@@ -71,6 +71,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File"], "---", None, "---"),
     (&["File"], "Print…", Some("Cmd+P"), "file.print"),
     (&["File"], "Print One Copy", Some("Cmd+Alt+Shift+P"), "file.printOneCopy"),
+    (&["File"], "---", None, "---"),
+    (&["File"], "Exit", Some("Cmd+Q"), "file.exit"),
     (&["Edit"], "Undo", None, "edit.undo"),
     (&["Edit"], "Redo", None, "edit.redo"),
     (&["Edit"], "Toggle Last State", Some("Cmd+Alt+Z"), "edit.toggleLastState"),
