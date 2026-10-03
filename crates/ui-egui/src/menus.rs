@@ -564,7 +564,6 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut clicked: Option<String> = None;
     let t = crate::theme::Tokens::get(ui.ctx());
     ui.scope(|ui| {
-        ui.spacing_mut().button_padding = egui::vec2(8.0, 3.0);
         ui.spacing_mut().item_spacing.x = 0.0;
         let v = &mut ui.style_mut().visuals;
         v.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
@@ -572,6 +571,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, t.text_dim);
         v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
         egui::MenuBar::new().ui(ui, |ui| {
+            ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
             for top in TOP_MENUS {
                 let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
                 ui.menu_button(egui::RichText::new(top).color(t.text_dim), |ui| {
@@ -669,6 +669,34 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_bar_labels_have_horizontal_padding_and_open_menus() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for theme in crate::theme::ThemeKind::ALL {
+            for width in [640.0, 1440.0] {
+                let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                let mut harness = Harness::builder().with_size(egui::vec2(width, 200.0)).build_ui_state(|ui, app| menu_bar(app, ui), app);
+                PhotocraftApp::setup_context(&harness.ctx, theme);
+                harness.run_steps(3);
+
+                let font = egui::TextStyle::Button.resolve(&harness.ctx.global_style());
+                let mut right = 0.0;
+                for label in TOP_MENUS {
+                    let rect = harness.get_by_label(label).rect();
+                    let text_width = harness.ctx.fonts_mut(|fonts| fonts.layout_no_wrap(label.into(), font.clone(), egui::Color32::WHITE).size().x);
+                    assert!(rect.width() >= text_width + 11.5, "{theme:?}: {label} lacks horizontal padding");
+                    assert!(rect.left() >= right && rect.right() <= width, "{theme:?}: {label} overlaps or overflows at width {width}");
+                    right = rect.right();
+                }
+
+                harness.get_by_label("File").click();
+                harness.run_steps(3);
+                assert!(harness.query_by_label_contains("Open…").is_some(), "{theme:?}: File menu did not open");
+            }
+        }
+    }
 
     #[test]
     fn window_panel_and_workspace_ids_drive_the_shell() {
