@@ -1074,8 +1074,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ui.close();
                 }
             });
-            if icons::button(ui, "square-dot", 26.0, false, "Add a mask").clicked() {
-                actions.push(("layer.layerMask.revealAll".into(), json!({})));
+            if icons::button(ui, "square-dot", 26.0, false, "Add a mask  (from the selection; ⌥ inverts)").clicked() {
+                let alt = ui.input(|i| i.modifiers.alt);
+                actions.push((crate::layer_menu_ui::add_mask_command(doc.selection.is_some(), alt).into(), json!({})));
             }
             let fx = fx_button(ui, 26.0, "Add a layer style");
             egui::Popup::menu(&fx).show(|ui| {

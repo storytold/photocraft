@@ -8,8 +8,19 @@ use serde_json::{Value, json};
 /// One entry: label, command id. `None` = separator.
 pub type Entry = Option<(&'static str, &'static str)>;
 
+/// The command behind "Add Layer Mask" (the panel button and this menu). Like Photoshop, an active
+/// selection becomes the mask; ⌥ inverts it (Hide Selection, or Hide All without a selection).
+pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
+    match (has_selection, alt) {
+        (true, false) => "layer.layerMask.revealSelection",
+        (true, true) => "layer.layerMask.hideSelection",
+        (false, false) => "layer.layerMask.revealAll",
+        (false, true) => "layer.layerMask.hideAll",
+    }
+}
+
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
-pub fn entries(l: &Layer, multi: bool) -> Vec<Entry> {
+pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     let mut v: Vec<Entry> = vec![Some(("Blending Options…", "layer.layerStyle.blendingOptions"))];
     v.push(None);
     v.push(Some((if multi { "Duplicate Layers…" } else { "Duplicate Layer…" }, "layer.duplicate")));
@@ -38,7 +49,7 @@ pub fn entries(l: &Layer, multi: bool) -> Vec<Entry> {
         v.push(Some(("Apply Layer Mask", "layer.layerMask.apply")));
         v.push(Some(("Delete Layer Mask", "layer.layerMask.delete")));
     } else {
-        v.push(Some(("Add Layer Mask", "layer.layerMask.revealAll")));
+        v.push(Some(("Add Layer Mask", add_mask_command(has_selection, false))));
     }
     v.push(Some((if l.clipped { "Release Clipping Mask" } else { "Create Clipping Mask" }, if l.clipped { "layer.releaseClippingMask" } else { "layer.createClippingMask" })));
     v.push(None);
@@ -65,7 +76,8 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
     ui.set_min_width(220.0);
     let mut rename = false;
     let mut last_sep = true;
-    for e in entries(l, on_set) {
+    let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
+    for e in entries(l, on_set, has_selection) {
         match e {
             None => {
                 if !last_sep {
@@ -112,12 +124,30 @@ mod tests {
         s.execute("layer.new.layer", json!({})).unwrap();
         let st = s.active().unwrap();
         let l = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
-        let ids: Vec<&str> = entries(&l, false).into_iter().flatten().map(|e| e.1).collect();
+        let ids: Vec<&str> = entries(&l, false, false).into_iter().flatten().map(|e| e.1).collect();
         assert_eq!(ids.first(), Some(&"layer.layerStyle.blendingOptions"));
         assert!(ids.contains(&"layer.mergeDown") && !ids.contains(&"layer.mergeLayers"));
         assert!(ids.contains(&"layer.layerMask.revealAll"));
-        let ids: Vec<&str> = entries(&l, true).into_iter().flatten().map(|e| e.1).collect();
+        let ids: Vec<&str> = entries(&l, false, true).into_iter().flatten().map(|e| e.1).collect();
+        assert!(ids.contains(&"layer.layerMask.revealSelection") && !ids.contains(&"layer.layerMask.revealAll"));
+        let ids: Vec<&str> = entries(&l, true, false).into_iter().flatten().map(|e| e.1).collect();
         assert!(ids.contains(&"layer.mergeLayers"));
+    }
+
+    #[test]
+    fn add_mask_uses_the_selection() {
+        assert_eq!(add_mask_command(false, false), "layer.layerMask.revealAll");
+        assert_eq!(add_mask_command(false, true), "layer.layerMask.hideAll");
+        assert_eq!(add_mask_command(true, true), "layer.layerMask.hideSelection");
+        // With a selection the new mask is the selection: inside revealed, outside hidden.
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 10})).unwrap();
+        s.execute(add_mask_command(true, false), json!({})).unwrap();
+        let st = s.active().unwrap();
+        let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
+        assert!(mask.pixel(1, 5)[0] > 0.99 && mask.pixel(8, 5)[0] < 0.01);
     }
 
     #[test]
@@ -125,7 +155,7 @@ mod tests {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
         let l = s.active().unwrap().doc.layers[0].clone();
-        for (_, id) in entries(&l, false).into_iter().flatten() {
+        for (_, id) in entries(&l, false, true).into_iter().chain(entries(&l, false, false)).flatten() {
             assert!(crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) || photocraft_engine::commands::find(id).is_some(), "{id}");
         }
     }
