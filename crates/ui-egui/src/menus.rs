@@ -13,6 +13,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
+    ("file.exit", "Exit", &["File"], Some("Cmd+Q")),
     ("edit.freeTransform", "Free Transform", &["Edit"], Some("Cmd+T")),
     ("file.export.exportAs", "Export As…", &["File", "Export"], Some("Cmd+Alt+Shift+W")),
     ("file.export.quickExportAsPng", "Quick Export as PNG", &["File", "Export"], None),
@@ -203,6 +204,10 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
             let path = params.get("path").and_then(Value::as_str).map(str::to_string).or_else(|| app.session.active().and_then(|d| d.path.clone()).filter(|p| p.ends_with(".psd") || p.ends_with(".psb")));
             app.save_as(path).map(|p| json!({"path": p}))
         }
+        "file.exit" => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            Ok(Value::Null)
+        }
         "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)).map(|p| json!({"path": p})),
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => {
             let i = app.session.active_index().ok_or("no document")?;
@@ -376,7 +381,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "help.about" | "edit.search" => true,
+        "file.open" | "file.exit" | "help.about" | "edit.search" => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => app.session.active().is_some() && app.services.export.is_some(),
