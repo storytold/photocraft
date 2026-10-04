@@ -466,6 +466,9 @@ pub struct DockTabs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
+    /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
+    #[serde(default)]
+    pub recent_files: Vec<String>,
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
@@ -557,6 +560,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             tool: Tool::Brush,
+            recent_files: Vec::new(),
             text_edit: None,
             transform: None,
             mask_target: false,

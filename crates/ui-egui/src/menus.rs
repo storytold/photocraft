@@ -208,6 +208,24 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             Ok(Value::Null)
         }
+        "file.clearRecent" => {
+            app.ui.recent_files.clear();
+            Ok(Value::Null)
+        }
+        id if id.starts_with("file.openRecent.") => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                match id.rsplit('.').next().and_then(|s| s.parse::<usize>().ok()).and_then(|i| app.ui.recent_files.get(i).cloned()) {
+                    Some(p) => open_path(app, &p),
+                    None => Err("no such recent file".to_string()),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = app;
+                Err("Open Recent is unavailable on the web".to_string())
+            }
+        }
         "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)).map(|p| json!({"path": p})),
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => {
             let i = app.session.active_index().ok_or("no document")?;
@@ -355,6 +373,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
     if let Some(st) = app.session.active_mut() {
         st.path = Some(path.to_string());
     }
+    app.push_recent(path);
     Ok(Value::Null)
 }
 
@@ -381,7 +400,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "help.about" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "edit.search" => true,
+        i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => app.session.active().is_some() && app.services.export.is_some(),
@@ -524,6 +544,27 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             let top = e.path.first().cloned();
             let at = items.iter().rposition(|i| i.path.first() == top.as_ref()).map_or(items.len(), |p| p + 1);
             items.insert(at, e);
+        }
+    }
+    // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
+    if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
+        let rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
+        let mut recent: Vec<MenuItem> = app
+            .ui
+            .recent_files
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let label = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+                MenuItem { id: format!("file.openRecent.{i}"), label, path: rp.clone(), shortcut: None, enabled: true, checked: None, color: None }
+            })
+            .collect();
+        if !recent.is_empty() {
+            recent.push(MenuItem { id: "---".into(), label: "---".into(), path: rp.clone(), shortcut: None, enabled: false, checked: None, color: None });
+        }
+        recent.push(MenuItem { id: "file.clearRecent".into(), label: "Clear Recent Files".into(), path: rp.clone(), shortcut: None, enabled: !app.ui.recent_files.is_empty(), checked: None, color: None });
+        for (k, it) in recent.into_iter().enumerate() {
+            items.insert(after + 1 + k, it);
         }
     }
     // Help: the link items, a separator, then About.
@@ -746,5 +787,63 @@ mod tests {
         let spec = photocraft_engine::commands::find("edit.convertToProfile").unwrap();
         let params = crate::filter_dialog::parse_spec(spec.params);
         assert!(matches!(&params[0].kind, crate::filter_dialog::Kind::Choice(c) if c[0] == "srgb" && !c.iter().any(|v| v.contains('/'))));
+    }
+}
+
+#[cfg(test)]
+mod open_recent_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tracks_dedupes_caps_and_lists() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.push_recent("/tmp/a.png");
+        app.push_recent("/tmp/b.psd");
+        app.push_recent("/tmp/a.png"); // de-dupe → moves to front
+        assert_eq!(app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/b.psd".to_string()]);
+        for i in 0..15 {
+            app.push_recent(&format!("/tmp/f{i}.png"));
+        }
+        assert_eq!(app.ui.recent_files.len(), 10, "capped at 10");
+
+        // Menu lists them under File › Open Recent, with basenames, plus Clear Recent Files.
+        app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
+        let items = menu_items(&app);
+        let rp = vec!["File".to_string(), "Open Recent".to_string()];
+        let labels: Vec<&str> = items.iter().filter(|i| i.id.starts_with("file.openRecent.")).map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["a.png", "b.psd"]);
+        assert!(items.iter().any(|i| i.id == "file.clearRecent" && i.path == rp));
+
+        // Clear Recent Files empties the list.
+        let ctx = egui::Context::default();
+        invoke(&mut app, &ctx, "file.clearRecent", json!({})).unwrap();
+        assert!(app.ui.recent_files.is_empty());
+        // No recent items in the menu once cleared (only the disabled "Clear Recent Files").
+        assert!(!menu_items(&app).iter().any(|i| i.id.starts_with("file.openRecent.")));
+        // A bad recent index errors gracefully (no panic).
+        assert!(invoke(&mut app, &ctx, "file.openRecent.5", json!({})).is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn opening_a_file_records_it_as_recent() {
+        use photocraft_color::{ColorMode, SampleType};
+        use photocraft_geom::Size;
+        let services = crate::Services {
+            import: Some(Box::new(|_n: &str, _b: &[u8]| Ok(photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8)))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let path = std::env::temp_dir().join("photocraft_recent_test.pcraft");
+        std::fs::write(&path, b"x").unwrap();
+        let p = path.to_string_lossy().to_string();
+        let ctx = egui::Context::default();
+        invoke(&mut app, &ctx, "file.open", json!({ "path": p })).unwrap();
+        assert_eq!(app.ui.recent_files.first().map(String::as_str), Some(p.as_str()));
+        // Re-open via the recent entry.
+        invoke(&mut app, &ctx, "file.openRecent.0", json!({})).unwrap();
+        assert_eq!(app.session.documents().len(), 2);
+        let _ = std::fs::remove_file(&path);
     }
 }

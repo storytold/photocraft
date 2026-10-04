@@ -327,6 +327,15 @@ impl PhotocraftApp {
         self.ui.windows.retain(|w| w.document < n);
     }
 
+    /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
+    /// first, capped at 10.
+    pub fn push_recent(&mut self, path: &str) {
+        let r = &mut self.ui.recent_files;
+        r.retain(|p| p != path);
+        r.insert(0, path.to_string());
+        r.truncate(10);
+    }
+
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let doc = import(name, bytes)?;
@@ -346,10 +355,11 @@ impl PhotocraftApp {
 
     pub fn open_dialog_file(&mut self) {
         let picked = self.services.pick_open.as_mut().and_then(|f| f());
-        if let Some((name, bytes)) = picked
-            && let Err(e) = self.open_bytes(&name, &bytes)
-        {
-            self.ui.status = format!("Couldn't open {name}: {e}");
+        if let Some((name, bytes)) = picked {
+            match self.open_bytes(&name, &bytes) {
+                Ok(()) => self.push_recent(&name),
+                Err(e) => self.ui.status = format!("Couldn't open {name}: {e}"),
+            }
         }
     }
 
