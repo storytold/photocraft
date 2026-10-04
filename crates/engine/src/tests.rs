@@ -214,6 +214,33 @@ fn canvas_flips_and_rotation() {
 }
 
 #[test]
+fn image_rotation_rotates_every_layer_not_just_the_active_one() {
+    // Issue #1: Image Rotation must rotate the whole canvas, not only the selected layer.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10, "background": "white"})).unwrap();
+    // A second (lower) layer with a red dot at the top-left; keep a third layer active.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("dot", |doc, a| {
+        doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(2, 2, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let dotted = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap(); // a different, empty active layer
+    assert_ne!(s.active().unwrap().active_layer.unwrap(), dotted, "active layer is not the dotted one");
+
+    s.execute("image.imageRotation.180", json!({})).unwrap();
+
+    // The non-active layer's content rotated too: (2,2)..(4,4) in 20x10 → (16,6)..(18,8).
+    let st = s.active().unwrap();
+    let surf = st.doc.layer(dotted).unwrap().surface().unwrap();
+    assert_eq!(surf.rgba(17, 6), [1.0, 0.0, 0.0, 1.0], "dot moved to the opposite corner");
+    assert_eq!(surf.rgba(3, 3)[3], 0.0, "original spot is now empty");
+    // The Background layer rotated as well (still fully opaque white everywhere).
+    assert_eq!(st.doc.layers[0].surface().unwrap().rgba(1, 1), [1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
 fn fill_layers_and_colors() {
     let mut s = session_with_doc();
     s.execute("tools.setColors", json!({"foreground": "#112233"})).unwrap();
