@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::bridge::BridgeClient;
 use crate::headless::Headless;
+use crate::security::MAX_BATCH_STEPS;
 use crate::{AutomationError, files};
 
 /// Where tools are executed.
@@ -179,8 +180,9 @@ fn to_result(r: Result<Value, AutomationError>) -> Result<CallToolResult, McpErr
 
 fn bridge_only(name: &str) -> Result<CallToolResult, McpError> {
     Ok(fail(format!(
-        "`{name}` drives the live GUI and needs bridge mode: run `photocraft-cli mcp --bridge 127.0.0.1:<port>` \
-         with the app started as `photocraft --control <port>`"
+        "`{name}` drives the live GUI and needs bridge mode: start the app with \
+         `photocraft --control <port> --control-token-file <path>`, then run \
+         `photocraft-cli mcp --bridge 127.0.0.1:<port> --control-token-file <path>`"
     )))
 }
 
@@ -189,8 +191,8 @@ impl PhotocraftMcp {
         Self::with_backend(Backend::Headless(Arc::new(Mutex::new(Headless::new()))))
     }
 
-    pub fn bridge(addr: &str) -> Result<Self, AutomationError> {
-        Ok(Self::with_backend(Backend::Bridge(Arc::new(BridgeClient::new(addr)?))))
+    pub fn bridge(addr: &str, token: &str) -> Result<Self, AutomationError> {
+        Ok(Self::with_backend(Backend::Bridge(Arc::new(BridgeClient::new(addr, token)?))))
     }
 
     pub fn with_backend(backend: Backend) -> Self {
@@ -411,6 +413,9 @@ impl PhotocraftMcp {
     #[tool(description = "Run several engine commands in one call (fewer round trips). Returns {completed, failed, \
         results:[{ok, result|error}]}; stops at the first error unless stop_on_error is false.")]
     async fn command_batch(&self, Parameters(p): Parameters<BatchParams>) -> Result<CallToolResult, McpError> {
+        if p.steps.len() > MAX_BATCH_STEPS {
+            return Ok(fail(format!("batch contains {} steps; maximum is {MAX_BATCH_STEPS}", p.steps.len())));
+        }
         let stop = p.stop_on_error.unwrap_or(true);
         let steps: Vec<Value> = p.steps.into_iter().map(|s| json!({"command": s.id, "params": s.params.unwrap_or_else(|| json!({}))})).collect();
         let args = json!({"steps": steps, "stopOnError": stop});

@@ -9,7 +9,7 @@
 
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
-cargo run --release -p photocraft -- --control 7878 img.jpg # with the JSON control server
+cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token img.jpg
 cargo test --workspace                                     # everything
 cargo xtask ci                                             # fmt + clippy + tests + layers + wasm
 cargo xtask stats                                          # tests and lines per crate
@@ -23,6 +23,8 @@ Image code is slow at `opt-level 0`, so the workspace profile builds dependencie
 | Variable | Effect |
 |---|---|
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>` |
+| `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
+| `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
 | `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
 | `PHOTOCRAFT_GPU_TILE=2048` | Force GPU canvas tiling (tests tile seams) |
 | `PHOTOCRAFT_FX_NOCACHE=1` | Bypass the CPU layer-effect map cache (`compose::effect_maps`) |
@@ -40,10 +42,12 @@ Keys are the field names of `theme::Tokens` (`crates/ui-egui/src/theme.rs`). Edi
 
 ## Driving the app programmatically
 
-Start the app with `--control 7878`. It then accepts JSON lines on `127.0.0.1:7878`:
+Start the app with a private token file. It then accepts authenticated JSON lines on `127.0.0.1:7878`:
 
 ```sh
-printf '%s\n' '{"id":1,"method":"engine.execute","params":{"command":"layer.newAdjustmentLayer.hueSaturation","params":{"hue":30}}}' \
+TOKEN=$(tr -d '\r\n' < .private/control.token)
+printf '%s\n' "{\"id\":\"auth\",\"method\":\"auth\",\"params\":{\"token\":\"$TOKEN\"}}" \
+              '{"id":1,"method":"engine.execute","params":{"command":"layer.newAdjustmentLayer.hueSaturation","params":{"hue":30}}}' \
               '{"id":2,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}' | nc 127.0.0.1 7878
 ```
 
@@ -86,7 +90,7 @@ Keep one `PcraftWriter` per open document: re-saving then only compresses and wr
 `photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
 - **Headless:** `photocraft-cli mcp`. It drives an in-process engine session.
-- **Live app:** start `photocraft --control 7878`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878`. See `docs/control-protocol.md#mcp-bridge`.
+- **Live app:** start `photocraft --control 7878 --control-token-file <private-path>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. See `docs/control-protocol.md#mcp-bridge`.
 
 Tools:
 
@@ -106,7 +110,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--bridge", "127.0.0.1:7878"]
+      "args": ["mcp", "--bridge", "127.0.0.1:7878", "--control-token-file", "/private/path/photocraft-control.token"]
     }
   }
 }

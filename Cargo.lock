@@ -3242,6 +3242,7 @@ dependencies = [
  "egui",
  "log",
  "open",
+ "photocraft-automation",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",
@@ -3274,6 +3275,7 @@ name = "photocraft-automation"
 version = "0.1.1"
 dependencies = [
  "base64",
+ "getrandom 0.3.4",
  "photocraft-codecs",
  "photocraft-compose",
  "photocraft-doc",

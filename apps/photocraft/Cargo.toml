@@ -20,6 +20,7 @@ photocraft-engine = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }
+photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }

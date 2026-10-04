@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use photocraft_automation::{Headless, PhotocraftMcp, files};
+use photocraft_automation::{Headless, PhotocraftMcp, files, security};
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
@@ -25,9 +25,9 @@ USAGE:
       Run a droplet (File › Automate › Create Droplet) on images and folders.
   photocraft-cli commands [--json] [--filter <text>]
       List the engine command registry.
-  photocraft-cli mcp [--bridge <127.0.0.1:port>]
+  photocraft-cli mcp [--bridge <127.0.0.1:port>] [--control-token <64-hex> | --control-token-file <path>]
       Run the MCP server on stdio (headless engine, or bridge to a running `photocraft --control <port>`).
-  photocraft-cli serve [--port <port>]
+  photocraft-cli serve [--port <port>] [--control-token <64-hex> | --control-token-file <path>]
       Keep one headless session open and answer JSON lines ({\"id\",\"method\",\"params\"}) on stdio,
       or on 127.0.0.1:<port>. Methods: engine.execute, engine.commands, doc.open/new/save/inspect/render/
       select/close, session.list, batch, methods (docs/control-protocol.md#headless-server).
@@ -38,7 +38,21 @@ struct Args {
     flags: Vec<(String, Option<String>)>,
 }
 
-const VALUE_FLAGS: &[&str] = &["--format", "--quality", "--new", "--cmd", "--params", "--out", "--actions", "--in", "--filter", "--bridge", "--port"];
+const VALUE_FLAGS: &[&str] = &[
+    "--format",
+    "--quality",
+    "--new",
+    "--cmd",
+    "--params",
+    "--out",
+    "--actions",
+    "--in",
+    "--filter",
+    "--bridge",
+    "--port",
+    "--control-token",
+    "--control-token-file",
+];
 
 fn parse(args: &[String]) -> Result<Args, String> {
     let mut a = Args { positional: Vec::new(), flags: Vec::new() };
@@ -326,7 +340,14 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
         Some(port) => {
             let port: u16 = port.parse().map_err(|_| format!("bad --port `{port}`"))?;
             let addr = format!("127.0.0.1:{port}");
-            photocraft_automation::rpc::serve_tcp(&addr, h, |local| {
+            let (supplied, token_file) = security::token_inputs(a.get("--control-token").map(str::to_owned), a.get("--control-token-file").map(PathBuf::from));
+            let token = security::server_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
+            if let Some(path) = &token_file {
+                let _ = writeln!(err, "photocraft-cli control token file: {}", path.display());
+            } else if supplied.is_none() {
+                let _ = writeln!(err, "photocraft-cli control token: {token}");
+            }
+            photocraft_automation::rpc::serve_tcp(&addr, h, token, |local| {
                 let _ = writeln!(err, "photocraft-cli serving on {local}");
             })
             .map_err(|e| e.to_string())
@@ -340,7 +361,11 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
 
 fn mcp(a: &Args) -> R {
     let server = match a.get("--bridge") {
-        Some(addr) => PhotocraftMcp::bridge(addr).map_err(|e| e.to_string())?,
+        Some(addr) => {
+            let (supplied, token_file) = security::token_inputs(a.get("--control-token").map(str::to_owned), a.get("--control-token-file").map(PathBuf::from));
+            let token = security::client_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
+            PhotocraftMcp::bridge(addr, &token).map_err(|e| e.to_string())?
+        }
         None => PhotocraftMcp::headless(),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;

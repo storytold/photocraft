@@ -1,6 +1,20 @@
 # Control protocol
 
-The desktop app (`photocraft --control <port>`) listens on `127.0.0.1:<port>` (loopback only). Each request is one JSON line:
+The desktop app listens on `127.0.0.1:<port>` (loopback only). Start it with a token file so the credential is not exposed in the process command line:
+
+```sh
+photocraft --control 7878 --control-token-file /private/path/photocraft-control.token
+```
+
+If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents.
+
+The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
+
+```json
+{"id": "auth", "method": "auth", "params": {"token": "<64 hexadecimal characters>"}}
+```
+
+After the successful authentication reply, each request is one JSON line:
 
 ```json
 {"id": 1, "method": "ui.inspect", "params": {}}
@@ -100,9 +114,14 @@ magenta alignment lines. `ui.pointer` drives the same code, so agents get identi
 `photocraft-automation` provides an MCP server built on the official Rust SDK (`rmcp`). It runs in one of two modes:
 
 - **Headless** (`photocraft-cli mcp`): an in-process `photocraft_engine::Session`. There is no window.
-- **Bridge** (`photocraft-cli mcp --bridge 127.0.0.1:7878`): every tool is forwarded to a running `photocraft --control 7878` over this protocol, so agents see and drive the live app.
+- **Bridge** (`photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <path>`): every tool is forwarded to a running `photocraft --control 7878 --control-token-file <path>` over this protocol, so agents see and drive the live app.
 
-The bridge keeps one TCP connection open. It reconnects once if a request fails, and it skips reply lines whose `id` doesn't match the request (for example, stale replies to requests that timed out). It only accepts loopback addresses, because the app only listens on loopback.
+The bridge keeps one authenticated TCP connection open. It reconnects and authenticates once if a request fails, and it skips reply lines whose `id` doesn't match the request (for example, stale replies to requests that timed out). It only accepts loopback addresses, because the app only listens on loopback. Supply its bearer token with `--control-token-file`, `--control-token`, `PHOTOCRAFT_CONTROL_TOKEN_FILE`, or `PHOTOCRAFT_CONTROL_TOKEN`:
+
+```sh
+photocraft-cli mcp --bridge 127.0.0.1:7878 \
+  --control-token-file /private/path/photocraft-control.token
+```
 
 How each MCP tool maps onto control methods in bridge mode:
 
@@ -124,13 +143,15 @@ How each MCP tool maps onto control methods in bridge mode:
 
 `doc_select` and `doc_close` work only in headless mode. The `ui_*` tools and `control_call` work only in bridge mode; in headless mode they return a tool error that explains how to start bridge mode.
 
-**Security note:** the control port has no authentication. Any local process can drive the app. Only enable `--control` when you need it. A token handshake is planned (architecture §12).
+**Security note:** TCP control uses a bearer token, not client identity or per-method authorization. A client that possesses the token receives the full exposed control surface, including file operations, UI input, command execution, and application control. Keep token files private, do not commit or log tokens, and do not pass a token directly on a shared system where process command lines are visible. The protocol is unencrypted and must remain on loopback; do not tunnel or proxy it to an untrusted host. Capability scopes and filesystem roots are not yet implemented.
 
 ## Headless server
 
 `photocraft-cli serve` keeps one headless engine session (no window, no GPU) and answers the same
 JSON-lines envelope on stdio, or on `127.0.0.1:<port>` with `--port <port>` (loopback only; each
-connection shares the session). It is the fastest way for a script or agent to make many edits:
+authenticated connection shares the session). TCP uses the same first-frame `auth` exchange and
+token options as desktop control. Stdio does not require this TCP handshake because access is
+inherited from the process pipe. It is the fastest way for a script or agent to make many edits:
 no MCP framing, no app start-up per command. Implementation: `crates/automation/src/rpc.rs`.
 
 | Method | Params |
@@ -155,3 +176,14 @@ printf '%s\n' \
 
 The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params}], stop_on_error}`),
 in headless and bridge mode.
+
+## Transport limits
+
+The desktop and headless TCP listeners currently enforce:
+
+- a 1 MiB maximum encoded request line;
+- at most 16 simultaneously serviced connections per listener;
+- a 30-second socket read/write timeout;
+- at most 256 steps in a headless `batch` or MCP `command_batch` request.
+
+An oversized line, excess connection, or unauthenticated request is rejected before command dispatch. These limits do not impose JSON-depth, response-size, render, document-memory, command-duration, filesystem-root, or capability budgets.

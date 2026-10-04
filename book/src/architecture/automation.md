@@ -16,4 +16,4 @@ Headless file operations are implemented in `crates/automation/src/files.rs`; RP
 
 The control and headless TCP listeners are restricted to loopback addresses. Stdio MCP avoids a listening network socket, but the MCP process still acts with the filesystem permissions of the user who launched it.
 
-Loopback is not authentication. Current transports do not implement authentication, capability scopes, allowed filesystem roots, request-byte limits, batch-step limits, or connection limits. See the [Automation security model](../automation/security-model.md) and [Automation security](../security/automation-security.md) before exposing or extending these surfaces.
+Loopback is not authentication. TCP transports now require a bearer token and enforce request-byte, batch-step, and active-connection limits, but they do not implement capability scopes, allowed filesystem roots, client identity, encryption, or operation budgets. See the [Automation security model](../automation/security-model.md) and [Automation security](../security/automation-security.md) before exposing or extending these surfaces.

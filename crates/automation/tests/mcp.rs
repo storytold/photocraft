@@ -10,6 +10,8 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+const CONTROL_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 #[derive(Clone, Default)]
 struct Client;
 impl ClientHandler for Client {
@@ -196,6 +198,7 @@ async fn fake_app() -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     let addr = listener.local_addr().unwrap().to_string();
     let h = tokio::spawn(async move {
         let mut seen = Vec::new();
+        let mut authenticated = false;
         let (sock, _) = listener.accept().await.unwrap();
         let (r, mut w) = sock.into_split();
         let mut lines = BufReader::new(r).lines();
@@ -204,6 +207,13 @@ async fn fake_app() -> (String, tokio::task::JoinHandle<Vec<Value>>) {
             let id = req["id"].clone();
             let method = req["method"].as_str().unwrap_or("").to_owned();
             let reply = match method.as_str() {
+                "auth" if req["params"]["token"] == CONTROL_TOKEN => {
+                    authenticated = true;
+                    json!({"id": id, "ok": true, "result": {"authenticated": true}})
+                }
+                _ if !authenticated => {
+                    json!({"id": id, "ok": false, "error": "authentication required"})
+                }
                 "ui.inspect" => {
                     json!({"id": id, "ok": true, "result": {"tool": "brush", "panels": ["layers"]}})
                 }
@@ -234,7 +244,7 @@ async fn fake_app() -> (String, tokio::task::JoinHandle<Vec<Value>>) {
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_forwards_to_control_protocol() {
     let (addr, app) = fake_app().await;
-    let client = connect(PhotocraftMcp::bridge(&addr).unwrap()).await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
 
     let ui = json_of(&call(&client, "ui_inspect", json!({})).await);
     assert_eq!(ui["tool"], "brush");
@@ -258,14 +268,27 @@ async fn bridge_forwards_to_control_protocol() {
 
 #[test]
 fn bridge_rejects_non_loopback() {
-    assert!(PhotocraftMcp::bridge("10.0.0.5:7878").is_err());
-    assert!(PhotocraftMcp::bridge("127.0.0.1:7878").is_ok());
-    assert!(PhotocraftMcp::bridge("localhost:1").is_ok());
+    assert!(PhotocraftMcp::bridge("10.0.0.5:7878", CONTROL_TOKEN).is_err());
+    assert!(PhotocraftMcp::bridge("127.0.0.1:7878", CONTROL_TOKEN).is_ok());
+    assert!(PhotocraftMcp::bridge("localhost:1", CONTROL_TOKEN).is_ok());
+    assert!(PhotocraftMcp::bridge("localhost:1", "short").is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_rejects_wrong_token_before_control_methods() {
+    let (addr, app) = fake_app().await;
+    let wrong = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let client = connect(PhotocraftMcp::bridge(&addr, wrong).unwrap()).await;
+    let r = call(&client, "ui_inspect", json!({})).await;
+    assert_eq!(r.is_error, Some(true));
+    assert!(text(&r).contains("authentication required"), "{}", text(&r));
+    client.cancel().await.unwrap();
+    app.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_reports_unreachable_app() {
-    let client = connect(PhotocraftMcp::bridge("127.0.0.1:1").unwrap()).await;
+    let client = connect(PhotocraftMcp::bridge("127.0.0.1:1", CONTROL_TOKEN).unwrap()).await;
     let r = call(&client, "ui_inspect", json!({})).await;
     assert_eq!(r.is_error, Some(true));
     assert!(text(&r).contains("--control"), "{}", text(&r));
@@ -293,5 +316,15 @@ async fn command_batch_runs_steps_in_order() {
     assert_eq!(r["failed"], 1);
     let doc = json_of(&call(&client, "doc_inspect", json!({})).await).to_string();
     assert!(doc.contains("\"Two\"") && !doc.contains("\"Three\""));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_batch_rejects_too_many_steps() {
+    let client = connect(PhotocraftMcp::headless()).await;
+    let steps: Vec<Value> = (0..=photocraft_automation::security::MAX_BATCH_STEPS).map(|_| json!({"id": "command.list"})).collect();
+    let r = call(&client, "command_batch", json!({"steps": steps})).await;
+    assert_eq!(r.is_error, Some(true));
+    assert!(text(&r).contains("maximum is 256"), "{}", text(&r));
     client.cancel().await.unwrap();
 }

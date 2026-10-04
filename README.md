@@ -235,7 +235,7 @@ photocraft-cli batch --actions grade.json --in ./raw --out ./graded
 photocraft-cli mcp
 ```
 
-The desktop app also listens on a local control channel (`photocraft --control`) for inspecting UI state, driving tools with pointer events, and taking offscreen screenshots. Every image in this README was rendered that way. See [`docs/control-protocol.md`](docs/control-protocol.md).
+The desktop app also offers an authenticated, loopback-only control channel (`photocraft --control`) for inspecting UI state, driving tools with pointer events, and taking offscreen screenshots. Every image in this README was rendered that way. See [`docs/control-protocol.md`](docs/control-protocol.md).
 
 ## Under the hood
 

@@ -21,6 +21,9 @@ use std::sync::{Arc, Mutex};
 use base64::Engine as _;
 use serde_json::{Value, json};
 
+use crate::security::{
+    ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply, configure_stream, read_bounded_line,
+};
 use crate::{AutomationError, Headless};
 
 /// Method names served by [`Headless::handle`].
@@ -122,6 +125,9 @@ impl Headless {
     /// `stopOnError` is false; the reply lists every step's result.
     pub fn batch(&mut self, p: &Value) -> Result<Value, AutomationError> {
         let steps = p.get("steps").and_then(Value::as_array).ok_or_else(|| bad("batch needs `steps`"))?;
+        if steps.len() > MAX_BATCH_STEPS {
+            return Err(bad(format!("batch contains {} steps; maximum is {MAX_BATCH_STEPS}", steps.len())));
+        }
         let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(true);
         let mut results = Vec::with_capacity(steps.len());
         let mut failed = 0usize;
@@ -184,21 +190,67 @@ pub fn serve_lines(h: &Mutex<Headless>, r: impl BufRead, mut w: impl Write) -> s
     Ok(())
 }
 
-/// Serve on a loopback TCP address (one thread per connection, one shared session).
-/// Refuses non-loopback addresses.
-pub fn serve_tcp(addr: &str, h: Arc<Mutex<Headless>>, ready: impl FnOnce(std::net::SocketAddr)) -> Result<(), AutomationError> {
+fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token: &str) -> std::io::Result<()> {
+    configure_stream(&stream)?;
+    let read = stream.try_clone()?;
+    let mut reader = std::io::BufReader::new(read);
+    let mut out = stream;
+    let mut line = String::new();
+    let mut authenticated = false;
+    loop {
+        match read_bounded_line(&mut reader, &mut line)? {
+            LineRead::Eof => return Ok(()),
+            LineRead::TooLong => {
+                let reply = json!({
+                    "id": null,
+                    "ok": false,
+                    "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+                });
+                writeln!(out, "{reply}")?;
+                out.flush()?;
+                return Ok(());
+            }
+            LineRead::Line if line.trim().is_empty() => continue,
+            LineRead::Line => {}
+        }
+        let reply = if authenticated {
+            respond(h, &line)
+        } else {
+            let (reply, ok) = authentication_reply(&line, token);
+            authenticated = ok;
+            reply
+        };
+        writeln!(out, "{reply}")?;
+        out.flush()?;
+        if !authenticated {
+            return Ok(());
+        }
+    }
+}
+
+/// Serve authenticated JSON lines on a loopback TCP address with one shared session.
+/// Refuses non-loopback addresses and caps active connections and request bytes.
+pub fn serve_tcp(addr: &str, h: Arc<Mutex<Headless>>, token: String, ready: impl FnOnce(std::net::SocketAddr)) -> Result<(), AutomationError> {
     let listener = TcpListener::bind(addr).map_err(|e| AutomationError::Io(format!("bind {addr}: {e}")))?;
     let local = listener.local_addr().map_err(|e| AutomationError::Io(e.to_string()))?;
     if !local.ip().is_loopback() {
         return Err(bad(format!("{addr} is not a loopback address")));
     }
     ready(local);
+    let limiter = ConnectionLimiter::new(MAX_CONNECTIONS);
+    let token = Arc::new(token);
     for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+        let Ok(mut stream) = stream else { continue };
+        let Some(permit) = limiter.try_acquire() else {
+            let _ = configure_stream(&stream);
+            let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
+            continue;
+        };
         let h = h.clone();
+        let token = Arc::clone(&token);
         std::thread::spawn(move || {
-            let Ok(read) = stream.try_clone() else { return };
-            let _ = serve_lines(&h, std::io::BufReader::new(read), stream);
+            let _permit = permit;
+            let _ = serve_tcp_connection(&h, stream, &token);
         });
     }
     Ok(())
@@ -261,6 +313,15 @@ mod tests {
     }
 
     #[test]
+    fn batch_rejects_too_many_steps() {
+        let h = session();
+        let mut g = h.lock().unwrap();
+        let steps = vec![json!({"command": "command.list"}); MAX_BATCH_STEPS + 1];
+        let error = g.handle("batch", json!({"steps": steps})).unwrap_err();
+        assert!(error.to_string().contains("maximum is 256"));
+    }
+
+    #[test]
     fn render_to_file_and_base64() {
         let h = session();
         let mut g = h.lock().unwrap();
@@ -279,18 +340,45 @@ mod tests {
     #[test]
     fn tcp_serves_loopback() {
         use std::io::{BufReader, Write as _};
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let h = Arc::new(Mutex::new(Headless::new()));
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = serve_tcp("127.0.0.1:0", h, move |a| tx.send(a).unwrap());
+            let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
         });
         let addr = rx.recv().unwrap();
         let mut s = std::net::TcpStream::connect(addr).unwrap();
-        writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+        writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+        let mut reader = BufReader::new(s.try_clone().unwrap());
         let mut line = String::new();
-        BufReader::new(s.try_clone().unwrap()).read_line(&mut line).unwrap();
+        reader.read_line(&mut line).unwrap();
+        let auth: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(auth["result"]["authenticated"], true);
+        writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
         let v: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["id"], "a");
         assert!(v["result"].as_array().unwrap().iter().any(|m| m == "batch"));
+    }
+
+    #[test]
+    fn tcp_rejects_requests_before_authentication() {
+        use std::io::{BufReader, Write as _};
+        const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let h = Arc::new(Mutex::new(Headless::new()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
+        });
+        let addr = rx.recv().unwrap();
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        writeln!(s, r#"{{"id":1,"method":"methods"}}"#).unwrap();
+        let mut line = String::new();
+        BufReader::new(s).read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"], "authentication required");
+        assert!(v.get("result").is_none());
     }
 }

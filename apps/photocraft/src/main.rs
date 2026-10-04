@@ -1,9 +1,10 @@
 //! Photocraft desktop app.
 //!
-//! Usage: `photocraft [--control <port>] [files…]`
+//! Usage: `photocraft [--control <port>] [--control-token <64-hex> |
+//! --control-token-file <path>] [files…]`
 //!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
-//! Each line `{"id":1,"method":"ui.inspect","params":{}}` gets a reply line
+//! The first line must authenticate; subsequent request lines get reply lines.
 //! `{"id":1,"ok":true,"result":…}`. See `photocraft_ui_egui::control` for the methods.
 
 // Release builds on Windows are GUI-subsystem apps, so launching from the Start Menu or Explorer
@@ -31,11 +32,15 @@ fn app_icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
+    let mut control_token = None;
+    let mut control_token_file = None;
     let mut files = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = args.next().and_then(|p| p.parse().ok()),
+            "--control-token" => control_token = args.next(),
+            "--control-token-file" => control_token_file = args.next().map(std::path::PathBuf::from),
             "--version" => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
@@ -45,6 +50,27 @@ fn main() -> eframe::Result {
             _ => files.push(a),
         }
     }
+
+    let control = if let Some(port) = control_port {
+        let (supplied, token_file) = photocraft_automation::security::token_inputs(control_token, control_token_file);
+        let token = match photocraft_automation::security::server_token(supplied.as_deref(), token_file.as_deref()) {
+            Ok(token) => token,
+            Err(e) => {
+                eprintln!("photocraft: cannot configure control authentication: {e}");
+                return Ok(());
+            }
+        };
+        if let Some(path) = token_file {
+            eprintln!("photocraft: control token file: {}", path.display());
+        } else if supplied.is_none() {
+            eprintln!("photocraft: control token: {token}");
+        } else {
+            eprintln!("photocraft: using supplied control token");
+        }
+        Some((port, token))
+    } else {
+        None
+    };
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -72,8 +98,8 @@ fn main() -> eframe::Result {
             {
                 app.set_wgpu(rs);
             }
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
+            if let Some((port, token)) = control {
+                let rx = control_server::start(port, token, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             }
             for f in files {

@@ -11,11 +11,13 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::AutomationError;
+use crate::security::{AUTH_METHOD, MAX_REQUEST_BYTES, validate_token};
 
 type Conn = (BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf);
 
 pub struct BridgeClient {
     addr: String,
+    token: String,
     conn: Mutex<Option<Conn>>,
     next_id: AtomicU64,
     timeout: Duration,
@@ -24,13 +26,15 @@ pub struct BridgeClient {
 impl BridgeClient {
     /// `addr` such as `127.0.0.1:7878`. Only loopback addresses are accepted,
     /// matching the server, which binds to loopback only.
-    pub fn new(addr: impl Into<String>) -> Result<Self, AutomationError> {
+    pub fn new(addr: impl Into<String>, token: impl Into<String>) -> Result<Self, AutomationError> {
         let addr = addr.into();
+        let token = token.into();
         let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(&addr);
         if !matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
             return Err(AutomationError::BadRequest(format!("bridge address must be loopback, got `{addr}`")));
         }
-        Ok(BridgeClient { addr, conn: Mutex::new(None), next_id: AtomicU64::new(1), timeout: Duration::from_secs(60) })
+        validate_token(&token)?;
+        Ok(BridgeClient { addr, token: token.to_ascii_lowercase(), conn: Mutex::new(None), next_id: AtomicU64::new(1), timeout: Duration::from_secs(60) })
     }
 
     pub fn with_timeout(mut self, t: Duration) -> Self {
@@ -51,9 +55,20 @@ impl BridgeClient {
                 let s = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
                     .await
                     .map_err(|_| AutomationError::Bridge(format!("timed out connecting to {}", self.addr)))?
-                    .map_err(|e| AutomationError::Bridge(format!("cannot connect to {} ({e}); start the app with `photocraft --control <port>`", self.addr)))?;
+                    .map_err(|e| {
+                        AutomationError::Bridge(format!(
+                            "cannot connect to {} ({e}); start the app with `photocraft --control <port>` and matching control credentials",
+                            self.addr
+                        ))
+                    })?;
                 let (r, w) = s.into_split();
-                *guard = Some((BufReader::new(r), w));
+                let mut conn = (BufReader::new(r), w);
+                let auth_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let auth = tokio::time::timeout(Duration::from_secs(5), exchange(&mut conn, auth_id, AUTH_METHOD, &json!({"token": self.token})))
+                    .await
+                    .map_err(|_| AutomationError::Bridge("control authentication timed out".into()))??;
+                auth?;
+                *guard = Some(conn);
             }
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             let conn = guard.as_mut().expect("connected");
@@ -81,6 +96,9 @@ impl BridgeClient {
 async fn exchange(conn: &mut Conn, id: u64, method: &str, params: &Value) -> Result<Result<Value, AutomationError>, AutomationError> {
     let mut line = serde_json::to_string(&json!({"id": id, "method": method, "params": params})).map_err(|e| AutomationError::Other(e.to_string()))?;
     line.push('\n');
+    if line.len() > MAX_REQUEST_BYTES {
+        return Ok(Err(AutomationError::BadRequest(format!("request is {} bytes; maximum is {MAX_REQUEST_BYTES}", line.len()))));
+    }
     let io = |e: std::io::Error| AutomationError::Bridge(e.to_string());
     conn.1.write_all(line.as_bytes()).await.map_err(io)?;
     conn.1.flush().await.map_err(io)?;

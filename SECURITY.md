@@ -49,4 +49,4 @@ General bugs without a security impact should use the project's normal issue and
 
 ## Current limitations
 
-The current loopback control channel has no authentication or capability model. Loopback binding is not an authorization boundary. Automation file operations are not restricted to configured workspace roots, and explicit request, batch, and connection limits are not yet implemented. See the [security documentation](book/src/security/overview.md) for the source-backed status and hardening roadmap.
+TCP control connections require a 256-bit bearer token before method dispatch and enforce request-line, active-connection, and batch-step limits. These protections do not provide a capability model: an authenticated client still receives the complete exposed control surface. Automation file operations are not restricted to configured workspace roots, and JSON-depth, render, document-memory, command-duration, client-identity, encryption, and audit controls are not yet implemented. See the [security documentation](book/src/security/overview.md) for the source-backed status and hardening roadmap.

@@ -11,18 +11,18 @@ Start the headless server with:
 photocraft-cli mcp
 ```
 
-Bridge to a running desktop application with:
+Bridge to a running desktop application with the same private token file used by the app:
 
 ```sh
-photocraft-cli mcp --bridge 127.0.0.1:7878
+photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file /private/path/control.token
 ```
 
 Tools cover session/document operations, command discovery and execution, batching, and—when bridged—UI inspection and control. Tool schemas improve correctness but are not authorization boundaries.
 
 ## Security notes
 
-Stdio MCP does not open a network listener. Its client can still invoke file operations and engine commands using the MCP process's operating-system permissions. Bridge mode additionally inherits the unauthenticated control-channel limitation.
+Stdio MCP does not open a network listener. Its client can still invoke file operations and engine commands using the MCP process's operating-system permissions. Bridge mode authenticates its loopback control connection with a bearer token before invoking any control method.
 
-The current server does not issue scoped sessions or distinguish trusted tools from high-impact tools. A connected client is not restricted to document-only access. Do not expose the stdio transport through an untrusted broker, shell, or remote service without adding an external policy boundary.
+The current server does not issue scoped sessions or distinguish trusted tools from high-impact tools. Authentication proves possession of the token; it does not restrict an authenticated client to document-only access. Do not expose either transport through an untrusted broker, shell, proxy, or remote service without adding an external policy boundary.
 
 Capability-scoped MCP access is [proposed](../security/automation-security.md), not implemented.

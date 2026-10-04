@@ -19,6 +19,7 @@ pub mod bridge;
 pub mod files;
 pub mod headless;
 pub mod rpc;
+pub mod security;
 pub mod server;
 
 pub use bridge::BridgeClient;

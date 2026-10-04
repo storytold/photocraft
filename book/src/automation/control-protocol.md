@@ -1,8 +1,9 @@
 # Control protocol
 
-The desktop control protocol is newline-delimited JSON over a TCP listener bound to `127.0.0.1`. Each request carries `id`, `method`, and optional `params`; each reply includes the matching `id` and either a result or error.
+The desktop control protocol is newline-delimited JSON over a TCP listener bound to `127.0.0.1`. The first frame on every connection must be `auth` with the configured 256-bit bearer token. After authentication, each request carries `id`, `method`, and optional `params`; each reply includes the matching `id` and either a result or error.
 
 ```json
+{"id":"auth","method":"auth","params":{"token":"<64-hex>"}}
 {"id":1,"method":"ui.inspect","params":{}}
 ```
 
@@ -16,8 +17,8 @@ Implementation is split across:
 
 ## Current security posture
 
-**Implemented:** the desktop server binds to IPv4 loopback, the bridge accepts only loopback-style addresses, and request handlers use a 60-second response timeout.
+**Implemented:** the desktop server binds to IPv4 loopback; every TCP connection authenticates before dispatch; the bridge accepts only loopback-style addresses and authenticates on connection; encoded request lines are limited to 1 MiB; active connections are limited to 16; socket I/O and handler waits use timeouts; MCP and headless batches are limited to 256 steps.
 
-**Known limitations:** there is no authentication handshake, encryption, client identity, per-method capability check, request-line byte limit, connection limit, or bounded worker pool. The listener creates one thread per accepted connection. Any local process able to connect can attempt exposed operations with PhotoCraft's user permissions.
+**Known limitations:** the token is a bearer credential and grants the complete exposed control surface. There is no encryption, client identity, per-method capability check, allowed filesystem root, JSON-depth limit, or operation/resource budget. The listener creates one thread per authenticated active connection, within the connection cap.
 
-Enable `--control` only for the duration of a trusted local automation session. See [Automation security](../security/automation-security.md) for the proposed gateway model.
+Use a private token file, enable `--control` only for a trusted local automation session, and never proxy the unencrypted protocol beyond loopback. See [Automation security](../security/automation-security.md) for the remaining gateway work.
