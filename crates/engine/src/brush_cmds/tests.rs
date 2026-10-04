@@ -226,3 +226,19 @@ fn brush_blend_mode_multiply() {
     let n = rgba(&s2, 20, 20);
     assert!(n[2] > 0.9 && n[0] < 0.1, "normal paints blue: {n:?}");
 }
+
+#[test]
+fn eraser_on_background_layer_paints_the_background_colour() {
+    // Issue #15: erasing the Background layer (locked transparency) must paint the background
+    // colour, not silently do nothing (opacity can't be removed there).
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 20, "background": "white"})).unwrap();
+    s.execute("tools.setColors", json!({"background": "#ff0000"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[2, 10], [18, 10]], "size": 8, "erase": true, "brush": {"hardness": 1.0}})).unwrap();
+    let st = s.active().unwrap();
+    let c = st.doc.layers[0].surface().unwrap().rgba(10, 10);
+    assert!(c[0] > 0.9 && c[1] < 0.1 && c[2] < 0.1 && c[3] > 0.99, "erased to opaque background red: {c:?}");
+    // A corner the stroke didn't touch stays white.
+    let w = st.doc.layers[0].surface().unwrap().rgba(10, 2);
+    assert!(w[0] > 0.9 && w[1] > 0.9 && w[2] > 0.9, "untouched stays white: {w:?}");
+}

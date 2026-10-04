@@ -167,6 +167,12 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
         let mut brush = brush;
+        // Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so
+        // it paints the background colour instead (Photoshop). `gray` targets are handled above.
+        if brush.erase && lock {
+            brush.erase = false;
+            brush.color = bg;
+        }
         if auto_erase {
             // Pencil Auto Erase: starting on foreground-coloured pixels paints the background colour.
             let c = surf.rgba(pts[0].x.floor() as i32, pts[0].y.floor() as i32);
