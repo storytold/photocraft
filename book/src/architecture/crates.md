@@ -22,4 +22,4 @@ Workspace applications are:
 | PhotoCraft CLI | `apps/photocraft-cli` | Convert, inspect, run, batch, JSON-lines serve, and MCP |
 | PhotoCraft web | `apps/photocraft-web` | The UI and engine compiled for WebAssembly |
 
-New crates must be registered in `xtask/src/layers.rs`. Nothing below `ui-egui` may depend on egui, eframe, winit, or rfd. The `psd`, `codecs`, and `cms` crates have additional independence requirements documented in [`AGENTS.md`](https://github.com/Gh0stlyKn1ght/photocraft/blob/main/AGENTS.md).
+New crates must be registered in `xtask/src/layers.rs`. Nothing below `ui-egui` may depend on egui, eframe, winit, or rfd. The `psd`, `codecs`, and `cms` crates have additional independence requirements documented in [`AGENTS.md`](https://github.com/storytold/photocraft/blob/main/AGENTS.md).

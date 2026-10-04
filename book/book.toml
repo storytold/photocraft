@@ -11,8 +11,8 @@ create-missing = false
 
 [output.html]
 git-repository-icon = "fa-github"
-git-repository-url = "https://github.com/Gh0stlyKn1ght/photocraft"
-edit-url-template = "https://github.com/Gh0stlyKn1ght/photocraft/edit/main/book/{path}"
+git-repository-url = "https://github.com/storytold/photocraft"
+edit-url-template = "https://github.com/storytold/photocraft/edit/main/book/{path}"
 preferred-dark-theme = "navy"
 smart-punctuation = true
 

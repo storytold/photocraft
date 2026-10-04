@@ -18,7 +18,7 @@ cargo xtask layers
 cargo xtask wasm
 ```
 
-`cargo xtask wasm` requires the `wasm32-unknown-unknown` target. UI work should also be checked using the offscreen snapshot example described in the [development guide](https://github.com/Gh0stlyKn1ght/photocraft/blob/main/docs/development.md).
+`cargo xtask wasm` requires the `wasm32-unknown-unknown` target. UI work should also be checked using the offscreen snapshot example described in the [development guide](https://github.com/storytold/photocraft/blob/main/docs/development.md).
 
 ## Build the documentation
 

@@ -19,4 +19,4 @@ Format adapters pass compatible allocation limits into PNG, TIFF, WebP, and `ima
 
 `Limits::none()` exists for callers with a deliberate reason to relax policy. It remains bounded by representable memory sizes, but it removes the default resource policy and should not be used for untrusted input.
 
-Animated containers are represented as a single decoded frame by the current codec API. Refer to [`crates/codecs/README.md`](https://github.com/Gh0stlyKn1ght/photocraft/blob/main/crates/codecs/README.md) and source capability declarations for current behavior.
+Animated containers are represented as a single decoded frame by the current codec API. Refer to [`crates/codecs/README.md`](https://github.com/storytold/photocraft/blob/main/crates/codecs/README.md) and source capability declarations for current behavior.

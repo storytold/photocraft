@@ -26,7 +26,7 @@ cargo test -p photocraft-engine
 cargo test -p photocraft-engine --test panic_hunt -- --ignored
 ```
 
-The exact command-creation checklist is maintained in the existing [contribution guide](https://github.com/Gh0stlyKn1ght/photocraft/blob/main/docs/contributing.md).
+The exact command-creation checklist is maintained in the existing [contribution guide](https://github.com/storytold/photocraft/blob/main/docs/contributing.md).
 
 ## Security boundary note
 

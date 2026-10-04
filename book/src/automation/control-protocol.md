@@ -6,7 +6,7 @@ The desktop control protocol is newline-delimited JSON over a TCP listener bound
 {"id":1,"method":"ui.inspect","params":{}}
 ```
 
-The current method catalog includes engine execution and discovery, application open/save operations, UI inspection and input, screenshots, and document/control helpers. The authoritative method and parameter tables are maintained in [`docs/control-protocol.md`](https://github.com/Gh0stlyKn1ght/photocraft/blob/main/docs/control-protocol.md).
+The current method catalog includes engine execution and discovery, application open/save operations, UI inspection and input, screenshots, and document/control helpers. The authoritative method and parameter tables are maintained in [`docs/control-protocol.md`](https://github.com/storytold/photocraft/blob/main/docs/control-protocol.md).
 
 Implementation is split across:
 
