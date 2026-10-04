@@ -177,10 +177,16 @@ impl ConnectionLimiter {
     }
 
     pub fn try_acquire(self: &Arc<Self>) -> Option<ConnectionPermit> {
-        self.active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| (current < self.max).then_some(current + 1))
-            .ok()
-            .map(|_| ConnectionPermit { limiter: Arc::clone(self) })
+        let mut current = self.active.load(Ordering::Acquire);
+        loop {
+            if current >= self.max {
+                return None;
+            }
+            match self.active.compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(ConnectionPermit { limiter: Arc::clone(self) }),
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 
