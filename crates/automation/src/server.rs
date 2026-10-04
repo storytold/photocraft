@@ -2,7 +2,7 @@
 //! are not valid in every client's tool-name grammar).
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -228,9 +228,10 @@ impl PhotocraftMcp {
         let h = h.clone();
         Some(
             tokio::task::spawn_blocking(move || {
-                let mut g = h
-                    .lock()
-                    .map_err(|_| AutomationError::Other("session lock poisoned".into()))?;
+                // A panicking command poisons the lock, but edits run on a copy
+                // of the document (`Session::edit`), so the session is still
+                // consistent: keep serving instead of failing every later call.
+                let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
                 f(&mut g)
             })
             .await
@@ -671,4 +672,24 @@ pub fn render_document_png(
     max_side: u32,
 ) -> Result<Vec<u8>, AutomationError> {
     files::render_png(doc, max_side)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panicking_command_does_not_wedge_the_session() {
+        let mcp = PhotocraftMcp::headless();
+        let r = mcp
+            .headless_op(|_| -> Result<(), AutomationError> { panic!("boom") })
+            .await
+            .unwrap();
+        assert!(r.is_err());
+        let r = mcp
+            .headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8})))
+            .await
+            .unwrap();
+        assert!(r.is_ok(), "session still usable after a panic: {r:?}");
+    }
 }
