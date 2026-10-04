@@ -80,6 +80,7 @@ pub fn native() -> Services {
             photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())
         })),
         inbox: None,
+        open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         clipboard_set_image: Some(Box::new(|w: u32, h: u32, px: &[u8]| {
             let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())

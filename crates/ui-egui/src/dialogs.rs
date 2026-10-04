@@ -46,7 +46,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.vertical_centered(|ui| {
                         crate::links::discord_button(app, ui, 220.0);
                         ui.add_space(8.0);
-                        crate::links::link_row(ui);
+                        crate::links::link_row(app, ui);
                     });
                     ui.add_space(10.0);
                     ui.weak("egui · wgpu · photocraft-engine");

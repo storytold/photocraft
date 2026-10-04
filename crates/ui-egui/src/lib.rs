@@ -90,6 +90,8 @@ pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<Vec<u
 pub type PickOpenFn = Box<dyn FnMut() -> Option<(String, Vec<u8>)>>;
 pub type PickSaveFn = Box<dyn FnMut(&str) -> Option<String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
+pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
@@ -126,6 +128,8 @@ pub struct Services {
     pub write: Option<WriteFn>,
     /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
     pub encode_png: Option<EncodePngFn>,
+    /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
+    pub open_url: Option<OpenUrlFn>,
     /// Files delivered asynchronously (web file pickers, drag-and-drop): drained every frame.
     pub inbox: Option<Inbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
