@@ -247,6 +247,10 @@ fn median_cut(pts: &[([f32; 3], u32)], n: usize) -> Vec<[f32; 3]> {
 
 /// Lloyd refinement of `centers` over weighted points.
 fn kmeans(pts: &[([f32; 3], u32)], centers: &mut [[f32; 3]], iters: usize) {
+    if centers.is_empty() {
+        // No room left (the forced colours fill the palette): nothing to refine.
+        return;
+    }
     for _ in 0..iters {
         let mut sum = vec![[0.0f64; 3]; centers.len()];
         let mut cnt = vec![0.0f64; centers.len()];
@@ -687,6 +691,24 @@ mod tests {
             let pal = build_palette(&px, kind, 16, Forced::BlackWhite).unwrap();
             assert!(pal.len() <= 16 && pal.len() >= 8, "{kind:?} {}", pal.len());
             assert_eq!(&pal[..2], &[[0, 0, 0], [255, 255, 255]]);
+        }
+    }
+
+    #[test]
+    fn forced_colours_filling_the_count_do_not_panic() {
+        // 2 colours + Black and White (or 8 + Primaries) leaves no room for
+        // computed entries; the median cut used to return no centres and
+        // k-means indexed into the empty list.
+        let px = vec![[1.0, 1.0, 1.0, 1.0]; 16];
+        for kind in [
+            PaletteKind::Adaptive,
+            PaletteKind::Perceptual,
+            PaletteKind::Selective,
+        ] {
+            let pal = build_palette(&px, kind, 2, Forced::BlackWhite).unwrap();
+            assert_eq!(pal, vec![[0, 0, 0], [255, 255, 255]], "{kind:?}");
+            let pal = build_palette(&gradient(8, 8), kind, 8, Forced::Primaries).unwrap();
+            assert_eq!(pal.len(), 8, "{kind:?}");
         }
     }
 
