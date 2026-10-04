@@ -160,7 +160,7 @@ impl GpuCanvas {
         }
         let mut renderer = self.rs.renderer.write();
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return Err(photocraft_gpu::Unsupported("no GPU canvas".into())) };
-        let mut comp = res.compositor.take().unwrap_or_else(|| photocraft_gpu::Compositor::new(device));
+        let mut comp = res.compositor.take().unwrap_or_else(|| photocraft_gpu::Compositor::new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)));
         let key = doc.id.0;
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size);
         let region = if fresh { doc.bounds() } else { region.intersect(&doc.bounds()) };

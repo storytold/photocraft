@@ -3417,6 +3417,7 @@ dependencies = [
 name = "photocraft-gpu"
 version = "0.1.1"
 dependencies = [
+ "half",
  "log",
  "photocraft-color",
  "photocraft-compose",

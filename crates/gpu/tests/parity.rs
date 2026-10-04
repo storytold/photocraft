@@ -961,3 +961,38 @@ fn lab_documents_mix_in_lab() {
     let p = photocraft_compose::flatten(&d).px[0];
     assert!((p[0] - 0.5).abs() > 0.05 || (p[2] - 0.5).abs() > 0.05, "{p:?}");
 }
+
+#[test]
+fn rgba16f_fallback_path_renders() {
+    // Issue #7 / #4: on adapters that can't render Rgba32Float the compositor falls back to
+    // Rgba16Float. Force that path here (even on a 32f-capable GPU) to prove it works end to end —
+    // pipeline creation, the accumulation texture, and the half-float readback — within display
+    // tolerance of the CPU reference. This is the path Intel-Vulkan / limited GPUs take.
+    let instance = wgpu::Instance::default();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        return;
+    };
+    let Some((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok() else {
+        return;
+    };
+    let mut comp = Compositor::new_with_format(&device, wgpu::TextureFormat::Rgba16Float);
+    let mut d = base_doc(48, 32);
+    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 48, 32), 7, 1.0);
+    top.blend = BlendMode::Multiply;
+    top.opacity = 0.8;
+    d.layers.push(top);
+    d.layers.push(Layer::new("adj", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false })));
+    let cpu = photocraft_compose::flatten(&d);
+    let out = render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("16f render");
+    let mut worst = 0.0f32;
+    for (c, o) in cpu.px.iter().zip(&out) {
+        for k in 0..4 {
+            worst = worst.max((c[k] * c[3] - o[k] * o[3]).abs());
+        }
+    }
+    // Half-float display precision — looser than the exact 1/255 parity bar, but proves the path works.
+    assert!(worst <= 3.0 / 255.0, "16f fallback max diff {:.2}/255", worst * 255.0);
+    // preferred_acc_format returns a renderable format for this adapter.
+    let f = Compositor::preferred_acc_format(&adapter);
+    assert!(matches!(f, wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::Rgba16Float));
+}

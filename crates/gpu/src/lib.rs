@@ -43,7 +43,7 @@ pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 /// Accumulator format for intermediate buffers. Full float: discontinuous operations
 /// (Posterize, Threshold, Hard Mix, Dissolve) must land on the same side of their thresholds as
 /// the CPU reference, and Color Burn/Dodge amplify input error.
-pub const ACC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+pub const ACC_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float; // default accumulation format; `preferred_acc_format` downgrades to Rgba16Float where 32-bit float isn't renderable
 /// Effect intermediates (distances, blurs) and layer shapes.
 const MAP32: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Final effect coverage maps (0..1; half precision is ~1/4000).
@@ -181,6 +181,7 @@ impl Tex {
         let bpp = match self.texture.format() {
             wgpu::TextureFormat::R16Float => 2,
             wgpu::TextureFormat::Rgba32Float => 16,
+            wgpu::TextureFormat::Rgba16Float => 8,
             _ => 4,
         };
         s.width as usize * s.height as usize * bpp
@@ -310,6 +311,7 @@ pub struct Compositor {
     patterns: HashMap<String, (u64, Tex)>,
     max_dim: u32,
     frame: u64,
+    acc_format: wgpu::TextureFormat,
 }
 
 fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -343,7 +345,27 @@ struct Bound {
 }
 
 impl Compositor {
+    /// Create a compositor with the default accumulation format ([`ACC_FORMAT`]).
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_with_format(device, ACC_FORMAT)
+    }
+
+    /// The accumulation format to use on `adapter`: `Rgba32Float` when it can be a render target,
+    /// else `Rgba16Float`. Some drivers (e.g. Intel Vulkan) don't support rendering to `Rgba32Float`
+    /// and would otherwise panic at render-pipeline creation.
+    pub fn preferred_acc_format(adapter: &wgpu::Adapter) -> wgpu::TextureFormat {
+        let feats = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba32Float);
+        if feats.allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
+            wgpu::TextureFormat::Rgba32Float
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        }
+    }
+
+    /// Create a compositor whose accumulation/render-target format is `acc_format`. Pass
+    /// `Rgba16Float` on adapters that can't render to `Rgba32Float` (e.g. some Intel Vulkan drivers),
+    /// which otherwise panics at render-pipeline creation. See `Compositor::preferred_acc_format`.
+    pub fn new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("pc_compose_uniforms"), entries: &[uniform_entry(0, CHUNK_UNIFORM), uniform_entry(1, OP_UNIFORM)] });
         let bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("pc_compose_textures"), entries: &(0..8).map(tex_entry).collect::<Vec<_>>() });
@@ -351,7 +373,7 @@ impl Compositor {
         let mut pipelines = HashMap::new();
         for k in Kernel::DRAWN {
             let entry = k.entry().expect("drawn kernels have an entry point");
-            let formats: &[wgpu::TextureFormat] = if k.is_map() { &[MAP32, MAP16] } else { &[ACC_FORMAT] };
+            let formats: &[wgpu::TextureFormat] = if k.is_map() { &[MAP32, MAP16] } else { &[acc_format] };
             for &format in formats {
                 let p = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some(entry),
@@ -377,6 +399,7 @@ impl Compositor {
             patterns: HashMap::new(),
             max_dim: device.limits().max_texture_dimension_2d,
             frame: 0,
+            acc_format,
         }
     }
 
@@ -532,7 +555,7 @@ impl Compositor {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: ACC_FORMAT,
+                format: self.acc_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -621,7 +644,7 @@ impl Compositor {
                 if clear {
                     continue;
                 }
-                pass.set_pipeline(&self.kit.pipelines[&(p.kernel, ACC_FORMAT)]);
+                pass.set_pipeline(&self.kit.pipelines[&(p.kernel, self.acc_format)]);
                 pass.set_scissor_rect(scissor.x0 as u32, scissor.y0 as u32, scissor.width(), scissor.height());
                 pass.set_bind_group(0, &bg0, &[(ci as u64 * STRIDE) as u32, (op_base + i as u64 * STRIDE) as u32]);
                 pass.set_bind_group(1, bg1[i].as_ref(), &[]);
@@ -1109,8 +1132,11 @@ pub fn render_to_vec(comp: &mut Compositor, device: &wgpu::Device, queue: &wgpu:
 pub fn render_to_vec_stats(comp: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue, doc: &Document, rect: Rect) -> Result<(Vec<[f32; 4]>, Stats), Unsupported> {
     let rect = rect.intersect(&doc.bounds());
     let mut staging: Vec<(Rect, wgpu::Buffer, u32)> = Vec::new();
+    let mut bpp = 16u32;
     let stats = comp.render(device, queue, doc, rect, |enc, out| {
-        let row = (out.rect.width() * 16).div_ceil(256) * 256;
+        // Bytes per pixel of the accumulation format (Rgba32Float = 16, Rgba16Float = 8).
+        bpp = if out.texture.format() == wgpu::TextureFormat::Rgba32Float { 16 } else { 8 };
+        let row = (out.rect.width() * bpp).div_ceil(256) * 256;
         let buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("pc_readback"), size: (row * out.rect.height()) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo { texture: out.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -1129,8 +1155,12 @@ pub fn render_to_vec_stats(comp: &mut Compositor, device: &wgpu::Device, queue: 
         let data = b.slice(..).get_mapped_range().expect("mapped readback buffer");
         for y in 0..r.height() as usize {
             for x in 0..r.width() as usize {
-                let o = y * *row as usize + x * 16;
-                let px: [f32; 4] = std::array::from_fn(|i| f32::from_le_bytes(data[o + i * 4..o + i * 4 + 4].try_into().expect("4 bytes")));
+                let o = y * *row as usize + x * bpp as usize;
+                let px: [f32; 4] = if bpp == 16 {
+                    std::array::from_fn(|i| f32::from_le_bytes(data[o + i * 4..o + i * 4 + 4].try_into().expect("4 bytes")))
+                } else {
+                    std::array::from_fn(|i| half::f16::from_le_bytes([data[o + i * 2], data[o + i * 2 + 1]]).to_f32())
+                };
                 let (dx, dy) = ((r.x0 - rect.x0) as usize + x, (r.y0 - rect.y0) as usize + y);
                 out[dy * w + dx] = px;
             }
