@@ -262,6 +262,14 @@ Installers for macOS, Windows, Linux and the web are attached to each [GitHub re
 > [!IMPORTANT]
 > **Status:** PhotoCraft is in early alpha. The core editing workflow is here, and we're working toward full Photoshop parity milestone by milestone (see [`docs/roadmap.md`](docs/roadmap.md)). Progress is measured, not guessed: `cargo xtask parity` checks every item in Photoshop's menu tree against the live command registry and writes [`docs/parity.md`](docs/parity.md). Expect rough edges, and please file issues. You can also tell us what broke on [Discord](https://discord.gg/artcraft).
 
+## Documentation
+
+Developer, architecture, automation, format, and security documentation is maintained in the [PhotoCraft documentation book](book/).
+
+## Security
+
+Security architecture, threat modeling, parser hardening, fuzzing, and vulnerability reporting are covered in the [security documentation](book/src/security/) and the repository [security policy](SECURITY.md).
+
 ## The Crafting Apps
 
 PhotoCraft is one of the **Crafting Apps**: free, open-source creative tools from the
