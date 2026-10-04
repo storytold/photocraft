@@ -98,6 +98,14 @@ fn workspace_name(id: &str) -> Option<&'static str> {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if crate::discard_ui::intercept(app, id, &params) {
+        return Ok(Value::Null);
+    }
+    invoke_unguarded(app, ctx, id, params)
+}
+
+/// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
+pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     // Help › Discord, website, GitHub, Report an Issue.
     if let Some(url) = crate::links::url_for(id) {
         return Ok(crate::links::open(app, ctx, url));

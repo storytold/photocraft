@@ -164,11 +164,11 @@ fn engine_commands_open_their_dialogs() {
     assert!(app.run("type.info", json!({})).unwrap()["warp"]["style"] == "warpArc");
     // Batch needs a recorded action.
     assert!(menu(&mut app, &ctx, "file.automate.batch", json!({})).is_err());
-    // Close Others keeps the active document's view.
+    // Close Others keeps the active document's view (the documents are dirty; the unsaved-changes prompt is covered in discard_ui).
     app.ui.views[1].zoom = 4.0;
-    menu(&mut app, &ctx, "file.closeOthers", json!({})).unwrap();
+    crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeOthers", json!({})).unwrap();
     assert_eq!(app.ui.views.len(), 1);
     assert_eq!(app.ui.views[0].zoom, 4.0);
-    menu(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
+    crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
     assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
 }

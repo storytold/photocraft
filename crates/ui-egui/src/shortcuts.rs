@@ -49,7 +49,7 @@ pub fn pretty(s: &str) -> String {
 }
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if ctx.egui_wants_keyboard_input() || !app.ui.dialogs.is_empty() {
+    if ctx.egui_wants_keyboard_input() || !app.ui.dialogs.is_empty() || app.discard.is_some() {
         return;
     }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.

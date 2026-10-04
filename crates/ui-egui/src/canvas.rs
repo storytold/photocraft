@@ -502,7 +502,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.session.set_active(i);
     }
     if let Some(i) = close {
-        let _ = app.run("file.close", json!({"document": i}));
+        let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
     }
 }
 
@@ -549,7 +549,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.session.set_active(i);
     }
     if let Some(i) = close {
-        let _ = app.run("file.close", json!({"document": i}));
+        let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
     }
 }
 

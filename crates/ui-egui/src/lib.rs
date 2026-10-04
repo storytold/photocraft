@@ -20,6 +20,7 @@ pub mod color_picker_ui;
 pub mod comps_ui;
 pub mod control;
 pub mod dialogs;
+pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod enable_rules;
@@ -221,6 +222,10 @@ pub struct PhotocraftApp {
     pub perf: gpu_canvas::Perf,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
+    /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
+    pub(crate) discard: Option<discard_ui::Prompt>,
+    /// Set once the user has agreed to quit, so the resulting close request goes through.
+    pub(crate) allow_close: bool,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
 }
@@ -270,6 +275,8 @@ impl PhotocraftApp {
             gpu: None,
             perf: Default::default(),
             prefs_rt: Default::default(),
+            discard: None,
+            allow_close: false,
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
@@ -493,6 +500,7 @@ impl eframe::App for PhotocraftApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
+        discard_ui::guard_window_close(self, ctx);
         shortcuts::handle(self, ctx);
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
@@ -568,6 +576,7 @@ impl eframe::App for PhotocraftApp {
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        discard_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);

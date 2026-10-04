@@ -313,6 +313,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
         },
         "app.save" => wrap(app.save_as(s("path").map(str::to_string)).map(|p| json!({"path": p}))),
         "app.quit" => {
+            app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Value::Null)
         }
