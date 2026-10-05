@@ -369,6 +369,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.icon_width = 14.0;
         s.visuals.indent_has_left_vline = false;
         s.interaction.tooltip_delay = TOOLTIP_DELAY;
+        s.animation_time = ANIMATION_TIME;
         // Thin overlay scrollbars that appear on hover (Photoshop/macOS style).
         s.spacing.scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
         s.spacing.tooltip_width = 280.0;
@@ -377,6 +378,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
 
 /// Seconds the pointer rests on a control before its tooltip shows.
 pub const TOOLTIP_DELAY: f32 = 0.35;
+
+/// Seconds menus, popups and collapsing sections take to fade or slide (egui's default).
+pub const ANIMATION_TIME: f32 = 1.0 / 12.0;
 
 /// Vertical gap between stacked control rows in panels (Properties fields, the Layers panel's
 /// Opacity and Fill rows); docks zero egui's item spacing, so rows add this themselves.

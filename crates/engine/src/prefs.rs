@@ -207,6 +207,8 @@ pub struct Interface {
     /// Draw menu item colours set with Edit › Menus.
     pub show_menu_colors: bool,
     pub show_tooltips: bool,
+    /// Fade menus, popups, tooltips and collapsing sections in and out; off makes them instant.
+    pub animate_menus_and_panels: bool,
 }
 
 impl Default for Interface {
@@ -222,6 +224,7 @@ impl Default for Interface {
             dynamic_color_sliders: true,
             show_menu_colors: true,
             show_tooltips: true,
+            animate_menus_and_panels: true,
         }
     }
 }

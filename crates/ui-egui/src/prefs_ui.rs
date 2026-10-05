@@ -181,6 +181,16 @@ fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Interface › Animate Menus and Panels: off sets egui's animation time to zero, so menus,
+/// popups, tooltips and collapsing sections appear at once. Re-checked every frame for the same
+/// reason as [`sync_tooltips`].
+fn sync_animations(app: &PhotocraftApp, ctx: &egui::Context) {
+    let time = if app.session.prefs().interface.animate_menus_and_panels { crate::theme::ANIMATION_TIME } else { 0.0 };
+    if ctx.global_style().animation_time != time {
+        ctx.global_style_mut(|s| s.animation_time = time);
+    }
+}
+
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
@@ -202,6 +212,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     presets_store(app);
     sync_tooltips(app, ctx);
+    sync_animations(app, ctx);
     app.sync_recent();
     if app.session.prefs.rev() != app.prefs_rt.saved_rev {
         app.prefs_rt.saved_rev = app.session.prefs.rev();
@@ -1245,6 +1256,24 @@ mod tests {
             tick(&mut app, &ctx);
             assert_eq!(ctx.global_style().interaction.tooltip_delay, crate::theme::TOOLTIP_DELAY);
         }
+    }
+
+    #[test]
+    fn animate_menus_and_panels_preference_turns_fades_off() {
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert_eq!(ctx.global_style().animation_time, crate::theme::ANIMATION_TIME);
+        app.run("prefs.set", json!({"values": {"interface.animateMenusAndPanels": false}})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(ctx.global_style().animation_time, 0.0, "menus and popups open at once");
+        // A theme change rebuilds the style; the preference still holds.
+        app.set_theme(&ctx, crate::theme::ThemeKind::Studio);
+        tick(&mut app, &ctx);
+        assert_eq!(ctx.global_style().animation_time, 0.0);
+        app.run("prefs.set", json!({"values": {"interface.animateMenusAndPanels": true}})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(ctx.global_style().animation_time, crate::theme::ANIMATION_TIME);
     }
 
     #[test]
