@@ -38,6 +38,13 @@ Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"
     values in two columns (H S B, R G B and # on the left; L a b and C M Y K on the right); "Only
     Web Colors" under the colour field. Every one of H, S, B, R, G, B, L, a and b has a radio
     that picks what the field and slider show.
+  - Color Picker CMYK values go through a printing profile: the active CMYK document's own
+    profile, else the working CMYK from Edit › Color Settings (`ColorState::rgb_to_ink` /
+    `ink_to_rgb`). Load the same profile as Photoshop and the numbers match it.
+  - Add to Swatches (Color Picker) asks for a name and saves the colour (`swatches.add`); saved
+    swatches live in the preferences (`swatches`) and follow the built-in ones in the Swatches
+    panel, which scrolls. Alt-click deletes a saved swatch (`swatches.delete`); the panel's +
+    button saves the foreground colour.
 - **Motion:** menus, popups and tooltips fade in over `theme::ANIMATION_TIME` (1/12 s).
   Preferences › Interface › "Animate menus and panels" turns that off (`animation_time` 0), so
   they appear at once.

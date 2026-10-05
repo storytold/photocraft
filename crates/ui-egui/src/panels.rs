@@ -1265,32 +1265,81 @@ const SWATCHES: [[u8; 3]; 40] = [
     [110, 20, 90],
 ];
 
+/// A Swatches panel cell: its colour, and the index and name of a saved swatch.
+type SwatchCell = ([u8; 3], Option<(usize, String)>);
+
+/// The Swatches panel: the built-in colours, then the ones saved with Add to Swatches or the
+/// panel's new-swatch button. Click sets the foreground, right-click the background, Alt-click
+/// deletes a saved swatch (Photoshop).
 fn swatches(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let cols = 10;
     let gap = 4.0;
     let w = ui.available_width();
     let cell = ((w - gap * (cols as f32 - 1.0)) / cols as f32).floor();
-    let rows = SWATCHES.len().div_ceil(cols);
-    let (area, _) = ui.allocate_exact_size(vec2(w, rows as f32 * (cell + gap)), Sense::hover());
-    for (i, s) in SWATCHES.iter().enumerate() {
-        let (cx, cy) = ((i % cols) as f32, (i / cols) as f32);
-        let r = Rect::from_min_size(area.min + vec2(cx * (cell + gap), cy * (cell + gap)), Vec2::splat(cell));
-        let resp = ui.interact(r, ui.id().with(("sw", i)), Sense::click());
-        ui.painter().rect_filled(r, 4.0, Color32::from_rgb(s[0], s[1], s[2]));
-        if resp.hovered() {
-            ui.painter().rect_stroke(r, 4.0, Stroke::new(1.5, t.text), StrokeKind::Outside);
+    // Saved entries that don't parse (a hand-edited preferences file) are skipped.
+    let mut cells: Vec<SwatchCell> = SWATCHES.iter().map(|c| (*c, None)).collect();
+    cells.extend(
+        app.session
+            .prefs()
+            .swatches
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| photocraft_engine::prefs::parse_hex(&s.color).map(|c| (c, Some((i, s.name.clone()))))),
+    );
+    let rows = cells.len().div_ceil(cols);
+    let alt = ui.input(|i| i.modifiers.alt);
+    let mut delete = None;
+    // The grid scrolls when the group is shorter than it (saved swatches come after the
+    // built-in ones); the hint row below stays put.
+    let max_h = (ui.available_height() - 24.0).max(cell + gap);
+    egui::ScrollArea::vertical().id_salt("swatches-grid").max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
+        let (area, _) = ui.allocate_exact_size(vec2(w, rows as f32 * (cell + gap)), Sense::hover());
+        for (i, (s, saved)) in cells.iter().enumerate() {
+            let (cx, cy) = ((i % cols) as f32, (i / cols) as f32);
+            let r = Rect::from_min_size(area.min + vec2(cx * (cell + gap), cy * (cell + gap)), Vec2::splat(cell));
+            let mut resp = ui.interact(r, ui.id().with(("sw", i)), Sense::click());
+            ui.painter().rect_filled(r, 4.0, Color32::from_rgb(s[0], s[1], s[2]));
+            if resp.hovered() {
+                ui.painter().rect_stroke(r, 4.0, Stroke::new(1.5, t.text), StrokeKind::Outside);
+            }
+            if let Some((index, name)) = saved {
+                resp = resp.on_hover_text(format!("{name}\n{}-click to delete", crate::shortcuts::pretty("Alt")));
+                if resp.clicked() && alt {
+                    delete = Some(*index);
+                    continue;
+                }
+            }
+            let c = [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, 1.0];
+            if resp.clicked() {
+                app.session.tools.foreground = c;
+            }
+            if resp.secondary_clicked() {
+                app.session.tools.background = c;
+            }
         }
-        let c = [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, 1.0];
-        if resp.clicked() {
-            app.session.tools.foreground = c;
-        }
-        if resp.secondary_clicked() {
-            app.session.tools.background = c;
-        }
+    });
+    if let Some(index) = delete
+        && let Err(e) = app.run("swatches.delete", json!({ "index": index }))
+    {
+        app.ui.status = format!("Couldn't delete the swatch: {e}");
     }
     ui.add_space(2.0);
-    ui.label(RichText::new("Click sets foreground · right-click sets background").small().color(t.text_faint));
+    ui.horizontal(|ui| {
+        // The new-swatch button keeps its room; the hint is cut short in a narrow dock.
+        let hint_w = (ui.available_width() - 30.0).max(0.0);
+        ui.allocate_ui(vec2(hint_w, 22.0), |ui| {
+            ui.add(egui::Label::new(RichText::new("Click: foreground · right-click: background").small().color(t.text_faint)).truncate());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let resp = icons::button(ui, "square-plus", 22.0, false, "Create new swatch from the foreground colour");
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Create new swatch"));
+            if resp.clicked() {
+                let fg = app.session.tools.foreground;
+                crate::color_picker_ui::open_swatch_name(app, [fg[0], fg[1], fg[2]]);
+            }
+        });
+    });
 }
 
 fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {

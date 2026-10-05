@@ -212,15 +212,19 @@ fn grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) -> Mesh
 /// Width of a numeric field, and of the right-hand area (swatches, buttons, two field columns).
 const FIELD_W: f32 = 44.0;
 const RIGHT_W: f32 = 224.0;
-/// Width of the OK / Cancel buttons.
-const BUTTON_W: f32 = 104.0;
+/// Width of the OK / Cancel / Add to Swatches buttons.
+const BUTTON_W: f32 = 128.0;
 /// Width of the whole body: field, gap, slider, gap, right-hand area.
 pub const WIDTH: f32 = 256.0 + 12.0 + 20.0 + 18.0 + RIGHT_W;
 
-/// The picker body. It draws its own OK and Cancel (top right, like Photoshop), so the dialog
-/// host skips its footer; returns `Some(true)` for OK (or Enter), `Some(false)` for Cancel.
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+/// The picker body. It draws its own OK, Cancel and Add to Swatches (top right, like
+/// Photoshop), so the dialog host skips its footer (and handles Enter while the picker is the
+/// topmost dialog); returns `Some(true)` for OK, `Some(false)` for Cancel.
+pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
     let t = Tokens::get(ui.ctx());
+    // CMYK reads through the active CMYK document's profile, else the working CMYK.
+    let doc = app.session.active().map(|d| d.doc.clone());
+    let mut add_swatch = false;
     let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
     let (rgb, hsv) = current(f);
     let (fx, fy, fz) = locate(&mode, hsv, rgb);
@@ -281,7 +285,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
                     ui.spacing_mut().item_spacing.y = 10.0;
                     let ok = widgets::primary_button(ui, "OK", BUTTON_W);
                     let cancel = widgets::secondary_button(ui, "Cancel", BUTTON_W);
-                    for (r, label) in [(&ok, "OK"), (&cancel, "Cancel")] {
+                    let add = widgets::secondary_button(ui, "Add to Swatches", BUTTON_W);
+                    for (r, label) in [(&ok, "OK"), (&cancel, "Cancel"), (&add, "Add to Swatches")] {
                         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
                     }
                     if ok.clicked() {
@@ -289,16 +294,25 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
                     } else if cancel.clicked() {
                         outcome = Some(false);
                     }
+                    add_swatch = add.on_hover_text("Save the new colour in the Swatches panel").clicked();
                 });
             });
             ui.add_space(14.0);
-            fields(ui, f, &mode, rgb, hsv);
+            fields(ui, f, &mode, rgb, hsv, &app.session.color, doc.as_deref());
         });
     });
-    if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        outcome = Some(true);
+    if add_swatch {
+        open_swatch_name(app, rgb);
     }
     outcome
+}
+
+/// Photoshop's "Color Swatch Name" dialog: OK runs `swatches.add` with the name and `rgb`
+/// (passed as an array, which the form keeps but doesn't show).
+pub fn open_swatch_name(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
+    let name = format!("Swatch {}", app.session.prefs().swatches.len() + 1);
+    let color: Vec<f32> = rgb.iter().map(|v| v.clamp(0.0, 1.0)).collect();
+    crate::view_cmds::form(app, "swatches.add", "Color Swatch Name", json!({"name": name, "color": color}), Value::Null)
 }
 
 /// The new (top) and current (bottom) colours; clicking the current one restores it.
@@ -348,10 +362,18 @@ fn field_row(ui: &mut egui::Ui, radio: Option<bool>, label: &str, value: &mut f3
 
 /// Component radios and numeric fields in Photoshop's two columns: HSB, RGB and hex on the
 /// left; Lab and CMYK on the right.
-fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, rgb: [f32; 3], hsv: [f32; 3]) {
+fn fields(
+    ui: &mut egui::Ui,
+    f: &mut Map<String, Value>,
+    mode: &str,
+    rgb: [f32; 3],
+    hsv: [f32; 3],
+    color: &photocraft_engine::color_cmds::ColorState,
+    doc: Option<&photocraft_doc::Document>,
+) {
     let t = Tokens::get(ui.ctx());
     let lab = photocraft_color::convert::srgb_to_lab(rgb);
-    let cmyk = photocraft_color::convert::rgb_to_cmyk(rgb);
+    let cmyk = color.rgb_to_ink(doc, rgb).unwrap_or_else(|_| photocraft_color::convert::rgb_to_cmyk(rgb));
     let mut edit: Option<([f32; 3], Option<[f32; 3]>)> = None;
     let mut new_mode: Option<&str> = None;
     ui.horizontal_top(|ui| {
@@ -412,7 +434,8 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, rgb: [f32; 
                 if field_row(ui, None, label, &mut x, 0.0..=100.0, "%").1 {
                     let mut k = cmyk;
                     k[i] = x / 100.0;
-                    edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), None));
+                    let c = color.ink_to_rgb(doc, k).unwrap_or_else(|_| photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)));
+                    edit = Some((c, None));
                 }
             }
         });
@@ -510,5 +533,38 @@ mod tests {
             let fg = h.state().session.tools.foreground;
             assert_eq!(hex([fg[0], fg[1], fg[2]]), expect, "{button}");
         }
+    }
+
+    /// Add to Swatches asks for a name (Photoshop's "Color Swatch Name"); Enter there saves the
+    /// swatch and closes only the name dialog, the picker stays open.
+    #[test]
+    fn add_to_swatches_names_and_saves_the_colour() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let id = open(&mut app, "foreground");
+            if let Some(d) = app.ui.dialog_mut(id) {
+                d.fields.insert("color".into(), json!("#3399cc"));
+            }
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("Add to Swatches").click();
+        h.run_steps(4);
+        assert_eq!(h.state().ui.dialogs.len(), 2, "the name dialog opens over the picker");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+        let saved = &h.state().session.prefs().swatches;
+        assert_eq!(saved, &vec![photocraft_engine::prefs::Swatch { name: "Swatch 1".into(), color: "#3399cc".into() }]);
+        assert_eq!(h.state().ui.dialogs.len(), 1, "Enter closed only the name dialog");
+        assert!(owns(&h.state().ui.dialogs[0].fields), "the picker is still open");
+        // Enter with the picker on top confirms it.
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.is_empty());
+        let fg = h.state().session.tools.foreground;
+        assert_eq!(hex([fg[0], fg[1], fg[2]]), "#3399cc");
     }
 }

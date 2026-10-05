@@ -206,7 +206,13 @@ pub struct ColorState {
     pub(crate) display: crate::display_color::DisplayCaches,
     /// View › 32-bit Preview Options per document.
     pub hdr: HashMap<DocId, crate::proof_sim::HdrPreview>,
+    /// Working RGB ↔ working CMYK transforms for colour readouts, with the settings they were
+    /// built for (rebuilt only when Color Settings change).
+    ink: Mutex<Option<(InkKey, InkTransforms)>>,
 }
+
+type InkKey = (String, String, String, bool);
+type InkTransforms = (Arc<Transform>, Arc<Transform>);
 
 impl ColorState {
     /// The working profile of a mode from Color Settings (the built-in default when the
@@ -218,6 +224,55 @@ impl ColorState {
             .and_then(|spec| resolve_profile(spec, None, Some(mode)).ok())
             .filter(|p| p.color_space == space)
             .unwrap_or_else(|| working_profile(mode))
+    }
+
+    /// Working RGB ↔ CMYK transforms with the Color Settings intent and black point
+    /// compensation. The CMYK side is the CMYK document's own profile when `doc` is a CMYK
+    /// document with one, else the working CMYK (as in Photoshop's Color Picker). Built once per
+    /// change of those, so per-frame readouts stay cheap.
+    fn ink_transforms(&self, doc: Option<&Document>) -> Result<InkTransforms> {
+        let c = &self.settings;
+        let embedded = doc
+            .filter(|d| mode_space(d.mode) == ColorSpace::Cmyk)
+            .and_then(|d| d.icc_profile.as_ref())
+            .and_then(|b| profile_from_bytes(b).ok())
+            .filter(|p| p.color_space == ColorSpace::Cmyk);
+        let cmyk_key = match &embedded {
+            Some(p) => format!("document:{:x}", p.content_hash()),
+            None => format!("working:{}", c.working_cmyk),
+        };
+        let key = (c.working_rgb.clone(), cmyk_key, c.intent.clone(), c.bpc);
+        let mut cache = self.ink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((k, t)) = cache.as_ref()
+            && *k == key
+        {
+            return Ok(t.clone());
+        }
+        let rgb = self.working(ColorMode::Rgb);
+        let cmyk = embedded.unwrap_or_else(|| self.working(ColorMode::Cmyk));
+        let opts = photocraft_cms::TransformOptions { intent: c.intent(), bpc: c.bpc, ..Default::default() };
+        let t = (photocraft_cms::cached(&rgb, &cmyk, opts).map_err(cms_err)?, photocraft_cms::cached(&cmyk, &rgb, opts).map_err(cms_err)?);
+        *cache = Some((key, t.clone()));
+        Ok(t)
+    }
+
+    /// The CMYK inks (C, M, Y, K, each 0..1) of a working-RGB colour: what Photoshop's Color
+    /// Picker shows. See [`Self::ink_transforms`] for the profile used.
+    pub fn rgb_to_ink(&self, doc: Option<&Document>, rgb: [f32; 3]) -> Result<[f32; 4]> {
+        let (to_ink, _) = self.ink_transforms(doc)?;
+        let src = rgb.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+        let mut ink = [0.0f32; 4];
+        to_ink.convert_f32(&src, 3, &mut ink, 4, false);
+        Ok(ink.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }))
+    }
+
+    /// The working-RGB colour of CMYK inks (each 0..1), clipped to the RGB gamut.
+    pub fn ink_to_rgb(&self, doc: Option<&Document>, ink: [f32; 4]) -> Result<[f32; 3]> {
+        let (_, from_ink) = self.ink_transforms(doc)?;
+        let src = ink.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+        let mut rgb = [0.0f32; 3];
+        from_ink.convert_f32(&src, 4, &mut rgb, 3, false);
+        Ok(rgb.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }))
     }
 
     /// Resolve a profile spec, reading "working…" specs from Color Settings.
@@ -1193,6 +1248,38 @@ mod tests {
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    /// The picker's CMYK follows the CMYK profile in use: the working CMYK, or a CMYK
+    /// document's own profile. It round-trips, and hostile input is clamped, never a panic.
+    #[test]
+    fn ink_readout_follows_the_cmyk_profile_in_use() {
+        use photocraft_cms::synth::{CmykParams, cmyk_profile};
+        let c = ColorState::default();
+        let rgb = [0x33 as f32 / 255.0, 0x99 as f32 / 255.0, 0xcc as f32 / 255.0];
+        let ink = c.rgb_to_ink(None, rgb).unwrap();
+        // The built-in coated CMYK (the default working CMYK).
+        assert_eq!(ink.map(|v| (v * 100.0).round()), [68.0, 16.0, 4.0, 0.0]);
+        let back = c.ink_to_rgb(None, ink).unwrap();
+        for i in 0..3 {
+            assert!((back[i] - rgb[i]).abs() < 0.03, "round trip {rgb:?} -> {ink:?} -> {back:?}");
+        }
+        assert!(c.rgb_to_ink(None, [f32::NAN, f32::INFINITY, -3.0]).is_ok());
+        assert!(c.ink_to_rgb(None, [f32::NAN, 2.0, -1.0, f32::NEG_INFINITY]).is_ok());
+        // A CMYK document with a heavier-dot-gain profile reads differently; RGB documents and
+        // untagged CMYK documents use the working CMYK.
+        let heavy = cmyk_profile(&CmykParams { description: "Test Uncoated CMYK".into(), tvi: [0.26, 0.26, 0.26, 0.3], ..Default::default() });
+        let mut doc = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+        assert_eq!(c.rgb_to_ink(Some(&doc), rgb).unwrap(), ink, "untagged CMYK document");
+        doc.icc_profile = Some(heavy.to_bytes());
+        let own = c.rgb_to_ink(Some(&doc), rgb).unwrap();
+        assert!(own.iter().zip(ink).any(|(a, b)| (a - b).abs() > 0.02), "document profile: {own:?} vs working {ink:?}");
+        doc.mode = ColorMode::Rgb;
+        assert_eq!(c.rgb_to_ink(Some(&doc), rgb).unwrap(), ink, "RGB document");
+        // A working CMYK that isn't CMYK falls back to the built-in one.
+        let mut c2 = ColorState::default();
+        c2.settings.working_cmyk = "sgray".into();
+        assert_eq!(c2.rgb_to_ink(None, rgb).unwrap(), ink);
+    }
 
     fn tagged(spec: &str) -> Document {
         let mut d = Document::with_background("t", photocraft_doc::Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgba(0.2, 0.6, 0.9, 1.0));

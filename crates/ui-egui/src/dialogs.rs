@@ -105,7 +105,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
-                    if let Some(o) = crate::color_picker_ui::body(ui, &mut fields) {
+                    if let Some(o) = crate::color_picker_ui::body(app, ui, &mut fields) {
                         outcome = Some(o);
                     }
                 }
@@ -158,6 +158,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             // Keep the whole dialog (and so its title bar) on screen.
             let room = ((ctx.content_rect().size() - modal.response.rect.size()) / 2.0).max(egui::Vec2::ZERO);
             ctx.data_mut(|m| m.insert_temp(id, (offset + drag).clamp(-room, room)));
+        }
+        // Enter confirms the Color Picker (its own buttons replace the footer, which handles
+        // Enter for other dialogs) only while it is the topmost dialog, so Enter in a dialog it
+        // opened (Add to Swatches' name) doesn't also close the picker.
+        if outcome.is_none()
+            && crate::color_picker_ui::owns(&d.fields)
+            && modal.is_top_modal
+            && !modal.any_popup_open
+            && ctx.input(|i| i.key_pressed(egui::Key::Enter))
+        {
+            outcome = Some(true);
         }
         // Esc cancels (topmost dialog, no popup open). A click outside does nothing: Photoshop keeps
         // the dialog, and the pointer may be panning or zooming the canvas under it.

@@ -67,6 +67,7 @@ pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
+pub mod swatch_cmds;
 mod timeline_cmds;
 pub mod transform_cmds;
 mod trap_cmds;

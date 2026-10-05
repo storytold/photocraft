@@ -744,6 +744,17 @@ pub struct Preferences {
     pub panel_layout: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
+    /// Swatches the user saved (Color Picker › Add to Swatches, `swatches.add`), oldest first.
+    pub swatches: Vec<Swatch>,
+}
+
+/// A saved colour swatch.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Swatch {
+    pub name: String,
+    /// `#rrggbb` (lowercase).
+    pub color: String,
 }
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
