@@ -53,3 +53,13 @@ missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`do
 ## Automation for visual checks
 
 Use `ui.click {x,y}`, `ui.move`, `ui.key` and `ui.type` (synthetic input in screen points) to open menus, popups and context menus, then `ui.screenshot`.
+
+## High DPI and 4K displays
+
+Edit → Preferences → Interface → UI Scale applies immediately. Auto follows the operating
+system's display scale (including fractional scales). For a 4K or larger monitor,
+Auto uses at least 200% so text and controls remain readable. Detection uses the current monitor,
+including portrait displays, and updates when the window moves between monitors. If monitor
+size is unavailable, Auto follows system DPI. The 100% and 200% choices set an absolute UI
+scale, allowing large 4K displays to use smaller controls when desired. Canvas zoom shortcuts
+continue to control the document independently of UI scaling.

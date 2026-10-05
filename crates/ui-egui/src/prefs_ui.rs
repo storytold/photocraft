@@ -143,11 +143,38 @@ fn presets_store(app: &mut PhotocraftApp) {
     }
 }
 
+/// Resolve an absolute pixels-per-point preference without multiplying the OS DPI twice.
+/// Monitor dimensions are physical pixels, independent of window size and UI zoom.
+fn display_scale(pref: prefs::UiScale, native: Option<f32>, monitor_px: Option<egui::Vec2>) -> f32 {
+    let native = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
+    match pref {
+        prefs::UiScale::P100 => 1.0,
+        prefs::UiScale::P200 => 2.0,
+        prefs::UiScale::Auto => {
+            // A 4K display needs at least 200%; preserve larger system scales.
+            let is_4k = monitor_px.is_some_and(|s| s.x.is_finite() && s.y.is_finite() && s.x.min(s.y) >= 2160.0 && s.x.max(s.y) >= 3840.0);
+            if is_4k { native.max(2.0) } else { native }
+        }
+    }
+}
+
+fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
+    let native = ctx.native_pixels_per_point();
+    // ViewportInfo uses egui points, including the current UI zoom. Converting back to
+    // physical pixels avoids oscillating between 100% and 200% on successive frames.
+    // logic() can receive new viewport DPI before InputState::pixels_per_point updates.
+    let native_scale = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
+    let monitor_px = ctx.input(|i| i.viewport().monitor_size).map(|s| s * (native_scale * ctx.zoom_factor()));
+    let scale = display_scale(app.session.prefs().interface.ui_scale, native, monitor_px);
+    ctx.set_zoom_factor(scale / native_scale);
+}
+
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
         load(app);
     }
+    sync_display_scale(app, ctx);
     // Interface theme: a preference change applies to the UI; a theme picked from the Window
     // menu is stored as the preference.
     let pref = app.session.prefs().interface.theme;
@@ -1052,6 +1079,58 @@ mod tests {
             ..Default::default()
         };
         (PhotocraftApp::new(photocraft_engine::Session::new(), services), store)
+    }
+
+    #[test]
+    fn auto_scale_detects_4k_and_preserves_larger_system_dpi() {
+        use prefs::UiScale::Auto;
+        for size in [vec2(3840.0, 2160.0), vec2(4096.0, 2160.0), vec2(2160.0, 3840.0)] {
+            assert_eq!(display_scale(Auto, Some(1.0), Some(size)), 2.0);
+            for dpi in [1.25, 1.5, 2.0] {
+                assert_eq!(display_scale(Auto, Some(dpi), Some(size)), 2.0);
+            }
+        }
+        assert_eq!(display_scale(Auto, Some(3.0), Some(vec2(3840.0, 2160.0))), 3.0);
+        for size in [vec2(1920.0, 1080.0), vec2(2560.0, 1440.0), vec2(3840.0, 1080.0)] {
+            assert_eq!(display_scale(Auto, Some(1.0), Some(size)), 1.0);
+        }
+        assert_eq!(display_scale(Auto, None, None), 1.0);
+        assert_eq!(display_scale(Auto, Some(f32::NAN), Some(vec2(f32::INFINITY, 2160.0))), 1.0);
+    }
+
+    #[test]
+    fn scale_preferences_and_monitor_changes_apply_live() {
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        {
+            let mut step = |physical: egui::Vec2, native: f32, expected: f32| {
+                let mut input = egui::RawInput::default();
+                let viewport = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+                viewport.native_pixels_per_point = Some(native);
+                viewport.monitor_size = Some(physical / (native * ctx.zoom_factor()));
+                ctx.run_ui(input, |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
+                // Scale changes take effect on the following pass.
+                let mut input = egui::RawInput::default();
+                let viewport = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+                viewport.native_pixels_per_point = Some(native);
+                viewport.monitor_size = Some(physical / (native * ctx.zoom_factor()));
+                ctx.run_ui(input, |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
+                assert!((ctx.pixels_per_point() - expected).abs() < 1e-4);
+            };
+            for _ in 0..4 {
+                step(vec2(3840.0, 2160.0), 1.0, 2.0);
+            }
+            step(vec2(1920.0, 1080.0), 1.0, 1.0);
+            step(vec2(3840.0, 2160.0), 1.5, 2.0);
+        }
+        for (pref, expected) in [("200", 2.0), ("100", 1.0), ("auto", 1.5)] {
+            app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
+            let mut input = egui::RawInput::default();
+            input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
+            ctx.run_ui(input.clone(), |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
+            ctx.run_ui(input, |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
+            assert!((ctx.pixels_per_point() - expected).abs() < 1e-4);
+        }
     }
 
     #[test]
