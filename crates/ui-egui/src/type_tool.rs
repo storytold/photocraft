@@ -761,7 +761,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.text_edit.is_some() {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
-            if crate::icons::button(ui, "check", 24.0, false, "Commit any current edits (⌘↩)").clicked() {
+            if crate::icons::button(ui, "check", 24.0, false, &format!("Commit any current edits ({})", crate::shortcuts::pretty("Cmd+Enter"))).clicked() {
                 commit(app);
             }
             if crate::icons::button(ui, "ban", 24.0, false, "Cancel any current edits (Esc)").clicked() {

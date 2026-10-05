@@ -266,9 +266,9 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
                 }
             }
             resp.on_hover_text(if id == 0 && !paragraph {
-                "No character style"
+                "No character style".to_string()
             } else {
-                "Click to apply, ⌥-click to clear overrides, double-click for Style Options"
+                format!("Click to apply, {}-click to clear overrides, double-click for Style Options", crate::shortcuts::pretty("Alt"))
             });
         }
     });

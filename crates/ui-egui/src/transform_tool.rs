@@ -874,7 +874,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(8.0);
-        if crate::icons::button(ui, "check", 24.0, false, "Commit transform (↩)").clicked() {
+        if crate::icons::button(ui, "check", 24.0, false, &format!("Commit transform ({})", crate::shortcuts::pretty("Enter"))).clicked() {
             commit(app);
         }
         if crate::icons::button(ui, "ban", 24.0, false, "Cancel transform (Esc)").clicked() {
@@ -945,7 +945,7 @@ fn warp_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(8.0);
-        if crate::icons::button(ui, "check", 24.0, false, "Commit warp (↩)").clicked() {
+        if crate::icons::button(ui, "check", 24.0, false, &format!("Commit warp ({})", crate::shortcuts::pretty("Enter"))).clicked() {
             commit(app);
         }
         if crate::icons::button(ui, "ban", 24.0, false, "Cancel warp (Esc)").clicked() {

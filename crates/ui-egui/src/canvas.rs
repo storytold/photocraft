@@ -963,6 +963,8 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let recent: Vec<String> = if cfg!(target_arch = "wasm32") { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
     let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
     let card = Rect::from_center_size(area.center(), egui::vec2(460.0, 330.0 + recent_h));
+    let new_label = crate::shortcuts::command_label(app, "New document…", "file.new");
+    let open_label = crate::shortcuts::command_label(app, "Open…", "file.open");
     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
@@ -981,10 +983,10 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.add_space(((card.width() - 2.0 * 190.0 - 12.0) / 2.0).max(0.0));
                 ui.spacing_mut().item_spacing.x = 12.0;
-                if crate::widgets::primary_button(ui, "New document…     ⌘N", 190.0).clicked() {
+                if crate::widgets::primary_button(ui, &new_label, 190.0).clicked() {
                     app.ui.open_dialog(crate::state::DialogKind::NewDocument, crate::state::UiState::new_document_fields());
                 }
-                if crate::widgets::secondary_button(ui, "Open…     ⌘O", 190.0).clicked() {
+                if crate::widgets::secondary_button(ui, &open_label, 190.0).clicked() {
                     app.open_dialog_file();
                 }
             });

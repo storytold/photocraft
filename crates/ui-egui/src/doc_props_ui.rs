@@ -217,11 +217,11 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.x = 6.0;
             let pixel_grid = crate::view_cmds::checked(app, "view.show.pixelGrid").unwrap_or(false);
             for (icon, tip, id, on) in [
-                ("ruler", "Rulers  (⌘R)", "view.rulers", app.ui.extras.rulers),
-                ("grid-3x3", "Grid  (⌘')", "view.show.grid", app.ui.extras.grid),
-                ("grid-2x2", "Pixel Grid", "view.show.pixelGrid", pixel_grid),
+                ("ruler", crate::shortcuts::tip_label(app, "Rulers", "view.rulers"), "view.rulers", app.ui.extras.rulers),
+                ("grid-3x3", crate::shortcuts::tip_label(app, "Grid", "view.show.grid"), "view.show.grid", app.ui.extras.grid),
+                ("grid-2x2", crate::shortcuts::tip_label(app, "Pixel Grid", "view.show.pixelGrid"), "view.show.pixelGrid", pixel_grid),
             ] {
-                if icons::button(ui, icon, 26.0, on, tip).clicked() {
+                if icons::button(ui, icon, 26.0, on, &tip).clicked() {
                     run.push((id.to_string(), Value::Null));
                 }
             }
@@ -240,9 +240,12 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
-            for (icon, tip, id) in [("eye", "Show Guides  (⌘;)", "view.show.guides"), ("lock", "Lock Guides", "view.lockGuides")] {
+            for (icon, tip, id) in [
+                ("eye", crate::shortcuts::tip_label(app, "Show Guides", "view.show.guides"), "view.show.guides"),
+                ("lock", crate::shortcuts::tip_label(app, "Lock Guides", "view.lockGuides"), "view.lockGuides"),
+            ] {
                 let on = if id == "view.lockGuides" { app.ui.extras.lock_guides } else { app.ui.extras.guides };
-                if icons::button(ui, icon, 26.0, on, tip).clicked() {
+                if icons::button(ui, icon, 26.0, on, &tip).clicked() {
                     run.push((id.to_string(), Value::Null));
                 }
             }

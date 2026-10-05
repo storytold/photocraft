@@ -160,11 +160,11 @@ pub fn indicators(
                     actions.push(("layer.setEffectsExpanded".into(), json!({"layer": l.id.0, "expanded": !fx_open, "all": all})));
                 }
                 let (verb, name) = (if fx_open { "Collapse" } else { "Expand" }, l.name.clone());
-                let resp = resp.on_hover_text(if fx_open {
-                    "Hide the layer's effects  (⌥-click: all layers)"
-                } else {
-                    "Show the layer's effects  (⌥-click: all layers)"
-                });
+                let resp = resp.on_hover_text(format!(
+                    "{} the layer's effects  ({}-click: all layers)",
+                    if fx_open { "Hide" } else { "Show" },
+                    crate::shortcuts::pretty("Alt")
+                ));
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{verb} effects {name}")));
             }
         }

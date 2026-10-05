@@ -310,10 +310,7 @@ fn history_log(app: &mut PhotocraftApp) {
 
 // ------------------------------------------------------------------ shortcuts
 
-/// The shortcut in effect for a menu item: the user's override, else `default`.
-pub fn effective_shortcut(app: &PhotocraftApp, id: &str, default: Option<&str>) -> Option<String> {
-    app.session.prefs().shortcut(id, default).map(str::to_string)
-}
+pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 
 /// Every shortcut-bearing command (engine registry plus shell commands): (id, label, menu path,
 /// default shortcut), menu items first in Photoshop order.
@@ -333,17 +330,6 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
         }
     }
     out
-}
-
-/// Default (unmodified) shortcut of a command id.
-pub fn default_shortcut(id: &str) -> Option<String> {
-    crate::menus::UI_COMMANDS
-        .iter()
-        .find(|c| c.0 == id)
-        .and_then(|c| c.3)
-        .or_else(|| photocraft_engine::commands::find(id).and_then(|c| c.shortcut))
-        .or_else(|| crate::menu_catalog::CATALOG.iter().find(|c| c.3 == id).and_then(|c| c.2))
-        .map(str::to_string)
 }
 
 /// Text of a key press for the shortcut editor (`Cmd+Shift+K`), `None` for bare modifiers.

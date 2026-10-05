@@ -33,7 +33,9 @@ pub fn parse(s: &str) -> Option<KeyboardShortcut> {
     Some(KeyboardShortcut::new(mods, key?))
 }
 
-/// Human-readable form for menus.
+/// Human-readable form for menus, tooltips and inline hints (`Cmd+Shift+N` → `⌘⇧N` on
+/// macOS, `Ctrl+Shift+N` elsewhere). Works for lone keys too: `pretty("Alt")` is `⌥`/`Alt`,
+/// `pretty("Enter")` is `↩`/`Enter`.
 pub fn pretty(s: &str) -> String {
     let mac = cfg!(target_os = "macos");
     s.split('+')
@@ -42,10 +44,46 @@ pub fn pretty(s: &str) -> String {
             ("Cmd", false) => "Ctrl".to_string(),
             ("Shift", true) => "⇧".to_string(),
             ("Alt", true) => "⌥".to_string(),
+            ("Enter", true) => "↩".to_string(),
+            ("Delete", true) => "⌫".to_string(),
             (other, _) => other.to_string(),
         })
         .collect::<Vec<_>>()
         .join(if mac { "" } else { "+" })
+}
+
+/// The command's effective shortcut in the platform's notation (`Ctrl+N`), or `None` when
+/// the command has no binding (the user removed it in Edit › Keyboard Shortcuts).
+pub fn shortcut_label(app: &PhotocraftApp, command: &str) -> Option<String> {
+    effective_shortcut(app, command, default_shortcut(command).as_deref()).map(|s| pretty(&s))
+}
+
+/// `label` followed by the command's effective shortcut (`New document…     Ctrl+N`); bare
+/// `label` when the binding was removed.
+pub fn command_label(app: &PhotocraftApp, label: &str, command: &str) -> String {
+    shortcut_label(app, command).map_or_else(|| label.to_string(), |sc| format!("{label}     {sc}"))
+}
+
+/// `label` with the command's effective shortcut in parentheses (`Rulers  (Ctrl+R)`); bare
+/// `label` when the binding was removed.
+pub fn tip_label(app: &PhotocraftApp, label: &str, command: &str) -> String {
+    shortcut_label(app, command).map_or_else(|| label.to_string(), |sc| format!("{label}  ({sc})"))
+}
+
+/// The shortcut in effect for a command: the user's override, else `default`.
+pub fn effective_shortcut(app: &PhotocraftApp, id: &str, default: Option<&str>) -> Option<String> {
+    app.session.prefs().shortcut(id, default).map(str::to_string)
+}
+
+/// Default (unmodified) shortcut of a command id.
+pub fn default_shortcut(id: &str) -> Option<String> {
+    crate::menus::UI_COMMANDS
+        .iter()
+        .find(|c| c.0 == id)
+        .and_then(|c| c.3)
+        .or_else(|| photocraft_engine::commands::find(id).and_then(|c| c.shortcut))
+        .or_else(|| crate::menu_catalog::CATALOG.iter().find(|c| c.3 == id).and_then(|c| c.2))
+        .map(str::to_string)
 }
 
 /// With ⇧ held the OS reports the shifted character as the logical key (US layout): ⇧; is `:`.
@@ -323,6 +361,35 @@ mod tests {
         let clear = parse("Delete").unwrap();
         assert!(key_matches(&clear, Key::Delete, Modifiers::NONE) && key_matches(&clear, Key::Backspace, Modifiers::NONE));
         assert!(!key_matches(&clear, Key::Backspace, cmd));
+    }
+
+    #[test]
+    fn pretty_uses_the_platform_notation() {
+        let mac = cfg!(target_os = "macos");
+        assert_eq!(pretty("Cmd+Shift+N"), if mac { "⌘⇧N" } else { "Ctrl+Shift+N" });
+        // Lone keys and inline-hint combos.
+        assert_eq!(pretty("Alt"), if mac { "⌥" } else { "Alt" });
+        assert_eq!(pretty("Shift+Alt"), if mac { "⇧⌥" } else { "Shift+Alt" });
+        assert_eq!(pretty("Enter"), if mac { "↩" } else { "Enter" });
+        assert_eq!(pretty("Cmd+Enter"), if mac { "⌘↩" } else { "Ctrl+Enter" });
+    }
+
+    #[test]
+    fn labels_show_the_effective_shortcut_in_platform_notation() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let new = command_label(&app, "New document…", "file.new");
+        if cfg!(target_os = "macos") {
+            assert_eq!(new, "New document…     ⌘N");
+        } else {
+            assert_eq!(new, "New document…     Ctrl+N");
+        }
+        assert_eq!(tip_label(&app, "Rulers", "view.rulers"), format!("Rulers  ({})", pretty("Cmd+R")));
+        // A user override is picked up…
+        app.session.prefs.edit(|p| p.shortcuts.insert("file.new".into(), "Cmd+Shift+N".into()));
+        assert_eq!(command_label(&app, "New document…", "file.new"), format!("New document…     {}", pretty("Cmd+Shift+N")));
+        // …and a removed binding hides the shortcut entirely.
+        app.session.prefs.edit(|p| p.shortcuts.insert("file.new".into(), String::new()));
+        assert_eq!(command_label(&app, "New document…", "file.new"), "New document…");
     }
 
     #[test]

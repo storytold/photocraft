@@ -143,7 +143,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         app.ui.palette_open = false;
                     }
                     ui.add_space(4.0);
-                    ui.label(RichText::new("↑↓ navigate   ↵ run   esc close").small().color(t.text_faint));
+                    ui.label(RichText::new(format!("↑↓ navigate   {} run   esc close", crate::shortcuts::pretty("Enter"))).small().color(t.text_faint));
                     ui.data_mut(|d| {
                         d.insert_temp(qid, q);
                         d.insert_temp(sel_id, sel);

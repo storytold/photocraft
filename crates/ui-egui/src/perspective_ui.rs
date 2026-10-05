@@ -319,7 +319,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if crate::widgets::primary_button(ui, "✓", 32.0).on_hover_text("Commit Perspective Warp (↩)").clicked() {
+        if crate::widgets::primary_button(ui, "✓", 32.0).on_hover_text(format!("Commit Perspective Warp ({})", crate::shortcuts::pretty("Enter"))).clicked() {
             commit(app);
         } else if crate::widgets::secondary_button(ui, "⊘", 32.0).on_hover_text("Cancel (Esc)").clicked() {
             app.distort.perspective = None;

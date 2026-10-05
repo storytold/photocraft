@@ -360,7 +360,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let opts = [("path".to_string(), "Path"), ("shape".to_string(), "Shape")];
         crate::widgets::dropdown(ui, "pen-mode", &mut o.vector_mode, &opts, 80.0);
         crate::widgets::vline(ui, 22.0);
-        lbl(ui, "Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel");
+        lbl(ui, &format!("Click: corner · Drag: smooth · Click first point: close · {} finish · Esc cancel", crate::shortcuts::pretty("Enter")));
         return true;
     }
     let mut mode = "shape".to_string();

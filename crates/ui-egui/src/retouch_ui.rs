@@ -152,7 +152,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::dropdown(ui, "clone-sample", &mut o.clone_sample, &opts, 130.0);
             if app.ui.clone_source.is_none() {
                 crate::widgets::vline(ui, 22.0);
-                opt(ui, "⌥-click to set the source");
+                opt(ui, &format!("{}-click to set the source", crate::shortcuts::pretty("Alt")));
             }
         }
         Tool::Dodge | Tool::Burn => {
@@ -182,7 +182,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, "Sample All Layers");
             crate::widgets::checkbox(ui, &mut o.enhance_edge, "Enhance Edge");
-            opt(ui, "⌥ to subtract");
+            opt(ui, &format!("{} to subtract", crate::shortcuts::pretty("Alt")));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, "Select Subject", 0.0).clicked() {
                 let _ = app.run("select.subject", json!({}));

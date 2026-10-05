@@ -573,7 +573,11 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         }
     });
     let t2 = Tokens::get(ui.ctx());
-    ui.label(RichText::new("Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove").color(t2.text_faint).size(11.0));
+    ui.label(
+        RichText::new(format!("Click to add a point · drag off or {}-click or Delete to remove", crate::shortcuts::pretty("Cmd")))
+            .color(t2.text_faint)
+            .size(11.0),
+    );
     ui.data_mut(|d| d.insert_temp(state_id, st));
     if changed {
         v[key] = json!(pts.iter().map(|q| [q[0].round(), q[1].round()]).collect::<Vec<_>>());
