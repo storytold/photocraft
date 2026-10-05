@@ -107,12 +107,15 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let screen = ctx.content_rect();
-    // Keep the whole picker on screen (it is about 280 × 300 points).
-    let pos = egui::pos2(x.min(screen.right() - 284.0).max(screen.left()), y.min(screen.bottom() - 310.0).max(screen.top()));
-    let area = egui::Area::new(egui::Id::new("canvas-brush-picker")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    // Keep the whole picker on screen: anchor at the pointer, clamped by the picker's measured
+    // size (a rough estimate on the first frame).
+    let area_id = egui::Id::new("canvas-brush-picker");
+    let size = ctx.memory(|m| m.area_rect(area_id)).map_or(egui::vec2(310.0, 560.0), |r| r.size());
+    let pos = egui::pos2(x.min(screen.right() - size.x - 4.0).max(screen.left()), y.min(screen.bottom() - size.y - 4.0).max(screen.top()));
+    let area = egui::Area::new(area_id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
-        egui::Frame::popup(ui.style()).show(ui, |ui| crate::panels::brush_picker_body(ui, &mut b));
+        egui::Frame::popup(ui.style()).show(ui, |ui| crate::panels::brush_picker_body(app, ui, &mut b));
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
     });
     let outside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
@@ -212,7 +215,9 @@ mod tests {
         // The picker shows over the canvas, at the pointer.
         h.run_steps(2);
         let shown = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("picker shown");
-        assert!(shown.min.distance(c) < 1.0 && shown.width() > 250.0 && shown.height() > 150.0, "{shown:?}");
+        // Anchored at the pointer (clamped inside the screen when it wouldn't fit there).
+        assert!(shown.min.distance(c) < 1.0 || shown.contains(c), "{shown:?} vs {c:?}");
+        assert!(shown.width() > 250.0 && shown.height() > 150.0, "{shown:?}");
         // A right drag doesn't paint either.
         drag(&mut h, PointerButton::Secondary);
         assert!(strokes(&h).is_empty(), "right-drag never paints with the brush picker preference");

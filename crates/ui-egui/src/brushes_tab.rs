@@ -77,14 +77,19 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
             Action::MoveGroup { group, before } => run_or_status(app, "brush.presets.moveGroup", json!({ "group": group, "before": before })),
             Action::Rename(r) => {
                 let text = r.text.trim().to_string();
-                if !text.is_empty() && text != r.name {
-                    if r.group {
-                        run_or_status(app, "brush.presets.renameGroup", json!({ "group": r.name, "newName": text }));
-                    } else {
-                        run_or_status(app, "brush.presets.rename", json!({ "name": r.name, "newName": text }));
+                if text.is_empty() {
+                    // From a context menu: open the rename bar (it primes the text with the name).
+                    app.ui.brushes_panel.renaming = Some(r);
+                } else {
+                    if text != r.name {
+                        if r.group {
+                            run_or_status(app, "brush.presets.renameGroup", json!({ "group": r.name, "newName": text }));
+                        } else {
+                            run_or_status(app, "brush.presets.rename", json!({ "name": r.name, "newName": text }));
+                        }
                     }
+                    app.ui.brushes_panel.renaming = None;
                 }
-                app.ui.brushes_panel.renaming = None;
             }
             Action::Delete(name) => run_or_status(app, "brush.presets.delete", json!({ "name": name })),
             Action::DeleteGroup(g) => run_or_status(app, "brush.presets.deleteGroup", json!({ "group": g })),
@@ -163,10 +168,12 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
         egui::FontId::proportional(9.0),
         t.text_faint,
     );
-    let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke:{}", p.name), pb, 170, 36, t.text);
-    let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0), vec2(170.0, 36.0));
+    let sw = (r.width() - 58.0 - 8.0 - 12.0 - 96.0).clamp(60.0, 170.0).round() as u32;
+    let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke:{}", p.name), pb, sw, 36, t.text);
+    let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0), vec2(sw as f32, 36.0));
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
-    ui.painter().text(pos2(sr.right() + 12.0, r.center().y), egui::Align2::LEFT_CENTER, &p.name, egui::FontId::proportional(12.0), t.text_dim);
+    let name_r = egui::Rect::from_min_max(pos2(sr.right() + 12.0, r.top()), r.right_bottom() - vec2(4.0, 0.0));
+    ui.painter().with_clip_rect(name_r).text(name_r.left_center(), egui::Align2::LEFT_CENTER, &p.name, egui::FontId::proportional(12.0), t.text_dim);
     preset_interactions(ui, &resp, r, p, presets, false, acts);
 }
 
@@ -283,53 +290,22 @@ fn rename_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, acts: &mut Vec<Action>
     ui.add_space(4.0);
 }
 
-/// The Brushes tab.
-pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    // Size of the current brush (Photoshop's Brushes panel slider).
-    let before = app.session.tools.brush.clone();
-    let mut b = before.clone();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Size").color(t.text_dim));
-        let mut lv = b.size.max(1.0).ln();
-        ui.add_sized(vec2(WIDTH - 140.0, 18.0), |ui: &mut egui::Ui| {
-            let r = widgets::slider(ui, &mut lv, 0.0..=5000f32.ln(), None);
-            if r.changed() {
-                b.size = lv.exp().round().clamp(1.0, 5000.0);
-            }
-            r
-        });
-        let mut s = b.size;
-        if widgets::value_field(ui, &mut s, 1.0..=5000.0, "px", 74.0).changed() {
-            b.size = s.round().clamp(1.0, 5000.0);
-        }
-    });
-    commit_gesture(app, ui.ctx(), &before, &b);
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
-        ui.add_space(20.0);
-        ui.add(egui::TextEdit::singleline(&mut app.ui.brushes_panel.filter).hint_text("Search Brushes").desired_width(WIDTH - 120.0));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let view = &mut app.ui.brushes_panel.view;
-            if icons::button(ui, "grid-2x2", 24.0, *view == BrushesView::Grid, "Grid view").clicked() {
-                *view = BrushesView::Grid;
-            }
-            if icons::button(ui, "align-justify", 24.0, *view == BrushesView::List, "List view").clicked() {
-                *view = BrushesView::List;
-            }
-        });
-    });
-    ui.add_space(6.0);
+/// The preset list itself: collapsible groups of rows (or grid cells) with tip and stroke
+/// previews, drag and drop, context menus and the drag label — shared by the Brushes tab and
+/// the preset pickers (`panels::brush_picker_body`). Returns the actions for `apply`; `rename`
+/// shows the rename bar (pickers leave renaming to this panel).
+pub(crate) fn preset_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, max_height: f32, rename: bool) -> Vec<Action> {
     let mut acts = Vec::new();
-    rename_bar(app, ui, &mut acts);
+    if rename {
+        rename_bar(app, ui, &mut acts);
+    }
     let filter = app.ui.brushes_panel.filter.trim().to_lowercase();
     let grid = app.ui.brushes_panel.view == BrushesView::Grid;
     let presets = &app.session.tools.presets;
     let groups = grouped_presets(presets);
     let brush = &app.session.tools.brush;
     let collapsed = &app.ui.brushes_panel.collapsed;
-    egui::ScrollArea::vertical().id_salt("brush-presets").max_height(400.0).auto_shrink([false, true]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt("brush-presets").max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         for (label, items) in groups {
             let items: Vec<usize> =
@@ -385,10 +361,73 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             },
         );
     }
+    // Forget previews of presets that no longer exist.
+    let names: std::collections::HashSet<&str> = app.session.tools.presets.iter().map(|p| p.name.as_str()).collect();
+    brush_preview::with_cache(ui.ctx(), |c| {
+        c.retain(|slot| slot.split_once(':').is_none_or(|(_, n)| names.contains(n)));
+    });
+    acts
+}
+
+/// The Brushes tab.
+pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    // Size of the current brush (Photoshop's Brushes panel slider).
+    let before = app.session.tools.brush.clone();
+    let mut b = before.clone();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Size").color(t.text_dim));
+        let mut lv = b.size.max(1.0).ln();
+        ui.add_sized(vec2(WIDTH - 140.0, 18.0), |ui: &mut egui::Ui| {
+            let r = widgets::slider(ui, &mut lv, 0.0..=5000f32.ln(), None);
+            if r.changed() {
+                b.size = lv.exp().round().clamp(1.0, 5000.0);
+            }
+            r
+        });
+        let mut s = b.size;
+        if widgets::value_field(ui, &mut s, 1.0..=5000.0, "px", 74.0).changed() {
+            b.size = s.round().clamp(1.0, 5000.0);
+        }
+    });
+    commit_gesture(app, ui.ctx(), &before, &b);
+    ui.add_space(4.0);
+    browser_toolbar(app, ui);
+    ui.add_space(6.0);
+    let acts = preset_list(app, ui, 400.0, true);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);
     ui.add_space(4.0);
+    browser_footer(app, ui);
+}
+
+/// The search field and the list/grid view toggle — shared by the Brushes tab and the preset
+/// pickers (`panels::brush_picker_body`).
+pub(crate) fn browser_toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
+        ui.add_space(20.0);
+        // Buttons claim the right edge first; the field takes what's left, so the row fits any width.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let view = &mut app.ui.brushes_panel.view;
+            if icons::button(ui, "grid-2x2", 24.0, *view == BrushesView::Grid, "Grid view").clicked() {
+                *view = BrushesView::Grid;
+            }
+            if icons::button(ui, "align-justify", 24.0, *view == BrushesView::List, "List view").clicked() {
+                *view = BrushesView::List;
+            }
+            ui.add_space(4.0);
+            ui.add(egui::TextEdit::singleline(&mut app.ui.brushes_panel.filter).hint_text("Search Brushes").desired_width(ui.available_width().max(60.0)));
+        });
+    });
+}
+
+/// The preset count and the delete/new/import buttons — shared by the Brushes tab and the
+/// preset pickers.
+pub(crate) fn browser_footer(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} presets", app.session.tools.presets.len())).color(t.text_faint));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -405,11 +444,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr)").clicked() {
                 app.open_dialog_file();
             }
+            if icons::button(ui, "settings", 24.0, false, "Brush Settings").clicked() {
+                app.ui.panels.brush_settings = true;
+                app.ui.brush_tab = 0;
+            }
         });
-    });
-    // Forget previews of presets that no longer exist.
-    let names: std::collections::HashSet<&str> = app.session.tools.presets.iter().map(|p| p.name.as_str()).collect();
-    brush_preview::with_cache(ui.ctx(), |c| {
-        c.retain(|slot| slot.split_once(':').is_none_or(|(_, n)| names.contains(n)));
     });
 }

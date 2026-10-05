@@ -137,9 +137,15 @@ pub fn roundness_handles(angle: f32, roundness: f32) -> [egui::Vec2; 2] {
     [minor, -minor]
 }
 
-/// What a press at `rel` (relative to the centre) grabs: a roundness handle within 7 px, else the angle.
+/// How far from a roundness handle (pixels) a press still grabs it. The dots are drawn 5 px
+/// wide but get an 11 px hit radius: they're small and sat on a moving ellipse, so the generous
+/// target matters more than the occasional dead spot it carves out of the angle drag.
+const HANDLE_GRAB_R: f32 = 11.0;
+
+/// What a press at `rel` (relative to the centre) grabs: a roundness handle within
+/// `HANDLE_GRAB_R`, else the angle.
 pub fn ellipse_grab(rel: egui::Vec2, angle: f32, roundness: f32) -> EllipseGrab {
-    if roundness_handles(angle, roundness).iter().any(|h| (*h - rel).length() <= 7.0) { EllipseGrab::Roundness } else { EllipseGrab::Angle }
+    if roundness_handles(angle, roundness).iter().any(|h| (*h - rel).length() <= HANDLE_GRAB_R) { EllipseGrab::Roundness } else { EllipseGrab::Angle }
 }
 
 /// The new (angle, roundness) for a drag to `rel`: the angle points at the pointer (degrees,
@@ -156,8 +162,9 @@ pub fn ellipse_drag(grab: EllipseGrab, rel: egui::Vec2, angle: f32, roundness: f
     }
 }
 
-/// Photoshop's angle/roundness widget: drag the arrow to rotate, the dots to squash.
-fn ellipse_widget(ui: &mut egui::Ui, angle: &mut f32, roundness: &mut f32) -> bool {
+/// Photoshop's angle/roundness widget: drag the arrow to rotate, the dots to squash. Used by the
+/// Brush Tip Shape section and the preset picker (`panels::brush_picker_body`).
+pub(crate) fn ellipse_widget(ui: &mut egui::Ui, angle: &mut f32, roundness: &mut f32) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(84.0, 84.0), Sense::click_and_drag());
     let c = rect.center();
@@ -187,8 +194,9 @@ fn ellipse_widget(ui: &mut egui::Ui, angle: &mut f32, roundness: &mut f32) -> bo
         }
     }
     let p = ui.painter();
-    p.circle_filled(c, 40.0, t.field);
-    p.circle_stroke(c, 40.0, Stroke::new(1.0, t.field_border));
+    let box_rect = rect.shrink(1.0);
+    p.rect_filled(box_rect, 2.0, t.field);
+    p.rect_stroke(box_rect, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     p.line_segment([c - vec2(40.0, 0.0), c + vec2(40.0, 0.0)], Stroke::new(1.0, t.separator));
     p.line_segment([c - vec2(0.0, 40.0), c + vec2(0.0, 40.0)], Stroke::new(1.0, t.separator));
     let (s, co) = angle.to_radians().sin_cos();
@@ -208,8 +216,8 @@ fn ellipse_widget(ui: &mut egui::Ui, angle: &mut f32, roundness: &mut f32) -> bo
     let back = tip - major * 7.0;
     p.add(egui::Shape::convex_polygon(vec![tip, back + minor * 4.0, back - minor * 4.0], t.accent, Stroke::NONE));
     for h in roundness_handles(*angle, *roundness) {
-        p.circle_filled(c + h, 4.0, Color32::WHITE);
-        p.circle_stroke(c + h, 4.0, Stroke::new(1.0, t.accent));
+        p.circle_filled(c + h, 5.0, Color32::WHITE);
+        p.circle_stroke(c + h, 5.0, Stroke::new(1.0, t.accent));
     }
     let _ = resp.on_hover_text("Drag the arrow to set the angle, the dots to set the roundness");
     changed
