@@ -222,6 +222,11 @@ pub struct Panels {
     pub color: bool,
     pub navigator: bool,
     pub toolbar: bool,
+    /// Tools panel columns chosen with the double arrow in its header (like Photoshop's):
+    /// `Some(true)` two, `Some(false)` one (tools that don't fit go to an overflow flyout).
+    /// `None` until the user picks: two columns only when one doesn't fit.
+    #[serde(default)]
+    pub toolbar_double: Option<bool>,
     pub options_bar: bool,
     pub status_bar: bool,
     /// Window › Brush Settings (F5): floating, like Photoshop's.
@@ -241,6 +246,7 @@ impl Default for Panels {
             color: true,
             navigator: false,
             toolbar: true,
+            toolbar_double: None,
             options_bar: true,
             status_bar: true,
             brush_settings: false,
