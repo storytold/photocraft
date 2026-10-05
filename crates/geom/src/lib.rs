@@ -84,20 +84,10 @@ impl Rect {
         Rect::new(self.x0.min(o.x0), self.y0.min(o.y0), self.x1.max(o.x1), self.y1.max(o.y1))
     }
     pub fn translate(&self, dx: i32, dy: i32) -> Rect {
-        Rect::new(
-            self.x0.saturating_add(dx),
-            self.y0.saturating_add(dy),
-            self.x1.saturating_add(dx),
-            self.y1.saturating_add(dy),
-        )
+        Rect::new(self.x0.saturating_add(dx), self.y0.saturating_add(dy), self.x1.saturating_add(dx), self.y1.saturating_add(dy))
     }
     pub fn inflate(&self, d: i32) -> Rect {
-        Rect::new(
-            self.x0.saturating_sub(d),
-            self.y0.saturating_sub(d),
-            self.x1.saturating_add(d),
-            self.y1.saturating_add(d),
-        )
+        Rect::new(self.x0.saturating_sub(d), self.y0.saturating_sub(d), self.x1.saturating_add(d), self.y1.saturating_add(d))
     }
     /// All tiles overlapping this rect.
     pub fn tiles(&self) -> impl Iterator<Item = TileCoord> + use<> {
