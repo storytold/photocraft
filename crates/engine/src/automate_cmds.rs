@@ -5,7 +5,7 @@
 //! "Scripts" are PhotoCraft action scripts: JSON (`[[id, params], …]`, `{"steps": …}` or a
 //! droplet) or a plain-text list with one `command.id {json params}` per line (`#` comments).
 //! Droplets are JSON files (`.pcdroplet`) holding an action plus batch options; `photocraft-cli
-//! droplet <file> <inputs…>` runs one, and on macOS/Linux a `.command` shim makes it
+//! droplet <file> <inputs…>` runs one, and on Unix a `.command` shim makes it
 //! double-clickable / drop-target-able from the shell.
 //!
 //! Script events (Start Application, New / Open / Save / Close Document, Print, Export) are
@@ -291,7 +291,7 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let droplet = json!({"photocraftDroplet": 1, "name": name, "action": {"name": name, "steps": steps_json}, "options": options});
     let text = serde_json::to_string_pretty(&droplet).unwrap_or_default();
     write_file(&path, text.as_bytes())?;
-    let shim = p.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(any(target_os = "macos", target_os = "linux")));
+    let shim = p.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix));
     let shim_path = if shim { Some(write_shim(&path)?) } else { None };
     let _ = s;
     Ok(json!({"path": path, "shim": shim_path, "steps": steps.len()}))
@@ -526,7 +526,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…] (the action),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on macOS/Linux (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim}"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…] (the action),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim}"##,
             native,
             create_droplet
         ),

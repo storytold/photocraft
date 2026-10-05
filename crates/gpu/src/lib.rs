@@ -826,6 +826,11 @@ impl Compositor {
         if region.is_empty() {
             return Ok(stats);
         }
+        if self.frame == 0 {
+            // The first submission after device creation is dropped on some drivers (RADV),
+            // which would render the first frame black; land it on an empty buffer instead.
+            queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+        }
         self.frame += 1;
         self.stamp += 1;
         self.staged = 0;

@@ -9,6 +9,10 @@ use photocraft_gpu::{Compositor, render_to_vec};
 
 const TOL: f32 = 1.0 / 255.0;
 
+/// Concurrent wgpu instances in one process segfault on some drivers (RADV), so the GPU tests
+/// take this lock and hold it until their device is dropped.
+static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -16,12 +20,14 @@ struct Gpu {
     /// The same device with a simulated texture limit of [`PAGED_LIMIT`]: every check also runs
     /// through layer pages and per-cell effect maps.
     paged: Compositor,
+    _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 /// Simulated texture limit (pages and chunks of 256 px).
 const PAGED_LIMIT: u32 = 256;
 
 fn gpu() -> Option<Gpu> {
+    let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let instance = wgpu::Instance::default();
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
         Ok(a) => a,
@@ -46,14 +52,16 @@ fn gpu() -> Option<Gpu> {
     };
     let mut paged = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float).ok()?;
     paged.set_texture_limit(PAGED_LIMIT);
-    Some(Gpu { device, queue, comp, paged })
+    Some(Gpu { device, queue, comp, paged, _lock: lock })
 }
 
 /// Any adapter and device, for the fallback-path tests (which don't need 32-bit float targets).
-fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+/// The returned guard holds [`GPU_LOCK`] until the device is dropped.
+fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {
+    let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let adapter = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
-    Some((adapter, device, queue))
+    Some((adapter, device, queue, lock))
 }
 
 /// Deterministic pseudo-random values in 0..1.
@@ -132,6 +140,14 @@ fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<phot
 
 fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
+fn first_frame_renders() {
+    // Regression: the first submission after device creation is dropped on some drivers
+    // (RADV), which used to make the very first render come back all zeroes.
+    let Some(mut g) = gpu() else { return };
+    check(&mut g, &base_doc(64, 48), "first frame");
 }
 
 #[test]
@@ -1156,7 +1172,7 @@ fn rgba16f_fallback_path_renders() {
     // Rgba16Float. Force that path here (even on a 32f-capable GPU) to prove it works end to end —
     // pipeline creation, the accumulation texture, and the half-float readback — within display
     // tolerance of the CPU reference. This is the path Intel-Vulkan / limited GPUs take.
-    let Some((adapter, device, queue)) = any_device() else { return };
+    let Some((adapter, device, queue, _lock)) = any_device() else { return };
     let mut comp = match Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba16Float) {
         Ok(c) => c,
         Err(e) => return eprintln!("skipping: {e}"),
@@ -1186,7 +1202,7 @@ fn rgba16f_fallback_path_renders() {
 fn unbuildable_pipelines_are_an_error_not_a_panic() {
     // The app falls back to the CPU compositor on Err; a panic here would crash it (as FXC once
     // did on D3D12). A depth format can't be a colour target, so its pipelines fail to build.
-    let Some((adapter, device, _)) = any_device() else { return };
+    let Some((adapter, device, _, _lock)) = any_device() else { return };
     let e = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Depth32Float).err().expect("depth target must fail");
     assert!(e.0.contains("pipelines"), "{e}");
     // The format the app picks builds (effect maps the adapter can't render are left out, not fatal).
