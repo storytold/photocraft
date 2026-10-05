@@ -22,6 +22,27 @@ Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"
   - Options-bar labels end with a colon ("Size:").
   - Document tabs read "name @ 12.5% (RGB/8)".
   - Toolbar tool groups carry a corner triangle.
+  - The toolbar header's double arrow switches one/two columns (`panels.toolbar_double`: `true`,
+    `false`, or `null` for automatic, two columns only when one doesn't fit). A chosen single
+    column too tall for the window moves the remaining tools into a "More tools" flyout.
+  - In two columns the tools fill the rows in order, two per row, in every theme, so no tool sits
+    alone with a gap beside it. Studio and Studio Light keep their group dividers only in one
+    column. One column has 4 px of extra room on each side.
+  - The selected tool (Pro themes) sits in a darker square: the toolbar colour about a third
+    darker, with the icon in its normal colour and no blue outline. Other themes keep the accent.
+  - Colour chips (every theme): square foreground and background chips with a dark edge and a
+    white ring, centred in the toolbar; the swap arrow in the top-right corner and the small
+    default-colours chips in the bottom-left. Quick Mask and Screen Mode (Pro) sit side by side
+    in two columns.
+  - Color Picker: OK and Cancel stacked at the top right; the new/current swatch beside them;
+    values in two columns (H S B, R G B and # on the left; L a b and C M Y K on the right); "Only
+    Web Colors" under the colour field. Every one of H, S, B, R, G, B, L, a and b has a radio
+    that picks what the field and slider show.
+- **Motion:** menus, popups and tooltips fade in over `theme::ANIMATION_TIME` (1/12 s).
+  Preferences › Interface › "Animate menus and panels" turns that off (`animation_time` 0), so
+  they appear at once.
+- **Main window:** the desktop app opens maximized; 1440×900 is the size it returns to when
+  un-maximized.
 - **Verify every visual change** with `ui.screenshot`, at several window sizes and in every theme.
 
 ## Adding icons
