@@ -84,10 +84,20 @@ impl Rect {
         Rect::new(self.x0.min(o.x0), self.y0.min(o.y0), self.x1.max(o.x1), self.y1.max(o.y1))
     }
     pub fn translate(&self, dx: i32, dy: i32) -> Rect {
-        Rect::new(self.x0 + dx, self.y0 + dy, self.x1 + dx, self.y1 + dy)
+        Rect::new(
+            self.x0.saturating_add(dx),
+            self.y0.saturating_add(dy),
+            self.x1.saturating_add(dx),
+            self.y1.saturating_add(dy),
+        )
     }
     pub fn inflate(&self, d: i32) -> Rect {
-        Rect::new(self.x0 - d, self.y0 - d, self.x1 + d, self.y1 + d)
+        Rect::new(
+            self.x0.saturating_sub(d),
+            self.y0.saturating_sub(d),
+            self.x1.saturating_add(d),
+            self.y1.saturating_add(d),
+        )
     }
     /// All tiles overlapping this rect.
     pub fn tiles(&self) -> impl Iterator<Item = TileCoord> + use<> {
@@ -241,5 +251,18 @@ mod tests {
         let t = Affine::translate(10.0, 0.0).then(&Affine::scale(2.0));
         // translate first, then scale
         assert_eq!(t.apply(Point::new(1.0, 0.0)), Point::new(22.0, 0.0));
+    }
+
+    #[test]
+    fn translate_and_inflate_saturate_on_overflow() {
+        let r = Rect::new(i32::MAX - 10, i32::MIN + 10, i32::MAX, i32::MIN + 20);
+        let t = r.translate(100, -100);
+        assert_eq!(t.x0, i32::MAX);
+        assert_eq!(t.x1, i32::MAX);
+        assert_eq!(t.y0, i32::MIN);
+        assert_eq!(t.y1, i32::MIN);
+        let grown = Rect::new(i32::MAX - 5, i32::MIN + 5, i32::MAX - 1, i32::MIN + 10).inflate(10);
+        assert_eq!(grown.x1, i32::MAX);
+        assert_eq!(grown.y0, i32::MIN);
     }
 }
