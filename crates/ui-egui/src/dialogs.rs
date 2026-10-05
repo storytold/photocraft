@@ -61,7 +61,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
                 800.0
-            } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
+            } else if crate::color_picker_ui::owns(&d.fields) {
+                crate::color_picker_ui::WIDTH
+            } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") {
                 600.0
             } else {
                 440.0
@@ -102,7 +104,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
-                DialogKind::Command if crate::color_picker_ui::owns(&fields) => crate::color_picker_ui::body(ui, &mut fields),
+                DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
+                    if let Some(o) = crate::color_picker_ui::body(ui, &mut fields) {
+                        outcome = Some(o);
+                    }
+                }
                 DialogKind::Command if crate::color_range_ui::owns(&fields) => crate::color_range_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::prefs_ui::owns(&fields) => crate::prefs_ui::body(app, ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
@@ -116,31 +122,34 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
-            ui.add_space(8.0);
-            // Align::Min, not Center: a centred row fills the height left over from last frame's
-            // (larger) size, so a dialog whose body gets shorter would never shrink back.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                if matches!(d.kind, DialogKind::About | DialogKind::Error) {
-                    if crate::widgets::primary_button(ui, "OK", 84.0).clicked() {
-                        outcome = Some(false);
-                    }
-                } else {
-                    let ok_label = if d.kind == DialogKind::NewDocument {
-                        "Create"
-                    } else if d.fields.contains_key("__export") {
-                        "Export"
+            // The Color Picker draws its own OK and Cancel (top right, like Photoshop).
+            if !crate::color_picker_ui::owns(&d.fields) {
+                ui.add_space(8.0);
+                // Align::Min, not Center: a centred row fills the height left over from last frame's
+                // (larger) size, so a dialog whose body gets shorter would never shrink back.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+                        if crate::widgets::primary_button(ui, "OK", 84.0).clicked() {
+                            outcome = Some(false);
+                        }
                     } else {
-                        crate::file_ui::ok_label(&d.fields).unwrap_or("OK")
-                    };
-                    if crate::widgets::primary_button(ui, ok_label, 84.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        outcome = Some(true);
+                        let ok_label = if d.kind == DialogKind::NewDocument {
+                            "Create"
+                        } else if d.fields.contains_key("__export") {
+                            "Export"
+                        } else {
+                            crate::file_ui::ok_label(&d.fields).unwrap_or("OK")
+                        };
+                        if crate::widgets::primary_button(ui, ok_label, 84.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            outcome = Some(true);
+                        }
+                        if crate::widgets::secondary_button(ui, if d.kind == DialogKind::NewDocument { "Close" } else { "Cancel" }, 84.0).clicked() {
+                            outcome = Some(false);
+                        }
                     }
-                    if crate::widgets::secondary_button(ui, if d.kind == DialogKind::NewDocument { "Close" } else { "Cancel" }, 84.0).clicked() {
-                        outcome = Some(false);
-                    }
-                }
-            });
+                });
+            }
             // The frame around the content (Frame::popup's margin and stroke).
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
