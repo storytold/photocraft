@@ -248,6 +248,11 @@ pub struct PhotocraftApp {
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// Signature of the image we last put on the OS clipboard (to tell ours from other apps').
     os_clip_sig: Option<u64>,
+    /// The session clipboard currently holds an image imported from the OS clipboard: it has no
+    /// original position, so Paste centres it (see `menus` "edit.paste").
+    pub(crate) clip_external: bool,
+    /// Last `ctx` time (s) the OS clipboard was polled; a read every frame is too costly.
+    last_clip_poll: f64,
     /// Pointer position over the canvas (document px), for the Info panel and status bar.
     pub(crate) hover_doc: Option<[f64; 2]>,
     /// Info panel sample cache: ((x, y, revision), composite RGBA).
@@ -318,6 +323,8 @@ impl PhotocraftApp {
             hover_doc: None,
             info_sample: None,
             os_clip_sig: None,
+            clip_external: false,
+            last_clip_poll: f64::NEG_INFINITY,
             transform_preview: None,
             style_preview: None,
             distort: Default::default(),
@@ -373,6 +380,7 @@ impl PhotocraftApp {
         }
         let r = self.session.execute(id, params).map_err(|e| e.to_string());
         if r.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
+            self.clip_external = false;
             self.export_os_clipboard();
         }
         self.perf.last_command = id.to_string();
@@ -650,6 +658,12 @@ impl eframe::App for PhotocraftApp {
         self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
         discard_ui::guard_window_close(self, ctx);
+        // Mirror the OS clipboard a few times a second so Edit > Paste greys correctly and Ctrl+V
+        // sees images copied in other apps (a clipboard read every frame is too costly).
+        if now - self.last_clip_poll >= 0.25 {
+            self.last_clip_poll = now;
+            self.import_os_clipboard();
+        }
         shortcuts::handle(self, ctx);
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
@@ -995,6 +1009,7 @@ impl PhotocraftApp {
         surface.prune();
         self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r });
         self.os_clip_sig = Some(sig);
+        self.clip_external = true;
         true
     }
 }
@@ -1035,5 +1050,27 @@ mod clipboard_tests {
         let st = app.session.active().unwrap();
         let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
         assert_eq!(surf.content_bounds().width(), 3);
+    }
+
+    #[test]
+    fn external_clipboard_enables_and_centres_paste() {
+        // The periodic clipboard poll in `logic` (or the ⌘V handler) imports the OS image into
+        // the session clipboard before the enabled check and the menu's positioning run.
+        type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
+        let os: OsClip = Arc::default();
+        let b = os.clone();
+        let services = Services { clipboard_get_image: Some(Box::new(move || b.lock().unwrap().clone())), ..Default::default() };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+        app.sync_views();
+        // An image copied in another app: Paste greys until the import brings it in.
+        *os.lock().unwrap() = Some((4, 4, [255u8, 0, 0, 255].repeat(16)));
+        assert!(!crate::menus::is_enabled(&app, "edit.paste"));
+        assert!(app.import_os_clipboard());
+        assert!(crate::menus::is_enabled(&app, "edit.paste"));
+        // Invoking Paste after the import still treats the image as external and centres it
+        // instead of pasting at (0,0) like an in-app copy.
+        let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+        assert_ne!(r["offset"], serde_json::json!([0, 0]), "external image is centred: {r}");
     }
 }

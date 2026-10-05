@@ -216,6 +216,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             continue;
         }
         if consume(ctx, &sc) {
+            // ⌘V can arrive with an external image still on the OS clipboard (the periodic import
+            // hasn't run yet): pull it in before deciding whether Paste is enabled.
+            if matches!(id.as_str(), "edit.paste" | "edit.pasteSpecial.pasteInPlace") {
+                app.import_os_clipboard();
+            }
             if crate::menus::is_enabled(app, &id) {
                 let r = if crate::adjust_dialog::has_dialog(&id) {
                     crate::adjust_dialog::open(app, &id);

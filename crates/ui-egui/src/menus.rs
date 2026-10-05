@@ -313,7 +313,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "edit.paste" if params.as_object().is_none_or(|o| o.is_empty()) => {
             // Photoshop: paste in place when the copied area is visible, else centred in the view;
             // images from other apps are always centred.
-            let external = app.import_os_clipboard();
+            app.import_os_clipboard();
+            let external = app.clip_external;
             let visible = !external
                 && app.session.active_index().zip(app.session.clipboard.as_ref()).is_some_and(|(i, clip)| {
                     let v = &app.ui.views[i];
