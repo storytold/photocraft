@@ -75,7 +75,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
                         icons::paint(ui, r, "search", 16.0, t.text_dim);
                         let te = egui::TextEdit::singleline(&mut q)
-                            .hint_text("Search commands, tools and panels…")
+                            .hint_text(tl!("Search commands, tools and panels…"))
                             .frame(egui::Frame::NONE)
                             .font(egui::FontId::proportional(15.0))
                             .desired_width(width - 40.0);
@@ -85,23 +85,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_space(6.0);
                     crate::widgets::hairline(ui);
                     ui.add_space(6.0);
+                    let lang = crate::i18n::Lang::from_pref(&app.session.prefs().interface.language);
                     let mut hits: Vec<(i32, String, String, Option<String>, bool)> = crate::menus::menu_items(app)
                         .into_iter()
                         .filter_map(|m| {
-                            let path = m.path.join(" › ");
-                            let s = fuzzy_score(&q, &format!("{} {}", m.label, path))?;
+                            let path_en = m.path.join(" › ");
+                            let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
+                            let label = crate::i18n::tr_id(lang, &m.id, &m.label);
+                            // Match what is shown and the English name (commands are documented in English).
+                            let s = fuzzy_score(&q, &format!("{label} {path} {} {path_en}", m.label))?;
                             Some((
                                 s,
                                 m.id,
-                                m.label.trim_end_matches('…').to_string(),
+                                label.trim_end_matches('…').to_string(),
                                 Some(path + &m.shortcut.map(|s| format!("   {}", crate::shortcuts::pretty(&s))).unwrap_or_default()),
                                 m.enabled,
                             ))
                         })
                         .collect();
                     for tool in crate::state::Tool::ALL {
-                        if let Some(s) = fuzzy_score(&q, tool.label()) {
-                            hits.push((s + 2, format!("tool:{tool:?}"), tool.label().into(), Some(format!("Tool   {}", tool.key())), true));
+                        if let Some(s) = fuzzy_score(&q, &format!("{} {}", tl!(tool.label()), tool.label())) {
+                            hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
                         }
                     }
                     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
@@ -113,7 +117,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     };
                     if !recent.is_empty() {
                         hits = recent;
-                        ui.label(RichText::new("Recent").small().color(t.text_faint));
+                        ui.label(RichText::new(tl!("Recent")).small().color(t.text_faint));
                     }
                     hits.truncate(12);
                     let sel_id = egui::Id::new("palette-sel");
@@ -134,7 +138,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                     sel = sel.min(hits.len().saturating_sub(1));
                     if hits.is_empty() {
-                        ui.label(RichText::new("No matching commands").color(t.text_faint));
+                        ui.label(RichText::new(tl!("No matching commands")).color(t.text_faint));
                     }
                     for (i, (_, id, label, detail, enabled)) in hits.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
@@ -158,7 +162,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         app.ui.palette_open = false;
                     }
                     ui.add_space(4.0);
-                    ui.label(RichText::new(format!("↑↓ navigate   {} run   esc close", crate::shortcuts::pretty("Enter"))).small().color(t.text_faint));
+                    ui.label(
+                        RichText::new(crate::i18n::fmt(tl!("↑↓ navigate   {key} run   esc close"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+                            .small()
+                            .color(t.text_faint),
+                    );
                     ui.data_mut(|d| {
                         d.insert_temp(qid, q);
                         d.insert_temp(sel_id, sel);

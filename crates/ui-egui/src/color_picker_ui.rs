@@ -250,7 +250,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             }
             ui.add_space(12.0);
             let mut web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
-            if widgets::checkbox(ui, &mut web, "Only Web Colors").changed() {
+            if widgets::checkbox(ui, &mut web, tl!("Only Web Colors")).changed() {
                 f.insert("__webOnly".into(), json!(web));
                 set_rgb(f, rgb, None);
             }
@@ -283,9 +283,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.add_space(RIGHT_W - 64.0 - BUTTON_W - 2.0 * ui.spacing().item_spacing.x);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 10.0;
-                    let ok = widgets::primary_button(ui, "OK", BUTTON_W);
-                    let cancel = widgets::secondary_button(ui, "Cancel", BUTTON_W);
-                    let add = widgets::secondary_button(ui, "Add to Swatches", BUTTON_W);
+                    let ok = widgets::primary_button(ui, tl!("OK"), BUTTON_W);
+                    let cancel = widgets::secondary_button(ui, tl!("Cancel"), BUTTON_W);
+                    let add = widgets::secondary_button(ui, tl!("Add to Swatches"), BUTTON_W);
                     for (r, label) in [(&ok, "OK"), (&cancel, "Cancel"), (&add, "Add to Swatches")] {
                         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
                     }
@@ -294,7 +294,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     } else if cancel.clicked() {
                         outcome = Some(false);
                     }
-                    add_swatch = add.on_hover_text("Save the new colour in the Swatches panel").clicked();
+                    add_swatch = add.on_hover_text(tl!("Save the new colour in the Swatches panel")).clicked();
                 });
             });
             ui.add_space(14.0);
@@ -312,7 +312,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 pub fn open_swatch_name(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
     let name = format!("Swatch {}", app.session.prefs().swatches.len() + 1);
     let color: Vec<f32> = rgb.iter().map(|v| v.clamp(0.0, 1.0)).collect();
-    crate::view_cmds::form(app, "swatches.add", "Color Swatch Name", json!({"name": name, "color": color}), Value::Null)
+    crate::view_cmds::form(app, "swatches.add", tl!("Color Swatch Name"), json!({"name": name, "color": color}), Value::Null)
 }
 
 /// The new (top) and current (bottom) colours; clicking the current one restores it.
@@ -325,13 +325,13 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>, rgb: [f32; 3]) {
     let cur = Rect::from_min_size(sw.min + vec2(0.0, 36.0), vec2(64.0, 36.0));
     let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
     let p = ui.painter();
-    p.text(pos2(sw.center().x, area.top() + 8.0), Align2::CENTER_CENTER, "new", font.clone(), t.text_dim);
+    p.text(pos2(sw.center().x, area.top() + 8.0), Align2::CENTER_CENTER, tl!("new"), font.clone(), t.text_dim);
     p.rect_filled(new, 0.0, c32(rgb));
     p.rect_filled(cur, 0.0, c32(orig));
     p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    p.text(pos2(sw.center().x, sw.bottom() + 10.0), Align2::CENTER_CENTER, "current", font, t.text_dim);
+    p.text(pos2(sw.center().x, sw.bottom() + 10.0), Align2::CENTER_CENTER, tl!("current"), font, t.text_dim);
     let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
-    if click_cur.on_hover_text("Click to restore the current colour").clicked() {
+    if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
         set_rgb(f, orig, None);
     }
 }
@@ -351,7 +351,7 @@ fn field_row(ui: &mut egui::Ui, radio: Option<bool>, label: &str, value: &mut f3
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, label));
         }
         let (lr, _) = ui.allocate_exact_size(vec2(18.0, 24.0), Sense::hover());
-        ui.painter().text(lr.left_center(), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text_dim);
+        ui.painter().text(lr.left_center(), Align2::LEFT_CENTER, tl!(label), egui::FontId::proportional(12.5), t.text_dim);
         let changed = widgets::value_field(ui, value, range, "", FIELD_W).changed();
         let (ur, _) = ui.allocate_exact_size(vec2(12.0, 24.0), Sense::hover());
         ui.painter().text(ur.left_center(), Align2::LEFT_CENTER, unit, egui::FontId::proportional(12.5), t.text_faint);

@@ -68,6 +68,9 @@ fn corpus_text_layers() {
             continue;
         };
         let doc = imp.document;
+        // The document's Txt2 (kept verbatim on export) carries what EngineData can't, e.g.
+        // optical kerning; re-reads apply it like an import does.
+        let txt2 = doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.2));
         let mut all = Vec::new();
         walk(&doc.layers, &mut all);
         for l in all {
@@ -82,7 +85,10 @@ fn corpus_text_layers() {
             assert!(st.size_pt > 0.0 && st.postscript_name.is_some(), "{name}/{}: {st:?}", l.name);
             // Round trip of the model through our own TySh writer.
             let rebuilt = photocraft_text::psd::build_tysh(t, doc.resolution_dpi, None);
-            let back = photocraft_text::psd::text_layer_from_tysh(&rebuilt, doc.resolution_dpi).unwrap();
+            let mut back = photocraft_text::psd::text_layer_from_tysh(&rebuilt, doc.resolution_dpi).unwrap();
+            if let Some(txt2) = &txt2 {
+                photocraft_text::psd::apply_txt2(&mut back, &rebuilt, txt2);
+            }
             assert_eq!(back.text, t.text);
             assert_eq!(back.char_runs(), t.char_runs(), "{name}/{}", l.name);
             assert_eq!(back.paragraph_runs(), t.paragraph_runs(), "{name}/{}", l.name);

@@ -70,7 +70,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut play_idx = None;
     egui::ScrollArea::vertical().id_salt("actions-rows").max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
         if app.ui.actions.list.is_empty() {
-            ui.label(egui::RichText::new("Record ● a sequence of edits, then play ▶ it on any document.").color(t.text_faint).size(11.5));
+            ui.label(egui::RichText::new(tl!("Record ● a sequence of edits, then play ▶ it on any document.")).color(t.text_faint).size(11.5));
         }
         let n = app.ui.actions.list.len();
         for i in 0..n {
@@ -126,7 +126,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let recording = app.ui.actions.recording.is_some();
-        if crate::icons::button(ui, "square", 24.0, false, "Stop playing/recording").clicked() {
+        if crate::icons::button(ui, "square", 24.0, false, tl!("Stop playing/recording")).clicked() {
             stop_recording(app);
         }
         let (r, rec) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
@@ -134,16 +134,16 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
         ui.painter().circle_filled(r.center(), 5.5, if recording { Color32::from_rgb(230, 60, 60) } else { t.icon });
-        if rec.on_hover_text("Begin recording").clicked() && !recording {
+        if rec.on_hover_text(tl!("Begin recording")).clicked() && !recording {
             start_recording(app);
         }
-        if crate::icons::button(ui, "play", 24.0, false, "Play selection").clicked() {
+        if crate::icons::button(ui, "play", 24.0, false, tl!("Play selection")).clicked() {
             play_idx = app.ui.actions.selected;
         }
-        if crate::icons::button(ui, "plus", 24.0, false, "Create new action").clicked() && !recording {
+        if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new action")).clicked() && !recording {
             start_recording(app);
         }
-        if crate::icons::button(ui, "trash", 24.0, false, "Delete").clicked()
+        if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
             && !recording
             && let Some(i) = app.ui.actions.selected.take()
             && i < app.ui.actions.list.len()

@@ -26,6 +26,25 @@ pub const COV_TILE: i32 = 64;
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
 
 #[inline]
+/// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
+/// grid: the centre of the pixel holding the point for odd diameters, the nearest pixel corner
+/// for even ones. Its footprint is then a whole-pixel block around that point, the same square
+/// the Pencil cursor shows ([`grid_square`]).
+pub fn grid_center(x: f64, y: f64, diameter: f32) -> (f32, f32) {
+    let n = if diameter.is_finite() { diameter.round().max(1.0) as i64 } else { 1 };
+    let snap = |v: f64| if n % 2 == 1 { v.floor() + 0.5 } else { v.round() };
+    (snap(x) as f32, snap(y) as f32)
+}
+
+/// The whole-pixel square `[x0, y0, x1, y1]` an aliased dab of `diameter` pixels at (`x`, `y`)
+/// can touch (see [`grid_center`]): the Pencil's cursor.
+pub fn grid_square(x: f64, y: f64, diameter: f32) -> [f64; 4] {
+    let n = if diameter.is_finite() { f64::from(diameter.round().clamp(1.0, 100_000.0)) } else { 1.0 };
+    let (cx, cy) = grid_center(x, y, n as f32);
+    let h = n / 2.0;
+    [f64::from(cx) - h, f64::from(cy) - h, f64::from(cx) + h, f64::from(cy) + h]
+}
+
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -141,7 +160,7 @@ impl BrushContext {
         let wet = b.wet_edges && !dual;
         let noise = b.noise && !dual;
         let tex_tip = !dual && b.texture.enabled && b.texture.each_tip && self.texture.is_some();
-        let (cx, cy) = (d.center.x as f32, d.center.y as f32);
+        let (cx, cy) = if aliased { grid_center(d.center.x, d.center.y, 2.0 * d.radius) } else { (d.center.x as f32, d.center.y as f32) };
         let (sn, cs) = d.angle.sin_cos();
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         // Brush Projection: stretch the sampling coordinates along the tilt direction, which

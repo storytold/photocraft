@@ -276,3 +276,44 @@ fn hostile_vertical_input_does_not_panic() {
         }
     }
 }
+
+/// Manual kerning in vertical type moves the following glyphs down the column (#206); with a
+/// CJK font, upright characters too, and the punctuation squeeze still applies.
+#[test]
+fn manual_kerning_runs_along_the_column() {
+    use photocraft_doc::text::Kerning;
+    let kerned = |t: &TextLayer, kern: f32| {
+        let mut k = t.clone();
+        let first = k.text.chars().next().map_or(0, char::len_utf8);
+        let style = k.runs[0].style.clone();
+        k.runs = vec![TextRun { len: first, style: CharStyle { kerning: Kerning::Off, kern, ..style.clone() } }, TextRun { len: k.text.len() - first, style }];
+        k
+    };
+    let mut e = TextEngine::new();
+    // Rotated Latin: 100/1000 em at 40 px = 4 px further down for the second glyph on.
+    let t = vertical("HOH", "Inter", 40.0);
+    let plain = e.layout(&t, 72.0);
+    let k = e.layout(&kerned(&t, 100.0), 72.0);
+    assert!(k.vertical);
+    assert_eq!(k.glyphs[0].y, plain.glyphs[0].y);
+    for i in 1..3 {
+        assert!((k.glyphs[i].y - plain.glyphs[i].y - 4.0).abs() < 1e-3, "{i}: {} vs {}", k.glyphs[i].y, plain.glyphs[i].y);
+        assert!((k.glyphs[i].x - plain.glyphs[i].x).abs() < 1e-3, "stays on the column");
+    }
+    let (b0, b1) = (plain.bounds().unwrap(), k.bounds().unwrap());
+    assert!((b1[3] - b0[3] - 4.0).abs() < 1e-3, "the column grows by the kern");
+    // Optical kerning in vertical type (rotated Latin) lays out without trouble.
+    let mut opt = vertical("AVATAR", "Inter", 40.0);
+    opt.runs[0].style.kerning = Kerning::Optical;
+    let o = e.layout(&opt, 72.0);
+    assert_eq!(o.glyphs.len(), 6);
+
+    let Some((mut e, fam)) = cjk_engine() else { return };
+    let t = vertical("東京、「都」", &fam, 40.0);
+    let plain = e.layout(&t, 72.0);
+    let k = e.layout(&kerned(&t, -250.0), 72.0);
+    assert!((k.glyphs[1].y - plain.glyphs[1].y + 10.0).abs() < 1e-3, "upright CJK moves up by 10 px");
+    // The squeeze between 、 and 「 is unchanged (same gap as without kerning).
+    let gap = |l: &crate::TextLayout| l.glyphs[3].y - l.glyphs[2].y;
+    assert!((gap(&k) - gap(&plain)).abs() < 1e-3);
+}

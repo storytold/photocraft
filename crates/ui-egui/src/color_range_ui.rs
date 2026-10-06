@@ -82,7 +82,7 @@ pub fn controls(f: &Map<String, Value>) -> Controls {
 /// Open the dialog with Photoshop's defaults (Sampled Colors, Fuzziness 40, the foreground colour
 /// as the sample until the eyedropper picks one).
 pub fn open(app: &mut PhotocraftApp) -> u64 {
-    let label = photocraft_engine::commands::find(COMMAND).map_or("Color Range…", |c| c.label);
+    let label = photocraft_engine::commands::find(COMMAND).map_or(tl!("Color Range…"), |c| c.label);
     let mut f = Map::new();
     f.insert("__colorRange".into(), json!(true));
     f.insert("__label".into(), json!(label));
@@ -295,7 +295,7 @@ fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
         if on {
             ui.painter().circle_filled(r.center(), 3.0, t.accent);
         }
-        let l = ui.add(egui::Label::new(egui::RichText::new(label).color(t.text_dim)).sense(Sense::click()));
+        let l = ui.add(egui::Label::new(egui::RichText::new(tl!(&label)).color(t.text_dim)).sense(Sense::click()));
         resp.union(l)
     })
     .inner
@@ -323,7 +323,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let c = controls(f);
     let select = s(f, "select", "sampledColors").to_string();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Select:").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Select:")).color(t.text_dim));
         let mut cur: &str = &select;
         if widgets::dropdown(ui, "color-range-select", &mut cur, SELECTS, 170.0) {
             f.insert("select".into(), json!(cur));
@@ -332,7 +332,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     ui.add_space(4.0);
     ui.add_enabled_ui(c.sampling, |ui| {
         let mut on = flag(f, "localized");
-        if widgets::checkbox(ui, &mut on, "Localized Color Clusters").changed() {
+        if widgets::checkbox(ui, &mut on, tl!("Localized Color Clusters")).changed() {
             f.insert("localized".into(), json!(on));
         }
     });
@@ -340,19 +340,19 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     ui.add_enabled_ui(c.fuzziness, |ui| {
         if c.tonal {
             let mut v = num(f, "toneFuzziness", 20.0);
-            if widgets::slider_row(ui, "Fuzziness:", &mut v, 0.0..=100.0, "%", None).changed() {
+            if widgets::slider_row(ui, tl!("Fuzziness:"), &mut v, 0.0..=100.0, "%", None).changed() {
                 f.insert("toneFuzziness".into(), json!(v.round()));
             }
         } else {
             let mut v = num(f, "fuzziness", 40.0);
-            if widgets::slider_row(ui, "Fuzziness:", &mut v, 0.0..=200.0, "", None).changed() {
+            if widgets::slider_row(ui, tl!("Fuzziness:"), &mut v, 0.0..=200.0, "", None).changed() {
                 f.insert("fuzziness".into(), json!(v.round()));
             }
         }
     });
     if c.range {
         let mut v = num(f, "range", 100.0);
-        if widgets::slider_row(ui, "Range:", &mut v, 0.0..=100.0, "%", None).changed() {
+        if widgets::slider_row(ui, tl!("Range:"), &mut v, 0.0..=100.0, "%", None).changed() {
             f.insert("range".into(), json!(v.round()));
         }
     }
@@ -367,8 +367,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             "shadows" => level(ui, "shadowsLevel", "Shadows up to:", 65.0),
             "highlights" => level(ui, "highlightsLevel", "Highlights from:", 190.0),
             _ => {
-                level(ui, "midtonesLow", "Midtones from:", 105.0);
-                level(ui, "midtonesHigh", "Midtones to:", 150.0);
+                level(ui, "midtonesLow", tl!("Midtones from:"), 105.0);
+                level(ui, "midtonesHigh", tl!("Midtones to:"), 150.0);
             }
         }
     }
@@ -405,7 +405,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.painter().rect_stroke(frame, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
         let label = match app.color_range.as_ref().and_then(|p| p.error.as_deref()) {
             Some(e) => format!("Color Range preview unavailable: {e}"),
-            None => "Color Range preview".to_string(),
+            None => tl!("Color Range preview").to_string(),
         };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), &label));
         ui.add_space(10.0);
@@ -413,7 +413,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.add_enabled_ui(c.sampling, |ui| {
                 let tool = s(f, "__tool", "sample").to_string();
                 ui.horizontal(|ui| {
-                    for (id, badge, label) in [("sample", "", "Eyedropper"), ("add", "+", "Add to Sample"), ("subtract", "−", "Subtract from Sample")] {
+                    for (id, badge, label) in
+                        [("sample", "", tl!("Eyedropper")), ("add", "+", tl!("Add to Sample")), ("subtract", "−", tl!("Subtract from Sample"))]
+                    {
                         if eyedropper(ui, badge, tool == id, label).clicked() {
                             f.insert("__tool".into(), json!(id));
                         }
@@ -421,19 +423,22 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 });
                 let (add, sub) = (points(f, "points").len(), points(f, "subtractPoints").len());
                 let what = match (add, sub) {
-                    (0, 0) => "Sample: foreground colour".to_string(),
-                    (a, 0) => format!("{a} sample{}", if a == 1 { "" } else { "s" }),
-                    (a, s) => format!("{a} sample{}, {s} subtracted", if a == 1 { "" } else { "s" }),
+                    (0, 0) => tl!("Sample: foreground colour").to_string(),
+                    (a, 0) => crate::i18n::trn(crate::i18n::current(), a as u64, "{n} sample", "{n} samples"),
+                    (a, s) => crate::i18n::fmt(
+                        tl!("{added}, {removed} subtracted"),
+                        &[("added", &crate::i18n::trn(crate::i18n::current(), a as u64, "{n} sample", "{n} samples")), ("removed", &s.to_string())],
+                    ),
                 };
                 ui.label(egui::RichText::new(what).size(11.0).color(t.text_faint));
-                if add + sub > 0 && widgets::secondary_button(ui, "Clear Samples", 0.0).clicked() {
+                if add + sub > 0 && widgets::secondary_button(ui, tl!("Clear Samples"), 0.0).clicked() {
                     set_points(f, "points", &[]);
                     set_points(f, "subtractPoints", &[]);
                 }
             });
             ui.add_space(8.0);
             let mut inv = flag(f, "invert");
-            if widgets::checkbox(ui, &mut inv, "Invert").changed() {
+            if widgets::checkbox(ui, &mut inv, tl!("Invert")).changed() {
                 f.insert("invert".into(), json!(inv));
             }
         });
@@ -450,7 +455,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         }
     });
     if app.session.active().is_none() {
-        ui.label(egui::RichText::new("Open a document to select a colour range.").color(t.text_faint));
+        ui.label(egui::RichText::new(tl!("Open a document to select a colour range.")).color(t.text_faint));
     }
 }
 

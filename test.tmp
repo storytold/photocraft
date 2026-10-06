@@ -1,0 +1,1929 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.43s
+     Running unittests src/main.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft-09c5ef8c0d147911)
+
+running 35 tests
+test gpu_startup::tests::cpu_prefers_software_adapters ... ok
+test gpu_startup::tests::intel_on_windows_defaults_to_dx12 ... ok
+test gpu_startup::tests::env_override_beats_everything ... ok
+test app_icon::tests::exe_icon_has_every_shell_size ... ok
+test gpu_startup::tests::no_marker_uses_the_preference ... ok
+test gpu_startup::tests::safe_gpu_forces_the_cpu_for_one_launch ... ok
+test app_icon::tests::msi_shortcut_icons_keep_the_exe_extension ... ok
+test app_dirs::tests::missing_exe_dir_or_env_never_panics ... ok
+test crash_guard::tests::guard_turns_a_panic_into_an_error ... ok
+test linux_libs::tests::distro_detection ... ok
+test linux_libs::tests::complete_systems_pass ... ok
+test app_dirs::tests::no_marker_uses_the_platform_dir ... ok
+test gpu_startup::tests::a_crash_moves_down_each_chain_and_is_remembered ... ok
+test linux_libs::tests::ldconfig_parsing_matches_name_and_architecture ... ok
+test gpu_startup::tests::marker_round_trip_and_lenient_parse ... ok
+test app_dirs::tests::override_wins_over_portable ... ok
+test gpu_startup::tests::unwritable_config_dir_is_not_fatal ... ok
+test linux_libs::tests::session_follows_winit_order ... ok
+test linux_libs::tests::gpu_needs_vulkan_or_egl ... ok
+test linux_libs::tests::x11_without_xkbcommon_x11_is_reported ... ok
+test linux_libs::tests::library_dirs_count_and_unread_cache_only_warns ... ok
+test app_dirs::tests::a_marker_folder_is_not_a_marker ... ok
+test app_dirs::tests::unwritable_portable_folder_falls_back_with_a_warning ... ok
+test monitor_profile::tests::base64 ... ok
+test tablet::tests::samples_map_and_sanitize ... ok
+test gpu_startup::tests::prefs_are_read_leniently ... ok
+test gpu_startup::tests::sentinel_detects_a_crash_and_clears_on_success ... ok
+test app_dirs::tests::either_marker_keeps_everything_beside_the_exe ... ok
+test app_icon::tests::window_icon_decodes ... ok
+test control_server::tests::oversized_reply_preserves_framing_id_and_the_next_control_request ... ok
+test tablet::tests::eraser_end_switches_to_the_eraser_and_back ... ok
+test tablet::tests::use_tablet_pressure_off_paints_like_a_mouse ... ok
+test tablet::tests::xinput_tablet_pressure_drives_stroke_width_and_opacity ... ok
+test tablet::tests::appkit_tablet_pressure_drives_stroke_width_and_opacity ... ok
+test monitor_profile::tests::detected_profile_parses ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_algo-d86ce5d8ff3f8fc1)
+
+running 223 tests
+test artistic_fx::tests::bench_gallery ... ignored
+test artistic_fx::tests::gallery_sheet ... ignored
+test distort2::tests::curve_passes_through_points_and_clamps ... ok
+test content_aware::tests::variant_geometry ... ok
+test camera_raw::tests::defaults_are_identity ... ok
+test erase::tests::degenerate_inputs_do_nothing ... ok
+test artistic_fx::tests::params_parse_and_clamp ... ok
+test exif::tests::round_trips_and_survives_garbage ... ok
+test erase::tests::respects_selection_and_lock ... ok
+test features::tests::fits_are_exact_on_clean_data ... ok
+test features::tests::ransac_rejects_outliers ... ok
+test features::tests::harris_finds_square_corners ... ok
+test camera_raw::tests::float_documents_keep_overrange ... ok
+test content_aware::tests::fills_only_the_hole_with_known_texture ... ok
+test blur::tests::box_gaussian_matches_exact_kernel ... ok
+test hdr::tests::mtb_finds_shifts ... ok
+test content_aware::tests::color_adaptation_follows_a_gradient ... ok
+test camera_raw::tests::curves_hsl_grading_detail_effects ... ok
+test inpaint::tests::synthesis_fills_hole_with_plausible_values ... ok
+test features::tests::descriptors_are_deterministic ... ok
+test inpaint::tests::proximity_finds_matching_offset ... ok
+test lens::tests::generic_profiles_and_cmyk ... ok
+test lens::tests::vignette_ca_perspective_and_straighten ... ok
+test hdr::tests::tone_mapping_methods_produce_display_range ... ok
+test inpaint::tests::completion_continues_structure ... ok
+test liquify::tests::forward_warp_displaces_along_the_stroke_and_reconstruct_restores ... ok
+test liquify::tests::no_strokes_is_identity_at_every_depth ... ok
+test liquify::tests::reconstruct_brush_reduces_the_field_and_freeze_protects ... ok
+test content_aware::tests::sampling_area_restricts_sources ... ok
+test matting::tests::box_mean_matches_naive ... ok
+test liquify::tests::proxy_matches_the_full_render_roughly ... ok
+test matting::tests::decontaminate_and_masked_copy_any_depth ... ok
+test matting::tests::feather_contrast_and_shift ... ok
+test matting::tests::max_square_matches_naive ... ok
+test matting::tests::guided_filter_matting_softens_blurred_edge ... ok
+test other2::tests::hsb_hsl_round_trip ... ok
+test liquify::tests::twirl_pucker_bloat_and_push_left_have_the_right_sense ... ok
+test paint::tests::bucket_fills_contiguous_region ... ok
+test paint::tests::gradient_t_shapes ... ok
+test paint::tests::gradient_paints_ramp_within_selection ... ok
+test liquify::tests::replay_is_deterministic_and_depths_agree ... ok
+test panorama::tests::placement_round_trips_all_projections ... ok
+test lens::tests::identity_is_lossless_at_all_depths ... ok
+test lens::tests::distortion_round_trip_and_edges ... ok
+test inpaint::tests::completion_fills_blemish_from_texture ... ok
+test panorama::tests::photometric_recovers_gain_and_vignette ... ok
+test perspective::tests::shared_edges_stay_continuous ... ok
+test perspective::tests::identity_and_a_known_homography ... ok
+test perspective::tests::straighten_levels_and_plumbs_edges ... ok
+test panorama::tests::seams_avoid_disagreement_and_multiband_is_seamless ... ok
+test photo_util::tests::dense_and_sparse_solvers_agree ... ok
+test photo_util::tests::srgb_round_trip_and_sampling ... ok
+test poisson::tests::membrane_reproduces_linear_boundary ... ok
+test poisson::tests::seamless_clone_takes_destination_colour_and_source_texture ... ok
+test puppet::tests::depth_orders_triangles ... ok
+test puppet::tests::mesh_covers_the_shape_only ... ok
+test puppet::tests::arap_energy_decreases_and_modes_differ ... ok
+test features::tests::registers_translation_and_similarity ... ok
+test hdr::tests::exposure_estimation_and_merge_recover_radiance ... ok
+test pyramid::tests::laplacian_round_trip_is_exact ... ok
+test pyramid::tests::panorama_splits_the_overlap ... ok
+test pyramid::tests::stack_picks_the_sharp_image ... ok
+test quantize::tests::bitmap_methods_are_binary_and_track_tone ... ok
+test pyramid::tests::blend_with_one_hot_weights_reproduces_each_side ... ok
+test quantize::tests::fixed_palettes_have_expected_sizes ... ok
+test quantize::tests::forced_colours_filling_the_count_do_not_panic ... ok
+test quantize::tests::exact_palette_and_failure ... ok
+test render2::tests::composite_draws_a_disc_and_respects_the_clip ... ok
+test quantize::tests::quantize_maps_to_palette_with_each_dither ... ok
+test quantize::tests::adaptive_and_perceptual_respect_count_and_forced ... ok
+test resample::tests::downscale_averages_checkerboard ... ok
+test puppet::tests::a_single_pin_translates_rigidly ... ok
+test resample::tests::masks_keep_default_pixel ... ok
+test render2::tests::renderers_are_deterministic_and_seeded ... ok
+test resample::tests::identity_scale_is_lossless ... ok
+test resample::tests::translate_and_crop ... ok
+test retouch::tests::blur_ignores_transparent_colour ... ok
+test retouch::tests::blur_reduces_variance_and_sharpen_increases_it ... ok
+test retouch::tests::dodge_midtones_affects_midtones_most ... ok
+test retouch::tests::protect_tones_keeps_hue ... ok
+test retouch::tests::ranges_target_their_tones ... ok
+test retouch::tests::sponge_changes_saturation ... ok
+test resample::tests::transparent_edges_do_not_darken ... ok
+test seam::tests::enlarging_duplicates_flat_areas ... ok
+test seam::tests::height_and_protection ... ok
+test seam::tests::seam_follows_low_energy ... ok
+test seam::tests::skin_rule ... ok
+test seam::tests::shrinking_keeps_the_salient_bar ... ok
+test segment::sky::tests::colour_prior_ranks_sky_over_foliage ... ok
+test segment::sky::tests::no_sky_in_a_ground_only_image ... ok
+test resample::tests::half_and_double_sizes ... ok
+test camera_raw::tests::basic_panel_moves_the_right_way ... ok
+test segment::sky::tests::overcast_sky_is_found ... ok
+test segment::tests::clean_mask_drops_islands_and_fills_holes ... ok
+test segment::sky::tests::finds_sky_and_not_ground_or_tree ... ok
+test segment::tests::geodesic_distance_jumps_across_edges ... ok
+test segment::tests::gmm_recovers_synthetic_clusters ... ok
+test segment::tests::focus_area_selects_sharp_half ... ok
+test segment::tests::maxflow_clrs_network ... ok
+test segment::tests::grid_cut_separates_two_halves ... ok
+test segment::tests::maxflow_tiny_graph ... ok
+test segment::tests::maxflow_matches_reference_on_random_graphs ... ok
+test panorama::tests::rotating_camera_focal_and_cylindrical_layout ... ok
+test segment::tests::geodesic_barrier_blocks_oblique_crossings ... ok
+test hdr::tests::ghosts_come_from_the_base_exposure ... ok
+test puppet::tests::no_pins_or_unmoved_pins_are_identity ... ok
+test erase::tests::erases_alpha_in_every_format ... ok
+test panorama::tests::recovers_translations_and_homographies ... ok
+test segment::tests::sampler_downsampling_matches_image_downsample ... ok
+test segment::tests::saliency_highlights_the_object ... ok
+test selection::tests::color_range_falloff ... ok
+test matting::tests::refine_mask_tiles_match_single_buffer ... ok
+test selection::tests::color_range_several_samples_and_localized ... ok
+test selection::tests::combine_modes ... ok
+test segment::tests::quick_select_stops_at_thin_line ... ok
+test segment::tests::grabcut_trimap_on_disc ... ok
+test segment::tests::quick_select_grows_without_leaking ... ok
+test selection::tests::expand_contract_border ... ok
+test selection::tests::hue_families ... ok
+test selection::tests::polygon_area_and_aa ... ok
+test selection::tests::tonal_ranges ... ok
+test selection::tests::wand_contiguous_vs_global ... ok
+test selection::tests::wand_tolerance ... ok
+test selection_blur::tests::bench_24mp ... ignored
+test segment::tests::slic_counts_compactness_and_edges ... ok
+test selection::tests::smooth_removes_specks_and_feather_softens ... ok
+test selection_blur::tests::cosine_fit_is_used_and_accurate ... ok
+test segment::tests::object_select_disc_full_resolution ... ok
+test selection::tests::wand_region_matches_reference_magic_wand ... ok
+test stack::tests::basic_statistics ... ok
+test stack::tests::median_removes_outlier ... ok
+test stack::tests::transparent_samples_are_ignored ... ok
+test tests::blur_keeps_16bit_precision ... ok
+test tests::distortions_are_identity_at_zero ... ok
+test tests::blur_preserves_flat_colour_and_mass ... ok
+test selection::tests::combine_region_matches_combine ... ok
+test tests::float_surfaces_keep_hdr_values ... ok
+test segment::tests::quick_select_downsampled_window ... ok
+test tests::gaussian_sigma_matches_radius ... ok
+test tests::gaussian_identity_at_tiny_radius ... ok
+test tests::halos_and_output_area ... ok
+test tests::half_selection_mixes_halfway ... ok
+test selection_blur::tests::edge_cases ... ok
+test tests::high_pass_of_flat_is_mid_gray ... ok
+test segment::tests::object_select_downsampled_with_band_refinement ... ok
+test tests::minimum_maximum_old_params_default_to_squareness ... ok
+test tests::median_and_dust_remove_a_speck ... ok
+test tests::minimum_maximum_spread ... ok
+test tests::mosaic_cells_are_uniform ... ok
+test tests::motion_blur_spreads_along_angle_only ... ok
+test tests::noise_is_deterministic_monochrome_and_centred ... ok
+test tests::offset_wrap_repeat_transparent ... ok
+test tests::minimum_maximum_roundness_match_brute_force ... ok
+test tests::params_serde_roundtrip ... ok
+test tests::running_extreme_windows ... ok
+test tests::stylize_basics ... ok
+test tests::twirl_keeps_centre_and_outside ... ok
+test poisson::tests::multigrid_matches_reference_solve ... ok
+test tests_ext::custom_kernel_shifts_and_offsets ... ok
+test segment::tests::select_subject_finds_centred_object ... ok
+test tests::unsharp_threshold_and_contrast ... ok
+test tests::other_colour_modes_work ... ok
+test tests_ext::deinterlace_rebuilds_a_field ... ok
+test tests_ext::displace_shifts_by_map_and_shear_by_curve ... ok
+test tests_ext::fibers_lie_between_colours_and_are_seeded ... ok
+test tests_ext::diffuse_only_moves_pixels_locally ... ok
+test tests_ext::extrude_blocks_and_pyramids_shade_cells ... ok
+test content_aware::tests::adaptations_run_and_stay_deterministic ... ok
+test tests_ext::hsb_filter_encodes_and_decodes ... ok
+test tests_ext::lens_blur_depth_map_keeps_focal_plane_sharp ... ok
+test tests_ext::lens_flare_is_brightest_at_its_centre ... ok
+test tests_ext::halftone_covers_by_ink ... ok
+test tests_ext::mezzotint_is_binary_and_tracks_brightness ... ok
+test tests_ext::gallery_blurs_follow_their_geometry ... ok
+test tests_ext::lighting_point_light_falls_off ... ok
+test tests::maximum_roundness_grows_a_point_into_a_disc ... ok
+test tests_ext::identities_at_zero_strength ... ok
+test tests_ext::new_params_serde_roundtrip ... ok
+test scancrop::tests::finds_rotated_photos_in_reading_order ... ok
+test tests_ext::ntsc_limits_saturated_colours_only ... ok
+test tests_ext::pointillize_shows_canvas ... ok
+test tests_ext::oil_paint_smooths_along_strokes ... ok
+test tests_ext::reduce_noise_lowers_noise ... ok
+test tests::layer_filters_repeat_the_canvas_edge ... ok
+test tests_ext::tiles_leave_gaps_with_fill ... ok
+test tests_ext::shaped_blurs_spread_a_point_into_the_shape ... ok
+test tests_ext::trace_contour_draws_line_at_level_crossing ... ok
+test tests_ext::smart_blur_keeps_edges_and_smooths_noise ... ok
+test tone::tests::highlights_darken_bright_pixels ... ok
+test tone::tests::match_color_moves_statistics_toward_source ... ok
+test tone::tests::hdr_toning_compresses_range_and_keeps_bounds ... ok
+test tone::tests::replace_color_only_touches_matching_pixels ... ok
+test tests::every_filter_changes_something_and_respects_zero_selection ... ok
+test transform::tests::homography_maps_rect_corners_and_inverts ... ok
+test tone::tests::shadows_lift_dark_pixels_more_than_bright ... ok
+test transform::tests::identity_and_translation_are_exact ... ok
+test transform::tests::large_downscale_is_prefiltered ... ok
+test trap::tests::leaves_paper_untouched ... ok
+test tests_ext::flat_images_stay_flat ... ok
+test trap::tests::width_zero_is_identity ... ok
+test vanishing::tests::focal_and_metric_aspect_from_one_plane ... ok
+test transform::tests::scale_doubles_size_and_rotation_keeps_area ... ok
+test trap::tests::traps_the_internal_colour_edge ... ok
+test vanishing::tests::tear_off_is_perpendicular_and_shares_the_edge ... ok
+test warp::tests::gray_masks_keep_their_default ... ok
+test tests_ext::wind_streaks_downwind_from_edges ... ok
+test vanishing::tests::paste_and_clone_in_perspective ... ok
+test transform::tests::surfaces_without_alpha_gain_it ... ok
+test wideangle::tests::camera_models_round_trip ... ok
+test wideangle::tests::no_constraints_is_identity_and_renders ... ok
+test warp::tests::translation_and_known_arc_points ... ok
+test warp::tests::identity_warp_is_a_no_op_at_every_depth ... ok
+test tests::every_filter_is_tile_independent ... ok
+test selection::tests::tiled_conversions_match_per_sample_ones ... ok
+test artistic_fx::tests::every_effect_changes_pixels_and_is_tile_independent ... ok
+test tests_ext::new_filters_change_pixels_and_respect_empty_selection ... ok
+test tests_ext::new_filters_are_tile_independent ... ok
+test tests_ext::new_filters_agree_across_bit_depths ... ok
+test tests_ext::new_filters_work_in_other_colour_modes ... ok
+test selection_blur::tests::smooth_matches_direct_box ... ok
+test wideangle::tile_tests::no_gaps_across_tiles ... ok
+test selection_blur::tests::feather_matches_direct_gaussian ... ok
+test wideangle::tests::constraints_become_straight_and_level ... ok
+
+test result: ok. 220 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_automation-523153a457ded865)
+
+running 32 tests
+test budgets::tests::preview_checks_full_size_requested_edge_and_source_before_rendering ... ok
+test budgets::tests::batch_cannot_retain_more_than_the_aggregate_reply_budget ... ok
+test budgets::tests::encoded_bytes_include_json_escaping_and_accept_exact_boundary ... ok
+test security::tests::authentication_does_not_dispatch_without_the_token ... ok
+test security::tests::bounded_reader_rejects_an_oversized_line ... ok
+test security::tests::connection_limiter_releases_capacity ... ok
+test security::tests::generated_tokens_are_valid_and_distinct ... ok
+test security::tests::token_file_round_trips_between_server_and_client ... ok
+test budgets::tests::oversized_reply_is_one_complete_error_with_matching_id ... ok
+test server::tests::bridge_screenshot_decode_limits_apply_even_without_downscaling ... ok
+test rpc::tests::stdio_rejects_oversized_frames_before_dispatch ... ok
+test workspace::tests::filesystem_commands_fail_closed ... ok
+test rpc::tests::tcp_rejects_requests_before_authentication ... ok
+test rpc::tests::batch_rejects_too_many_steps ... ok
+test rpc::tests::tcp_serves_loopback ... ok
+test workspace::tests::missing_parent_is_a_stable_error_before_any_file_is_created ... ok
+test workspace::tests::rejects_absolute_traversal_mixed_prefix_and_malformed_paths_without_panicking ... ok
+test workspace::tests::symlink_escape_is_rejected ... ok
+test rpc::tests::poisoned_session_keeps_serving ... ok
+test server::tests::a_panicking_command_does_not_wedge_the_session ... ok
+test rpc::tests::trusted_local_render_keeps_full_size_behavior ... ok
+test rpc::tests::automation_preview_rejects_oversized_full_size_and_numeric_wraparound ... ok
+test rpc::tests::lines_round_trip_and_errors ... ok
+test rpc::tests::batch_stops_on_error_unless_told_not_to ... ok
+test workspace::tests::read_and_write_authority_are_separate ... ok
+test workspace::tests::write_into_read_only_folder_keeps_the_original ... ok
+test workspace::tests::valid_read_and_nonexistent_output_write_stay_in_root ... ok
+test rpc::tests::preview_rejection_precedes_output_file_creation ... ok
+test rpc::tests::render_to_file_and_base64 ... ok
+test workspace::tests::write_replaces_atomically_and_leaves_no_temp_file ... ok
+test server::tests::mcp_text_checks_the_encoded_tool_envelope ... ok
+test rpc::tests::batch_response_budget_stops_later_steps_even_when_stop_on_error_is_false ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/agent_tasks.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/agent_tasks-2fd61b28f26dfe60)
+
+running 1 test
+test agent_completes_ten_scripted_tasks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/mcp.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/mcp-077a3167b7340cbc)
+
+running 14 tests
+test bridge_rejects_non_loopback ... ok
+test bridge_rejects_wrong_token_before_control_methods ... ok
+test bridge_reports_unreachable_app ... ok
+test lists_expected_tools ... ok
+test bridge_forwards_to_control_protocol ... ok
+test command_batch_rejects_too_many_steps ... ok
+test filesystem_policy_rejects_absolute_and_escaping_paths_before_effects ... ok
+test errors_are_tool_errors_not_crashes ... ok
+test open_png_and_inspect ... ok
+test command_batch_runs_steps_in_order ... ok
+test preview_budget_failure_preserves_the_mcp_session ... ok
+test command_list_filters ... ok
+test headless_edit_render_save_roundtrip ... ok
+test bridge_response_budget_drops_connection_without_retrying_the_operation ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_cli-0c7668ccc9d9469b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_cli-f68ecbe913a6c37d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/cli-ec967ecf2209cdab)
+
+running 12 tests
+test parse_actions_formats ... ok
+test in_process_run_matches_binary ... ok
+test mcp_stdio_handshake_and_tool_call ... ok
+test convert_errors ... ok
+test usage_and_unknown_command ... ok
+test commands_listing ... ok
+test info_prints_layer_tree_json ... ok
+test run_errors ... ok
+test droplet_runs_an_action_on_files ... ok
+test run_commands_and_save ... ok
+test convert_png_pcraft_png_is_lossless ... ok
+test batch_applies_actions_to_directory ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_cms-aaf201d721f2ccff)
+
+running 19 tests
+test curve::tests::hdr_and_negative_extension ... ok
+test clut::tests::four_d_and_multilinear_agree_on_linear ... ok
+test curve::tests::parametric_inverses ... ok
+test clut::tests::one_and_two_d ... ok
+test clut::tests::exact_on_nodes_and_linear_functions ... ok
+test curve::tests::srgb_matches_formula ... ok
+test curve::tests::table_inverse_exact_on_knots_and_between ... ok
+test lut3d::tests::half_float_roundtrip ... ok
+test lutfile::tests::malformed_rejected ... ok
+test lutfile::tests::look_hex_floats ... ok
+test lutfile::tests::cube_roundtrip_and_identity ... ok
+test lutfile::tests::three_dl_blue_fastest_and_bit_depth ... ok
+test math::tests::bradford_maps_white ... ok
+test math::tests::invert_roundtrip ... ok
+test math::tests::lab_roundtrip ... ok
+test synth::tests::model_anchors ... ok
+test lutfile::tests::cube_1d_expands ... ok
+test synth::tests::separation_hits_in_gamut_targets ... ok
+test lutfile::tests::builtins_exist_and_are_in_range ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bench.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/bench-092976b374e59d24)
+
+running 1 test
+test bench_srgb8_to_cmyk8 ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cms.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/cms-b71e7682ab9db3b6)
+
+running 19 tests
+test builtin_all_in_declaration_order ... ok
+test gray_profile_with_reversed_lut_type_reencodes ... ok
+test gray_profiles ... ok
+test hdr_floats_survive_matrix_transforms ... ok
+test srgb_known_lab_values ... ok
+test identity_transform_is_identity ... ok
+test malformed_profiles_are_rejected_without_panicking ... ok
+test rgb_to_rgb_matrix_shaper_paths_agree ... ok
+test tetrahedral_beats_trilinear ... ok
+test oracle_moxcms_rgb ... ok
+test builtins_encode_and_reparse ... ok
+test in_gamut_colours_survive_cmyk_roundtrip ... ok
+test rgb_lab_rgb_roundtrip_8bit_and_float ... ok
+test oracle_moxcms_system_cmyk ... ok
+test proof_and_display_lut ... ok
+test black_point_compensation ... ok
+test intents_differ_as_expected ... ok
+test system_profiles ... ok
+test cmyk_profile_is_monotonic_and_in_range ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+     Running tests/regen.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/regen-182c0f4101a281fe)
+
+running 1 test
+test regen_or_check_coated_cmyk ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_codecs-68828bc4ebfb7cfa)
+
+running 18 tests
+test web::anim_tests::rejects_bad_frames ... ok
+test image::tests::rgba8_of_gray ... ok
+test image::tests::cmyk_rgb_basic ... ok
+test image::tests::icc_dropped_on_model_change ... ok
+test image::tests::from_raw_rejects_bad_len ... ok
+test image::tests::u8_u16_roundtrip_exact ... ok
+test image::tests::adding_alpha_fast_path_matches_the_general_conversion ... ok
+test image::tests::u16_f32_roundtrip_exact ... ok
+test web::tests::wbmp_roundtrips ... ok
+test codecs::png::parallel_tests::adler_combine_matches_one_pass ... ok
+test codecs::png::indexed_tests::png8_roundtrips_through_the_decoder ... ok
+test web::anim_tests::animated_gif_has_header_and_frames ... ok
+test web::tests::gif_small_palettes_and_transparency ... ok
+test web::tests::progressive_jpeg_decodes ... ok
+test web::subsampling_tests::every_option_combination_decodes_to_the_source ... ok
+test web::tests::gif_roundtrips_through_the_decoder ... ok
+test web::tests::gif_long_runs_hit_the_dictionary_limit ... ok
+test codecs::png::parallel_tests::large_images_roundtrip_through_the_parallel_encoder ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/camera_raw.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/camera_raw-009da72a9e2f647a)
+
+running 7 tests
+test cr2_is_reported_as_camera_raw ... ok
+test raw_behind_a_preview_is_reported_as_camera_raw ... ok
+test linear_raw_image_is_reported_as_camera_raw ... ok
+test dng_is_reported_as_camera_raw ... ok
+test cfa_image_is_reported_as_camera_raw ... ok
+test truncated_raw_markers_do_not_panic ... ok
+test ordinary_tiffs_still_decode ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/detect_caps.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/detect_caps-436468915aace902)
+
+running 27 tests
+test caps_function_matches_method ... ok
+test default_build_formats_all_symmetric ... ok
+test detect_magic_jpeg ... ok
+test caps_are_internally_consistent ... ok
+test detect_magic_png ... ok
+test detect_magic_pnm_family ... ok
+test detect_magic_ico ... ok
+test detect_magic_exr ... ok
+test detect_magic_hdr ... ok
+test detect_magic_avif ... ok
+test decode_unknown_is_error ... ok
+test detect_magic_gif ... ok
+test detect_magic_qoi ... ok
+test detect_magic_tiff_both_endians_and_bigtiff ... ok
+test detect_magic_webp ... ok
+test detect_magic_bmp ... ok
+test avif_never_readable ... ok
+test detect_negatives ... ok
+test detect_tga_heuristic ... ok
+test every_enabled_format_is_symmetric_or_whitelisted ... ok
+test exceptions_are_documented_and_unique ... ok
+test extension_specific_cases ... ok
+test extensions_map_back ... ok
+test extensions_unique_across_formats ... ok
+test never_write_only_without_exception ... ok
+test detect_random_bytes_rarely_matches_tga ... ok
+test detect_encoded_output_of_every_format ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/fidelity.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/fidelity-1417810b6c76ba19)
+
+running 27 tests
+test f16_to_exr_is_clean ... ok
+test float_to_png_reduces_and_clips ... ok
+test float_pnm_drops_alpha ... ok
+test cmyk_to_png_converted ... ok
+test exif_xmp_dpi_text_dropped_for_qoi ... ok
+test alpha_to_hdr_discarded ... ok
+test hdr_is_lossy ... ok
+test gif_quantizes_and_binarizes ... ok
+test avif_default_build_write_unsupported ... ok
+test alpha_to_jpeg_discarded ... ok
+test every_warning_has_a_message ... ok
+test cmyk_to_jpeg_and_tiff_not_converted ... ok
+test float_to_exr_and_tiff_is_clean ... ok
+test cmyka_to_webp_converted_keeps_alpha ... ok
+test icc_dropped_for_bmp ... ok
+test ico_oversize_is_fatal ... ok
+test icc_warning_suppressed_when_not_embedding ... ok
+test in_range_float_not_clipped ... ok
+test integer_to_exr_is_lossless ... ok
+test opaque_alpha_not_reported ... ok
+test png_u16_rgba_is_clean ... ok
+test png_u8_rgb_is_clean ... ok
+test sixteen_bit_message_text ... ok
+test sixteen_bit_to_jpeg_reduces ... ok
+test webp_drops_dpi_and_text_only ... ok
+test tiff_is_clean_for_all_integer_and_f32_layouts ... ok
+test warnings_match_actual_roundtrip_behaviour ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/limits.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/limits-3021b712e583367e)
+
+running 10 tests
+test limits_check_api ... ok
+test jpeg_bomb_header_rejected ... ok
+test pnm_bomb_header_rejected ... ok
+test png_bomb_header_rejected_before_alloc ... ok
+test tiff_bomb_header_rejected ... ok
+test max_height_enforced_for_every_format ... ok
+test max_alloc_enforced_for_every_format ... ok
+test max_width_enforced_for_every_format ... ok
+test max_pixels_enforced_for_every_format ... ok
+test limits_none_accepts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/malformed.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/malformed-4ce790a3c8220245)
+
+running 14 tests
+test pnm_valid_variants ... ok
+test pnm_specific_malformations ... ok
+test jpeg_marker_garbage ... ok
+test tiff_empty_sample_format_is_an_error ... ok
+test tiff_fixture_decodes ... ok
+test empty_input_errors_for_every_format ... ok
+test random_bytes_each_format_never_panic ... ok
+test truncated_files_mostly_error ... ok
+test random_bytes_with_magic_never_panic ... ok
+test random_bytes_never_panic ... ok
+test mutated_valid_files_never_panic ... ok
+test truncated_at_many_offsets ... ok
+test bit_flips_never_panic ... ok
+test byte_overwrites_in_header_never_panic ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/metadata.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/metadata-369e33e872497790)
+
+running 25 tests
+test hdr_metadata ... ok
+test jpeg_exif_readable_by_oracle ... ok
+test bmp_metadata ... ok
+test jpeg_dpi_in_jfif ... ok
+test jpeg_metadata ... ok
+test cmyk_icc_not_written_to_rgb_format ... ok
+test ico_metadata ... ok
+test gif_metadata ... ok
+test png_exif_chunk_written ... ok
+test png_icc_readable_by_oracle ... ok
+test icc_on_cmyk_tiff_and_jpeg ... ok
+test metadata_survives_depth_conversion ... ok
+test png_xmp_in_itxt_keyword ... ok
+test png_unicode_text_uses_itxt ... ok
+test pnm_metadata ... ok
+test qoi_metadata ... ok
+test tga_metadata ... ok
+test embed_flags_disable_metadata ... ok
+test png_metadata ... ok
+test metadata_on_16bit_png_and_tiff ... ok
+test tiff_icc_readable_by_oracle ... ok
+test webp_metadata ... ok
+test tiff_metadata ... ok
+test exr_metadata ... ok
+test jpeg_multi_segment_icc ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/png_jpeg.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/png_jpeg-de2d6aced1438593)
+
+running 14 tests
+test png_palette_and_low_bit_depth_expand ... ok
+test adam7_with_metadata ... ok
+test adam7_compressions ... ok
+test jpeg_grayscale_decodes_as_gray ... ok
+test jpeg_cmyk_roundtrip_with_adobe_marker ... ok
+test jpeg_progressive_from_other_encoder_decodes ... ok
+test jpeg_ycck_decodes_to_cmyk ... ok
+test jpeg_cmyk_flat_colour_exact_ish ... ok
+test jpeg_rgb_matches_oracle_decoder ... ok
+test tiff_f32_output_matches_oracle ... ok
+test tiff_output_matches_oracle ... ok
+test png_output_matches_oracle_all_layouts ... ok
+test adam7_16bit ... ok
+test adam7_small_sizes_all_layouts ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/roundtrip.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/roundtrip-311ec99aa3c9542e)
+
+running 300 tests
+test bmp::gray_u8 ... ok
+test bmp::gray_u16 ... ok
+test bmp::gray_f32 ... ok
+test bmp::graya_f16 ... ok
+test bmp::cmyk_f32 ... ok
+test bmp::cmyka_u8 ... ok
+test bmp::cmyka_f16 ... ok
+test bmp::cmyk_u16 ... ok
+test bmp::cmyk_u8 ... ok
+test bmp::gray_f16 ... ok
+test bmp::graya_f32 ... ok
+test bmp::cmyka_u16 ... ok
+test bmp::cmyk_f16 ... ok
+test bmp::cmyka_f32 ... ok
+test bmp::graya_u16 ... ok
+test bmp::graya_u8 ... ok
+test bmp::rgb_f16 ... ok
+test bmp::rgb_f32 ... ok
+test bmp::rgb_u16 ... ok
+test bmp::rgb_u8 ... ok
+test bmp::rgba_f16 ... ok
+test bmp::rgba_f32 ... ok
+test bmp::rgba_u16 ... ok
+test empty_image_rejected ... ok
+test bmp::rgba_u8 ... ok
+test exr::gray_f32 ... ok
+test exr::graya_f16 ... ok
+test exr::gray_u8 ... ok
+test exr::graya_f32 ... ok
+test exr::gray_u16 ... ok
+test exr::cmyk_f16 ... ok
+test exr::cmyk_f32 ... ok
+test exr::cmyk_u16 ... ok
+test exr::gray_f16 ... ok
+test exr::cmyk_u8 ... ok
+test exr::cmyka_f16 ... ok
+test exr::cmyka_u8 ... ok
+test exr::cmyka_f32 ... ok
+test exr::cmyka_u16 ... ok
+test exr::graya_u16 ... ok
+test exr::graya_u8 ... ok
+test exr::rgb_f16 ... ok
+test exr::rgb_f32 ... ok
+test exr::rgb_u16 ... ok
+test exr::rgb_u8 ... ok
+test exr::rgba_f16 ... ok
+test exr::rgba_f32 ... ok
+test exr::rgba_u16 ... ok
+test gif::gray_f32 ... ok
+test gif::gray_f16 ... ok
+test gif::gray_u16 ... ok
+test gif::gray_u8 ... ok
+test gif::cmyk_f32 ... ok
+test gif::cmyka_f32 ... ok
+test gif::cmyka_u8 ... ok
+test exr::rgba_u8 ... ok
+test gif::cmyk_u16 ... ok
+test gif::graya_u16 ... ok
+test gif::graya_u8 ... ok
+test gif::graya_f16 ... ok
+test gif::cmyka_u16 ... ok
+test gif::graya_f32 ... ok
+test gif::cmyka_f16 ... ok
+test gif::cmyk_u8 ... ok
+test gif::cmyk_f16 ... ok
+test hdr::cmyk_f32 ... ok
+test hdr::cmyk_f16 ... ok
+test hdr::cmyk_u8 ... ok
+test hdr::cmyka_f16 ... ok
+test hdr::cmyk_u16 ... ok
+test hdr::cmyka_u8 ... ok
+test gif::rgb_f16 ... ok
+test gif::rgb_u8 ... ok
+test hdr::gray_f16 ... ok
+test gif::rgba_f16 ... ok
+test gif::rgba_u16 ... ok
+test gif::rgba_u8 ... ok
+test hdr::cmyka_f32 ... ok
+test hdr::gray_f32 ... ok
+test hdr::gray_u16 ... ok
+test hdr::cmyka_u16 ... ok
+test hdr::gray_u8 ... ok
+test gif::rgb_f32 ... ok
+test hdr::graya_f16 ... ok
+test f16_exr_is_bit_exact ... ok
+test hdr::graya_f32 ... ok
+test hdr::graya_u16 ... ok
+test hdr::graya_u8 ... ok
+test hdr::rgb_f16 ... ok
+test gif::rgb_u16 ... ok
+test hdr::rgb_f32 ... ok
+test hdr::rgb_u16 ... ok
+test hdr::rgb_u8 ... ok
+test hdr::rgba_f16 ... ok
+test hdr::rgba_f32 ... ok
+test hdr_format_keeps_bright_values_approximately ... ok
+test hdr::rgba_u16 ... ok
+test hdr::rgba_u8 ... ok
+test gif::rgba_f32 ... ok
+test ico::cmyka_f16 ... ok
+test ico::cmyk_u16 ... ok
+test ico::cmyk_f16 ... ok
+test ico::cmyka_u16 ... ok
+test ico::gray_f16 ... ok
+test ico::cmyka_f32 ... ok
+test hdr_values_survive_float_formats ... ok
+test ico::cmyk_f32 ... ok
+test ico::cmyka_u8 ... ok
+test ico::cmyk_u8 ... ok
+test ico::gray_f32 ... ok
+test ico::gray_u16 ... ok
+test ico::gray_u8 ... ok
+test ico::graya_f16 ... ok
+test ico::graya_f32 ... ok
+test ico::graya_u16 ... ok
+test ico::graya_u8 ... ok
+test ico::rgb_f16 ... ok
+test ico::rgb_f32 ... ok
+test ico::rgb_u16 ... ok
+test ico::rgb_u8 ... ok
+test ico::rgba_f16 ... ok
+test ico::rgba_f32 ... ok
+test ico::rgba_u16 ... ok
+test ico::rgba_u8 ... ok
+test ico_rejects_oversize ... ok
+test jpeg::gray_u16 ... ok
+test jpeg::graya_f16 ... ok
+test jpeg::gray_f32 ... ok
+test jpeg::graya_f32 ... ok
+test jpeg::gray_u8 ... ok
+test jpeg::cmyk_f16 ... ok
+test jpeg::cmyk_u16 ... ok
+test jpeg::cmyka_f32 ... ok
+test jpeg::gray_f16 ... ok
+test jpeg::cmyka_u16 ... ok
+test jpeg::cmyka_u8 ... ok
+test jpeg::cmyk_u8 ... ok
+test jpeg::cmyk_f32 ... ok
+test jpeg::cmyka_f16 ... ok
+test jpeg::graya_u16 ... ok
+test jpeg::graya_u8 ... ok
+test jpeg::rgb_f16 ... ok
+test jpeg::rgb_f32 ... ok
+test jpeg::rgb_u16 ... ok
+test jpeg::rgb_u8 ... ok
+test jpeg::rgba_f16 ... ok
+test jpeg::rgba_f32 ... ok
+test jpeg::rgba_u16 ... ok
+test jpeg::rgba_u8 ... ok
+test jpeg_quality_affects_size_and_error ... ok
+test png::cmyk_f16 ... ok
+test png::cmyk_u16 ... ok
+test png::cmyk_u8 ... ok
+test png::cmyk_f32 ... ok
+test one_pixel_images_roundtrip ... ok
+test png::cmyka_f16 ... ok
+test jpeg_444_beats_420_on_chroma_detail ... ok
+test png::gray_f16 ... ok
+test png::gray_f32 ... ok
+test png::cmyka_f32 ... ok
+test png::cmyka_u8 ... ok
+test png::cmyka_u16 ... ok
+test png::gray_u16 ... ok
+test png::gray_u8 ... ok
+test png::graya_f32 ... ok
+test png::graya_u8 ... ok
+test png::graya_f16 ... ok
+test png::graya_u16 ... ok
+test png::rgb_f32 ... ok
+test png::rgb_u16 ... ok
+test png::rgb_u8 ... ok
+test png::rgb_f16 ... ok
+test pnm::cmyk_u16 ... ok
+test pnm::cmyk_f16 ... ok
+test pnm::cmyk_u8 ... ok
+test png::rgba_f16 ... ok
+test png::rgba_f32 ... ok
+test pnm::cmyk_f32 ... ok
+test pnm::cmyka_f16 ... ok
+test png::rgba_u8 ... ok
+test pnm::cmyka_u8 ... ok
+test pnm::cmyka_f32 ... ok
+test pnm::gray_f16 ... ok
+test png::rgba_u16 ... ok
+test pnm::cmyka_u16 ... ok
+test pnm::gray_f32 ... ok
+test pnm::gray_u16 ... ok
+test pnm::gray_u8 ... ok
+test pnm::graya_f16 ... ok
+test pnm::graya_f32 ... ok
+test pnm::graya_u16 ... ok
+test pnm::graya_u8 ... ok
+test pnm::rgb_f16 ... ok
+test pnm::rgb_f32 ... ok
+test pnm::rgb_u16 ... ok
+test pnm::rgb_u8 ... ok
+test png_all_compressions_lossless ... ok
+test pnm::rgba_f16 ... ok
+test pnm::rgba_f32 ... ok
+test pnm::rgba_u16 ... ok
+test pnm::rgba_u8 ... ok
+test qoi::cmyk_f16 ... ok
+test qoi::cmyk_f32 ... ok
+test qoi::cmyk_u16 ... ok
+test qoi::cmyk_u8 ... ok
+test qoi::cmyka_f16 ... ok
+test qoi::cmyka_f32 ... ok
+test qoi::cmyka_u16 ... ok
+test qoi::cmyka_u8 ... ok
+test qoi::gray_f16 ... ok
+test qoi::gray_f32 ... ok
+test qoi::gray_u16 ... ok
+test qoi::gray_u8 ... ok
+test qoi::graya_f16 ... ok
+test qoi::graya_f32 ... ok
+test qoi::graya_u16 ... ok
+test qoi::graya_u8 ... ok
+test qoi::rgb_f16 ... ok
+test qoi::rgb_f32 ... ok
+test qoi::rgb_u16 ... ok
+test qoi::rgb_u8 ... ok
+test qoi::rgba_f16 ... ok
+test qoi::rgba_f32 ... ok
+test qoi::rgba_u16 ... ok
+test qoi::rgba_u8 ... ok
+test tga::cmyk_f16 ... ok
+test tga::cmyk_f32 ... ok
+test tga::cmyk_u16 ... ok
+test tga::cmyk_u8 ... ok
+test tga::cmyka_f16 ... ok
+test tga::cmyka_f32 ... ok
+test tga::cmyka_u16 ... ok
+test tga::gray_f16 ... ok
+test tga::cmyka_u8 ... ok
+test tga::gray_f32 ... ok
+test tga::gray_u16 ... ok
+test tga::gray_u8 ... ok
+test tga::graya_f16 ... ok
+test tga::graya_f32 ... ok
+test tga::graya_u16 ... ok
+test tga::graya_u8 ... ok
+test tga::rgb_f16 ... ok
+test tga::rgb_f32 ... ok
+test tga::rgb_u16 ... ok
+test tga::rgb_u8 ... ok
+test tga::rgba_f16 ... ok
+test tga::rgba_f32 ... ok
+test tga::rgba_u16 ... ok
+test tga::rgba_u8 ... ok
+test tiff::cmyk_u8 ... ok
+test tiff::cmyk_u16 ... ok
+test tiff::cmyk_f32 ... ok
+test tiff::cmyka_u8 ... ok
+test tiff::cmyka_u16 ... ok
+test tiff::gray_f16 ... ok
+test tiff::gray_f32 ... ok
+test tiff::graya_u8 ... ok
+test tiff::graya_u16 ... ok
+test tiff::gray_u8 ... ok
+test tiff::cmyka_f32 ... ok
+test tiff::graya_f32 ... ok
+test tiff::gray_u16 ... ok
+test tiff::graya_f16 ... ok
+test tiff::cmyk_f16 ... ok
+test tiff::rgba_u8 ... ok
+test tiff::rgb_f32 ... ok
+test tiff::rgb_u8 ... ok
+test tiff::rgb_u16 ... ok
+test tiff::rgba_u16 ... ok
+test tiff::rgba_f32 ... ok
+test webp::cmyk_f16 ... ok
+test webp::cmyk_f32 ... ok
+test webp::cmyka_f16 ... ok
+test webp::gray_f16 ... ok
+test tiff::cmyka_f16 ... ok
+test tiff::rgb_f16 ... ok
+test webp::cmyka_f32 ... ok
+test webp::gray_f32 ... ok
+test webp::gray_u16 ... ok
+test webp::cmyka_u16 ... ok
+test webp::cmyk_u8 ... ok
+test webp::cmyk_u16 ... ok
+test webp::cmyka_u8 ... ok
+test webp::graya_f16 ... ok
+test webp::gray_u8 ... ok
+test webp::graya_f32 ... ok
+test webp::graya_u16 ... ok
+test webp::graya_u8 ... ok
+test tiff::rgba_f16 ... ok
+test webp::rgb_f16 ... ok
+test webp::rgb_f32 ... ok
+test webp::rgb_u16 ... ok
+test webp::rgb_u8 ... ok
+test webp_lossy_request_is_honest_error ... ok
+test webp::rgba_f16 ... ok
+test webp::rgba_f32 ... ok
+test webp::rgba_u16 ... ok
+test webp::rgba_u8 ... ok
+test tiff_all_compressions_lossless ... ok
+test larger_image_png_tiff_exact ... ok
+
+test result: ok. 300 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_color-1ae24d4e370cf497)
+
+running 18 tests
+test blend::tests::composite_alpha_rules ... ok
+test blend::tests::darker_lighter_color_pick_whole_pixel ... ok
+test blend::tests::luminosity_and_color_swap_components ... ok
+test blend::tests::identities_with_white_and_black ... ok
+test blend::tests::known_values ... ok
+test blend::tests::normal_is_source ... ok
+test convert::tests::srgb_roundtrip ... ok
+test tests::float_samples_keep_hdr ... ok
+test tests::integer_samples_clamp ... ok
+test tests::pixel_format_sizes ... ok
+test convert::tests::cmyk_roundtrip ... ok
+test convert::tests::lab_roundtrip_and_anchors ... ok
+test blend::tests::psd_keys_roundtrip_and_unique ... ok
+test tests::sample_roundtrip_all_depths ... ok
+test blend::tests::separable_outputs_stay_in_unit_range ... ok
+test tests::color_to_rgba8 ... ok
+test convert::tests::managed_cmyk ... ok
+test convert::tests::document_cmyk_space_scope ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_compose-5f783406ad90413d)
+
+running 121 tests
+test adjust::lookup_tests::dither_offsets_are_balanced ... ok
+test adjust::tone_tests::black_white_weights ... ok
+test adjust::lookup_tests::selective_color_zero_is_identity_and_ranges_are_local ... ok
+test effects::tests::effect_gradients_snap_end_points_and_sample_corners ... ok
+test adjust::lookup_tests::identity_lut_is_identity_both_interpolations ... ok
+test effects::tests::chamfer_uses_euclidean_step_lengths ... ok
+test effects::tests::edt_is_exact ... ok
+test effects::tests::edt_two_seeds ... ok
+test adjust::tone_tests::hue_ranges_only_touch_their_colours ... ok
+test effects::tests::blur_preserves_mass ... ok
+test adjust::tone_tests::gradient_map_dither_stays_close ... ok
+test effects::tests::glow_range_stretches_the_contour ... ok
+test effects::tests::gradient_geometry ... ok
+test effects::tests::chisel_hard_has_flat_facets ... ok
+test effects::tests::offsets_follow_light ... ok
+test effects::tests::emboss_width_rounds_up_and_shades_past_the_blur ... ok
+test effects::tests::emboss_paints_both_sides_and_pillow_flips_the_outside ... ok
+test effects::tests::smooth_inner_bevel_lights_the_top_edge_inside_only ... ok
+test effects::tests::spread_dilates_with_the_chamfer_metric ... ok
+test effects::tests::tent_kernel_is_two_boxes ... ok
+test fill_layout::tests::exact_layouts_are_unchanged ... ok
+test fill_layout::tests::large_frames_barely_move_and_bad_input_is_harmless ... ok
+test effects::tests::bevel_contour_and_texture_shape_the_height ... ok
+test fill_layout::tests::offset_centres_snap_like_the_frame_centre ... ok
+test fill_layout::tests::small_reflected_30_degrees_snaps_to_the_corner ... ok
+test gradient_fill::tests::handles_map_to_the_ends_of_the_ramp ... ok
+test gradient_fill::tests::handles_round_trip ... ok
+test gradient_fill::tests::ramp_midpoints_and_opacity ... ok
+test effects::tests::running_sum_tent_matches_the_kernel ... ok
+test pattern::tests::link_phase_scale_and_angle_move_the_origin ... ok
+test pattern::tests::identity_placement_tiles_exactly ... ok
+test psblend::tests::burn_and_dodge_treat_near_extremes_as_exact ... ok
+test psblend::tests::hard_mix_edges_match_photoshop ... ok
+test masks::tests::matches_the_cpu_mask_and_is_cached ... ok
+test gradient_fill::tests::render_handles_empty_and_degenerate_rects ... ok
+test psblend::tests::text_gamma_lightens_dark_edges ... ok
+test proxy::tests::downsample_handles_negative_coordinates ... ok
+test proxy::tests::downsample_picks_every_kth_pixel ... ok
+test psblend::tests::other_modes_delegate ... ok
+test psblend::tests::vivid_light_source_extremes_win ... ok
+test stroke_tests::outline_share_treats_stroke_and_shape_as_disjoint_areas ... ok
+test multichannel::tests::inks_multiply_over_paper ... ok
+test tests::background_only ... ok
+test tests::blend_if_modes ... ok
+test tests::adjustment_opacity_and_mask ... ok
+test tests::blend_if_per_channel_ranges ... ok
+test tests::blend_if_split_point_fades_like_opacity ... ok
+test stroke_tests::outside_stroke_fills_the_rest_of_a_shapes_edge_pixel ... ok
+test tests::blend_if_on_adjustment_and_clipped_layers ... ok
+test tests::adjustment_results_are_rounded_to_the_document_depth ... ok
+test tests::buffer_over_background ... ok
+test tests::blend_if_underlying_layer_hides_by_the_backdrop_value ... ok
+test tests::blend_if_this_layer_hides_by_the_layers_own_value ... ok
+test tests::clipped_adjustment_only_affects_base ... ok
+test tests::channel_restrictions_keep_the_backdrop ... ok
+test tests::clipping_mask_restricts_to_base_alpha ... ok
+test tests::disabled_mask_is_ignored ... ok
+test tests::dissolve_coverage_matches_opacity ... ok
+test stroke_tests::a_stroked_shapes_mask_applies_to_fill_and_stroke_together ... ok
+test stroke_tests::several_strokes_stack_top_instance_first ... ok
+test stroke_tests::filled_shape_stroke_follows_the_outline_where_the_fill_fades_out ... ok
+test stroke_tests::gradient_stroke_spans_the_strokes_extent ... ok
+test tests::clipped_layer_effects_are_clipped_to_base ... ok
+test tests::color_overlay_ignores_fill_opacity_but_not_opacity ... ok
+test tests::exposure_offset_uses_gamma_2_2_in_rgb ... ok
+test tests::every_blend_mode_matches_reference_on_opaque_pixels ... ok
+test tests::group_opacity_applies_once ... ok
+test tests::hidden_base_hides_clipping_group ... ok
+test tests::hidden_layers_skipped ... ok
+test tests::hue_saturation_roundtrips_and_desaturates ... ok
+test tests::drop_shadow_falls_away_from_light ... ok
+test tests::drop_shadow_uses_global_light_and_knockout ... ok
+test tests::gradient_overlay_follows_angle_and_reverse ... ok
+test stroke_tests::vector_stroke_stays_above_interior_effects_and_below_the_stroke_effect ... ok
+test tests::group_effects_apply_to_group_shape ... ok
+test tests::emboss_shades_the_composited_layer ... ok
+test tests::invert_adjustment_layer ... ok
+test tests::isolated_group_differs_from_pass_through ... ok
+test tests::levels_matches_photoshop ... ok
+test tests::layer_mask_hides_pixels ... ok
+test tests::interior_effects_keep_the_layer_alpha ... ok
+test tests::inside_stroke_respects_partial_edge_coverage ... ok
+test tests::linked_pattern_overlay_anchors_at_the_effects_reference_point ... ok
+test tests::inner_shadow_only_inside ... ok
+test tests::mask_feather_blurs_the_edge ... ok
+test tests::levels_work_on_whole_levels ... ok
+test tests::modern_brightness_matches_photoshop ... ok
+test tests::modern_contrast_matches_photoshop ... ok
+test tests::master_switch_and_per_effect_enable ... ok
+test tests::normal_layer_over_background ... ok
+test tests::inside_and_center_strokes ... ok
+test tests::pass_through_group_below_full_fill_is_isolated ... ok
+test tests::opacity_and_fill_multiply ... ok
+test tests::pass_through_group_opacity_mixes ... ok
+test tests::outside_stroke_width ... ok
+test tests::outer_and_inner_glow_regions ... ok
+test tests::effect_maps_are_cached_and_invalidated_by_pixel_changes ... ok
+test tests::render_bands_cover_the_rect_in_order ... ok
+test tests::cmyk_document_renders_via_rgb ... ok
+test adjust::tone_tests::cmyk_black_curve_darkens_and_lab_lightness_lifts ... ok
+test adjust::tone_tests::identity_tone_in_every_space_is_identity ... ok
+test tests::sixteen_bit_and_float_layers_composite ... ok
+test tests::solid_and_gradient_fill_layers ... ok
+test tests::stroke_corners_follow_the_5x5_chamfer_metric ... ok
+test tests::threshold_posterize_levels_curves ... ok
+test tests::small_gradient_fill_matches_photoshop_at_all_depths ... ok
+test tests::satin_and_bevel_stay_inside_shape ... ok
+test tests::soft_shadow_is_blurred_and_bounded ... ok
+test tests::shadow_knockout_needs_see_through_fill ... ok
+test tests::render_is_tile_independent ... ok
+test tests::upper_stroke_blends_with_the_backdrop_not_the_lower_stroke ... ok
+test tests::vector_mask_combines_with_pixel_mask ... ok
+test tests::thumbnail_dimensions ... ok
+test tests::parallel_tiles_match_single_pass ... ok
+test tests::render_tiled_in_place_matches_one_tile_with_many_bands ... ok
+test tests::effect_maps_built_inside_parallel_tiles_do_not_deadlock ... ok
+test tests::reduced_render_matches_the_full_composite_averaged ... ok
+test tests::reduced_damage_matches_the_whole_reduction ... ok
+test proxy::tests::proxy_keeps_structure_and_ids ... ok
+test tests::effects_render_identically_in_tiles ... ok
+test tests::large_documents_thumbnail_from_a_proxy ... ok
+
+test result: ok. 121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/artboard.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/artboard-b7397c75ae007cdf)
+
+running 3 tests
+test backdrop_outside_the_board_is_untouched ... ok
+test background_kinds ... ok
+test contents_are_clipped_and_background_painted ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_doc-f28fd32449886680)
+
+running 43 tests
+test adjust::tests::hue_range_weights ... ok
+test blend_if::tests::bytes_round_trip_in_psd_order ... ok
+test blend_if::tests::full_range_shows_everything ... ok
+test blend_if::tests::split_points_ramp_linearly ... ok
+test blend_if::tests::unsplit_points_are_hard_thresholds ... ok
+test id_tests::ensure_ids_above_advances_counter ... ok
+test mode::tests::stack_mode_ids_roundtrip ... ok
+test mode::tests::color_table_nearest ... ok
+test analysis::tests::scale_factor_and_text ... ok
+test slices::tests::auto_slices_tile_the_rest_of_the_canvas ... ok
+test comps::tests::captured_info_bits ... ok
+test blend_if::tests::set_trims_trailing_full_entries ... ok
+test mode::tests::duotone_render_black_ink_is_gray ... ok
+test tests::duplicate_assigns_fresh_ids_recursively ... ok
+test analysis::tests::serde_defaults_fill_missing_fields ... ok
+test adjust::tests::old_files_get_neutral_new_fields ... ok
+test tests::mask_density ... ok
+test slices::tests::resolve_numbers_top_to_bottom ... ok
+test tests::duplicate_clears_psd_id_but_keeps_blocks ... ok
+test tests::layer_names_increment ... ok
+test tests::groups_walk_and_paths ... ok
+test tests::insert_remove_shift ... ok
+test pattern::tests::ids_are_deterministic_and_lookup_falls_back_to_names ... ok
+test comps::tests::artboards_listed_and_found ... ok
+test tests::pixel_format_follows_mode_and_depth ... ok
+test tests::new_document_has_locked_background ... ok
+test text::tests::runs_are_normalized_to_the_text ... ok
+test text::tests::summary_follows_first_run ... ok
+test tests::snapshot_clone_is_independent ... ok
+test variables::tests::lookups ... ok
+test variables::tests::round_trips_through_json ... ok
+test vector::tests::first_op_is_combine_and_bounds ... ok
+test vector::tests::segments_open_and_closed ... ok
+test comps::tests::missing_layers_and_ids ... ok
+test vector::tests::serde_roundtrip ... ok
+test video::tests::new_and_clamp ... ok
+test text::tests::styles_serialize ... ok
+test text_styles::tests::resolution_layers_styles ... ok
+test text_styles::tests::names_and_ids ... ok
+test comps::tests::capture_records_every_layer ... ok
+test text_styles::tests::attrs_validate_and_diff ... ok
+test video::tests::round_trips ... ok
+test text_styles::tests::overrides_survive_restyling ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_engine-e7d50945b7359cff)
+
+running 589 tests
+test adjust_params::tests::hue_range_sliders_stay_ordered ... ok
+test adjust_params::tests::bad_params_are_errors_not_panics ... ok
+test adjust_params::tests::params_reach_the_model ... ok
+test adjust_params::tests::every_kind_round_trips_through_params ... ok
+test adjust_params::tests::set_adjustment_merges_and_resets ... ok
+test adjust_cmds::tests::match_color_from_another_document ... ok
+test adjust_params::tests::commands_reject_bad_params_gracefully ... ok
+test adjust_cmds::tests::disabled_without_pixels ... ok
+test adjust_cmds::tests::hdr_toning_flattens ... ok
+test adjust_cmds::tests::destructive_adjustments_respect_selection ... ok
+test analysis_cmds::tests::inscribed_rect ... ok
+test analysis_cmds::tests::count_groups_markers_and_undo ... ok
+test align_cmds::tests::auto_blend_stack_without_seamless ... ok
+test analysis_cmds::tests::now_iso_shape ... ok
+test analysis_cmds::tests::features_area_perimeter_circularity ... ok
+test adjust_cmds::tests::color_lookup_builtin_data_and_errors ... ok
+test analysis_cmds::tests::measurement_scale_set_query_default_and_undo ... ok
+test analysis_cmds::tests::analysis_info_and_cmyk_document ... ok
+test analysis_cmds::tests::ruler_protractor_and_record ... ok
+test adjust_params::tests::cmyk_and_lab_documents_use_their_channels ... ok
+test artboard_cmds::tests::clear_artboard_guides_only_inside ... ok
+test artboard_cmds::tests::disabled_without_artboards ... ok
+test analysis_cmds::tests::log_delete_and_csv_export ... ok
+test artboard_cmds::tests::raster_pdf_xref_offsets_point_at_objects ... ok
+test analysis_cmds::tests::record_selection_rows_respect_scale_and_data_points ... ok
+test artboard_cmds::tests::new_artboards_place_and_grow_canvas ... ok
+test align_cmds::tests::auto_blend_panorama_masks_and_seamless_layer ... ok
+test automate_cmds::tests::browse_runs_a_script_file ... ok
+test analysis_cmds::tests::straighten_layer_and_image ... ok
+test automate_cmds::tests::scripts_parse_json_and_lines ... ok
+test automate_cmds::tests::script_events_fire_on_new_and_close ... ok
+test align_cmds::tests::auto_align_auto_projection_and_errors ... ok
+test adjust_cmds::tests::selective_color_layer_and_destructive ... ok
+test artboard_cmds::tests::from_layers_and_group_then_compose_clips ... ok
+test brush_cmds::tests::brush_blend_mode_multiply ... ok
+test brush_cmds::tests::eraser_on_background_layer_paints_the_background_colour ... ok
+test brush_cmds::tests::color_replacement_modes ... ok
+test brush_cmds::tests::define_brush_from_selection ... ok
+test brush_cmds::tests::live_pencil_matches_the_committed_pencil_and_auto_erases ... ok
+test brush_cmds::tests::coalesced_set_brush_calls_journal_once_per_gesture ... ok
+test brush_cmds::tests::mixer_brush_uses_the_brush_mixer_settings ... ok
+test brush_cmds::tests::mixer_brush_reservoir_and_cleaning ... ok
+test brush_cmds::tests::new_brush_controls_round_trip_through_set_brush ... ok
+test brush_cmds::tests::live_stroke_matches_the_committed_stroke ... ok
+test brush_cmds::tests::pencil_latency_24mp ... ignored
+test analysis_cmds::tests::place_scale_marker_builds_one_group_in_one_step ... ok
+test brush_cmds::tests::pencil_is_aliased_and_auto_erases ... ok
+test brush_cmds::tests::presets_save_load_delete_round_trip ... ok
+test adjust_cmds::tests::new_kinds_round_trip_through_psd_and_pcraft ... ok
+test brush_cmds::tests::set_brush_merges_fields ... ok
+test brush_cmds::tests::stroke_accepts_full_points_brush_and_preset ... ok
+test align_cmds::tests::auto_align_repositions_at_all_depths ... ok
+test brush_cmds::tests::replay_is_deterministic ... ok
+test brush_cmds::tests::set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones ... ok
+test brush_preset_cmds::tests::bad_params_fail_without_changes ... ok
+test brush_cmds::tests::stroke_backwards_compatible ... ok
+test brush_preset_cmds::tests::groups_move_rename_and_delete ... ok
+test brush_cmds::tests::works_on_cmyk_and_16_bit ... ok
+test build_info::tests::long_version_formats ... ok
+test build_info::tests::version_is_the_workspace_version ... ok
+test brush_preset_cmds::tests::rename_checks_names ... ok
+test brush_preset_cmds::tests::move_within_and_between_groups ... ok
+test canvas_geom::tests::gradient_fill_angle_follows_the_canvas ... ok
+test canvas_geom::tests::canvas_size_and_crop_move_vector_geometry ... ok
+test canvas_geom::tests::arbitrary_rotation_moves_marks_and_unlinked_vector_masks ... ok
+test automate_cmds::tests::statistics_makes_a_stack_mode_smart_object ... ok
+test canvas_geom::tests::image_size_scales_vector_geometry ... ok
+test channel_cmds::tests::apply_image_into_alpha_channel ... ok
+test channel_cmds::tests::apply_image_hand_computed ... ok
+test channel_cmds::tests::apply_image_and_calculations_fail_gracefully_never_panic ... ok
+test canvas_geom::tests::turns_map_guides_paths_slices_and_live_shapes ... ok
+test channel_cmds::tests::calculations_results ... ok
+test adjust_cmds::tests::destructive_adjustments_all_depths_and_modes_one_undo_step ... ok
+test channel_cmds::tests::channel_management_and_view_state ... ok
+test channel_cmds::tests::channel_options_and_spot_channels ... ok
+test canvas_geom::tests::turns_on_empty_and_tiny_documents_never_panic ... ok
+test channel_cmds::tests::duplicate_to_other_document ... ok
+test canvas_geom::tests::right_angle_turns_move_vectors_type_and_smart_objects ... ok
+test artboard_cmds::tests::export_to_files_and_pdf ... ok
+test channel_cmds::tests::quick_mask_enter_paint_exit ... ok
+test channel_cmds::tests::load_transparency_mask_and_composite ... ok
+test channel_cmds::tests::load_selection_operations_and_invert ... ok
+test channel_cmds::tests::specs_are_documented_and_registered ... ok
+test channel_cmds::tests::quick_mask_without_selection_and_options ... ok
+test channel_cmds::tests::split_and_merge_channels ... ok
+test channel_cmds::tests::image_size_and_rotate_carry_channels_and_quick_mask ... ok
+test channel_cmds::tests::painting_filtering_and_adjusting_into_an_alpha_channel ... ok
+test channel_cmds::tests::shortcut_slots_target_channels ... ok
+test color_cmds::settings_tests::mismatch_resolution_command ... ok
+test channel_cmds::tests::single_colour_channel_target_limits_edits ... ok
+test channel_cmds::tests::save_selection_new_and_operations ... ok
+test color_cmds::settings_tests::open_policies ... ok
+test color_cmds::tests::bench_cmyk_conversion_6016 ... ignored
+test color_cmds::settings_tests::color_settings_validate_and_report ... ok
+test color_cmds::tests::gray_and_cmyk_composite_profiles ... ok
+test color_cmds::tests::fill_and_effect_colours_follow_the_mode ... ok
+test color_cmds::tests::assign_and_convert_profile ... ok
+test color_cmds::settings_tests::mode_conversion_uses_working_spaces ... ok
+test comps_cmds::tests::disabled_states_and_bad_params ... ok
+test comps_cmds::tests::manage_comps_and_cycle ... ok
+test comps_cmds::tests::undo_redo_and_last_document_state ... ok
+test comps_cmds::tests::warnings_for_deleted_layers ... ok
+test automate_cmds::tests::droplets_are_written_and_run ... ok
+test display_color::tests::display_p3_matches_hand_computed_srgb ... ok
+test display_color::tests::linear_documents_are_encoded_for_the_texture ... ok
+test comps_cmds::tests::capture_apply_visibility_position_appearance_independently ... ok
+test display_color::tests::exr_round_trip_is_linear ... ok
+test display_color::tests::monitor_profile_bad_params_fail_gracefully ... ok
+test display_color::tests::monitor_profile_setting ... ok
+test display_color::tests::srgb_is_the_identity_fast_path ... ok
+test color_cmds::tests::rgb_lab_rgb_roundtrip_16bit ... ok
+test distort_cmds::tests::liquify_respects_the_selection ... ok
+test distort_cmds::tests::enabled_states ... ok
+test canvas_geom::tests::turns_at_every_depth_and_mode ... ok
+test display_color::tests::wide_gamut_and_gray_fixtures_display_correctly ... ok
+test color_cmds::tests::proofing_state_and_gamut_warning ... ok
+test distort_cmds::tests::liquify_identity_stroke_displacement_reconstruct_and_undo ... ok
+test display_color::tests::proof_colors_still_apply_on_top ... ok
+test edit_cmds::tests::copy_paste_between_documents ... ok
+test edit_cmds::tests::copy_paste_in_place_and_centred ... ok
+test distort_cmds::tests::background_layer_is_floated_by_geometric_warps ... ok
+test distort_cmds::tests::perspective_identity_known_homography_and_mask ... ok
+test edit_cmds::tests::guides_are_undoable ... ok
+test edit_cmds::tests::auto_tone_stretches_a_low_contrast_layer ... ok
+test edit_cmds::tests::toggle_last_state_and_transform_again ... ok
+test edit_cmds::tests::merge_visible_keeps_hidden_layers ... ok
+test comps_cmds::tests::export_comps_to_files_naming ... ok
+test edit_cmds::tests::transform_scale_grows_content ... ok
+test edit_cmds::tests::paste_with_malformed_center_does_not_panic ... ok
+test edit_cmds::tests::paste_between_different_color_modes ... ok
+test distort_cmds::tests::puppet_two_pins_bend_the_block ... ok
+test edit_cmds::tests::cut_clears_and_layer_via_copy_cut ... ok
+test edit_menu_cmds::tests::define_brush_preset_wraps_define_from_selection ... ok
+test edit_menu_cmds::tests::content_aware_scale_params ... ok
+test edit_menu_cmds::tests::define_custom_shape_and_preset_manager ... ok
+test edit_menu_cmds::tests::find_matches_cases ... ok
+test edit_menu_cmds::tests::fade_with_blend_mode_and_invalidation ... ok
+test edit_menu_cmds::tests::fade_blends_last_step_at_all_depths ... ok
+test edit_menu_cmds::tests::content_aware_scale_keeps_subject ... ok
+test edit_menu_cmds::tests::find_and_replace_across_type_layers ... ok
+test eraser_cmds::tests::bench_magic_eraser_24mp ... ignored
+test eraser_cmds::tests::background_eraser_fails_gracefully ... ok
+test edit_menu_cmds::tests::content_aware_fill_removes_object_at_all_depths ... ok
+test edit_menu_cmds::tests::purge_commands ... ok
+test eraser_cmds::tests::background_eraser_options ... ok
+test eraser_cmds::tests::background_eraser_erases_the_sampled_colour_at_every_depth_and_mode ... ok
+test extra_cmds::tests::average_and_clouds ... ok
+test extra_cmds::tests::layer_utilities ... ok
+test eraser_cmds::tests::magic_eraser_fails_gracefully ... ok
+test extra_cmds::tests::equalize_spreads_values ... ok
+test extra_cmds::tests::rasterize_fill_and_all_in_one_step ... ok
+test adjust_params::tests::destructive_commands_apply_their_params_at_every_depth ... ok
+test extra_cmds::tests::reselect_restores_the_last_selection ... ok
+test distort_cmds::tests::puppet_identity_translation_and_undo ... ok
+test eraser_cmds::tests::magic_eraser_samples_all_layers_and_paints_background_under_a_transparency_lock ... ok
+test extra_cmds::tests::paste_into_masks_to_the_selection ... ok
+test extra_cmds::tests::ungroup_restores_children_in_order ... ok
+test extra_cmds::tests::reveal_all_grows_the_canvas ... ok
+test file_cmds::tests::camera_raw_opens_as_16_bit_with_notes ... ok
+test edit_menu_cmds::tests::content_aware_fill_outputs_and_sampling ... ok
+test extra_cmds::tests::transform_presets_are_exact ... ok
+test file_cmds::tests::file_info_round_trips_through_xmp_and_psd ... ok
+test eraser_cmds::tests::magic_eraser_options ... ok
+test file_cmds::tests::guide_layouts ... ok
+test file_cmds::tests::close_all_and_close_others ... ok
+test file_cmds::tests::color_lookup_table_bakes_the_adjustment_stack ... ok
+test eraser_cmds::tests::magic_eraser_turns_the_background_into_a_layer_at_every_depth_and_mode ... ok
+test display_color::tests::embedded_cmyk_profile_is_used_for_display_and_flat_export ... ok
+test distort_cmds::tests::smart_objects_store_distortions_as_smart_filters_losslessly ... ok
+test automate_cmds::tests::contact_sheet_places_thumbnails_with_captions ... ok
+test fill_cmds::tests::bad_params_are_errors ... ok
+test fill_cmds::tests::every_constant_contents ... ok
+test file_cmds::tests::fit_image_and_conditional_mode_change ... ok
+test file_cmds::tests::open_as_forces_the_decoder ... ok
+test extra_cmds::tests::stroke_locations_at_several_depths ... ok
+test color_cmds::tests::mode_conversions_all_depths_with_undo ... ok
+test fill_cmds::tests::opacity_mode_and_preserve_transparency ... ok
+test fill_cmds::tests::history_pattern_and_content_aware ... ok
+test file_cmds::tests::flatten_all_layer_effects_and_masks ... ok
+test fill_cmds::tests::timing_24mp ... ignored
+test fill_key_cmds::tests::fill_keys_24mp ... ignored
+test fill_key_cmds::tests::foreground_fills_the_layer_without_a_selection ... ok
+test fill_key_cmds::tests::background_fills_only_the_selection ... ok
+test fill_key_cmds::tests::params_cannot_change_the_colour_and_bad_params_fail_gracefully ... ok
+test fill_key_cmds::tests::preserve_transparency_recolours_only_existing_pixels ... ok
+test fill_key_cmds::tests::locked_layer_and_no_document_are_errors ... ok
+test fill_key_cmds::tests::registered_with_photoshop_default_shortcuts ... ok
+test filters::tests::params_map_to_algorithm_units ... ok
+test fill_key_cmds::tests::fills_at_every_bit_depth ... ok
+test filters::tests::disabled_without_pixel_layer ... ok
+test filters::tests::last_filter_repeats_with_same_params ... ok
+test filters::tests::minimum_maximum_preserve_roundness ... ok
+test filters::tests::smart_object_records_smart_filter ... ok
+test filters::tests::selection_limits_the_filter ... ok
+test file_cmds::tests::revert_reloads_as_one_undoable_step ... ok
+test filters::tests::specs_are_complete_and_documented ... ok
+test filters_ext::tests::ids_match_the_menu_catalog_and_are_unique ... ok
+test filters_ext::tests::disabled_without_pixel_layer ... ok
+test filters_ext::tests::displace_reads_another_document ... ok
+test filters_ext::tests::colour_filters_use_and_record_tool_colours ... ok
+test filters_ext::tests::last_filter_repeats_new_filters ... ok
+test filters_ext::tests::lens_blur_uses_the_layer_mask_as_depth ... ok
+test filters_ext::tests::params_map_to_algorithm_units ... ok
+test brush_cmds::tests::live_stroke_equals_the_commit_at_every_zoom_with_smoothing ... ok
+test frame_cmds::tests::needs_a_selected_layer ... ok
+test filters_ext::tests::selection_limits_new_filters ... ok
+test frame_cmds::tests::frames_selected_layers_into_a_masked_group ... ok
+test file_cmds::tests::place_embedded_centres_fits_and_embeds ... ok
+test fx_view_cmds::tests::bad_params_fail_gracefully ... ok
+test file_cmds::tests::save_a_copy_keeps_path_and_dirty_state ... ok
+test gallery_cmds::tests::gallery_validates_and_lists ... ok
+test fx_view_cmds::tests::toggles_one_layer_or_all_without_history ... ok
+test gallery_cmds::tests::gallery_is_a_smart_filter_on_smart_objects ... ok
+test gradient_fill_cmds::tests::create_makes_a_canvas_aligned_fill_layer_with_the_drag_as_handles ... ok
+test gallery_cmds::tests::sketch_filters_record_and_use_the_current_colours ... ok
+test gradient_fill_cmds::tests::create_masks_the_layer_with_the_selection ... ok
+test gradient_fill_cmds::tests::commands_fail_gracefully ... ok
+test gradient_fill_cmds::tests::classic_gradient_still_paints_pixels ... ok
+test gradient_fill_cmds::tests::set_moves_handles_and_restyles_in_one_undo_step ... ok
+test filters::tests::every_filter_command_runs_changes_pixels_and_undoes ... ok
+test gradient_fill_cmds::tests::preview_equals_the_committed_edit ... ok
+test file_cmds::tests::layers_to_files_writes_each_visible_layer ... ok
+test gradient_fill_cmds::tests::stops_add_move_recolour_delete_and_midpoints ... ok
+test group_view_cmds::tests::all_sets_every_group ... ok
+test group_view_cmds::tests::toggles_one_group_without_history_or_dirtying ... ok
+test group_view_cmds::tests::bad_params_fail_gracefully ... ok
+test image_cmds::tests::canvas_size_anchors_and_extends_background ... ok
+test image_cmds::tests::duplicate_document ... ok
+test image_cmds::tests::resolution_only_change ... ok
+test image_cmds::tests::crop_to_explicit_rect_can_extend_canvas ... ok
+test image_cmds::tests::crop_to_selection_and_trim ... ok
+test image_cmds::tests::trim_based_on_top_left_colour ... ok
+test gallery_cmds::tests::stack_applies_in_order_and_skips_hidden_layers ... ok
+test layer_menu_cmds::tests::blend_if_rejects_bad_params ... ok
+test layer_menu_cmds::tests::blend_if_channel_names_follow_the_mode ... ok
+test layer_menu_cmds::tests::defringe_pure_function ... ok
+test layer_menu_cmds::tests::blending_options_blend_if ... ok
+test image_cmds::tests::image_size_scales_everything ... ok
+test layer_menu_cmds::tests::content_options_reports_the_editor ... ok
+test gallery_cmds::tests::gallery_filters_run_in_other_colour_models ... ok
+test layer_menu_cmds::tests::mask_all_objects_masks_the_subject ... ok
+test layer_menu_cmds::tests::global_light_blending_options_scale_effects ... ok
+test layer_menu_cmds::tests::layer_masks_in_gray_cmyk_lab ... ok
+test filters_ext::tests::every_new_filter_runs_changes_pixels_and_undoes_in_one_step ... ok
+test filters_ext::tests::new_filters_work_at_16_and_32_bit ... ok
+test layer_menu_cmds::tests::mask_apply_from_transparency_hide_selection ... ok
+test file_cmds::tests::load_files_into_stack_and_image_processor_and_batch ... ok
+test layer_menu_cmds::tests::load_files_into_stack_as_smart_object_then_median ... ok
+test layer_multi_cmds::tests::align_single_layer_to_canvas ... ok
+test layer_menu_cmds::tests::matting_commands_fix_dark_fringes ... ok
+test layer_multi_cmds::tests::duplicate_hide_lock_and_reverse_selected ... ok
+test layer_menu_cmds::tests::reveal_in_finder_dry_run_and_enabled ... ok
+test layer_multi_cmds::tests::group_from_layers_preserves_order ... ok
+test layer_multi_cmds::tests::inspect_reports_selection ... ok
+test layer_multi_cmds::tests::find_layers_by_name ... ok
+test gallery_cmds::tests::results_do_not_depend_on_tiling ... ok
+test layer_multi_cmds::tests::align_single_layer_to_selection ... ok
+test layer_multi_cmds::tests::selection_pruned_after_delete_and_undo ... ok
+test layer_multi_cmds::tests::moves_and_layer_props_report_only_their_area ... ok
+test layer_multi_cmds::tests::the_move_preview_matches_the_move ... ok
+test layer_menu_cmds::tests::export_layer_trims_to_its_pixels ... ok
+test layer_multi_cmds::tests::merge_selected_into_top_most ... ok
+test layer_style::tests::gradient_styles_parse ... ok
+test layer_style::tests::bevel_command_sets_technique_contour_and_texture ... ok
+test layer_style::tests::clear_and_undo ... ok
+test layer_multi_cmds::tests::toggle_and_range_selection ... ok
+test layer_style::tests::color_overlay_renders ... ok
+test layer_multi_cmds::tests::linked_layers_move_together_and_undo ... ok
+test layer_style::tests::params_are_applied_and_replace_or_add ... ok
+test layer_multi_cmds::tests::distribute_uneven_layers ... ok
+test mask_view_cmds::tests::a_mask_view_never_alters_pixels ... ok
+test mask_view_cmds::tests::bad_params_and_no_mask_fail_gracefully ... ok
+test lens_cmds::tests::lens_correction_as_smart_filter ... ok
+test mask_view_cmds::tests::load_selection_from_a_vector_mask ... ok
+test layer_menu_cmds::tests::stack_modes_render_from_the_nested_layers ... ok
+test mask_view_cmds::tests::painting_in_mask_view_paints_the_mask ... ok
+test mask_view_cmds::tests::modes_toggle_and_show_in_inspect_without_history ... ok
+test migrate_cmds::tests::bad_path_is_an_error ... ok
+test layer_style::tests::every_style_command_adds_its_effect ... ok
+test mask_view_cmds::tests::the_view_ends_with_its_layer_or_mask ... ok
+test layer_menu_cmds::tests::create_layer_splits_effects_and_keeps_the_look ... ok
+test mode_cmds::tests::color_table_presets_and_entries ... ok
+test migrate_cmds::tests::merges_new_groups_only ... ok
+test mode_cmds::tests::duotone_inks_and_display ... ok
+test mode_cmds::tests::bitmap_methods_need_grayscale ... ok
+test mode_cmds::tests::modes_round_trip_through_pcraft ... ok
+test image_cmds::tests::mode_and_depth_conversions ... ok
+test multichannel_cmds::tests::duotone_inks_become_channels ... ok
+test multichannel_cmds::tests::flattens_layers_and_keeps_alpha_channels ... ok
+test multichannel_cmds::tests::flat_export_prints_the_inks ... ok
+test lens_cmds::tests::camera_raw_filter_on_layers_selection_and_smart_objects ... ok
+test multichannel_cmds::tests::mismatched_channel_count_converts_the_printed_look ... ok
+test layer_multi_cmds::tests::align_each_edge ... ok
+test lens_cmds::tests::lens_correction_runs_undoes_and_resolves_profiles ... ok
+test multichannel_cmds::tests::psd_round_trip_keeps_names_inks_and_values ... ok
+test mode_cmds::tests::rotate_arbitrary_grows_canvas_and_keeps_background ... ok
+test multichannel_cmds::tests::psd_stores_ink_as_dark ... ok
+test mode_cmds::tests::rotate_arbitrary_other_modes ... ok
+test mode_cmds::tests::indexed_exact_transparency_and_sources ... ok
+test multichannel_cmds::tests::pcraft_round_trip ... ok
+test notes_cmds::tests::add_edit_move_delete_with_undo ... ok
+test notes_cmds::tests::bad_params ... ok
+test multichannel_cmds::tests::cmyk_lab_and_gray_channel_sets ... ok
+test paint_cmds::tests::bucket_fill_contiguous ... ok
+test multichannel_cmds::tests::rgb_becomes_cmy_inks_and_back_exactly ... ok
+test paint_cmds::tests::gradient_tool_with_selection_and_reverse ... ok
+test paint_cmds::tests::bucket_fills_with_a_pattern ... ok
+test pattern_cmds::tests::pattern_overlay_composes_with_an_outside_stroke ... ok
+test paint_cmds::tests::gradient_dither_breaks_banding ... ok
+test pattern_cmds::tests::library_has_builtins_and_lists ... ok
+test notes_cmds::tests::import_notes_from_pcraft_and_psd ... ok
+test pattern_cmds::tests::pattern_overlay_renders_and_brush_texture_uses_library ... ok
+test pattern_cmds::tests::fill_with_pattern_respects_selection ... ok
+test pick_cmds::tests::picks_topmost_layer_with_pixels ... ok
+test pattern_cmds::tests::pattern_fill_layer_renders_at_every_depth_and_undoes ... ok
+test plugin_cmds::tests::bad_params_are_errors_not_panics ... ok
+test plugin_cmds::tests::params_are_validated_and_passed ... ok
+test plugin_cmds::tests::preference_folder_is_loaded ... ok
+test prefs::tests::defaults_match_photoshop ... ok
+test prefs::tests::choice_and_range_tables_cover_enum_fields ... ok
+test lens_cmds::tests::lens_correction_batch_over_files ... ok
+test pattern_cmds::tests::define_rename_delete_and_pat_round_trip ... ok
+test prefs::tests::get_set_reset_by_path ... ok
+test prefs::tests::keyboard_shortcuts_reassign_and_reset ... ok
+test prefs::tests::json_round_trip_tolerates_unknown_and_missing_keys ... ok
+test prefs::tests::menus_and_toolbar_customisation_persist ... ok
+test prefs::tests::preference_sections_are_commands ... ok
+test prefs::tests::shortcuts_normalise_and_detect_conflicts ... ok
+test prefs::tests::right_click_with_painting_tools_pref ... ok
+test prefs::tests::units_convert_both_ways ... ok
+test prefs::tests::gpu_backend_round_trips_and_validates ... ok
+test prefs::tests::whole_section_set_merges_keys ... ok
+test preset_import_cmds::tests::colour_conversions ... ok
+test prefs::tests::set_validates_and_is_all_or_nothing ... ok
+test preset_import_cmds::tests::grd_import_adds_a_gradient_group ... ok
+test preset_import_cmds::tests::unique_names ... ok
+test preset_store::tests::backends_refuse_paths_outside_the_store ... ok
+test prefs::tests::temporary_tools_and_fill_keys_are_rebindable ... ok
+test preset_store::tests::bench_load_500_sampled_presets ... ignored
+test preset_import_cmds::tests::bad_params_fail_gracefully ... ok
+test preset_import_cmds::tests::import_adds_a_group_and_paints ... ok
+test plugin_cmds::tests::example_invert_matches_builtin_invert_and_round_trips_the_registry ... ok
+test mode_cmds::tests::indexed_color_palettes_and_dithers ... ok
+test gradient_fill_cmds::tests::live_gradient_renders_like_the_classic_gradient ... ok
+test preset_store::tests::sessions_have_no_store_by_default ... ok
+test photo_cmds::tests::crop_and_straighten_makes_documents ... ok
+test lens_cmds::tests::adaptive_wide_angle_straightens ... ok
+test preset_store::tests::tip_codec_round_trips_8_and_16_bit ... ok
+test photo_cmds::tests::photomerge_cylindrical_with_fill ... ok
+test preset_store::tests::tip_decoder_rejects_garbage ... ok
+test photo_cmds::tests::hdr_merge_from_synthetic_exposures ... ok
+test presets::tests::clone_source_errors_and_overlay ... ok
+test presets::tests::custom_shapes_join_the_shapes_panel ... ok
+test preset_store::tests::write_failures_are_warnings ... ok
+test presets::tests::clone_source_slots_and_identity_matches_offset ... ok
+test presets::tests::clone_source_flip_scale_rotation ... ok
+test presets::tests::gradient_apply_creates_fill_layer_and_select_recolours_it ... ok
+test presets::tests::gradient_builtins_and_listing ... ok
+test presets::tests::foreground_to_transparent_paints_alpha ... ok
+test presets::tests::gradient_new_rename_move_delete_groups ... ok
+test presets::tests::pattern_groups_select_apply_and_sync ... ok
+test presets::tests::gradient_tool_uses_selected_preset_at_every_depth ... ok
+test presets::tests::presets_persist_through_preferences_json ... ok
+test plugin_cmds::tests::hostile_plugins_fail_without_touching_the_document ... ok
+test preset_store::tests::deleted_builtins_stay_deleted_and_overrides_replace_them ... ok
+test presets::tests::shape_path_language_parses ... ok
+test presets::tests::styles_with_pattern_overlay_copy_the_pattern ... ok
+test presets::tests::styles_apply_to_selected_layers_and_new_from_layer ... ok
+test presets::tests::tool_presets_save_filter_select ... ok
+test presets::tests::shapes_place_as_shape_layers ... ok
+test proof_sim::tests::dichromat_keeps_neutrals_and_merges_red_green ... ok
+test proof_sim::tests::legacy_mac_is_darker_in_midtones ... ok
+test proof_sim::tests::plate_previews_are_gray_and_track_ink ... ok
+test print_cmds::tests::paths_export_as_illustrator_postscript ... ok
+test gallery_cmds::tests::every_gallery_filter_runs_at_every_depth_and_undoes ... ok
+test photo_cmds::tests::photomerge_open_documents_reposition_and_perspective ... ok
+test render_cmds::tests::bench_24mp ... ignored
+test render_cmds::tests::flame_follows_the_work_path ... ok
+test proof_sim::tests::thirty_two_bit_preview_options ... ok
+test render_cmds::tests::selection_limits_and_new_layer ... ok
+test print_cmds::tests::photocraft_manages_colors_converts_to_the_printer_profile ... ok
+test render_cmds::tests::works_in_cmyk_and_gray ... ok
+test retouch_cmds::tests::clone_stamp_respects_selection_and_cmyk ... ok
+test render_cmds::tests::each_renderer_draws_undoes_and_is_seeded_at_every_depth ... ok
+test retouch_cmds::tests::clone_stamp_copies_exactly_at_all_depths ... ok
+test retouch_cmds::tests::blur_reduces_local_variance_and_sharpen_increases_it ... ok
+test preset_store::tests::commands_persist_and_delete_removes_from_disk ... ok
+test retouch_cmds::tests::clone_stamp_sample_all_layers_onto_empty_layer_and_opacity ... ok
+test retouch_cmds::tests::clone_stamp_samples_pre_stroke_state_and_non_aligned_returns_source ... ok
+test print_cmds::tests::print_one_copy_repeats_the_last_settings ... ok
+test retouch_cmds::tests::healing_brush_takes_destination_colour_and_source_texture ... ok
+test retouch_cmds::tests::dodge_brightens_midtones_more_than_shadows_and_burn_darkens ... ok
+test retouch_cmds::tests::history_brush_errors_when_layer_is_new ... ok
+test retouch_cmds::tests::history_brush_restores_earlier_pixels ... ok
+test retouch_cmds::tests::retouch_tools_paint_the_quick_mask ... ok
+test retouch_cmds::tests::retouch_tools_follow_the_channels_panel_target ... ok
+test retouch_cmds::tests::retouch_commands_are_registered_and_need_a_pixel_layer ... ok
+test retouch_cmds::tests::retouch_targets_fail_gracefully ... ok
+test preset_store::tests::imported_abr_group_persists ... ok
+test retouch_cmds::tests::retouch_tools_paint_only_the_targeted_alpha_channel ... ok
+test retouch_cmds::tests::sample_all_layers_blur_and_sharpen_work_on_an_empty_layer ... ok
+test retouch_cmds::tests::retouch_tools_paint_only_the_targeted_mask ... ok
+test print_cmds::tests::package_copies_links_and_relinks ... ok
+test retouch_cmds::tests::sample_all_layers_smudge_drags_colour_from_below ... ok
+test retouch_cmds::tests::sponge_reduces_and_increases_saturation ... ok
+test retouch_cmds::tests::smudge_moves_colour_along_the_stroke ... ok
+test retouch_cmds::tests::smudge_across_a_transparent_edge_has_no_dark_fringe ... ok
+test select_extra_cmds::tests::isolate_layers_toggles ... ok
+test select_extra_cmds::hang_tests::transform_selection_with_extreme_params_terminates ... ok
+test select_extra_cmds::tests::transform_selection_needs_a_selection ... ok
+test select_extra_cmds::tests::sky_without_sky_changes_nothing ... ok
+test select_extra_cmds::tests::transform_selection_perspective_and_warp ... ok
+test selection_cmds::tests::color_range_presets ... ok
+test preset_store::tests::group_with_sampled_8_and_16_bit_tips_round_trips ... ok
+test select_extra_cmds::tests::transform_selection_scales_rotates_and_moves ... ok
+test select_extra_cmds::tests::sky_selects_the_sky_at_every_depth ... ok
+test selection_cmds::tests::color_range_rejects_bad_params ... ok
+test proof_sim::tests::plates_and_simulations_build_luts ... ok
+test selection_cmds::tests::color_range_out_of_gamut_matches_the_gamut_warning ... ok
+test print_cmds::tests::print_dry_run_renders_a_pdf_and_reports_lp ... ok
+test selection_cmds::tests::color_range_selects_by_colour ... ok
+test retouch_cmds::tests::spot_healing_removes_blemish_all_types ... ok
+test selection_cmds::tests::color_range_several_samples_points_and_invert ... ok
+test slice_cmds::tests::slices_from_guides_and_clear ... ok
+test selection_cmds::tests::lasso_polygon ... ok
+test selection_cmds::tests::grow_and_similar ... ok
+test selection_cmds::tests::magic_wand_contiguous_and_modes ... ok
+test slice_cmds::tests::promote_auto_slice_and_divide ... ok
+test selection_cmds::tests::modify_commands ... ok
+test slice_cmds::tests::lock_slices_blocks_editing ... ok
+test slice_cmds::tests::layer_based_slice_follows_the_layer_and_its_effects ... ok
+test slice_cmds::tests::slices_round_trip_through_psd_and_pcraft ... ok
+test smart_cmds::tests::commands_are_registered_with_catalog_ids ... ok
+test slice_cmds::tests::user_slices_and_options ... ok
+test smart_cmds::tests::edit_contents_updates_the_parent ... ok
+test smart_cmds::tests::psd_placed_layer_renders_from_lnk2_data ... ok
+test smart_cmds::tests::empty_layer_cannot_be_converted ... ok
+test smart_cmds::tests::conversion_is_pixel_identical_at_every_depth ... ok
+test preset_store::tests::corrupt_and_oversized_files_are_skipped_with_a_warning ... ok
+test smart_cmds::tests::masked_layer_and_group_convert_within_rounding ... ok
+test smart_cmds::tests::rasterize_and_via_copy ... ok
+test smart_cmds::tests::selection_becomes_the_filter_mask ... ok
+test smart_cmds::tests::filters_follow_transforms ... ok
+test smart_cmds::tests::filter_stack_order_blend_disable_and_clear ... ok
+test smart_cmds::tests::smart_filter_blur_repeats_the_canvas_edge_like_a_layer_filter ... ok
+test smartselect_cmds::tests::focus_area_command ... ok
+test smart_cmds::tests::transforms_re_render_from_source_losslessly ... ok
+test smart_cmds::tests::smart_filters_are_re_editable ... ok
+test smartselect_cmds::tests::refine_edge_outputs_and_undo ... ok
+test smart_cmds::tests::pcraft_round_trip_keeps_live_smart_objects ... ok
+test smartselect_cmds::tests::refine_edge_shift_and_contrast ... ok
+test smartselect_cmds::tests::quick_selection_subtract_from_select_all_and_enhance ... ok
+test snap::tests::grid_snaps_to_nearest_line ... ok
+test snap::tests::guides_win_ties ... ok
+test snap::tests::point_snaps_within_threshold_only ... ok
+test snap::tests::rect_snaps_by_closest_anchor ... ok
+test snap::tests::smart_guide_lines_span_both_objects ... ok
+test snap::tests::targets_from_document ... ok
+test smartselect_cmds::tests::quick_selection_add_subtract_undo ... ok
+test snap::tests::threshold_scales_with_zoom ... ok
+test smartselect_cmds::tests::select_subject_centred_object ... ok
+test tests::adjustment_layers_change_composite ... ok
+test tests::advanced_blending_channels ... ok
+test tests::bad_blend_mode_is_a_param_error ... ok
+test tests::arrange_and_group ... ok
+test tests::canvas_flips_and_rotation ... ok
+test tests::command_ids_are_unique_and_documented ... ok
+test tests::coalesced_edits_share_one_history_step ... ok
+test tests::clipping_and_merge_and_flatten ... ok
+test smartselect_cmds::tests::object_selection_disc ... ok
+test tests::damage_is_reported_for_strokes_only ... ok
+test tests::command_list_reports_enablement ... ok
+test smart_cmds::tests::export_replace_and_linked_contents ... ok
+test tests::duplicating_the_background_unlocks_the_copy ... ok
+test tests::file_new_resolution_and_background_color ... ok
+test tests::levels_and_curves_params_cover_output_and_channels ... ok
+test tests::file_new_variants ... ok
+test tests::fill_layers_and_colors ... ok
+test tests::layer_lifecycle_with_undo ... ok
+test tests::fill_clear_and_masks ... ok
+test tests::image_rotation_rotates_every_layer_not_just_the_active_one ... ok
+test tests::file_new_takes_whole_floats_and_survives_odd_sizes ... ok
+test tests::marquee_feather_and_anti_aliased_ellipse ... ok
+test tests::layer_locks_are_set_and_enforced ... ok
+test tests::integer_params_accept_json_floats ... ok
+test tests::journal_records_mutations_only ... ok
+test tests::every_adjustment_command_runs ... ok
+test tests::moving_a_layer_moves_its_effects_reference_point ... ok
+test tests::paint_stroke_and_selection ... ok
+test tests::move_to_reorders_and_nests ... ok
+test tests::painting_can_target_the_layer_mask ... ok
+test tests::selecting_a_layer_does_not_dirty_the_document ... ok
+test tests::threshold_and_hue_params ... ok
+test tests::selection_modes ... ok
+test tests::unknown_and_disabled_commands_error ... ok
+test timeline_cmds::tests::create_navigate_delete ... ok
+test tests::translate_moves_pixels_and_respects_locks ... ok
+test tests::type_edit_rerenders_cache_to_new_text ... ok
+test transform_cmds::tests::split_gray_selected_rejects_non_gray ... ok
+test timeline_cmds::tests::navigation_without_timeline_errors ... ok
+test transform_cmds::tests::background_becomes_layer_0 ... ok
+test transform_cmds::tests::scale_via_quad_and_undo ... ok
+test transform_cmds::tests::affine_matrix_and_perspective ... ok
+test transform_cmds::tests::linked_raster_mask_moves_with_the_pixels ... ok
+test transform_cmds::tests::shapes_move_and_transform_as_vectors ... ok
+test trap_cmds::tests::rejects_non_cmyk ... ok
+test transform_cmds::tests::targeted_alpha_channel_transforms_alone ... ok
+test transform_cmds::tests::type_layers_transform_as_vectors ... ok
+test type_cmds::tests::create_renders_and_is_undoable ... ok
+test transform_cmds::tests::targeted_linked_mask_moves_with_its_layer ... ok
+test trap_cmds::tests::traps_a_cmyk_document ... ok
+test transform_cmds::tests::type_moves_with_the_move_command ... ok
+test type_cmds::tests::kern_pair_cost ... ignored
+test transform_cmds::tests::linked_mask_with_a_selection_moves_only_the_selected_region ... ok
+test transform_cmds::tests::targeted_unlinked_mask_transforms_alone ... ok
+test transform_cmds::tests::transform_targets_fail_gracefully ... ok
+test type_cmds::tests::kerning_params_fail_gracefully ... ok
+test type_cmds::tests::kern_pair_steps_from_the_shown_kerning ... ok
+test type_cmds::tests::edit_replace_keeps_styles ... ok
+test transform_cmds::tests::with_selection_only_selected_pixels_move ... ok
+test type_cmds::tests::edit_sets_kerning_over_a_range ... ok
+test transform_cmds::tests::unlinked_mask_stays_put ... ok
+test type_cmds::tests::rasterize_and_fonts ... ok
+test type_cmds::tests::style_range_on_empty_text ... ok
+test type_cmds::tests::set_style_paragraph_and_box ... ok
+test type_extra_cmds::tests::rasterize_type_layer ... ok
+test type_spell_cmds::tests::disabled_without_type ... ok
+test type_extra_cmds::tests::anti_alias_and_orientation_are_one_step_each ... ok
+test type_extra_cmds::tests::opentype_toggles_store_features ... ok
+test type_extra_cmds::tests::paragraph_to_point_hardens_soft_wraps ... ok
+test type_spell_cmds::tests::insert_glyph_at_caret_and_over_range ... ok
+test preset_store::tests::reordering_presets_and_groups_persists ... ok
+test type_styles_cmds::tests::disabled_states ... ok
+test type_styles_cmds::tests::shared_attribute_names_accept_both_spellings ... ok
+test type_extra_cmds::tests::vertical_orientation_renders_columns_inside_the_canvas ... ok
+test variables_cmds::tests::bad_params_are_errors ... ok
+test variables_cmds::tests::csv_import_and_apply ... ok
+test variables_cmds::tests::define_apply_visibility_and_text ... ok
+test type_styles_cmds::tests::character_style_lifecycle ... ok
+test vector_cmds::tests::all_vector_commands_are_registered ... ok
+test variables_cmds::tests::pixel_replacement_changes_the_layer ... ok
+test vector_cmds::tests::fill_and_stroke_path_on_pixel_layer ... ok
+test type_extra_cmds::tests::point_and_paragraph_conversion_keep_the_text_in_place ... ok
+test type_styles_cmds::tests::paragraph_styles_and_basic_paragraph ... ok
+test vector_cmds::tests::paths_set_rename_delete_list ... ok
+test type_extra_cmds::tests::work_path_and_shape_follow_the_glyphs ... ok
+test type_styles_cmds::tests::new_style_from_selection_and_redefine ... ok
+test type_cmds::tests::type_edits_damage_only_the_layer_and_coalesce ... ok
+test vector_cmds::tests::path_to_selection_matches_analytic_shape ... ok
+test type_styles_cmds::tests::styles_survive_typing_and_save ... ok
+test vector_cmds::tests::shape_create_fill_stroke_and_composite ... ok
+test vector_cmds::tests::shape_add_to_with_path_ops ... ok
+test vector_cmds::tests::translate_vectors_moves_shapes_and_masks ... ok
+test type_spell_cmds::tests::lists_changes_and_learns_words ... ok
+test vector_cmds::tests::shape_rasterize_keeps_pixels ... ok
+test vector_cmds::tests::selection_to_work_path_roundtrip_iou ... ok
+test vector_cmds::tests::vector_mask_commands_and_compositing ... ok
+test vector_cmds::tests::shape_edit_live_params_and_undo ... ok
+test video_cmds::tests::frame_ops_need_a_video_layer ... ok
+test video_cmds::tests::new_blank_insert_duplicate_delete_frames ... ok
+test video_cmds::tests::scrub_keeps_content_a_raster ... ok
+test video_cmds::tests::rasterize_drops_the_stack ... ok
+test vector_cmds::tests::shape_create_every_kind_and_undo ... ok
+test warp_cmds::tests::identity_and_bend_zero_are_no_ops_at_every_depth ... ok
+test warp_cmds::tests::arc_warps_pixels_and_undoes ... ok
+test warp_cmds::tests::custom_mesh_moves_a_control_point ... ok
+test warp_cmds::tests::split_commands_edit_meshes_exactly ... ok
+test vp_cmds::tests::planes_paste_and_clone ... ok
+test web_cmds::tests::generator_naming_grammar ... ok
+test video_cmds::tests::inspect_reports_video_layer ... ok
+test type_extra_cmds::tests::warp_text_changes_pixels_and_round_trips ... ok
+test type_extra_cmds::tests::vertical_point_and_paragraph_conversion_keep_the_columns_in_place ... ok
+test video_cmds::tests::new_video_layer_from_image_sequence ... ok
+test warp_cmds::tests::smart_object_warp_is_lossless ... ok
+test web_cmds::tests::previews_show_the_optimised_pixels ... ok
+test type_extra_cmds::tests::lorem_update_fonts_and_default_styles ... ok
+test web_cmds::tests::jpeg_preview_at_odd_sizes ... ok
+test web_cmds::tests::web_settings_from_params ... ok
+test wia_cmds::tests::reports_availability ... ok
+test web_cmds::tests::estimates_every_format_at_every_depth ... ok
+test variables_cmds::tests::export_data_sets_as_files ... ok
+test video_cmds::tests::render_video_to_animated_gif ... ok
+test web_cmds::tests::gif_and_png8_keep_transparency_and_palette ... ok
+test video_cmds::tests::frames_to_layers_and_render_video ... ok
+test web_cmds::tests::export_preferences_drive_quick_export ... ok
+test web_cmds::tests::jpeg_quality_progressive_and_metadata ... ok
+test web_cmds::tests::image_assets_are_generated_now_and_on_save ... ok
+test web_cmds::tests::slices_export_with_html_table ... ok
+test preset_store::tests::startup_with_many_groups_loads_them_all ... ok
+
+test result: ok. 581 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 2.11s
+
+     Running tests/brush_smoothing.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/brush_smoothing-ad31ddbf82b4f7c0)
+
+running 1 test
+test presets_keep_the_tool_smoothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/eraser_locked.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/eraser_locked-3d105f35a12a235f)
+
+running 6 tests
+test eraser_on_background_respects_the_selection ... ok
+test eraser_on_transparency_locked_layer_paints_background_colour ... ok
+test eraser_bad_params_fail_gracefully ... ok
+test stroke_path_with_the_eraser_paints_background_colour_on_locked_layers ... ok
+test eraser_on_normal_layer_erases_to_transparency ... ok
+test eraser_on_background_paints_background_colour_at_every_depth_and_mode ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/panic_hunt.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/panic_hunt-85abb664c06aad8e)
+
+running 1 test
+test no_command_panics_or_hangs_on_adversarial_params ... ignored, slow full-registry fuzz; run with --ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/photoshop_oracles.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photoshop_oracles-2dc5929a171db0fb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/prefs_usage.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/prefs_usage-870502debbe5027a)
+
+running 2 tests
+test the_scanner_finds_reads ... ok
+test every_preference_is_read_or_hidden ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/text_gamma.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/text_gamma-1636aa6ed2f89015)
+
+running 1 test
+test blend_text_gamma_setting ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/unicode_colors.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/unicode_colors-9cf9edd990bcd052)
+
+running 4 tests
+test unicode_preference_colour_is_invalid ... ok
+test unicode_pixelate_colour_uses_the_existing_fallback ... ok
+test unicode_gallery_colour_uses_the_existing_fallback ... ok
+test unicode_render_colour_uses_the_existing_fallback ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_format-922b9929e4d7abae)
+
+running 20 tests
+test migrate::tests::current_version_is_noop ... ok
+test manifest::channel_tests::older_channels_load_with_default_options ... ok
+test migrate::tests::chained_steps_run_in_order ... ok
+test migrate::tests::partial_chain_from_middle ... ok
+test migrate::tests::too_new_and_invalid_versions ... ok
+test zip::tests::crc_known_value ... ok
+test zip::tests::crc_mismatch_detected ... ok
+test zip::tests::offset_access_rejects_overflow ... ok
+test zip::tests::roundtrip ... ok
+test atomic::tests::write_failure_halfway_keeps_original ... ok
+test atomic::tests::directory_target_or_bare_root_is_an_error_not_a_panic ... ok
+test atomic::tests::cross_device_rename_errors_clearly_and_never_writes_in_place ... ok
+test atomic::tests::read_only_folder_errors_clearly_and_never_writes_in_place ... ok
+test atomic::tests::lock_that_outlasts_the_retries_keeps_original ... ok
+test atomic::tests::keeps_the_original_file_mode ... ok
+test atomic::tests::rename_failure_keeps_original ... ok
+test atomic::tests::creates_missing_parent_folders ... ok
+test atomic::tests::locked_target_rename_is_retried ... ok
+test atomic::tests::writes_through_a_symlink ... ok
+test atomic::tests::replaces_and_creates ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/analysis.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/analysis-0e7a6d910b0d3a03)
+
+running 1 test
+test measurement_and_notes_roundtrip_and_default_when_absent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/autosave.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/autosave-0f3e959a7da5ef3a)
+
+running 4 tests
+test list_ignores_junk ... ok
+test discard_removes_everything ... ok
+test repeated_autosaves_are_incremental_and_coalesced ... ok
+test autosave_then_recover ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s
+
+     Running tests/corruption.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/corruption-2befd4fac2665c79)
+
+running 15 tests
+test random_bytes_never_panic ... ok
+test random_manifest_never_panics ... ok
+test bad_manifest_json ... ok
+test missing_manifest_is_error ... ok
+test manifest_size_limit ... ok
+test total_size_limit ... ok
+test missing_tile_is_error ... ok
+test invalid_hash_strings_rejected ... ok
+test too_new_version_rejected ... ok
+test swapped_tile_content_fails_hash_check ... ok
+test truncation_never_panics_and_fails ... ok
+test deflated_zip_entries_are_readable ... ok
+test directory_bundle_tampered_tile ... ok
+test byte_flips_detected ... ok
+test random_tile_payload_never_panics ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.15s
+
+     Running tests/roundtrip.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/roundtrip-d07550de725f55aa)
+
+running 29 tests
+test empty_document_roundtrips ... ok
+test identical_tiles_are_stored_once ... ok
+test gray_u8 ... ok
+test ids_preserved_and_counter_advanced ... ok
+test channel_restrictions_and_bevel_elements_roundtrip ... ok
+test fresh_ids_option ... ok
+test not_pcraft ... ok
+test cmyk_u8 ... ok
+test manifest_is_human_readable_json ... ok
+test gray_u16 ... ok
+test blend_if_roundtrips ... ok
+test gray_f32 ... ok
+test lab_u16 ... ok
+test cmyk_u16 ... ok
+test video_layer_frames_survive_roundtrip ... ok
+test lab_u8 ... ok
+test previews_embedded_and_readable ... ok
+test rgb_u8 ... ok
+test text_kerning_roundtrips_and_defaults ... ok
+test save_is_deterministic ... ok
+test save_path_zip_file ... ok
+test rgb_u16 ... ok
+test vector_fields_roundtrip_and_default_when_absent ... ok
+test lab_f32 ... ok
+test cmyk_f32 ... ok
+test zip_incremental_only_new_tiles ... ok
+test rgb_f32 ... ok
+test directory_incremental_and_gc ... ok
+test directory_bundle_roundtrip_all_modes ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.52s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_geom-1669e87ed582d511)
+
+running 13 tests
+test tests::affine_inverse_roundtrip ... ok
+test tests::affine_then_order ... ok
+test tests::intersect_and_union ... ok
+test tests::rect_basics ... ok
+test tests::rect_tiles_enumeration ... ok
+test tests::tile_coords_handle_negatives ... ok
+test tests::translate_and_inflate_saturate_on_overflow ... ok
+test warp::tests::arc_maps_known_points ... ok
+test warp::tests::identity_mesh_is_exact_and_fit_reproduces_affine ... ok
+test warp::tests::presets_at_bend_zero_are_identity ... ok
+test warp::tests::preset_fits_closely_as_mesh_and_affine_composes ... ok
+test warp::tests::styles_parse_and_round_trip_names ... ok
+test warp::tests::splits_are_exact_and_removable ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/photocraft_gpu-49a2d9bb9597cfdc)
+
+running 15 tests
+test tests::half_roundtrip ... ok
+test tests::grid_rounds_out ... ok
+test tests::op_record_fits_the_uniform ... ok
+test health::tests::first_fault_wins_but_loss_upgrades_an_error ... ok
+test fx::tests::programs_key_on_geometry_not_colour ... ok
+test fx::tests::windows_grow_by_reach_and_temps_are_reused ... ok
+test health::tests::fault_text ... ok
+test plan::tests::effects_are_planned_in_place ... ok
+test plan::tests::slots_are_recycled ... ok
+test plan::tests::blend_if_falls_back_to_the_cpu ... ok
+test plan::tests::small_layers_composite_only_over_their_bounds ... ok
+test plan::tests::opaque_fill_layers_skip_what_they_cover ... ok
+test bounds::tests::matches_surface_content_bounds ... ok
+test tests::shader_validates ... ok
+test fx::tests::banded_fields_match_whole_region_within_reach ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/device_loss.rs (/Users/bt/dev/storyteller/craft-apps/photocraft/target/agent-w6/debug/deps/device_loss-a40ec96070c39839)
+
+running 3 tests

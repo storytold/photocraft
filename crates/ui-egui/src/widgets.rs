@@ -59,7 +59,7 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
             let strip = ui.interact(strip_rect, ui.id().with((id, "strip")), Sense::click_and_drag());
             // Pill tabs left of the menu button; they elide or overflow into a chevron (#151).
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-            let tip = format!("{} options", tabs.get(*selected).copied().unwrap_or(id));
+            let tip = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!(tabs.get(*selected).copied().unwrap_or(id)))]);
             let menu_rect = Rect::from_min_max(pos2(row.right() - 22.0, row.top() + 1.0), pos2(row.right(), row.bottom() - 1.0));
             let menu = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(menu_rect)), "ellipsis", 22.0, false, &tip);
             let area = Rect::from_min_max(row.min, pos2((menu_rect.left() - 4.0).max(row.left()), row.bottom()));
@@ -112,7 +112,7 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
 pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(12.5);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, t.text);
+    let galley = ui.painter().layout_no_wrap(tl!(label).to_owned(), font, t.text);
     let size = vec2(galley.size().x + 20.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if selected {
@@ -273,7 +273,7 @@ pub fn slider_row_default(
     let t = Tokens::get(ui.ctx());
     let mut changed_resp = None;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             changed_resp = Some(value_field(ui, value, range.clone(), suffix, 74.0));
         });
@@ -307,7 +307,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             }
             let x = egui::lerp((rect.left() + 8.5)..=(rect.right() - 8.5), how_on);
             ui.painter().circle_filled(pos2(x, rect.center().y), 6.5, Color32::WHITE);
-            ui.label(egui::RichText::new(label).color(if *on { t.text } else { t.text_dim }));
+            ui.label(egui::RichText::new(tl!(label)).color(if *on { t.text } else { t.text_dim }));
             resp
         })
         .inner;
@@ -331,7 +331,7 @@ pub fn secondary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
 
 fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color32, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(13.0), fg);
+    let galley = ui.painter().layout_no_wrap(tl!(label).to_owned(), theme::medium(13.0), fg);
     let h = if t.pro { 28.0 } else { 30.0 };
     let size = vec2((galley.size().x + 28.0).max(min_width), h);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -377,7 +377,7 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
 /// Small caps section label.
 pub fn section_label(ui: &mut Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(text).font(theme::medium(11.5)).color(t.text_faint));
+    ui.label(egui::RichText::new(tl!(text)).font(theme::medium(11.5)).color(t.text_faint));
 }
 
 /// Hairline separator.
@@ -407,11 +407,11 @@ pub fn hue_stops() -> Vec<Color32> {
 
 /// A compact labelled dropdown in the studio style.
 pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| *l).unwrap_or("—");
+    let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| tl!(l)).unwrap_or("—");
     let mut changed = false;
     egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
         for (v, l) in options {
-            if ui.selectable_label(v == current, *l).clicked() {
+            if ui.selectable_label(v == current, tl!(l)).clicked() {
                 *current = v.clone();
                 changed = true;
             }
@@ -454,7 +454,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
                 p.rect_filled(rect, 2.0, t.field);
                 p.rect_stroke(rect, 2.0, Stroke::new(1.5, if resp.hovered() { t.text_dim } else { t.text_faint }), StrokeKind::Inside);
             }
-            let l = ui.add(egui::Label::new(egui::RichText::new(label).color(t.text_dim)).sense(Sense::click()));
+            let l = ui.add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).sense(Sense::click()));
             resp.union(l)
         })
         .inner;

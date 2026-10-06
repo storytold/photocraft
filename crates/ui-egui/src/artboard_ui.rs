@@ -76,19 +76,19 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     let key = |k: &str| format!("artboard-{}-{k}", layer.id.0);
     let mut edit: Option<Value> = None;
-    ui.label(egui::RichText::new("Artboard").font(crate::theme::semibold(12.0)).color(t.text));
+    ui.label(egui::RichText::new(tl!("Artboard")).font(crate::theme::semibold(12.0)).color(t.text));
     ui.add_space(4.0);
     let mut preset = a.preset.clone();
-    let mut opts: Vec<(String, &str)> = vec![(String::new(), "Custom")];
+    let mut opts: Vec<(String, &str)> = vec![(String::new(), tl!("Custom"))];
     opts.extend(photocraft_engine::artboard_cmds::PRESETS.iter().map(|(n, _, _)| (n.to_string(), *n)));
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Size").color(t.text_dim).size(12.0));
+        ui.label(egui::RichText::new(tl!("Size")).color(t.text_dim).size(12.0));
         if crate::widgets::dropdown(ui, &key("preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
             edit = Some(json!({"layer": layer.id.0, "preset": preset}));
         }
     });
     let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>| -> bool {
-        ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
+        ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
         crate::widgets::value_field(ui, v, range, "px", 64.0).changed()
     };
     let r = a.rect;
@@ -110,11 +110,11 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Artboard Background Color").color(t.text_dim).size(12.0));
+        ui.label(egui::RichText::new(tl!("Artboard Background Color")).color(t.text_dim).size(12.0));
     });
     ui.horizontal(|ui| {
         let mut bg = a.background.name().to_string();
-        let opts = [("white".to_string(), "White"), ("black".to_string(), "Black"), ("transparent".to_string(), "Transparent"), ("custom".to_string(), "Other…")];
+        let opts = [("white".to_string(), tl!("White")), ("black".to_string(), tl!("Black")), ("transparent".to_string(), tl!("Transparent")), ("custom".to_string(), tl!("Other…"))];
         if crate::widgets::dropdown(ui, &key("bg"), &mut bg, &opts, 120.0) {
             edit = Some(json!({"layer": layer.id.0, "background": bg}));
         }

@@ -39,6 +39,10 @@ pub fn take_log(ctx: &egui::Context) -> Vec<(String, Outcome)> {
     ctx.data_mut(|d| d.remove_temp::<Vec<(String, Outcome)>>(log_id())).unwrap_or_default()
 }
 
+/// Alternative default shortcuts Photoshop gives some commands besides the one its menu shows:
+/// (command, shortcut). Edit › Fill… is Shift+F5 and also Shift+Backspace (Shift+Delete on a Mac).
+pub const SECONDARY: &[(&str, &str)] = &[("edit.fill", "Shift+Backspace")];
+
 /// Every key binding, most modifiers first (so ⇧⌘Z wins over ⌘Z), each key owned by one command:
 /// command and shell shortcuts, then the menu catalogue's for live items without their own,
 /// then Edit › Keyboard Shortcuts assignments to any other menu item. D and X
@@ -67,8 +71,10 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
                 && !crate::hold_keys::is_temporary(id)
         })
         .map(|(id, sc)| (id.as_str(), Some(sc.as_str())));
+    // Photoshop's second shortcuts, kept while the command's main one is the default.
+    let secondary = SECONDARY.iter().filter(|(id, _)| !prefs.shortcuts.contains_key(*id)).map(|&(id, sc)| (id, Some(sc)));
     let mut all: Vec<(String, KeyboardShortcut)> = Vec::new();
-    for (id, sc) in ui.chain(engine).chain(catalog).chain(overrides) {
+    for (id, sc) in ui.chain(engine).chain(catalog).chain(overrides).chain(secondary) {
         let Some(sc) = sc.and_then(parse) else { continue };
         if !all.iter().any(|(_, b)| *b == sc) {
             all.push((id.to_string(), sc));

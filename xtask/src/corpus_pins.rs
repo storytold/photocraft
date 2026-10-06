@@ -13,7 +13,7 @@ use crate::pinned::{PinnedCorpus, Upstream};
 
 /// https://github.com/storytold/photocraft-corpus: our Photoshop-authored oracle PSDs
 /// (`photoshop/`). Bump through a PR after committing there.
-pub const PHOTOCRAFT_CORPUS_COMMIT: &str = "16427e2078634493e27cdc4a55b4d4786c49e575";
+pub const PHOTOCRAFT_CORPUS_COMMIT: &str = "f5b1178cab15309e05b7b504545df3c701f6d8fd";
 /// https://github.com/psd-tools/psd-tools (MIT): `tests/psd_files` (main, 2026-10-05).
 pub const PSD_TOOLS_COMMIT: &str = "96eb134c17b2c65edf4c4151c0f00b802ada86c2";
 /// https://github.com/Agamnentzar/ag-psd (MIT): `test/` (master, 2026-07-02).
@@ -21,7 +21,7 @@ pub const AG_PSD_COMMIT: &str = "387049670cb89b88fb8fe1b7c01aeacf98dd2e3b";
 /// PngSuite (public domain), a fixed release archive.
 pub const PNGSUITE_URL: &str = "http://www.schaik.com/pngsuite/PngSuite-2017jul19.tgz";
 
-/// `corpus/photoshop`: 256 PSDs authored with Photoshop by the photocraft-corpus generator.
+/// `corpus/photoshop`: 258 PSDs authored with Photoshop by the photocraft-corpus generator.
 pub const PHOTOSHOP: PinnedCorpus = PinnedCorpus {
     name: "photoshop",
     dest: "photoshop",

@@ -46,7 +46,7 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     let icon_r = Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(20.0, 20.0));
     crate::icons::paint(ui, icon_r, kind_icon(&layer.content), 15.0, t.icon);
     let kind = kind_label(layer);
-    let kind_g = ui.painter().layout_no_wrap(kind.clone(), egui::FontId::proportional(11.0), t.text_faint);
+    let kind_g = ui.painter().layout_no_wrap(tl!(&kind).to_owned(), egui::FontId::proportional(11.0), t.text_faint);
     let kind_w = kind_g.size().x;
     // The name takes what's left between the icon and the kind (elided when long).
     let name_x = r.left() + 26.0;
@@ -81,7 +81,7 @@ pub fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
         11.0,
         t.text_dim,
     );
-    ui.painter().text(pos2(r.left() + 18.0, r.center().y), egui::Align2::LEFT_CENTER, title, theme::semibold(12.0), t.text);
+    ui.painter().text(pos2(r.left() + 18.0, r.center().y), egui::Align2::LEFT_CENTER, tl!(title), theme::semibold(12.0), t.text);
     if resp.clicked() {
         open = !open;
         ui.data_mut(|d| d.insert_temp(key, open));

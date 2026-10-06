@@ -7,6 +7,13 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Translate a string literal into the current UI language: `tl!("Image Size…")`.
+macro_rules! tl {
+    ($s:expr) => {
+        $crate::i18n::t($s)
+    };
+}
+
 pub mod actions;
 pub mod adjust_dialog;
 pub mod adjust_editors;
@@ -41,12 +48,14 @@ pub mod eraser_ui;
 pub mod export_dialog;
 pub mod file_open;
 pub mod file_ui;
+pub mod fill_ui;
 pub mod filter_dialog;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
 pub mod gradient_ui;
 pub mod hold_keys;
+pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod layer_menu_ui;
@@ -78,6 +87,7 @@ pub mod preset_panels;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
+pub mod rasterize_prompt;
 pub mod retouch_ui;
 pub mod rulers;
 pub mod shortcut_dispatch;
@@ -772,6 +782,7 @@ impl PhotocraftApp {
 
 impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         if !self.styled {
             Self::setup_context(ctx, self.ui.theme);
             self.styled = true;
@@ -1212,6 +1223,9 @@ impl PhotocraftApp {
 
 #[cfg(test)]
 mod input_tests;
+
+#[cfg(test)]
+mod pencil_tests;
 
 #[cfg(test)]
 mod marquee_tests;

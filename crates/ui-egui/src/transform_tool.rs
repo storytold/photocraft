@@ -840,7 +840,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rw = crate::widgets::value_field(ui, &mut w, -10000.0..=10000.0, "%", 66.0);
     let link_id = egui::Id::new("transform-link");
     let mut link: bool = ui.data(|d| d.get_temp(link_id)).unwrap_or(true);
-    if crate::icons::button(ui, if link { "link" } else { "unlink" }, 22.0, link, "Maintain aspect ratio").clicked() {
+    if crate::icons::button(ui, if link { "link" } else { "unlink" }, 22.0, link, tl!("Maintain aspect ratio")).clicked() {
         link = !link;
         ui.data_mut(|d| d.insert_temp(link_id, link));
     }
@@ -859,14 +859,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut a = angle as f32;
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "rotate-cw", 13.0, tk.text_dim);
-    resp.on_hover_text("Rotate");
+    resp.on_hover_text(tl!("Rotate"));
     if crate::widgets::value_field(ui, &mut a, -180.0..=180.0, "°", 60.0).changed() {
         rotate_about_pivot(app, (a as f64 - angle).to_radians());
     }
     crate::widgets::vline(ui, 22.0);
-    lbl(ui, "Interpolation:");
+    lbl(ui, tl!("Interpolation:"));
     let mut interp = t.interpolation.clone();
-    let opts = [("bicubic".to_string(), "Bicubic"), ("bilinear".to_string(), "Bilinear"), ("nearest".to_string(), "Nearest Neighbor")];
+    let opts = [("bicubic".to_string(), tl!("Bicubic")), ("bilinear".to_string(), tl!("Bilinear")), ("nearest".to_string(), tl!("Nearest Neighbor"))];
     if crate::widgets::dropdown(ui, "transform-interp", &mut interp, &opts, 130.0)
         && let Some(s) = app.ui.transform.as_mut()
     {
@@ -874,14 +874,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(8.0);
-        if crate::icons::button(ui, "check", 24.0, false, &format!("Commit transform ({})", crate::shortcuts::pretty("Enter"))).clicked() {
+        if crate::icons::button(ui, "check", 24.0, false, &crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+            .clicked()
+        {
             commit(app);
         }
-        if crate::icons::button(ui, "ban", 24.0, false, "Cancel transform (Esc)").clicked() {
+        if crate::icons::button(ui, "ban", 24.0, false, tl!("Cancel transform (Esc)")).clicked() {
             cancel(app);
         }
         crate::widgets::vline(ui, 22.0);
-        if crate::icons::button(ui, "grid-3x3", 24.0, false, "Switch between free transform and warp modes").clicked() {
+        if crate::icons::button(ui, "grid-3x3", 24.0, false, tl!("Switch between free transform and warp modes")).clicked() {
             enter_warp(app);
         }
     });
@@ -893,7 +895,7 @@ fn warp_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
-    lbl(ui, "Warp:");
+    lbl(ui, tl!("Warp:"));
     let mut style = w.style;
     let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().map(|s| (s, s.label())).collect();
     if crate::widgets::dropdown(ui, "warp-style", &mut style, &opts, 120.0)
@@ -908,12 +910,12 @@ fn warp_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     }
     if w.style.is_preset() {
         let mut vertical = w.vertical;
-        if crate::widgets::checkbox(ui, &mut vertical, "Vertical").changed()
+        if crate::widgets::checkbox(ui, &mut vertical, tl!("Vertical")).changed()
             && let Some(Some(cur)) = app.ui.transform.as_mut().map(|t| t.warp.as_mut())
         {
             cur.vertical = vertical;
         }
-        let fields: [(&str, f64); 3] = [("Bend:", w.bend), ("H:", w.h_distort), ("V:", w.v_distort)];
+        let fields: [(&str, f64); 3] = [(tl!("Bend:"), w.bend), ("H:", w.h_distort), ("V:", w.v_distort)];
         for (k, (name, v)) in fields.iter().enumerate() {
             lbl(ui, name);
             let mut f = *v as f32;
@@ -929,12 +931,12 @@ fn warp_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
         }
     } else {
         crate::widgets::vline(ui, 22.0);
-        lbl(ui, "Split:");
+        lbl(ui, tl!("Split:"));
         for (id, label) in [
             ("edit.transform.splitWarpCrosswise", "Crosswise"),
             ("edit.transform.splitWarpVertically", "Vertical"),
             ("edit.transform.splitWarpHorizontally", "Horizontal"),
-            ("edit.transform.removeWarpSplit", "Remove"),
+            ("edit.transform.removeWarpSplit", tl!("Remove")),
         ] {
             if crate::widgets::secondary_button(ui, label, 0.0).clicked()
                 && let Err(e) = split(app, id, None)
@@ -945,14 +947,16 @@ fn warp_options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(8.0);
-        if crate::icons::button(ui, "check", 24.0, false, &format!("Commit warp ({})", crate::shortcuts::pretty("Enter"))).clicked() {
+        if crate::icons::button(ui, "check", 24.0, false, &crate::i18n::fmt(tl!("Commit warp ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+            .clicked()
+        {
             commit(app);
         }
-        if crate::icons::button(ui, "ban", 24.0, false, "Cancel warp (Esc)").clicked() {
+        if crate::icons::button(ui, "ban", 24.0, false, tl!("Cancel warp (Esc)")).clicked() {
             cancel(app);
         }
         crate::widgets::vline(ui, 22.0);
-        if crate::icons::button(ui, "grid-3x3", 24.0, true, "Switch between free transform and warp modes").clicked() {
+        if crate::icons::button(ui, "grid-3x3", 24.0, true, tl!("Switch between free transform and warp modes")).clicked() {
             leave_warp(app);
         }
     });

@@ -71,7 +71,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         // Repeated quit requests (the X pressed again) keep the prompt, and the answers so far.
         Some(open) if open.id == id => {}
         Some(_) => {
-            app.ui.status = "Answer the unsaved-changes prompt first".into();
+            app.ui.status = tl!("Answer the unsaved-changes prompt first").into();
             app.ui.status_error = true;
         }
     }
@@ -140,15 +140,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     };
     let (title, message) = if reverts {
-        ("Revert", format!("Revert “{name}” to the last saved version? Your changes will be lost."))
+        ("Revert", crate::i18n::fmt(tl!("Revert “{name}” to the last saved version? Your changes will be lost."), &[("name", &name)]))
     } else {
-        let verb = if exits { "quitting" } else { "closing" };
-        ("Unsaved changes", format!("Do you want to save the changes you made to “{name}” before {verb}?"))
+        let template = if exits {
+            tl!("Do you want to save the changes you made to “{name}” before quitting?")
+        } else {
+            tl!("Do you want to save the changes you made to “{name}” before closing?")
+        };
+        (tl!("Unsaved changes"), crate::i18n::fmt(template, &[("name", &name)]))
     };
     let (mut save_it, mut discard_it, mut cancel) = (false, false, false);
     let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
         ui.set_max_width(420.0);
-        ui.label(egui::RichText::new(title).font(crate::theme::semibold(15.0)));
+        ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
@@ -157,12 +161,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             if reverts {
-                discard_it = crate::widgets::primary_button(ui, "Revert", 84.0).clicked();
-                cancel = crate::widgets::secondary_button(ui, "Cancel", 84.0).clicked();
+                discard_it = crate::widgets::primary_button(ui, tl!("Revert"), 84.0).clicked();
+                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
             } else {
-                save_it = crate::widgets::primary_button(ui, "Save", 84.0).clicked();
-                cancel = crate::widgets::secondary_button(ui, "Cancel", 84.0).clicked();
-                discard_it = crate::widgets::secondary_button(ui, "Don't Save", 100.0).clicked();
+                save_it = crate::widgets::primary_button(ui, tl!("Save"), 84.0).clicked();
+                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+                discard_it = crate::widgets::secondary_button(ui, tl!("Don't Save"), 100.0).clicked();
             }
         });
     });

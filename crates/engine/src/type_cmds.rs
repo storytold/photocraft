@@ -82,6 +82,24 @@ fn range_param(text: &str, p: &Value) -> (usize, usize) {
     }
 }
 
+/// Photoshop's manual kerning range (1/1000 em).
+pub const KERN_MIN: f64 = -1000.0;
+pub const KERN_MAX: f64 = 10_000.0;
+
+/// Validates the `kerning` key of character params: a number in [`KERN_MIN`]..=[`KERN_MAX`] or
+/// `"metrics"`, `"optical"`, `"off"` (`"none"`, `"0"`).
+pub fn check_kerning(p: &Value) -> std::result::Result<(), String> {
+    match p.get("kerning") {
+        None => Ok(()),
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(k) if (KERN_MIN..=KERN_MAX).contains(&k) => Ok(()),
+            _ => Err(format!("kerning must be between {KERN_MIN} and {KERN_MAX} (1/1000 em)")),
+        },
+        Some(Value::String(v)) if matches!(v.to_ascii_lowercase().as_str(), "metrics" | "optical" | "off" | "none" | "0") => Ok(()),
+        Some(_) => Err("kerning must be a number (1/1000 em) or \"metrics\", \"optical\" or \"off\"".into()),
+    }
+}
+
 /// Applies character-style keys from JSON. Returns true if any key was present.
 pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
     let mut any = false;
@@ -157,13 +175,25 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
             hit(true);
         }
     }
-    if let Some(v) = p.get("kerning").and_then(Value::as_str) {
-        s.kerning = match v {
-            "optical" => Kerning::Optical,
-            "none" | "off" | "0" => Kerning::Off,
-            _ => Kerning::Metrics,
-        };
-        hit(true);
+    match p.get("kerning") {
+        // A number is Photoshop's manual kerning: no automatic pair kerning plus the value.
+        Some(v) if v.is_number() => {
+            if let Some(k) = v.as_f64().filter(|k| k.is_finite()) {
+                s.kerning = Kerning::Off;
+                s.kern = k.clamp(KERN_MIN, KERN_MAX) as f32;
+                hit(true);
+            }
+        }
+        Some(Value::String(v)) => {
+            s.kerning = match v.to_ascii_lowercase().as_str() {
+                "optical" => Kerning::Optical,
+                "none" | "off" | "0" => Kerning::Off,
+                _ => Kerning::Metrics,
+            };
+            s.kern = 0.0;
+            hit(true);
+        }
+        _ => {}
     }
     if let Some(v) = p.get("caps").and_then(Value::as_str) {
         s.caps = match v {
@@ -435,7 +465,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
     }))
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":pt,"color":"#rrggbb"|[r,g,b,a],"tracking":1/1000em,"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":"metrics|optical|none","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":pt,"color":"#rrggbb"|[r,g,b,a],"tracking":1/1000em,"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -491,13 +521,58 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Type",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"text":str? (replace all, styles kept),"replace":{"start":char,"end":char,"text":str}?,"runs":[{"start":char,"end":char,…character keys}]?,"box":[x,y,w,h]? (to paragraph text),"point":[x,y]? (to point text),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"antialias":"none|sharp|crisp|strong|smooth"?,"name":str?}"##,
+            params: r##"{"layer":id?,"text":str? (replace all, styles kept),"replace":{"start":char,"end":char,"text":str}?,"runs":[{"start":char,"end":char,…character keys}]?,"box":[x,y,w,h]? (to paragraph text),"point":[x,y]? (to point text),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"antialias":"none|sharp|crisp|strong|smooth"?,"name":str?,"kerning":1/1000em|"metrics"|"optical"|"off"? (with "range":[startChar,endChar]?, default all),"kernPair":{"at":caretChar,"by":1/1000em}? (Photoshop Alt+←/→: the pair before the caret becomes manual, its current kerning + by)}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
                 let id = layer_id(s, p)?;
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-                with_text_layer(s, p, "Edit Type", |t, _| {
+                check_kerning(p).map_err(|m| bad("type.edit", m))?;
+                if let Some(Value::Array(runs)) = p.get("runs") {
+                    for r in runs {
+                        check_kerning(r).map_err(|m| bad("type.edit", m))?;
+                    }
+                }
+                let kern_pair = match p.get("kernPair") {
+                    None => None,
+                    Some(k) => {
+                        let at = k.get("at").and_then(Value::as_u64).ok_or_else(|| bad("type.edit", "kernPair.at must be a caret position (character index)"))?;
+                        let by = k
+                            .get("by")
+                            .and_then(Value::as_f64)
+                            .filter(|v| v.is_finite() && v.abs() <= KERN_MAX)
+                            .ok_or_else(|| bad("type.edit", "kernPair.by must be a number of 1/1000 em"))?;
+                        Some((at as usize, by))
+                    }
+                };
+                let label = if kern_pair.is_some() { "Kerning" } else { "Edit Type" };
+                with_text_layer(s, p, label, |t, doc| {
+                    if let Some((at, by)) = kern_pair {
+                        // Photoshop's Alt+←/→: the pair before the caret becomes manually kerned,
+                        // starting from what it shows now (its metrics/optical or manual value).
+                        let n = t.text.chars().count();
+                        if at == 0 || at >= n {
+                            return Err(bad("type.edit", "kernPair needs a caret between two characters"));
+                        }
+                        let a = byte_at(&t.text, at - 1);
+                        let b = byte_at(&t.text, at);
+                        let now = {
+                            let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+                            eng.pair_kerning(t, doc.resolution_dpi, a)
+                        }
+                        .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break or line end)"))?;
+                        let value = (f64::from(now.round()) + by).clamp(KERN_MIN, KERN_MAX) as f32;
+                        style_range(t, a, b, &|st| {
+                            st.kerning = Kerning::Off;
+                            st.kern = value;
+                        });
+                    }
+                    if p.get("kerning").is_some() {
+                        let (a, b) = range_param(&t.text, p);
+                        style_range(t, a, b, &|st| {
+                            apply_char_props(st, &json!({ "kerning": p.get("kerning") }));
+                        });
+                    }
                     if let Some(v) = p.get("text").and_then(Value::as_str) {
                         let n = t.text.len();
                         replace_text(t, 0, n, v);
@@ -569,6 +644,7 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
             run: |s, p| {
                 let id = layer_id(s, p)?;
+                check_kerning(p).map_err(|m| bad("type.setStyle", m))?;
                 with_text_layer(s, p, "Set Type Style", |t, _| {
                     let (a, b) = range_param(&t.text, p);
                     let mut probe = CharStyle::default();
@@ -792,5 +868,130 @@ mod tests {
         assert_eq!(t.runs.len(), 1);
         assert_eq!(t.runs[0].len, 3);
         assert_eq!(t.runs[0].style.size_pt, 40.0);
+    }
+
+    fn kerning_of(s: &Session, id: u64) -> Vec<(Kerning, f32)> {
+        let t = text_layer(s, id);
+        let mut out = Vec::new();
+        let mut at = 0;
+        for r in t.char_runs() {
+            out.extend(std::iter::repeat_n((r.style.kerning, r.style.kern), t.text[at..at + r.len].chars().count()));
+            at += r.len;
+        }
+        out
+    }
+
+    /// #206: `type.edit {"kerning"}` over a range takes a number (manual, 1/1000 em) or a mode.
+    #[test]
+    fn edit_sets_kerning_over_a_range() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 5, "y": 50, "text": "AVAT", "size": 30})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.edit", json!({"layer": id, "range": [0, 1], "kerning": 100})).unwrap();
+        s.execute("type.edit", json!({"layer": id, "range": [2, 4], "kerning": "optical"})).unwrap();
+        assert_eq!(kerning_of(&s, id), vec![(Kerning::Off, 100.0), (Kerning::Metrics, 0.0), (Kerning::Optical, 0.0), (Kerning::Optical, 0.0)]);
+        s.execute("type.edit", json!({"layer": id, "kerning": "metrics"})).unwrap();
+        assert!(kerning_of(&s, id).iter().all(|k| *k == (Kerning::Metrics, 0.0)));
+        // Runs and setStyle take the same values; type.info reports them.
+        s.execute("type.edit", json!({"layer": id, "runs": [{"start": 1, "end": 2, "kerning": -50}]})).unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [3, 4], "kerning": "off"})).unwrap();
+        assert_eq!(kerning_of(&s, id)[1], (Kerning::Off, -50.0));
+        assert_eq!(kerning_of(&s, id)[3], (Kerning::Off, 0.0));
+        let info = s.execute("type.info", json!({"layer": id})).unwrap();
+        assert_eq!(info["runs"][1]["style"]["kern"], json!(-50.0));
+    }
+
+    /// Bad kerning params are errors, never panics, and leave the layer alone.
+    #[test]
+    fn kerning_params_fail_gracefully() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 5, "y": 50, "text": "AV\nT", "size": 30})).unwrap()["layer"].as_u64().unwrap();
+        let before = text_layer(&s, id);
+        for p in [
+            json!({"kerning": "tight"}),
+            json!({"kerning": 1e9}),
+            json!({"kerning": -5000}),
+            json!({"kerning": true}),
+            json!({"kerning": [1]}),
+            json!({"runs": [{"start": 0, "end": 1, "kerning": "x"}]}),
+            json!({"kernPair": 3}),
+            json!({"kernPair": {"by": 20}}),
+            json!({"kernPair": {"at": 1}}),
+            json!({"kernPair": {"at": 1, "by": "20"}}),
+            json!({"kernPair": {"at": 1, "by": 1e12}}),
+            json!({"kernPair": {"at": 0, "by": 20}}),
+            json!({"kernPair": {"at": 4, "by": 20}}),
+            json!({"kernPair": {"at": 99, "by": 20}}),
+            json!({"kernPair": {"at": 2, "by": 20}}),
+            json!({"kernPair": {"at": 3, "by": 20}}),
+            json!({"kernPair": {"at": -1, "by": 20}}),
+        ] {
+            let mut p = p;
+            p["layer"] = json!(id);
+            assert!(s.execute("type.edit", p.clone()).is_err(), "{p}");
+        }
+        assert!(s.execute("type.setStyle", json!({"layer": id, "kerning": "tight"})).is_err());
+        assert_eq!(text_layer(&s, id).runs, before.runs);
+    }
+
+    /// Cost of one Alt+←/→ press (`kernPair`: two measuring layouts + the edit's re-render) on
+    /// a headline and on a 2000-character paragraph. Release timings for the dev log:
+    /// `cargo test --release -p photocraft-engine kern_pair_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn kern_pair_cost() {
+        let para = "The quick brown fox jumps over the lazy dog. ".repeat(45);
+        for (name, text, size, bx, kerning) in [
+            ("headline", "AVATAR Wave", 72, false, "metrics"),
+            ("paragraph", para.as_str(), 12, true, "metrics"),
+            ("optical paragraph", para.as_str(), 12, true, "optical"),
+        ] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 2000, "height": 1500})).unwrap();
+            let mut p = json!({"x": 20, "y": 100, "text": text, "size": size, "font": "Inter", "kerning": kerning});
+            if bx {
+                p["box"] = json!([20, 20, 900, 1400]);
+            }
+            let id = s.execute("type.create", p).unwrap()["layer"].as_u64().unwrap();
+            let n = 20;
+            let t0 = std::time::Instant::now();
+            for i in 0..n {
+                s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 1 + i % 3, "by": 20}})).unwrap();
+            }
+            let per = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+            let t1 = std::time::Instant::now();
+            for i in 0..n {
+                s.execute("type.setStyle", json!({"layer": id, "range": [1 + i % 3, 2 + i % 3], "tracking": i})).unwrap();
+            }
+            let base = t1.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+            eprintln!("{name} ({} chars): kernPair {per:.2} ms/press; a plain style edit {base:.2} ms", text.chars().count());
+        }
+    }
+
+    /// Photoshop's Alt+←/→: the pair before the caret becomes manual, starting from the kerning
+    /// it shows (the font's pair kerning for "AV"), ±20 per press, one history step each.
+    #[test]
+    fn kern_pair_steps_from_the_shown_kerning() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 5, "y": 50, "text": "AVA", "size": 40, "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
+        let metric = {
+            let t = text_layer(&s, id);
+            photocraft_text::shared().lock().unwrap().pair_kerning(&t, 72.0, 0).unwrap()
+        };
+        assert!(metric < -10.0, "Inter kerns AV: {metric}");
+        let steps = s.active().unwrap().history.entries().len();
+        s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 1, "by": 20}})).unwrap();
+        let k0 = kerning_of(&s, id)[0];
+        assert_eq!(k0, (Kerning::Off, metric.round() + 20.0));
+        s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 1, "by": 100}})).unwrap();
+        assert_eq!(kerning_of(&s, id)[0].1, metric.round() + 120.0);
+        s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 1, "by": -20}})).unwrap();
+        assert_eq!(kerning_of(&s, id)[0].1, metric.round() + 100.0);
+        // Other characters are untouched; each press is its own undoable step.
+        assert_eq!(&kerning_of(&s, id)[1..], &[(Kerning::Metrics, 0.0), (Kerning::Metrics, 0.0)]);
+        assert_eq!(s.active().unwrap().history.entries().len(), steps + 3);
+        assert!(s.undo());
+        assert_eq!(kerning_of(&s, id)[0].1, metric.round() + 120.0);
+        assert!(s.undo() && s.undo());
+        assert_eq!(kerning_of(&s, id)[0], (Kerning::Metrics, 0.0));
     }
 }

@@ -568,7 +568,7 @@ pub fn preset_swatch(ui: &mut egui::Ui, stops: &[(f32, [f32; 4])]) {
     let (r, resp) = ui.allocate_exact_size(vec2(96.0, 20.0), Sense::hover());
     paint_ramp(ui.painter(), r, |u| photocraft_algo::paint::sample_stops(stops, u));
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    let _ = resp.on_hover_text("The current gradient (pick one in Window › Gradients)");
+    let _ = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
 }
 
 /// Live mode: style, reverse and dither changes in the options bar also edit the selected
@@ -615,7 +615,7 @@ fn field(ui: &mut egui::Ui, id: &str, current: f32, range: std::ops::RangeInclus
 fn label(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(PROP_LABEL_W, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.left(), r.center().y), egui::Align2::LEFT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    ui.painter().text(pos2(r.left(), r.center().y), egui::Align2::LEFT_CENTER, tl!(text), egui::FontId::proportional(12.0), t.text_dim);
 }
 
 /// Properties panel sections for a gradient fill layer (`props_layout::section` headers):
@@ -677,7 +677,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             }
         });
         ui.add_space(crate::theme::ROW_GAP);
-        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text("Centre the gradient (offset 0, 0)").clicked() {
+        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
             runs.push(json!({"offset": [0, 0]}));
         }
         ui.add_space(crate::theme::ROW_GAP);

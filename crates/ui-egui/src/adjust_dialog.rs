@@ -64,7 +64,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     }
     let mut preview = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
     ui.add_space(6.0);
-    if crate::widgets::checkbox(ui, &mut preview, "Preview").changed() {
+    if crate::widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
         fields.insert("__preview".into(), json!(preview));
     }
 }

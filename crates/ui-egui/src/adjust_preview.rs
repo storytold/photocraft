@@ -64,7 +64,7 @@ pub fn unsupported(doc: &Document, target: LayerId) -> Option<&'static str> {
         return Some("the target is clipped");
     }
     if photocraft_compose::blend_if_active(l, doc.mode) {
-        return Some("Blend If");
+        return Some(tl!("Blend If"));
     }
     let shows_default = !s.format().alpha || s.default_pixel().last().is_some_and(|a| *a > 0.0);
     if shows_default && !s.content_bounds().contains_rect(&doc.bounds()) {
@@ -96,7 +96,7 @@ pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String
     if let Some(why) = unsupported(doc, target) {
         return Err(why.into());
     }
-    let mut l = Layer::new("Adjustment Preview", LayerContent::Adjustment(Adjustment::Invert));
+    let mut l = Layer::new(tl!("Adjustment Preview"), LayerContent::Adjustment(Adjustment::Invert));
     l.id = PREVIEW_LAYER;
     l.clipped = true;
     if let Some(sel) = &doc.selection {

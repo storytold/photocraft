@@ -45,13 +45,31 @@ pub fn import(doc: &mut Document) {
             });
             pmap.insert(*ix, id);
         }
-        link(t, &sh.run_char, &cmap, &sh.run_para, &pmap);
+        link(t, &sh.run_char, &sh.run_char_lens, &cmap, &sh.run_para, &pmap);
     }
     doc.text_styles = styles;
 }
 
-fn link(t: &mut TextLayer, run_char: &[Option<usize>], cmap: &HashMap<usize, u32>, run_para: &[Option<usize>], pmap: &HashMap<usize, u32>) {
-    if t.runs.len() == run_char.len() {
+fn link(
+    t: &mut TextLayer,
+    run_char: &[Option<usize>],
+    run_char_lens: &[usize],
+    cmap: &HashMap<usize, u32>,
+    run_para: &[Option<usize>],
+    pmap: &HashMap<usize, u32>,
+) {
+    if run_char_lens.len() == run_char.len() && !run_char.is_empty() {
+        // Each model run takes the sheet of the `StyleRun` entry its first character is in.
+        let (mut off, mut i, mut end) = (0usize, 0usize, run_char_lens.first().copied().unwrap_or(0));
+        for r in t.runs.iter_mut() {
+            while off >= end && i + 1 < run_char_lens.len() {
+                i += 1;
+                end = end.saturating_add(run_char_lens.get(i).copied().unwrap_or(0));
+            }
+            r.style.style_sheet = run_char.get(i).copied().flatten().and_then(|i| cmap.get(&i).copied());
+            off = off.saturating_add(r.len);
+        }
+    } else if t.runs.len() == run_char.len() {
         for (r, ix) in t.runs.iter_mut().zip(run_char) {
             r.style.style_sheet = ix.and_then(|i| cmap.get(&i).copied());
         }

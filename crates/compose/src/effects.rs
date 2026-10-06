@@ -724,8 +724,9 @@ fn tent_line(src: &[f32], dst: &mut [f32], bw: f32) {
 }
 
 /// Rows of a `w`-wide row-major buffer, each through `f(src_row, dst_row)`, in parallel on
-/// scoped OS threads. Not rayon: maps are built inside a `OnceLock` while rayon renders tiles,
-/// and a rayon worker that stole another tile here would block on that same lock (deadlock).
+/// scoped OS threads. Not rayon: maps can be built from inside a rayon tile, where a waiting
+/// worker steals other tiles. Map builds no longer block on each other (#276), but the blur
+/// keeps out of the tile pool.
 fn rows_par(src: &[f32], dst: &mut [f32], w: usize, f: impl Fn(&[f32], &mut [f32]) + Sync) {
     if w == 0 {
         return;

@@ -112,6 +112,9 @@ fn tabs_in(
     mut paint_tab: impl FnMut(&Ui, Rect, usize, std::sync::Arc<egui::Galley>, &Response, bool),
 ) -> StripOut {
     let t = Tokens::get(ui.ctx());
+    // Panel names are English keys; draw them in the UI language.
+    let names: Vec<&str> = tabs.iter().map(|n| tl!(n)).collect();
+    let tabs = names.as_slice();
     let natural: Vec<f32> = tabs.iter().map(|n| ui.painter().layout_no_wrap((*n).to_owned(), font.clone(), t.text).size().x + pad).collect();
     let f = fit(&natural, *selected, area.width(), min_w, CHEVRON_W);
     let mut x = area.left();
@@ -139,8 +142,8 @@ fn tabs_in(
             ui.painter().rect_filled(r.shrink2(vec2(1.0, 3.0)), t.radius_sm, t.hover.gamma_multiply(0.6));
         }
         crate::icons::paint(ui, r, "chevrons-right", 12.0, if resp.hovered() { t.text } else { t.text_dim });
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "More panels"));
-        let resp = resp.on_hover_text("More panels");
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("More panels")));
+        let resp = resp.on_hover_text(tl!("More panels"));
         egui::Popup::menu(&resp).show(|ui| {
             ui.set_min_width(140.0);
             for &i in &f.overflow {

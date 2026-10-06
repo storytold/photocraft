@@ -79,27 +79,30 @@ pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) ->
     match key {
         "sizes" => {
             let (flat, layered) = document_sizes(doc);
-            format!("Doc: {}/{}", fmt_bytes(flat), fmt_bytes(layered))
+            crate::i18n::fmt(tl!("Doc: {flat}/{layered}"), &[("flat", &fmt_bytes(flat)), ("layered", &fmt_bytes(layered))])
         }
         "profile" => format!("{profile} ({bits}bpc)"),
         "measurementScale" => "1 pixel = 1.0000 pixels".into(),
         "scratch" => {
             let (_, layered) = document_sizes(doc);
-            format!("Scratch: {}", fmt_bytes(layered))
+            crate::i18n::fmt(tl!("Scratch: {size}"), &[("size", &fmt_bytes(layered))])
         }
-        "efficiency" => "Efficiency: 100%".into(),
+        "efficiency" => tl!("Efficiency: 100%").into(),
         "tool" => tool.to_string(),
         "layers" => {
             let n = doc.layer_count();
-            format!("{n} {}", if n == 1 { "Layer" } else { "Layers" })
+            crate::i18n::trn(crate::i18n::current(), n as u64, "{n} Layer", "{n} Layers")
         }
-        _ => format!("{} px x {} px ({} ppi)", doc.size.width, doc.size.height, widgets::fmt_num(doc.resolution_dpi as f64)),
+        _ => crate::i18n::fmt(
+            tl!("{w} px x {h} px ({ppi} ppi)"),
+            &[("w", &doc.size.width.to_string()), ("h", &doc.size.height.to_string()), ("ppi", &widgets::fmt_num(doc.resolution_dpi as f64))],
+        ),
     }
 }
 
 fn profile_name(doc: &Document) -> String {
     if doc.icc_profile.is_none() {
-        return format!("Untagged {}", crate::canvas::mode_label(doc));
+        return crate::i18n::fmt(tl!("Untagged {mode}"), &[("mode", tl!(&crate::canvas::mode_label(doc)))]);
     }
     photocraft_engine::color_cmds::document_profile(doc).description.clone()
 }
@@ -108,23 +111,23 @@ fn profile_name(doc: &Document) -> String {
 pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (Some(st), Some(i)) = (app.session.active(), app.session.active_index()) else {
-        ui.label(RichText::new("No document").color(t.text_dim));
+        ui.label(RichText::new(tl!("No document")).color(t.text_dim));
         return;
     };
-    let text = status_info_text(&st.doc, &app.ui.chrome.status_info, app.ui.tool.label(), &profile_name(&st.doc));
+    let text = status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc));
     let mut pct = app.ui.views[i].zoom * 100.0;
     if widgets::value_field(ui, &mut pct, 1.0..=3200.0, "%", 64.0).changed() {
         app.ui.views[i].zoom = pct / 100.0;
         app.ui.views[i].fit_pending = false;
     }
     ui.add_space(12.0);
-    ui.label(RichText::new(text).color(t.text_dim).size(12.0));
+    ui.label(RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
     icons::paint(ui, r, "chevron-right", 11.0, t.text_dim);
-    let resp = resp.on_hover_text("Show");
+    let resp = resp.on_hover_text(tl!("Show"));
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(200.0);
         for (key, label) in STATUS_INFO {
@@ -151,7 +154,7 @@ pub fn home_button(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let on = app.ui.chrome.shows_home(n, auto);
     // With no documents and auto-show on, Home can't be dismissed (there's nothing behind it).
     let can_toggle = n > 0 || !auto;
-    if icons::button(ui, "house", 26.0, on && can_toggle, "Home").clicked() && can_toggle {
+    if icons::button(ui, "house", 26.0, on && can_toggle, tl!("Home")).clicked() && can_toggle {
         app.ui.chrome.home = if on { None } else { Some(n) };
     }
 }

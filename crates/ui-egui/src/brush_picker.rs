@@ -94,7 +94,7 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) -
     ui.set_width(WIDTH);
     // Size: value field plus a logarithmic slider (small sizes get most of the travel).
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Size").color(t.text_dim));
+        ui.label(RichText::new(tl!("Size")).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut size = b.size;
             if widgets::value_field(ui, &mut size, 1.0..=5000.0, "px", 72.0).changed() {
@@ -117,7 +117,7 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) -
     ui.horizontal(|ui| {
         icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
         ui.add_space(20.0);
-        ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Search Brushes").desired_width(WIDTH - 90.0).id_salt("brush-picker-search"));
+        ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text(tl!("Search Brushes")).desired_width(WIDTH - 90.0).id_salt("brush-picker-search"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if named(icons::button(ui, "square-plus", 24.0, false, "Create new brush preset from the current settings"), "New Brush Preset").clicked() {
                 pick = Some(Pick::NewPreset);
@@ -157,7 +157,7 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) -
             ui.add_space(3.0);
         }
         if presets.is_empty() {
-            ui.label(RichText::new("No brush presets").color(t.text_faint));
+            ui.label(RichText::new(tl!("No brush presets")).color(t.text_faint));
         }
     });
     ui.data_mut(|d| d.insert_temp(view_id(), view));

@@ -352,10 +352,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         // Left: effect list.
         ui.vertical(|ui| {
             ui.set_width(190.0);
-            ui.label(RichText::new("Styles").color(t.text_faint));
+            ui.label(RichText::new(tl!("Styles")).color(t.text_faint));
             // Blending Options page (layer blend mode, opacity and fill opacity).
-            let bo =
-                ui.add(egui::Label::new(RichText::new("Blending Options").color(if selected == BLENDING { t.text } else { t.text_dim })).sense(Sense::click()));
+            let bo = ui.add(
+                egui::Label::new(RichText::new(tl!("Blending Options")).color(if selected == BLENDING { t.text } else { t.text_dim })).sense(Sense::click()),
+            );
             if bo.clicked() {
                 f.insert("selected".into(), json!(BLENDING));
             }
@@ -382,7 +383,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.painter().text(
                     rect.left_center() + vec2(28.0, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    label,
+                    tl!(label),
                     egui::FontId::proportional(12.5),
                     if on || is_sel { t.text } else { t.text_dim },
                 );
@@ -401,7 +402,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.vertical(|ui| {
             ui.set_width(330.0);
             let label = KINDS.iter().find(|k| k.0 == selected).map(|k| k.1).unwrap_or(if selected == BLENDING { "Blending Options" } else { "" });
-            ui.label(RichText::new(label).font(crate::theme::semibold(14.0)).color(t.text));
+            ui.label(RichText::new(tl!(&label)).font(crate::theme::semibold(14.0)).color(t.text));
             ui.add_space(6.0);
             let pkey = format!("p:{selected}");
             let mut p = f.get(&pkey).cloned().unwrap_or_else(|| defaults(&selected));
@@ -415,7 +416,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     }
                     P::Color => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(label).color(t.text_dim));
+                            ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                             let hexs = p.get(key).and_then(Value::as_str).unwrap_or("#000000").to_string();
                             let mut c = parse_hex(&hexs);
                             if ui.color_edit_button_srgba(&mut c).changed() {
@@ -425,7 +426,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     }
                     P::Blend => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(label).color(t.text_dim));
+                            ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                             let mut cur = p.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                             let opts: Vec<(String, &str)> =
                                 photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
@@ -436,7 +437,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     }
                     P::Choice(options) => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(label).color(t.text_dim));
+                            ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                             let mut cur = p.get(key).and_then(Value::as_str).unwrap_or(options[0].0).to_string();
                             let opts: Vec<(String, &str)> = options.iter().map(|(v, l)| (v.to_string(), *l)).collect();
                             if widgets::dropdown(ui, &format!("fx-{selected}-{key}"), &mut cur, &opts, 150.0) {
@@ -451,7 +452,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             .map(|a| a.iter().filter_map(|e| Some((e.get(0)?.as_str()?.to_string(), e.get(1)?.as_str()?.to_string()))).collect())
                             .unwrap_or_default();
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(label).color(t.text_dim));
+                            ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                             let mut cur = p
                                 .get(key)
                                 .and_then(Value::as_str)

@@ -44,7 +44,7 @@ pub struct PresetUi {
 
 impl PresetUi {
     pub fn shape(&self) -> &str {
-        if self.custom_shape.is_empty() { "Heart" } else { &self.custom_shape }
+        if self.custom_shape.is_empty() { tl!("Heart") } else { &self.custom_shape }
     }
 }
 
@@ -258,7 +258,7 @@ fn browser(
     if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
         let mut done = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Name:").color(t.text_dim).size(11.5));
+            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
             let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
@@ -301,11 +301,11 @@ fn browser(
                 }
             }
             hresp.context_menu(|ui| {
-                if ui.button("Rename Group…").clicked() {
+                if ui.button(tl!("Rename Group…")).clicked() {
                     st.renaming = Some((panel.to_string(), format!("group:{}", g.name), g.name.clone()));
                     ui.close();
                 }
-                if ui.button("Delete Group").clicked() {
+                if ui.button(tl!("Delete Group")).clicked() {
                     ev.push(Ev::DeleteGroup(g.name.clone()));
                     ui.close();
                 }
@@ -373,15 +373,15 @@ fn browser(
                     dropped = Some((it.key.clone(), pp));
                 }
                 resp.context_menu(|ui| {
-                    if ui.button("Rename…").clicked() {
+                    if ui.button(tl!("Rename…")).clicked() {
                         st.renaming = Some((panel.to_string(), it.key.clone(), it.name.clone()));
                         ui.close();
                     }
-                    if ui.button("Delete").clicked() {
+                    if ui.button(tl!("Delete")).clicked() {
                         ev.push(Ev::Delete(it.key.clone()));
                         ui.close();
                     }
-                    ui.menu_button("Move to", |ui| {
+                    ui.menu_button(tl!("Move to"), |ui| {
                         for gname in group_names.iter().filter(|n| **n != g.name) {
                             if ui.button(gname).clicked() {
                                 ev.push(Ev::Move(it.key.clone(), gname.clone()));
@@ -405,12 +405,12 @@ fn browser(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut s = size;
-        ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false)).on_hover_text("Thumbnail size (smallest: list)");
+        ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false)).on_hover_text(tl!("Thumbnail size (smallest: list)"));
         if (s - size).abs() > 0.01 {
             st.sizes.insert(panel.to_string(), s);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 24.0, false, "Delete").clicked()
+            if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
                 && let Some(k) = selected.clone()
             {
                 ev.push(Ev::Delete(k));
@@ -418,7 +418,7 @@ fn browser(
             if crate::icons::button(ui, "plus", 24.0, false, new_tip).clicked() {
                 ev.push(Ev::New);
             }
-            if crate::icons::button(ui, "folder-plus", 24.0, false, "Create new group").clicked() {
+            if crate::icons::button(ui, "folder-plus", 24.0, false, tl!("Create new group")).clicked() {
                 ev.push(Ev::NewGroup);
             }
         });
@@ -495,7 +495,7 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let canvas = app.last_canvas_rect;
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
-    let events = browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: "Create new gradient" }, &mut |ui, r, gi, ii| {
+    let events = browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient") }, &mut |ui, r, gi, ii| {
         let stops = groups_src[gi].items[ii].resolve(fg, bg);
         paint_gradient(ui, r, &stops);
     });
@@ -543,10 +543,11 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 280.0);
     let ctx = ui.ctx().clone();
-    let events = browser(ui, &mut st, "patterns", &groups, Place { canvas, max_h, new_tip: "Create new pattern from the selection" }, &mut |ui, r, gi, ii| {
-        let tex = pattern_texture(&ctx, &pats[gi][ii]);
-        ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-    });
+    let events =
+        browser(ui, &mut st, "patterns", &groups, Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection") }, &mut |ui, r, gi, ii| {
+            let tex = pattern_texture(&ctx, &pats[gi][ii]);
+            ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        });
     app.ui.presets_ui = st;
     for e in events {
         match &e {
@@ -595,9 +596,9 @@ fn float_window(
             ui.set_width(width);
             // Photoshop-style tab header with a close box.
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(title).color(t.text).size(12.0).strong());
+                ui.label(egui::RichText::new(tl!(&title)).color(t.text).size(12.0).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::icons::button(ui, "x", 20.0, false, "Close").clicked() {
+                    if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                         close = true;
                     }
                 });
@@ -612,16 +613,16 @@ fn float_window(
 /// Draws the open floating panels (Styles, Shapes, Tool Presets, Clone Source).
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let p = app.ui.presets_ui.clone();
-    if p.styles && float_window(app, ctx, "styles", "Styles", 250.0, 0.0, styles_panel) {
+    if p.styles && float_window(app, ctx, "styles", tl!("Styles"), 250.0, 0.0, styles_panel) {
         app.ui.presets_ui.styles = false;
     }
-    if p.shapes && float_window(app, ctx, "shapes", "Shapes", 250.0, 280.0, shapes_panel) {
+    if p.shapes && float_window(app, ctx, "shapes", tl!("Shapes"), 250.0, 280.0, shapes_panel) {
         app.ui.presets_ui.shapes = false;
     }
-    if p.tool_presets && float_window(app, ctx, "toolPresets", "Tool Presets", 250.0, 560.0, tool_presets_panel) {
+    if p.tool_presets && float_window(app, ctx, "toolPresets", tl!("Tool Presets"), 250.0, 560.0, tool_presets_panel) {
         app.ui.presets_ui.tool_presets = false;
     }
-    if p.clone_source && float_window(app, ctx, "cloneSource", "Clone Source", 270.0, 840.0, clone_source_panel) {
+    if p.clone_source && float_window(app, ctx, "cloneSource", tl!("Clone Source"), 270.0, 840.0, clone_source_panel) {
         app.ui.presets_ui.clone_source = false;
     }
 }
@@ -642,11 +643,17 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for g in &src {
         texes.push(g.items.iter().map(|s| style_texture(app, &ctx, s)).collect());
     }
-    let events =
-        browser(ui, &mut st, "styles", &groups, Place { canvas, max_h: 300.0, new_tip: "Create new style from the selected layer" }, &mut |ui, r, gi, ii| {
+    let events = browser(
+        ui,
+        &mut st,
+        "styles",
+        &groups,
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer") },
+        &mut |ui, r, gi, ii| {
             ui.painter().rect_filled(r, 2.0, t.field);
             ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-        });
+        },
+    );
     app.ui.presets_ui = st;
     let shift = ui.input(|i| i.modifiers.shift);
     for e in events {
@@ -680,11 +687,17 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
-    let events =
-        browser(ui, &mut st, "shapes", &groups, Place { canvas, max_h: 300.0, new_tip: "Create new shape from the current path" }, &mut |ui, r, gi, ii| {
+    let events = browser(
+        ui,
+        &mut st,
+        "shapes",
+        &groups,
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path") },
+        &mut |ui, r, gi, ii| {
             let tex = shape_texture(&ctx, &src[gi].items[ii]);
             ui.painter().image(tex.id(), r.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
-        });
+        },
+    );
     app.ui.presets_ui = st;
     let fill = shape_fill(app);
     for e in events {
@@ -724,7 +737,7 @@ fn shape_fill(app: &PhotocraftApp) -> Value {
 /// Options-bar shape picker for the Custom Shape tool.
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new("Shape:").color(t.text_dim).size(12.0));
+    ui.label(egui::RichText::new(tl!("Shape:")).color(t.text_dim).size(12.0));
     let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
     let cur = app.ui.presets_ui.shape().to_string();
     let ctx = ui.ctx().clone();
@@ -824,7 +837,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Rename field.
     if let Some((_, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Name:").color(t.text_dim).size(11.5));
+            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
             let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
@@ -842,7 +855,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().id_salt("tool-presets").max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         if items.is_empty() {
-            empty(ui, if only { "No presets for the current tool." } else { "No tool presets." });
+            empty(ui, if only { tl!("No presets for the current tool.") } else { tl!("No tool presets.") });
         }
         for (name, tool) in &items {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
@@ -858,11 +871,11 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 pick = Some(name.clone());
             }
             resp.context_menu(|ui| {
-                if ui.button("Rename Tool Preset…").clicked() {
+                if ui.button(tl!("Rename Tool Preset…")).clicked() {
                     app.ui.presets_ui.renaming = Some(("toolPresets".into(), name.clone(), name.clone()));
                     ui.close();
                 }
-                if ui.button("Delete Tool Preset").clicked() {
+                if ui.button(tl!("Delete Tool Preset")).clicked() {
                     action = Some(("tool.presets.edit".into(), json!({"action": "delete", "preset": name})));
                     ui.close();
                 }
@@ -872,14 +885,14 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        crate::widgets::checkbox(ui, &mut app.ui.presets_ui.current_tool_only, "Current Tool Only");
+        crate::widgets::checkbox(ui, &mut app.ui.presets_ui.current_tool_only, tl!("Current Tool Only"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 24.0, false, "Delete tool preset").clicked()
+            if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete tool preset")).clicked()
                 && let Some(n) = selected.clone()
             {
                 action = Some(("tool.presets.edit".into(), json!({"action": "delete", "preset": n})));
             }
-            if crate::icons::button(ui, "plus", 24.0, false, "Create new tool preset").clicked() {
+            if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new tool preset")).clicked() {
                 let label = cur.label().to_string();
                 let opts = json!({"toolOptions": serde_json::to_value(&app.ui.tool_options).unwrap_or_default()});
                 action = Some(("tool.presets.new".into(), json!({"name": label, "tool": tool_id(cur), "options": opts})));
@@ -916,7 +929,10 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let set = cs.slots[i].source.is_some();
             let tip = match cs.slots[i].source {
                 Some(s) => format!("Clone source {}: {:.0}, {:.0}", i + 1, s[0], s[1]),
-                None => format!("Clone source {} ({}-click with Clone Stamp to set)", i + 1, crate::shortcuts::pretty("Alt")),
+                None => crate::i18n::fmt(
+                    tl!("Clone source {n} ({key}-click with Clone Stamp to set)"),
+                    &[("n", &(i + 1).to_string()), ("key", &crate::shortcuts::pretty("Alt"))],
+                ),
             };
             let r = crate::icons::button(ui, "stamp", 30.0, cs.active == i, &tip);
             if set {
@@ -933,7 +949,7 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         match (slot.source, slot.layer.and_then(|l| app.session.active().and_then(|d| d.doc.layer(photocraft_doc::LayerId(l)).map(|x| x.name.clone())))) {
             (Some(_), Some(l)) => format!("Source: {} : {l}", app.session.active().map(|d| d.doc.name.clone()).unwrap_or_default()),
             (Some(_), None) => "Source: set".to_string(),
-            _ => format!("Source: not set ({}-click with Clone Stamp)", crate::shortcuts::pretty("Alt")),
+            _ => crate::i18n::fmt(tl!("Source: not set ({key}-click with Clone Stamp)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
         };
     ui.label(egui::RichText::new(src_line).color(t.text_dim).size(11.0));
     ui.add_space(4.0);
@@ -968,15 +984,15 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             action = Some(json!({"rotation": rot}));
         }
         ui.horizontal(|ui| {
-            if crate::icons::button(ui, "arrow-left-right", 22.0, slot.flip_h, "Flip Horizontal").clicked() {
+            if crate::icons::button(ui, "arrow-left-right", 22.0, slot.flip_h, tl!("Flip Horizontal")).clicked() {
                 action = Some(json!({"flipH": !slot.flip_h}));
             }
-            if crate::icons::button(ui, "rotate-cw", 22.0, false, "Reset Transform").clicked() {
+            if crate::icons::button(ui, "rotate-cw", 22.0, false, tl!("Reset Transform")).clicked() {
                 run(app, "cloneSource.resetTransform", json!({}));
             }
         });
         ui.horizontal(|ui| {
-            if crate::icons::button(ui, "scaling", 22.0, slot.flip_v, "Flip Vertical").clicked() {
+            if crate::icons::button(ui, "scaling", 22.0, slot.flip_v, tl!("Flip Vertical")).clicked() {
                 action = Some(json!({"flipV": !slot.flip_v}));
             }
         });
@@ -991,20 +1007,24 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Overlay options.
     let mut o = cs.overlay.clone();
     let before = o.clone();
-    crate::widgets::checkbox(ui, &mut o.show, "Show Overlay");
+    crate::widgets::checkbox(ui, &mut o.show, tl!("Show Overlay"));
     ui.horizontal(|ui| {
         ui.add_space(18.0);
-        ui.label(egui::RichText::new("Opacity:").color(t.text_dim).size(11.5));
+        ui.label(egui::RichText::new(tl!("Opacity:")).color(t.text_dim).size(11.5));
         crate::widgets::value_field(ui, &mut o.opacity, 0.0..=100.0, "%", 56.0);
-        let opts =
-            [("normal".to_string(), "Normal"), ("darken".to_string(), "Darken"), ("lighten".to_string(), "Lighten"), ("difference".to_string(), "Difference")];
+        let opts = [
+            ("normal".to_string(), tl!("Normal")),
+            ("darken".to_string(), tl!("Darken")),
+            ("lighten".to_string(), tl!("Lighten")),
+            ("difference".to_string(), tl!("Difference")),
+        ];
         crate::widgets::dropdown(ui, "clone-overlay-mode", &mut o.blend, &opts, 90.0);
     });
     ui.horizontal(|ui| {
         ui.add_space(18.0);
-        crate::widgets::checkbox(ui, &mut o.clipped, "Clipped");
-        crate::widgets::checkbox(ui, &mut o.auto_hide, "Auto Hide");
-        crate::widgets::checkbox(ui, &mut o.invert, "Invert");
+        crate::widgets::checkbox(ui, &mut o.clipped, tl!("Clipped"));
+        crate::widgets::checkbox(ui, &mut o.auto_hide, tl!("Auto Hide"));
+        crate::widgets::checkbox(ui, &mut o.invert, tl!("Invert"));
     });
     if o != before {
         run(

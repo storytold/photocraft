@@ -132,3 +132,78 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     h.run_steps(2);
     assert!(h.state().ui.dialogs.is_empty());
 }
+
+/// Type tool (#206): Alt+←/→ at a collapsed caret kerns the pair before it by 20/1000 em (100
+/// with ⌘/Ctrl), one history step per press; ⌘/Ctrl+←/→ moves by word; Alt+Shift+→ extends
+/// the selection by a word.
+#[test]
+fn type_tool_alt_arrows_kern_the_pair() {
+    use photocraft_doc::text::Kerning;
+    let mut h = harness();
+    let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "AVA To", "size": 40, "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
+    let text = |h: &Harness<'static, PhotocraftApp>| {
+        let st = h.state().session.active().unwrap();
+        match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => t.clone(),
+            _ => panic!("not text"),
+        }
+    };
+    let kern = |h: &Harness<'static, PhotocraftApp>| {
+        let t = text(h);
+        let r = t.char_runs();
+        (r[0].style.kerning, r[0].style.kern, r.len())
+    };
+    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries().len();
+    let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
+    h.state_mut().ui.text_edit =
+        Some(crate::state::TextEdit { layer: id, caret: 1, anchor: 1, session: "kern-test".into(), created: false, dragging: false, preedit: None });
+    h.run_steps(2);
+    let s0 = steps(&h);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(kern(&h).0, Kerning::Off);
+    assert_eq!(kern(&h).1, metric + 20.0);
+    h.key_press_modifiers(Modifiers::ALT | Modifiers::COMMAND, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(kern(&h).1, metric + 120.0);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(kern(&h).1, metric + 100.0);
+    assert_eq!(steps(&h), s0 + 3, "one history step per press");
+    // The caret didn't move; ⌘/Ctrl+→ moves by word, Alt+Shift+→ selects by word.
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.caret, e.anchor)), Some((1, 1)));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.caret, e.anchor)), Some((3, 3)));
+    h.key_press_modifiers(Modifiers::ALT | Modifiers::SHIFT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.anchor, e.caret)), Some((3, 6)));
+    // With a selection Alt+→ moves by word instead of kerning; at the text end there's no pair.
+    let before = kern(&h);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(kern(&h), before);
+    assert_eq!(steps(&h), s0 + 3);
+    // Undo walks back one press at a time.
+    assert!(h.state_mut().session.undo());
+    h.run_steps(1);
+    assert_eq!(kern(&h).1, metric + 120.0);
+}
+
+/// The Character panel's kerning field reads and parses Photoshop's values.
+#[test]
+fn kerning_field_values() {
+    use photocraft_doc::text::Kerning;
+    assert_eq!(crate::type_tool::kerning_label((Kerning::Metrics, 0.0)), "Metrics");
+    assert_eq!(crate::type_tool::kerning_label((Kerning::Optical, 0.0)), "Optical");
+    assert_eq!(crate::type_tool::kerning_label((Kerning::Off, 0.0)), "0");
+    assert_eq!(crate::type_tool::kerning_label((Kerning::Off, -49.6)), "-50");
+    for (s, v) in [("metrics", Some(json!("metrics"))), (" Optical ", Some(json!("optical"))), ("120", Some(json!(120.0))), ("-25.4", Some(json!(-25.0)))] {
+        assert_eq!(crate::type_tool::parse_kerning(s), v, "{s}");
+    }
+    for s in ["", "tight", "1e9", "-5000", "NaN", "inf"] {
+        assert_eq!(crate::type_tool::parse_kerning(s), None, "{s}");
+    }
+}

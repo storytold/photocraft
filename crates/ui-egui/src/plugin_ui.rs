@@ -13,7 +13,7 @@ const PREFIX: &str = "plugin.filter.";
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
     let plugins = photocraft_plugins::registry::list();
     let Some(at) = items.iter().position(|i| i.id == "plugin.install") else { return };
-    let path: Vec<String> = vec!["Filter".into(), "Plug-ins".into()];
+    let path: Vec<String> = vec![tl!("Filter").into(), tl!("Plug-ins").into()];
     let enabled = app.session.is_enabled("plugin.run");
     let mut extra: Vec<MenuItem> = plugins
         .iter()
