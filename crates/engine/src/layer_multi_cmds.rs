@@ -664,21 +664,18 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
 
 /// The visible ones of `layers`, composited as they look in `doc`, as one raster layer named
 /// `name` (the document's mode, with transparency). `none_visible` is the error when every one
-/// of them is hidden.
+/// of them is hidden. Rendered and written in bands, so no full-size float composite is held
+/// (a 36 MP document needed two of them, about 1.15 GB).
 fn composite_layer(doc: &Document, layers: Vec<Layer>, name: String, none_visible: &str) -> Result<Layer> {
     let mut solo = doc.clone();
     solo.layers = layers.into_iter().filter(|l| l.visible).collect();
     if solo.layers.is_empty() {
         return Err(EngineError::Other(none_visible.into()));
     }
-    let buf = photocraft_compose::flatten(&solo);
     let fmt = doc.pixel_format();
     let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-    let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
     let mut layer = Layer::raster(name, fmt);
-    let surf = crate::pixels_mut(&mut layer)?;
-    surf.write_region(doc.bounds(), &data);
-    surf.prune();
+    *crate::pixels_mut(&mut layer)? = photocraft_compose::flatten_to_surface(&solo, fmt, None);
     Ok(layer)
 }
 
