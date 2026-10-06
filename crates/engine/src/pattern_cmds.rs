@@ -15,7 +15,7 @@ use photocraft_doc::{Color, Document, Fill, Layer, LayerContent, Pattern, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, layer_param};
+use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 /// The app-level pattern library (Window › Patterns).
@@ -313,50 +313,6 @@ fn new_fill_layer(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     Ok(json!({"layer": id.0, "pattern": pat.id}))
-}
-
-/// Edit › Fill with `"contents": "pattern"`: tiles the pattern over the selection (or the whole
-/// target), composited at `opacity` (Normal), respecting transparency locks.
-pub fn fill_with_pattern(s: &mut Session, p: &Value) -> Result<Value> {
-    let pat = resolve_param(s, "edit.fill", p)?;
-    let (scale, angle, _, phase) = placement(p);
-    let opacity = (p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32 / 100.0).clamp(0.0, 1.0);
-    let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_param(s, p)?) };
-    let tile = photocraft_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("edit.fill", "the pattern is empty"))?;
-    s.edit("Fill", |doc, _| {
-        let sel = doc.selection.clone();
-        let area = sel.as_ref().map(|m| m.content_bounds()).unwrap_or(doc.bounds());
-        // Photoshop's Fill uses the canvas origin.
-        let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
-        let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
-        let fmt = surf.format();
-        let n = fmt.channels();
-        let mut region = surf.read_region(area);
-        let src = photocraft_compose::pattern::render(&tile, &place, area);
-        let w = area.width() as usize;
-        for (i, (px, c)) in region.chunks_exact_mut(n).zip(&src).enumerate() {
-            let k = sel.as_ref().map_or(1.0, |m| m.sample_channel(area.x0 + (i % w) as i32, area.y0 + (i / w) as i32, 0)) * opacity;
-            if k <= 0.0 {
-                continue;
-            }
-            let d = photocraft_raster::to_rgba(&fmt, px);
-            let sa = c[3] * k;
-            let oa = sa + d[3] * (1.0 - sa);
-            let mut o = [0.0f32; 4];
-            if oa > 0.0 {
-                for ch in 0..3 {
-                    o[ch] = (c[ch] * sa + d[ch] * d[3] * (1.0 - sa)) / oa;
-                }
-            }
-            o[3] = if lock || !fmt.alpha { d[3] } else { oa };
-            let mut enc = [0.0f32; 8];
-            photocraft_raster::from_rgba_into(&fmt, o, &mut enc);
-            px.copy_from_slice(&enc[..n]);
-        }
-        surf.write_region(area, &region);
-        Ok(())
-    })?;
-    Ok(json!({"pattern": pat.id}))
 }
 
 fn brush_texture(s: &mut Session, p: &Value) -> Result<Value> {

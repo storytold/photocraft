@@ -224,7 +224,17 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
-    let r = f(p, "radius", 1.0).max(0.0);
+    // The dialogs' ranges (Photoshop's limits); anything else is refused, never clamped silently.
+    let max = match op {
+        "border" => 200.0,
+        "feather" => 1000.0,
+        _ => 500.0,
+    };
+    let r = f(p, "radius", 1.0);
+    if !r.is_finite() || r > max {
+        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: format!("radius must be a number in 0..{max}") });
+    }
+    let r = r.max(0.0);
     let (area, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
     let (w, h) = (area.width() as usize, area.height() as usize);
     let out = match op {
@@ -512,6 +522,13 @@ mod tests {
         s.execute("select.modify.smooth", json!({"radius": 2})).unwrap();
         assert!(s.active().unwrap().doc.selection.is_some());
         assert!(!s.is_enabled("select.nothing"));
+        // Out-of-range or non-finite radii are refused and leave the selection alone.
+        for op in ["feather", "smooth", "expand", "contract", "border"] {
+            for r in [json!(1e300), json!(5000), json!(f64::MAX)] {
+                assert!(s.execute(&format!("select.modify.{op}"), json!({"radius": r})).is_err(), "{op} {r}");
+            }
+        }
+        assert!(s.active().unwrap().doc.selection.is_some());
     }
 
     #[test]

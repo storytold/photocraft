@@ -110,6 +110,14 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
             buf
         });
     }
+    // Effect maps are built once, here, before any tile needs them (#276).
+    prepare_effects(&doc.layers, rect, cx, |f| {
+        photocraft_color::convert::with_cmyk_space(cmyk, || {
+            psblend::LAB_MIX.with(|l| l.set(lab));
+            f();
+            psblend::LAB_MIX.with(|l| l.set(false));
+        });
+    });
     let run = |t: Rect| {
         photocraft_color::convert::with_cmyk_space(cmyk, || {
             let mut b = multichannel::backdrop(doc, t);
@@ -260,6 +268,7 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
             mode: photocraft_color::ColorMode::Rgb,
             depth: photocraft_color::SampleType::F32,
             vector_masks: RenderVectorMasks::default(),
+            fx_maps: Default::default(),
         },
     );
     buf
@@ -427,6 +436,9 @@ struct Ctx<'a> {
     mode: photocraft_color::ColorMode,
     depth: photocraft_color::SampleType,
     vector_masks: RenderVectorMasks,
+    /// Effect maps used by this render, by cache key: built before the parallel tiles (see
+    /// [`prepare_effects`]) and held for the whole render, so eviction can't force a rebuild.
+    fx_maps: std::sync::Mutex<std::collections::HashMap<u64, std::sync::Arc<effects::FxMaps>>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -439,6 +451,54 @@ impl<'a> Ctx<'a> {
             mode: doc.mode,
             depth: doc.depth,
             vector_masks: RenderVectorMasks::default(),
+            fx_maps: Default::default(),
+        }
+    }
+}
+
+/// Deepest group nesting [`prepare_effects`] walks (deeper layers build their maps on demand).
+const PREPARE_DEPTH: u32 = 64;
+
+/// Build the effect maps of every visible layer in `layers` (groups included) that can reach
+/// `rect` before tiles render in parallel, layers concurrently on native targets, each build
+/// inside `setting` (the tiles' thread-local colour setting). Tiles then only read finished maps:
+/// none builds one while others need it (#276), and none duplicates another's build. Builds never
+/// wait on each other (`cached_effect_maps`), so building them in parallel can't deadlock.
+fn prepare_effects(layers: &[Layer], rect: Rect, cx: &Ctx, setting: impl Fn(&mut dyn FnMut()) + Sync) {
+    let mut todo = Vec::new();
+    effect_layers(layers, rect, 0, &mut todo);
+    let build = |l: &&Layer| {
+        setting(&mut || {
+            let _ = effect_maps(l, cx);
+        });
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if todo.len() > 1 {
+        use rayon::prelude::*;
+        todo.par_iter().for_each(build);
+        return;
+    }
+    todo.iter().for_each(build);
+}
+
+/// The visible layers of `layers` (groups included) with effects that can reach `rect`.
+fn effect_layers<'l>(layers: &'l [Layer], rect: Rect, depth: u32, out: &mut Vec<&'l Layer>) {
+    let mut base_visible = true;
+    for l in layers {
+        if !l.clipped {
+            base_visible = l.visible;
+        }
+        // A clipping group is drawn only when its base is.
+        if !l.visible || !base_visible {
+            continue;
+        }
+        if effects::has_effects(l) && !empty_in(l, rect) {
+            out.push(l);
+        }
+        if let LayerContent::Group(g) = &l.content
+            && depth < PREPARE_DEPTH
+        {
+            effect_layers(&g.children, rect, depth + 1, out);
         }
     }
 }
@@ -1204,8 +1264,8 @@ struct FxEntry {
     bytes: usize,
 }
 
-/// Global cache of effect maps (bounded by bytes). Tiles rendered in parallel share one build per
-/// layer state via a per-key `OnceLock`.
+/// Global cache of effect maps (bounded by bytes), one slot per layer state. Slots are filled
+/// with `set`, never `get_or_init`: nothing may block on a build (see `cached_effect_maps`).
 type FxSlot = std::sync::Arc<std::sync::OnceLock<FxEntry>>;
 struct FxCache {
     map: std::collections::HashMap<u64, FxSlot>,
@@ -1263,6 +1323,22 @@ fn effect_maps(layer: &Layer, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     let key = h.finish();
+    // Prepared for this render (see `prepare_effects`): no global lookup, no build.
+    if let Some(m) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return m.clone();
+    }
+    let maps = cached_effect_maps(layer, region, key, cx);
+    cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert(maps).clone()
+}
+
+/// The layer's effect maps from the global cache, built on a miss.
+///
+/// Never waits for another thread's build (#276): this can run on a Rayon worker inside a tile,
+/// and the build itself runs Rayon work. A worker waiting on that work may steal another tile of
+/// the same layer; had it blocked on a once-init held further up its own stack, it would deadlock.
+/// Instead a miss builds the maps here and the first finished build is kept. Renders build every
+/// layer's maps before their parallel tiles (`prepare_effects`), so tiles rarely miss.
+fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     let slot = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = c.map.get(&key) {
@@ -1274,15 +1350,25 @@ fn effect_maps(layer: &Layer, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
             s
         }
     };
-    let entry = slot.get_or_init(|| {
-        let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
-        let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
-        let bytes = maps.bytes();
-        // Counted exactly once, when the entry is built.
-        fx_cache().lock().unwrap_or_else(|e| e.into_inner()).bytes += bytes;
-        FxEntry { maps: std::sync::Arc::new(maps), _pin: layer.clone(), bytes }
-    });
-    let maps = entry.maps.clone();
+    let maps = match slot.get() {
+        Some(e) => e.maps.clone(),
+        None => {
+            let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
+            let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
+            let bytes = maps.bytes();
+            let maps = std::sync::Arc::new(maps);
+            if slot.set(FxEntry { maps: maps.clone(), _pin: layer.clone(), bytes }).is_ok() {
+                // Counted exactly once, by the build that filled the slot, and only while the
+                // slot is still cached (eviction may have dropped it meanwhile).
+                let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+                if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, &slot)) {
+                    c.bytes += bytes;
+                }
+            }
+            // A concurrent build that finished first wins, so every tile shares one map.
+            slot.get().map_or(maps, |e| e.maps.clone())
+        }
+    };
     // Evict the oldest entries over budget (never the one just used).
     let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
     let budget = effect_cache_budget();

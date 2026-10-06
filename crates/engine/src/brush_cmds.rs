@@ -222,15 +222,35 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
         let mut brush = brush;
         erase_locked(&mut brush, lock, bg);
         if auto_erase {
-            // Pencil Auto Erase: starting on foreground-coloured pixels paints the background colour.
-            let c = surf.rgba(pts[0].x.floor() as i32, pts[0].y.floor() as i32);
-            if c[3] > 0.0 && (0..3).all(|i| (c[i] - fg[i]).abs() < 1.5 / 255.0) {
-                brush.color = bg;
-            }
+            apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
         }
         Ok(render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom))
     })?;
     Ok(damage_json(s, dmg))
+}
+
+/// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
+/// background colour instead (Photoshop).
+fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
+    let Some(p0) = start else { return };
+    let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
+    if c[3] > 0.0 && (0..3).all(|i| (c[i] - fg[i]).abs() < 1.5 / 255.0) {
+        brush.color = bg;
+    }
+}
+
+/// The Pencil's brush: the session brush made aliased (every pixel fully painted or untouched,
+/// dabs on the pixel grid), hard and at full flow, with the options-bar mode.
+fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
+    let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
+    brush.aliased = true;
+    if num(p, "hardness").is_none() {
+        brush.hardness = 1.0;
+    }
+    if num(p, "flow").is_none() {
+        brush.flow = 1.0;
+    }
+    Ok(brush)
 }
 
 /// Applies the options-bar blend `mode` to a brush. `"mode"` accepts any blend-mode name
@@ -273,15 +293,29 @@ pub struct LiveStroke {
 impl LiveStroke {
     /// Start from `paint.stroke` params; their `points` are rendered.
     pub fn begin(s: &Session, p: &Value) -> Result<Self> {
+        Self::begin_with(s, "paint.stroke", p)
+    }
+
+    /// Start a live stroke of `cmd`: `paint.stroke` (the Brush and Eraser) or `paint.pencil`.
+    /// Committing `cmd` with the same params and `"seed": live.seed` gives the same pixels.
+    pub fn begin_with(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
         has_paintable(s).map_err(EngineError::Other)?;
-        let pts = parse_points(p, "paint.stroke")?;
-        let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
-        let seed = brush.seed;
+        let pts = parse_points(p, cmd)?;
+        let pencil = match cmd {
+            "paint.stroke" => false,
+            "paint.pencil" => true,
+            other => return Err(bad(other, "live strokes are `paint.stroke` or `paint.pencil`")),
+        };
+        let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
+        let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         erase_locked(&mut brush, lock, s.tools.background);
+        if pencil && flag(p, "autoErase", false) {
+            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
+        }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let pre = surf.clone();
         let mut live = Self { doc: std::sync::Arc::new(doc), seed, renderer, pre, sel, lock, layer, params: p.clone(), tail: Rect::EMPTY };
@@ -320,11 +354,7 @@ impl LiveStroke {
 
 fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.pencil")?;
-    let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
-    brush.aliased = true;
-    if num(p, "hardness").is_none() {
-        brush.hardness = 1.0;
-    }
+    let brush = pencil_brush(s, p)?;
     let label = if brush.erase { "Eraser" } else { "Pencil" };
     stroke_with(s, p, label, brush, pts, flag(p, "autoErase", false))
 }

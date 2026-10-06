@@ -239,6 +239,50 @@ jobs:
           path: dist/release/*.flatpak
           if-no-files-found: error
 
+  freebsd:
+    name: FreeBSD x86_64
+    needs: version
+    # GitHub has no FreeBSD runners: build in a FreeBSD 14.3 VM, the same image and packages as
+    # .github/workflows/freebsd.yml.
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
+    env:
+      PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and package in a FreeBSD VM (tar.gz)
+        # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc
+        with:
+          release: "14.3"
+          usesh: true
+          cpu: 4
+          mem: 12288
+          # Passed into the VM by name; never templated into the script below.
+          envs: "PHOTOCRAFT_VERSION PHOTOCRAFT_BUILD_DATE PHOTOCRAFT_BUILD_SHA INPUT_VERSION"
+          # The FreeBSD CI packages, plus bash for the packaging script.
+          prepare: |
+            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            git config --global --add safe.directory "$PWD"
+            # Build outside the checkout so only dist/ is copied back out of the VM (copying the
+            # target dir back fails on large builds). 4 jobs: more runs the VM out of memory.
+            export CARGO_TARGET_DIR=/var/tmp/photocraft-target CARGO_BUILD_JOBS=4
+            if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$PHOTOCRAFT_VERSION"; fi
+            bash packaging/freebsd/package.sh
+            tar -tzf dist/release/photocraft-*-freebsd-x86_64.tar.gz \
+              | grep -E '/bin/photocraft$|/bin/photocraft-cli$|/share/applications/ai\.storyteller\.photocraft\.desktop$|/share/doc/photocraft/LICENSE-MIT$'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-freebsd-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+
   web:
     name: Web (wasm)
     needs: version
@@ -274,7 +318,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, flatpak, web]
+    needs: [version, macos, windows, linux, flatpak, freebsd, web]
     runs-on: ubuntu-latest
     environment: release
     permissions:

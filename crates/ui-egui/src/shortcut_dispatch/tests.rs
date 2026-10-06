@@ -265,6 +265,8 @@ fn common_shortcuts_work_after_clicking_panels() {
             h.run_steps(2);
         }
         if !text {
+            // From another group (B again would cycle to the Pencil).
+            h.state_mut().ui.tool = Tool::Move;
             press(&mut h, "B");
             assert_eq!(h.state().ui.tool, Tool::Brush, "{place:?}: B picks the Brush");
             press(&mut h, "V");

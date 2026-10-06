@@ -23,7 +23,7 @@ fn default_dir(app: &PhotocraftApp) -> String {
 }
 
 fn doc_stem(app: &PhotocraftApp) -> String {
-    app.session.active().map(|d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string())).unwrap_or_else(|| "Untitled".into())
+    app.session.active().map(|d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string())).unwrap_or_else(|| tl!("Untitled").into())
 }
 
 /// A generic form dialog for `command` (rendered by `view_cmds::form_body`).
@@ -63,7 +63,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         "file.automate.contactSheetII" => form(
             app,
             id,
-            "Contact Sheet II",
+            tl!("Contact Sheet II"),
             json!({"input": dir, "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false}),
             json!({"units": ["inches", "cm", "pixels"], "mode": ["rgb", "gray", "cmyk", "lab"]}),
         ),
@@ -78,7 +78,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             form(
                 app,
                 id,
-                "Create Droplet",
+                tl!("Create Droplet"),
                 json!({"path": format!("{dir}/{name}.pcdroplet"), "name": name, "steps": steps, "output": format!("{dir}/droplet-output"), "format": "same"}),
                 json!({"format": ["same", "png", "jpg", "psd", "tiff"]}),
             )
@@ -141,9 +141,9 @@ pub fn dialog_width(f: &Map<String, Value>) -> Option<f32> {
 
 pub fn ok_label(f: &Map<String, Value>) -> Option<&'static str> {
     if f.contains_key("__web") {
-        Some("Save…")
+        Some(tl!("Save…"))
     } else if f.contains_key("__print") {
-        Some("Print")
+        Some(tl!("Print"))
     } else {
         None
     }
@@ -332,7 +332,7 @@ fn check(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, 
 fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>, unit: &str, d: f64) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
         let mut v = n(f, key, d) as f32;
         crate::widgets::value_field(ui, &mut v, range, unit, 64.0);
         f.insert(key.into(), json!(v.round()));
@@ -344,8 +344,8 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     ui.horizontal(|ui| {
         let mut view = s(f, "__view", "2up");
-        for (k, l) in [("original", "Original"), ("optimized", "Optimized"), ("2up", "2-Up"), ("4up", "4-Up")] {
-            if ui.selectable_label(view == k, l).clicked() {
+        for (k, l) in [("original", tl!("Original")), ("optimized", tl!("Optimized")), ("2up", "2-Up"), ("4up", "4-Up")] {
+            if ui.selectable_label(view == k, tl!(&l)).clicked() {
                 view = k.into();
             }
         }
@@ -386,7 +386,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         // Settings.
         ui.vertical(|ui| {
             ui.set_width(250.0);
-            ui.label(egui::RichText::new("Preset").color(t.text_dim));
+            ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
             let mut preset = s(f, "__preset", "");
             let mut opts: Vec<(String, &str)> = vec![("".into(), "[Unnamed]")];
             opts.extend(web_cmds::PRESETS.iter().map(|p| (p.to_string(), *p)));
@@ -408,45 +408,52 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         f,
                         "palette",
                         &[
-                            ("perceptual", "Perceptual"),
-                            ("selective", "Selective"),
-                            ("adaptive", "Adaptive"),
-                            ("restrictive", "Restrictive (Web)"),
-                            ("exact", "Exact"),
+                            ("perceptual", tl!("Perceptual")),
+                            ("selective", tl!("Selective")),
+                            ("adaptive", tl!("Adaptive")),
+                            ("restrictive", tl!("Restrictive (Web)")),
+                            ("exact", tl!("Exact")),
                         ],
                         150.0,
                     );
-                    number(ui, f, "colors", "Colors", 2.0..=256.0, "", 128.0);
+                    number(ui, f, "colors", tl!("Colors"), 2.0..=256.0, "", 128.0);
                     dropdown_str(
                         ui,
                         "web-dither",
                         f,
                         "dither",
-                        &[("none", "No Dither"), ("diffusion", "Diffusion"), ("pattern", "Pattern"), ("noise", "Noise")],
+                        &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern")), ("noise", tl!("Noise"))],
                         150.0,
                     );
-                    number(ui, f, "ditherAmount", "Dither", 0.0..=100.0, "%", 88.0);
-                    check(ui, f, "transparency", "Transparency", true);
-                    check(ui, f, "interlaced", "Interlaced", false);
-                    number(ui, f, "webSnap", "Web Snap", 0.0..=100.0, "%", 0.0);
+                    number(ui, f, "ditherAmount", tl!("Dither"), 0.0..=100.0, "%", 88.0);
+                    check(ui, f, "transparency", tl!("Transparency"), true);
+                    check(ui, f, "interlaced", tl!("Interlaced"), false);
+                    number(ui, f, "webSnap", tl!("Web Snap"), 0.0..=100.0, "%", 0.0);
                 }
                 "jpeg" => {
-                    number(ui, f, "quality", "Quality", 0.0..=100.0, "", 60.0);
-                    check(ui, f, "progressive", "Progressive", false);
-                    check(ui, f, "optimized", "Optimized", true);
-                    check(ui, f, "embedIcc", "Embed Color Profile", false);
+                    number(ui, f, "quality", tl!("Quality"), 0.0..=100.0, "", 60.0);
+                    check(ui, f, "progressive", tl!("Progressive"), false);
+                    check(ui, f, "optimized", tl!("Optimized"), true);
+                    check(ui, f, "embedIcc", tl!("Embed Color Profile"), false);
                 }
                 "wbmp" => {
-                    dropdown_str(ui, "web-dither", f, "dither", &[("none", "No Dither"), ("diffusion", "Diffusion"), ("pattern", "Pattern")], 150.0);
+                    dropdown_str(
+                        ui,
+                        "web-dither",
+                        f,
+                        "dither",
+                        &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern"))],
+                        150.0,
+                    );
                 }
                 _ => {
-                    check(ui, f, "transparency", "Transparency", true);
-                    check(ui, f, "interlaced", "Interlaced", false);
+                    check(ui, f, "transparency", tl!("Transparency"), true);
+                    check(ui, f, "interlaced", tl!("Interlaced"), false);
                 }
             }
             if fmt != "png24" || !b(f, "transparency", true) {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Matte").color(t.text_dim));
+                    ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
                     let mut m = s(f, "matte", "#ffffff");
                     if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).changed() {
                         f.insert("matte".into(), json!(m));
@@ -454,21 +461,21 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 });
             }
             ui.add_space(6.0);
-            check(ui, f, "convertToSrgb", "Convert to sRGB", true);
+            check(ui, f, "convertToSrgb", tl!("Convert to sRGB"), true);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Metadata").color(t.text_dim));
+                ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
                 dropdown_str(
                     ui,
                     "web-meta",
                     f,
                     "metadata",
-                    &[("none", "None"), ("copyright", "Copyright"), ("copyrightAndContact", "Copyright and Contact Info"), ("all", "All")],
+                    &[("none", tl!("None")), ("copyright", tl!("Copyright")), ("copyrightAndContact", tl!("Copyright and Contact Info")), ("all", tl!("All"))],
                     160.0,
                 );
             });
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Image Size").font(crate::theme::semibold(12.0)).color(t.text));
-            number(ui, f, "percent", "Percent", 1.0..=1000.0, "%", 100.0);
+            ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
+            number(ui, f, "percent", tl!("Percent"), 1.0..=1000.0, "%", 100.0);
             let pct = n(f, "percent", 100.0) / 100.0;
             ui.label(
                 egui::RichText::new(format!("W: {} px   H: {} px", (f64::from(doc.size.width) * pct).round(), (f64::from(doc.size.height) * pct).round()))
@@ -479,8 +486,8 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             if !doc.slices.is_empty() {
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(format!("{nslices} slices")).color(t.text_dim));
-                check(ui, f, "html", "Save HTML and Images", true);
-                dropdown_str(ui, "web-slices", f, "slices", &[("all", "All Slices"), ("user", "All User Slices")], 150.0);
+                check(ui, f, "html", tl!("Save HTML and Images"), true);
+                dropdown_str(ui, "web-slices", f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
             }
         });
     });
@@ -614,30 +621,30 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(s).font(crate::theme::semibold(12.0)).color(t.text));
             };
-            head(ui, "Printer Setup");
+            head(ui, tl!("Printer Setup"));
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Printer").color(t.text_dim));
+                ui.label(egui::RichText::new(tl!("Printer")).color(t.text_dim));
                 let mut pr = s(f, "printer", "");
-                if ui.add(egui::TextEdit::singleline(&mut pr).hint_text("Default printer").desired_width(180.0)).changed() {
+                if ui.add(egui::TextEdit::singleline(&mut pr).hint_text(tl!("Default printer")).desired_width(180.0)).changed() {
                     f.insert("printer".into(), json!(pr));
                 }
             });
-            number(ui, f, "copies", "Copies", 1.0..=999.0, "", 1.0);
+            number(ui, f, "copies", tl!("Copies"), 1.0..=999.0, "", 1.0);
             ui.horizontal(|ui| {
                 let papers: Vec<(&str, &str)> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0, p.0)).collect();
                 dropdown_str(ui, "print-paper", f, "paper", &papers, 110.0);
-                dropdown_str(ui, "print-orient", f, "orientation", &[("portrait", "Portrait"), ("landscape", "Landscape")], 110.0);
+                dropdown_str(ui, "print-orient", f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
             });
-            head(ui, "Color Management");
+            head(ui, tl!("Color Management"));
             dropdown_str(
                 ui,
                 "print-color",
                 f,
                 "colorHandling",
                 &[
-                    ("printerManages", "Printer Manages Colors"),
-                    ("photocraftManages", "PhotoCraft Manages Colors"),
-                    ("noColorManagement", "No Color Management"),
+                    ("printerManages", tl!("Printer Manages Colors")),
+                    ("photocraftManages", tl!("PhotoCraft Manages Colors")),
+                    ("noColorManagement", tl!("No Color Management")),
                 ],
                 240.0,
             );
@@ -648,11 +655,11 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     f,
                     "printerProfile",
                     &[
-                        ("coated-cmyk", "Coated CMYK"),
+                        ("coated-cmyk", tl!("Coated CMYK")),
                         ("srgb", "sRGB IEC61966-2.1"),
-                        ("adobe-rgb-compat", "Adobe RGB (1998) compatible"),
-                        ("display-p3", "Display P3"),
-                        ("gray-gamma-2.2", "Gray Gamma 2.2"),
+                        ("adobe-rgb-compat", tl!("Adobe RGB (1998) compatible")),
+                        ("display-p3", tl!("Display P3")),
+                        ("gray-gamma-2.2", tl!("Gray Gamma 2.2")),
                     ],
                     240.0,
                 );
@@ -663,41 +670,41 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                         f,
                         "intent",
                         &[
-                            ("perceptual", "Perceptual"),
-                            ("relative", "Relative Colorimetric"),
-                            ("saturation", "Saturation"),
-                            ("absolute", "Absolute Colorimetric"),
+                            ("perceptual", tl!("Perceptual")),
+                            ("relative", tl!("Relative Colorimetric")),
+                            ("saturation", tl!("Saturation")),
+                            ("absolute", tl!("Absolute Colorimetric")),
                         ],
                         170.0,
                     );
-                    check(ui, f, "bpc", "Black Point Compensation", true);
+                    check(ui, f, "bpc", tl!("Black Point Compensation"), true);
                 });
             }
-            head(ui, "Position and Size");
-            check(ui, f, "center", "Center", true);
+            head(ui, tl!("Position and Size"));
+            check(ui, f, "center", tl!("Center"), true);
             if !b(f, "center", true) {
                 ui.horizontal(|ui| {
-                    number(ui, f, "top", "Top", 0.0..=100.0, "in", 0.0);
-                    number(ui, f, "left", "Left", 0.0..=100.0, "in", 0.0);
+                    number(ui, f, "top", tl!("Top"), 0.0..=100.0, "in", 0.0);
+                    number(ui, f, "left", tl!("Left"), 0.0..=100.0, "in", 0.0);
                 });
             }
-            check(ui, f, "scaleToFit", "Scale to Fit Media", false);
+            check(ui, f, "scaleToFit", tl!("Scale to Fit Media"), false);
             if !b(f, "scaleToFit", false) {
-                number(ui, f, "scale", "Scale", 1.0..=1000.0, "%", 100.0);
+                number(ui, f, "scale", tl!("Scale"), 1.0..=1000.0, "%", 100.0);
             }
-            head(ui, "Printing Marks");
+            head(ui, tl!("Printing Marks"));
             ui.horizontal(|ui| {
-                check(ui, f, "cornerCropMarks", "Corner Crop Marks", false);
-                check(ui, f, "centerCropMarks", "Center Crop Marks", false);
+                check(ui, f, "cornerCropMarks", tl!("Corner Crop Marks"), false);
+                check(ui, f, "centerCropMarks", tl!("Center Crop Marks"), false);
             });
             ui.horizontal(|ui| {
-                check(ui, f, "registrationMarks", "Registration Marks", false);
-                check(ui, f, "description", "Description", false);
-                check(ui, f, "labels", "Labels", false);
+                check(ui, f, "registrationMarks", tl!("Registration Marks"), false);
+                check(ui, f, "description", tl!("Description"), false);
+                check(ui, f, "labels", tl!("Labels"), false);
             });
-            head(ui, "Save as PDF");
+            head(ui, tl!("Save as PDF"));
             let mut out = s(f, "output", "");
-            if ui.add(egui::TextEdit::singleline(&mut out).hint_text("(print to the printer)").desired_width(300.0)).changed() {
+            if ui.add(egui::TextEdit::singleline(&mut out).hint_text(tl!("(print to the printer)")).desired_width(300.0)).changed() {
                 f.insert("output".into(), json!(out));
             }
         });

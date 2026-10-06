@@ -142,7 +142,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.spacing_mut().item_spacing.x = 18.0;
         for (name, _) in CATEGORIES {
             let on = cat == *name;
-            let r = ui.add(egui::Label::new(RichText::new(*name).size(13.0).color(if on { t.text } else { t.text_dim })).sense(Sense::click()));
+            let r = ui.add(egui::Label::new(RichText::new(tl!(name)).size(13.0).color(if on { t.text } else { t.text_dim })).sense(Sense::click()));
             if on {
                 ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(2.0, t.text));
             }
@@ -160,7 +160,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         // Left: preset grid.
         ui.vertical(|ui| {
             ui.set_width(520.0);
-            ui.label(RichText::new(format!("BLANK DOCUMENT PRESETS ({})", presets.len())).size(11.0).color(t.text_faint));
+            ui.label(RichText::new(crate::i18n::fmt(tl!("BLANK DOCUMENT PRESETS ({n})"), &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
             ui.add_space(6.0);
             let card = vec2(164.0, 112.0);
             for row in presets.chunks(3) {
@@ -184,7 +184,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             ui.painter().rect_stroke(r, t.radius, Stroke::new(1.5, t.accent), StrokeKind::Inside);
                         }
                         page_icon(ui, Rect::from_center_size(pos2(r.center().x, r.top() + 34.0), vec2(40.0, 40.0)), p.1, p.2, &t);
-                        ui.painter().text(pos2(r.center().x, r.top() + 72.0), Align2::CENTER_CENTER, p.0, egui::FontId::proportional(12.0), t.text);
+                        ui.painter().text(pos2(r.center().x, r.top() + 72.0), Align2::CENTER_CENTER, tl!(p.0), egui::FontId::proportional(12.0), t.text);
                         let unit = if p.3 >= 300.0 { "in" } else { "px" };
                         let size = if unit == "in" {
                             format!(
@@ -209,16 +209,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         // Right: Preset Details.
         ui.vertical(|ui| {
             ui.set_width(260.0);
-            ui.label(RichText::new("PRESET DETAILS").size(11.0).color(t.text_faint));
+            ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
             ui.add_space(4.0);
-            let mut name = get_s(f, "name", "Untitled-1");
+            let mut name = get_s(f, "name", tl!("Untitled-1"));
             if ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).changed() {
                 f.insert("name".into(), json!(name));
             }
             ui.add_space(8.0);
             let ppi = get_f(f, "resolution", 72.0);
             let mut unit = get_s(f, "__unit", "px");
-            small_label(ui, "Width");
+            small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
                 let mut w = to_unit(get_f(f, "width", 1920.0), &unit, ppi);
                 if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
@@ -230,7 +230,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     f.insert("__unit".into(), json!(unit));
                 }
             });
-            small_label(ui, "Height");
+            small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
                 let mut h = to_unit(get_f(f, "height", 1080.0), &unit, ppi);
                 if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
@@ -238,7 +238,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     f.remove("__preset");
                 }
                 ui.add_space(6.0);
-                small_label(ui, "Orientation");
+                small_label(ui, tl!("Orientation"));
                 let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
                 for (icon, portrait) in [("rectangle-vertical", true), ("rectangle-horizontal", false)] {
                     if icons::button(ui, icon, 24.0, (h > w) == portrait, if portrait { "Portrait" } else { "Landscape" }).clicked() && (h > w) != portrait {
@@ -248,7 +248,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 }
             });
             ui.add_space(4.0);
-            small_label(ui, "Resolution");
+            small_label(ui, tl!("Resolution"));
             ui.horizontal(|ui| {
                 let per_cm = get_s(f, "__resUnit", "in") == "cm";
                 let mut r = if per_cm { ppi / 2.54 } else { ppi };
@@ -256,12 +256,13 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     f.insert("resolution".into(), json!(if per_cm { r * 2.54 } else { r }));
                 }
                 let mut ru = get_s(f, "__resUnit", "in");
-                if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), "Pixels/Inch"), ("cm".to_string(), "Pixels/Centimeter")], 120.0) {
+                if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0)
+                {
                     f.insert("__resUnit".into(), json!(ru));
                 }
             });
             ui.add_space(4.0);
-            small_label(ui, "Color Mode");
+            small_label(ui, tl!("Color Mode"));
             ui.horizontal(|ui| {
                 let mut mode = get_s(f, "mode", "rgb");
                 if widgets::dropdown(
@@ -269,10 +270,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     "nd-mode",
                     &mut mode,
                     &[
-                        ("gray".to_string(), "Grayscale"),
-                        ("rgb".to_string(), "RGB Color"),
-                        ("cmyk".to_string(), "CMYK Color"),
-                        ("lab".to_string(), "Lab Color"),
+                        ("gray".to_string(), tl!("Grayscale")),
+                        ("rgb".to_string(), tl!("RGB Color")),
+                        ("cmyk".to_string(), tl!("CMYK Color")),
+                        ("lab".to_string(), tl!("Lab Color")),
                     ],
                     110.0,
                 ) {
@@ -284,13 +285,13 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 }
             });
             ui.add_space(4.0);
-            small_label(ui, "Background Contents");
+            small_label(ui, tl!("Background Contents"));
             let mut bg = get_s(f, "background", "white");
             let opts = [
-                ("white".to_string(), "White"),
-                ("black".to_string(), "Black"),
-                ("backgroundColor".to_string(), "Background Color"),
-                ("transparent".to_string(), "Transparent"),
+                ("white".to_string(), tl!("White")),
+                ("black".to_string(), tl!("Black")),
+                ("backgroundColor".to_string(), tl!("Background Color")),
+                ("transparent".to_string(), tl!("Transparent")),
             ];
             if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, 240.0) {
                 f.insert("background".into(), json!(bg));

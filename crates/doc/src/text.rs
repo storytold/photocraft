@@ -18,9 +18,9 @@ pub enum Kerning {
     /// Font kerning (`kern` feature).
     #[default]
     Metrics,
-    /// Photoshop's optical kerning; rendered like `Metrics` for now.
+    /// Photoshop's optical kerning: pair spacing computed from the glyph outlines.
     Optical,
-    /// No kerning.
+    /// No automatic kerning (Photoshop's "0" / manual kerning).
     Off,
 }
 
@@ -73,7 +73,11 @@ pub struct CharStyle {
     pub strikethrough: bool,
     pub faux_bold: bool,
     pub faux_italic: bool,
+    /// Automatic (pair) kerning mode.
     pub kerning: Kerning,
+    /// Manual kerning in 1/1000 em between this character and the next one (Photoshop stores it
+    /// per character run as `Kerning`). Added to the automatic kerning of the pair.
+    pub kern: f32,
     pub caps: Caps,
     /// Standard ligatures (`liga`/`clig`).
     pub ligatures: bool,
@@ -111,6 +115,7 @@ impl Default for CharStyle {
             faux_bold: false,
             faux_italic: false,
             kerning: Kerning::Metrics,
+            kern: 0.0,
             caps: Caps::Normal,
             ligatures: true,
             discretionary_ligatures: false,

@@ -207,7 +207,7 @@ fn channel_picker(ui: &mut egui::Ui, id: egui::Id, label: &str) -> usize {
     let mut ch: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
     ui.horizontal(|ui| {
         let t = Tokens::get(ui.ctx());
-        ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
+        ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
         let opts: Vec<(usize, &str)> = CHANNELS.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
         crate::widgets::dropdown(ui, &format!("{id:?}-ch"), &mut ch, &opts, 110.0);
     });
@@ -223,7 +223,7 @@ fn channel_picker(ui: &mut egui::Ui, id: egui::Id, label: &str) -> usize {
 pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
-        ui.label(egui::RichText::new("No document").color(t.text_faint));
+        ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
         return;
     };
     let (doc_id, rev) = (st.doc.id, st.revision);
@@ -275,11 +275,11 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     egui::Grid::new("hist-stats").num_columns(2).spacing(vec2(12.0, 2.0)).show(ui, |ui| {
         for (k, v) in [
-            ("Mean:", format!("{mean:.2}")),
-            ("Std Dev:", format!("{:.2}", var.sqrt())),
-            ("Median:", median.unwrap_or(0).to_string()),
-            ("Pixels:", (size.width as u64 * size.height as u64).to_string()),
-            ("Cache Level:", level.to_string()),
+            (tl!("Mean:"), format!("{mean:.2}")),
+            (tl!("Std Dev:"), format!("{:.2}", var.sqrt())),
+            (tl!("Median:"), median.unwrap_or(0).to_string()),
+            (tl!("Pixels:"), (size.width as u64 * size.height as u64).to_string()),
+            (tl!("Cache Level:"), level.to_string()),
         ] {
             ui.label(egui::RichText::new(k).color(t.text_dim).size(11.5));
             ui.label(egui::RichText::new(v).font(crate::theme::mono(11.5)).color(t.text));

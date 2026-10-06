@@ -119,7 +119,7 @@ pub fn indicators(
     let has_fx = !l.effects.items.is_empty();
     let show_blend = l.blend != BlendMode::Normal && l.blend != BlendMode::PassThrough;
     let fx_galley = has_fx.then(|| painter.layout_no_wrap("fx".into(), fx_font, t.text_dim));
-    let blend_galley = show_blend.then(|| painter.layout_no_wrap(l.blend.label().into(), blend_font, t.text_faint));
+    let blend_galley = show_blend.then(|| painter.layout_no_wrap(tl!(l.blend.label()).into(), blend_font, t.text_faint));
     let mut items = Vec::new();
     if locked {
         items.push((Indicator::Lock, ICON_W));
@@ -159,12 +159,13 @@ pub fn indicators(
                     let all = ui.input(|i| i.modifiers.alt);
                     actions.push(("layer.setEffectsExpanded".into(), json!({"layer": l.id.0, "expanded": !fx_open, "all": all})));
                 }
-                let (verb, name) = (if fx_open { "Collapse" } else { "Expand" }, l.name.clone());
-                let resp = resp.on_hover_text(format!(
-                    "{} the layer's effects  ({}-click: all layers)",
-                    if fx_open { "Hide" } else { "Show" },
-                    crate::shortcuts::pretty("Alt")
-                ));
+                let (verb, name) = (if fx_open { tl!("Collapse") } else { tl!("Expand") }, l.name.clone());
+                let tip = if fx_open {
+                    tl!("Hide the layer's effects  ({key}-click: all layers)")
+                } else {
+                    tl!("Show the layer's effects  ({key}-click: all layers)")
+                };
+                let resp = resp.on_hover_text(crate::i18n::fmt(tip, &[("key", &crate::shortcuts::pretty("Alt"))]));
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{verb} effects {name}")));
             }
         }
@@ -195,7 +196,7 @@ pub fn label(painter: &Painter, x: f32, cy: f32, right: f32, text: &str, font: F
 /// The Layers panel's own items at the top of its panel menu (Photoshop's flyout).
 pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     let can = app.session.is_enabled("layer.setExpanded");
-    if ui.add_enabled(can, egui::Button::new("Collapse All Groups")).clicked() {
+    if ui.add_enabled(can, egui::Button::new(tl!("Collapse All Groups"))).clicked() {
         if let Err(e) = app.run("layer.setExpanded", json!({"all": true, "expanded": false})) {
             app.ui.status = e;
             app.ui.status_error = true;

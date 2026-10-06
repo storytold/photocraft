@@ -58,15 +58,17 @@ pub fn shortcut_label(app: &PhotocraftApp, command: &str) -> Option<String> {
     effective_shortcut(app, command, default_shortcut(command).as_deref()).map(|s| pretty(&s))
 }
 
-/// `label` followed by the command's effective shortcut (`New document…     Ctrl+N`); bare
-/// `label` when the binding was removed.
+/// `label` (English, shown in the UI language) followed by the command's effective shortcut
+/// (`New document…     Ctrl+N`); bare `label` when the binding was removed.
 pub fn command_label(app: &PhotocraftApp, label: &str, command: &str) -> String {
+    let label = tl!(label);
     shortcut_label(app, command).map_or_else(|| label.to_string(), |sc| format!("{label}     {sc}"))
 }
 
-/// `label` with the command's effective shortcut in parentheses (`Rulers  (Ctrl+R)`); bare
-/// `label` when the binding was removed.
+/// `label` (English, shown in the UI language) with the command's effective shortcut in
+/// parentheses (`Rulers  (Ctrl+R)`); bare `label` when the binding was removed.
 pub fn tip_label(app: &PhotocraftApp, label: &str, command: &str) -> String {
+    let label = tl!(label);
     shortcut_label(app, command).map_or_else(|| label.to_string(), |sc| format!("{label}  ({sc})"))
 }
 

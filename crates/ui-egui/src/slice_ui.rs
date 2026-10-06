@@ -249,36 +249,36 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let locked = app.session.file_menu.slices_locked;
     let t = crate::theme::Tokens::get(ui.ctx());
     if tool == Tool::Slice {
-        ui.label(egui::RichText::new("Style: Normal").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Style: Normal")).color(t.text_dim));
         crate::widgets::vline(ui, 22.0);
-        if ui.add_enabled_ui(has_doc && !locked, |ui| crate::widgets::secondary_button(ui, "Slices From Guides", 0.0)).inner.clicked() {
+        if ui.add_enabled_ui(has_doc && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Slices From Guides"), 0.0)).inner.clicked() {
             let _ = app.run("slice.fromGuides", json!({}));
         }
     } else {
         let sel = app.ui.slices.selected.is_some();
         let stored =
             sel && app.session.active().is_some_and(|d| slices::resolve(&d.doc).iter().any(|r| Some(r.number) == app.ui.slices.selected && r.id.is_some()));
-        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, "Promote", 0.0)).inner.clicked() {
+        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Promote"), 0.0)).inner.clicked() {
             let _ = selected_id(app, true).map(|id| app.run("slice.promote", json!({"slice": id})));
         }
-        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, "Divide…", 0.0)).inner.clicked() {
+        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Divide…"), 0.0)).inner.clicked() {
             let _ = open_divide(app);
         }
-        if ui.add_enabled_ui(stored && !locked, |ui| crate::widgets::secondary_button(ui, "Delete", 0.0)).inner.clicked()
+        if ui.add_enabled_ui(stored && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Delete"), 0.0)).inner.clicked()
             && let Some(id) = selected_id(app, false)
             && app.run("slice.delete", json!({"slice": id})).is_ok()
         {
             app.ui.slices.selected = None;
         }
         crate::widgets::vline(ui, 22.0);
-        crate::widgets::checkbox(ui, &mut app.ui.slices.hide_auto, "Hide Auto Slices");
+        crate::widgets::checkbox(ui, &mut app.ui.slices.hide_auto, tl!("Hide Auto Slices"));
         crate::widgets::vline(ui, 22.0);
-        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, "Slice Options…", 0.0)).inner.clicked() {
+        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Slice Options…"), 0.0)).inner.clicked() {
             let _ = open_options(app);
         }
     }
     if locked {
-        ui.label(egui::RichText::new("Slices are locked (View › Lock Slices)").color(t.text_dim).size(11.0));
+        ui.label(egui::RichText::new(tl!("Slices are locked (View › Lock Slices)")).color(t.text_dim).size(11.0));
     }
     true
 }

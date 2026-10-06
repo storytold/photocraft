@@ -1,8 +1,9 @@
 # Releasing PhotoCraft
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
-signed installers for macOS, Windows, Linux and the web, then creates or updates a **draft**
-GitHub Release named `PhotoCraft v<version>`. Nobody sees a draft until a maintainer publishes it.
+signed installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball, then creates
+or updates a **draft** GitHub Release named `PhotoCraft v<version>`. Nobody sees a draft until a
+maintainer publishes it.
 
 This is PhotoCraft's implementation of the shared
 [release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
@@ -52,6 +53,7 @@ in the dialog.
 | Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
 | Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
 | Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
+| FreeBSD 14 x86_64 | `photocraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM on `ubuntu-latest` |
 | Web | `photocraft-web-<v>.zip` (static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
 
 Every binary reports its version, the commit and the build date: `photocraft --version`,
@@ -187,6 +189,34 @@ one is missing, prints the package to install and exits with status 1 instead of
 Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/install/), then
 `packaging/linux/package.sh` (or `--formats "deb tar"`).
 
+### FreeBSD
+
+GitHub has no FreeBSD runners, so the `freebsd` job runs `packaging/freebsd/package.sh` in a
+FreeBSD 14.3 VM (`vmactions/freebsd-vm`, pinned by commit), with the same packages as the
+FreeBSD CI workflow (`.github/workflows/freebsd.yml`) plus `bash`. The script builds both
+binaries with `CARGO_BUILD_JOBS=4` (more runs the 12 GB VM out of memory) and writes
+`photocraft-<v>-freebsd-x86_64.tar.gz`. FreeBSD's `uname -m` says `amd64`; the file name uses
+`x86_64` like the other artifacts. The tarball is a `/usr/local`-style tree: `bin/photocraft`,
+`bin/photocraft-cli`, and under `share/` the same desktop entry, MIME type, AppStream metainfo
+and hicolor icons as Linux, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
+`share/doc/photocraft/`. Users install it with:
+
+```sh
+pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
+tar -xzf photocraft-<v>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+```
+
+The job signs nothing, so it runs outside the `release` environment and gets no secrets. The
+version, build date and commit reach the VM through the action's `envs:` (by name, never
+templated into the script), and the build happens in `/var/tmp` so only `dist/` is copied back
+out of the VM. The binaries aren't signed: FreeBSD has no code-signing scheme for loose
+binaries, so check the tarball against `SHA256SUMS.txt`.
+
+The FreeBSD CI workflow runs the same script after its build and test (on pushes to `main`, and
+on PRs that touch `packaging/freebsd/`, `freebsd.yml` or `release.yml`), so the release job
+isn't the first place it runs. Locally, on any OS, `packaging/freebsd/package.sh --dry-run` stages the tree from stub binaries
+and lists the tarball, which checks the layout without a FreeBSD machine.
+
 ### Web
 
 `packaging/web/package.sh` runs `trunk build --release` (see `apps/photocraft-web/Trunk.toml`)
@@ -200,9 +230,9 @@ caching, the iframe snippet and the `?webgl` / `?cpu` flags.
 ## Secrets
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →
-release*). Restrict its deployment branches to `release`. Every job in `release.yml` declares
-`environment: release`, so only pushes to that branch, or manual runs on it, can read the
-secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
+release*). Restrict its deployment branches to `release`. Every job in `release.yml` that
+signs or publishes declares `environment: release` (the Flatpak and FreeBSD jobs sign nothing
+and don't), so only pushes to that branch, or manual runs on it, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
 the run shows a `::warning::`.
 
 | Secret | Used for |

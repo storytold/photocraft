@@ -30,6 +30,9 @@ pub struct PsdStyleSheets {
     pub para_sheets: Vec<(usize, String, ParagraphStyle, Option<CharStyle>)>,
     /// Per `StyleRun` entry: the character sheet index it refers to, if any.
     pub run_char: Vec<Option<usize>>,
+    /// Per `StyleRun` entry: its length in UTF-8 bytes of the layer text (entries don't map
+    /// one to one to model runs: kerning moves pair data between characters).
+    pub run_char_lens: Vec<usize>,
     /// Per `ParagraphRun` entry: the paragraph sheet index it refers to, if any.
     pub run_para: Vec<Option<usize>>,
 }
@@ -91,6 +94,8 @@ pub fn read_style_sheets(tysh: &[u8], dpi: f32) -> Option<PsdStyleSheets> {
     let pnames = names(res.get("ParagraphSheetSet"));
     if let Some(a) = e.path(&["EngineDict", "StyleRun", "RunArray"]).and_then(E::as_array) {
         out.run_char = a.iter().map(|r| reference(r.get("StyleSheet"), &snames, normal_c)).collect();
+        let ed_text = e.path(&["EngineDict", "Editor", "Text"]).and_then(E::as_str).unwrap_or("");
+        out.run_char_lens = crate::psd::utf16_to_byte_lengths(ed_text, &crate::psd::arr_f(e.path(&["EngineDict", "StyleRun", "RunLengthArray"])));
     }
     if let Some(a) = e.path(&["EngineDict", "ParagraphRun", "RunArray"]).and_then(E::as_array) {
         out.run_para = a.iter().map(|r| reference(r.get("ParagraphSheet"), &pnames, normal_p)).collect();
@@ -168,12 +173,27 @@ pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, d
     let char_ix = |id: Option<u32>| id.and_then(|id| styles.character.iter().position(|d| d.id == id)).map(|i| i as i64 + 1);
     let para_ix = |id: Option<u32>| id.and_then(|id| styles.paragraph.iter().position(|d| d.id == id)).map(|i| i as i64 + 1);
     let runs = layer.char_runs();
+    // Each entry lies inside one model run: find it by the entry's start offset.
+    let ed_text = e.path(&["EngineDict", "Editor", "Text"]).and_then(E::as_str).unwrap_or("").to_string();
+    let entry_lens = crate::psd::utf16_to_byte_lengths(&ed_text, &crate::psd::arr_f(e.path(&["EngineDict", "StyleRun", "RunLengthArray"])));
+    let run_at = |off: usize| {
+        let mut end = 0usize;
+        runs.iter()
+            .find(|r| {
+                end = end.saturating_add(r.len);
+                off < end
+            })
+            .or(runs.last())
+    };
     if let Some(E::Array(a)) = e.get_mut("EngineDict").and_then(|d| d.get_mut("StyleRun")).and_then(|r| r.get_mut("RunArray")) {
+        let mut off = 0usize;
         for (i, r) in a.iter_mut().enumerate() {
+            let start = off;
+            off = off.saturating_add(entry_lens.get(i).copied().unwrap_or(0));
             if let Some(sheet) = r.get_mut("StyleSheet") {
                 remove_key(sheet, "Parent");
                 remove_key(sheet, "Name");
-                if let Some(ix) = char_ix(runs.get(i).and_then(|r| r.style.style_sheet)) {
+                if let Some(ix) = char_ix(run_at(start).and_then(|r| r.style.style_sheet)) {
                     sheet.set("Parent", E::Int(ix));
                 }
             }

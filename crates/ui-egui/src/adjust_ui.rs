@@ -36,7 +36,7 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
     let key = egui::Id::new(("selc-range", id.0));
     let mut range: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0);
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Colors").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Colors")).color(t.text_dim));
         let opts: Vec<(usize, &str)> = RANGE_LABELS.iter().copied().enumerate().collect();
         if widgets::dropdown(ui, &format!("selc-colors-{}", id.0), &mut range, &opts, 150.0) {
             ui.data_mut(|d| d.insert_temp(key, range));
@@ -45,7 +45,7 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
     ui.add_space(4.0);
     let mut live = false;
     let mut commit = false;
-    for (k, label) in ["Cyan", "Magenta", "Yellow", "Black"].iter().enumerate() {
+    for (k, label) in [tl!("Cyan"), tl!("Magenta"), tl!("Yellow"), tl!("Black")].iter().enumerate() {
         let mut v = values[RANGES[range]][k].as_f64().unwrap_or(0.0) as f32;
         let r = widgets::slider_row(ui, label, &mut v, -100.0..=100.0, "%", None);
         if r.changed() {
@@ -59,7 +59,7 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
     ui.add_space(4.0);
     let mut method = values["method"].as_str().unwrap_or("relative").to_string();
     ui.horizontal(|ui| {
-        for (m, label) in [("relative", "Relative"), ("absolute", "Absolute")] {
+        for (m, label) in [("relative", tl!("Relative")), ("absolute", tl!("Absolute"))] {
             if ui.radio(method == m, label).clicked() && method != m {
                 method = m.to_string();
                 values["method"] = json!(m);
@@ -87,7 +87,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let current =
         if lut.is_none() { "none".to_string() } else { builtins.iter().find(|b| b.1 == name).map_or_else(|| "custom".to_string(), |b| b.0.to_string()) };
     let custom_label = format!("{name} ({size}³)");
-    let mut opts: Vec<(String, &str)> = vec![("none".into(), "Load 3D LUT…")];
+    let mut opts: Vec<(String, &str)> = vec![("none".into(), tl!("Load 3D LUT…"))];
     opts.extend(builtins.iter().map(|(id, label)| (id.to_string(), *label)));
     if current == "custom" {
         opts.push(("custom".into(), custom_label.as_str()));
@@ -95,7 +95,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let mut sel = current.clone();
     let mut params: Option<Value> = None;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("3D LUT File").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("3D LUT File")).color(t.text_dim));
         if widgets::dropdown(ui, &format!("clrl-{}", id.0), &mut sel, &opts, 170.0) && sel != current && sel != "custom" {
             params = Some(json!({"lut": sel}));
         }
@@ -108,14 +108,14 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         if r.changed() {
             ui.data_mut(|d| d.insert_temp(path_key, path.clone()));
         }
-        if widgets::secondary_button(ui, "Load", 60.0).clicked() && !path.trim().is_empty() {
+        if widgets::secondary_button(ui, tl!("Load"), 60.0).clicked() && !path.trim().is_empty() {
             params = Some(json!({"file": path.trim()}));
         }
     });
     ui.add_space(4.0);
     let mut tet = *tetrahedral;
     ui.horizontal(|ui| {
-        for (on, label) in [(false, "Trilinear"), (true, "Tetrahedral")] {
+        for (on, label) in [(false, tl!("Trilinear")), (true, tl!("Tetrahedral"))] {
             if ui.radio(tet == on, label).clicked() && tet != on {
                 tet = on;
                 params = Some(json!({"tetrahedral": on}));
@@ -123,7 +123,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         }
     });
     let mut d = *dither;
-    if widgets::toggle(ui, &mut d, "Dither").changed() {
+    if widgets::toggle(ui, &mut d, tl!("Dither")).changed() {
         params = Some(json!({"dither": d}));
     }
     if let Some(mut p) = params {

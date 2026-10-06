@@ -177,7 +177,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         app.distort.puppet = None;
         return Ok(json!({"cancelled": true}));
     }
-    let s = app.distort.puppet.as_mut().ok_or("Puppet Warp is not active")?;
+    let s = app.distort.puppet.as_mut().ok_or(tl!("Puppet Warp is not active"))?;
     let mut remesh = false;
     if let Some(m) = ui.get("mode").and_then(Value::as_str) {
         s.warp.mode = PuppetMode::parse(m).ok_or("mode: rigid|normal|distort")?;
@@ -293,48 +293,48 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut remesh = false;
     let mut resolve = false;
     let mut rebind = false;
-    ui.label("Mode:");
+    ui.label(tl!("Mode:"));
     let mode = s.warp.mode;
     crate::widgets::dropdown(
         ui,
         "puppet-mode",
         &mut s.warp.mode,
-        &[(PuppetMode::Rigid, "Rigid"), (PuppetMode::Normal, "Normal"), (PuppetMode::Distort, "Distort")],
+        &[(PuppetMode::Rigid, tl!("Rigid")), (PuppetMode::Normal, tl!("Normal")), (PuppetMode::Distort, tl!("Distort"))],
         90.0,
     );
     resolve |= mode != s.warp.mode;
-    ui.label("Density:");
+    ui.label(tl!("Density:"));
     let density = s.warp.density;
     crate::widgets::dropdown(
         ui,
         "puppet-density",
         &mut s.warp.density,
-        &[(PuppetDensity::Fewer, "Fewer Points"), (PuppetDensity::Normal, "Normal"), (PuppetDensity::More, "More Points")],
+        &[(PuppetDensity::Fewer, tl!("Fewer Points")), (PuppetDensity::Normal, tl!("Normal")), (PuppetDensity::More, tl!("More Points"))],
         110.0,
     );
     remesh |= density != s.warp.density;
-    ui.label("Expansion:");
+    ui.label(tl!("Expansion:"));
     let mut e = s.warp.expansion as f32;
     if crate::widgets::value_field(ui, &mut e, -50.0..=100.0, "px", 56.0).changed() {
         s.warp.expansion = f64::from(e);
         remesh = true;
     }
-    crate::widgets::checkbox(ui, &mut s.show_mesh, "Show Mesh");
+    crate::widgets::checkbox(ui, &mut s.show_mesh, tl!("Show Mesh"));
     crate::widgets::vline(ui, 22.0);
     if let Some(i) = s.selected.filter(|i| *i < s.warp.pins.len()) {
-        ui.label("Pin Depth:");
-        if ui.small_button("+").on_hover_text("Bring the selected pin forward").clicked() {
+        ui.label(tl!("Pin Depth:"));
+        if ui.small_button("+").on_hover_text(tl!("Bring the selected pin forward")).clicked() {
             s.warp.pins[i].depth += 1;
             resolve = true;
         }
-        if ui.small_button("−").on_hover_text("Send the selected pin backward").clicked() {
+        if ui.small_button("−").on_hover_text(tl!("Send the selected pin backward")).clicked() {
             s.warp.pins[i].depth -= 1;
             resolve = true;
         }
-        ui.label("Rotate:");
+        ui.label(tl!("Rotate:"));
         let mut fixed = s.warp.pins[i].rotate.is_some();
         let was = fixed;
-        crate::widgets::dropdown(ui, "puppet-rotate", &mut fixed, &[(false, "Auto"), (true, "Fixed")], 70.0);
+        crate::widgets::dropdown(ui, "puppet-rotate", &mut fixed, &[(false, tl!("Auto")), (true, tl!("Fixed"))], 70.0);
         if fixed != was {
             s.warp.pins[i].rotate = fixed.then_some(0.0);
             rebind = true;
@@ -348,7 +348,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         crate::widgets::vline(ui, 22.0);
     }
-    if ui.button("Remove All Pins").clicked() {
+    if ui.button(tl!("Remove All Pins")).clicked() {
         s.warp.pins.clear();
         s.selected = None;
         rebind = true;
@@ -361,9 +361,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         s.solve(true);
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if crate::widgets::primary_button(ui, "✓", 32.0).on_hover_text(format!("Commit Puppet Warp ({})", crate::shortcuts::pretty("Enter"))).clicked() {
+        if crate::widgets::primary_button(ui, "✓", 32.0)
+            .on_hover_text(crate::i18n::fmt(tl!("Commit Puppet Warp ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
+            .clicked()
+        {
             commit(app);
-        } else if crate::widgets::secondary_button(ui, "⊘", 32.0).on_hover_text("Cancel (Esc)").clicked() {
+        } else if crate::widgets::secondary_button(ui, "⊘", 32.0).on_hover_text(tl!("Cancel (Esc)")).clicked() {
             app.distort.puppet = None;
         }
     });

@@ -231,6 +231,45 @@ fn vector_fields_roundtrip_and_default_when_absent() {
     assert!(old.layers.iter().all(|l| l.vector_mask.is_none()));
 }
 
+/// Type kerning (#206): the auto mode and manual kerning survive .pcraft; manifests written
+/// before `kern` existed load with no manual kerning.
+#[test]
+fn text_kerning_roundtrips_and_defaults() {
+    use photocraft_doc::LayerContent;
+    use photocraft_doc::text::Kerning;
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let back = load_from_bytes(&bytes).unwrap();
+    let runs = |d: &Document| {
+        d.walk()
+            .into_iter()
+            .find_map(|(_, _, l)| match &l.content {
+                LayerContent::Text(t) => Some(t.runs.iter().map(|r| (r.len, r.style.kerning, r.style.kern)).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(runs(&back), vec![(1, Kerning::Off, 120.0), (5, Kerning::Metrics, 0.0), (9, Kerning::Optical, 0.0)]);
+    assert_eq!(runs(&back), runs(&doc));
+    let m = read_manifest(&bytes).unwrap();
+    let mut v = serde_json::to_value(&m.document).unwrap();
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(o) => {
+                o.remove("kern");
+                o.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut v);
+    assert!(!v.to_string().contains("\"kern\""));
+    let old: photocraft_format::manifest::DocM = serde_json::from_value(v).unwrap();
+    let s = serde_json::to_string(&old).unwrap();
+    assert!(s.contains("\"kern\":0.0"), "kern defaults to 0");
+}
+
 #[test]
 fn channel_restrictions_and_bevel_elements_roundtrip() {
     use photocraft_doc::{Bevel, BevelContour, BevelTexture, Contour, Effect};

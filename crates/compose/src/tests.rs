@@ -1326,3 +1326,69 @@ fn large_documents_thumbnail_from_a_proxy() {
     d.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
     assert!(!proxy::proxy_faithful(&d));
 }
+
+/// Layers whose effect maps are built with nested Rayon work (a gradient fill's rows render in
+/// parallel), each carrying a different effect.
+#[cfg(not(target_arch = "wasm32"))]
+fn nested_parallel_fx_doc() -> Document {
+    use photocraft_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
+    let mut d = doc_white(512, 512);
+    let g = |a: f32| Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(0.2, 0.5, 0.9))], a, 1.0, photocraft_doc::GradientStyle::Linear, false);
+    let mut shadow = Layer::new("shadow", LayerContent::Fill(g(0.0)));
+    shadow.effects.items = vec![Effect::default_drop_shadow()];
+    let mut stroke = Layer::new("stroke", LayerContent::Fill(g(45.0)));
+    stroke.opacity = 0.6;
+    stroke.effects.items = vec![Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        size: 3.0,
+        position: StrokePosition::Inside,
+        paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+    })];
+    let mut glow = Layer::new("glow", LayerContent::Fill(g(90.0)));
+    glow.opacity = 0.5;
+    glow.effects.items = vec![Effect::InnerGlow(Glow {
+        common: FxCommon::new(BlendMode::Screen, 0.75),
+        paint: FxPaint::Color(Color::rgb(1.0, 1.0, 0.7)),
+        technique: GlowTechnique::Softer,
+        spread: 0.0,
+        size: 9.0,
+        contour: Contour::Linear,
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    })];
+    // Unaffected layers whose rows also render in parallel keep both workers stealing.
+    let base = Layer::new("base", LayerContent::Fill(g(30.0)));
+    let mut top = Layer::new("top", LayerContent::Fill(g(60.0)));
+    top.opacity = 0.3;
+    d.layers.extend([base, shadow, stroke, glow, top]);
+    d
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn effect_maps_with_nested_rayon_work_do_not_deadlock() {
+    // #276: a tile building a layer's effect maps inside a once-init ran Rayon work; waiting on
+    // it, its worker stole another tile of the same layer, which then blocked on the init held
+    // further up its own stack. Eight threads (two rarely steal across that wait) and 64 tiles make that stealing likely; the cache is
+    // purged every round so the maps are rebuilt. A watchdog turns a hang into a failure.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(8).build() else { return };
+        let d = nested_parallel_fx_doc();
+        let first = pool.install(|| render_tiled(&d, d.bounds(), 64));
+        for _ in 0..100 {
+            purge_effect_cache();
+            let out = pool.install(|| render_tiled(&d, d.bounds(), 64));
+            assert!(out.px == first.px, "renders differ between rounds");
+        }
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("effect-map rendering deadlocked (#276)"),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("render thread panicked"),
+    }
+}

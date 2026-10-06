@@ -178,15 +178,41 @@ fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
 /// stroke smoothing is the session brush's (the options bar's Smoothing %).
-fn stroke_params(app: &PhotocraftApp, erase: bool, points: &[Vec<f64>]) -> serde_json::Value {
-    json!({ "points": points, "erase": erase, "zoom": app.current_zoom(), "target": paint_target(app) })
+fn stroke_params(app: &PhotocraftApp, tool: Tool, erase: bool, points: &[Vec<f64>]) -> serde_json::Value {
+    let mut p = json!({ "points": points, "erase": erase, "zoom": app.current_zoom(), "target": paint_target(app) });
+    if tool == Tool::Pencil {
+        p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
+    }
+    p
+}
+
+/// Tools whose strokes the engine renders while they are drawn (`LiveStroke`).
+pub(crate) fn strokes_live(tool: Tool) -> bool {
+    matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+}
+
+/// The command a live-stroking tool commits: the Pencil's `paint.pencil`, else `paint.stroke`.
+pub(crate) fn stroke_command(tool: Tool) -> &'static str {
+    if tool == Tool::Pencil { "paint.pencil" } else { "paint.stroke" }
+}
+
+/// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
+/// (`paint::grid_square`), in screen points with its edges on physical pixels (`ppp` = pixels
+/// per point), so it lines up with the pixel grid at any zoom.
+pub(crate) fn pencil_cursor_rect(xf: &ViewXform, doc: [f64; 2], size: f32, ppp: f32) -> Rect {
+    let [x0, y0, x1, y1] = photocraft_engine::paint::grid_square(doc[0], doc[1], size);
+    let r = Rect::from_two_pos(xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32));
+    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    Rect::from_min_max(pos2(snap(r.min.x), snap(r.min.y)), pos2(snap(r.max.x), snap(r.max.y)))
 }
 
 fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
     let d = app.drag.as_ref()?;
-    let stroke = photocraft_engine::brush_cmds::LiveStroke::begin(&app.session, &stroke_params(app, d.erase, &app.stylus.stroke_points(&d.points))).ok()?;
+    let p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
+    let stroke = photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?;
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
     Some(LiveStroke { stroke, doc: st.doc.id, revision: st.revision, key: (1 << 44) | (n << 20), damage, fed: d.points.len() })
@@ -887,7 +913,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let active_layer = st.active_layer.and_then(|id| st.doc.layer(id)).filter(|l| !(l.name == "Background" && l.locks.transparency));
         let is_active_doc = app.session.active_index() == Some(i);
         let mask = is_active_doc && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
-        let model = if mask { "Layer Mask".to_string() } else { mode_label(&st.doc).to_string() };
+        let model = if mask { tl!("Layer Mask").to_string() } else { mode_label(&st.doc).to_string() };
         let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
         let title = format!("{} @ {}% ({layer}{model}/{}){}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" });
         let g = ui.painter().layout_no_wrap(title, egui::FontId::proportional(11.5), t.text);
@@ -985,7 +1011,7 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
-                let title = ui.painter().layout_no_wrap("PhotoCraft".into(), crate::theme::semibold(38.0), t.text);
+                let title = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(38.0), t.text);
                 let by = ui.painter().layout_no_wrap("open source".into(), egui::FontId::proportional(13.0), t.text_faint);
                 let total = title.size().x + by.size().x + 10.0;
                 ui.add_space(((card.width() - total) / 2.0).max(0.0));
@@ -995,7 +1021,7 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().galley(egui::pos2(r2.left() + 10.0, r.bottom() - by.size().y - 8.0), by, t.text_faint);
             });
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Create a new document or open an existing file.").color(t.text_dim).size(14.0));
+            ui.label(egui::RichText::new(tl!("Create a new document or open an existing file.")).color(t.text_dim).size(14.0));
             ui.add_space(22.0);
             ui.horizontal(|ui| {
                 ui.add_space(((card.width() - 2.0 * 190.0 - 12.0) / 2.0).max(0.0));
@@ -1009,7 +1035,7 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
             ui.add_space(22.0);
             ui.horizontal(|ui| {
-                let msg = "Drop an image or PSD anywhere to open it.";
+                let msg = tl!("Drop an image or PSD anywhere to open it.");
                 let g = ui.painter().layout_no_wrap(msg.into(), egui::FontId::proportional(12.5), t.text_faint);
                 ui.add_space(((card.width() - g.size().x - 24.0) / 2.0).max(0.0));
                 let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover());
@@ -1040,7 +1066,7 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     ui.horizontal(|ui| {
         // Line the heading up with the file icons.
         ui.add_space(((ui.available_width() - width) / 2.0).max(0.0) + 8.0);
-        ui.label(egui::RichText::new("Recent").font(crate::theme::semibold(12.5)).color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Recent")).font(crate::theme::semibold(12.5)).color(t.text_dim));
     });
     ui.add_space(4.0);
     let mut open = None;
@@ -1498,6 +1524,19 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             crosshair(5.0);
                             egui::CursorIcon::None
                         }
+                        // The Pencil: the square of whole pixels its dab fills, on the pixel grid.
+                        _ if tool == Tool::Pencil => {
+                            let ppp = painter.ctx().pixels_per_point();
+                            let sq = pencil_cursor_rect(&xf, xf.to_doc(p), brush.size, ppp);
+                            let px = 1.0 / ppp;
+                            painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_black_alpha(160)), egui::StrokeKind::Outside);
+                            painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_white_alpha(230)), egui::StrokeKind::Inside);
+                            // Too small to see where it is: the hotspot as well.
+                            if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
+                                crosshair(4.0);
+                            }
+                            egui::CursorIcon::None
+                        }
                         _ => {
                             painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
                             painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
@@ -1738,7 +1777,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
     }
     match d.tool {
         // The canvas shows the live stroke itself (`LiveStroke`).
-        Tool::Brush | Tool::Eraser => {}
+        Tool::Brush | Tool::Pencil | Tool::Eraser => {}
         t if t.is_brushlike() || t == Tool::QuickSelection => {
             // Retouching strokes preview as a translucent trail of the brush footprint: a mask,
             // not a brush-wide egui polyline (which zoomed in tessellates into wedges, #189).
@@ -1877,6 +1916,12 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     match ev {
         ToolEvent::Down { x, y, pressure } => {
+            // Painting a type, shape, Smart Object or fill layer asks to rasterize it first
+            // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
+            let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
+            if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
+                return;
+            }
             match tool {
                 Tool::Pen => {
                     crate::vector_ui::pen_down(app, x, y);
@@ -1932,7 +1977,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             if from.is_some() {
                 app.stylus.record_point();
             }
-            app.live_stroke = if matches!(tool, Tool::Brush | Tool::Eraser) { begin_live_stroke(app) } else { None };
+            app.live_stroke = if strokes_live(tool) { begin_live_stroke(app) } else { None };
         }
         ToolEvent::Move { x, y, pressure } => {
             if tool == Tool::Type && app.drag.is_none() {
@@ -2007,15 +2052,15 @@ fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.modifiers),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
-        Tool::Brush | Tool::Eraser => {
+        Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();
-            let mut p = stroke_params(app, d.erase, &app.stylus.stroke_points(&d.points));
+            let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
             if let Some(l) = &live {
                 p["seed"] = json!(l.stroke.seed);
             }
             // The canvas already shows the stroke: let the commit's damage rect refresh it rather
             // than recompositing the whole document.
-            if app.run("paint.stroke", p).is_ok()
+            if app.run(stroke_command(d.tool), p).is_ok()
                 && let Some(l) = live
             {
                 let display_key = app.session.active().map_or(0, |st| canvas_display(app, &st.doc).1);

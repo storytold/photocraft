@@ -61,8 +61,9 @@ pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions:
         let all = ui.input(|i| i.modifiers.alt);
         actions.push(("layer.setExpanded".into(), json!({"layer": l.id.0, "expanded": !g.expanded, "all": all})));
     }
-    let (verb, name) = (if g.expanded { "Collapse" } else { "Expand" }, l.name.clone());
-    let resp = resp.on_hover_text(format!("{} group  ({}-click: all groups)", if g.expanded { "Collapse" } else { "Expand" }, crate::shortcuts::pretty("Alt")));
+    let (verb, name) = (if g.expanded { tl!("Collapse") } else { tl!("Expand") }, l.name.clone());
+    let tip = if g.expanded { tl!("Collapse group  ({key}-click: all groups)") } else { tl!("Expand group  ({key}-click: all groups)") };
+    let resp = resp.on_hover_text(crate::i18n::fmt(tip, &[("key", &crate::shortcuts::pretty("Alt"))]));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{verb} group {name}")));
     clicked
 }

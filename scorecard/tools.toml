@@ -8,9 +8,9 @@ order = 3
 [[item]]
 id = "TOOL-213-1"
 target = "Pencil tool: aliased 1 px painting, square pixel-aligned cursor"
-status = "partial"
+status = "done"
 issue = 213
-note = "paint.pencil exists (brush_cmds.rs:322) with an aliasing test; no Tool::Pencil (state.rs:7)"
+note = "Tool::Pencil (B group): live aliased strokes on the pixel grid, square cursor, Auto Erase; pencil_tests.rs"
 
 [[item]]
 id = "TOOL-213-2"
@@ -36,16 +36,16 @@ note = "inpaint::complete only used by spot healing (retouch_cmds.rs:386)"
 [[item]]
 id = "TOOL-213-5"
 target = "Painting a type/shape/smart/fill layer offers to rasterize, then continues the stroke"
-status = "missing"
+status = "done"
 issue = 213
-note = "Rasterize only in the layer menus (layer_menu_ui.rs:40)"
+note = "rasterize_prompt.rs: OK rasterizes then paints (two history states), Cancel does nothing; drivable via ui.dialog.confirm"
 
 [[item]]
 id = "TOOL-213-6"
 target = "Fill dialog: contents, blend, opacity, preserve transparency; remembered; Shift+Backspace"
-status = "partial"
+status = "done"
 issue = 213
-note = "edit.fill: color or pattern + opacity, Shift+F5 (commands.rs:263-267); no blend/history/CA/persist"
+note = "fill_ui.rs dialog over edit.fill (fill_cmds.rs): all contents, mode, opacity, preserve; remembered in prefs; Shift+F5 / Shift+Backspace"
 
 [[item]]
 id = "TOOL-213-7"

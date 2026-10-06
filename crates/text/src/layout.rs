@@ -277,11 +277,29 @@ const RLM: &str = "\u{200F}";
 
 pub(crate) struct Layouter {
     lcx: LayoutContext<RunBrush>,
+    optical: crate::optical::Cache,
+}
+
+/// A cluster of a line in visual order, for kerning.
+struct KernSlot {
+    /// Index of the run in the paragraph layout.
+    run: usize,
+    /// Byte offset in the paragraph text.
+    start: usize,
+    first: Option<u32>,
+    last: Option<u32>,
+    font: FontData,
+    coords: Vec<i16>,
+    size: f32,
+    rtl: bool,
+    blank: bool,
+    /// Vertical type, upright glyph (its outline doesn't run along the column).
+    upright: bool,
 }
 
 impl Layouter {
     pub fn new() -> Self {
-        Self { lcx: LayoutContext::new() }
+        Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default() }
     }
 
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
@@ -484,9 +502,109 @@ impl Layouter {
                 prev_baseline = Some(baseline);
                 let last_line = li + 1 == nlines;
                 let adv = m.advance - m.trailing_whitespace;
+                let map = |o: usize| (prange.start + o.saturating_sub(prefix.len())).min(content_end);
+
+                // Kerning after each cluster (px), per run in visual cluster order: manual
+                // kerning plus optical pair kerning. Applied after shaping (like horizontal
+                // scale) in line space, so it moves the following glyphs, carets and the line
+                // extent; in vertical type that is along the column. Optical kerning measures
+                // horizontal outlines, so it applies to rotated (Latin) glyphs only there.
+                let mut slots: Vec<KernSlot> = Vec::new();
+                let mut line_runs: Vec<usize> = Vec::new();
+                for item in line.items() {
+                    let PositionedLayoutItem::GlyphRun(gr) = item else {
+                        continue;
+                    };
+                    let run = gr.run();
+                    if line_runs.contains(&run.index()) {
+                        continue;
+                    }
+                    line_runs.push(run.index());
+                    for c in run.visual_clusters() {
+                        let mut gl = c.glyphs();
+                        let first = gl.next().map(|g| g.id);
+                        let last = gl.last().map(|g| g.id).or(first);
+                        slots.push(KernSlot {
+                            run: run.index(),
+                            start: c.text_range().start,
+                            first,
+                            last,
+                            font: run.font().clone(),
+                            coords: run.normalized_coords().to_vec(),
+                            size: run.font_size(),
+                            rtl: c.is_rtl(),
+                            blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= prefix.len(),
+                            upright: vertical && c.first_style().brush.1 != VClass::Rotate as u8,
+                        });
+                    }
+                }
+                let mut kern_px: Vec<f32> = vec![0.0; slots.len()];
+                for j in 0..slots.len().saturating_sub(1) {
+                    let (a, b) = (&slots[j], &slots[j + 1]);
+                    if a.start < prefix.len() {
+                        continue;
+                    }
+                    let st = &out.styles[style_at(map(a.start))];
+                    let next = &out.styles[style_at(map(b.start))];
+                    let mut units = if st.kern.is_finite() { st.kern } else { 0.0 };
+                    // Optical pairs: both characters optical (a mode change splits shaping
+                    // runs, which ends automatic kerning, as with Metrics).
+                    if st.kerning == Kerning::Optical
+                        && next.kerning == Kerning::Optical
+                        && st.kern == 0.0
+                        && next.kern == 0.0
+                        && !a.rtl
+                        && !b.rtl
+                        && !a.blank
+                        && !b.blank
+                        && !a.upright
+                        && !b.upright
+                        && a.font.data.id() == b.font.data.id()
+                        && a.font.index == b.font.index
+                        && a.coords == b.coords
+                        && (a.size - b.size).abs() < 1e-3
+                        && let (Some(l), Some(r)) = (a.last, b.first)
+                    {
+                        let coords: Vec<skrifa::instance::NormalizedCoord> =
+                            a.coords.iter().map(|&c| skrifa::instance::NormalizedCoord::from_bits(c)).collect();
+                        if let Some(k) = self.optical.pair(a.font.data.id(), a.font.data.as_ref(), a.font.index, &coords, l, r) {
+                            units += k + crate::optical::size_adjust(st.size_pt);
+                        }
+                    }
+                    kern_px[j] = units / 1000.0 * a.size;
+                }
+                let line_kern: f32 = kern_px.iter().sum();
+                // Per run on the line: (run index, glyph → slot, glyphs emitted, first slot whose
+                // kerning isn't applied yet).
+                let mut cursors: Vec<(usize, Vec<usize>, usize, usize)> = Vec::new();
+                for item in line.items() {
+                    let PositionedLayoutItem::GlyphRun(gr) = item else {
+                        continue;
+                    };
+                    let run = gr.run();
+                    if cursors.iter().any(|c| c.0 == run.index()) {
+                        continue;
+                    }
+                    let base = slots.iter().position(|s| s.run == run.index()).unwrap_or(0);
+                    let mut g2s = Vec::new();
+                    for (ci, c) in run.visual_clusters().enumerate() {
+                        g2s.extend(c.glyphs().map(|_| base + ci));
+                    }
+                    cursors.push((run.index(), g2s, 0, base));
+                }
+                // Parley aligned box lines without the kerning.
+                let kern_align = if is_box {
+                    match ps.align {
+                        TextAlign::Center => line_kern / 2.0,
+                        TextAlign::Right => line_kern,
+                        _ => 0.0,
+                    }
+                } else {
+                    0.0
+                };
                 let dx = if is_box {
-                    let base = line_origin + indent_start;
-                    let slack = avail.unwrap_or(0.0) - adv;
+                    let base = line_origin + indent_start - kern_align;
+                    let slack = avail.unwrap_or(0.0) - adv - line_kern;
                     base + if last_line {
                         match ps.align {
                             TextAlign::JustifyCenter => slack * 0.5 - m.offset,
@@ -498,20 +616,19 @@ impl Layouter {
                     }
                 } else {
                     let target = match ps.align {
-                        TextAlign::Center | TextAlign::JustifyCenter => -adv / 2.0,
-                        TextAlign::Right | TextAlign::JustifyRight => -adv,
+                        TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
+                        TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
                         _ => indent_start,
                     };
                     target - m.offset
                 };
                 let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll;
                 let line_index = out.lines.len();
-                let map = |o: usize| (prange.start + o.saturating_sub(prefix.len())).min(content_end);
                 let lr = line.text_range();
                 let g0 = out.glyphs.len();
                 let c0 = out.clusters.len();
                 let mut vinfo: Vec<VGlyph> = Vec::new();
-                let mut extra = 0.0f32; // horizontal-scale growth along the line
+                let mut extra = 0.0f32; // horizontal-scale growth and kerning along the line
                 let mut seen_runs: Vec<usize> = Vec::new();
                 for item in line.items() {
                     let PositionedLayoutItem::GlyphRun(gr) = item else {
@@ -534,8 +651,9 @@ impl Layouter {
                     if !seen_runs.contains(&run.index()) {
                         seen_runs.push(run.index());
                         let mut cx = run_x0;
-                        for c in run.visual_clusters() {
-                            let a = c.advance() * hs;
+                        let base = slots.iter().position(|s| s.run == run.index()).unwrap_or(0);
+                        for (ci, c) in run.visual_clusters().enumerate() {
+                            let a = c.advance() * hs + kern_px.get(base + ci).copied().unwrap_or(0.0);
                             let r = c.text_range();
                             if r.end > prefix.len() || prefix.is_empty() {
                                 out.clusters.push(ClusterInfo { range: map(r.start)..map(r.end), x: cx, advance: a, line: line_index, rtl: c.is_rtl() });
@@ -552,7 +670,18 @@ impl Layouter {
                         _ => Vec::new(),
                     };
                     let mut pen = gr.offset();
+                    let mut cursor = cursors.iter_mut().find(|c| c.0 == run.index());
                     for g in gr.glyphs() {
+                        // Kerning of the clusters before this glyph's cluster.
+                        if let Some(c) = cursor.as_deref_mut() {
+                            if let Some(&slot) = c.1.get(c.2) {
+                                while c.3 < slot {
+                                    extra += kern_px.get(c.3).copied().unwrap_or(0.0);
+                                    c.3 += 1;
+                                }
+                            }
+                            c.2 += 1;
+                        }
                         out.glyphs.push(PlacedGlyph {
                             face,
                             id: g.id,
@@ -574,6 +703,16 @@ impl Layouter {
                         }
                         extra += g.advance * (hs - 1.0);
                         pen += g.advance;
+                    }
+                    // The run's last glyph: its remaining clusters' kerning follows it.
+                    if let Some(c) = cursor
+                        && c.2 >= c.1.len()
+                    {
+                        let end = slots.iter().rposition(|s| s.run == c.0).map_or(c.3, |p| p + 1);
+                        while c.3 < end {
+                            extra += kern_px.get(c.3).copied().unwrap_or(0.0);
+                            c.3 += 1;
+                        }
                     }
                     let run_x1 = dx + gr.offset() + gr.advance() + extra;
                     let shift = st.baseline_shift_pt * k;
@@ -785,7 +924,9 @@ impl skrifa::outline::OutlinePen for YMax {
 /// OpenType feature settings of a character style (CSS `font-feature-settings` items).
 fn feature_list(st: &CharStyle) -> Vec<String> {
     let mut feats: Vec<String> = Vec::new();
-    if st.kerning == Kerning::Off {
+    // Optical and manual kerning replace the font's kerning table; a character with a manual
+    // kern is manually kerned whatever its mode (as in Photoshop).
+    if st.kerning != Kerning::Metrics || st.kern != 0.0 {
         feats.push("\"kern\" 0".into());
     }
     if !st.ligatures {

@@ -28,7 +28,7 @@ fn run(app: &mut PhotocraftApp, id: &str, p: Value) {
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
-        ui.label(egui::RichText::new("No document").color(t.text_faint).size(11.5));
+        ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint).size(11.5));
         return;
     };
     let doc = st.doc.clone();
@@ -51,7 +51,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if applied.is_none() {
             crate::icons::paint(ui, marker, "check", 10.0, t.icon);
         }
-        ui.painter().text(pos2(rect.left() + 30.0, rect.center().y), Align2::LEFT_CENTER, "Last Document State", egui::FontId::proportional(12.0), t.text_dim);
+        ui.painter().text(
+            pos2(rect.left() + 30.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            tl!("Last Document State"),
+            egui::FontId::proportional(12.0),
+            t.text_dim,
+        );
         if resp.clicked() && doc.last_document_state.is_some() && applied.is_some() {
             action = Some(("layerComp.restoreLastDocumentState", json!({})));
         }
@@ -60,7 +66,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if doc.layer_comps.is_empty() {
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new("Capture the visibility, position and style of every layer with + below, then switch between versions.")
+                egui::RichText::new(tl!("Capture the visibility, position and style of every layer with + below, then switch between versions."))
                     .color(t.text_faint)
                     .size(11.5),
             );
@@ -80,9 +86,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             // The three apply toggles, right-aligned.
             let toggles = [
-                ("eye", "Visibility", c.apply_visibility, "visibility"),
-                ("move", "Position", c.apply_position, "position"),
-                ("sparkles", "Appearance (Layer Style)", c.apply_appearance, "appearance"),
+                ("eye", tl!("Visibility"), c.apply_visibility, "visibility"),
+                ("move", tl!("Position"), c.apply_position, "position"),
+                ("sparkles", tl!("Appearance (Layer Style)"), c.apply_appearance, "appearance"),
             ];
             let mut x = rect.right() - 14.0;
             let mut toggle_hit = false;
@@ -139,22 +145,22 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let has = !doc.layer_comps.is_empty();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if crate::icons::button(ui, "chevrons-left", 24.0, false, "Apply previous selected layer comp").clicked() && has {
+        if crate::icons::button(ui, "chevrons-left", 24.0, false, tl!("Apply previous selected layer comp")).clicked() && has {
             action = Some(("layerComp.previous", json!({})));
         }
-        if crate::icons::button(ui, "chevrons-right", 24.0, false, "Apply next selected layer comp").clicked() && has {
+        if crate::icons::button(ui, "chevrons-right", 24.0, false, tl!("Apply next selected layer comp")).clicked() && has {
             action = Some(("layerComp.next", json!({})));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 24.0, false, "Delete layer comp").clicked()
+            if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete layer comp")).clicked()
                 && let Some(id) = selected
             {
                 action = Some(("layerComp.delete", json!({"comp": id})));
             }
-            if crate::icons::button(ui, "file-plus", 24.0, false, "Create new layer comp").clicked() {
+            if crate::icons::button(ui, "file-plus", 24.0, false, tl!("Create new layer comp")).clicked() {
                 action = Some(("layerComp.new", json!({})));
             }
-            if crate::icons::button(ui, "rotate-cw", 24.0, false, "Update layer comp (visibility, position and appearance)").clicked()
+            if crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Update layer comp (visibility, position and appearance)")).clicked()
                 && let Some(id) = selected
             {
                 action = Some(("layerComp.update", json!({"comp": id})));

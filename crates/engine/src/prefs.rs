@@ -201,6 +201,10 @@ pub struct Interface {
     /// Document border in standard screen mode.
     pub canvas_border: CanvasBorder,
     pub ui_scale: UiScale,
+    /// UI language: `auto` (follow the system) or a language code such as `en`, `ja`. The list of
+    /// languages belongs to the shell (`ui-egui` i18n); an unknown code falls back to `auto`.
+    /// Command ids and the control protocol stay English.
+    pub language: String,
     pub ui_font_size: UiFontSize,
     pub show_channels_in_color: bool,
     pub dynamic_color_sliders: bool,
@@ -219,6 +223,7 @@ impl Default for Interface {
             canvas_custom_color: "#282828".into(),
             canvas_border: CanvasBorder::DropShadow,
             ui_scale: UiScale::Auto,
+            language: "auto".into(),
             ui_font_size: UiFontSize::Small,
             show_channels_in_color: false,
             dynamic_color_sliders: true,
@@ -742,6 +747,9 @@ pub struct Preferences {
     /// as the user changes it and restored at launch when Workspace › Remember Workspace
     /// Changes is on. JSON owned by the shell.
     pub panel_layout: Value,
+    /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
+    /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
+    pub dialogs: BTreeMap<String, Value>,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Swatches the user saved (Color Picker › Add to Swatches, `swatches.add`), oldest first.
@@ -996,6 +1004,12 @@ fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
         let s = v.as_str().ok_or_else(|| format!("`{path}` must be one of {}", c.join("|")))?;
         if !c.contains(&s) {
             return Err(format!("`{path}` must be one of {} (got `{s}`)", c.join("|")));
+        }
+    }
+    if path == "interface.language" {
+        let ok = v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 16 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        if !ok {
+            return Err("`interface.language` must be `auto` or a language code such as `en` or `ja`".into());
         }
     }
     if let Some((lo, hi)) = range(path) {

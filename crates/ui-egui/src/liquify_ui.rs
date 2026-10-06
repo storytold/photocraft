@@ -294,7 +294,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         app.distort.liquify = None;
         return Ok(json!({"cancelled": true}));
     }
-    let d = app.distort.liquify.as_mut().ok_or("Liquify is not open")?;
+    let d = app.distort.liquify.as_mut().ok_or(tl!("Liquify is not open"))?;
     if let Some(t) = ui.get("tool") {
         d.opts.tool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
     }
@@ -470,7 +470,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(6.0, 8.0))));
         strip.spacing_mut().item_spacing.y = 4.0;
         for tool in LiquifyTool::ALL {
-            let tip = format!("{} ({})", tool.label(), shortcut(tool));
+            let tip = format!("{} ({})", tl!(tool.label()), shortcut(tool));
             if crate::icons::button(&mut strip, tool_icon(tool), 34.0, d.opts.tool == tool, &tip).clicked() {
                 d.opts.tool = tool;
             }
@@ -485,47 +485,47 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 12.0))));
         egui::ScrollArea::vertical().id_salt("liquify-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
-            widgets::section_label(ui, "Brush Tool Options");
-            widgets::slider_row(ui, "Size", &mut d.opts.size, 1.0..=3000.0, "", None);
-            widgets::slider_row(ui, "Density", &mut d.opts.density, 0.0..=100.0, "", None);
-            widgets::slider_row(ui, "Pressure", &mut d.opts.pressure, 0.0..=100.0, "", None);
-            widgets::slider_row(ui, "Rate", &mut d.opts.rate, 0.0..=100.0, "", None);
+            widgets::section_label(ui, tl!("Brush Tool Options"));
+            widgets::slider_row(ui, tl!("Size"), &mut d.opts.size, 1.0..=3000.0, "", None);
+            widgets::slider_row(ui, tl!("Density"), &mut d.opts.density, 0.0..=100.0, "", None);
+            widgets::slider_row(ui, tl!("Pressure"), &mut d.opts.pressure, 0.0..=100.0, "", None);
+            widgets::slider_row(ui, tl!("Rate"), &mut d.opts.rate, 0.0..=100.0, "", None);
             widgets::hairline(ui);
-            widgets::section_label(ui, "Brush Reconstruct Options");
-            widgets::slider_row(ui, "Amount", &mut d.opts.reconstruct_amount, 0.0..=100.0, "%", None);
+            widgets::section_label(ui, tl!("Brush Reconstruct Options"));
+            widgets::slider_row(ui, tl!("Amount"), &mut d.opts.reconstruct_amount, 0.0..=100.0, "%", None);
             ui.horizontal(|ui| {
-                if widgets::secondary_button(ui, "Reconstruct", 110.0).clicked() {
+                if widgets::secondary_button(ui, tl!("Reconstruct"), 110.0).clicked() {
                     let a = f64::from(d.opts.reconstruct_amount);
                     d.global(LiquifyTool::ReconstructAll, Some(a));
                 }
-                if widgets::secondary_button(ui, "Restore All", 110.0).clicked() {
+                if widgets::secondary_button(ui, tl!("Restore All"), 110.0).clicked() {
                     d.restore_all();
                 }
             });
             widgets::hairline(ui);
-            widgets::section_label(ui, "Mask Options");
+            widgets::section_label(ui, tl!("Mask Options"));
             ui.horizontal(|ui| {
-                if widgets::secondary_button(ui, "None", 70.0).clicked() {
+                if widgets::secondary_button(ui, tl!("None"), 70.0).clicked() {
                     d.global(LiquifyTool::ThawAll, None);
                 }
-                if widgets::secondary_button(ui, "Mask All", 80.0).clicked() {
+                if widgets::secondary_button(ui, tl!("Mask All"), 80.0).clicked() {
                     d.global(LiquifyTool::FreezeAll, None);
                 }
-                if widgets::secondary_button(ui, "Invert All", 80.0).clicked() {
+                if widgets::secondary_button(ui, tl!("Invert All"), 80.0).clicked() {
                     d.global(LiquifyTool::InvertFreeze, None);
                 }
             });
             widgets::hairline(ui);
-            widgets::section_label(ui, "View Options");
-            widgets::checkbox(ui, &mut d.opts.show_mesh, "Show Mesh");
+            widgets::section_label(ui, tl!("View Options"));
+            widgets::checkbox(ui, &mut d.opts.show_mesh, tl!("Show Mesh"));
             ui.horizontal(|ui| {
-                ui.label("Mesh Size");
-                widgets::dropdown(ui, "liquify-mesh-size", &mut d.opts.mesh_size, &[(0, "Small"), (1, "Medium"), (2, "Large")], 110.0);
+                ui.label(tl!("Mesh Size"));
+                widgets::dropdown(ui, "liquify-mesh-size", &mut d.opts.mesh_size, &[(0, tl!("Small")), (1, tl!("Medium")), (2, tl!("Large"))], 110.0);
             });
-            widgets::checkbox(ui, &mut d.opts.show_mask, "Show Mask");
-            widgets::checkbox(ui, &mut d.opts.show_backdrop, "Show Backdrop");
+            widgets::checkbox(ui, &mut d.opts.show_mask, tl!("Show Mask"));
+            widgets::checkbox(ui, &mut d.opts.show_backdrop, tl!("Show Backdrop"));
             if d.opts.show_backdrop {
-                widgets::slider_row(ui, "Opacity", &mut d.opts.backdrop_opacity, 0.0..=100.0, "", None);
+                widgets::slider_row(ui, tl!("Opacity"), &mut d.opts.backdrop_opacity, 0.0..=100.0, "", None);
             }
             widgets::hairline(ui);
             ui.label(
@@ -537,10 +537,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Footer buttons.
         let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
         let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        if widgets::primary_button(&mut fb, "OK", 84.0).clicked() {
+        if widgets::primary_button(&mut fb, tl!("OK"), 84.0).clicked() {
             action = Some("ok");
         }
-        if widgets::secondary_button(&mut fb, "Cancel", 84.0).clicked() {
+        if widgets::secondary_button(&mut fb, tl!("Cancel"), 84.0).clicked() {
             action = Some("cancel");
         }
         // Preview.

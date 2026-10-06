@@ -55,7 +55,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) -
 
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(text).color(t.text_dim).size(12.0));
+    ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
 }
 
 /// Options bar for the Magic Eraser and Background Eraser. Returns false for other tools.
@@ -63,22 +63,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::MagicEraser => {
-            opt(ui, "Tolerance:");
+            opt(ui, tl!("Tolerance:"));
             widgets::value_field(ui, &mut o.tolerance, 0.0..=255.0, "", 58.0);
-            widgets::checkbox(ui, &mut o.anti_alias, "Anti-alias");
-            widgets::checkbox(ui, &mut o.contiguous, "Contiguous");
-            widgets::checkbox(ui, &mut o.sample_all_layers, "Sample All Layers");
+            widgets::checkbox(ui, &mut o.anti_alias, tl!("Anti-alias"));
+            widgets::checkbox(ui, &mut o.contiguous, tl!("Contiguous"));
+            widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
             widgets::vline(ui, 22.0);
-            opt(ui, "Opacity:");
+            opt(ui, tl!("Opacity:"));
             widgets::value_field(ui, &mut o.magic_eraser_opacity, 1.0..=100.0, "%", 62.0);
         }
         Tool::BackgroundEraser => {
             // Sampling: Continuous / Once / Background Swatch, as icon toggles (Photoshop).
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, icon, tip) in [
-                ("continuous", "pipette", "Sampling: Continuous"),
-                ("once", "circle-dot", "Sampling: Once"),
-                ("backgroundSwatch", "square", "Sampling: Background Swatch"),
+                ("continuous", "pipette", tl!("Sampling: Continuous")),
+                ("once", "circle-dot", tl!("Sampling: Once")),
+                ("backgroundSwatch", "square", tl!("Sampling: Background Swatch")),
             ] {
                 if icons::button(ui, icon, 24.0, o.bg_sampling == k, tip).clicked() {
                     o.bg_sampling = k.into();
@@ -86,12 +86,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             ui.spacing_mut().item_spacing.x = 8.0;
             widgets::vline(ui, 22.0);
-            opt(ui, "Limits:");
-            let limits = [("discontiguous".to_string(), "Discontiguous"), ("contiguous".to_string(), "Contiguous"), ("findEdges".to_string(), "Find Edges")];
+            opt(ui, tl!("Limits:"));
+            let limits = [
+                ("discontiguous".to_string(), tl!("Discontiguous")),
+                ("contiguous".to_string(), tl!("Contiguous")),
+                ("findEdges".to_string(), tl!("Find Edges")),
+            ];
             widgets::dropdown(ui, "bg-eraser-limits", &mut o.bg_limits, &limits, 110.0);
-            opt(ui, "Tolerance:");
+            opt(ui, tl!("Tolerance:"));
             widgets::value_field(ui, &mut o.bg_tolerance, 0.0..=100.0, "%", 62.0);
-            widgets::checkbox(ui, &mut o.bg_protect_fg, "Protect Foreground Color");
+            widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color"));
         }
         _ => return false,
     }

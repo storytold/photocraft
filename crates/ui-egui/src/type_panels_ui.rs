@@ -144,7 +144,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let canvas = app.last_canvas_rect;
     if app.ui.type_panels.styles {
         let mut close = false;
-        egui::Window::new("Type Styles")
+        egui::Window::new(tl!("Type Styles"))
             .id(egui::Id::new("type-styles-window"))
             .title_bar(false)
             .resizable(false)
@@ -154,7 +154,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_width(290.0);
                 ui.horizontal(|ui| {
                     let mut tab = app.ui.type_panels.styles_tab;
-                    for (i, name) in ["Character Styles", "Paragraph Styles"].iter().enumerate() {
+                    for (i, name) in [tl!("Character Styles"), tl!("Paragraph Styles")].iter().enumerate() {
                         if crate::widgets::pill_tab(ui, name, tab == i).clicked() {
                             tab = i;
                         }
@@ -164,7 +164,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         app.ui.type_panels.options = None;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, "Close").clicked() {
+                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                             close = true;
                         }
                     });
@@ -179,7 +179,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if app.ui.type_panels.glyphs {
         let mut close = false;
-        egui::Window::new("Glyphs")
+        egui::Window::new(tl!("Glyphs"))
             .id(egui::Id::new("glyphs-window"))
             .title_bar(false)
             .resizable(false)
@@ -188,9 +188,9 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             .show(ctx, |ui| {
                 ui.set_width(340.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Glyphs").color(t.text).size(12.0).strong());
+                    ui.label(RichText::new(tl!("Glyphs")).color(t.text).size(12.0).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, "Close").clicked() {
+                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                             close = true;
                         }
                     });
@@ -213,7 +213,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
 pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool) {
     let t = Tokens::get(ui.ctx());
     if app.session.active().is_none() {
-        ui.label(RichText::new("No document").color(t.text_faint).size(11.5));
+        ui.label(RichText::new(tl!("No document")).color(t.text_faint).size(11.5));
         return;
     }
     let prefix = if paragraph { "type.paragraphStyle" } else { "type.characterStyle" };
@@ -255,7 +255,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
                     p["id"] = json!(id);
                     p["clearOverrides"] = json!(alt);
                     if !paragraph && p.get("range").and_then(Value::as_array).is_some_and(|r| r[0] == r[1]) {
-                        app.ui.status = "Select text to apply a character style".into();
+                        app.ui.status = tl!("Select text to apply a character style").into();
                         app.ui.status_error = false;
                     } else {
                         action = Some((format!("{prefix}.apply"), p));
@@ -266,9 +266,12 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
                 }
             }
             resp.on_hover_text(if id == 0 && !paragraph {
-                "No character style".to_string()
+                tl!("No character style").to_string()
             } else {
-                format!("Click to apply, {}-click to clear overrides, double-click for Style Options", crate::shortcuts::pretty("Alt"))
+                crate::i18n::fmt(
+                    tl!("Click to apply, {key}-click to clear overrides, double-click for Style Options"),
+                    &[("key", &crate::shortcuts::pretty("Alt"))],
+                )
             });
         }
     });
@@ -278,33 +281,33 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
     let sel = selected.filter(|i| *i != 0 || paragraph);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if crate::icons::button(ui, "ban", 22.0, false, "Clear Override").clicked() && has_target && over {
+        if crate::icons::button(ui, "ban", 22.0, false, tl!("Clear Override")).clicked() && has_target && over {
             action = Some((format!("{prefix}.clearOverride"), tgt.clone()));
         }
-        if crate::icons::button(ui, "check", 22.0, false, "Redefine style by current selection").clicked()
+        if crate::icons::button(ui, "check", 22.0, false, tl!("Redefine style by current selection")).clicked()
             && has_target
             && cur_id.is_some_and(|i| i != 0 || paragraph)
         {
             action = Some((format!("{prefix}.redefine"), tgt.clone()));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 22.0, false, "Delete style").clicked()
+            if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete style")).clicked()
                 && let Some(id) = sel.filter(|i| *i != 0)
             {
                 action = Some((format!("{prefix}.delete"), json!({ "id": id })));
                 app.ui.type_panels.options = None;
             }
-            if crate::icons::button(ui, "plus", 22.0, false, "Create new style (from the selected type)").clicked() {
+            if crate::icons::button(ui, "plus", 22.0, false, tl!("Create new style (from the selected type)")).clicked() {
                 let mut p = tgt.clone();
                 p["fromSelection"] = json!(has_target);
                 action = Some((format!("{prefix}.new"), p));
             }
-            if crate::icons::button(ui, "copy", 22.0, false, "Duplicate style").clicked()
+            if crate::icons::button(ui, "copy", 22.0, false, tl!("Duplicate style")).clicked()
                 && let Some(id) = sel
             {
                 action = Some((format!("{prefix}.duplicate"), json!({ "id": id })));
             }
-            if crate::icons::button(ui, "settings", 22.0, false, "Style Options…").clicked()
+            if crate::icons::button(ui, "settings", 22.0, false, tl!("Style Options…")).clicked()
                 && let Some(id) = sel
             {
                 app.ui.type_panels.options = Some((paragraph, id as u32));
@@ -344,9 +347,9 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     let mut clear: Vec<&str> = Vec::new();
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Style Options").color(t.text).size(11.5).strong());
+        ui.label(RichText::new(tl!("Style Options")).color(t.text).size(11.5).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "x", 18.0, false, "Close Style Options").clicked() {
+            if crate::icons::button(ui, "x", 18.0, false, tl!("Close Style Options")).clicked() {
                 app.ui.type_panels.options = None;
             }
         });
@@ -355,7 +358,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     let key = egui::Id::new(("style-name", paragraph, id));
     let mut name: String = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| s["name"].as_str().unwrap_or("").to_string());
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Name").color(t.text_dim).size(11.5));
+        ui.label(RichText::new(tl!("Name")).color(t.text_dim).size(11.5));
         let r = ui.add_enabled(id != 0, egui::TextEdit::singleline(&mut name).desired_width(170.0));
         if r.lost_focus() && name.trim() != s["name"].as_str().unwrap_or("") && !name.trim().is_empty() {
             let _ = run(app, &format!("{prefix}.rename"), json!({ "id": id, "name": name.trim() }));
@@ -368,22 +371,22 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     egui::Grid::new(("style-opts", paragraph, id)).num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
         // (label, model key, panel key, kind)
         let rows: &[(&str, &str, &str, &str)] = &[
-            ("Font", "font_family", "font", "font"),
-            ("Size", "size_pt", "size", "pt"),
-            ("Leading", "leading_pt", "leading", "leading"),
-            ("Tracking", "tracking", "tracking", "num"),
-            ("Baseline", "baseline_shift_pt", "baselineShift", "pt"),
-            ("Color", "color", "color", "color"),
-            ("Faux Bold", "faux_bold", "fauxBold", "bool"),
-            ("Faux Italic", "faux_italic", "fauxItalic", "bool"),
-            ("Underline", "underline", "underline", "bool"),
-            ("Strikethrough", "strikethrough", "strikethrough", "bool"),
+            (tl!("Font"), "font_family", "font", "font"),
+            (tl!("Size"), "size_pt", "size", "pt"),
+            (tl!("Leading"), "leading_pt", "leading", "leading"),
+            (tl!("Tracking"), "tracking", "tracking", "num"),
+            (tl!("Baseline"), "baseline_shift_pt", "baselineShift", "pt"),
+            (tl!("Color"), "color", "color", "color"),
+            (tl!("Faux Bold"), "faux_bold", "fauxBold", "bool"),
+            (tl!("Faux Italic"), "faux_italic", "fauxItalic", "bool"),
+            (tl!("Underline"), "underline", "underline", "bool"),
+            (tl!("Strikethrough"), "strikethrough", "strikethrough", "bool"),
         ];
         for &(label, key, panel, kind) in rows {
             let mut on = defined(&char_attrs, key);
             let was = on;
             ui.checkbox(&mut on, "");
-            ui.label(RichText::new(label).color(if on { t.text } else { t.text_faint }).size(11.5));
+            ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
             let v = if on { char_attrs[key].clone() } else { resolved_c[key].clone() };
             ui.add_enabled_ui(on, |ui| match kind {
                 "font" => {
@@ -398,7 +401,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                     let range = if kind == "num" { -1000.0..=10000.0 } else { -1296.0..=1296.0 };
                     let unit = if kind == "num" { "" } else { " pt" };
                     if auto {
-                        ui.label(RichText::new("Auto").color(t.text_dim).size(11.5));
+                        ui.label(RichText::new(tl!("Auto")).color(t.text_dim).size(11.5));
                     } else if crate::widgets::value_field(ui, &mut x, range, unit, 70.0).changed() {
                         set = Some(json!({ key: x }));
                     }
@@ -430,24 +433,25 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
         }
         if paragraph {
             let rows: &[(&str, &str, &str)] = &[
-                ("Align", "align", "align"),
-                ("Indent First", "first_line_indent_pt", "pt"),
-                ("Indent Left", "start_indent_pt", "pt"),
-                ("Indent Right", "end_indent_pt", "pt"),
-                ("Space Before", "space_before_pt", "pt"),
-                ("Space After", "space_after_pt", "pt"),
-                ("Hyphenate", "hyphenate", "bool"),
+                (tl!("Align"), "align", "align"),
+                (tl!("Indent First"), "first_line_indent_pt", "pt"),
+                (tl!("Indent Left"), "start_indent_pt", "pt"),
+                (tl!("Indent Right"), "end_indent_pt", "pt"),
+                (tl!("Space Before"), "space_before_pt", "pt"),
+                (tl!("Space After"), "space_after_pt", "pt"),
+                (tl!("Hyphenate"), "hyphenate", "bool"),
             ];
             for &(label, key, kind) in rows {
                 let mut on = defined(&para_attrs, key);
                 let was = on;
                 ui.checkbox(&mut on, "");
-                ui.label(RichText::new(label).color(if on { t.text } else { t.text_faint }).size(11.5));
+                ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
                 let v = if on { para_attrs[key].clone() } else { resolved_p[key].clone() };
                 ui.add_enabled_ui(on, |ui| match kind {
                     "align" => {
                         let mut a = v.as_str().unwrap_or("Left").to_string();
-                        let opts = ["Left", "Center", "Right", "JustifyLeft", "JustifyCenter", "JustifyRight", "JustifyAll"].map(|o| (o.to_string(), o));
+                        let opts = [tl!("Left"), tl!("Center"), tl!("Right"), "JustifyLeft", "JustifyCenter", "JustifyRight", "JustifyAll"]
+                            .map(|o| (o.to_string(), o));
                         let opts: Vec<(String, &str)> = opts.to_vec();
                         if crate::widgets::dropdown(ui, &format!("style-align-{id}"), &mut a, &opts, 110.0) {
                             set = Some(json!({ "align": a }));
@@ -496,7 +500,7 @@ fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
     let shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
     egui::ComboBox::from_id_salt(salt).selected_text(shown.clone()).width(140.0).height(360.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
         let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("Search fonts").desired_width(180.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(180.0));
         if !r.has_focus() && q.is_empty() {
             r.request_focus();
         }
@@ -519,7 +523,7 @@ fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
 fn glyph_font(app: &PhotocraftApp) -> (String, String) {
     let p = &app.ui.type_panels;
     if !p.glyph_family.is_empty() {
-        return (p.glyph_family.clone(), if p.glyph_style.is_empty() { "Regular".into() } else { p.glyph_style.clone() });
+        return (p.glyph_family.clone(), if p.glyph_style.is_empty() { tl!("Regular").into() } else { p.glyph_style.clone() });
     }
     let layer = app.ui.text_edit.as_ref().map(|e| photocraft_doc::LayerId(e.layer)).or_else(|| app.session.active().and_then(|s| s.active_layer));
     if let Some(st) = app.session.active()
@@ -528,10 +532,11 @@ fn glyph_font(app: &PhotocraftApp) -> (String, String) {
         && let Some(r) = tl.char_runs().first()
     {
         let fam = if r.style.font_family.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { r.style.font_family.clone() };
-        let style = if r.style.font_style.is_empty() { if r.style.italic { "Italic".into() } else { "Regular".into() } } else { r.style.font_style.clone() };
+        let style =
+            if r.style.font_style.is_empty() { if r.style.italic { tl!("Italic").into() } else { tl!("Regular").into() } } else { r.style.font_style.clone() };
         return (fam, style);
     }
-    (photocraft_text::fonts::DEFAULT_FAMILY.into(), "Regular".into())
+    (photocraft_text::fonts::DEFAULT_FAMILY.into(), tl!("Regular").into())
 }
 
 fn char_style_for(family: &str, style: &str) -> photocraft_doc::text::CharStyle {
@@ -598,7 +603,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut f = family.clone();
         if family_picker(ui, "glyph-family", &mut f) {
             app.ui.type_panels.glyph_family = f;
-            app.ui.type_panels.glyph_style = "Regular".into();
+            app.ui.type_panels.glyph_style = tl!("Regular").into();
         }
         let styles = crate::type_tool::styles(&family);
         let mut s = style.clone();
@@ -609,9 +614,9 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     // Show: category.
-    let mut cat = if app.ui.type_panels.glyph_category.is_empty() { "Entire Font".to_string() } else { app.ui.type_panels.glyph_category.clone() };
+    let mut cat = if app.ui.type_panels.glyph_category.is_empty() { tl!("Entire Font").to_string() } else { app.ui.type_panels.glyph_category.clone() };
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Show:").color(t.text_dim).size(11.5));
+        ui.label(RichText::new(tl!("Show:")).color(t.text_dim).size(11.5));
         let opts: Vec<(String, &str)> = photocraft_text::glyphs::CATEGORIES.iter().map(|c| (c.to_string(), *c)).collect();
         if crate::widgets::dropdown(ui, "glyph-category", &mut cat, &opts, 160.0) {
             app.ui.type_panels.glyph_category = cat.clone();
@@ -625,7 +630,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Recently used.
     let recent = app.ui.type_panels.glyph_recent.clone();
     ui.add_space(2.0);
-    ui.label(RichText::new("Recently Used").color(t.text_faint).size(10.5));
+    ui.label(RichText::new(tl!("Recently Used")).color(t.text_faint).size(10.5));
     let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(rr, 2.0, t.field);
     for (i, g) in recent.iter().enumerate() {
@@ -705,7 +710,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(g) = activated {
         app.ui.type_panels.glyph_selected = Some(g.clone());
         if !insert_glyph(app, &g) {
-            app.ui.status = "Select a type layer or click into text to insert glyphs".into();
+            app.ui.status = tl!("Select a type layer or click into text to insert glyphs").into();
         }
     }
 }
@@ -738,7 +743,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut act: Option<&str> = None;
     let mut change_to = d.change_to.clone();
     let mut all_layers = d.all_layers;
-    egui::Window::new("Check Spelling")
+    egui::Window::new(tl!("Check Spelling"))
         .id(egui::Id::new("check-spelling"))
         .collapsible(false)
         .resizable(false)
@@ -747,12 +752,12 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0))
         .show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("Check Spelling").color(t.text).size(13.0).strong());
+            ui.label(RichText::new(tl!("Check Spelling")).color(t.text).size(13.0).strong());
             ui.add_space(6.0);
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(250.0);
-                    ui.label(RichText::new("Not in Dictionary:").color(t.text_dim).size(11.5));
+                    ui.label(RichText::new(tl!("Not in Dictionary:")).color(t.text_dim).size(11.5));
                     let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("");
                     let shown = if item.is_some() {
                         word.to_string()
@@ -763,10 +768,10 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     };
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut shown.clone()).desired_width(240.0));
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Change To:").color(t.text_dim).size(11.5));
+                    ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
                     ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0));
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Suggestions:").color(t.text_dim).size(11.5));
+                    ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
                     egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
                         ui.set_min_size(vec2(240.0, 110.0));
                         egui::ScrollArea::vertical().id_salt("spell-sugg").max_height(110.0).show(ui, |ui| {
@@ -784,23 +789,28 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         });
                     });
                     ui.add_space(4.0);
-                    if crate::widgets::checkbox(ui, &mut all_layers, "Check All Layers").changed() {
+                    if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
                         act = Some("relist");
                     }
-                    let msg = if item.is_none() { "Spell check complete." } else { "" };
+                    let msg = if item.is_none() { tl!("Spell check complete.") } else { "" };
                     if !msg.is_empty() {
                         ui.label(RichText::new(msg).color(t.text).size(11.5));
                     }
                 });
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    if crate::widgets::primary_button(ui, "Done", 100.0).clicked() {
+                    if crate::widgets::primary_button(ui, tl!("Done"), 100.0).clicked() {
                         act = Some("done");
                     }
                     ui.add_space(6.0);
                     ui.add_enabled_ui(item.is_some(), |ui| {
-                        for (label, a) in [("Ignore", "ignore"), ("Ignore All", "ignoreAll"), ("Change", "change"), ("Change All", "changeAll"), ("Add", "add")]
-                        {
+                        for (label, a) in [
+                            (tl!("Ignore"), "ignore"),
+                            (tl!("Ignore All"), "ignoreAll"),
+                            (tl!("Change"), "change"),
+                            (tl!("Change All"), "changeAll"),
+                            (tl!("Add"), "add"),
+                        ] {
                             if crate::widgets::secondary_button(ui, label, 100.0).clicked() {
                                 act = Some(a);
                             }
