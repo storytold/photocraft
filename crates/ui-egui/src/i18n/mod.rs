@@ -49,9 +49,12 @@ fn plural_none(_: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 2] = [
+pub static LANGUAGES: [LangInfo; 3] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
+    },
 ];
 
 impl LangInfo {
@@ -259,6 +262,43 @@ mod tests {
         assert_eq!(candidates("zh_TW"), ["zh-tw", "zh-hant", "zh"]);
         assert_eq!(candidates("zh-CN"), ["zh-cn", "zh-hans", "zh"]);
         assert_eq!(candidates("zh-Hant-HK"), ["zh-hant-hk", "zh-hant", "zh"]);
+    }
+
+    #[test]
+    fn traditional_chinese_locale_tags_resolve_without_claiming_simplified_chinese() {
+        let zh = Lang::from_code("zh-hant").expect("Traditional Chinese registered");
+        for tag in ["zh-TW", "zh_TW.UTF-8", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh-Hant-CN", "ZH_hant_HK"] {
+            assert_eq!(lang_from_tag(tag), Some(zh), "{tag}");
+        }
+        for tag in ["zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-TW"] {
+            assert_ne!(lang_from_tag(tag), Some(zh), "{tag} must not select Traditional Chinese");
+        }
+        assert_eq!(Lang::from_pref("ZH-HANT"), zh);
+        assert_eq!(zh.name(), "繁體中文");
+        assert!(Lang::all().any(|lang| lang == zh), "the Preferences dropdown uses the registry");
+    }
+
+    #[test]
+    fn traditional_chinese_preserves_fallbacks_placeholders_and_single_plural_form() {
+        let zh = Lang::from_code("zh-hant").expect("Traditional Chinese registered");
+        assert_eq!(tr(zh, "Layer"), "圖層");
+        assert_eq!(tr(zh, "Preferences"), "偏好設定");
+        assert_eq!(tr(zh, "Light"), "淺色", "checkerboard color");
+        assert_eq!(tr_ctx(zh, "font-style", "Light"), "細體");
+        assert_eq!(tr_ctx(zh, "font-style", "Medium"), "中體");
+        assert_eq!(tr_ctx(zh, "font-style", "Black"), "黑體");
+        assert_eq!(tr(zh, "Black"), "黑色", "color outside the font-style context");
+        assert_eq!(tr(zh, "Level"), "調平", "perspective correction, not a hierarchy level");
+        assert_eq!(tr_id(zh, "file.saveAs", "Save As…"), "另存新檔…");
+        assert_eq!(tr(zh, "An untranslated future label"), "An untranslated future label");
+        assert_eq!(tr_ctx(zh, "unknown context", "Layer"), "圖層");
+        for n in [0, 1, 2, u64::MAX] {
+            assert_eq!(trn(zh, n, "{n} item", "{n} items"), format!("{n} 個項目"));
+        }
+        assert_eq!(fmt(tr(zh, "Version {version}"), &[("version", "0.2.0")]), "版本 0.2.0");
+        for key in ["Alt", "⌥", "Ctrl+Enter"] {
+            assert_eq!(fmt(tr(zh, "Commit transform ({key})"), &[("key", key)]), format!("套用變形 ({key})"));
+        }
     }
 
     #[test]

@@ -46,7 +46,12 @@ fn has_ident(text: &str, prefix: &str, ident: &str) -> bool {
 
 /// Production source of a file: everything before its unit-test module.
 fn production(text: &str) -> &str {
-    let cut = text.find("#[cfg(test)]\nmod ").or_else(|| text.find("#[cfg(test)]\npub mod ")).unwrap_or(text.len());
+    // Git checkouts may use CRLF on Windows; unit-test reads are not production usage.
+    let cut = ["#[cfg(test)]\nmod ", "#[cfg(test)]\npub mod ", "#[cfg(test)]\r\nmod ", "#[cfg(test)]\r\npub mod "]
+        .into_iter()
+        .filter_map(|marker| text.find(marker))
+        .min()
+        .unwrap_or(text.len());
     &text[..cut]
 }
 
@@ -156,6 +161,17 @@ fn every_preference_is_read_or_hidden() {
         "these preferences are shown in Edit › Preferences but nothing reads them: wire them up or add them to prefs::HIDDEN_UNTIL_IMPLEMENTED: {unread:#?}"
     );
     assert!(stale.is_empty(), "these preferences are read now: remove them from prefs::HIDDEN_UNTIL_IMPLEMENTED so the dialog shows them: {stale:#?}");
+}
+
+#[test]
+fn the_scanner_excludes_unit_tests_with_lf_and_crlf() {
+    for newline in ["\n", "\r\n"] {
+        for visibility in ["", "pub "] {
+            let before_tests = format!("fn a() {{}}{newline}");
+            let source = format!("{before_tests}#[cfg(test)]{newline}{visibility}mod tests {{{newline} p.x.y{newline}}}");
+            assert_eq!(production(&source), before_tests, "newline={newline:?}, visibility={visibility:?}");
+        }
+    }
 }
 
 #[test]

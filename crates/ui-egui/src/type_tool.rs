@@ -713,7 +713,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.tool_options.type_style = style.clone();
         apply(app, ui.ctx(), json!({"font": fam, "fontStyle": style}));
     }
-    let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), s)).collect();
+    let opts: Vec<(String, String)> =
+        styles(&fam).into_iter().map(|s| (s.clone(), crate::i18n::tr_ctx(crate::i18n::current(), "font-style", &s).to_string())).collect();
     let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
     if crate::widgets::dropdown(ui, "type-style", &mut style, &opts_ref, 110.0) {
         app.ui.tool_options.type_style = style.clone();
@@ -1019,7 +1020,8 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         });
         row(ui, &mut |ui| {
             let mut style = if c.font_style.is_empty() { "Regular".to_string() } else { c.font_style.clone() };
-            let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), s)).collect();
+            let opts: Vec<(String, String)> =
+                styles(&fam).into_iter().map(|s| (s.clone(), crate::i18n::tr_ctx(crate::i18n::current(), "font-style", &s).to_string())).collect();
             let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
             if crate::widgets::dropdown(ui, "props-type-style", &mut style, &opts_ref, full) {
                 apply(app, ui.ctx(), json!({"fontStyle": style}));
