@@ -22,9 +22,9 @@ note = "Tool::MixerBrush in the Brush (B) flyout; Wet/Load/Mix/Flow/Sample All L
 [[item]]
 id = "TOOL-213-3"
 target = "Patch tool with a live preview of the patched area"
-status = "partial"
+status = "done"
 issue = 213
-note = "paint.patch (retouch_cmds/patch.rs, source/destination) + Tool::Patch (J group: lasso, then drag the selection); the drag previews the outline, not the patched pixels"
+note = "paint.patch (retouch_cmds/patch.rs, source/destination) + Tool::Patch (J group: lasso, then drag the selection); the drag shows the heal live (patch_preview.rs, coarse colour fit: 1000x1000 in 52 ms)"
 
 [[item]]
 id = "TOOL-213-4"

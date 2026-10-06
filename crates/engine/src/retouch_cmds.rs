@@ -24,6 +24,7 @@ use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
 
 mod patch;
+pub use patch::preview as patch_preview;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }

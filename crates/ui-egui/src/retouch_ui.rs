@@ -107,10 +107,14 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     if off == [0, 0] {
         return;
     }
+    let preview = crate::patch_preview::take(app);
     let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
-    if let Err(e) = app.run("paint.patch", p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match app.run("paint.patch", p) {
+        Ok(_) => crate::patch_preview::committed(app, preview, off),
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 

@@ -426,6 +426,10 @@ fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>
     if let Some(shown) = crate::move_ui::display_doc(app, idx) {
         return shown;
     }
+    // Patch Tool drag: the selection healed from where the pointer is.
+    if let Some(shown) = crate::patch_preview::display_doc(app, idx) {
+        return shown;
+    }
     let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc.clone(), l.display_key());
@@ -499,9 +503,9 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     {
         return Some(t.id());
     }
-    // While a Move drag is under way the navigator keeps its image and catches up on release.
+    // While a Move or Patch drag is under way the navigator keeps its image and catches up on release.
     if let Some((_, _, t)) = &cached
-        && crate::move_ui::showing(app)
+        && (crate::move_ui::showing(app) || crate::patch_preview::showing(app))
     {
         return Some(t.id());
     }
@@ -610,6 +614,13 @@ fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u6
     if (seen.0 == now.0 || (seen.0 + 1 == now.0 && last_damage.is_some_and(|r| r.is_empty())))
         && let Some(st) = app.session.documents().get(idx)
         && let Some(r) = crate::move_ui::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
+    // Between a Patch drag's previews: the areas they healed.
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::patch_preview::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }

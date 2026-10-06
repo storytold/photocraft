@@ -64,5 +64,9 @@ fn main() {
         let t = Instant::now();
         s.execute("paint.patch", json!({"offset": [300, 200]})).unwrap();
         println!("patch ellipse {size:>4}×{size:<4}: {:>8.1?}", t.elapsed());
+        // The Patch Tool's live preview of the same patch (coarse solve, 128² cells, at 100 % zoom).
+        let t = Instant::now();
+        photocraft_engine::retouch_cmds::patch_preview(&s, &json!({"offset": [300, 200]}), 128 * 128, 1).unwrap();
+        println!("patch preview {size:>4}×{size:<4}: {:>8.1?}", t.elapsed());
     }
 }

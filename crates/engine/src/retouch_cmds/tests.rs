@@ -638,3 +638,34 @@ fn patch_fails_gracefully() {
     }
     assert!(s.execute("paint.patch", json!({"offset": [10, 0]})).is_ok());
 }
+
+#[test]
+fn patch_preview_matches_the_command_and_its_coarse_solve_is_close() {
+    let mut s = session(160, 96, 16, "rgb");
+    paint_layer(&mut s, blemished(100));
+    s.execute("select.rect", json!({"x": 80, "y": 4, "width": 60, "height": 60, "ellipse": true, "feather": 3})).unwrap();
+    let p = json!({"offset": [-70, 20]});
+    let rev = s.active().unwrap().revision;
+    let id = s.active().unwrap().active_layer.unwrap();
+    let layer = |d: &Document, x, y| d.layer(id).unwrap().surface().unwrap().rgba(x, y);
+    let (exact, dmg) = patch_preview(&s, &p, u64::MAX, 1).unwrap();
+    let (coarse, _) = patch_preview(&s, &p, 64, 1).unwrap();
+    assert!(dmg.contains(104, 24) && !dmg.contains(20, 24), "{dmg:?}");
+    assert_eq!(s.active().unwrap().revision, rev, "the preview records nothing");
+    s.execute("paint.patch", p).unwrap();
+    let committed = s.active().unwrap().doc.clone();
+    let mut worst = 0.0f32;
+    for y in 0..96 {
+        for x in 0..160 {
+            let (e, c, d) = (layer(&exact, x, y), layer(&coarse, x, y), layer(&committed, x, y));
+            for k in 0..4 {
+                assert!((e[k] - d[k]).abs() < 1e-6, "step 1 is the command at {x},{y}");
+                worst = worst.max((c[k] - d[k]).abs());
+            }
+        }
+    }
+    // 64 cells over a ~64² patch: an 8× coarser membrane. Measured worst pixel 0.022 (under six
+    // 8-bit steps), all in the colour fit: the texture is exact.
+    assert!(worst < 0.03, "coarse preview off by {worst}");
+    assert!(patch_preview(&s, &json!({"offset": [500, 0]}), 64, 1).is_err());
+}
