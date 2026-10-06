@@ -682,13 +682,31 @@ fn composite_layer(doc: &Document, layers: Vec<Layer>, name: String, none_visibl
     Ok(layer)
 }
 
+/// Where a stamp goes above `id`: above `id` and the layers clipped to it, so a stamp never
+/// slips into a clipping group (the clipped layers would then clip to the stamp instead).
+fn above_clipping_group(doc: &Document, id: LayerId) -> LayerId {
+    let Some(path) = doc.path_of(id) else { return id };
+    let Some((&idx, parent)) = path.split_last() else { return id };
+    let mut anchor = id;
+    let mut next = parent.to_vec();
+    next.push(idx + 1);
+    while let Some(l) = doc.layer_at(&next).filter(|l| l.clipped) {
+        anchor = l.id;
+        if let Some(last) = next.last_mut() {
+            *last += 1;
+        }
+    }
+    anchor
+}
+
 /// Stamp Visible (⌘⌥⇧E): a new layer above the active one holding everything visible, merged;
-/// the original layers stay as they are.
+/// the original layers stay as they are. It goes above the active layer's clipping group.
 pub fn stamp_visible(s: &mut Session) -> Result<Value> {
     let id = s.edit("Stamp Visible", |doc, active| {
         let name = doc.next_layer_name("Layer");
         let layer = composite_layer(doc, doc.layers.clone(), name, "there are no visible layers to stamp")?;
-        let id = doc.insert_above(*active, layer);
+        let anchor = active.map(|a| above_clipping_group(doc, a));
+        let id = doc.insert_above(anchor, layer);
         *active = Some(id);
         Ok(id)
     })?;
@@ -710,7 +728,7 @@ pub fn stamp_layers(s: &mut Session) -> Result<Value> {
         let top_name = doc.layer(top_id).ok_or(EngineError::NoLayer(top_id))?.name.clone();
         let layers = ids.iter().filter_map(|id| doc.layer(*id)).cloned().collect();
         let layer = composite_layer(doc, layers, format!("{top_name} (merged)"), "the selected layers are all hidden")?;
-        let id = doc.insert_above(Some(top_id), layer);
+        let id = doc.insert_above(Some(above_clipping_group(doc, top_id)), layer);
         *active = Some(id);
         Ok(id)
     })?;
@@ -1246,6 +1264,140 @@ mod tests {
         // The bottom layer has nothing below to stamp into.
         let mut s = session(8);
         assert!(s.execute("layer.stampLayers", json!({})).is_err());
+    }
+
+    /// New pixel layer filled with `c` over `r`.
+    fn color_layer(s: &mut Session, r: Rect, c: [f32; 4]) -> LayerId {
+        let id = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(r, &c);
+            Ok(())
+        })
+        .unwrap();
+        id
+    }
+
+    /// A realistic stack: a layer with a mask, a layer clipped to it in Multiply at 60 %, a
+    /// group in Screen at 70 % holding two layers (one at 50 %), and a hidden layer on top.
+    /// Returns (masked base, clipped layer, group, hidden layer).
+    fn complex_stack(s: &mut Session) -> (LayerId, LayerId, LayerId, LayerId) {
+        let base = color_layer(s, Rect::new(0, 0, 70, 50), [0.9, 0.2, 0.1, 1.0]);
+        s.execute("select.rect", json!({"x": 10, "y": 0, "width": 50, "height": 40})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({"layer": base.0})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let clipped = color_layer(s, Rect::new(20, 10, 90, 70), [0.1, 0.6, 0.9, 1.0]);
+        s.execute("layer.setProps", json!({"layer": clipped.0, "clipped": true, "blend": "Multiply", "opacity": 0.6})).unwrap();
+        let c = color_layer(s, Rect::new(40, 30, 100, 80), [0.2, 0.8, 0.3, 1.0]);
+        let d = color_layer(s, Rect::new(0, 50, 50, 80), [0.7, 0.7, 0.1, 1.0]);
+        s.execute("layer.setProps", json!({"layer": d.0, "opacity": 0.5})).unwrap();
+        select_all(s, &[c, d]);
+        let g = LayerId(s.execute("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.setProps", json!({"layer": g.0, "blend": "Screen", "opacity": 0.7})).unwrap();
+        let hidden = color_layer(s, Rect::new(60, 0, 100, 30), [0.0, 0.0, 0.0, 1.0]);
+        s.execute("layer.setProps", json!({"layer": hidden.0, "visible": false})).unwrap();
+        (base, clipped, g, hidden)
+    }
+
+    /// Every pixel of layer `id` against the composite `want`, within `tol`.
+    fn assert_layer_matches(d: &Document, id: LayerId, want: &photocraft_compose::Buffer, tol: f32, what: &str) {
+        let surf = d.layer(id).unwrap().surface().unwrap();
+        let w = want.rect.width() as i32;
+        for y in want.rect.y0..want.rect.y1 {
+            for x in want.rect.x0..want.rect.x1 {
+                let i = ((y - want.rect.y0) * w + (x - want.rect.x0)) as usize;
+                let (got, exp) = (surf.rgba(x, y), want.px[i]);
+                for k in 0..4 {
+                    assert!((got[k] - exp[k]).abs() <= tol, "{what}: pixel ({x},{y}) {got:?} vs {exp:?}");
+                }
+            }
+        }
+    }
+
+    /// Stamp Visible on a realistic stack (mask, clipping, blend modes, partial opacity, a group,
+    /// a hidden layer) is exactly the visible composite, at every depth; the originals are
+    /// untouched, and undo / redo restore the document exactly.
+    #[test]
+    fn stamp_visible_matches_the_composite_of_a_complex_stack() {
+        for (depth, tol) in [(8, 1.0 / 255.0 + 1e-6), (16, 1.0 / 65535.0 + 1e-6), (32, 1e-5)] {
+            let mut s = session(depth);
+            let (base, clipped, _, hidden) = complex_stack(&mut s);
+            select_all(&mut s, &[base]);
+            let before = doc(&s).clone();
+            let want = photocraft_compose::flatten(&before);
+            let st = LayerId(s.execute("layer.stampVisible", json!({})).unwrap()["layer"].as_u64().unwrap());
+            let after = doc(&s).clone();
+            assert_layer_matches(&after, st, &want, tol, &format!("{depth}-bit stamp"));
+            for l in before.walk() {
+                assert_eq!(after.layer(l.2.id), Some(l.2), "{depth}-bit: {} changed", l.2.name);
+            }
+            // Stamped with the clipping base active, it goes above the clipped layer (never into
+            // the clipping group), so the picture is unchanged.
+            let order: Vec<LayerId> = after.layers.iter().map(|l| l.id).collect();
+            let pos = |id: LayerId| order.iter().position(|x| *x == id).unwrap();
+            assert!(pos(st) > pos(clipped) && !after.layer(st).unwrap().clipped, "{depth}-bit: {order:?}");
+            assert!(s.undo());
+            assert_eq!(*doc(&s), before, "{depth}-bit: undo restores the document exactly");
+            assert!(s.redo());
+            assert_eq!(*doc(&s), after, "{depth}-bit: redo brings the stamp back exactly");
+            // Stamped from the top layer it lands on top, where it changes nothing you see
+            // (lower down, the visible layers above it blend over it once more, as in Photoshop).
+            assert!(s.undo());
+            select_all(&mut s, &[hidden]);
+            let top = LayerId(s.execute("layer.stampVisible", json!({})).unwrap()["layer"].as_u64().unwrap());
+            assert_eq!(doc(&s).layers.last().map(|l| l.id), Some(top));
+            let shown = photocraft_compose::flatten(doc(&s));
+            for (a, b) in shown.px.iter().zip(&want.px) {
+                for k in 0..4 {
+                    assert!((a[k] - b[k]).abs() <= tol * 2.0, "{depth}-bit: a stamp on top changed the picture");
+                }
+            }
+        }
+    }
+
+    /// Stamp Layers gives what Merge Layers gives (the same pixels), only as a new layer with the
+    /// originals kept; Stamp Down of a clipped, blended layer gives what Merge Down gives.
+    #[test]
+    fn stamps_equal_merges_on_a_complex_stack() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let (base, clipped, g, _) = complex_stack(&mut s);
+            // Several layers: the masked base and the group.
+            select_all(&mut s, &[base, g]);
+            let before = doc(&s).clone();
+            let st = LayerId(s.execute("layer.stampLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+            let stamped = doc(&s).layer(st).unwrap().surface().unwrap().clone();
+            assert_eq!(doc(&s).layer_count(), before.layer_count() + 1);
+            assert!(s.undo());
+            assert_eq!(*doc(&s), before);
+            select_all(&mut s, &[base, g]);
+            let m = LayerId(s.execute("layer.mergeLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+            let merged = doc(&s).layer(m).unwrap().surface().unwrap().clone();
+            assert_eq!(stamped.content_bounds(), merged.content_bounds(), "{depth}-bit");
+            let r = merged.content_bounds();
+            for y in r.y0..r.y1 {
+                for x in r.x0..r.x1 {
+                    assert_eq!(stamped.rgba(x, y), merged.rgba(x, y), "{depth}-bit stamp vs merge at ({x},{y})");
+                }
+            }
+            assert!(s.undo());
+            // One layer: the clipped Multiply layer stamped down into the masked base.
+            select_all(&mut s, &[clipped]);
+            s.execute("layer.stampLayers", json!({})).unwrap();
+            let down = doc(&s).layer(base).unwrap().surface().unwrap().clone();
+            assert!(doc(&s).layer(clipped).is_some(), "{depth}-bit: the clipped layer stays");
+            assert!(s.undo());
+            assert_eq!(*doc(&s), before);
+            select_all(&mut s, &[clipped]);
+            s.execute("layer.mergeDown", json!({})).unwrap();
+            let md = doc(&s).layer(base).unwrap().surface().unwrap().clone();
+            assert_eq!(down.content_bounds(), md.content_bounds(), "{depth}-bit");
+            let r = md.content_bounds();
+            for y in r.y0..r.y1 {
+                for x in r.x0..r.x1 {
+                    assert_eq!(down.rgba(x, y), md.rgba(x, y), "{depth}-bit stamp down vs merge down at ({x},{y})");
+                }
+            }
+        }
     }
 
     #[test]
