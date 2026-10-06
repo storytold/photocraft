@@ -1935,3 +1935,6 @@ cameraRaw	Amount	强度
 cameraRaw	Tint	色偏
 cameraRaw	Masking	蒙版保护
 cameraRaw	Blending	混合
+	Patch Tool	修补工具
+	Patch:	修补：
+	Lasso around an area, then drag the selection	用套索圈出区域，然后拖动选区

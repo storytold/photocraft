@@ -282,6 +282,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::Burn
             | Tool::Sponge
             | Tool::Lasso
+            | Tool::Patch
             | Tool::QuickSelection
     )
 }
@@ -2035,7 +2036,16 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             };
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
-        Tool::Lasso => {
+        // Patch Tool dragging the patch: the selection outline follows the pointer.
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            let start = d.start;
+            let [dx, dy] = crate::retouch_ui::patch_offset(app, start, last);
+            if let Some((_, _, segs)) = &app.outline_cache {
+                let moved: Vec<crate::outline::Segment> = segs.iter().map(|(a, b)| ([a[0] + dx, a[1] + dy], [b[0] + dx, b[1] + dy])).collect();
+                marching_ants_segments(painter, xf, &moved, painter.ctx().input(|i| i.time));
+            }
+        }
+        Tool::Lasso | Tool::Patch => {
             let pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
             crate::tool_feedback::draw_ants(painter, &pts, false);
         }
@@ -2364,7 +2374,8 @@ fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             let (aa, feather) = (app.ui.tool_options.anti_alias, app.ui.tool_options.feather);
             let _ = app.run("select.rect", json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "antiAlias": aa, "feather": feather}));
         }
-        Tool::Lasso => {
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
+        Tool::Lasso | Tool::Patch => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);

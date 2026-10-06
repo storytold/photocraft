@@ -84,6 +84,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Hand => "hand",
         Tool::Zoom => "zoom-in",
         Tool::SpotHealing | Tool::Healing => "bandage",
+        Tool::Patch => "lasso-select",
         Tool::CloneStamp => "stamp",
         Tool::HistoryBrush => "clock",
         Tool::Blur => "droplet",

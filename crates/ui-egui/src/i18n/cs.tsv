@@ -2053,3 +2053,6 @@ cameraRaw	Blending	Míchání
 cameraRaw	Luminance	Jas
 cameraRaw	Temperature	Barevná teplota
 cameraRaw	Color	Barvy
+	Patch Tool	Nástroj záplata
+	Patch:	Záplata:
+	Lasso around an area, then drag the selection	Obtáhněte oblast lasem a pak přetáhněte výběr

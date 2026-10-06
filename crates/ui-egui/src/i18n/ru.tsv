@@ -2330,3 +2330,6 @@ cameraRaw	Blending	Смешивание
 cameraRaw	Luminance Detail	Детализация яркости
 cameraRaw	Color Detail	Детализация цвета
 cameraRaw	Roughness	Неровность
+	Patch Tool	Заплатка
+	Patch:	Заплатка:
+	Lasso around an area, then drag the selection	Обведите область лассо, затем перетащите выделение

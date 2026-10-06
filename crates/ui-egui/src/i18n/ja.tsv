@@ -2036,3 +2036,6 @@ cameraRaw	Blending	ブレンド
 cameraRaw	Blacks	黒レベル
 cameraRaw	Amount	適用量
 cameraRaw	Color	カラー
+	Patch Tool	パッチツール
+	Patch:	パッチ:
+	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
