@@ -1025,6 +1025,7 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         dock_panels(app, ui, &p, &t);
     }
     crate::dock::persist(app, ui.ctx());
+    crate::dock::persist_window(app, ui.ctx());
 }
 
 /// The right dock's width range (points).
@@ -1059,13 +1060,16 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
     }
     let margin = if t.pro { 2 } else { 8 };
     let mut panel = egui::Panel::right("dock").resizable(true).default_size(if t.pro { 290.0 } else { 300.0 }).size_range(DOCK_WIDTH);
-    if let Some(w) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())) {
-        panel = panel.exact_size(w);
+    let request = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())).or(app.ui.dock_width_request.take());
+    if let Some(w) = request.filter(|w| w.is_finite()) {
+        panel = panel.exact_size(w.clamp(*DOCK_WIDTH.start(), *DOCK_WIDTH.end()));
     }
-    panel.frame(egui::Frame::NONE.fill(t.dock).inner_margin(egui::Margin::same(margin))).show(ui, |ui| {
+    let shown_panel = panel.frame(egui::Frame::NONE.fill(t.dock).inner_margin(egui::Margin::same(margin))).show(ui, |ui| {
         // Groups keep their heights whatever they show (#88): see `dock`.
         crate::dock::show(app, ui, &shown, dock_body);
     });
+    // Remembered with the panel layout (whole points, so it doesn't churn).
+    app.ui.dock_width = Some(shown_panel.response.rect.width().round());
 }
 
 /// One dock group's tab content; `dock` bounds it and scrolls it when it's taller.

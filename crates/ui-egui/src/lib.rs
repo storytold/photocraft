@@ -129,7 +129,9 @@ pub struct ExportSettings {
 
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
-pub type PickOpenFn = Box<dyn FnMut() -> Option<(String, Vec<u8>)>>;
+/// Show the open-file dialog, starting in the given folder when there is one; returns the
+/// chosen file's path (or name) and bytes.
+pub type PickOpenFn = Box<dyn FnMut(Option<&str>) -> Option<(String, Vec<u8>)>>;
 pub type PickSaveFn = Box<dyn FnMut(&str) -> Option<String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// Read bytes through the desktop control session's authorized read root.
@@ -498,6 +500,10 @@ impl PhotocraftApp {
     /// Keep one view per document.
     pub fn sync_views(&mut self) {
         let n = self.session.documents().len();
+        // Preferences › Units & Rulers › Show Rulers in New Documents.
+        if n > self.ui.views.len() && self.session.prefs().units_and_rulers.show_rulers_in_new_documents {
+            self.ui.extras.rulers = true;
+        }
         self.ui.views.resize_with(n, Default::default);
         self.ui.windows.retain(|w| w.document < n);
         self.prune_thumbs();
@@ -621,10 +627,25 @@ impl PhotocraftApp {
         result
     }
 
+    /// Run the open-file dialog in the folder the last file was opened from, and remember the
+    /// folder of the file picked (also across restarts). Every open-a-file command uses it.
+    pub fn pick_open_file(&mut self) -> Option<(String, Vec<u8>)> {
+        let start = Some(self.session.prefs().last_open_folder.clone()).filter(|d| !d.is_empty());
+        let picked = self.services.pick_open.as_mut().and_then(|f| f(start.as_deref()))?;
+        // The web gives a bare file name, so there's no folder to remember there.
+        let dir = std::path::Path::new(&picked.0).parent().map(|p| p.to_string_lossy().to_string()).filter(|d| !d.is_empty());
+        if let Some(dir) = dir
+            && start.as_deref() != Some(dir.as_str())
+        {
+            self.session.prefs.edit(|p| p.last_open_folder = dir);
+        }
+        Some(picked)
+    }
+
     /// File › Open: the platform dialog returns the chosen file's path (native; the web delivers
     /// picks through the inbox instead).
     pub fn open_dialog_file(&mut self) {
-        let picked = self.services.pick_open.as_mut().and_then(|f| f());
+        let picked = self.pick_open_file();
         if let Some((path, bytes)) = picked
             && let Err(e) = self.open_file(&path, &bytes)
         {

@@ -566,3 +566,50 @@ fn dock_strips_fit_and_the_chevron_menu_switches_tabs() {
     h.run_steps(3);
     assert_eq!(*h.state(), 3, "Patterns chosen from the chevron menu");
 }
+
+/// The dock width is saved with the panel layout and restored at the next launch.
+#[test]
+fn dock_width_survives_a_restart() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    crate::panels::request_dock_width(&h.ctx, 420.0);
+    h.run_steps(4);
+    let width = h.state().ui.dock_width.expect("the dock records its width");
+    assert!((width - 420.0).abs() <= 1.0, "{width}");
+    let prefs = h.state().session.prefs_to_json();
+    let mut s2 = photocraft_engine::Session::new();
+    s2.load_prefs_json(&prefs).unwrap();
+    let mut app2 = PhotocraftApp::new(s2, crate::Services::default());
+    restore(&mut app2);
+    assert_eq!(app2.ui.dock_width_request, Some(width));
+    let h2 = harness(app2, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    assert_eq!(h2.state().ui.dock_width, Some(width), "restored at launch");
+}
+
+/// The main window's size is saved once it holds still, only while it isn't maximized (so
+/// un-maximizing returns to it), and not at all where the platform doesn't report it.
+#[test]
+fn main_window_geometry_is_saved_once_settled() {
+    use photocraft_engine::prefs::WindowGeometry;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let frame = |app: &mut PhotocraftApp, t: f64, state: Option<(bool, f32)>| {
+        let mut input = egui::RawInput { time: Some(t), ..Default::default() };
+        if let Some((maximized, w)) = state {
+            let vp = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+            vp.maximized = Some(maximized);
+            vp.inner_rect = Some(Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(w, 700.0)));
+        }
+        ctx.run_ui(input, |ui| persist_window(app, ui.ctx())).textures_delta.clear();
+    };
+    frame(&mut app, 0.0, None);
+    frame(&mut app, 1.0, None);
+    assert_eq!(app.session.prefs().main_window, None, "no window state reported (browser)");
+    frame(&mut app, 2.0, Some((false, 1000.0)));
+    assert_eq!(app.session.prefs().main_window, None, "not yet: the size may still be changing");
+    frame(&mut app, 2.6, Some((false, 1000.0)));
+    assert_eq!(app.session.prefs().main_window, Some(WindowGeometry { width: 1000.0, height: 700.0, maximized: false }));
+    frame(&mut app, 3.0, Some((true, 1900.0)));
+    frame(&mut app, 3.6, Some((true, 1900.0)));
+    assert_eq!(app.session.prefs().main_window, Some(WindowGeometry { width: 1000.0, height: 700.0, maximized: true }), "maximizing keeps the restore size");
+}

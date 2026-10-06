@@ -209,3 +209,13 @@ fn curves_points_are_added_selected_and_deleted() {
     h.run_steps(3);
     assert_eq!(curve_of(&layer(&h).1).len(), 2, "endpoints can't be deleted");
 }
+
+/// Hue/Saturation's Saturation and Lightness tracks show the hue they act on.
+#[test]
+fn saturation_and_lightness_tracks_follow_the_hue() {
+    let (sat, light) = super::sat_light_tracks(0.0);
+    assert_eq!(sat, [egui::Color32::from_gray(128), egui::Color32::from_rgb(255, 0, 0)]);
+    assert_eq!(light, [egui::Color32::BLACK, egui::Color32::from_rgb(255, 0, 0), egui::Color32::WHITE]);
+    assert_eq!(super::sat_light_tracks(120.0).0[1], egui::Color32::from_rgb(0, 255, 0));
+    assert_eq!(super::sat_light_tracks(-120.0).0[1], egui::Color32::from_rgb(0, 0, 255), "negative shifts wrap");
+}

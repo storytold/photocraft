@@ -1,4 +1,8 @@
-//! ⌘K command palette: fuzzy search over every menu command and tool.
+//! ⌘K command palette: fuzzy search over every menu command and tool. With an empty search it
+//! lists what was last run from it (remembered across restarts).
+
+/// How many recently run entries the palette remembers.
+pub const RECENT: usize = 8;
 
 use egui::{Align2, Color32, CornerRadius, RichText, Sense, Stroke, vec2};
 
@@ -101,6 +105,16 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         }
                     }
                     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
+                    // An empty search lists what was run last (entries that no longer exist drop out).
+                    let recent: Vec<_> = if q.trim().is_empty() {
+                        app.session.prefs().recent_commands.iter().filter_map(|id| hits.iter().find(|h| &h.1 == id).cloned()).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    if !recent.is_empty() {
+                        hits = recent;
+                        ui.label(RichText::new("Recent").small().color(t.text_faint));
+                    }
                     hits.truncate(12);
                     let sel_id = egui::Id::new("palette-sel");
                     let mut sel: usize = ui.data_mut(|d| d.get_temp(sel_id).unwrap_or(0));
@@ -124,6 +138,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                     for (i, (_, id, label, detail, enabled)) in hits.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, *enabled, label));
                         if i == sel || resp.hovered() {
                             ui.painter().rect_filled(rect, t.radius_sm, if i == sel { t.accent_soft } else { t.hover });
                         }
@@ -153,6 +168,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(id) = run {
         app.ui.palette_open = false;
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("palette-query"), String::new()));
+        remember(app, &id);
         if let Some(tool) = id.strip_prefix("tool:") {
             if let Some(t) = crate::state::Tool::from_name(tool) {
                 app.ui.tool = t;
@@ -163,9 +179,58 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Put `id` first in the palette's recent list (no duplicates, at most [`RECENT`]).
+fn remember(app: &mut PhotocraftApp, id: &str) {
+    if app.session.prefs().recent_commands.first().map(String::as_str) == Some(id) {
+        return;
+    }
+    app.session.prefs.edit(|p| {
+        p.recent_commands.retain(|r| r != id);
+        p.recent_commands.insert(0, id.to_string());
+        p.recent_commands.truncate(RECENT);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::fuzzy_score;
+    use super::*;
+
+    /// Running from the palette remembers the pick (newest first, no duplicates, capped); an
+    /// empty search then lists those under "Recent", and they survive a restart.
+    #[test]
+    fn empty_search_lists_recent_commands() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for id in ["view.zoomIn", "tool:Brush", "view.zoomIn", "edit.undo"] {
+            remember(&mut app, id);
+        }
+        assert_eq!(app.session.prefs().recent_commands, vec!["edit.undo", "view.zoomIn", "tool:Brush"]);
+        for i in 0..20 {
+            remember(&mut app, &format!("x{i}"));
+        }
+        assert_eq!(app.session.prefs().recent_commands.len(), RECENT);
+        app.session.prefs.edit(|p| p.recent_commands = vec!["view.zoomIn".into(), "gone.command".into(), "tool:Brush".into()]);
+        let saved = app.session.prefs_to_json();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(32).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
+            let mut s = photocraft_engine::Session::new();
+            s.load_prefs_json(&saved).unwrap();
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.ui.palette_open = true;
+            app
+        });
+        h.run_steps(4);
+        assert!(h.query_by_label("Recent").is_some());
+        assert!(h.query_by_label("Brush Tool").is_some());
+        assert!(h.query_by_label("Zoom In").is_some());
+        assert!(h.query_by_label("Gaussian Blur…").is_none() && h.query_by_label("Gaussian Blur").is_none(), "only the recent ones");
+        // Zoom In is listed but disabled without a document; the tool runs and moves to the top.
+        h.get_by_label("Brush Tool").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.prefs().recent_commands, vec!["tool:Brush", "view.zoomIn", "gone.command"]);
+    }
 
     #[test]
     fn fuzzy_ranks_prefix_and_contiguous_higher() {

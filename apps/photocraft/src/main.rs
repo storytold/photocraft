@@ -39,6 +39,12 @@ use photocraft_ui_egui::PhotocraftApp;
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
+/// The main window as it was last left (Preferences `mainWindow`), or maximized on first launch.
+fn main_window_geometry(prefs: Option<&std::path::Path>) -> photocraft_engine::prefs::WindowGeometry {
+    let text = prefs.and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    photocraft_engine::prefs::WindowGeometry::from_prefs_json(&text)
+}
+
 fn main() -> eframe::Result {
     crash_guard::install_hook();
     let mut control_port: Option<u16> = std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
@@ -120,14 +126,16 @@ fn main() -> eframe::Result {
     let monitor = monitor_profile::detect_async();
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
+    let window = main_window_geometry(services::prefs_file().as_deref());
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(app_icon::window_icon())
             .with_app_id(APP_ID)
             .with_title("PhotoCraft")
-            // Opens maximized like Photoshop; the inner size is what un-maximizing restores to.
-            .with_maximized(true)
-            .with_inner_size([1440.0, 900.0])
+            // As the window was last left (maximized at first launch, like Photoshop); the
+            // inner size is what un-maximizing restores to.
+            .with_maximized(window.maximized)
+            .with_inner_size([window.width, window.height])
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
             .with_fullsize_content_view(true)

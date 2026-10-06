@@ -618,6 +618,12 @@ pub struct UiState {
     /// Right-dock group order, heights and collapsed groups (see `dock`).
     #[serde(default)]
     pub dock: crate::dock::DockLayout,
+    /// The right dock's width as last drawn (points), saved with the panel layout.
+    #[serde(default)]
+    pub dock_width: Option<f32>,
+    /// A dock width to apply on the next frame (a restored layout or workspace).
+    #[serde(skip)]
+    pub dock_width_request: Option<f32>,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
     #[serde(default)]
     pub brush_section: usize,
@@ -687,6 +693,8 @@ impl Default for UiState {
             palette_open: false,
             dock_tabs: DockTabs::default(),
             dock: Default::default(),
+            dock_width: None,
+            dock_width_request: None,
             brush_section: 0,
             brush_tab: 0,
             brushes_panel: Default::default(),

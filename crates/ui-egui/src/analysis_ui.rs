@@ -159,7 +159,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             r
         }
         "file.import.notes" => {
-            let (name, bytes) = app.services.pick_open.as_mut().and_then(|f| f())?;
+            let (name, bytes) = app.pick_open_file()?;
             let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
             if r.is_ok() {
                 app.ui.analysis.notes = true;

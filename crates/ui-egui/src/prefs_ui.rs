@@ -150,6 +150,9 @@ fn display_scale(pref: prefs::UiScale, native: Option<f32>, monitor_px: Option<e
     let native = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
     match pref {
         prefs::UiScale::P100 => 1.0,
+        prefs::UiScale::P115 => 1.15,
+        prefs::UiScale::P125 => 1.25,
+        prefs::UiScale::P150 => 1.5,
         prefs::UiScale::P200 => 2.0,
         prefs::UiScale::Auto => {
             // A 4K display needs at least 200%; preserve larger system scales.
@@ -596,8 +599,7 @@ fn choice_label(v: &str) -> String {
     match v {
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
-        "100" => "100%".into(),
-        "200" => "200%".into(),
+        "100" | "115" | "125" | "150" | "200" => format!("{v}%"),
         "8" => "8 Bits/Channel".into(),
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
@@ -1109,7 +1111,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         "presetsIO" => {
             let kinds: Vec<&str> = ["brushes", "customShapes"].into_iter().filter(|k| f.get(*k).and_then(Value::as_bool).unwrap_or(true)).collect();
             if f.get("action").and_then(Value::as_str) == Some("import") {
-                let (name, bytes) = app.services.pick_open.as_mut().and_then(|p| p()).ok_or("cancelled")?;
+                let (name, bytes) = app.pick_open_file().ok_or("cancelled")?;
                 let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a preset file"))?;
                 app.run("edit.presets.exportImportPresets", json!({"action": "import", "kinds": kinds, "data": text}))
             } else {
@@ -1199,7 +1201,7 @@ mod tests {
             step(vec2(1920.0, 1080.0), 1.0, 1.0);
             step(vec2(3840.0, 2160.0), 1.5, 2.0);
         }
-        for (pref, expected) in [("200", 2.0), ("100", 1.0), ("auto", 1.5)] {
+        for (pref, expected) in [("200", 2.0), ("150", 1.5), ("125", 1.25), ("115", 1.15), ("100", 1.0), ("auto", 1.5)] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
             let mut input = egui::RawInput::default();
             input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);

@@ -58,7 +58,7 @@ choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
 choice!(Theme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic" } default ProMedium);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
-choice!(UiScale { Auto = "auto", P100 = "100", P200 = "200" } default Auto);
+choice!(UiScale { Auto = "auto", P100 = "100", P115 = "115", P125 = "125", P150 = "150", P200 = "200" } default Auto);
 choice!(
     /// Graphics backend of the desktop app's window and GPU canvas (applies at next launch).
     /// `auto` lets PhotoCraft pick (DX12 for Intel adapters on Windows); `cpu` composites on the
@@ -512,6 +512,8 @@ impl TransparencyAndGamut {
 #[serde(default, rename_all = "camelCase")]
 pub struct UnitsAndRulers {
     pub rulers: Unit,
+    /// Turn View › Rulers on when a document is created or opened.
+    pub show_rulers_in_new_documents: bool,
     pub type_units: TypeUnit,
     pub column_width: f64,
     pub gutter: f64,
@@ -524,6 +526,7 @@ impl Default for UnitsAndRulers {
     fn default() -> Self {
         Self {
             rulers: Unit::Pixels,
+            show_rulers_in_new_documents: false,
             type_units: TypeUnit::Points,
             column_width: 180.0,
             gutter: 12.0,
@@ -746,6 +749,74 @@ pub struct Preferences {
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Swatches the user saved (Color Picker › Add to Swatches, `swatches.add`), oldest first.
     pub swatches: Vec<Swatch>,
+    /// The main window's size and maximized state, remembered for the next launch (desktop).
+    pub main_window: Option<WindowGeometry>,
+    /// The folder the last file was opened from; File › Open (and Place, Browse…) start there.
+    pub last_open_folder: String,
+    /// File › Export › Export As…: the settings last exported with, where the dialog starts.
+    pub export_as: ExportAsSettings,
+    /// Command palette (Cmd+K): what was last run from it (command ids, `tool:<Name>`), newest
+    /// first; shown when the search is empty.
+    pub recent_commands: Vec<String>,
+}
+
+/// File › Export › Export As… settings (format id, JPEG quality %, transparency, scale %).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportAsSettings {
+    pub format: String,
+    pub quality: f64,
+    pub transparency: bool,
+    pub scale: f64,
+}
+
+impl Default for ExportAsSettings {
+    fn default() -> Self {
+        Self { format: "png".into(), quality: 85.0, transparency: true, scale: 100.0 }
+    }
+}
+
+/// The desktop main window as it was last left: its size in points when not maximized (what
+/// un-maximizing returns to) and whether it was maximized.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowGeometry {
+    pub width: f32,
+    pub height: f32,
+    pub maximized: bool,
+}
+
+impl Default for WindowGeometry {
+    /// A first launch opens maximized; 1440×900 is the size un-maximizing returns to.
+    fn default() -> Self {
+        Self { width: 1440.0, height: 900.0, maximized: true }
+    }
+}
+
+impl WindowGeometry {
+    /// Smallest and largest size kept (points); the window's own minimum is 760×480.
+    pub const MIN: [f32; 2] = [760.0, 480.0];
+    pub const MAX: f32 = 16384.0;
+
+    /// The geometry with its size rounded and clamped to a usable range; `None` when a size
+    /// isn't a finite number (a hand-edited preferences file).
+    pub fn sane(self) -> Option<Self> {
+        if !(self.width.is_finite() && self.height.is_finite()) {
+            return None;
+        }
+        Some(Self { width: self.width.round().clamp(Self::MIN[0], Self::MAX), height: self.height.round().clamp(Self::MIN[1], Self::MAX), ..self })
+    }
+
+    /// The geometry saved in a preferences file's text (`mainWindow`), read at launch before
+    /// the preferences load; the default (maximized) when missing or unreadable.
+    pub fn from_prefs_json(text: &str) -> Self {
+        serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|v| v.get("mainWindow").cloned())
+            .and_then(|g| serde_json::from_value::<Self>(g).ok())
+            .and_then(Self::sane)
+            .unwrap_or_default()
+    }
 }
 
 /// A saved colour swatch.

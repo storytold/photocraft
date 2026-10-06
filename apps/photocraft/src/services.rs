@@ -94,8 +94,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             }
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
-        pick_open: Some(Box::new(|| {
-            let path = rfd::FileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]).pick_file()?;
+        pick_open: Some(Box::new(|start: Option<&str>| {
+            let mut d = rfd::FileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]);
+            // The last folder a file was opened from, while it still exists.
+            if let Some(dir) = start.map(Path::new).filter(|d| d.is_dir()) {
+                d = d.set_directory(dir);
+            }
+            let path = d.pick_file()?;
             let bytes = std::fs::read(&path).ok()?;
             Some((path.to_string_lossy().to_string(), bytes))
         })),

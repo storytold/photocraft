@@ -256,3 +256,23 @@ fn gpu_backend_round_trips_and_validates() {
         assert_eq!(GpuBackend::parse(n).map(GpuBackend::name), Some(*n));
     }
 }
+
+/// The main window geometry read at launch: the saved one, sanitised; the default (maximized
+/// 1440×900) when missing, unreadable or not a number.
+#[test]
+fn main_window_geometry_reads_back_and_rejects_garbage() {
+    let saved = r#"{"mainWindow": {"width": 1280.4, "height": 800, "maximized": false}}"#;
+    assert_eq!(WindowGeometry::from_prefs_json(saved), WindowGeometry { width: 1280.0, height: 800.0, maximized: false });
+    // Tiny or huge sizes are clamped to a usable window.
+    let odd = r#"{"mainWindow": {"width": 10, "height": 1e9, "maximized": false}}"#;
+    assert_eq!(WindowGeometry::from_prefs_json(odd), WindowGeometry { width: 760.0, height: WindowGeometry::MAX, maximized: false });
+    for bad in ["", "not json", "{}", r#"{"mainWindow": null}"#, r#"{"mainWindow": {"width": "wide"}}"#, r#"{"mainWindow": 5}"#] {
+        assert_eq!(WindowGeometry::from_prefs_json(bad), WindowGeometry::default(), "{bad}");
+    }
+    assert!(WindowGeometry { width: f32::NAN, height: 800.0, maximized: false }.sane().is_none());
+    assert!(WindowGeometry { width: 900.0, height: f32::INFINITY, maximized: false }.sane().is_none());
+    // The preference round-trips through the preferences JSON.
+    let p = Preferences { main_window: Some(WindowGeometry { width: 1000.0, height: 700.0, maximized: true }), ..Default::default() };
+    let back: Preferences = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+    assert_eq!(back.main_window, p.main_window);
+}

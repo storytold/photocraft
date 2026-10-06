@@ -527,7 +527,47 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.
 fn snapshot(app: &PhotocraftApp) -> Value {
-    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock})
+    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "dockWidth": app.ui.dock_width})
+}
+
+/// Remember the main window's size and maximized state for the next launch. The size is the
+/// one un-maximizing returns to, so it's only taken while the window isn't maximized. Written
+/// once the size has held still for half a second (an edge drag doesn't save every frame);
+/// full screen and platforms that don't report the window state (the browser) are skipped.
+pub fn persist_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let (rect, maximized, fullscreen, now) = ctx.input(|i| {
+        let v = i.viewport();
+        (v.inner_rect, v.maximized, v.fullscreen, i.time)
+    });
+    let Some(maximized) = maximized else { return };
+    if fullscreen == Some(true) {
+        return;
+    }
+    let saved = app.session.prefs().main_window;
+    let mut g = saved.unwrap_or_default();
+    g.maximized = maximized;
+    if !maximized && let Some(r) = rect {
+        g.width = r.width();
+        g.height = r.height();
+    }
+    let Some(g) = g.sane() else { return };
+    if saved == Some(g) {
+        return;
+    }
+    let id = egui::Id::new("main-window-geometry");
+    match ctx.data(|d| d.get_temp::<(photocraft_engine::prefs::WindowGeometry, f64)>(id)) {
+        Some((pending, since)) if pending == g => {
+            if now - since >= 0.5 {
+                app.session.prefs.edit(|p| p.main_window = Some(g));
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(550));
+            }
+        }
+        _ => {
+            ctx.data_mut(|d| d.insert_temp(id, (g, now)));
+            ctx.request_repaint_after(std::time::Duration::from_millis(550));
+        }
+    }
 }
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
@@ -565,6 +605,10 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     }
     if let Some(d) = v.get("dock").and_then(|d| serde_json::from_value(d.clone()).ok()) {
         app.ui.dock = d;
+    }
+    if let Some(w) = v.get("dockWidth").and_then(Value::as_f64).map(|w| w as f32).filter(|w| w.is_finite()) {
+        app.ui.dock_width = Some(w);
+        app.ui.dock_width_request = Some(w);
     }
 }
 

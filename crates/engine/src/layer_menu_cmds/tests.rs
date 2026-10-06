@@ -408,3 +408,24 @@ fn load_files_into_stack_as_smart_object_then_median() {
     assert!((px[0] - 0.2).abs() < 2.0 / 255.0, "{px:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// file.reveal (a document tab's "show in folder"): needs a saved document; picks one by index;
+/// bad indices are errors. The label is the platform's wording.
+#[test]
+fn reveal_document_shows_the_saved_file() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert!(!s.is_enabled("file.reveal"), "not saved yet");
+    assert!(s.execute("file.reveal", json!({"dryRun": true})).is_err());
+    s.active_mut().unwrap().path = Some("/tmp/pics/a.psd".into());
+    assert!(s.is_enabled("file.reveal"));
+    let r = s.execute("file.reveal", json!({"document": 0, "dryRun": true})).unwrap();
+    let (prog, args) = reveal_command("/tmp/pics/a.psd");
+    assert_eq!((r["program"].clone(), r["args"].clone()), (json!(prog), json!(args)));
+    for bad in [json!({"document": 5}), json!({"document": -1}), json!({"document": "0"})] {
+        assert!(s.execute("file.reveal", bad.clone()).is_err(), "{bad}");
+    }
+    let label = crate::commands::find("file.reveal").map(|c| c.label);
+    assert_eq!(label, Some(REVEAL_LABEL));
+    assert!(["Reveal in Finder", "Show in Explorer", "Show in Folder"].contains(&REVEAL_LABEL));
+}

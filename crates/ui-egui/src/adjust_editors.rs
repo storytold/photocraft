@@ -178,7 +178,7 @@ fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[(&str, &str, f32, f32, f32,
     let mut e = Edit::default();
     for &(key, text, min, max, default, unit) in rows {
         let mut x = num(v, key, default).clamp(min, max);
-        let r = widgets::slider_row(ui, text, &mut x, min..=max, unit, None);
+        let r = widgets::slider_row_default(ui, text, &mut x, min..=max, unit, None, Some(default));
         if r.changed() {
             v[key] = json!(if max - min <= 10.0 { round(x, 0.01) } else { x.round() });
         }
@@ -829,6 +829,23 @@ fn hue_color(deg: f32) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
+/// Saturation and Lightness tracks for a hue (degrees): grey to the full colour, and black
+/// through the colour to white, so both sliders show the colour they act on.
+fn sat_light_tracks(hue: f32) -> ([Color32; 2], [Color32; 3]) {
+    let c = hue_color(hue);
+    ([Color32::from_gray(128), c], [Color32::BLACK, c, Color32::WHITE])
+}
+
+/// One Saturation or Lightness row of the Hue/Saturation editor (double-click resets to 0).
+fn tracked_slider(ui: &mut egui::Ui, v: &mut Value, key: &str, label: &str, lo: f32, track: &[Color32]) -> Edit {
+    let mut x = num(v, key, 0.0).clamp(lo, 100.0);
+    let r = widgets::slider_row_default(ui, label, &mut x, lo..=100.0, "%", Some(track), Some(0.0));
+    if r.changed() {
+        v[key] = json!(x.round());
+    }
+    Edit::of(&r)
+}
+
 /// The spectrum bar after the adjustment (what each hue becomes), sampled at `n` hues.
 fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
     let adj = photocraft_engine::commands::adjustment_from_params("hueSaturation", v);
@@ -871,18 +888,15 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if range == 0 {
         let (hlo, hhi, slo) = if colorize { (0.0, 360.0, 0.0) } else { (-180.0, 180.0, -100.0) };
         let mut h = num(v, "hue", 0.0).clamp(hlo, hhi);
-        let r = widgets::slider_row(ui, "Hue", &mut h, hlo..=hhi, "°", Some(&hue_grad));
+        let r = widgets::slider_row_default(ui, "Hue", &mut h, hlo..=hhi, "°", Some(&hue_grad), Some(0.0));
         if r.changed() {
             v["hue"] = json!(h.round());
         }
         e.add(Edit::of(&r));
-        let mut s = num(v, "saturation", 0.0).clamp(slo, 100.0);
-        let r = widgets::slider_row(ui, "Saturation", &mut s, slo..=100.0, "%", None);
-        if r.changed() {
-            v["saturation"] = json!(s.round());
-        }
-        e.add(Edit::of(&r));
-        e.add(sliders(ui, v, &[("lightness", "Lightness", -100.0, 100.0, 0.0, "%")]));
+        // The tracks follow the hue: Colorize's hue, or red shifted by the Hue slider.
+        let (sat, light) = sat_light_tracks(h);
+        e.add(tracked_slider(ui, v, "saturation", "Saturation", slo, &sat));
+        e.add(tracked_slider(ui, v, "lightness", "Lightness", -100.0, &light));
     } else {
         let key = HUE_RANGES[range - 1];
         if !v.get(key).is_some_and(Value::is_object) {
@@ -891,12 +905,15 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let mut o = v[key].clone();
         let mut sub = Edit::default();
         let mut h = num(&o, "hue", 0.0);
-        let r = widgets::slider_row(ui, "Hue", &mut h, -180.0..=180.0, "°", Some(&hue_grad));
+        let r = widgets::slider_row_default(ui, "Hue", &mut h, -180.0..=180.0, "°", Some(&hue_grad), Some(0.0));
         if r.changed() {
             o["hue"] = json!(h.round());
         }
         sub.add(Edit::of(&r));
-        sub.add(sliders(ui, &mut o, &[("saturation", "Saturation", -100.0, 100.0, 0.0, "%"), ("lightness", "Lightness", -100.0, 100.0, 0.0, "%")]));
+        // The tracks follow this range's hue (Reds 0°, Yellows 60° …) after the Hue shift.
+        let (sat, light) = sat_light_tracks((range - 1) as f32 * 60.0 + h);
+        sub.add(tracked_slider(ui, &mut o, "saturation", "Saturation", -100.0, &sat));
+        sub.add(tracked_slider(ui, &mut o, "lightness", "Lightness", -100.0, &light));
         if sub.changed {
             v[key] = o;
         }

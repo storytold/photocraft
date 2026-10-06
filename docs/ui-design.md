@@ -48,8 +48,27 @@ Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"
 - **Motion:** menus, popups and tooltips fade in over `theme::ANIMATION_TIME` (1/12 s).
   Preferences › Interface › "Animate menus and panels" turns that off (`animation_time` 0), so
   they appear at once.
-- **Main window:** the desktop app opens maximized; 1440×900 is the size it returns to when
-  un-maximized.
+- **Main window:** the desktop app opens as it was last left (`mainWindow` in the preferences:
+  the un-maximized size and whether it was maximized), maximized at 1440×900 on first launch.
+  The size is saved once it has held still for half a second; full screen isn't saved.
+- **What PhotoCraft remembers across restarts** (all in the preferences file):
+  - the right dock's width (with the panel layout, `dockWidth`, when Remember Workspace Changes
+    is on; saved workspaces carry it too);
+  - the folder the last file was opened from (`lastOpenFolder`): File › Open, Place, Browse and
+    preset import start there;
+  - the last Export As settings (`exportAs`: format, quality, transparency, scale);
+  - the last 8 entries run from the command palette (`recentCommands`), listed under "Recent"
+    when its search is empty.
+- **UI scale:** Preferences › Interface › UI Scale offers Auto, 100, 115, 125, 150 and 200 %.
+- **Document tabs:** right-click a tab for Close, Close Others, Close All and, for a saved
+  document, Reveal in Finder / Show in Explorer / Show in Folder (`file.reveal`). The reveal
+  wording follows the platform everywhere (`layer_menu_cmds::REVEAL_LABEL`).
+- **Sliders:** double-click a slider to reset it: to its default where the caller gives one
+  (`widgets::slider_row_default`, e.g. the adjustment editors), else to the value it had when it
+  appeared. Hue/Saturation's Saturation and Lightness tracks show the hue they act on.
+- **Zoom:** ⌥/Alt + mouse wheel zooms around the pointer, about 5 % per wheel notch.
+- **Rulers:** Preferences › Units & Rulers › Show Rulers in New Documents turns rulers on when a
+  document is created or opened.
 - **Verify every visual change** with `ui.screenshot`, at several window sizes and in every theme.
 
 ## Adding icons

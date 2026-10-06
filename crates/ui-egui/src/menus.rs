@@ -589,7 +589,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         .iter()
         .map(|&(path, label, sc, id)| MenuItem {
             id: id.to_string(),
-            label: label.to_string(),
+            // Photoshop's macOS wording, in the platform's words elsewhere.
+            label: if label == "Reveal in Finder" { photocraft_engine::layer_menu_cmds::REVEAL_LABEL.to_string() } else { label.to_string() },
             path: path.iter().map(|s| s.to_string()).collect(),
             shortcut: sc.map(Into::into),
             enabled: known(id) && is_enabled(app, id),

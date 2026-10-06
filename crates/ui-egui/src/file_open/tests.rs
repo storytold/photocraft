@@ -29,7 +29,7 @@ fn app_with(pick_open: Option<(String, Vec<u8>)>, pick_save: Option<String>) -> 
             let warnings = if path.ends_with(".png") { vec!["Layers were flattened".to_string()] } else { Vec::new() };
             Ok((b"out".to_vec(), warnings))
         })),
-        pick_open: Some(Box::new(move || pick_open.take())),
+        pick_open: Some(Box::new(move |_| pick_open.take())),
         pick_save: Some(Box::new(move |_s: &str| pick_save.clone())),
         write: Some(Box::new(move |p: &str, b: &[u8]| {
             w.borrow_mut().push((p.to_string(), b.to_vec()));
@@ -244,4 +244,47 @@ fn notices_render_without_panicking() {
     let mut out = ctx.run_ui(Default::default(), |ui| notices::show(&mut app, ui.ctx()));
     out.textures_delta.clear();
     assert_eq!(app.ui.notices.len(), 2);
+}
+
+/// File › Open starts in the folder the last file came from, and the folder survives a
+/// restart (it's a preference). A bare name (the web) leaves it alone.
+#[test]
+fn open_starts_in_the_last_folder() {
+    let starts: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+    let picks = Rc::new(RefCell::new(vec!["photo.png".to_string(), "/photos/trip/b.png".to_string(), "/photos/trip/a.png".to_string()]));
+    let (s, p) = (starts.clone(), picks.clone());
+    let services = Services {
+        import: Some(Box::new(|name: &str, _: &[u8]| Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))),
+        pick_open: Some(Box::new(move |start: Option<&str>| {
+            s.borrow_mut().push(start.map(str::to_string));
+            p.borrow_mut().pop().map(|name| (name, b"img".to_vec()))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.open_dialog_file();
+    app.open_dialog_file();
+    app.open_dialog_file();
+    assert_eq!(*starts.borrow(), vec![None, Some("/photos/trip".to_string()), Some("/photos/trip".to_string())]);
+    assert_eq!(app.session.prefs().last_open_folder, "/photos/trip", "a bare file name keeps the folder");
+    let saved = app.session.prefs_to_json();
+    let mut s2 = photocraft_engine::Session::new();
+    s2.load_prefs_json(&saved).unwrap();
+    assert_eq!(s2.prefs().last_open_folder, "/photos/trip");
+}
+
+/// Preferences › Units & Rulers › Show Rulers in New Documents turns rulers on for a new
+/// document; off (the default), they stay as they are.
+#[test]
+fn rulers_follow_the_new_documents_preference() {
+    let (mut app, _) = app_with(None, None);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.sync_views();
+    assert!(!app.ui.extras.rulers);
+    app.run("prefs.set", json!({"values": {"unitsAndRulers.showRulersInNewDocuments": true}})).unwrap();
+    app.sync_views();
+    assert!(!app.ui.extras.rulers, "only a new document turns them on");
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.sync_views();
+    assert!(app.ui.extras.rulers);
 }

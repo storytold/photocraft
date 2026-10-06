@@ -8,23 +8,23 @@ order = 4
 [[item]]
 id = "UI-217-1"
 target = "Tool options, last Export As / Save for Web / Fill settings and font recents persist"
-status = "missing"
+status = "partial"
 issue = 217
-note = "No tool_options/export fields in Preferences (prefs.rs:694); export_dialog.rs:21 png/85"
+note = "Export As remembers its settings (prefs exportAs, export_dialog.rs); tool options, Save for Web, Fill and font recents still don't persist"
 
 [[item]]
 id = "UI-217-2"
 target = "Window size and dock width remembered across restarts"
-status = "missing"
+status = "done"
 issue = 217
-note = "main.rs:108 fixed 1440x900; dock.rs:529 snapshot omits the width"
+note = "prefs mainWindow (size + maximized, read in main.rs) and dockWidth in the panel layout (dock.rs persist_window / snapshot)"
 
 [[item]]
 id = "UI-217-3"
 target = "File > Open starts in the last-used folder"
-status = "missing"
+status = "done"
 issue = 217
-note = "services.rs:110 FileDialog::new() without set_directory"
+note = "prefs lastOpenFolder; PhotocraftApp::pick_open_file passes it to the dialog (services.rs set_directory)"
 
 [[item]]
 id = "UI-217-4"
@@ -43,16 +43,16 @@ note = "No floating groups in dock.rs/panels.rs"
 [[item]]
 id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
-status = "missing"
+status = "partial"
 issue = 217
-note = "canvas.rs:674-770 tabs click/close only"
+note = "Right-click menu Close / Close Others / Close All / Reveal (canvas.rs tab_menu, file.reveal); no overflow list or drag to reorder"
 
 [[item]]
 id = "UI-217-7"
 target = "Command palette shows recently run commands on an empty query"
-status = "missing"
+status = "done"
 issue = 217
-note = "palette.rs:83-108 fuzzy hits only"
+note = "palette.rs: prefs recentCommands (last 8) listed under Recent on an empty query"
 
 [[item]]
 id = "UI-217-8"
@@ -64,16 +64,16 @@ note = "paint_mouse.rs:67 right-click opens the brush picker only"
 [[item]]
 id = "UI-217-9"
 target = "UI scale presets 100/115/125/150/200 % through zoom_factor, remembered"
-status = "missing"
+status = "done"
 issue = 217
-note = "prefs.rs:61 UiScale unused; input_tests.rs:71 asserts zoom_factor stays 1.0"
+note = "UiScale Auto/100/115/125/150/200 (prefs.rs), applied through zoom_factor and saved with the preferences"
 
 [[item]]
 id = "UI-217-10"
 target = "Appearance: animation toggle, canvas pattern toggle per theme, start-screen recents"
-status = "missing"
+status = "partial"
 issue = 217
-note = "No such prefs; start screen (canvas.rs:825) has no recents"
+note = "Interface > Animate menus and panels exists; no canvas pattern toggle per theme, no start-screen recents"
 
 [[item]]
 id = "UI-217-11"
@@ -94,7 +94,7 @@ id = "UI-217-13"
 target = "Numeric fields accept arithmetic and units; scrubby labels; double-click resets a slider"
 status = "partial"
 issue = 217
-note = "widgets.rs:131 DragValue scrubs; no expressions, label scrub or reset"
+note = "Double-click resets a slider (widgets::slider_default); no arithmetic, units or label scrubbing yet"
 
 [[item]]
 id = "UI-217-14"
@@ -113,9 +113,9 @@ note = "adjust_editors.rs:397 has none of them"
 [[item]]
 id = "UI-217-16"
 target = "Hue/Saturation: Saturation and Lightness sliders get hue-following colour tracks"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only the Hue slider has a gradient"
+note = "adjust_editors.rs sat_light_tracks: Saturation grey-to-hue, Lightness black-hue-white, following the Hue slider and range"
 
 [[item]]
 id = "UI-217-17"
@@ -127,23 +127,23 @@ note = "panels.rs:1837 single field + hex/RGB readout"
 [[item]]
 id = "UI-217-18"
 target = "Alt+wheel zooms in gentle ~5 % steps; zoom controls uncramped"
-status = "missing"
+status = "partial"
 issue = 217
-note = "canvas.rs:1107-1125 no Alt handling"
+note = "Alt+wheel zooms ~5 % per notch (canvas.rs alt_wheel_zoom); zoom controls not reworked"
 
 [[item]]
 id = "UI-217-19"
 target = "Shortcut hints rendered per platform; Reveal label per OS"
-status = "missing"
+status = "done"
 issue = 217
-note = "~33 hard-coded modifier glyph strings in ui-egui; menu_catalog.rs:341 one label"
+note = "Modifier glyphs go through shortcuts::pretty (only test messages keep literal glyphs); REVEAL_LABEL per OS in menus, tabs and commands"
 
 [[item]]
 id = "UI-217-20"
 target = "'Show rulers in new documents' preference; guides stored as f64"
-status = "missing"
+status = "partial"
 issue = 217
-note = "No rulers pref; doc lib.rs:523 guides are Vec<f32>"
+note = "Units & Rulers > Show Rulers in New Documents (lib.rs sync_views); guides are still f32"
 
 [[item]]
 id = "UI-217-21"

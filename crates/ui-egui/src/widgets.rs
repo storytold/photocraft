@@ -171,10 +171,25 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
 pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
+    slider_default(ui, value, range, gradient, None)
+}
+
+/// [`slider`] that a double-click resets to `default`, or, without one, to the value it had when
+/// it appeared (a dialog's starting value).
+pub fn slider_default(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, default: Option<f32>) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
+    // The value to reset to: the given default, else the value when the slider appeared (kept
+    // while it is drawn every frame; a slider shown again starts over).
+    let pass = ui.ctx().cumulative_pass_nr();
+    let key = resp.id.with("reset-to");
+    let first = match ui.data(|d| d.get_temp::<(f32, u64)>(key)) {
+        Some((v, last)) if last.saturating_add(1) >= pass => v,
+        _ => *value,
+    };
+    ui.data_mut(|d| d.insert_temp(key, (first, pass)));
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
     if let Some(p) = resp.interact_pointer_pos()
         && (resp.dragged() || resp.clicked())
@@ -186,6 +201,15 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
             resp.mark_changed();
         }
     }
+    if resp.double_clicked() {
+        let reset = default.unwrap_or(first);
+        if reset.is_finite() && (reset - *value).abs() > f32::EPSILON {
+            *value = reset.clamp(lo.min(hi), hi.max(lo));
+            resp.mark_changed();
+        }
+    }
+    let v = f64::from(*value);
+    resp.widget_info(|| egui::WidgetInfo::slider(true, v, ""));
     let f = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
     let knob_x = track.left() + f * track.width();
     let painter = ui.painter();
@@ -230,8 +254,22 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
     resp
 }
 
-/// Labelled slider row: `Label ........ [value field]` above a full-width thin slider.
+/// Labelled slider row: `Label ........ [value field]` above a full-width thin slider. A
+/// double-click on the slider resets it (see [`slider_default`]).
 pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: Option<&[Color32]>) -> Response {
+    slider_row_default(ui, label, value, range, suffix, gradient, None)
+}
+
+/// [`slider_row`] whose slider a double-click resets to `default`.
+pub fn slider_row_default(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    default: Option<f32>,
+) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut changed_resp = None;
     ui.horizontal(|ui| {
@@ -240,7 +278,7 @@ pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Ra
             changed_resp = Some(value_field(ui, value, range.clone(), suffix, 74.0));
         });
     });
-    let s = slider(ui, value, range, gradient);
+    let s = slider_default(ui, value, range, gradient, default);
     let mut r = s.clone();
     if let Some(v) = changed_resp
         && v.changed()
@@ -450,6 +488,40 @@ pub fn fmt_num2(v: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A double-click on a slider resets it: to the given default, else to the value it had
+    /// when it appeared.
+    #[test]
+    fn double_click_resets_a_slider() {
+        use egui::{Event, Modifiers, PointerButton};
+        use egui_kittest::Harness;
+        let click = |h: &mut Harness<'_, f32>, p: egui::Pos2| {
+            h.event(Event::PointerMoved(p));
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.step();
+        };
+        for default in [Some(0.0f32), None] {
+            let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+                move |ui, v: &mut f32| {
+                    let r = super::slider_default(ui, v, -100.0..=100.0, None, default);
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("slider-rect"), r.rect));
+                },
+                25.0f32,
+            );
+            h.run_steps(2);
+            let r: egui::Rect = h.ctx.data(|d| d.get_temp(egui::Id::new("slider-rect"))).unwrap();
+            // A click near the right end sets about 100.
+            click(&mut h, egui::pos2(r.right() - 8.0, r.center().y));
+            h.run_steps(30);
+            assert!(*h.state() > 90.0, "{}", h.state());
+            let c = r.center();
+            click(&mut h, c);
+            click(&mut h, c);
+            h.run_steps(2);
+            assert_eq!(*h.state(), default.unwrap_or(25.0), "{default:?}");
+        }
+    }
+
     #[test]
     fn two_decimal_numbers_trim_zeros() {
         assert_eq!(super::fmt_num2(1.05), "1.05");

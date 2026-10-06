@@ -258,6 +258,17 @@ pub fn fit_view(view: &mut View, doc: &Document, area: Vec2) {
 }
 
 /// Zoom steps like Photoshop's (⌘+ / ⌘−).
+/// How much one wheel notch zooms with ⌥ held (about 5 %).
+pub const ALT_WHEEL_STEP: f32 = 1.05;
+
+/// ⌥-wheel zoom: about 5 % per wheel notch, smooth for trackpads and the smoothed wheel.
+/// `scroll` is this frame's vertical scroll and `notch` what one notch scrolls (points).
+pub fn alt_wheel_zoom(z: f32, scroll: f32, notch: f32) -> f32 {
+    let notch = if notch.is_finite() && notch > 0.0 { notch } else { 40.0 };
+    let f = ALT_WHEEL_STEP.powf(scroll / notch);
+    if f.is_finite() && z.is_finite() { (z * f).clamp(0.01, 64.0) } else { z }
+}
+
 pub fn zoom_step(z: f32, dir: i32) -> f32 {
     const STEPS: [f32; 22] =
         [0.01, 0.02, 0.03, 0.05, 0.0667, 0.1, 0.125, 0.1667, 0.25, 0.333, 0.5, 0.6667, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 12.0, 16.0, 32.0];
@@ -829,11 +840,13 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let active = app.session.active_index();
     let mut activate = None;
     let mut close = None;
+    let mut menu = None;
     egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, st) in app.session.documents().iter().enumerate() {
                 let sel = Some(i) == active;
+                let saved = st.path.is_some();
                 let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
                 let meta = format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits());
                 let name_g = ui.painter().layout_no_wrap(name, crate::theme::medium(12.5), t.text);
@@ -861,6 +874,9 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if resp.clicked() {
                     activate = Some(i);
                 }
+                let tab_name = st.doc.name.clone();
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &tab_name));
+                tab_menu(&resp, i, saved, &mut menu);
             }
         });
     });
@@ -870,13 +886,14 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(i) = close {
         let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
     }
+    run_tab_menu(app, ui.ctx(), menu);
 }
 
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
 fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let active = app.session.active_index();
-    let (mut activate, mut close) = (None, None);
+    let (mut activate, mut close, mut menu) = (None, None, None);
     let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
     let mut x = strip.left();
@@ -909,6 +926,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         } else if resp.clicked() {
             activate = Some(i);
         }
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &st.doc.name));
+        tab_menu(&resp, i, st.path.is_some(), &mut menu);
         x = r.right();
     }
     if let Some(i) = activate {
@@ -916,6 +935,39 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if let Some(i) = close {
         let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
+    }
+    run_tab_menu(app, ui.ctx(), menu);
+}
+
+/// A document tab's right-click menu (Photoshop): Close, Close Others, Close All and, for a
+/// saved document on the desktop, show its file in the file manager. Records the pick in `menu`
+/// as (command id, document index); [`run_tab_menu`] runs it once the tabs are drawn.
+fn tab_menu(resp: &egui::Response, i: usize, saved: bool, menu: &mut Option<(&'static str, usize)>) {
+    resp.context_menu(|ui| {
+        ui.set_min_width(170.0);
+        for (id, label) in [("file.close", "Close"), ("file.closeOthers", "Close Others"), ("file.closeAll", "Close All")] {
+            if ui.button(label).clicked() {
+                *menu = Some((id, i));
+                ui.close();
+            }
+        }
+        if saved && !cfg!(target_arch = "wasm32") {
+            ui.separator();
+            if ui.button(photocraft_engine::layer_menu_cmds::REVEAL_LABEL).clicked() {
+                *menu = Some(("file.reveal", i));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// Run what a tab's right-click menu picked (the close commands ask about unsaved changes).
+fn run_tab_menu(app: &mut PhotocraftApp, ctx: &egui::Context, menu: Option<(&'static str, usize)>) {
+    let Some((id, i)) = menu else { return };
+    let params = if id == "file.closeAll" { json!({}) } else { json!({ "document": i }) };
+    if let Err(e) = crate::menus::invoke(app, ctx, id, params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
@@ -1308,13 +1360,21 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
-    // Navigation: scroll pans, pinch / ⌘-scroll zooms around the pointer.
+    // Navigation: scroll pans, pinch / ⌘-scroll zooms around the pointer, ⌥-scroll zooms in
+    // gentle steps (Photoshop).
     if response.hovered() || free_hover {
-        let (scroll, zoom_delta, pointer) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos()));
+        let (scroll, zoom_delta, pointer, alt) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos(), i.modifiers.alt));
         if zoom_delta != 1.0
             && let Some(p) = pointer
         {
             let nz = (view.zoom * zoom_delta).clamp(0.01, 64.0);
+            zoom_about(&mut view, &xf, p, nz);
+        } else if alt
+            && scroll.y != 0.0
+            && let Some(p) = pointer
+        {
+            let notch = ctx.options(|o| o.input_options.line_scroll_speed);
+            let nz = alt_wheel_zoom(view.zoom, scroll.y, notch);
             zoom_about(&mut view, &xf, p, nz);
         } else if scroll.y != 0.0
             && app.session.prefs().general.zoom_with_scroll_wheel
@@ -2431,6 +2491,13 @@ mod tests {
 
     #[test]
     fn zoom_steps_monotone() {
+        // ⌥-wheel: one notch is about 5 %, either way; bounded; garbage leaves the zoom alone.
+        assert!((alt_wheel_zoom(1.0, 40.0, 40.0) - 1.05).abs() < 1e-5);
+        assert!((alt_wheel_zoom(1.0, -40.0, 40.0) - 1.0 / 1.05).abs() < 1e-5);
+        assert!((alt_wheel_zoom(1.0, 20.0, 40.0) - 1.05f32.sqrt()).abs() < 1e-5, "half a notch, half a step");
+        assert_eq!(alt_wheel_zoom(60.0, 4000.0, 40.0), 64.0);
+        assert_eq!(alt_wheel_zoom(1.0, f32::NAN, 40.0), 1.0);
+        assert!((alt_wheel_zoom(1.0, 40.0, 0.0) - 1.05).abs() < 1e-5, "a bad notch size falls back");
         assert_eq!(zoom_step(1.0, 1), 2.0);
         assert_eq!(zoom_step(1.0, -1), 0.6667);
         assert_eq!(zoom_step(0.4, 1), 0.5);
@@ -2486,5 +2553,46 @@ mod transform_controls_tests {
         assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
         assert!(!transform_controls_hit(r, r.center()));
         assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
+    }
+}
+
+#[cfg(test)]
+mod tab_menu_tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    use crate::PhotocraftApp;
+    use crate::theme::ThemeKind;
+
+    /// Right-clicking a document tab offers Close, Close Others and Close All (both tab styles);
+    /// Close Others keeps the clicked document. Unsaved documents have no "show in folder" item.
+    #[test]
+    fn tab_right_click_menu_closes_documents() {
+        for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, theme);
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.ui.theme = theme;
+                for name in ["one", "two", "three"] {
+                    app.run("file.new", json!({"width": 40, "height": 30, "name": name})).unwrap();
+                }
+                app.sync_views();
+                app
+            });
+            h.run_steps(6);
+            h.get_by_label("two").click_secondary();
+            h.run_steps(3);
+            assert!(h.query_by_label(photocraft_engine::layer_menu_cmds::REVEAL_LABEL).is_none(), "{theme:?}: not saved");
+            h.get_by_label("Close Others").click();
+            h.run_steps(4);
+            let names: Vec<String> = h.state().session.documents().iter().map(|d| d.doc.name.clone()).collect();
+            assert_eq!(names, vec!["two".to_string()], "{theme:?}");
+            h.get_by_label("two").click_secondary();
+            h.run_steps(3);
+            h.get_by_label("Close All").click();
+            h.run_steps(4);
+            assert!(h.state().session.documents().is_empty(), "{theme:?}");
+        }
     }
 }

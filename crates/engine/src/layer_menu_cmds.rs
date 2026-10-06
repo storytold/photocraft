@@ -339,6 +339,35 @@ macro_rules! stack_spec {
     };
 }
 
+/// The platform's wording for showing a file in the file manager (Photoshop says "Reveal in
+/// Finder" on macOS and "Show in Explorer" on Windows).
+pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(target_os = "windows") {
+    "Show in Explorer"
+} else {
+    "Show in Folder"
+};
+
+/// Native-only: show a document's saved file in the platform file manager (a document tab's
+/// right-click menu). `document` is an index into the open documents, the active one if unset.
+fn reveal_document(s: &mut Session, p: &Value) -> Result<Value> {
+    let st = match p.get("document") {
+        None | Some(Value::Null) => s.active().ok_or(EngineError::NoDocument)?,
+        Some(v) => {
+            let i = v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| other("`document` must be a document index"))?;
+            s.documents().get(i).ok_or_else(|| other(format!("no document {i}")))?
+        }
+    };
+    let path = st.path.clone().ok_or_else(|| other("the document hasn't been saved yet"))?;
+    let (program, args) = reveal_command(&path);
+    if p.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(json!({"program": program, "args": args}));
+    }
+    spawn(program, &args)?;
+    Ok(json!({"path": path}))
+}
+
 /// Native-only: show a linked smart object's file in the platform file manager.
 fn reveal_in_finder(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -752,14 +781,28 @@ pub fn specs() -> Vec<CommandSpec> {
         stack_spec!("summation", "Summation", Some(StackMode::Summation)),
         stack_spec!("variance", "Variance", Some(StackMode::Variance)),
         stack_spec!("none", "None", None),
-        spec!(
-            "layer.smartObjects.revealInFinder",
-            "Reveal in Finder",
-            ["Layer", "Smart Objects"],
-            r##"{"dryRun":bool=false}"##,
-            |s| native(s).and_then(|_| has_linked_smart(s)),
-            reveal_in_finder
-        ),
+        CommandSpec {
+            id: "layer.smartObjects.revealInFinder",
+            label: REVEAL_LABEL,
+            menu: &["Layer", "Smart Objects"],
+            shortcut: None,
+            params: r##"{"dryRun":bool=false}"##,
+            enabled: |s| native(s).and_then(|_| has_linked_smart(s)),
+            run: reveal_in_finder,
+            journal: true,
+        },
+        CommandSpec {
+            id: "file.reveal",
+            label: REVEAL_LABEL,
+            menu: &[],
+            shortcut: None,
+            params: r##"{"document":n?,"dryRun":bool=false}"##,
+            enabled: |s| {
+                native(s).and_then(|_| if s.active().is_some_and(|d| d.path.is_some()) { Ok(()) } else { Err("the document hasn't been saved yet".into()) })
+            },
+            run: reveal_document,
+            journal: false,
+        },
         spec!(
             "layer.layerStyle.blendingOptions",
             "Blending Options…",

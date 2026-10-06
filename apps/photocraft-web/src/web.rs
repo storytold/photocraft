@@ -146,7 +146,8 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             }
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        pick_open: Some(Box::new(move || {
+        // Browsers choose the starting folder themselves.
+        pick_open: Some(Box::new(move |_start| {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {

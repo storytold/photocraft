@@ -13,15 +13,20 @@ use crate::{ExportSettings, PhotocraftApp};
 
 const FORMATS: [(&str, &str); 4] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP (lossless)"), ("tif", "TIFF")];
 
+/// The dialog opens with the settings last exported with (checked: a hand-edited preferences
+/// file can hold anything), PNG at 85 % the first time.
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
+    let last = app.session.prefs().export_as.clone();
     let st = app.session.active().ok_or("no document")?;
     let mut f = Map::new();
     f.insert("__export".into(), json!(true));
     f.insert("__label".into(), json!("Export As"));
-    f.insert("format".into(), json!("png"));
-    f.insert("quality".into(), json!(85));
-    f.insert("transparency".into(), json!(true));
-    f.insert("scale".into(), json!(100));
+    let format = if FORMATS.iter().any(|(id, _)| *id == last.format) { last.format.as_str() } else { "png" };
+    let finite = |v: f64, default: f64, lo: f64, hi: f64| if v.is_finite() { v.round().clamp(lo, hi) } else { default };
+    f.insert("format".into(), json!(format));
+    f.insert("quality".into(), json!(finite(last.quality, 85.0, 1.0, 100.0)));
+    f.insert("transparency".into(), json!(last.transparency));
+    f.insert("scale".into(), json!(finite(last.scale, 100.0, 1.0, 1000.0)));
     f.insert("__w".into(), json!(st.doc.size.width));
     f.insert("__h".into(), json!(st.doc.size.height));
     Ok(app.ui.open_dialog(DialogKind::Command, f))
@@ -196,6 +201,18 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     write(&path, &bytes)?;
     app.ui.status = format!("Exported {path} ({})", crate::sizing::human_bytes(bytes.len() as f64));
     app.ui.status_error = false;
+    // Export As remembers its settings for next time (Quick Export layer PNG uses fixed ones).
+    if f.contains_key("__export") {
+        let last = photocraft_engine::prefs::ExportAsSettings {
+            format: ext,
+            quality: n(f, "quality", 85.0),
+            transparency: f.get("transparency").and_then(Value::as_bool).unwrap_or(true),
+            scale: n(f, "scale", 100.0),
+        };
+        if app.session.prefs().export_as != last {
+            app.session.prefs.edit(|p| p.export_as = last);
+        }
+    }
     crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
     Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
 }
@@ -250,5 +267,43 @@ mod tests {
         let proxy = export_document(&doc, &f, Some(40)).unwrap();
         assert_eq!(proxy.size.width, 40);
         assert_eq!(settings(&f).jpeg_quality, Some(85));
+    }
+
+    /// Export As opens with the settings last exported with (PNG/85 the first time), they
+    /// survive a restart, and garbage from a hand-edited preferences file is replaced.
+    #[test]
+    fn export_as_remembers_its_last_settings() {
+        let services = crate::Services {
+            export: Some(Box::new(|_: &Document, _: &str, _: &ExportSettings| Ok((b"out".to_vec(), Vec::new())))),
+            pick_save: Some(Box::new(|s: &str| Some(format!("/out/{s}")))),
+            write: Some(Box::new(|_: &str, _: &[u8]| Ok(()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let fields = |app: &PhotocraftApp, id: u64| app.ui.dialogs.iter().find(|d| d.id == id).map(|d| d.fields.clone()).unwrap();
+        let id = open(&mut app).unwrap();
+        let mut f = fields(&app, id);
+        assert_eq!((f["format"].clone(), f["quality"].clone()), (json!("png"), json!(85.0)));
+        f.insert("format".into(), json!("jpg"));
+        f.insert("quality".into(), json!(60));
+        f.insert("scale".into(), json!(50));
+        app.ui.close_dialog(id);
+        confirm(&mut app, &f).unwrap();
+        let saved = app.session.prefs_to_json();
+        let mut s2 = photocraft_engine::Session::new();
+        s2.load_prefs_json(&saved).unwrap();
+        s2.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let mut app2 = PhotocraftApp::new(s2, crate::Services::default());
+        let id2 = open(&mut app2).unwrap();
+        let f2 = fields(&app2, id2);
+        assert_eq!((f2["format"].clone(), f2["quality"].clone(), f2["scale"].clone()), (json!("jpg"), json!(60.0), json!(50.0)));
+        // Junk in the preferences falls back to the defaults.
+        app2.session
+            .prefs
+            .edit(|p| p.export_as = photocraft_engine::prefs::ExportAsSettings { format: "exe".into(), quality: f64::NAN, transparency: false, scale: 1e9 });
+        let id3 = open(&mut app2).unwrap();
+        let f3 = fields(&app2, id3);
+        assert_eq!((f3["format"].clone(), f3["quality"].clone(), f3["scale"].clone()), (json!("png"), json!(85.0), json!(1000.0)));
     }
 }
