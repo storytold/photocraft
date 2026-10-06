@@ -71,9 +71,9 @@ note = "sample_eyedropper (canvas.rs:1552) draws no ring"
 [[item]]
 id = "TOOL-213-10"
 target = "Ctrl+Alt drag resizes brush size/hardness with an on-canvas readout"
-status = "missing"
+status = "done"
 issue = 213
-note = "Only [ ] resize (shortcuts.rs:270)"
+note = "brush_resize.rs: Ctrl+Alt drag (#231) and Alt+right-drag (#297), size left/right, hardness up/down, Diameter/Hardness readout"
 
 [[item]]
 id = "TOOL-213-11"

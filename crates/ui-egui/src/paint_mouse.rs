@@ -3,6 +3,7 @@
 //! with Preferences › Tools › Right-click with painting tools set to Erase, a right drag with the
 //! Brush erases with the current brush (Krita, Paint). Each right stroke is one `paint.stroke`
 //! with `"erase": true`, so one undo step, with the pen pressure and tilt of a normal stroke.
+//! Alt + right-drag resizes the brush instead (Photoshop on Windows, #297; see `brush_resize`).
 
 use egui::{PointerButton, Response};
 use photocraft_engine::prefs::RightClickPaint;
@@ -61,12 +62,21 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 /// Route the canvas response's buttons: the left one drives the tool; the right one erases (Erase
 /// preference) or opens the Brush Preset picker. Arms `secondary_erase` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
-    let erase = right_erases(app, tool);
+    // Alt + right-drag resizes the brush (left/right size, up/down hardness) rather than
+    // erasing or opening the picker; its Down starts the resize in `brush_resize::pointer`.
+    let alt = response.ctx.input(|i| i.modifiers.alt);
+    let resize_start = alt && crate::brush_resize::applies(tool) && response.drag_started_by(PointerButton::Secondary);
+    let resizing = app.brush_resize.is_some();
+    if resize_start {
+        app.brush_resize_armed = true;
+    }
+    let erase = right_erases(app, tool) && !alt;
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && response.drag_started_by(PointerButton::Secondary);
     let right_click = response.secondary_clicked();
     if right_click
         && !erase
+        && !alt
         && has_brush_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
@@ -74,10 +84,11 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     }
     let erase_click = erase && right_click;
     app.secondary_erase = right_start || erase_click;
+    let right_drag = right_stroke || resizing;
     Buttons {
-        started: response.drag_started_by(PointerButton::Primary) || right_start,
-        dragged: response.dragged_by(PointerButton::Primary) || (right_stroke && response.dragged_by(PointerButton::Secondary)),
-        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_stroke && response.drag_stopped_by(PointerButton::Secondary)),
+        started: response.drag_started_by(PointerButton::Primary) || right_start || resize_start,
+        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && response.dragged_by(PointerButton::Secondary)),
+        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
         clicked: response.clicked() || erase_click,
     }
 }
@@ -194,6 +205,35 @@ mod tests {
 
     fn strokes(h: &Harness<'static, PhotocraftApp>) -> Vec<serde_json::Value> {
         h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).collect()
+    }
+
+    /// Alt + right-drag resizes the brush (#297, Photoshop on Windows): nothing is painted or
+    /// erased and the picker stays shut, also with right-drag set to erase. A plain Alt +
+    /// right-click doesn't open the picker either.
+    #[test]
+    fn alt_right_drag_resizes_the_brush() {
+        for prefs in [None, Some("erase")] {
+            let mut h = harness(prefs);
+            let undo = h.state().session.active().unwrap().history.past_len();
+            h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+            drag(&mut h, PointerButton::Secondary);
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(2);
+            let size = h.state().session.tools.brush.size;
+            assert!(size > 100.0, "{prefs:?}: dragging right grows the brush: {size}");
+            assert!(strokes(&h).is_empty(), "{prefs:?}: nothing painted or erased");
+            assert_eq!(h.state().ui.brush_picker, None, "{prefs:?}");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), undo, "{prefs:?}: the brush is tool state, not a history step");
+            assert!(h.state().brush_resize.is_none(), "{prefs:?}: the gesture ended with the button");
+            // Alt + right-click without a drag: no picker.
+            let c = h.state().last_canvas_rect.center();
+            h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+            press(&mut h, c, PointerButton::Secondary, true);
+            press(&mut h, c, PointerButton::Secondary, false);
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(1);
+            assert_eq!(h.state().ui.brush_picker, None, "{prefs:?}");
+        }
     }
 
     #[test]

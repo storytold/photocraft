@@ -284,6 +284,17 @@ pub fn fit_view(view: &mut View, doc: &Document, area: Vec2) {
 }
 
 /// Zoom steps like Photoshop's (⌘+ / ⌘−).
+/// How much one wheel notch zooms with ⌥ held (about 5 %).
+pub const ALT_WHEEL_STEP: f32 = 1.05;
+
+/// ⌥-wheel zoom: about 5 % per wheel notch, smooth for trackpads and the smoothed wheel.
+/// `scroll` is this frame's vertical scroll and `notch` what one notch scrolls (points).
+pub fn alt_wheel_zoom(z: f32, scroll: f32, notch: f32) -> f32 {
+    let notch = if notch.is_finite() && notch > 0.0 { notch } else { 40.0 };
+    let f = ALT_WHEEL_STEP.powf(scroll / notch);
+    if f.is_finite() && z.is_finite() { (z * f).clamp(0.01, 64.0) } else { z }
+}
+
 pub fn zoom_step(z: f32, dir: i32) -> f32 {
     const STEPS: [f32; 22] =
         [0.01, 0.02, 0.03, 0.05, 0.0667, 0.1, 0.125, 0.1667, 0.25, 0.333, 0.5, 0.6667, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 12.0, 16.0, 32.0];
@@ -1334,13 +1345,21 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
-    // Navigation: scroll pans, pinch / ⌘-scroll zooms around the pointer.
+    // Navigation: scroll pans, pinch / ⌘-scroll zooms around the pointer, ⌥-scroll zooms in
+    // gentle steps (Photoshop).
     if response.hovered() || free_hover {
-        let (scroll, zoom_delta, pointer) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos()));
+        let (scroll, zoom_delta, pointer, alt) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos(), i.modifiers.alt));
         if zoom_delta != 1.0
             && let Some(p) = pointer
         {
             let nz = (view.zoom * zoom_delta).clamp(0.01, 64.0);
+            zoom_about(&mut view, &xf, p, nz);
+        } else if alt
+            && scroll.y != 0.0
+            && let Some(p) = pointer
+        {
+            let notch = ctx.options(|o| o.input_options.line_scroll_speed);
+            let nz = alt_wheel_zoom(view.zoom, scroll.y, notch);
             zoom_about(&mut view, &xf, p, nz);
         } else if scroll.y != 0.0
             && app.session.prefs().general.zoom_with_scroll_wheel
@@ -2476,6 +2495,13 @@ mod tests {
 
     #[test]
     fn zoom_steps_monotone() {
+        // ⌥-wheel: one notch is about 5 %, either way; bounded; garbage leaves the zoom alone.
+        assert!((alt_wheel_zoom(1.0, 40.0, 40.0) - 1.05).abs() < 1e-5);
+        assert!((alt_wheel_zoom(1.0, -40.0, 40.0) - 1.0 / 1.05).abs() < 1e-5);
+        assert!((alt_wheel_zoom(1.0, 20.0, 40.0) - 1.05f32.sqrt()).abs() < 1e-5, "half a notch, half a step");
+        assert_eq!(alt_wheel_zoom(60.0, 4000.0, 40.0), 64.0);
+        assert_eq!(alt_wheel_zoom(1.0, f32::NAN, 40.0), 1.0);
+        assert!((alt_wheel_zoom(1.0, 40.0, 0.0) - 1.05).abs() < 1e-5, "a bad notch size falls back");
         assert_eq!(zoom_step(1.0, 1), 2.0);
         assert_eq!(zoom_step(1.0, -1), 0.6667);
         assert_eq!(zoom_step(0.4, 1), 0.5);

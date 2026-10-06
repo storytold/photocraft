@@ -237,6 +237,8 @@ pub struct PhotocraftApp {
     last_stroke_end: Option<(DocId, [f64; 2])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
     pub(crate) brush_resize: Option<brush_resize::Resize>,
+    /// An Alt+right-drag began this frame: its `Down` starts a brush resize (#297).
+    pub(crate) brush_resize_armed: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
@@ -354,6 +356,7 @@ impl PhotocraftApp {
             secondary_erase: false,
             last_stroke_end: None,
             brush_resize: None,
+            brush_resize_armed: false,
             control_rx: None,
             pending_screenshots: Vec::new(),
             queued_screenshots: Vec::new(),

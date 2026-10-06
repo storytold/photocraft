@@ -127,9 +127,9 @@ note = "panels.rs:1837 single field + hex/RGB readout"
 [[item]]
 id = "UI-217-18"
 target = "Alt+wheel zooms in gentle ~5 % steps; zoom controls uncramped"
-status = "missing"
+status = "partial"
 issue = 217
-note = "canvas.rs:1107-1125 no Alt handling"
+note = "Alt+wheel zooms ~5 % per notch (canvas.rs alt_wheel_zoom); zoom controls not reworked"
 
 [[item]]
 id = "UI-217-19"

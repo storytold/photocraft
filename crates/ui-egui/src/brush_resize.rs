@@ -1,5 +1,6 @@
-//! Photoshop's on-canvas brush resize (#231): with a painting tool, Control+Alt+drag (Windows,
-//! Linux) or Control+Option+drag (macOS) changes the brush instead of painting. Left and right
+//! Photoshop's on-canvas brush resize (#231, #297): with a painting tool, Control+Alt+drag
+//! (Windows, Linux) or Control+Option+drag (macOS), or Alt+right-drag (Photoshop on Windows;
+//! armed by `paint_mouse::canvas_buttons`), changes the brush instead of painting. Left and right
 //! set the diameter (the circle's edge follows the pointer), up and down the hardness (down makes
 //! it harder). The brush circle stays where the drag began, tinted to show the hardness, with a
 //! Diameter/Hardness readout beside the pointer.
@@ -54,13 +55,14 @@ pub fn resized(start: (f32, f32), dx: f64, dy: f64, zoom: f32) -> (f32, f32) {
     (size, (hardness * 100.0).round() / 100.0)
 }
 
-/// Route a tool event: true when it belongs to a resize drag (begun here with Control+Alt held,
-/// or already in progress), so the tool never sees it.
+/// Route a tool event: true when it belongs to a resize drag (begun here with Control+Alt held
+/// or by an Alt+right-drag, or already in progress), so the tool never sees it.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     static KEY: AtomicU64 = AtomicU64::new(0);
     match ev {
         ToolEvent::Down { x, y, .. } => {
-            if app.drag.is_some() || !applies(app.ui.tool) || !is_gesture(mods) {
+            let armed = std::mem::take(&mut app.brush_resize_armed);
+            if app.drag.is_some() || !applies(app.ui.tool) || !(is_gesture(mods) || armed) {
                 return false;
             }
             let b = &app.session.tools.brush;

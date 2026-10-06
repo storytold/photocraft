@@ -207,3 +207,31 @@ fn kerning_field_values() {
         assert_eq!(crate::type_tool::parse_kerning(s), None, "{s}");
     }
 }
+
+/// Alt + mouse wheel zooms around the pointer, about 5 % per notch (#293); without Alt the
+/// wheel still pans.
+#[test]
+fn alt_wheel_zooms_in_gentle_steps() {
+    let mut h = harness();
+    let c = h.state().last_canvas_rect.center();
+    h.hover_at(c);
+    h.run_steps(1);
+    let wheel = |h: &mut Harness<'static, PhotocraftApp>, notches: f32, modifiers: Modifiers| {
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, notches), phase: egui::TouchPhase::Move, modifiers });
+        h.run_steps(30);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(1);
+    };
+    let z0 = zoom(&h);
+    wheel(&mut h, 1.0, Modifiers::ALT);
+    let z1 = zoom(&h);
+    assert!((z1 / z0 - 1.05).abs() < 0.01, "one notch in: {z0} -> {z1}");
+    wheel(&mut h, -2.0, Modifiers::ALT);
+    let z2 = zoom(&h);
+    assert!((z1 / z2 - 1.05 * 1.05).abs() < 0.02, "two notches out: {z1} -> {z2}");
+    let c0 = h.state().ui.views[0].center;
+    wheel(&mut h, -1.0, Modifiers::NONE);
+    assert_eq!(zoom(&h), z2, "no Alt: the wheel doesn't zoom");
+    assert_ne!(h.state().ui.views[0].center, c0, "no Alt: the wheel pans");
+}

@@ -22,6 +22,12 @@ Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"
   - Options-bar labels end with a colon ("Size:").
   - Document tabs read "name @ 12.5% (RGB/8)".
   - Toolbar tool groups carry a corner triangle.
+- **Canvas gestures (Photoshop):**
+  - ⌥/Alt + mouse wheel zooms around the pointer, about 5 % per wheel notch
+    (`canvas::alt_wheel_zoom`); the wheel alone pans, ⌘/Ctrl + wheel and pinch zoom freely.
+  - With a painting tool, Control+Alt-drag (Control+Option on a Mac) or Alt + right-drag resizes
+    the brush: left/right sets the diameter, up/down the hardness, with a readout
+    (`brush_resize`). Alt + right-click alone doesn't open the brush picker.
 - **Verify every visual change** with `ui.screenshot`, at several window sizes and in every theme.
 
 ## Adding icons
