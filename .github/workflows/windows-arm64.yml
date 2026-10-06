@@ -77,6 +77,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandArgumentPassing = 'Standard' # pass the JSON arguments to the CLI verbatim
           function Invoke-Cli {
+            # The CLI prints warnings on stderr; they're expected, so don't let them stop the script.
+            $ErrorActionPreference = 'Continue'
             $out = & $script:cli @args 2>&1 | Out-String
             if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "photocraft-cli $($args[0]) exited $LASTEXITCODE" }
             return $out
@@ -112,11 +114,11 @@ jobs:
           if (($info | ConvertTo-Json -Depth 32 -Compress) -notmatch '"Ink"') { throw 'smoke.psd lost the Ink layer' }
           Invoke-Cli convert "$work\smoke.psd" "$work\smoke.pcraft" | Out-Null
           Invoke-Cli convert "$work\smoke.pcraft" "$work\in\flat.png" | Out-Null
-          Invoke-Cli convert "$work\in\flat.png" "$work\in\flat.jpg" --quality 85 | Out-Null
+          Invoke-Cli convert "$work\in\flat.png" "$work\in\photo.jpg" --quality 85 | Out-Null
           [System.IO.File]::WriteAllText("$work\actions.json", '[{"command":"filter.blur.gaussianBlur","params":{"radius":2}},{"command":"image.adjustments.invert"}]')
           $batch = Invoke-Cli batch --actions "$work\actions.json" --in "$work\in" --out "$work\out" --format tif
           if ($batch -notmatch '2 succeeded, 0 failed') { Write-Output $batch; throw 'batch did not process both images' }
-          foreach ($f in 'smoke.psd', 'smoke.pcraft', 'in\flat.png', 'in\flat.jpg', 'out\flat.tif') {
+          foreach ($f in 'smoke.psd', 'smoke.pcraft', 'in\flat.png', 'in\photo.jpg', 'out\flat.tif', 'out\photo.tif') {
             $path = Join-Path $work $f
             if (-not (Test-Path $path) -or (Get-Item $path).Length -eq 0) { throw "$f was not written" }
           }
