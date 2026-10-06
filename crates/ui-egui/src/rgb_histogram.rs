@@ -148,7 +148,7 @@ mod tests {
     use crate::theme::ThemeKind;
 
     fn color_at(mesh: &Mesh, point: egui::Pos2) -> Option<egui::Color32> {
-        mesh.indices.chunks_exact(3).find_map(|triangle| {
+        mesh.indices.as_chunks::<3>().0.iter().find_map(|triangle| {
             let a = mesh.vertices[triangle[0] as usize].pos;
             let b = mesh.vertices[triangle[1] as usize].pos;
             let c = mesh.vertices[triangle[2] as usize].pos;
@@ -198,7 +198,9 @@ mod tests {
             // Triangle interiors never stack: alpha fill must be independent of the channel order.
             let area: f32 = m
                 .indices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|indices| {
                     let a = m.vertices[indices[0] as usize].pos;
                     let b = m.vertices[indices[1] as usize].pos;
