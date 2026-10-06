@@ -71,6 +71,16 @@ to display text at render time from one catalog per language (`i18n/<code>.tsv`;
 documented in the header of `ja.tsv`). Command ids, menu paths used for logic, the control channel,
 the CLI and MCP always use the English ids and labels.
 
+Languages shipped (`complete_menus` marks a catalog that covers every menu string and `tl!` literal;
+the tests enforce it):
+
+- English (`en`), the source language.
+- Japanese (`ja`), complete.
+- Simplified Chinese (`zh-hans`; see [`localization-zh-hans.md`](localization-zh-hans.md)), partial.
+- Traditional Chinese (`zh-hant`), complete, in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`,
+  `zh-MO` and `zh-Hant-*` locales all resolve to it. The resolver distinguishes the two Chinese
+  scripts, so neither catalog is shown to the other script's locales.
+
 - `tr(lang, s)` plain strings; `tr_ctx` when one English word needs different translations;
   `tr_id(lang, command_id, label)` for menu items (keyed by command id, English label as the
   fallback); `trn(lang, n, one, other)` for plurals; `fmt` fills `{name}` placeholders, which
@@ -91,4 +101,5 @@ preference label has no entry in a language marked `complete_menus`. Not transla
 messages and errors (they stay English, also for agents), names that are user data (layers, styles,
 documents), strings assembled with `format!` that were not converted to `fmt`/`trn`. Not done yet:
 per-language font fallback (the CJK fallback prefers Japanese forms), right-to-left layout,
-locale-aware number and date formats, automatic language detection on Windows and the web build.
+locale-aware number and date formats, automatic language detection on the web build (native
+builds read `LANG`/`LC_*`, the macOS preferred languages and the Windows user locale).

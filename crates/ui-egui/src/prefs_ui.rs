@@ -1161,27 +1161,29 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    /// Every generated preference label, section title and choice label has a Japanese entry.
+    /// Every generated preference label, section title and choice label has an entry in each
+    /// language that claims complete menus (Japanese, Traditional Chinese, ...).
     #[test]
     fn preference_labels_are_translated() {
-        let ja = crate::i18n::Lang::from_code("ja").expect("ja");
         let session = photocraft_engine::Session::new();
         let v: Value = serde_json::from_str(&session.prefs_to_json()).expect("prefs json");
-        let mut missing = Vec::new();
-        for (sec, title) in SECTIONS {
-            if !crate::i18n::has(ja, title) {
-                missing.push(title.to_string());
+        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
+            let mut missing = Vec::new();
+            for (sec, title) in SECTIONS {
+                if !crate::i18n::has(lang, title) {
+                    missing.push(title.to_string());
+                }
+                let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
+                for k in obj.keys() {
+                    let mut labels = vec![humanize(k)];
+                    labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
+                    missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
+                }
             }
-            let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
-            for k in obj.keys() {
-                let mut labels = vec![humanize(k)];
-                labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
-                missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(ja, l)));
-            }
+            missing.sort();
+            missing.dedup();
+            assert!(missing.is_empty(), "{}: untranslated preference labels: {missing:#?}", lang.code());
         }
-        missing.sort();
-        missing.dedup();
-        assert!(missing.is_empty(), "untranslated preference labels: {missing:#?}");
     }
 
     fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {

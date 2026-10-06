@@ -49,11 +49,16 @@ fn plural_none(_: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 3] = [
+pub static LANGUAGES: [LangInfo; 4] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
         code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: false, catalog: OnceLock::new()
+    },
+    // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
+    // locales all resolve here (see `candidates`).
+    LangInfo {
+        code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
     },
 ];
 
@@ -106,6 +111,11 @@ impl Lang {
 
     pub fn name(self) -> &'static str {
         self.0.name
+    }
+
+    /// Does this language's catalog claim to cover every menu string and `tl!` literal?
+    pub fn complete_menus(self) -> bool {
+        self.0.complete_menus
     }
 
     fn catalog(self) -> &'static Catalog {
@@ -165,6 +175,12 @@ fn detect_system_lang() -> Lang {
         && out.status.success()
         && let Some(l) = first_supported(&String::from_utf8_lossy(&out.stdout))
     {
+        return l;
+    }
+    // Windows sets no LANG: fall back to the OS locale the text engine already reads for its CJK
+    // font order (`HKCU\Control Panel\International` › `LocaleName`, e.g. `zh-TW`; on macOS the
+    // preferences plist). `PHOTOCRAFT_LOCALE` overrides it there too.
+    if let Some(l) = photocraft_text::cjk::ui_locale().and_then(lang_from_tag) {
         return l;
     }
     Lang::EN
@@ -243,6 +259,7 @@ mod tests {
     use super::*;
 
     const JA: fn() -> Lang = || Lang::from_code("ja").expect("ja registered");
+    const ZH: fn() -> Lang = || Lang::from_code("zh-hant").expect("zh-hant registered");
 
     #[test]
     fn tags_map_to_languages() {
@@ -252,6 +269,19 @@ mod tests {
         assert_eq!(lang_from_tag("C"), Some(Lang::EN));
         assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
         assert_eq!(lang_from_tag("fr_FR"), None);
+        // Traditional Chinese: by region, by script, and with a region after the script.
+        assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
+        assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));
+        assert_eq!(lang_from_tag("zh-HK"), Some(ZH()));
+        assert_eq!(lang_from_tag("zh_MO"), Some(ZH()));
+        assert_eq!(lang_from_tag("zh-Hant"), Some(ZH()));
+        assert_eq!(lang_from_tag("zh-Hant-TW"), Some(ZH()));
+        assert_eq!(lang_from_tag("zh-Hant-HK"), Some(ZH()));
+        // Simplified Chinese locales never pick up the Traditional catalog: they resolve to `zh-hans`.
+        for tag in ["zh-CN", "zh_CN.UTF-8", "zh_SG", "zh-Hans", "zh-Hans-CN", "zh"] {
+            assert_ne!(lang_from_tag(tag), Some(ZH()), "{tag}");
+            assert_eq!(lang_from_tag(tag), Lang::from_code("zh-hans"), "{tag}");
+        }
         assert_eq!(lang_from_tag(""), None);
         assert_eq!(lang_from_tag("_"), None);
     }
@@ -268,6 +298,7 @@ mod tests {
     fn macos_language_list_is_parsed() {
         assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
         assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Some(Lang::EN));
+        assert_eq!(first_supported("(\n    \"zh-Hant-TW\",\n    \"en-US\"\n)\n"), Some(ZH()));
         assert_eq!(first_supported("("), None);
     }
 
@@ -275,6 +306,8 @@ mod tests {
     fn preferences_resolve_with_fallback() {
         assert_eq!(Lang::from_pref("ja"), JA());
         assert_eq!(Lang::from_pref("JA"), JA());
+        assert_eq!(Lang::from_pref("zh-hant"), ZH());
+        assert_eq!(Lang::from_pref("ZH-Hant"), ZH());
         assert_eq!(Lang::from_pref("en"), Lang::EN);
         // `auto` and unknown codes follow the system (English under test).
         assert_eq!(Lang::from_pref("auto"), Lang::EN);
@@ -286,6 +319,9 @@ mod tests {
         assert_eq!(tr(JA(), "no such label"), "no such label");
         assert_eq!(tr(Lang::EN, "Layer"), "Layer");
         assert_eq!(tr(JA(), "Layer"), "レイヤー");
+        assert_eq!(tr(ZH(), "Layer"), "圖層");
+        assert_eq!(tr(ZH(), "no such label"), "no such label");
+        assert_eq!(tr_id(ZH(), "no.such.id", "Layer"), "圖層");
         assert_eq!(tr_id(JA(), "no.such.id", "Layer"), "レイヤー");
         assert_eq!(tr_ctx(JA(), "no such context", "Layer"), "レイヤー");
     }
@@ -316,6 +352,8 @@ mod tests {
         assert_eq!(trn(Lang::EN, 7, "{n} item", "{n} items"), "7 items");
         assert_eq!(trn(JA(), 1, "{n} item", "{n} items"), "1 件");
         assert_eq!(trn(JA(), 7, "{n} item", "{n} items"), "7 件");
+        assert_eq!(trn(ZH(), 1, "{n} item", "{n} items"), "1 個項目");
+        assert_eq!(trn(ZH(), 7, "{n} item", "{n} items"), "7 個項目");
         assert_eq!(fmt("{b} before {a}", &[("a", "x"), ("b", "y"), ("c", "z")]), "y before x");
         assert_eq!(fmt("{missing}", &[]), "{missing}");
         assert_eq!(placeholders("a {x} b {y} {"), ["x", "y"]);
