@@ -1249,6 +1249,66 @@ mod tests {
 mod settings_tests {
     use super::*;
 
+    /// The readout across profile combinations: every rendering intent with and without black
+    /// point compensation, sRGB / Adobe RGB / Display P3 working RGB, a heavier CMYK document
+    /// profile. Paper white needs no ink, black is dark, primaries stay in range, readouts
+    /// round-trip, and changing a setting changes the readout (the cache follows it).
+    #[test]
+    fn ink_readout_holds_across_profile_combinations() {
+        use photocraft_cms::synth::{CmykParams, cmyk_profile};
+        let heavy = cmyk_profile(&CmykParams { description: "Test Uncoated CMYK".into(), tvi: [0.26, 0.26, 0.26, 0.3], ..Default::default() });
+        let mut cmyk_doc = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+        cmyk_doc.icc_profile = Some(heavy.to_bytes());
+        let probes: [[f32; 3]; 7] = [[1.0, 1.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.2, 0.6, 0.8], [0.5, 0.5, 0.5]];
+        let mut readouts = Vec::new();
+        for rgb_space in ["srgb", "adobe-rgb-compat", "display-p3"] {
+            for intent in ["perceptual", "relative", "saturation", "absolute"] {
+                for bpc in [true, false] {
+                    for doc in [None, Some(&cmyk_doc)] {
+                        let mut c = ColorState::default();
+                        c.settings.working_rgb = rgb_space.into();
+                        c.settings.intent = intent.into();
+                        c.settings.bpc = bpc;
+                        let what = format!("{rgb_space} {intent} bpc={bpc} doc={}", doc.is_some());
+                        let white = c.rgb_to_ink(doc, [1.0; 3]).unwrap();
+                        let black = c.rgb_to_ink(doc, [0.0; 3]).unwrap();
+                        // Absolute colorimetric simulates the paper colour, so white may carry a
+                        // trace of ink there.
+                        let paper = if intent == "absolute" { 0.08 } else { 0.01 };
+                        assert!(white.iter().all(|v| *v <= paper), "{what}: white {white:?}");
+                        assert!(black.iter().sum::<f32>() > 1.5, "{what}: black is dark {black:?}");
+                        for rgb in probes {
+                            let ink = c.rgb_to_ink(doc, rgb).unwrap();
+                            assert!(ink.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{what}: {rgb:?} -> {ink:?}");
+                            let back = c.ink_to_rgb(doc, ink).unwrap();
+                            assert!(back.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{what}: {ink:?} -> {back:?}");
+                        }
+                        // An in-gamut colour comes back close (colorimetric intents).
+                        if matches!(intent, "relative" | "absolute") {
+                            let rgb = [0.5, 0.45, 0.4];
+                            let back = c.ink_to_rgb(doc, c.rgb_to_ink(doc, rgb).unwrap()).unwrap();
+                            assert!(rgb.iter().zip(back).all(|(a, b)| (a - b).abs() < 0.04), "{what}: {rgb:?} -> {back:?}");
+                        }
+                        readouts.push(c.rgb_to_ink(doc, [0.2, 0.6, 0.8]).unwrap());
+                    }
+                }
+            }
+        }
+        // The combinations really differ: the readout isn't stuck on one profile or intent.
+        let distinct = |i: usize, j: usize| readouts[i].iter().zip(readouts[j]).any(|(a, b)| (a - b).abs() > 0.005);
+        assert!(distinct(0, 1), "a CMYK document's profile changes the readout");
+        assert!(distinct(0, 16), "the RGB working space changes the readout");
+        // One ColorState, settings changed in place: the cached transforms are rebuilt.
+        let mut c = ColorState::default();
+        let rgb = [0.2, 0.6, 0.8];
+        let relative = c.rgb_to_ink(None, rgb).unwrap();
+        c.settings.working_rgb = "adobe-rgb-compat".into();
+        let adobe = c.rgb_to_ink(None, rgb).unwrap();
+        assert!(relative.iter().zip(adobe).any(|(a, b)| (a - b).abs() > 0.005), "{relative:?} vs {adobe:?}");
+        c.settings.working_rgb = "srgb".into();
+        assert_eq!(c.rgb_to_ink(None, rgb).unwrap(), relative, "back to sRGB: the first readout again");
+    }
+
     /// The picker's CMYK follows the CMYK profile in use: the working CMYK, or a CMYK
     /// document's own profile. It round-trips, and hostile input is clamped, never a panic.
     #[test]
