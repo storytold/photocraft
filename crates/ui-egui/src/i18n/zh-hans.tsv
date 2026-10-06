@@ -5,9 +5,10 @@
 # with a single Chinese form. Other contexts disambiguate the English meaning.
 # Escapes inside columns: \n, \t, \\. Keep {name} placeholders and trailing ….
 #
-# Original translations from the meaning of the English source keys in PhotoCraft
-# PR #169 (c1fb8909c4b3b176eead12d66b04338a103cf63d). No proprietary translation
-# resources were consulted or extracted. Licensed MIT OR Apache-2.0, as the code.
+# Original translations from the meaning of PhotoCraft's English source keys,
+# including the current menus, panels and platform-specific shortcut templates.
+# No proprietary translation resources were consulted or extracted.
+# Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
 	File	文件
@@ -1938,3 +1939,105 @@ cameraRaw	Blending	混合
 	Patch Tool	修补工具
 	Patch:	修补：
 	Lasso around an area, then drag the selection	用套索圈出区域，然后拖动选区
+# Current shell labels and shortcut templates. Keep {key} platform-dependent.
+	Add a mask  (from the selection; {key} inverts)	添加蒙版  （基于选区；{key} 反相）
+	Add to selection  ({key})	添加到选区  （{key}）
+	Click the first point or press {key} to close · Esc cancels	单击起点或按 {key} 闭合 · Esc 取消
+	Click to add a point · drag off or {key}-click or Delete to remove	单击添加点 · 拖离、按 {key} 单击或按 Delete 移除
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	单击应用，按 {key} 单击清除覆盖设置，双击打开样式选项
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	单击放大  ·  按 {key} 单击缩小  ·  向右或向左拖动以放大或缩小
+	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	单击：角点 · 拖动：平滑点 · 单击起点：闭合 · {key} 完成 · Esc 取消
+	Commit Perspective Warp ({key})	应用透视变形（{key}）
+	Commit Puppet Warp ({key})	应用操控变形（{key}）
+	Commit any current edits ({key})	应用当前所有编辑（{key}）
+	Commit current crop operation  ({key})	应用当前裁剪操作  （{key}）
+	Commit transform ({key})	应用变换（{key}）
+	Commit warp ({key})	应用变形（{key}）
+	Create a new layer	创建图层
+	Intersect with selection  ({key})	与选区相交  （{key}）
+	New document…	新建文档…
+	Search commands	搜索命令
+	Show Guides	显示参考线
+	Subtract from selection  ({key})	从选区中减去  （{key}）
+	↑↓ navigate   {key} run   esc close	↑↓ 导航   {key} 运行   esc 关闭
+@plural	{n} layer|{n} layers	{n} 个图层
+	Collapse group  ({key}-click: all groups)	折叠组  （按 {key} 单击：所有组）
+	Expand group  ({key}-click: all groups)	展开组  （按 {key} 单击：所有组）
+	Hide the layer's effects  ({key}-click: all layers)	隐藏图层效果  （按 {key} 单击：所有图层）
+	Show the layer's effects  ({key}-click: all layers)	显示图层效果  （按 {key} 单击：所有图层）
+	System Info…	系统信息…
+	System Info	系统信息
+	More panels	更多面板
+	These settings aren't available in PhotoCraft yet.	PhotoCraft 暂不支持这些设置。
+	Graphics	图形
+	Reset GPU Backend	重置 GPU 后端
+	Applies at next launch.	下次启动时生效。
+	Click to sample the foreground colour  ·  {key}-click for background	单击拾取前景色  ·  按 {key} 单击拾取背景色
+	{key}-click to set the source	按 {key} 单击设置源点
+	{key} to subtract	按 {key} 从选区中减去
+	Clone source {n} ({key}-click with Clone Stamp to set)	仿制源 {n}（使用仿制图章时按 {key} 单击设置）
+	Source: not set ({key}-click with Clone Stamp)	源点：未设置（使用仿制图章时按 {key} 单击）
+	Pixel Layer	像素图层
+	Type Layer	文字图层
+	Shape Layer	形状图层
+	Group Layer	图层组
+	Fill Layer	填充图层
+	Smart Object Layer	智能对象图层
+	Create Warped Text	创建变形文字
+	Rasterize Smart Object	栅格化智能对象
+	Rasterize Fill Content	栅格化填充内容
+	Unlock: picking a preset replaces these settings	解锁：选择预设时替换这些设置
+	Lock: keep these settings when picking another preset	锁定：选择其他预设时保留这些设置
+	Diameter:	直径：
+	Hardness:	硬度：
+	No brush presets	没有画笔预设
+	Toggle the Brush Settings panel  (F5)	切换画笔设置面板  （F5）
+	Create new brush preset from the current settings	根据当前设置创建画笔预设
+	Brush Settings…  (F5): every option of this brush	画笔设置…  （F5）：此画笔的全部选项
+	Rename Brush…	重命名画笔…
+	Delete Brush	删除画笔
+	Group name	组名称
+	Brush name	画笔名称
+	Grid view	网格视图
+	List view	列表视图
+	Off: the speed of the pointer sets the spacing	关闭：由指针移动速度决定间距
+	Tilt Scale	倾斜缩放
+	Brush Projection	画笔投影
+	Apply the pen's tilt and rotation to the tip shape	将笔的倾斜和旋转应用于笔尖形状
+	Mixer Brush	混合器画笔
+	Wet	湿润
+	Mix	混合
+	Wetness Jitter	湿润度抖动
+	Mix Jitter	混合抖动
+	Show the layer mask as an overlay	以叠加方式显示图层蒙版
+	Toggle visibility	切换可见性
+	Unlink the mask from the layer	取消蒙版与图层的链接
+	Link the mask to the layer	将蒙版与图层链接
+	Gradient	渐变
+	Gradient Options	渐变选项
+	Align with layer	与图层对齐
+	Reset Alignment	重置对齐
+	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
+	The current gradient (pick one in Window › Gradients)	当前渐变（在“窗口 › 渐变”中选择）
+	Select a type layer to edit its character and paragraph settings.	选择文字图层以编辑字符和段落设置。
+	Text color	文字颜色
+	Type Options	文字选项
+	Anti-aliasing method	消除锯齿方式
+	Horizontal type	横排文字
+	Vertical type	直排文字
+	Fill path with foreground color	以前景色填充路径
+	Stroke path with brush	用画笔描边路径
+	Load path as a selection	将路径载入选区
+	Make work path from selection	从选区生成工作路径
+	Add vector mask	添加矢量蒙版
+	Create new path	创建路径
+	Delete path	删除路径
+	Delete vector mask	删除矢量蒙版
+	CPU (no GPU acceleration)	CPU（无 GPU 加速）
+	DirectX 12	DirectX 12
+	GPU backend	GPU 后端
+	Metal	Metal
+	OpenGL	OpenGL
+	Use tablet pressure	使用数位板压感
+	Vulkan	Vulkan
+	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。

@@ -84,7 +84,7 @@ the tests enforce it):
 
 - English (`en`), the source language.
 - Japanese (`ja`), complete.
-- Simplified Chinese (`zh-hans`; see [`localization-zh-hans.md`](localization-zh-hans.md)), partial.
+- Simplified Chinese (`zh-hans`; see [`localization-zh-hans.md`](localization-zh-hans.md)), complete.
 - Traditional Chinese (`zh-hant`), complete, in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`,
   `zh-MO` and `zh-Hant-*` locales all resolve to it. The resolver distinguishes the two Chinese
   scripts, so neither catalog is shown to the other script's locales.
@@ -107,7 +107,7 @@ the tests enforce it):
 
 Localised so far: menus, the command palette, dialogs and panels (literals wrapped in `tl!("…")`;
 widgets such as `checkbox`, `slider_row`, `dropdown` and the buttons translate their labels
-themselves). A test fails when a `tl!` literal, a menu string, a blend mode name or a generated
+themselves). A test fails when a `tl!` literal, a menu string, a blend mode name, brush section name or a generated
 preference label has no entry in a language marked `complete_menus`. Not translated: status-bar
 messages and errors (they stay English, also for agents), names that are user data (layers, styles,
 documents), strings assembled with `format!` that were not converted to `fmt`/`trn`. Not done yet:

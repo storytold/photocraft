@@ -446,23 +446,60 @@ fn brushes_panel_groups_collapse_and_filter() {
 /// A fresh session with the Brush tool: shortcuts, the options bar and the Brush Settings window,
 /// in the default theme (#258).
 fn app_harness() -> Harness<'static, PhotocraftApp> {
+    app_harness_with_language(crate::i18n::Lang::EN)
+}
+
+fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PhotocraftApp> {
     let mut app = app();
     app.ui.tool = crate::state::Tool::Brush;
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
+            let previous = crate::i18n::current();
+            crate::i18n::set_current(lang);
             crate::shortcuts::handle(app, &ctx);
             crate::panels::options_bar(app, ui);
             window(app, &ctx);
+            crate::i18n::set_current(previous);
         },
         app,
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
     h.run_steps(4);
     h
+}
+
+#[test]
+fn brush_sections_paint_simplified_chinese_labels_and_heading() {
+    fn collect_text(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let zh = crate::i18n::Lang::from_code("zh-hans").unwrap();
+    let mut h = app_harness_with_language(zh);
+    h.key_press(egui::Key::F5);
+    h.run_steps(3);
+    let mut painted = Vec::new();
+    for shape in &h.output().shapes {
+        collect_text(&shape.shape, &mut painted);
+    }
+    for (name, _) in SECTIONS {
+        let translated = crate::i18n::tr(zh, name);
+        assert!(painted.iter().any(|s| s == translated), "{name} must paint as {translated}");
+        assert!(!painted.iter().any(|s| s == name), "{name} must not paint in English");
+    }
+    let heading = crate::i18n::tr(zh, "Brush Tip Shape");
+    assert_eq!(painted.iter().filter(|s| s.as_str() == heading).count(), 2, "both the section row and heading are translated");
 }
 
 #[test]

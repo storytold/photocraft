@@ -74,7 +74,7 @@ pub static LANGUAGES: [LangInfo; 7] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
-        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: false, catalog: OnceLock::new()
+        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
     },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
@@ -342,6 +342,22 @@ mod tests {
     }
 
     #[test]
+    fn simplified_chinese_covers_dynamic_shortcuts_and_layer_counts() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        assert!(zh.complete_menus(), "Simplified Chinese must participate in the coverage gates");
+        assert_eq!(Lang::from_pref("ZH-Hans"), zh);
+        assert_eq!(tr(zh, "Pixel Layer"), "像素图层");
+        assert_eq!(tr(zh, "System Info"), "系统信息");
+        for key in ["⌥", "Alt"] {
+            assert_eq!(fmt(tr(zh, "Add a mask  (from the selection; {key} inverts)"), &[("key", key)]), format!("添加蒙版  （基于选区；{key} 反相）"));
+        }
+        for n in [0, 1, 3] {
+            assert_eq!(trn(zh, n, "{n} layer", "{n} layers"), format!("{n} 个图层"));
+        }
+        assert_eq!(tr(zh, "no such label"), "no such label");
+    }
+
+    #[test]
     fn spanish_resolves_and_pluralises() {
         let es = Lang::from_code("es").expect("es registered");
         for tag in ["es", "es_ES.UTF-8", "es-MX", "es-419"] {
@@ -526,6 +542,16 @@ mod tests {
             let cat = l.catalog();
             let missing: Vec<_> = literals.iter().filter(|s| !KEEP_AS_IS.contains(&s.as_str()) && cat.plain(s).is_none()).collect();
             assert!(missing.is_empty(), "{}: untranslated tl! strings: {missing:#?}", l.code);
+        }
+    }
+
+    /// Section names are dynamic labels, so the literal scanner cannot cover them.
+    #[test]
+    fn brush_section_names_are_translated() {
+        for lang in Lang::all().filter(|l| l.complete_menus()) {
+            for (name, _) in crate::brush_panel::SECTIONS {
+                assert!(lang.0.catalog().plain(name).is_some(), "{} missing brush section: {name}", lang.code());
+            }
         }
     }
 
