@@ -209,6 +209,44 @@ fn grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) -> Mesh
     m
 }
 
+/// A vertical gradient (colour varies with `y` only) in `rect`: two vertices per row, `n` bands.
+/// The same sampling as a [`grid_mesh`] column at a fraction of its vertices and triangles.
+fn column_mesh(rect: Rect, n: usize, color: impl Fn(f32) -> [f32; 3]) -> Mesh {
+    let n = n.max(1);
+    let mut m = Mesh::default();
+    for j in 0..=n {
+        let y = j as f32 / n as f32;
+        let c = c32(color(y));
+        let py = rect.top() + y * rect.height();
+        m.colored_vertex(pos2(rect.left(), py), c);
+        m.colored_vertex(pos2(rect.right(), py), c);
+    }
+    for j in 0..n as u32 {
+        let a = j * 2;
+        m.add_triangle(a, a + 1, a + 3);
+        m.add_triangle(a, a + 3, a + 2);
+    }
+    m
+}
+
+/// The colour field's mesh, rebuilt only when what it shows changes (mode, the slider value,
+/// its place); otherwise the last one is reused.
+fn field_mesh(ctx: &egui::Context, field: Rect, mode: &str, fz: f32) -> std::sync::Arc<Mesh> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (mode, fz.to_bits(), field.min.x.to_bits(), field.min.y.to_bits(), field.max.x.to_bits(), field.max.y.to_bits()).hash(&mut h);
+    let key = h.finish();
+    let id = egui::Id::new("color-picker-field-mesh");
+    if let Some((k, m)) = ctx.data(|d| d.get_temp::<(u64, std::sync::Arc<Mesh>)>(id))
+        && k == key
+    {
+        return m;
+    }
+    let m = std::sync::Arc::new(grid_mesh(field, 32, |x, y| field_color(mode, fz, x, y)));
+    ctx.data_mut(|d| d.insert_temp(id, (key, m.clone())));
+    m
+}
+
 /// Width of a numeric field, and of the right-hand area (swatches, buttons, two field columns).
 const FIELD_W: f32 = 44.0;
 const RIGHT_W: f32 = 224.0;
@@ -229,7 +267,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
         ui.vertical(|ui| {
             // Colour field.
             let (field, resp) = ui.allocate_exact_size(vec2(256.0, 256.0), Sense::click_and_drag());
-            ui.painter().add(grid_mesh(field, 32, |x, y| field_color(&mode, fz, x, y)));
+            ui.painter().add(egui::Shape::Mesh(field_mesh(ui.ctx(), field, &mode, fz)));
             ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
             let marker = pos2(field.left() + fx * field.width(), field.top() + fy * field.height());
             ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
@@ -254,7 +292,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
         ui.add_space(12.0);
         // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
         let (strip, sresp) = ui.allocate_exact_size(vec2(20.0, 256.0), Sense::click_and_drag());
-        ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, hsv, rgb)));
+        ui.painter().add(column_mesh(strip, 32, |y| slider_color(&mode, 1.0 - y, hsv, rgb)));
         let sy = strip.top() + (1.0 - fz) * strip.height();
         for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
             let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
@@ -440,6 +478,36 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slider is a column gradient: 2 vertices per row instead of a 33×33 grid, with the
+    /// same colours down its edge.
+    #[test]
+    fn the_slider_mesh_is_a_column_gradient() {
+        let r = Rect::from_min_size(pos2(10.0, 20.0), vec2(20.0, 256.0));
+        let col = |y: f32| hsv_to_rgb((1.0 - y) * 360.0, 1.0, 1.0);
+        let m = column_mesh(r, 32, col);
+        assert_eq!((m.vertices.len(), m.indices.len() / 3), (66, 64));
+        let g = grid_mesh(r, 32, |_, y| col(y));
+        assert_eq!((g.vertices.len(), g.indices.len() / 3), (1089, 2048));
+        for j in 0..=32 {
+            let (cv, gv) = (m.vertices[j * 2], g.vertices[j * 33]);
+            assert_eq!((cv.pos, cv.color), (gv.pos, gv.color), "row {j}");
+        }
+        assert!(m.vertices.iter().all(|v| r.expand(0.01).contains(v.pos)));
+        assert_eq!(column_mesh(r, 0, col).vertices.len(), 4, "never empty or dividing by zero");
+    }
+
+    /// The colour field is rebuilt only when the mode, the slider value or its place change.
+    #[test]
+    fn the_field_mesh_is_cached_until_its_inputs_change() {
+        let ctx = egui::Context::default();
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(256.0, 256.0));
+        let a = field_mesh(&ctx, r, "h", 0.5);
+        assert!(std::sync::Arc::ptr_eq(&a, &field_mesh(&ctx, r, "h", 0.5)));
+        assert!(!std::sync::Arc::ptr_eq(&a, &field_mesh(&ctx, r, "h", 0.6)));
+        assert!(!std::sync::Arc::ptr_eq(&field_mesh(&ctx, r, "h", 0.6), &field_mesh(&ctx, r, "s", 0.6)));
+        assert!(!std::sync::Arc::ptr_eq(&field_mesh(&ctx, r, "s", 0.6), &field_mesh(&ctx, r.translate(vec2(5.0, 0.0)), "s", 0.6)));
+    }
 
     #[test]
     fn hsv_round_trips() {
