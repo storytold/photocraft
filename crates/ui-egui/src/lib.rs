@@ -239,6 +239,8 @@ pub struct PhotocraftApp {
     pub(crate) brush_resize: Option<brush_resize::Resize>,
     /// An Alt+right-drag began this frame: its `Down` starts a brush resize (#297).
     pub(crate) brush_resize_armed: bool,
+    /// What the right-button drag in progress does, decided when it began (`paint_mouse`).
+    pub(crate) right_drag: Option<paint_mouse::RightDrag>,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
@@ -357,6 +359,7 @@ impl PhotocraftApp {
             last_stroke_end: None,
             brush_resize: None,
             brush_resize_armed: false,
+            right_drag: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
             queued_screenshots: Vec::new(),

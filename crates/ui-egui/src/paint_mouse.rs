@@ -59,38 +59,66 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
     matches!(tool, Tool::Brush | Tool::Eraser) && app.session.prefs().tools.right_click_with_painting_tools == RightClickPaint::Erase
 }
 
+/// What a right-button drag does. Decided when the drag begins and kept until the button is
+/// released, so a modifier pressed or let go mid-drag never changes it (a stroke that started
+/// erasing still ends with its `Up`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RightDrag {
+    /// Erase with the current brush (Preferences › Tools › Right-click: Erase).
+    Erase,
+    /// Resize the brush (Alt + right-drag, #297).
+    Resize,
+}
+
 /// Route the canvas response's buttons: the left one drives the tool; the right one erases (Erase
 /// preference) or opens the Brush Preset picker. Arms `secondary_erase` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
     // Alt + right-drag resizes the brush (left/right size, up/down hardness) rather than
     // erasing or opening the picker; its Down starts the resize in `brush_resize::pointer`.
     let alt = response.ctx.input(|i| i.modifiers.alt);
-    let resize_start = alt && crate::brush_resize::applies(tool) && response.drag_started_by(PointerButton::Secondary);
-    let resizing = app.brush_resize.is_some();
+    let erase_pref = right_erases(app, tool);
+    // A right-button drag's mode is fixed when it begins (see `RightDrag`).
+    let right_started = response.drag_started_by(PointerButton::Secondary);
+    if right_started && app.right_drag.is_none() {
+        app.right_drag = if alt && crate::brush_resize::applies(tool) {
+            Some(RightDrag::Resize)
+        } else if erase_pref {
+            Some(RightDrag::Erase)
+        } else {
+            None
+        };
+    }
+    let mode = app.right_drag;
+    let resize_start = right_started && mode == Some(RightDrag::Resize);
     if resize_start {
         app.brush_resize_armed = true;
     }
-    let erase = right_erases(app, tool) && !alt;
-    let right_stroke = erase && app.drag.is_some();
-    let right_start = erase && response.drag_started_by(PointerButton::Secondary);
+    let right_start = right_started && mode == Some(RightDrag::Erase);
+    // A right-click (no drag) is decided by the keys held at the click.
     let right_click = response.secondary_clicked();
     if right_click
-        && !erase
+        && !erase_pref
         && !alt
         && has_brush_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
         app.ui.brush_picker = Some([p.x, p.y]);
     }
-    let erase_click = erase && right_click;
+    let erase_click = erase_pref && !alt && right_click;
     app.secondary_erase = right_start || erase_click;
-    let right_drag = right_stroke || resizing;
-    Buttons {
+    let right_drag = mode.is_some();
+    let right_stopped = right_drag && response.drag_stopped_by(PointerButton::Secondary);
+    let buttons = Buttons {
         started: response.drag_started_by(PointerButton::Primary) || right_start || resize_start,
         dragged: response.dragged_by(PointerButton::Primary) || (right_drag && response.dragged_by(PointerButton::Secondary)),
-        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
+        stopped: response.drag_stopped_by(PointerButton::Primary) || right_stopped,
         clicked: response.clicked() || erase_click,
+    };
+    // The drag is over when its button is up (released here, or somewhere else).
+    if right_stopped || !response.ctx.input(|i| i.pointer.secondary_down()) {
+        app.right_drag = None;
     }
+    buttons
 }
 
 /// `ui.pointer` with `"button": "secondary"`: true when its events should reach the tool (an
@@ -205,6 +233,57 @@ mod tests {
 
     fn strokes(h: &Harness<'static, PhotocraftApp>) -> Vec<serde_json::Value> {
         h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).collect()
+    }
+
+    /// The right-drag's mode is fixed when it begins: pressing Alt during an erasing stroke, or
+    /// letting go of Alt during a resize, never strands the gesture (its release still ends it).
+    #[test]
+    fn alt_changing_mid_right_drag_keeps_the_gesture() {
+        // Erasing stroke, Alt pressed mid-drag: the stroke is still committed on release.
+        let mut h = harness(Some("erase"));
+        let size = h.state().session.tools.brush.size;
+        let c = h.state().last_canvas_rect.center();
+        let (a, b) = (c - vec2(80.0, 0.0), c + vec2(80.0, 0.0));
+        h.event(egui::Event::PointerMoved(a));
+        h.run_steps(1);
+        press(&mut h, a, PointerButton::Secondary, true);
+        for i in 1..=4 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (i as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+        for i in 5..=8 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (i as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        press(&mut h, b, PointerButton::Secondary, false);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        assert_eq!(strokes(&h).len(), 1, "the erasing stroke ended and was committed");
+        assert_eq!(strokes(&h)[0]["erase"], serde_json::json!(true));
+        assert!(h.state().drag.is_none() && h.state().right_drag.is_none(), "no stroke left open");
+        assert_eq!(h.state().session.tools.brush.size, size, "Alt mid-stroke didn't turn it into a resize");
+        // A resize, Alt let go mid-drag: still a resize, and it ends with the button.
+        let mut h = harness(Some("erase"));
+        let c = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(1);
+        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+        press(&mut h, c, PointerButton::Secondary, true);
+        for i in 1..=4 {
+            h.event(egui::Event::PointerMoved(c + vec2(20.0 * i as f32, 0.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        for i in 5..=8 {
+            h.event(egui::Event::PointerMoved(c + vec2(20.0 * i as f32, 0.0)));
+            h.run_steps(1);
+        }
+        press(&mut h, c + vec2(160.0, 0.0), PointerButton::Secondary, false);
+        h.run_steps(2);
+        assert!(strokes(&h).is_empty(), "letting go of Alt mid-resize didn't start erasing");
+        assert!(h.state().brush_resize.is_none() && h.state().right_drag.is_none(), "the resize ended with the button");
+        assert!(h.state().session.tools.brush.size > 100.0);
     }
 
     /// Alt + right-drag resizes the brush (#297, Photoshop on Windows): nothing is painted or
