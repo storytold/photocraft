@@ -282,12 +282,14 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         });
                     });
                     let mut lv = v.clamp(min, max).ln();
-                    if crate::widgets::slider(ui, &mut lv, min.ln()..=max.ln(), None).changed() {
+                    // Double-click resets to the filter's default (on the log scale too).
+                    let reset = (default > 0.0).then(|| default.clamp(min, max).ln());
+                    if crate::widgets::slider_default(ui, &mut lv, min.ln()..=max.ln(), None, reset).changed() {
                         v = lv.exp();
                     }
                     ui.add_space(4.0);
                 } else {
-                    crate::widgets::slider_row(ui, &label(&p.key), &mut v, min..=max, unit, None);
+                    crate::widgets::slider_row_default(ui, &label(&p.key), &mut v, min..=max, unit, None, Some(default));
                 }
                 f.insert(p.key, json!((v * 10.0).round() / 10.0));
             }

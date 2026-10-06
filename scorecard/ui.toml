@@ -94,7 +94,7 @@ id = "UI-217-13"
 target = "Numeric fields accept arithmetic and units; scrubby labels; double-click resets a slider"
 status = "partial"
 issue = 217
-note = "Double-click resets a slider (widgets::slider_default); no arithmetic, units or label scrubbing yet"
+note = "Double-click resets a slider to its known default (widgets::slider_default: adjustments, Hue/Saturation, filters); no arithmetic, units or label scrubbing yet"
 
 [[item]]
 id = "UI-217-14"

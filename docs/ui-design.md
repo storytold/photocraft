@@ -63,9 +63,10 @@ Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"
 - **Document tabs:** right-click a tab for Close, Close Others, Close All and, for a saved
   document, Reveal in Finder / Show in Explorer / Show in Folder (`file.reveal`). The reveal
   wording follows the platform everywhere (`layer_menu_cmds::REVEAL_LABEL`).
-- **Sliders:** double-click a slider to reset it: to its default where the caller gives one
-  (`widgets::slider_row_default`, e.g. the adjustment editors), else to the value it had when it
-  appeared. Hue/Saturation's Saturation and Lightness tracks show the hue they act on.
+- **Sliders:** double-click a slider to reset it to its default, where one is known
+  (`widgets::slider_row_default`: the adjustment editors, Hue/Saturation, filter dialogs);
+  sliders without a known default don't reset. Hue/Saturation's Saturation and Lightness tracks
+  show the hue they act on.
 - **Zoom:** ⌥/Alt + mouse wheel zooms around the pointer, about 5 % per wheel notch.
 - **Rulers:** Preferences › Units & Rulers › Show Rulers in New Documents turns rulers on when a
   document is created or opened.

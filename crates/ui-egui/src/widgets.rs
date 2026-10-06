@@ -174,22 +174,14 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
     slider_default(ui, value, range, gradient, None)
 }
 
-/// [`slider`] that a double-click resets to `default`, or, without one, to the value it had when
-/// it appeared (a dialog's starting value).
+/// [`slider`] that a double-click resets to `default`. Without a default a double-click does
+/// nothing: "the value it had when it appeared" would depend on which object the panel showed
+/// first, not on the one being edited.
 pub fn slider_default(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, default: Option<f32>) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
-    // The value to reset to: the given default, else the value when the slider appeared (kept
-    // while it is drawn every frame; a slider shown again starts over).
-    let pass = ui.ctx().cumulative_pass_nr();
-    let key = resp.id.with("reset-to");
-    let first = match ui.data(|d| d.get_temp::<(f32, u64)>(key)) {
-        Some((v, last)) if last.saturating_add(1) >= pass => v,
-        _ => *value,
-    };
-    ui.data_mut(|d| d.insert_temp(key, (first, pass)));
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
     if let Some(p) = resp.interact_pointer_pos()
         && (resp.dragged() || resp.clicked())
@@ -201,12 +193,13 @@ pub fn slider_default(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclus
             resp.mark_changed();
         }
     }
-    if resp.double_clicked() {
-        let reset = default.unwrap_or(first);
-        if reset.is_finite() && (reset - *value).abs() > f32::EPSILON {
-            *value = reset.clamp(lo.min(hi), hi.max(lo));
-            resp.mark_changed();
-        }
+    if resp.double_clicked()
+        && let Some(reset) = default
+        && reset.is_finite()
+        && (reset - *value).abs() > f32::EPSILON
+    {
+        *value = reset.clamp(lo.min(hi), hi.max(lo));
+        resp.mark_changed();
     }
     let v = f64::from(*value);
     resp.widget_info(|| egui::WidgetInfo::slider(true, v, ""));
@@ -254,8 +247,8 @@ pub fn slider_default(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclus
     resp
 }
 
-/// Labelled slider row: `Label ........ [value field]` above a full-width thin slider. A
-/// double-click on the slider resets it (see [`slider_default`]).
+/// Labelled slider row: `Label ........ [value field]` above a full-width thin slider. Use
+/// [`slider_row_default`] to make a double-click reset it to a known default.
 pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: Option<&[Color32]>) -> Response {
     slider_row_default(ui, label, value, range, suffix, gradient, None)
 }
@@ -488,8 +481,8 @@ pub fn fmt_num2(v: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// A double-click on a slider resets it: to the given default, else to the value it had
-    /// when it appeared.
+    /// A double-click on a slider resets it to its given default; without one it does nothing
+    /// (a remembered "starting value" would follow whatever the panel showed first).
     #[test]
     fn double_click_resets_a_slider() {
         use egui::{Event, Modifiers, PointerButton};
@@ -518,7 +511,12 @@ mod tests {
             click(&mut h, c);
             click(&mut h, c);
             h.run_steps(2);
-            assert_eq!(*h.state(), default.unwrap_or(25.0), "{default:?}");
+            // Without a default the value stays where the first click put it.
+            let after_click = if default.is_some() { 0.0 } else { *h.state() };
+            assert_eq!(*h.state(), default.unwrap_or(after_click), "{default:?}");
+            if default.is_none() {
+                assert!(*h.state() != 25.0, "no reset to a remembered starting value");
+            }
         }
     }
 
