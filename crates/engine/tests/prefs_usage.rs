@@ -44,9 +44,17 @@ fn has_ident(text: &str, prefix: &str, ident: &str) -> bool {
     })
 }
 
-/// Production source of a file: everything before its unit-test module.
+/// Production source of a file: everything before its unit-test module. Lines may end in `\r\n`
+/// (a Windows checkout with `core.autocrlf`), so the test module is found either way.
 fn production(text: &str) -> &str {
-    let cut = text.find("#[cfg(test)]\nmod ").or_else(|| text.find("#[cfg(test)]\npub mod ")).unwrap_or(text.len());
+    let cut = text
+        .match_indices("#[cfg(test)]")
+        .find(|&(i, m)| {
+            let rest = &text[i + m.len()..];
+            let rest = rest.strip_prefix("\r\n").or_else(|| rest.strip_prefix('\n')).unwrap_or("");
+            rest.starts_with("mod ") || rest.starts_with("pub mod ")
+        })
+        .map_or(text.len(), |(i, _)| i);
     &text[..cut]
 }
 
