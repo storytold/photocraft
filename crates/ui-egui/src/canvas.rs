@@ -1162,6 +1162,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
+    // Scrollbars in Standard Screen Mode, like Photoshop (scrollbars.rs). Registered after the
+    // canvas widget so they sit on top of it and take only the presses on the bars themselves.
+    let overscroll = app.session.prefs().tools.overscroll;
+    let img_rect = xf.doc_rect(doc.bounds());
+    let bars = if app.ui.view.screen_mode == "standard" { crate::scrollbars::layout(rect, img_rect, overscroll) } else { Default::default() };
+    let scrolled = crate::scrollbars::interact(ui, egui::Id::new(("pc-scrollbars", ctx.viewport_id(), idx)), &bars);
+    crate::scrollbars::pan(&mut view, flip, scrolled.shift);
 
     match crate::prefs_ui::pasteboard_color(app) {
         Some(c) => {
@@ -1172,7 +1179,6 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let border = app.session.prefs().interface.canvas_border;
     let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
     // Drop shadow, checkerboard, document image.
-    let img_rect = xf.doc_rect(doc.bounds());
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs).
     let mut on_gpu = false;
     // A flipped view draws through the CPU path (the GPU canvas shader has no mirroring).
@@ -1335,7 +1341,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
     // Navigation: scroll pans, pinch / ⌘-scroll zooms around the pointer.
-    if response.hovered() || free_hover {
+    if response.hovered() || free_hover || scrolled.hovered {
         let (scroll, zoom_delta, pointer) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos()));
         if zoom_delta != 1.0
             && let Some(p) = pointer
@@ -1582,6 +1588,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // ⇧ after a stroke: the straight line a click would paint (#257).
             crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
         }
+    }
+    crate::scrollbars::paint(&painter, &crate::theme::Tokens::get(&ctx), &bars, &scrolled);
+    // Preferences › Tools › Overscroll off: the document can't be scrolled past its edges.
+    if !overscroll {
+        crate::scrollbars::clamp_view(&mut view, rect.size(), size);
     }
     if primary {
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));

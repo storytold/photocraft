@@ -90,6 +90,7 @@ pub mod puppet_ui;
 pub mod rasterize_prompt;
 pub mod retouch_ui;
 pub mod rulers;
+pub mod scrollbars;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
@@ -1208,6 +1209,9 @@ mod pencil_tests;
 
 #[cfg(test)]
 mod marquee_tests;
+
+#[cfg(test)]
+mod scrollbar_tests;
 
 #[cfg(test)]
 mod clipboard_tests {
