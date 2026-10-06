@@ -46,6 +46,8 @@ pub struct Buttons {
     pub dragged: bool,
     pub stopped: bool,
     pub clicked: bool,
+    /// A right-click that opens the canvas layer list (Move tool, or ⌘/Ctrl held: `layer_pick_ui`).
+    pub layer_menu: bool,
 }
 
 /// Tools whose right-click opens the Brush Preset picker (those with the options-bar brush chip).
@@ -60,11 +62,16 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 
 /// Route the canvas response's buttons: the left one drives the tool; the right one erases (Erase
 /// preference) or opens the Brush Preset picker. Arms `secondary_erase` for this frame's `Down`.
+/// A right-click with the Move tool, or with ⌘/Ctrl held, asks for the layer list instead.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
     let erase = right_erases(app, tool);
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && response.drag_started_by(PointerButton::Secondary);
-    let right_click = response.secondary_clicked();
+    let mut right_click = response.secondary_clicked();
+    let layer_menu = right_click && crate::layer_pick_ui::wanted(tool, response.ctx.input(|i| i.modifiers));
+    if layer_menu {
+        right_click = false;
+    }
     if right_click
         && !erase
         && has_brush_picker(tool)
@@ -79,6 +86,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
         dragged: response.dragged_by(PointerButton::Primary) || (right_stroke && response.dragged_by(PointerButton::Secondary)),
         stopped: response.drag_stopped_by(PointerButton::Primary) || (right_stroke && response.drag_stopped_by(PointerButton::Secondary)),
         clicked: response.clicked() || erase_click,
+        layer_menu,
     }
 }
 

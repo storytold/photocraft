@@ -11,7 +11,7 @@
 //! - `ui.menu.invoke {id}` / `ui.menu.list`: activate a menu item by id; list the menu tree
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog}` / `ui.dialog.cancel {dialog}`
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
-//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` = the right button: opens the Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
+//! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` = the right button: with the Move tool, or with `command`, opens the layer list at the point (`ui.layer_pick`, #307); otherwise opens the Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
 //! - `ui.resize {width, height}`: resize the main window
@@ -301,8 +301,17 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
                     "up" => ToolEvent::Up { x, y },
                     _ => ToolEvent::Move { x, y, pressure: pr },
                 };
-                if matches!(s("button"), Some("secondary" | "right")) && !crate::paint_mouse::pointer_secondary(app, matches!(ev, ToolEvent::Down { .. })) {
-                    continue;
+                if matches!(s("button"), Some("secondary" | "right")) {
+                    // Move tool (or ⌘/Ctrl): the layer list at the point, like a right-click.
+                    if crate::layer_pick_ui::wanted(app.ui.tool, mods) {
+                        if matches!(ev, ToolEvent::Down { .. }) {
+                            crate::layer_pick_ui::open_at_doc_point(app, [x, y]);
+                        }
+                        continue;
+                    }
+                    if !crate::paint_mouse::pointer_secondary(app, matches!(ev, ToolEvent::Down { .. })) {
+                        continue;
+                    }
                 }
                 // A simulated pen: tilt/rotation reach the stroke like a real stylus's (see `stylus`).
                 let tilt = |k: &str| e.get(k).and_then(Value::as_f64).map(|v| v as f32);

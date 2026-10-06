@@ -59,6 +59,7 @@ pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod layer_menu_ui;
+pub mod layer_pick_ui;
 pub mod layer_props_ui;
 mod layer_reveal;
 pub mod layer_row_ui;
