@@ -123,7 +123,11 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             transform: Affine::translate(10.5, 20.25),
             cache: Some(cache.clone()),
             psd_raw: Some(blob(9, 100)),
-            runs: vec![TextRun { len: 6, style: CharStyle::default() }, TextRun { len: 9, style: CharStyle::default() }],
+            runs: vec![
+                TextRun { len: 1, style: CharStyle { kerning: text::Kerning::Off, kern: 120.0, ..CharStyle::default() } },
+                TextRun { len: 5, style: CharStyle::default() },
+                TextRun { len: 9, style: CharStyle { kerning: text::Kerning::Optical, ..CharStyle::default() } },
+            ],
             paragraphs: vec![ParagraphRun { len: 15, style: ParagraphStyle::default() }],
             shape: TextShape::Box { x: 1.0, y: 2.0, width: 100.0, height: 50.0 },
             orientation: text::Orientation::Vertical,

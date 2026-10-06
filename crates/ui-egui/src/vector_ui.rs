@@ -353,35 +353,41 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     };
     let o = &mut app.ui.tool_options;
     if tool == Tool::PathSelection {
-        lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { "Drag to move the active shape's path or the Work Path" });
+        lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the active shape's path or the Work Path") });
         return true;
     }
     if tool == Tool::Pen {
-        let opts = [("path".to_string(), "Path"), ("shape".to_string(), "Shape")];
+        let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
         crate::widgets::dropdown(ui, "pen-mode", &mut o.vector_mode, &opts, 80.0);
         crate::widgets::vline(ui, 22.0);
-        lbl(ui, &format!("Click: corner · Drag: smooth · Click first point: close · {} finish · Esc cancel", crate::shortcuts::pretty("Enter")));
+        lbl(
+            ui,
+            &crate::i18n::fmt(
+                tl!("Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel"),
+                &[("key", &crate::shortcuts::pretty("Enter"))],
+            ),
+        );
         return true;
     }
     let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), "Shape")], 80.0);
+    crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
-    lbl(ui, "Fill:");
+    lbl(ui, tl!("Fill:"));
     crate::widgets::checkbox(ui, &mut o.shape_fill, "");
     let (r, _) = ui.allocate_exact_size(vec2(22.0, 16.0), Sense::hover());
     ui.painter().rect_filled(r, 2.0, rgb32(app.session.tools.foreground));
     ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
-    lbl(ui, "Stroke:");
+    lbl(ui, tl!("Stroke:"));
     crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0);
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
-            lbl(ui, "Radius:");
+            lbl(ui, tl!("Radius:"));
             crate::widgets::value_field(ui, &mut o.corner_radius, 0.0..=10000.0, "px", 62.0);
         }
         Tool::Polygon => {
             crate::widgets::vline(ui, 22.0);
-            lbl(ui, "Sides:");
+            lbl(ui, tl!("Sides:"));
             let mut s = o.polygon_sides as f32;
             if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 48.0).changed() {
                 o.polygon_sides = s.round().clamp(3.0, 100.0) as u32;
@@ -389,7 +395,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::Line => {
             crate::widgets::vline(ui, 22.0);
-            lbl(ui, "Weight:");
+            lbl(ui, tl!("Weight:"));
             crate::widgets::value_field(ui, &mut o.line_weight, 1.0..=1000.0, "px", 58.0);
         }
         Tool::CustomShape => {
@@ -463,7 +469,7 @@ fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, tip: &str) -> 
         if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
             out = Some(format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()));
         }
-        if fill.is_some() && ui.button("No Color").clicked() {
+        if fill.is_some() && ui.button(tl!("No Color")).clicked() {
             out = Some("none".into());
         }
     });
@@ -482,15 +488,15 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let mut edit: Option<Value> = None;
     let key = |k: &str| format!("shape-{}-{k}", id.0);
     // The shared collapsible section headers (#155).
-    if crate::props_layout::section(ui, "appearance", "Appearance") {
+    if crate::props_layout::section(ui, "appearance", tl!("Appearance")) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Fill").color(t.text_dim).size(12.0));
-            if let Some(c) = swatch(ui, sh.fill.as_ref(), "Set shape fill type") {
+            ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
+            if let Some(c) = swatch(ui, sh.fill.as_ref(), tl!("Set shape fill type")) {
                 edit = Some(if c == "none" { json!({"fill": null}) } else { json!({"fill": c, "coalesce": key("fill")}) });
             }
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Stroke").color(t.text_dim).size(12.0));
-            if let Some(c) = swatch(ui, sh.stroke.as_ref().map(|s| &s.paint), "Set shape stroke type") {
+            ui.label(egui::RichText::new(tl!("Stroke")).color(t.text_dim).size(12.0));
+            if let Some(c) = swatch(ui, sh.stroke.as_ref().map(|s| &s.paint), tl!("Set shape stroke type")) {
                 edit = Some(if c == "none" {
                     json!({"stroke": null})
                 } else {
@@ -516,10 +522,10 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         });
     }
     if let Some(live) = &sh.live
-        && crate::props_layout::section(ui, "liveShape", "Shape")
+        && crate::props_layout::section(ui, "liveShape", tl!("Shape"))
     {
         let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str| -> bool {
-            ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
+            ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
             crate::widgets::value_field(ui, v, range, unit, 64.0).changed()
         };
         match live {
@@ -540,23 +546,23 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         ui.horizontal(|ui| match live {
             photocraft_doc::vector::LiveShape::Rect { radii, .. } => {
                 let mut r = radii[0] as f32;
-                if num(ui, "Corner radius", &mut r, 0.0..=100000.0, "px") {
+                if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {
                     edit = Some(json!({"radii": r, "coalesce": key("radius")}));
                 }
             }
             photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, .. } => {
                 let mut n = *sides as f32;
-                if num(ui, "Sides", &mut n, 3.0..=100.0, "") {
+                if num(ui, tl!("Sides"), &mut n, 3.0..=100.0, "") {
                     edit = Some(json!({"sides": n.round() as u32, "coalesce": key("sides")}));
                 }
                 let mut sr = (*star_ratio * 100.0) as f32;
-                if num(ui, "Star ratio", &mut sr, 1.0..=100.0, "%") {
+                if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
                     edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
                 }
             }
             photocraft_doc::vector::LiveShape::Line { weight, .. } => {
                 let mut w = *weight as f32;
-                if num(ui, "Weight", &mut w, 1.0..=10000.0, "px") {
+                if num(ui, tl!("Weight"), &mut w, 1.0..=10000.0, "px") {
                     edit = Some(json!({"weight": w, "coalesce": key("weight")}));
                 }
             }
@@ -645,7 +651,7 @@ pub fn paths_footer(ctx: &egui::Context) -> Option<Rect> {
 pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
-        ui.label(egui::RichText::new("No document").color(t.text_faint));
+        ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
         return;
     };
     let doc = st.doc.clone();
@@ -660,7 +666,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             if rows.is_empty() {
-                ui.label(egui::RichText::new("Draw with the Pen tool (P) or make a work path from a selection.").color(t.text_faint).size(11.5));
+                ui.label(egui::RichText::new(tl!("Draw with the Pen tool (P) or make a work path from a selection.")).color(t.text_faint).size(11.5));
             }
             for PathEntry { name, path, kind } in &rows {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
@@ -681,7 +687,11 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let mut job = egui::text::LayoutJob::default();
                 // Temporary paths (the work path, the selected layer's shape path or vector mask) are italic.
                 let italics = *kind != PathRow::Saved;
-                job.append(name, 0.0, egui::TextFormat { font_id: egui::FontId::proportional(12.0), color: t.text, italics, ..Default::default() });
+                job.append(
+                    if *kind == PathRow::Work { tl!(name) } else { name },
+                    0.0,
+                    egui::TextFormat { font_id: egui::FontId::proportional(12.0), color: t.text, italics, ..Default::default() },
+                );
                 let g = ui.painter().layout_job(job);
                 ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
                 if resp.clicked() {

@@ -36,7 +36,7 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
         "grd" => ("gradient.presets.importGrd", "gradients"),
         _ => return None,
     };
-    let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Imported".into());
+    let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Imported").into());
     let mut p = source(name, bytes);
     p["group"] = json!(stem);
     if what == "brushes" {

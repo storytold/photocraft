@@ -281,7 +281,7 @@ issue = 211
 bench = "perf_scenarios"
 row = "Select > Modify > Smooth r 50 on 24 MP"
 budget_ms = 100
-enforce = false  # over budget in the 2026-10-05 baseline
+enforce = false  # #211: fastest samples 30-33 ms; p95 still over budget at load avg > 100
 
 [[scenario]]
 id = "P27"
@@ -290,7 +290,7 @@ issue = 211
 bench = "perf_scenarios"
 row = "Select > Modify > Feather r 50 on 24 MP"
 budget_ms = 100
-enforce = false  # over budget in the 2026-10-05 baseline
+enforce = false  # #211: fastest samples 30-33 ms; p95 still over budget at load avg > 100
 
 [[scenario]]
 id = "P28"

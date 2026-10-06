@@ -104,6 +104,83 @@ pub fn engine_data(text: &Descriptor) -> Option<E> {
     }
 }
 
+/// Parses the document's `Txt2` block (Photoshop's text engine data for all type layers).
+pub fn parse_txt2(data: &[u8]) -> Option<E> {
+    // Txt2 is a bare sequence of `/key value` pairs (no enclosing `<< >>`).
+    let mut wrapped = Vec::with_capacity(data.len() + 4);
+    wrapped.extend_from_slice(b"<<");
+    wrapped.extend_from_slice(data);
+    wrapped.extend_from_slice(b">>");
+    ed::parse(&wrapped).ok().filter(|v| matches!(v, E::Dict(_)))
+}
+
+/// Applies the automatic kerning modes that Photoshop keeps only in `Txt2` (EngineData writes
+/// Optical and "0" alike as `AutoKerning true`) to `layer`, read from `tysh`. Only when the
+/// layer's `TextIndex` entry still holds the layer's text (an edit elsewhere leaves `Txt2`
+/// stale).
+///
+/// Observed layout: `Txt2 /1` is the list of text objects; an object's `/0` is its text model
+/// with `/0` the text (`\r` breaks, trailing `\r`) and `/6 /0` its style runs, each
+/// `<< /0 << /0 << … /6 <<style>> >> >> /1 utf16-length >>`; style key `/11` is the auto-kern
+/// mode of the pair after each character: 0 manual, 1 metrics, 2 optical.
+pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
+    let Some(index) = parse_tysh(tysh).and_then(|t| match t.text.get("TextIndex") {
+        Some(D::Integer(i)) => usize::try_from(*i).ok(),
+        _ => None,
+    }) else {
+        return;
+    };
+    let Some(model) = txt2.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.get(index)).and_then(|o| o.get("0")) else {
+        return;
+    };
+    let Some(text) = model.get("0").and_then(E::as_str) else {
+        return;
+    };
+    if text.strip_suffix('\r').unwrap_or(text).replace('\r', "\n") != layer.text {
+        return;
+    }
+    let Some(style_runs) = model.path(&["6", "0"]).and_then(E::as_array) else {
+        return;
+    };
+    let modes: Vec<(f64, Option<i64>)> =
+        style_runs.iter().map(|r| (r.get("1").and_then(E::as_f64).unwrap_or(0.0), r.path(&["0", "0", "6", "11"]).and_then(E::as_i64))).collect();
+    let lens = utf16_to_byte_lengths(text, &modes.iter().map(|m| m.0).collect::<Vec<_>>());
+    // Auto-kern mode per byte segment, then split the model runs at segment boundaries.
+    let mut segs: Vec<(usize, Option<i64>)> = lens.into_iter().zip(modes.iter().map(|m| m.1)).collect();
+    segs.retain(|s| s.0 > 0);
+    let runs = layer.char_runs();
+    let mut out: Vec<TextRun> = Vec::new();
+    let (mut si, mut seg_end) = (0usize, segs.first().map_or(usize::MAX, |s| s.0));
+    let mut at = 0usize;
+    for r in runs {
+        let end = at + r.len;
+        while at < end {
+            while at >= seg_end && si + 1 < segs.len() {
+                si += 1;
+                seg_end = seg_end.saturating_add(segs.get(si).map_or(0, |s| s.0));
+            }
+            let piece_end = if at < seg_end { end.min(seg_end) } else { end };
+            let mut style = r.style.clone();
+            // Txt2 has the exact mode (EngineData's reading also marks neighbours of manual
+            // kerns manual, like Photoshop's legacy reader).
+            match segs.get(si).and_then(|s| s.1).filter(|_| at < seg_end) {
+                Some(0) => style.kerning = Kerning::Off,
+                Some(1) => style.kerning = Kerning::Metrics,
+                Some(2) => style.kerning = Kerning::Optical,
+                _ => {}
+            }
+            let len = piece_end - at;
+            match out.last_mut() {
+                Some(last) if last.style == style => last.len += len,
+                _ => out.push(TextRun { len, style }),
+            }
+            at = piece_end;
+        }
+    }
+    layer.runs = out;
+    layer.sync_summary();
+}
+
 /// Builds a [`TextLayer`] (model, text and transform; no cache, no `psd_raw`) from `TySh` data.
 pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
     let t = parse_tysh(data)?;
@@ -153,7 +230,7 @@ pub(crate) fn arr_f(v: Option<&E>) -> Vec<f64> {
 }
 
 /// Converts UTF-16 run lengths over `text` into UTF-8 byte lengths.
-fn utf16_to_byte_lengths(text: &str, lens: &[f64]) -> Vec<usize> {
+pub(crate) fn utf16_to_byte_lengths(text: &str, lens: &[f64]) -> Vec<usize> {
     let mut out = Vec::with_capacity(lens.len());
     let mut chars = text.chars().peekable();
     for &l in lens {
@@ -202,7 +279,17 @@ fn apply_engine_data(layer: &mut TextLayer, e: &E, txt: Option<&str>, k: f32) {
         .map(|a| a.iter().filter_map(|x| x.path(&["StyleSheet", "StyleSheetData"])).collect())
         .unwrap_or_default();
     let slens = utf16_to_byte_lengths(&ed_text, &arr_f(srun.and_then(|r| r.get("RunLengthArray"))));
+    let incoming: Vec<(usize, bool, f32)> = sdata
+        .iter()
+        .zip(&slens)
+        .map(|(d, len)| {
+            let auto = lookup(d, base_style, "AutoKerning").and_then(E::as_bool) != Some(false);
+            let kern = lookup(d, base_style, "Kerning").and_then(E::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) as f32;
+            (*len, auto, kern)
+        })
+        .collect();
     layer.runs = sdata.iter().zip(slens).map(|(d, len)| TextRun { len, style: char_style(base_style, d, &fonts, k) }).collect();
+    layer.runs = kerning_from_pairs(&layer.text, layer.char_runs(), &incoming);
 
     // Paragraph runs.
     let prun = e.path(&["EngineDict", "ParagraphRun"]);
@@ -266,6 +353,7 @@ pub(crate) fn char_style(base: Option<&E>, d: &E, fonts: &[String], k: f32) -> C
         }
     }
     s.kerning = if flag("AutoKerning") == Some(false) { Kerning::Off } else { Kerning::Metrics };
+    s.kern = num("Kerning").filter(|v| v.is_finite()).unwrap_or(0.0) as f32;
     s.caps = match g("FontCaps").and_then(E::as_i64) {
         Some(1) => Caps::SmallCaps,
         Some(2) => Caps::AllCaps,
@@ -311,6 +399,116 @@ pub(crate) fn para_style(base: Option<&E>, d: &E, k: f32) -> ParagraphStyle {
 
 fn real(v: f32) -> E {
     E::Real(f64::from(v))
+}
+
+/// Manual kerning as Photoshop stores it: a whole number of 1/1000 em (its UI range is ±1000;
+/// anything non-finite writes 0).
+pub(crate) fn kern_units(v: f32) -> i64 {
+    if v.is_finite() { v.round().clamp(-10_000.0, 10_000.0) as i64 } else { 0 }
+}
+
+// Kerning in EngineData, as observed in Photoshop 2026 (writing, and reading files without
+// `Txt2`): a manual kern k (1/1000 em) after character c is written on character c + 1 as
+// `AutoKerning false` + `Kerning k`; everything else is `true` + 0. Photoshop's reader takes
+// `Kerning k` on character j as the kern after j - 1 (making j - 1 manual), and
+// `AutoKerning false` on j as "character j - 2 is manually kerned" (no automatic kerning). The
+// automatic mode itself (Metrics or Optical) isn't in EngineData: Photoshop keeps it in the
+// document's `Txt2` (see [`apply_txt2`]). We write and read the same way, so Photoshop reads
+// our kerning as we do and Photoshop's own fields round-trip unchanged. (The mode of the last
+// character has no slot and reads back as Metrics.)
+
+fn manual(s: &CharStyle) -> bool {
+    s.kerning == Kerning::Off || kern_units(s.kern) != 0
+}
+
+/// EngineData style runs for `ed_text` (the layer text with `\r` breaks and the trailing `\r`):
+/// (model run index, `(AutoKerning, Kerning)`, UTF-16 length), split where those change.
+fn pair_runs(ed_text: &str, runs: &[TextRun]) -> Vec<(usize, (bool, i64), usize)> {
+    // Model run of each character (the trailing `\r` takes the last run).
+    let mut owner: Vec<(usize, usize)> = Vec::with_capacity(ed_text.len());
+    let (mut ri, mut run_end) = (0usize, runs.first().map_or(0, |r| r.len));
+    for (b, ch) in ed_text.char_indices() {
+        while b >= run_end && ri + 1 < runs.len() {
+            ri += 1;
+            run_end = run_end.saturating_add(runs.get(ri).map_or(0, |r| r.len));
+        }
+        owner.push((ri, ch.len_utf16()));
+    }
+    let style = |i: usize| owner.get(i).and_then(|o| runs.get(o.0)).map(|r| &r.style);
+    let mut out: Vec<(usize, (bool, i64), usize)> = Vec::new();
+    for (j, &(ri, n)) in owner.iter().enumerate() {
+        let k = j.checked_sub(1).and_then(style).map_or(0, |s| kern_units(s.kern));
+        // `false` marks character j - 2 manual: written when it is and its own kern (on j - 1)
+        // doesn't say so already; harmless (and Photoshop's own form) next to a kern on j.
+        let off = match j.checked_sub(2) {
+            Some(p) => style(p).is_some_and(|s| manual(s) && (kern_units(s.kern) == 0 || k != 0)),
+            None => k != 0,
+        };
+        let fields = (!off, k);
+        match out.last_mut() {
+            Some(last) if last.0 == ri && last.1 == fields => last.2 += n,
+            _ => out.push((ri, fields, n)),
+        }
+    }
+    out
+}
+
+/// Reads EngineData's kerning fields back into the model (see the notes above). `incoming` is
+/// per EngineData style run: (UTF-8 length in the engine text, `AutoKerning`, `Kerning`).
+fn kerning_from_pairs(text: &str, runs: Vec<TextRun>, incoming: &[(usize, bool, f32)]) -> Vec<TextRun> {
+    if text.is_empty() || runs.is_empty() {
+        return runs;
+    }
+    // Byte offset of every character, plus the trailing break.
+    let starts: Vec<usize> = text.char_indices().map(|(b, _)| b).chain(std::iter::once(text.len())).collect();
+    let n = starts.len().saturating_sub(1);
+    let mut kern = vec![0.0f32; n];
+    let mut off = vec![false; n];
+    let (mut si, mut seg_end) = (0usize, incoming.first().map_or(0, |s| s.0));
+    for (j, &b) in starts.iter().enumerate() {
+        while b >= seg_end && si < incoming.len() {
+            si += 1;
+            seg_end = seg_end.saturating_add(incoming.get(si).map_or(0, |s| s.0));
+        }
+        let Some(&(_, auto, k)) = incoming.get(si) else { break };
+        if k != 0.0
+            && let Some(p) = j.checked_sub(1)
+            && let (Some(kp), Some(op)) = (kern.get_mut(p), off.get_mut(p))
+        {
+            *kp = k;
+            *op = true;
+        }
+        if !auto && let Some(op) = j.checked_sub(2).and_then(|p| off.get_mut(p)) {
+            *op = true;
+        }
+    }
+    let (mut ri, mut run_end) = (0usize, runs.first().map_or(0, |r| r.len));
+    let mut out: Vec<TextRun> = Vec::new();
+    for (c, w) in starts.windows(2).enumerate() {
+        let (b, len) = (w[0], w[1] - w[0]);
+        while b >= run_end && ri + 1 < runs.len() {
+            ri += 1;
+            run_end = run_end.saturating_add(runs.get(ri).map_or(0, |r| r.len));
+        }
+        let Some(r) = runs.get(ri) else { break };
+        let k = kern.get(c).copied().unwrap_or(0.0);
+        let kerning = if off.get(c).copied().unwrap_or(false) { Kerning::Off } else { Kerning::Metrics };
+        match out.last_mut() {
+            Some(last) if last.style.kern == k && last.style.kerning == kerning && same_but_kerning(&last.style, &r.style) => last.len += len,
+            _ => {
+                let mut style = r.style.clone();
+                style.kerning = kerning;
+                style.kern = k;
+                out.push(TextRun { len, style });
+            }
+        }
+    }
+    out
+}
+
+/// Whether two styles differ at most in their kerning.
+fn same_but_kerning(a: &CharStyle, b: &CharStyle) -> bool {
+    CharStyle { kerning: b.kerning, kern: b.kern, ..a.clone() } == *b
 }
 
 /// PostScript name for a style (the PSD `FontSet` stores these).
@@ -382,7 +580,7 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
         ("VerticalScale".into(), real(s.vertical_scale)),
         ("Tracking".into(), E::Int(s.tracking.round() as i64)),
         ("AutoKerning".into(), E::Bool(s.kerning != Kerning::Off)),
-        ("Kerning".into(), E::Int(0)),
+        ("Kerning".into(), E::Int(kern_units(s.kern))),
         ("BaselineShift".into(), real(s.baseline_shift_pt / k)),
         (
             "FontCaps".into(),
@@ -465,17 +663,14 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
     };
     let mut sruns = Vec::new();
     let mut slens = Vec::new();
-    let mut at = 0usize;
-    for (i, r) in runs.iter().enumerate() {
-        let piece = &text[at..at + r.len];
-        at += r.len;
-        let mut n = utf16_len(piece);
-        if i + 1 == runs.len() {
-            n += 1; // trailing paragraph break
-        }
+    for (ri, pair, n) in pair_runs(&ed_text, &runs) {
+        let Some(r) = runs.get(ri) else { continue };
         let fi = font_index(postscript_for(&r.style));
-        sruns.push(E::Dict(vec![("StyleSheet".into(), E::Dict(vec![("StyleSheetData".into(), style_sheet_data(&r.style, fi, k))]))]));
-        slens.push(E::Int(n));
+        let mut data = style_sheet_data(&r.style, fi, k);
+        data.set("AutoKerning", E::Bool(pair.0));
+        data.set("Kerning", E::Int(pair.1));
+        sruns.push(E::Dict(vec![("StyleSheet".into(), E::Dict(vec![("StyleSheetData".into(), data)]))]));
+        slens.push(E::Int(n as i64));
     }
     let mut pruns = Vec::new();
     let mut plens = Vec::new();

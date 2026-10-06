@@ -313,6 +313,77 @@ fn live_stroke_matches_the_committed_stroke() {
 }
 
 #[test]
+fn live_pencil_matches_the_committed_pencil_and_auto_erases() {
+    let mut s = session(80, 40);
+    s.execute("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();
+    // A soft, low-flow session brush: the Pencil is still hard, aliased and full flow.
+    s.execute("tools.setBrush", json!({"brush": {"size": 3, "hardness": 0.0, "flow": 0.3}})).unwrap();
+    let pts = [[5.0, 5.0, 1.0], [30.2, 17.7, 0.6], [70.0, 33.0, 1.0]];
+    for (auto, start) in [(false, pts[0]), (true, [30.4, 17.2, 1.0])] {
+        let p = json!({"points": [start], "autoErase": auto, "smoothing": 0.0});
+        let mut live = LiveStroke::begin_with(&s, "paint.pencil", &p).unwrap();
+        let rest: Vec<StrokePoint> = pts.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
+        live.push(&rest).unwrap();
+        let mut commit = p.clone();
+        let mut all = vec![start];
+        all.extend(pts);
+        commit["points"] = json!(all);
+        commit["seed"] = json!(live.seed);
+        s.execute("paint.pencil", commit).unwrap();
+        let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        assert!(same_pixels(&shown, &surface(&s), Rect::new(0, 0, 80, 40)), "auto erase {auto}");
+        for y in 0..40 {
+            for x in 0..80 {
+                let a = shown.rgba(x, y)[3];
+                assert!(a == 0.0 || a == 1.0, "partial alpha {a} at ({x},{y})");
+            }
+        }
+    }
+    // The second stroke started on the first one's black: Auto Erase painted white.
+    assert_eq!(rgba(&s, 70, 33), [1.0, 1.0, 1.0, 1.0]);
+    // Only the Brush and the Pencil stroke live.
+    assert!(LiveStroke::begin_with(&s, "paint.mixerBrush", &json!({"points": [[1, 1]]})).is_err());
+    assert!(LiveStroke::begin_with(&s, "paint.pencil", &json!({"points": "none"})).is_err());
+}
+
+/// Pencil latency on a 24 MP document: the time to start a live stroke, per pointer move, and
+/// to commit. `cargo test -p photocraft-engine --release --lib pencil_latency -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn pencil_latency_24mp() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6000, "height": 4000, "background": "white"})).unwrap();
+    for size in [1.0f64, 9.0, 40.0] {
+        let p = json!({"points": [[100.0, 100.0]], "size": size, "smoothing": 0.0});
+        let t = std::time::Instant::now();
+        let mut live = LiveStroke::begin_with(&s, "paint.pencil", &p).unwrap();
+        let begin = t.elapsed().as_secs_f64() * 1000.0;
+        let mut steps = Vec::new();
+        let mut all = vec![[100.0, 100.0]];
+        for i in 1..=300 {
+            let q = [100.0 + i as f64 * 15.0, 100.0 + (i as f64 * 0.07).sin() * 900.0 + 1000.0];
+            all.push(q);
+            let t = std::time::Instant::now();
+            live.push(&[StrokePoint::new(q[0], q[1], 1.0)]).unwrap();
+            steps.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        let mut commit = p.clone();
+        commit["points"] = json!(all);
+        commit["seed"] = json!(live.seed);
+        let t = std::time::Instant::now();
+        s.execute("paint.pencil", commit).unwrap();
+        let done = t.elapsed().as_secs_f64() * 1000.0;
+        steps.sort_by(f64::total_cmp);
+        println!(
+            "pencil {size:>4} px: begin {begin:.2} ms, per move p50 {:.3} ms p95 {:.3} ms max {:.3} ms, commit {done:.1} ms",
+            steps[steps.len() / 2],
+            steps[steps.len() * 95 / 100],
+            steps[steps.len() - 1]
+        );
+    }
+}
+
+#[test]
 fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
     // #189: the preview while dragging must be the committed stroke (within 1/255), with a soft
     // brush on an opaque Background with content, at any zoom (the smoothing string scales with

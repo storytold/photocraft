@@ -128,6 +128,44 @@ fn pencil_is_aliased() {
     assert!((10..32).any(|y| (0..64).any(|x| (0.01..0.99).contains(&s.rgba(x, y)[3]))));
 }
 
+#[test]
+fn pencil_dabs_sit_on_the_pixel_grid() {
+    use crate::render::{grid_center, grid_square};
+    // Odd sizes centre on the pixel holding the point, even ones on the nearest corner.
+    assert_eq!(grid_center(10.0, 5.0, 1.0), (10.5, 5.5));
+    assert_eq!(grid_center(10.9, 5.2, 3.0), (10.5, 5.5));
+    assert_eq!(grid_center(10.4, 5.6, 2.0), (10.0, 6.0));
+    assert_eq!(grid_square(10.2, 5.7, 1.0), [10.0, 5.0, 11.0, 6.0]);
+    assert_eq!(grid_square(10.2, 5.7, 4.0), [8.0, 4.0, 12.0, 8.0]);
+    assert_eq!(grid_square(f64::NAN, 0.0, f32::NAN).len(), 4);
+    // A 1 px pencil paints exactly the pixel under each point, even on a pixel corner, with
+    // no partial alpha.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let s = paint(&b, &[StrokePoint::new(7.0, 4.0, 1.0)], 16, 16);
+    for y in 0..16 {
+        for x in 0..16 {
+            assert_eq!(s.rgba(x, y)[3], if (x, y) == (7, 4) { 1.0 } else { 0.0 }, "({x},{y})");
+        }
+    }
+    // A horizontal 1 px line is one pixel thick and unbroken.
+    let s = paint(&b, &line(2.0, 20.0, 9.3), 24, 16);
+    for x in 2..20 {
+        assert_eq!(s.rgba(x, 9)[3], 1.0, "x {x}");
+        assert_eq!(s.rgba(x, 8)[3] + s.rgba(x, 10)[3], 0.0, "x {x}");
+    }
+    // A 4 px dab stays inside its cursor square.
+    let b = BrushSettings { size: 4.0, ..b };
+    let s = paint(&b, &[StrokePoint::new(10.2, 5.7, 1.0)], 24, 16);
+    let [x0, y0, x1, y1] = grid_square(10.2, 5.7, 4.0);
+    for y in 0..16 {
+        for x in 0..24 {
+            let inside = (x as f64) >= x0 && (x as f64) < x1 && (y as f64) >= y0 && (y as f64) < y1;
+            assert!(inside || s.rgba(x, y)[3] == 0.0, "({x},{y}) outside the square is painted");
+        }
+    }
+    assert_eq!(s.rgba(9, 5)[3], 1.0);
+}
+
 // ---------- spacing ----------
 
 #[test]

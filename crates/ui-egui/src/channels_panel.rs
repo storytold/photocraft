@@ -48,7 +48,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         ui.add_space(6.0);
-        ui.label(RichText::new("No document").color(t.text_faint));
+        ui.label(RichText::new(tl!("No document")).color(t.text_faint));
         return;
     };
     let doc = st.doc.clone();
@@ -136,7 +136,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if row != Row::LayerMask || visible || eye_resp.hovered() {
                 icons::paint(ui, eye, if visible { "eye" } else { "eye-off" }, 14.0, if visible { t.icon } else { t.text_faint });
             }
-            let eye_resp = eye_resp.on_hover_text(if row == Row::LayerMask { "Show the layer mask as an overlay" } else { "Toggle visibility" });
+            let eye_resp = eye_resp.on_hover_text(if row == Row::LayerMask { tl!("Show the layer mask as an overlay") } else { tl!("Toggle visibility") });
             eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Visibility {name}")));
             let layer_id = masked.as_ref().map(|l| l.id.0);
             if eye_resp.clicked() {
@@ -276,17 +276,17 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ChannelTarget::Color(k) => json!({ "color": k }),
             ChannelTarget::Composite => json!("composite"),
         };
-        if icons::button(ui, "circle-dashed", 26.0, false, "Load channel as selection").clicked() {
+        if icons::button(ui, "circle-dashed", 26.0, false, tl!("Load channel as selection")).clicked() {
             actions.push(("select.loadSelection".into(), json!({ "channel": target_ref })));
         }
-        if icons::button(ui, "square-dashed", 26.0, false, "Save selection as channel").clicked() {
+        if icons::button(ui, "square-dashed", 26.0, false, tl!("Save selection as channel")).clicked() {
             actions.push(("select.saveSelection".into(), json!({})));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if icons::button(ui, "trash", 26.0, false, "Delete current channel").clicked() {
+            if icons::button(ui, "trash", 26.0, false, tl!("Delete current channel")).clicked() {
                 actions.push(("channel.delete".into(), json!({})));
             }
-            if icons::button(ui, "plus", 26.0, false, "Create new channel").clicked() {
+            if icons::button(ui, "plus", 26.0, false, tl!("Create new channel")).clicked() {
                 actions.push(("channel.new".into(), json!({})));
             }
         });
@@ -327,7 +327,7 @@ pub fn fit_thumb(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
 }
 
 fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd: &str, p: Value) {
-    if ui.button(label).clicked() {
+    if ui.button(tl!(&label)).clicked() {
         actions.push((cmd.into(), p));
         ui.close();
     }
@@ -343,16 +343,22 @@ fn indicates_items(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channe
 
 /// Overlay colour presets (Channel Options › Color) and opacity.
 fn overlay_colors(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channel: Value) {
-    ui.menu_button("Overlay Color", |ui| {
-        for (label, hex) in [("Red", "#ff0000"), ("Green", "#00c000"), ("Blue", "#0050ff"), ("Cyan", "#00d0e0"), ("Magenta", "#e000c0"), ("Yellow", "#f0d000")]
-        {
-            if ui.button(label).clicked() {
+    ui.menu_button(tl!("Overlay Color"), |ui| {
+        for (label, hex) in [
+            (tl!("Red"), "#ff0000"),
+            (tl!("Green"), "#00c000"),
+            (tl!("Blue"), "#0050ff"),
+            (tl!("Cyan"), "#00d0e0"),
+            (tl!("Magenta"), "#e000c0"),
+            (tl!("Yellow"), "#f0d000"),
+        ] {
+            if ui.button(tl!(&label)).clicked() {
                 actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "color": hex })));
                 ui.close();
             }
         }
     });
-    ui.menu_button("Overlay Opacity", |ui| {
+    ui.menu_button(tl!("Overlay Opacity"), |ui| {
         for o in [25, 50, 75, 100] {
             if ui.button(format!("{o}%")).clicked() {
                 actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "opacity": o })));

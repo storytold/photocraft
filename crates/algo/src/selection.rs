@@ -4,9 +4,11 @@
 //! and combining with an existing selection.
 
 use photocraft_color::PixelFormat;
-use photocraft_geom::Rect;
+use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
+
+use crate::photo_util::par_rows;
 
 /// How a new selection combines with the current one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -36,6 +38,32 @@ pub fn mask_from_surface(s: Option<&Surface>, area: Rect) -> Vec<f32> {
     let n = area.width() as usize * area.height() as usize;
     match s {
         None => vec![0.0; n],
+        // Selections are GRAY8: copy tile bytes through a table, tile rows in parallel.
+        Some(s) if s.format() == PixelFormat::GRAY8 && !area.is_empty() => {
+            let w = area.width() as usize;
+            let lut: [f32; 256] = std::array::from_fn(|i| i as f32 / 255.0);
+            let dp = s.default_pixel().first().copied().unwrap_or(0.0);
+            let mut out = vec![0.0f32; n];
+            par_rows(&mut out, w, 1, |yy, row| {
+                let y = area.y0 + yy as i32;
+                let mut x = area.x0;
+                while x < area.x1 {
+                    let tc = TileCoord::containing(x, y);
+                    let x1 = (tc.rect().x1).min(area.x1);
+                    let dst = row.get_mut((x - area.x0) as usize..(x1 - area.x0) as usize).unwrap_or_default();
+                    let src = s.tile(tc).and_then(|t| {
+                        let base = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize;
+                        t.bytes().get(base..base + dst.len())
+                    });
+                    match src {
+                        Some(src) => dst.iter_mut().zip(src).for_each(|(d, b)| *d = lut[*b as usize]),
+                        None => dst.fill(dp),
+                    }
+                    x = x1;
+                }
+            });
+            out
+        }
         Some(s) => {
             let mut v = Vec::new();
             s.read_region_into(area, &mut v);
@@ -45,35 +73,81 @@ pub fn mask_from_surface(s: Option<&Surface>, area: Rect) -> Vec<f32> {
     }
 }
 
+/// 8-bit selection value of a coverage (clamped and rounded, as GRAY8 surfaces store it; NaN → 0).
+#[inline]
+fn coverage8(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+/// Builds a GRAY8 selection surface from 8-bit coverage over `area`, allocating only the tiles
+/// that hold something (as [`Surface::prune`] would leave them).
+fn surface_from_coverage8(bytes: &[u8], area: Rect) -> Surface {
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    let w = area.width() as usize;
+    let ts = TILE_SIZE as usize;
+    for tc in area.tiles() {
+        let tr = tc.rect().intersect(&area);
+        let (lx, span) = ((tr.x0 - area.x0) as usize, tr.width() as usize);
+        let row = |y: i32| bytes.get((y - area.y0) as usize * w + lx..(y - area.y0) as usize * w + lx + span);
+        if !(tr.y0..tr.y1).any(|y| row(y).is_some_and(|r| r.iter().any(|b| *b != 0))) {
+            continue;
+        }
+        let data = s.tile_mut(tc).bytes_mut();
+        for y in tr.y0..tr.y1 {
+            let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+            if let (Some(src), Some(dst)) = (row(y), data.get_mut(o..o + span)) {
+                dst.copy_from_slice(src);
+            }
+        }
+    }
+    s
+}
+
+/// 8-bit coverage of `m` (missing samples are 0), computed in parallel.
+fn to_coverage8(m: &[f32], area: Rect, f: impl Fn(usize, f32) -> f32 + Sync + Send) -> Vec<u8> {
+    let w = area.width() as usize;
+    let mut bytes = vec![0u8; w * area.height() as usize];
+    par_rows(&mut bytes, w, 1, |y, row| {
+        for (x, b) in row.iter_mut().enumerate() {
+            let i = y * w + x;
+            *b = coverage8(f(i, m.get(i).copied().unwrap_or(0.0)));
+        }
+    });
+    bytes
+}
+
 /// Builds a GRAY8 selection surface from a mask over `area`.
 pub fn mask_to_surface(m: &[f32], area: Rect) -> Surface {
-    let mut s = Surface::new(PixelFormat::GRAY8);
-    if !area.is_empty() {
-        s.write_region(area, m);
+    if area.is_empty() {
+        return Surface::new(PixelFormat::GRAY8);
     }
-    s.prune();
-    s
+    surface_from_coverage8(&to_coverage8(m, area, |_, v| v), area)
 }
 
 /// Combines `new` with `old` by `mode`. Returns `None` when nothing is selected.
 pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMode) -> Option<Surface> {
-    let prev = mask_from_surface(old, area);
-    // Quantize to the 8-bit grid selections are stored on, so combining a
-    // mask with itself is exact.
-    let q: Vec<f32> = new.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() / 255.0).collect();
-    let new = &q[..];
-    let out: Vec<f32> = match mode {
-        SelectionMode::Replace => new.to_vec(),
-        SelectionMode::Add => prev.iter().zip(new).map(|(a, b)| a.max(*b)).collect(),
-        SelectionMode::Subtract => prev.iter().zip(new).map(|(a, b)| (a - b).max(0.0)).collect(),
-        SelectionMode::Intersect => prev.iter().zip(new).map(|(a, b)| a.min(*b)).collect(),
-    };
-    // Below half an 8-bit step is nothing (selections are stored as 8-bit).
-    let out: Vec<f32> = out.into_iter().map(|v| if v < 0.5 / 255.0 { 0.0 } else { v }).collect();
-    if out.iter().all(|v| *v <= 0.0) {
+    if area.is_empty() {
         return None;
     }
-    Some(mask_to_surface(&out, area))
+    // Quantize to the 8-bit grid selections are stored on, so combining a mask with itself is
+    // exact. Below half an 8-bit step is nothing.
+    let q = |v: f32| f32::from(coverage8(v)) / 255.0;
+    let bytes = match mode {
+        SelectionMode::Replace => to_coverage8(new, area, |_, v| v),
+        _ => {
+            let prev = mask_from_surface(old, area);
+            let at = |i: usize| prev.get(i).copied().unwrap_or(0.0);
+            match mode {
+                SelectionMode::Add => to_coverage8(new, area, |i, v| at(i).max(q(v))),
+                SelectionMode::Subtract => to_coverage8(new, area, |i, v| (at(i) - q(v)).max(0.0)),
+                _ => to_coverage8(new, area, |i, v| at(i).min(q(v))),
+            }
+        }
+    };
+    if bytes.iter().all(|b| *b == 0) {
+        return None;
+    }
+    Some(surface_from_coverage8(&bytes, area))
 }
 
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
@@ -548,76 +622,17 @@ pub fn border(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     outer.iter().zip(inner).map(|(o, i)| (o - i).max(0.0)).collect()
 }
 
-fn box_blur(m: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
-    if r == 0 {
-        return m.to_vec();
-    }
-    let mut tmp = vec![0.0f32; m.len()];
-    let win = (2 * r + 1) as f32;
-    for y in 0..h {
-        for x in 0..w {
-            let mut s = 0.0;
-            for k in x as i64 - r as i64..=x as i64 + r as i64 {
-                s += m[y * w + k.clamp(0, w as i64 - 1) as usize];
-            }
-            tmp[y * w + x] = s / win;
-        }
-    }
-    let mut out = vec![0.0f32; m.len()];
-    for y in 0..h {
-        for x in 0..w {
-            let mut s = 0.0;
-            for k in y as i64 - r as i64..=y as i64 + r as i64 {
-                s += tmp[k.clamp(0, h as i64 - 1) as usize * w + x];
-            }
-            out[y * w + x] = s / win;
-        }
-    }
-    out
-}
-
-/// Smooth: removes specks and rounds corners (box average, then re-threshold).
+/// Smooth: removes specks and rounds corners (box average of radius `round(r)`, edges
+/// replicated, then re-thresholded). Parallel and independent of the radius (#211).
 pub fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    box_blur(m, w, h, r.max(0.0).round() as usize).into_iter().map(|v| ((v - 0.5) * 4.0 + 0.5).clamp(0.0, 1.0)).collect()
+    crate::selection_blur::smooth(m, w, h, r)
 }
 
-/// Feather: Gaussian blur of the mask with sigma = radius / 2.
+/// Feather: Gaussian blur of the mask with sigma = radius / 2 (kernel truncated at 3σ, zero
+/// beyond the canvas). Parallel, confined to the selection's bounds, and independent of the
+/// radius (#211).
 pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
-    let sigma = radius.max(0.0) / 2.0;
-    if sigma < 0.1 {
-        return m.to_vec();
-    }
-    let r = (sigma * 3.0).ceil() as i64;
-    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
-    let s: f32 = k.iter().sum();
-    let k: Vec<f32> = k.iter().map(|v| v / s).collect();
-    let mut tmp = vec![0.0f32; m.len()];
-    for y in 0..h {
-        for x in 0..w {
-            let mut a = 0.0;
-            for (i, kv) in k.iter().enumerate() {
-                let xx = x as i64 + i as i64 - r;
-                if xx >= 0 && xx < w as i64 {
-                    a += m[y * w + xx as usize] * kv;
-                }
-            }
-            tmp[y * w + x] = a;
-        }
-    }
-    let mut out = vec![0.0f32; m.len()];
-    for y in 0..h {
-        for x in 0..w {
-            let mut a = 0.0;
-            for (i, kv) in k.iter().enumerate() {
-                let yy = y as i64 + i as i64 - r;
-                if yy >= 0 && yy < h as i64 {
-                    a += tmp[yy as usize * w + x] * kv;
-                }
-            }
-            out[y * w + x] = a;
-        }
-    }
-    out
+    crate::selection_blur::feather(m, w, h, radius)
 }
 
 /// Anti-aliased polygon (even-odd) coverage over `area`: exact horizontal
@@ -826,6 +841,78 @@ mod tests {
         assert_eq!(v(combine(Some(&old), &new, a, SelectionMode::Intersect)), vec![0.0, 1.0, 0.0, 0.0]);
         assert!(combine(Some(&old), &[1.0; 4], a, SelectionMode::Subtract).is_none());
         assert_eq!(SelectionMode::parse("add"), SelectionMode::Add);
+    }
+
+    /// The previous (per-sample) conversions, kept as the oracle for the tiled fast paths.
+    fn old_mask_to_surface(m: &[f32], area: Rect) -> Surface {
+        let mut s = Surface::new(PixelFormat::GRAY8);
+        if !area.is_empty() {
+            s.write_region(area, m);
+        }
+        s.prune();
+        s
+    }
+
+    fn old_combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMode) -> Option<Surface> {
+        let mut prev = Vec::new();
+        match old {
+            Some(s) => s.read_region_into(area, &mut prev),
+            None => prev = vec![0.0; new.len()],
+        }
+        let q: Vec<f32> = new.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() / 255.0).collect();
+        let out: Vec<f32> = match mode {
+            SelectionMode::Replace => q,
+            SelectionMode::Add => prev.iter().zip(&q).map(|(a, b)| a.max(*b)).collect(),
+            SelectionMode::Subtract => prev.iter().zip(&q).map(|(a, b)| (a - b).max(0.0)).collect(),
+            SelectionMode::Intersect => prev.iter().zip(&q).map(|(a, b)| a.min(*b)).collect(),
+        };
+        let out: Vec<f32> = out.into_iter().map(|v| if v < 0.5 / 255.0 { 0.0 } else { v }).collect();
+        if out.iter().all(|v| *v <= 0.0) {
+            return None;
+        }
+        Some(old_mask_to_surface(&out, area))
+    }
+
+    #[test]
+    fn tiled_conversions_match_per_sample_ones() {
+        let mut rng = crate::photo_util::Rng(7);
+        let mut u = move || (rng.next() >> 11) as f32 / (1u64 << 53) as f32;
+        // Off-grid areas spanning several tiles, including negative origins.
+        for area in [Rect::new(0, 0, 300, 20), Rect::new(-37, 250, 530, 263), Rect::new(255, -3, 258, 600), Rect::new(5, 5, 6, 6)] {
+            let n = area.width() as usize * area.height() as usize;
+            let old_m: Vec<f32> = (0..n).map(|i| if i % 97 < 40 { u() } else { 0.0 }).collect();
+            let old = old_mask_to_surface(&old_m, area);
+            let fast = mask_to_surface(&old_m, area);
+            assert_eq!(fast, old, "{area:?}");
+            let mut slow_read = Vec::new();
+            old.read_region_into(area, &mut slow_read);
+            assert_eq!(mask_from_surface(Some(&old), area), slow_read);
+            for kind in 0..3 {
+                let new: Vec<f32> = (0..n)
+                    .map(|i| match kind {
+                        0 => u() * 1.2 - 0.1,
+                        1 => {
+                            if i % 131 < 50 {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        _ => 0.001,
+                    })
+                    .collect();
+                for mode in [SelectionMode::Replace, SelectionMode::Add, SelectionMode::Subtract, SelectionMode::Intersect] {
+                    for prev in [None, Some(&old)] {
+                        assert_eq!(combine(prev, &new, area, mode), old_combine(prev, &new, area, mode), "{area:?} {kind} {mode:?}");
+                    }
+                }
+            }
+        }
+        // A short mask buffer reads as zeros instead of panicking.
+        let a = Rect::new(0, 0, 10, 10);
+        assert!(combine(None, &[1.0; 5], a, SelectionMode::Replace).is_some());
+        assert_eq!(mask_to_surface(&[], a).tile_count(), 0);
+        assert!(combine(None, &[], Rect::EMPTY, SelectionMode::Replace).is_none());
     }
 
     fn blobs(w: i32, h: i32) -> Vec<[u8; 4]> {

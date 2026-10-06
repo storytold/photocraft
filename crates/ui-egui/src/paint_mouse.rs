@@ -15,7 +15,7 @@ use crate::state::Tool;
 /// tool's (Photoshop's 10 % the first time). Other tools leave it alone.
 pub fn sync_tool_smoothing(app: &mut PhotocraftApp) {
     let tool = app.ui.tool;
-    if !matches!(tool, Tool::Brush | Tool::Eraser) || app.ui.smoothing_tool == Some(tool) {
+    if !matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) || app.ui.smoothing_tool == Some(tool) {
         return;
     }
     let current = app.session.tools.brush.smoothing.clone();

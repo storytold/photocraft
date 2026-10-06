@@ -395,6 +395,40 @@ impl Surface {
         }
     }
 
+    /// Take the tiles covering `r` out of the surface (missing ones filled with the default
+    /// pixel), so they can be edited elsewhere, e.g. in parallel: `Arc::unwrap_or_clone` copies a
+    /// tile only if an undo snapshot still shares it. Give them back with [`Surface::put_tiles`].
+    pub fn take_tiles(&mut self, r: Rect) -> Vec<(TileCoord, Arc<Tile>)> {
+        let fmt = self.format;
+        let mut blank: Option<Arc<Tile>> = None;
+        r.tiles()
+            .map(|c| {
+                let t = self.tiles.remove(&c).unwrap_or_else(|| blank.get_or_insert_with(|| Arc::new(Tile::filled(&fmt, &self.default_pixel))).clone());
+                (c, t)
+            })
+            .collect()
+    }
+
+    /// Put tiles back (see [`Surface::take_tiles`]); each replaces the tile at its coordinate.
+    pub fn put_tiles(&mut self, tiles: impl IntoIterator<Item = (TileCoord, Arc<Tile>)>) {
+        for (c, t) in tiles {
+            self.tiles.insert(c, t);
+        }
+    }
+
+    /// A tile of this surface's format filled with `px` (normalised channel values). Sharing one
+    /// across many coordinates fills them without copying (tiles are copy-on-write).
+    pub fn solid_tile(&self, px: &[f32]) -> Arc<Tile> {
+        let mut enc = vec![0u8; self.format.bytes_per_pixel()];
+        encode_pixel(&self.format, px, &mut enc);
+        Arc::new(Tile::filled(&self.format, &enc))
+    }
+
+    /// The default pixel's encoded bytes.
+    pub fn default_bytes(&self) -> &[u8] {
+        &self.default_pixel
+    }
+
     /// Fill a rectangle with one pixel value.
     pub fn fill_rect(&mut self, r: Rect, px: &[f32]) {
         let n = self.channels();

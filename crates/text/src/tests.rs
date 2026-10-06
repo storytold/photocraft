@@ -446,6 +446,97 @@ fn warp_bends_rendered_text_and_outlines() {
     }
 }
 
+/// `Txt2` as Photoshop writes it (a bare `/key value` sequence; text objects at `/1 /1`, style
+/// runs at `/0 /6 /0`, auto-kern mode at `/11`), for the layer text `text`.
+fn txt2_with_modes(text: &str, modes: &[(usize, i64)]) -> Vec<u8> {
+    let mut v = b"\n\n/98 << /0 14 >> /0 << >> /1 << /1 [ << /0 << /0 (\xfe\xff".to_vec();
+    for u in format!("{text}\r").encode_utf16() {
+        let b = u.to_be_bytes();
+        for x in b {
+            if matches!(x, b'(' | b')' | b'\\') {
+                v.push(b'\\');
+            }
+            v.push(x);
+        }
+    }
+    v.extend_from_slice(b") /6 << /0 [ ");
+    for (len, m) in modes {
+        v.extend_from_slice(format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /11 {m} >> >> >> /1 {len} >> ").as_bytes());
+    }
+    v.extend_from_slice(b"] >> >> >> ] >>");
+    v
+}
+
+fn with_text_index(tysh: &[u8], index: i32) -> Vec<u8> {
+    let mut t = crate::psd::parse_tysh(tysh).unwrap();
+    t.text.items.retain(|(k, _)| !k.is("TextIndex"));
+    t.text.items.push((photocraft_psd::descriptor::Id::new("TextIndex"), photocraft_psd::descriptor::Value::Integer(index)));
+    crate::psd::write_tysh(&t)
+}
+
+/// Optical (and "0") kerning only lives in `Txt2`: import applies it when the layer's
+/// `TextIndex` object still holds the same text.
+#[test]
+fn txt2_carries_optical_kerning() {
+    use photocraft_doc::text::Kerning;
+    let t = styled("AVA", CharStyle::default());
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    assert!(back.char_runs().iter().all(|r| r.style.kerning == Kerning::Metrics));
+    // "AVA\r": two optical characters, then manual ("0") for the last and the break.
+    let txt2 = crate::psd::parse_txt2(&txt2_with_modes("AVA", &[(2, 2), (2, 0)])).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(2, Kerning::Optical), (1, Kerning::Off)]);
+    // Stale Txt2 (other text), another index or garbage: nothing changes, nothing panics.
+    for (data, index) in [(txt2_with_modes("AVX", &[(4, 2)]), 0), (txt2_with_modes("AVA", &[(4, 2)]), 3), (b"<< /1 [ (x".to_vec(), 0), (Vec::new(), 0)] {
+        let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), index);
+        let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+        if let Some(txt2) = crate::psd::parse_txt2(&data) {
+            crate::psd::apply_txt2(&mut l, &tysh, &txt2);
+        }
+        assert!(
+            l.char_runs().iter().all(|r| r.style.kerning == Kerning::Metrics),
+            "case {index}: {:?}",
+            l.char_runs().iter().map(|r| r.style.kerning).collect::<Vec<_>>()
+        );
+    }
+    // Run lengths longer than the text, zero lengths and odd modes are tolerated.
+    let txt2 = crate::psd::parse_txt2(&txt2_with_modes("AVA", &[(0, 2), (100, 2), (5, 9)])).unwrap();
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2(&mut l, &tysh, &txt2);
+    assert!(l.char_runs().iter().all(|r| r.style.kerning == Kerning::Optical));
+}
+
+/// EngineData pair fields: manual kerning and "no automatic kerning" round-trip exactly, in
+/// Photoshop's form (see `psd::pair_runs`).
+#[test]
+fn psd_round_trips_manual_kerning() {
+    use photocraft_doc::text::Kerning::{Metrics as M, Off as O};
+    let s = CharStyle::default();
+    let cases: Vec<Vec<(usize, photocraft_doc::text::Kerning, f32)>> = vec![
+        vec![(1, O, 100.0), (1, O, -50.0), (2, M, 0.0)],
+        vec![(1, M, 0.0), (1, O, 0.0), (2, M, 0.0)],
+        vec![(4, O, 0.0)],
+        vec![(2, M, 0.0), (1, O, 25.0), (1, M, 0.0)],
+        vec![(3, M, 0.0), (1, O, 300.0)],
+    ];
+    for runs in cases {
+        let t = runs_of("AVAT", &runs.iter().map(|&(len, kerning, kern)| (len, CharStyle { kerning, kern, ..s.clone() })).collect::<Vec<_>>());
+        let back = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&t, 72.0, None), 72.0).unwrap();
+        let per = |t: &TextLayer| t.char_runs().iter().flat_map(|r| std::iter::repeat_n((r.style.kerning, r.style.kern), r.len)).collect::<Vec<_>>();
+        let mut want = per(&t);
+        // The last character's mode has no EngineData slot (it reads back as Metrics unless
+        // it has a manual kern).
+        if let Some(last) = want.last_mut()
+            && last.1 == 0.0
+        {
+            last.0 = M;
+        }
+        assert_eq!(per(&back), want, "{runs:?}");
+    }
+}
+
 #[test]
 fn psd_round_trips_antialias_opentype_and_warp() {
     use photocraft_doc::text::{AntiAlias, TextWarp};
@@ -504,6 +595,7 @@ fn clusters_sit_on_rendered_glyphs() {
         ("plain", styled("HOHOH", big.clone())),
         ("tracking", styled("HOHOH", CharStyle { tracking: 300.0, ..big.clone() })),
         ("hscale", styled("HOHOH", CharStyle { horizontal_scale: 1.6, ..big.clone() })),
+        ("kerned", styled("HOHOH", CharStyle { kern: 250.0, kerning: photocraft_doc::text::Kerning::Optical, ..big.clone() })),
         ("mixed", mixed),
         ("box", boxed),
     ];
@@ -528,4 +620,91 @@ fn clusters_sit_on_rendered_glyphs() {
             assert!((cx - c.x).abs() < 1e-3 && top < y && bottom > y, "{name}: caret at {:?}", c.range);
         }
     }
+}
+
+fn runs_of(text: &str, styles: &[(usize, CharStyle)]) -> TextLayer {
+    TextLayer { text: text.into(), runs: styles.iter().map(|(len, style)| TextRun { len: *len, style: style.clone() }).collect(), ..Default::default() }
+}
+
+/// Manual kerning (1/1000 em) after a character moves everything after it by kern × size.
+#[test]
+fn manual_kerning_moves_the_next_glyph() {
+    use photocraft_doc::text::Kerning;
+    let mut e = TextEngine::new();
+    let s = CharStyle { size_pt: 100.0, ..Default::default() };
+    let plain = e.layout(&styled("HOH", s.clone()), 72.0);
+    let kerned = e.layout(&runs_of("HOH", &[(1, CharStyle { kern: 100.0, ..s.clone() }), (2, s.clone())]), 72.0);
+    let x = |l: &crate::TextLayout, i: usize| l.glyphs[i].x;
+    assert_eq!(x(&kerned, 0), x(&plain, 0));
+    // 100/1000 em at 100 px = 10 px, for the next glyph and everything after it.
+    assert!((x(&kerned, 1) - x(&plain, 1) - 10.0).abs() < 1e-3, "{} vs {}", x(&kerned, 1), x(&plain, 1));
+    assert!((x(&kerned, 2) - x(&plain, 2) - 10.0).abs() < 1e-3);
+    assert!((width(&kerned) - width(&plain) - 10.0).abs() < 1e-3);
+    // Carets follow: the cluster after the kerned pair starts 10 px later.
+    assert!((kerned.caret(1).0 - plain.caret(1).0 - 10.0).abs() < 1e-3);
+    // Negative kerning tightens; kerning on the last character doesn't move anything.
+    let tight = e.layout(&runs_of("HOH", &[(1, CharStyle { kern: -50.0, ..s.clone() }), (2, s.clone())]), 72.0);
+    assert!((x(&tight, 1) - x(&plain, 1) + 5.0).abs() < 1e-3);
+    let last = e.layout(&runs_of("HOH", &[(2, s.clone()), (1, CharStyle { kern: 500.0, ..s.clone() })]), 72.0);
+    assert!((width(&last) - width(&plain)).abs() < 1e-3);
+    // Off replaces the font's pair kerning: "AV" with Off is wider than with Metrics.
+    let mut av = |st: CharStyle| e.layout(&styled("AV", st), 72.0).glyphs[1].x;
+    let metric = av(s.clone());
+    let off = av(CharStyle { kerning: Kerning::Off, ..s.clone() });
+    assert!(off > metric + 1.0, "Inter kerns AV: {off} vs {metric}");
+    // Centred point text stays centred around the anchor with kerning.
+    let centred = with_para(
+        runs_of("HOH", &[(1, CharStyle { kern: 300.0, ..s.clone() }), (2, s.clone())]),
+        ParagraphStyle { align: TextAlign::Center, ..Default::default() },
+    );
+    let l = e.layout(&centred, 72.0);
+    assert!((l.lines[0].x0 + l.lines[0].x1).abs() < 0.5, "{:?}", l.lines[0]);
+}
+
+/// Optical kerning computes pair spacing from the outlines: tighter for open pairs ("AV", "To")
+/// than the unkerned advance, about neutral for straight stems, and never absurd.
+#[test]
+fn optical_kerning_tightens_open_pairs() {
+    use photocraft_doc::text::Kerning;
+    let mut e = TextEngine::new();
+    let s = CharStyle { size_pt: 100.0, ..Default::default() };
+    let gap = |e: &mut TextEngine, text: &str, k: Kerning| {
+        let l = e.layout(&styled(text, CharStyle { kerning: k, ..s.clone() }), 72.0);
+        l.glyphs[1].x - l.glyphs[0].x
+    };
+    for pair in ["AV", "To", "LT", "Ty"] {
+        let off = gap(&mut e, pair, Kerning::Off);
+        let optical = gap(&mut e, pair, Kerning::Optical);
+        assert!(optical < off - 3.0, "{pair}: optical {optical} vs unkerned {off}");
+    }
+    for pair in ["HH", "nn", "oo", "HO"] {
+        let off = gap(&mut e, pair, Kerning::Off);
+        let optical = gap(&mut e, pair, Kerning::Optical);
+        assert!((optical - off).abs() < 6.0, "{pair}: optical {optical} vs unkerned {off}");
+    }
+    // A space breaks the pair; a manual kern replaces the automatic one (as in Photoshop).
+    assert_eq!(gap(&mut e, "A V", Kerning::Optical), gap(&mut e, "A V", Kerning::Off));
+    for mode in [Kerning::Optical, Kerning::Metrics] {
+        let l = e.layout(&styled("AV", CharStyle { kerning: mode, kern: 100.0, ..s.clone() }), 72.0);
+        let off = gap(&mut e, "AV", Kerning::Off);
+        assert!((l.glyphs[1].x - l.glyphs[0].x - off - 10.0).abs() < 1e-3, "{mode:?}");
+    }
+}
+
+/// A mode change splits shaping runs: the pairs on both sides of a manually kerned character
+/// lose their automatic kerning (Photoshop renders it the same way).
+#[test]
+fn kerning_modes_split_pairs() {
+    use photocraft_doc::text::Kerning;
+    let mut e = TextEngine::new();
+    let s = CharStyle { size_pt: 100.0, ..Default::default() };
+    let off = CharStyle { kerning: Kerning::Off, ..s.clone() };
+    let xs = |e: &mut TextEngine, t: &TextLayer| e.layout(t, 72.0).glyphs.iter().map(|g| g.x).collect::<Vec<_>>();
+    let metric = xs(&mut e, &styled("AVAV", s.clone()));
+    let plain = xs(&mut e, &styled("AVAV", off.clone()));
+    let mixed = xs(&mut e, &runs_of("AVAV", &[(2, s.clone()), (1, off.clone()), (1, s.clone())]));
+    let adv = |v: &[f32], i: usize| v[i + 1] - v[i];
+    assert!((adv(&mixed, 0) - adv(&metric, 0)).abs() < 1e-3, "AV before stays kerned");
+    assert!((adv(&mixed, 1) - adv(&plain, 1)).abs() < 1e-3, "VA into the manual character");
+    assert!((adv(&mixed, 2) - adv(&plain, 2)).abs() < 1e-3, "AV out of it");
 }

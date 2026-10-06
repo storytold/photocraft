@@ -129,7 +129,7 @@ fn label(ui: &mut egui::Ui, text: &str, width: f32) {
 fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
-        label(ui, k, 90.0);
+        label(ui, tl!(k), 90.0);
         ui.label(egui::RichText::new(v).color(t.text).size(12.0));
     });
 }
@@ -166,18 +166,18 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let resample = f.get("resample").and_then(Value::as_str).unwrap_or("bicubic").to_string();
     let resampling = resample != "none";
     let (w, h) = (num(f, "width").round(), num(f, "height").round());
-    info_row(ui, "Image Size:", format!("{} (was {})", human_bytes(w * h * bpp), human_bytes(ow * oh * bpp)));
-    info_row(ui, "Dimensions:", format!("{} px × {} px", w as i64, h as i64));
+    info_row(ui, tl!("Image Size:"), format!("{} (was {})", human_bytes(w * h * bpp), human_bytes(ow * oh * bpp)));
+    info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
     ui.add_space(6.0);
     let mut constrain = f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
     let w_row = ui.horizontal(|ui| {
-        label(ui, "Width:", 90.0);
+        label(ui, tl!("Width:"), 90.0);
         let c = dim_field(ui, f, "width", "__origW", "is-w");
         unit_dropdown(ui, f, "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
-        label(ui, "Height:", 90.0);
+        label(ui, tl!("Height:"), 90.0);
         let c = dim_field(ui, f, "height", "__origH", "is-h");
         unit_dropdown(ui, f, "is-unit-h");
         c
@@ -199,7 +199,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let chain = Rect::from_center_size(pos2(bracket.left() + 8.0, bracket.center().y), vec2(14.0, 14.0));
     ui.painter().rect_filled(chain, 2.0, if link.hovered() { t.hover } else { Color32::TRANSPARENT });
     crate::icons::paint(ui, chain, if constrain { "link" } else { "unlink" }, 11.0, col);
-    if link.on_hover_text("Constrain proportions").clicked() {
+    if link.on_hover_text(tl!("Constrain proportions")).clicked() {
         constrain = !constrain;
         f.insert("__constrain".into(), json!(constrain));
     }
@@ -211,7 +211,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     }
     ui.horizontal(|ui| {
-        label(ui, "Resolution:", 90.0);
+        label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
         if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).changed() {
             let r = r.max(1.0) as f64;
@@ -222,13 +222,13 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
             f.insert("resolution".into(), json!(r));
         }
-        ui.label(egui::RichText::new("Pixels/Inch").color(t.text_dim).size(12.0));
+        ui.label(egui::RichText::new(tl!("Pixels/Inch")).color(t.text_dim).size(12.0));
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
         let mut on = resampling;
-        if crate::widgets::checkbox(ui, &mut on, "Resample").changed() {
+        if crate::widgets::checkbox(ui, &mut on, tl!("Resample")).changed() {
             f.insert("resample".into(), json!(if on { "bicubic" } else { "none" }));
             if !on {
                 f.insert("width".into(), json!(ow));
@@ -238,11 +238,11 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         if resampling {
             let mut cur = resample.clone();
             let opts = [
-                ("preserveDetails".to_string(), "Preserve Details"),
-                ("bicubic".to_string(), "Bicubic (smooth gradients)"),
-                ("lanczos".to_string(), "Lanczos (sharp)"),
-                ("bilinear".to_string(), "Bilinear"),
-                ("nearest".to_string(), "Nearest Neighbor (hard edges)"),
+                ("preserveDetails".to_string(), tl!("Preserve Details")),
+                ("bicubic".to_string(), tl!("Bicubic (smooth gradients)")),
+                ("lanczos".to_string(), tl!("Lanczos (sharp)")),
+                ("bilinear".to_string(), tl!("Bilinear")),
+                ("nearest".to_string(), tl!("Nearest Neighbor (hard edges)")),
             ];
             if crate::widgets::dropdown(ui, "is-resample", &mut cur, &opts, 200.0) {
                 f.insert("resample".into(), json!(cur));
@@ -256,32 +256,32 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
     let bpp = num(f, "__bytesPerPixel").max(1.0);
     let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
-    ui.label(egui::RichText::new("Current Size").font(crate::theme::semibold(12.0)).color(t.text));
-    info_row(ui, "Size:", human_bytes(ow * oh * bpp));
-    info_row(ui, "Width:", format!("{} px", ow as i64));
-    info_row(ui, "Height:", format!("{} px", oh as i64));
+    ui.label(egui::RichText::new(tl!("Current Size")).font(crate::theme::semibold(12.0)).color(t.text));
+    info_row(ui, tl!("Size:"), human_bytes(ow * oh * bpp));
+    info_row(ui, tl!("Width:"), format!("{} px", ow as i64));
+    info_row(ui, tl!("Height:"), format!("{} px", oh as i64));
     ui.add_space(6.0);
     crate::widgets::hairline(ui);
     ui.add_space(6.0);
     let (nw, nh) = if relative { (ow + num(f, "width"), oh + num(f, "height")) } else { (num(f, "width"), num(f, "height")) };
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("New Size").font(crate::theme::semibold(12.0)).color(t.text));
+        ui.label(egui::RichText::new(tl!("New Size")).font(crate::theme::semibold(12.0)).color(t.text));
         ui.label(egui::RichText::new(human_bytes(nw.max(0.0) * nh.max(0.0) * bpp)).color(t.text_dim).size(12.0));
     });
     ui.horizontal(|ui| {
-        label(ui, "Width:", 90.0);
+        label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
         unit_dropdown(ui, f, "cs-unit-w");
     });
     ui.horizontal(|ui| {
-        label(ui, "Height:", 90.0);
+        label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
         unit_dropdown(ui, f, "cs-unit-h");
     });
     ui.horizontal(|ui| {
         label(ui, "", 90.0);
         let mut rel = relative;
-        if crate::widgets::checkbox(ui, &mut rel, "Relative").changed() {
+        if crate::widgets::checkbox(ui, &mut rel, tl!("Relative")).changed() {
             // Convert between absolute and delta so the resulting canvas is unchanged.
             let (w, h) = (num(f, "width"), num(f, "height"));
             let (w, h) = if rel { (w - ow, h - oh) } else { (w + ow, h + oh) };
@@ -291,7 +291,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
     ui.horizontal(|ui| {
-        label(ui, "Anchor:", 90.0);
+        label(ui, tl!("Anchor:"), 90.0);
         let cur = f.get("anchor").and_then(Value::as_str).unwrap_or("center").to_string();
         if let Some(a) = anchor_grid(ui, &cur, nw - ow, nh - oh) {
             f.insert("anchor".into(), json!(a));
@@ -299,14 +299,14 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        label(ui, "Canvas extension color:", 150.0);
+        label(ui, tl!("Canvas extension color:"), 150.0);
         let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
         let opts = [
-            ("foreground".to_string(), "Foreground"),
-            ("background".to_string(), "Background"),
-            ("white".to_string(), "White"),
-            ("black".to_string(), "Black"),
-            ("transparent".to_string(), "Transparent"),
+            ("foreground".to_string(), tl!("Foreground")),
+            ("background".to_string(), tl!("Background")),
+            ("white".to_string(), tl!("White")),
+            ("black".to_string(), tl!("Black")),
+            ("transparent".to_string(), tl!("Transparent")),
         ];
         if crate::widgets::dropdown(ui, "cs-ext", &mut cur, &opts, 140.0) {
             f.insert("extensionColor".into(), json!(cur));

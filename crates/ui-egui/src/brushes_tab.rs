@@ -129,11 +129,11 @@ fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &
         acts.push(Action::Select(p.name.clone()));
     }
     resp.context_menu(|ui| {
-        if ui.button("Rename Brush…").clicked() {
+        if ui.button(tl!("Rename Brush…")).clicked() {
             acts.push(Action::Rename(Renaming { group: false, name: p.name.clone(), text: String::new() }));
             ui.close();
         }
-        if ui.button("Delete Brush").clicked() {
+        if ui.button(tl!("Delete Brush")).clicked() {
             acts.push(Action::Delete(p.name.clone()));
             ui.close();
         }
@@ -243,11 +243,11 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, open: bool, count: us
         acts.push(Action::ToggleGroup(label.to_string()));
     }
     resp.context_menu(|ui| {
-        if ui.button("Rename Group…").clicked() {
+        if ui.button(tl!("Rename Group…")).clicked() {
             acts.push(Action::Rename(Renaming { group: true, name: key.to_string(), text: String::new() }));
             ui.close();
         }
-        if ui.button("Delete Group").clicked() {
+        if ui.button(tl!("Delete Group")).clicked() {
             acts.push(Action::DeleteGroup(key.to_string()));
             ui.close();
         }
@@ -264,7 +264,7 @@ fn rename_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, acts: &mut Vec<Action>
     }
     let mut cancel = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(if r.group { "Group name" } else { "Brush name" }).color(t.text_dim));
+        ui.label(RichText::new(if r.group { tl!("Group name") } else { tl!("Brush name") }).color(t.text_dim));
         let resp = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width(WIDTH - 230.0).id_salt("brush-rename"));
         if !resp.has_focus() && !resp.lost_focus() {
             resp.request_focus();
@@ -290,7 +290,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let before = app.session.tools.brush.clone();
     let mut b = before.clone();
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Size").color(t.text_dim));
+        ui.label(RichText::new(tl!("Size")).color(t.text_dim));
         let mut lv = b.size.max(1.0).ln();
         ui.add_sized(vec2(WIDTH - 140.0, 18.0), |ui: &mut egui::Ui| {
             let r = widgets::slider(ui, &mut lv, 0.0..=5000f32.ln(), None);
@@ -309,7 +309,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
         ui.add_space(20.0);
-        ui.add(egui::TextEdit::singleline(&mut app.ui.brushes_panel.filter).hint_text("Search Brushes").desired_width(WIDTH - 120.0));
+        ui.add(egui::TextEdit::singleline(&mut app.ui.brushes_panel.filter).hint_text(tl!("Search Brushes")).desired_width(WIDTH - 120.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let view = &mut app.ui.brushes_panel.view;
             if icons::button(ui, "grid-2x2", 24.0, *view == BrushesView::Grid, "Grid view").clicked() {

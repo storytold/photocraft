@@ -51,6 +51,8 @@ pub(crate) struct Ctx<'a> {
     pub warnings: Vec<String>,
     /// Document resolution (type sizes are converted to points with it).
     pub dpi: f32,
+    /// The parsed `Txt2` block (type settings EngineData lacks, e.g. optical kerning).
+    pub txt2: Option<photocraft_text::engine_data::Value>,
 }
 
 fn doc_mode(m: PsdMode) -> Option<ColorMode> {
@@ -251,6 +253,9 @@ impl Ctx<'_> {
                 let (text, transform) = blocks::parse_tysh(&data).unwrap_or_default();
                 TextLayer { text, transform, ..Default::default() }
             });
+            if let Some(txt2) = &self.txt2 {
+                photocraft_text::psd::apply_txt2(&mut t, &data, txt2);
+            }
             t.cache = Some(self.record_surface(rec, &name));
             t.psd_raw = principal(b"TySh");
             LayerContent::Text(t)
@@ -490,6 +495,7 @@ pub fn psd_to_document(file: &PsdFile) -> (Document, Vec<String>) {
         cmyk: fmt.mode == ColorMode::Cmyk,
         warnings,
         dpi: doc.resolution_dpi,
+        txt2: file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)),
     };
 
     let (w, hh) = (h.width as usize, h.height as usize);

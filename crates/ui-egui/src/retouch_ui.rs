@@ -26,7 +26,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
                 (Some(off), _) => p["offset"] = json!(off),
                 (None, Some(src)) => p["source"] = json!(src),
                 (None, None) => {
-                    app.ui.status = "Option-click to define a source point to clone from".into();
+                    app.ui.status = tl!("Option-click to define a source point to clone from").into();
                     app.ui.status_error = true;
                     return true;
                 }
@@ -119,7 +119,7 @@ pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
 
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(text).color(t.text_dim).size(12.0));
+    ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
 }
 
 fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
@@ -129,70 +129,74 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
 
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection) || matches!(tool, Tool::Brush | Tool::Eraser) {
+    if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection) || matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) {
         return false;
     }
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
-            opt(ui, "Type:");
-            for (k, l) in [("contentAware", "Content-Aware"), ("createTexture", "Create Texture"), ("proximityMatch", "Proximity Match")] {
+            opt(ui, tl!("Type:"));
+            for (k, l) in [("contentAware", tl!("Content-Aware")), ("createTexture", tl!("Create Texture")), ("proximityMatch", tl!("Proximity Match"))] {
                 let mut on = o.spot_type == k;
                 if crate::widgets::checkbox(ui, &mut on, l).clicked() {
                     o.spot_type = k.into();
                 }
             }
             crate::widgets::vline(ui, 22.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, "Sample All Layers");
+            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
         }
         Tool::Healing | Tool::CloneStamp => {
-            crate::widgets::checkbox(ui, &mut o.clone_aligned, "Aligned");
-            opt(ui, "Sample:");
-            let opts = [("current".to_string(), "Current Layer"), ("currentAndBelow".to_string(), "Current & Below"), ("all".to_string(), "All Layers")];
+            crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
+            opt(ui, tl!("Sample:"));
+            let opts = [
+                ("current".to_string(), tl!("Current Layer")),
+                ("currentAndBelow".to_string(), tl!("Current & Below")),
+                ("all".to_string(), tl!("All Layers")),
+            ];
             crate::widgets::dropdown(ui, "clone-sample", &mut o.clone_sample, &opts, 130.0);
             if app.ui.clone_source.is_none() {
                 crate::widgets::vline(ui, 22.0);
-                opt(ui, &format!("{}-click to set the source", crate::shortcuts::pretty("Alt")));
+                opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             }
         }
         Tool::Dodge | Tool::Burn => {
-            opt(ui, "Range:");
-            let opts = [("shadows".to_string(), "Shadows"), ("midtones".to_string(), "Midtones"), ("highlights".to_string(), "Highlights")];
+            opt(ui, tl!("Range:"));
+            let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
             crate::widgets::dropdown(ui, "tone-range", &mut o.tone_range, &opts, 100.0);
-            pct(ui, "Exposure:", &mut o.exposure);
-            crate::widgets::checkbox(ui, &mut o.protect_tones, "Protect Tones");
+            pct(ui, tl!("Exposure:"), &mut o.exposure);
+            crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
         }
         Tool::Sponge => {
-            opt(ui, "Mode:");
-            let opts = [("desaturate".to_string(), "Desaturate"), ("saturate".to_string(), "Saturate")];
+            opt(ui, tl!("Mode:"));
+            let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
             crate::widgets::dropdown(ui, "sponge-mode", &mut o.sponge_mode, &opts, 110.0);
-            crate::widgets::checkbox(ui, &mut o.vibrance, "Vibrance");
+            crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
-            pct(ui, "Strength:", &mut o.strength);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, "Sample All Layers");
+            pct(ui, tl!("Strength:"), &mut o.strength);
+            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
             if tool == Tool::Sharpen {
-                crate::widgets::checkbox(ui, &mut o.protect_detail, "Protect Detail");
+                crate::widgets::checkbox(ui, &mut o.protect_detail, tl!("Protect Detail"));
             }
             if tool == Tool::Smudge {
-                crate::widgets::checkbox(ui, &mut o.finger_painting, "Finger Painting");
+                crate::widgets::checkbox(ui, &mut o.finger_painting, tl!("Finger Painting"));
             }
         }
         Tool::HistoryBrush => opt(ui, "Paints from the document's opening state"),
         Tool::QuickSelection => {
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, "Sample All Layers");
-            crate::widgets::checkbox(ui, &mut o.enhance_edge, "Enhance Edge");
-            opt(ui, &format!("{} to subtract", crate::shortcuts::pretty("Alt")));
+            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
+            opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             crate::widgets::vline(ui, 22.0);
-            if crate::widgets::secondary_button(ui, "Select Subject", 0.0).clicked() {
+            if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let _ = app.run("select.subject", json!({}));
             }
         }
         Tool::ObjectSelection => {
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, "Sample All Layers");
-            opt(ui, "Drag a rectangle around the object");
+            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            opt(ui, tl!("Drag a rectangle around the object"));
             crate::widgets::vline(ui, 22.0);
-            if crate::widgets::secondary_button(ui, "Select Subject", 0.0).clicked() {
+            if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let _ = app.run("select.subject", json!({}));
             }
         }

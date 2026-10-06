@@ -124,20 +124,20 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
         ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
         icons::paint(ui, r, "file", 15.0, t.icon);
-        ui.label(RichText::new("Document").color(t.text));
+        ui.label(RichText::new(tl!("Document")).color(t.text));
     });
     ui.add_space(4.0);
     widgets::hairline(ui);
     ui.add_space(2.0);
     let label_w = 44.0;
-    if section(ui, "canvas", "Canvas") {
+    if section(ui, "canvas", tl!("Canvas")) {
         let link_key = egui::Id::new("doc-props-link");
         let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(false);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.vertical(|ui| {
                 ui.add_space(14.0);
-                if icons::button(ui, if linked { "link" } else { "unlink" }, 22.0, linked, "Link width and height").clicked() {
+                if icons::button(ui, if linked { "link" } else { "unlink" }, 22.0, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
             });
@@ -167,18 +167,18 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if icons::button(ui, "rectangle-vertical", 26.0, portrait, "Portrait").clicked() && !portrait && w != h {
                 run.push(("image.canvasSize".into(), json!({"width": h, "height": w, "anchor": "center"})));
             }
-            if icons::button(ui, "rectangle-horizontal", 26.0, !portrait, "Landscape").clicked() && portrait {
+            if icons::button(ui, "rectangle-horizontal", 26.0, !portrait, tl!("Landscape")).clicked() && portrait {
                 run.push(("image.canvasSize".into(), json!({"width": h, "height": w, "anchor": "center"})));
             }
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.add_space(label_w + 6.0);
-            ui.label(RichText::new(format!("Resolution: {} pixels/inch", widgets::fmt_num(dpi as f64))).color(t.text));
+            ui.label(RichText::new(crate::i18n::fmt(tl!("Resolution: {dpi} pixels/inch"), &[("dpi", &widgets::fmt_num(dpi as f64))])).color(t.text));
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            field_label(ui, "Mode", label_w);
+            field_label(ui, tl!("Mode"), label_w);
             let mut m = mode;
             let opts: Vec<(ColorMode, &str)> = MODES.iter().map(|(m, l, _)| (*m, *l)).collect();
             if widgets::dropdown(ui, "doc-props-mode", &mut m, &opts, 150.0)
@@ -198,20 +198,20 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.horizontal(|ui| {
-            field_label(ui, "Fill", label_w);
+            field_label(ui, tl!("Fill"), label_w);
             let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
             ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
             // The canvas fill is only editable for documents without a Background layer.
             ui.add_enabled_ui(!has_bg, |ui| {
                 let mut f = 0u8;
-                widgets::dropdown(ui, "doc-props-fill", &mut f, &[(0u8, "Background Color")], 124.0);
+                widgets::dropdown(ui, "doc-props-fill", &mut f, &[(0u8, tl!("Background Color"))], 124.0);
             });
         });
         ui.add_space(4.0);
     }
     widgets::hairline(ui);
     ui.add_space(2.0);
-    if section(ui, "rulers", "Rulers & Grids") {
+    if section(ui, "rulers", tl!("Rulers & Grids")) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -236,7 +236,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     widgets::hairline(ui);
     ui.add_space(2.0);
-    if section(ui, "guides", "Guides") {
+    if section(ui, "guides", tl!("Guides")) {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -249,7 +249,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     run.push((id.to_string(), Value::Null));
                 }
             }
-            for (label, id) in [("New Guide…", "view.newGuide"), ("Clear", "view.clearGuides")] {
+            for (label, id) in [(tl!("New Guide…"), "view.newGuide"), (tl!("Clear"), "view.clearGuides")] {
                 if crate::menus::is_enabled(app, id) && widgets::secondary_button(ui, label, 0.0).clicked() {
                     run.push((id.to_string(), Value::Null));
                 }

@@ -99,6 +99,7 @@ fn perturbed_char() -> CharStyle {
         faux_bold: true,
         faux_italic: true,
         kerning: Kerning::Off,
+        kern: -12345.0,
         caps: Caps::AllCaps,
         ligatures: false,
         discretionary_ligatures: true,

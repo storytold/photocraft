@@ -17,6 +17,7 @@ pub enum Tool {
     Note,
     Count,
     Brush,
+    Pencil,
     Eraser,
     BackgroundEraser,
     MagicEraser,
@@ -50,7 +51,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 42] = [
+    pub const ALL: [Tool; 43] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
@@ -63,6 +64,7 @@ impl Tool {
         Tool::Note,
         Tool::Count,
         Tool::Brush,
+        Tool::Pencil,
         Tool::Eraser,
         Tool::BackgroundEraser,
         Tool::MagicEraser,
@@ -101,6 +103,7 @@ impl Tool {
             Tool::RectMarquee => "Rectangular Marquee Tool",
             Tool::EllipseMarquee => "Elliptical Marquee Tool",
             Tool::Brush => "Brush Tool",
+            Tool::Pencil => "Pencil Tool",
             Tool::Eraser => "Eraser Tool",
             Tool::BackgroundEraser => "Background Eraser Tool",
             Tool::MagicEraser => "Magic Eraser Tool",
@@ -146,6 +149,7 @@ impl Tool {
         matches!(
             self,
             Tool::Brush
+                | Tool::Pencil
                 | Tool::Eraser
                 | Tool::BackgroundEraser
                 | Tool::SpotHealing
@@ -165,7 +169,7 @@ impl Tool {
         match self {
             Tool::Move => 'V',
             Tool::RectMarquee | Tool::EllipseMarquee => 'M',
-            Tool::Brush => 'B',
+            Tool::Brush | Tool::Pencil => 'B',
             Tool::Eraser | Tool::BackgroundEraser | Tool::MagicEraser => 'E',
             Tool::Eyedropper | Tool::Ruler | Tool::Note | Tool::Count => 'I',
             Tool::Lasso | Tool::PolygonLasso => 'L',
@@ -390,6 +394,9 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
+    #[serde(default)]
+    pub pencil_auto_erase: bool,
 }
 
 fn yes() -> bool {
@@ -459,6 +466,7 @@ impl Default for ToolOptions {
             bg_tolerance: 50.0,
             bg_protect_fg: false,
             zoom_scrubby: true,
+            pencil_auto_erase: false,
         }
     }
 }

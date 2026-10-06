@@ -21,21 +21,21 @@ pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
 pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
-    let mut v: Vec<Entry> = vec![Some(("Blending Options…", "layer.layerStyle.blendingOptions"))];
+    let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
     v.push(None);
-    v.push(Some((if multi { "Duplicate Layers…" } else { "Duplicate Layer…" }, "layer.duplicate")));
-    v.push(Some((if multi { "Delete Layers" } else { "Delete Layer" }, "layer.delete")));
+    v.push(Some((if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") }, "layer.duplicate")));
+    v.push(Some((if multi { tl!("Delete Layers") } else { tl!("Delete Layer") }, "layer.delete")));
     if !multi {
-        v.push(Some(("Group from Layers…", "layer.groupLayers")));
+        v.push(Some((tl!("Group from Layers…"), "layer.groupLayers")));
     }
     v.push(None);
-    v.push(Some(("Quick Export As PNG", "layer.quickExportAsPng")));
-    v.push(Some(("Export As…", "layer.exportAs")));
+    v.push(Some((tl!("Quick Export As PNG"), "layer.quickExportAsPng")));
+    v.push(Some((tl!("Export As…"), "layer.exportAs")));
     v.push(None);
-    v.push(Some(("Artboard from Layers…", "layer.new.artboardFromLayers")));
-    v.push(Some(("Frame from Layers…", "layer.new.frameFromLayers")));
+    v.push(Some((tl!("Artboard from Layers…"), "layer.new.artboardFromLayers")));
+    v.push(Some((tl!("Frame from Layers…"), "layer.new.frameFromLayers")));
     v.push(None);
-    v.push(Some(("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")));
+    v.push(Some((tl!("Convert to Smart Object"), "layer.smartObjects.convertToSmartObject")));
     match &l.content {
         LayerContent::Text(_) => v.push(Some(("Rasterize Type", "layer.rasterize.type"))),
         LayerContent::Shape(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.shape"))),
@@ -45,31 +45,31 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     }
     v.push(None);
     if l.mask.is_some() {
-        v.push(Some(("Disable Layer Mask", "layer.layerMask.enabled")));
-        v.push(Some(("Apply Layer Mask", "layer.layerMask.apply")));
-        v.push(Some(("Delete Layer Mask", "layer.layerMask.delete")));
+        v.push(Some((tl!("Disable Layer Mask"), "layer.layerMask.enabled")));
+        v.push(Some((tl!("Apply Layer Mask"), "layer.layerMask.apply")));
+        v.push(Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")));
     } else {
-        v.push(Some(("Add Layer Mask", add_mask_command(has_selection, false))));
+        v.push(Some((tl!("Add Layer Mask"), add_mask_command(has_selection, false))));
     }
     v.push(Some((
-        if l.clipped { "Release Clipping Mask" } else { "Create Clipping Mask" },
+        if l.clipped { tl!("Release Clipping Mask") } else { tl!("Create Clipping Mask") },
         if l.clipped { "layer.releaseClippingMask" } else { "layer.createClippingMask" },
     )));
     v.push(None);
-    v.push(Some(("Link Layers", "layer.linkLayers")));
-    v.push(Some(("Select Linked Layers", "layer.selectLinkedLayers")));
+    v.push(Some((tl!("Link Layers"), "layer.linkLayers")));
+    v.push(Some((tl!("Select Linked Layers"), "layer.selectLinkedLayers")));
     v.push(None);
-    v.push(Some(("Copy Layer Style", "layer.layerStyle.copyLayerStyle")));
-    v.push(Some(("Paste Layer Style", "layer.layerStyle.pasteLayerStyle")));
-    v.push(Some(("Clear Layer Style", "layer.layerStyle.clear")));
+    v.push(Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")));
+    v.push(Some((tl!("Paste Layer Style"), "layer.layerStyle.pasteLayerStyle")));
+    v.push(Some((tl!("Clear Layer Style"), "layer.layerStyle.clear")));
     v.push(None);
     if multi {
-        v.push(Some(("Merge Layers", "layer.mergeLayers")));
+        v.push(Some((tl!("Merge Layers"), "layer.mergeLayers")));
     } else {
-        v.push(Some(("Merge Down", "layer.mergeDown")));
+        v.push(Some((tl!("Merge Down"), "layer.mergeDown")));
     }
-    v.push(Some(("Merge Visible", "layer.mergeVisible")));
-    v.push(Some(("Flatten Image", "layer.flattenImage")));
+    v.push(Some((tl!("Merge Visible"), "layer.mergeVisible")));
+    v.push(Some((tl!("Flatten Image"), "layer.flattenImage")));
     v
 }
 
@@ -98,7 +98,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
                 // selected first when clicked, so its items stay available.
                 let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
                 let enabled = if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
                     if !on_set {
                         actions.push(("layer.select".into(), json!({"layer": l.id.0})));
                     }
@@ -109,7 +109,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         }
     }
     ui.separator();
-    if ui.button("Rename Layer…").clicked() {
+    if ui.button(tl!("Rename Layer…")).clicked() {
         rename = true;
         ui.close();
     }

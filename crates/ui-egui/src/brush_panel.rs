@@ -273,7 +273,8 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                     let tint = if *lock { t.text } else { t.text_faint };
                     icons::paint(ui, lr, if *lock { "lock" } else { "lock-open" }, 12.0, tint);
                 }
-                let tip = if *lock { "Unlock: picking a preset replaces these settings" } else { "Lock: keep these settings when picking another preset" };
+                let tip =
+                    if *lock { tl!("Unlock: picking a preset replaces these settings") } else { tl!("Lock: keep these settings when picking another preset") };
                 if lresp.on_hover_text(tip).clicked() {
                     *lock = !*lock;
                     lock_clicked = true;
@@ -318,11 +319,11 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let tex = brush_preview::stroke_texture(ui.ctx(), "settings-strip", &b, STRIP.0, STRIP.1, t.text);
         ui.painter().image(tex.id(), r, full_uv(), Color32::WHITE);
         ui.vertical(|ui| {
-            if icons::button(ui, "square-plus", 24.0, false, "Create new brush from these settings").clicked() {
+            if icons::button(ui, "square-plus", 24.0, false, tl!("Create new brush from these settings")).clicked() {
                 let name = new_preset_name(&app.session.tools.presets);
                 run_or_status(app, "brush.presets.save", json!({ "name": name, "brush": serde_json::to_value(&b).unwrap_or(Value::Null) }));
             }
-            if icons::button(ui, "undo-2", 24.0, false, "Reset the brush to the defaults").clicked() {
+            if icons::button(ui, "undo-2", 24.0, false, tl!("Reset the brush to the defaults")).clicked() {
                 b = BrushSettings { color: b.color, background: b.background, smoothing: b.smoothing.clone(), locks: b.locks.clone(), ..Default::default() };
             }
         });
@@ -343,7 +344,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .inner_margin(egui::Margin::same(10));
     let canvas = app.last_canvas_rect;
     let mut open = true;
-    egui::Window::new("Brush Settings")
+    egui::Window::new(tl!("Brush Settings"))
         .id(egui::Id::new("brush-settings"))
         .title_bar(false)
         .resizable(false)
@@ -353,14 +354,14 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.set_width(WIDTH);
             ui.horizontal(|ui| {
                 let mut tab = app.ui.brush_tab;
-                for (i, name) in ["Brush Settings", "Brushes"].iter().enumerate() {
+                for (i, name) in [tl!("Brush Settings"), tl!("Brushes")].iter().enumerate() {
                     if widgets::pill_tab(ui, name, tab == i).clicked() {
                         tab = i;
                     }
                 }
                 app.ui.brush_tab = tab;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::button(ui, "x", 20.0, false, "Close").clicked() {
+                    if icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                         open = false;
                     }
                 });

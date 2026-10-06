@@ -59,6 +59,7 @@ pub mod scancrop;
 pub mod seam;
 pub mod segment;
 pub mod selection;
+mod selection_blur;
 mod sharpen;
 pub mod stack;
 mod stylize;
