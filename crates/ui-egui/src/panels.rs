@@ -71,7 +71,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let r = ui.max_rect();
                 ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
             }
-            toolbar_header(app, ui, bx, double);
+            toolbar_header(app, ui, bx, double, m as f32);
             ui.add_space(4.0);
             // Subtle violet wash at the bottom of the toolbar.
             let full = ui.max_rect();
@@ -206,8 +206,14 @@ const TOOLBAR_HEADER_H: f32 = 14.0;
 
 /// The toolbar header: Photoshop's double arrow, `»` to expand to two columns, `«` to collapse
 /// back to one. Clicking records the choice, which then holds whatever the window height.
-fn toolbar_header(app: &mut PhotocraftApp, ui: &mut egui::Ui, bx: f32, double: bool) {
+fn toolbar_header(app: &mut PhotocraftApp, ui: &mut egui::Ui, bx: f32, double: bool, margin: f32) {
     let t = Tokens::get(ui.ctx());
+    // A header strip across the whole toolbar, in the dock colour, like the bars holding the
+    // dock columns' » / « (and Photoshop's toolbar header). The panel's margins are 8 above and
+    // `margin` either side.
+    let top = ui.max_rect();
+    let strip = Rect::from_min_max(pos2(top.left() - margin, top.top() - 8.0), pos2(top.right() + margin, top.top() + TOOLBAR_HEADER_H + 2.0));
+    ui.painter().rect_filled(strip, 0.0, t.dock);
     let (r, resp) = ui.allocate_exact_size(vec2(bx, TOOLBAR_HEADER_H), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
