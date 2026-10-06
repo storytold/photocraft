@@ -76,7 +76,10 @@ the same.
   containers that can hold more frames.
 * **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
   `caps.exif = false` for TIFF, and a warning is raised.
-* **EXIF orientation** is preserved as data but not applied to the pixels.
+* **EXIF orientation** in JPEG, PNG and WebP is applied on decode (all eight rotations/reflections),
+  then the main-image Orientation tag is set to 1 so exports cannot apply it twice. Pixel samples,
+  ICC profiles and unrelated EXIF bytes are preserved. Malformed or unsupported orientation
+  entries are left untouched and do not transform the pixels. TIFF orientation is not handled yet.
 * **JPEG**
   * 8-bit only. Neither decoder backend supports 12-bit.
   * CMYK is always written 4:4:4 (subsampled CMYK is not portable) as Adobe-inverted CMYK with an

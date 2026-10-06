@@ -19,6 +19,7 @@ mod fidelity;
 mod format;
 mod image;
 mod options;
+mod orientation;
 pub mod web;
 
 pub use crate::codecs::png::encode_indexed as encode_png_indexed;
@@ -31,7 +32,8 @@ pub use half::f16;
 
 use crate::codecs::{exr, jpeg, png, pnm, tiff, via_image, webp};
 
-/// Detect the format and decode with default [`Limits`].
+/// Detect the format and decode with default [`Limits`]. EXIF orientation is
+/// applied to the pixels and normalized to 1 in the retained metadata.
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -64,7 +66,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
     }?;
     // Final guard for decoders whose header we could not pre-inspect.
     l.check(img.width(), img.height(), img.layout(), img.sample_type())?;
-    Ok(img)
+    orientation::normalize(img, l)
 }
 
 /// Encode `image` as `format`. Conversions follow the same plan that
