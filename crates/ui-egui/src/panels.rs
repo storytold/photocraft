@@ -146,8 +146,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if !overflow.is_empty() {
                 let key = egui::Id::new("tool-slot-overflow");
                 let sel = overflow.iter().any(|s| s.contains(&app.ui.tool));
-                let resp = tool_button(ui, "chevron-down", bx, sel, "More tools");
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "More tools"));
+                let resp = tool_button(ui, "chevron-down", bx, sel, tl!("More tools"));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("More tools")));
                 if resp.clicked() || resp.secondary_clicked() {
                     open_tool_flyout(ui, key, resp.rect);
                 }
@@ -214,7 +214,7 @@ fn toolbar_header(app: &mut PhotocraftApp, ui: &mut egui::Ui, bx: f32, double: b
     }
     let tint = if resp.hovered() { t.text } else { t.text_faint };
     icons::paint(ui, r, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, tint);
-    let tip = if double { "Collapse to one column" } else { "Expand to two columns" };
+    let tip = if double { tl!("Collapse to one column") } else { tl!("Expand to two columns") };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     if resp.on_hover_text(tip).clicked() {
         app.ui.panels.toolbar_double = Some(!double);
@@ -283,7 +283,7 @@ fn tool_flyout(app: &mut PhotocraftApp, ui: &egui::Ui, key: egui::Id, button: &e
                     let label_w = groups
                         .iter()
                         .flat_map(|g| g.iter())
-                        .map(|it| ui.painter().layout_no_wrap(it.label().to_string(), egui::FontId::proportional(12.5), t.text).size().x)
+                        .map(|it| ui.painter().layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text).size().x)
                         .fold(0.0f32, f32::max);
                     let fw = (label_w + 42.0 + 40.0).max(180.0);
                     for (gi, group) in groups.iter().enumerate() {
@@ -307,7 +307,13 @@ fn tool_flyout(app: &mut PhotocraftApp, ui: &egui::Ui, key: egui::Id, button: &e
                                 14.0,
                                 t.icon,
                             );
-                            ui.painter().text(pos2(r.left() + 42.0, r.center().y), Align2::LEFT_CENTER, item.label(), egui::FontId::proportional(12.5), t.text);
+                            ui.painter().text(
+                                pos2(r.left() + 42.0, r.center().y),
+                                Align2::LEFT_CENTER,
+                                tl!(item.label()),
+                                egui::FontId::proportional(12.5),
+                                t.text,
+                            );
                             if item.key() != '\0' {
                                 ui.painter().text(
                                     pos2(r.right() - 8.0, r.center().y),
@@ -431,7 +437,12 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, double: bool) {
     // Tooltips show the shortcut in effect (D and X can be rebound).
     let swap_tip = crate::shortcuts::tip_label(app, "Swap colours", "tools.swapColors");
     let reset_tip = crate::shortcuts::tip_label(app, "Default colours", "tools.defaultColors");
-    for (r, label) in [(&fg_resp, "Set foreground color"), (&bg_resp, "Set background color"), (&swap_resp, "Swap colours"), (&reset_resp, "Default colours")] {
+    for (r, label) in [
+        (&fg_resp, tl!("Set foreground color")),
+        (&bg_resp, tl!("Set background color")),
+        (&swap_resp, tl!("Swap colours")),
+        (&reset_resp, tl!("Default colours")),
+    ] {
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     }
     if fg_resp.on_hover_text(tl!("Set foreground color")).clicked() {

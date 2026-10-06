@@ -1963,3 +1963,11 @@
 	OpenGL	OpenGL
 	Use tablet pressure	タブレットの筆圧を使用
 	Vulkan	Vulkan
+	More tools	その他のツール
+	Collapse to one column	1 列に折りたたむ
+	Expand to two columns	2 列に展開
+	Swap colours	描画色と背景色を入れ替え
+	Default colours	初期設定の描画色と背景色
+	Animate menus and panels	メニューとパネルをアニメーション表示
+	Color Picker (Foreground Color)	カラーピッカー(描画色)
+	Color Picker (Background Color)	カラーピッカー(背景色)

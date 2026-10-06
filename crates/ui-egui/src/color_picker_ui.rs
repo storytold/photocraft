@@ -279,9 +279,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
                 ui.add_space(RIGHT_W - 64.0 - BUTTON_W - 2.0 * ui.spacing().item_spacing.x);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 10.0;
-                    let ok = widgets::primary_button(ui, "OK", BUTTON_W);
-                    let cancel = widgets::secondary_button(ui, "Cancel", BUTTON_W);
-                    for (r, label) in [(&ok, "OK"), (&cancel, "Cancel")] {
+                    let ok = widgets::primary_button(ui, tl!("OK"), BUTTON_W);
+                    let cancel = widgets::secondary_button(ui, tl!("Cancel"), BUTTON_W);
+                    for (r, label) in [(&ok, tl!("OK")), (&cancel, tl!("Cancel"))] {
                         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
                     }
                     if ok.clicked() {
