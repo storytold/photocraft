@@ -1669,6 +1669,7 @@
 	Constraints ({n})	制約 ({n})
 	Align {what}	{what}で整列
 @plural	{n} Layer|{n} Layers	{n} レイヤー
+@plural	{n} layer|{n} layers	{n} レイヤー
 @plural	Group · {n} layer|Group · {n} layers	グループ · {n} レイヤー
 
 # Preferences (labels are generated from the setting names)

@@ -418,7 +418,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let ok = if kind == "deleteWorkspace" { "Delete" } else { "OK" };
+                    let ok = if kind == "deleteWorkspace" { tl!("Delete") } else { tl!("OK") };
                     if crate::widgets::primary_button(ui, ok, 70.0).clicked() {
                         result = Some(true);
                     }

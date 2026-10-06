@@ -1666,6 +1666,7 @@
 	Constraints ({n})	限制 ({n})
 	Align {what}	對齊{what}
 @plural	{n} Layer|{n} Layers	{n} 個圖層
+@plural	{n} layer|{n} layers	{n} 個圖層
 @plural	Group · {n} layer|Group · {n} layers	群組 · {n} 個圖層
 	Additional plugins folder	額外增效模組資料夾
 	Adobe	Adobe

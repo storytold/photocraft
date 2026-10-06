@@ -84,7 +84,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
                     }
                     ui.add_space(8.0);
-                    if crate::widgets::secondary_button(ui, "Copy", 84.0).clicked() {
+                    if crate::widgets::secondary_button(ui, tl!("Copy"), 84.0).clicked() {
                         ui.ctx().copy_text(lines.join("\n"));
                     }
                 }
@@ -133,12 +133,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     } else if d.fields.contains_key("__export") {
                         tl!("Export")
                     } else {
-                        crate::file_ui::ok_label(&d.fields).unwrap_or("OK")
+                        crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                     };
                     if crate::widgets::primary_button(ui, ok_label, 84.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         outcome = Some(true);
                     }
-                    if crate::widgets::secondary_button(ui, if d.kind == DialogKind::NewDocument { "Close" } else { "Cancel" }, 84.0).clicked() {
+                    if crate::widgets::secondary_button(ui, if d.kind == DialogKind::NewDocument { tl!("Close") } else { tl!("Cancel") }, 84.0).clicked() {
                         outcome = Some(false);
                     }
                 }

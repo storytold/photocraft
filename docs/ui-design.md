@@ -81,6 +81,7 @@ the tests enforce it):
   `zh-MO` and `zh-Hant-*` locales all resolve to it. The resolver distinguishes the two Chinese
   scripts, so neither catalog is shown to the other script's locales.
 - Spanish (`es`), complete.
+- Russian (`ru`), complete, with three plural forms (`one|few|many`, see `plural_russian`).
 
 - `tr(lang, s)` plain strings; `tr_ctx` when one English word needs different translations;
   `tr_id(lang, command_id, label)` for menu items (keyed by command id, English label as the
@@ -91,7 +92,8 @@ the tests enforce it):
 - To add a language: add `<code>.tsv` and one row in `i18n::LANGUAGES` (code, native name, catalog,
   plural rule). The dropdown, locale matching and the catalog tests (well-formed, no duplicates,
   placeholders and ellipses agree, command ids exist) pick it up. Set `complete_menus` once every
-  menu string is translated; a test then enforces it.
+  menu string is translated; a test then enforces it. A language with more plural forms lists them
+  all in `@plural` entries (Russian: `one|few|many`); the row's plural rule picks the form.
 - Translations are clean-room: written from the meaning of the English text in ordinary vocabulary,
   never from another product's localisation resources.
 

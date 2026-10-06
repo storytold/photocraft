@@ -1664,6 +1664,7 @@
 	Constraints ({n})	Restricciones ({n})
 	Align {what}	Alinear {what}
 @plural	{n} Layer|{n} Layers	{n} capa|{n} capas
+@plural	{n} layer|{n} layers	{n} capa|{n} capas
 @plural	Group · {n} layer|Group · {n} layers	Grupo · {n} capa|Grupo · {n} capas
 
 # Preferences (labels are generated from the setting names)

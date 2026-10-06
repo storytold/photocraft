@@ -48,8 +48,18 @@ fn plural_none(_: u64) -> usize {
     0
 }
 
+fn plural_russian(n: u64) -> usize {
+    match (n % 10, n % 100) {
+        (1, 11..=19) => 2,
+        (1, _) => 0,
+        (2..=4, 11..=19) => 2,
+        (2..=4, _) => 1,
+        _ => 2,
+    }
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 5] = [
+pub static LANGUAGES: [LangInfo; 6] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
@@ -61,6 +71,7 @@ pub static LANGUAGES: [LangInfo; 5] = [
         code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
     },
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -339,6 +350,19 @@ mod tests {
     }
 
     #[test]
+    fn russian_plural_rules() {
+        let ru = || Lang::from_code("ru").expect("ru registered");
+        assert_eq!(trn(ru(), 1, "{n} item", "{n} items"), "1 элемент");
+        assert_eq!(trn(ru(), 2, "{n} item", "{n} items"), "2 элемента");
+        assert_eq!(trn(ru(), 5, "{n} item", "{n} items"), "5 элементов");
+        assert_eq!(trn(ru(), 11, "{n} item", "{n} items"), "11 элементов");
+        assert_eq!(trn(ru(), 21, "{n} item", "{n} items"), "21 элемент");
+        assert_eq!(trn(ru(), 22, "{n} item", "{n} items"), "22 элемента");
+        assert_eq!(trn(ru(), 101, "{n} item", "{n} items"), "101 элемент");
+        assert_eq!(trn(ru(), 111, "{n} item", "{n} items"), "111 элементов");
+    }
+
+    #[test]
     fn catalog_kinds_are_parsed_and_looked_up() {
         let c = Catalog::parse("# c\n\tHello\tこんにちは\n@id\tfile.save\t保存する\nmenu\tWindows\tウィンドウ群\n@plural\t{n} file|{n} files\t{n} 個\n\n");
         assert_eq!(c.plain("Hello"), Some("こんにちは"));
@@ -447,9 +471,10 @@ mod tests {
                 if path.is_dir() {
                     stack.push(path);
                 } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("lib.rs") {
-                    let text = std::fs::read_to_string(&path).unwrap_or_default();
-                    // Test modules aside, scan every `tl!("…")`.
-                    let code = text.split("#[cfg(test)]").next().unwrap_or("");
+                    let text = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+                    // Test modules aside, scan every `tl!("…")`. Cut at the test *module*: a
+                    // `#[cfg(test)]` on a single item earlier in the file must not hide the rest.
+                    let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or("");
                     let mut rest = code;
                     while let Some(at) = rest.find("tl!(\"") {
                         rest = &rest[at + 5..];

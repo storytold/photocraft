@@ -270,10 +270,10 @@ fn rename_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, acts: &mut Vec<Action>
             resp.request_focus();
         }
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if widgets::primary_button(ui, "OK", 52.0).clicked() || enter {
+        if widgets::primary_button(ui, tl!("OK"), 52.0).clicked() || enter {
             acts.push(Action::Rename(r.clone()));
         }
-        if widgets::secondary_button(ui, "Cancel", 60.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if widgets::secondary_button(ui, tl!("Cancel"), 60.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             cancel = true;
         }
     });

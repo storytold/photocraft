@@ -635,19 +635,21 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 } else if resp.hovered() {
                     ui.painter().rect_filled(rect, t.radius_sm, t.hover);
                 }
-                ui.painter().text(
-                    rect.left_center() + vec2(8.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    tl!(title),
-                    crate::theme::medium(12.5),
-                    if sel {
-                        t.text
-                    } else if empty {
-                        t.text_faint
-                    } else {
-                        t.text_dim
-                    },
-                );
+                let color = if sel {
+                    t.text
+                } else if empty {
+                    t.text_faint
+                } else {
+                    t.text_dim
+                };
+                // Translated section names can be longer than the column: elide them (the full
+                // name is the tooltip) instead of drawing over the settings.
+                let mut job = egui::text::LayoutJob::simple_singleline(tl!(title).to_string(), crate::theme::medium(12.5), color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 12.0);
+                let galley = ui.painter().layout_job(job);
+                let elided = galley.elided;
+                ui.painter().galley(rect.left_center() + vec2(8.0, -galley.size().y / 2.0), galley, color);
+                let resp = if elided { resp.on_hover_text(tl!(title)) } else { resp };
                 if resp.clicked() {
                     section = id.to_string();
                 }
@@ -985,7 +987,7 @@ fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             for tool in crate::state::Tool::ALL {
                 let name = format!("{tool:?}");
                 let mut on = !hidden.contains(&name);
-                crate::widgets::checkbox(ui, &mut on, tool.label());
+                crate::widgets::checkbox(ui, &mut on, tl!(tool.label()));
                 if on {
                     hidden.retain(|h| *h != name);
                 } else if !hidden.contains(&name) {
