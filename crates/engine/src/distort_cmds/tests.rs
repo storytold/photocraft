@@ -69,6 +69,16 @@ fn liquify_identity_stroke_displacement_reconstruct_and_undo() {
     }
 }
 
+/// `ms` is measured with `Stopwatch`, the only wall-clock timer allowed in the engine: on
+/// wasm32 `std::time::Instant::now()` panics (#334), so Liquify must never call it.
+#[test]
+fn liquify_reports_a_finite_elapsed_time() {
+    let mut s = session(8);
+    let r = s.execute(LIQUIFY, json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[30, 25], [42, 25]]}]})).unwrap();
+    let ms = r["ms"].as_f64().unwrap();
+    assert!(ms.is_finite() && ms >= 0.0, "ms = {ms}");
+}
+
 fn worst_px(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
 }
