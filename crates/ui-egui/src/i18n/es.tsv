@@ -2101,3 +2101,32 @@
 
 	Rendering mode	Modo de renderizado
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lazo de congelación: arrastre para congelar un área; Alt+arrastrar para descongelarla (L)
+
+
+	Shadow Clipping Warning (U)	Aviso de recorte de sombras (U)
+	Highlight Clipping Warning (O)	Aviso de recorte de luces (O)
+	Show Lab Color Readouts	Mostrar valores de color Lab
+	Show Vectorscope	Mostrar vectorscopio
+	Show Red at 3 o'clock	Mostrar rojo a las 3 en punto
+	Show Skin Tone Indicator	Mostrar indicador de tono de piel
+	Tone Histogram	Histograma tonal
+	Show Selected Region	Mostrar región seleccionada
+
+cameraRaw	Light	Luz
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+cameraRaw	Lights	Tonos claros
+cameraRaw	Darks	Tonos oscuros
+cameraRaw	Red	Rojos
+cameraRaw	Orange	Naranjas
+cameraRaw	Yellow	Amarillos
+cameraRaw	Green	Verdes
+cameraRaw	Aqua	Aguamarinas
+cameraRaw	Blue	Azules
+cameraRaw	Purple	Morados
+cameraRaw	Magenta	Magentas
+cameraRaw	Blending	Mezcla
+cameraRaw	Tint	Matiz
+cameraRaw	Temperature	Temperatura de color
+cameraRaw	Amount	Cantidad

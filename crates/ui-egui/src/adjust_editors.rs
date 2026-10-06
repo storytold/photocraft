@@ -6,9 +6,11 @@
 //! and `commit` when a gesture ends (the Properties host then runs one `layer.setAdjustment`; a
 //! dialog commits on OK). Selective Color and Color Lookup keep their editors in `adjust_ui`.
 
+use crate::point_curve as curve_edit;
+use crate::state::CurvesEditorState as CurveUi;
 use std::sync::Arc;
 
-use egui::{Color32, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::adjust::ToneSpace;
 use photocraft_doc::{Adjustment, LayerId};
 use photocraft_engine::adjust_params::{self, HUE_RANGES, PHOTO_FILTERS};
@@ -301,75 +303,6 @@ fn gradient_bar(p: &egui::Painter, r: Rect, from: Color32, to: Color32, vertical
 // ---------------------------------------------------------------------------------------------
 // Curves
 
-/// Curve point editing as pure functions on `[input, output]` points in 0..=255, sorted by input.
-pub mod curve_edit {
-    use egui::Pos2;
-
-    /// Most points a curve can hold (Photoshop's limit).
-    pub const MAX_POINTS: usize = 16;
-    /// Points closer than this (input levels) are the same point.
-    pub const MIN_GAP: f32 = 2.0;
-
-    /// Index of the point nearest `pos` (screen) within `radius` pixels.
-    pub fn hit(pts: &[[f32; 2]], to_scr: impl Fn([f32; 2]) -> Pos2, pos: Pos2, radius: f32) -> Option<usize> {
-        pts.iter().enumerate().map(|(i, q)| (i, to_scr(*q).distance(pos))).filter(|(_, d)| *d <= radius).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
-    }
-
-    /// Adds a point at `v` (kept sorted). A point already at that input is selected instead; a
-    /// full curve takes no more points.
-    pub fn insert(pts: &mut Vec<[f32; 2]>, v: [f32; 2]) -> Option<usize> {
-        let v = [v[0].clamp(0.0, 255.0), v[1].clamp(0.0, 255.0)];
-        if let Some(i) = pts.iter().position(|q| (q[0] - v[0]).abs() < MIN_GAP) {
-            return Some(i);
-        }
-        if pts.len() >= MAX_POINTS {
-            return None;
-        }
-        let i = pts.iter().position(|q| q[0] > v[0]).unwrap_or(pts.len());
-        pts.insert(i, v);
-        Some(i)
-    }
-
-    /// Endpoints stay, and a curve keeps at least two points.
-    pub fn can_delete(pts: &[[f32; 2]], i: usize) -> bool {
-        pts.len() > 2 && i > 0 && i + 1 < pts.len()
-    }
-
-    pub fn delete(pts: &mut Vec<[f32; 2]>, i: usize) -> bool {
-        if !can_delete(pts, i) {
-            return false;
-        }
-        pts.remove(i);
-        true
-    }
-
-    /// Moves point `i` to `v`, kept strictly between its neighbours' inputs.
-    pub fn move_to(pts: &mut [[f32; 2]], i: usize, v: [f32; 2]) -> bool {
-        let n = pts.len();
-        if i >= n {
-            return false;
-        }
-        let lo = if i > 0 { pts[i - 1][0] + 1.0 } else { 0.0 };
-        let hi = if i + 1 < n { pts[i + 1][0] - 1.0 } else { 255.0 };
-        let new = [v[0].round().clamp(lo, hi.max(lo)), v[1].round().clamp(0.0, 255.0)];
-        let changed = new != pts[i];
-        pts[i] = new;
-        changed
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct CurveUi {
-    channel: usize,
-    sel: Option<usize>,
-    /// The point being dragged (None while dragged off the graph), the grab offset and whether
-    /// the drag removed it.
-    drag: Option<(Option<usize>, [f32; 2], bool)>,
-}
-
-/// Dragging a point this far outside the graph removes it (it comes back if dragged back in).
-pub const DRAG_OFF: f32 = 12.0;
-const HIT_RADIUS: f32 = 9.0;
 const CURVE_HANDLE_SIZE: f32 = 7.0;
 const CURVE_GRAPH_PADDING: f32 = 5.0;
 
@@ -417,91 +350,10 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let graph = curve_graph(full, side);
     ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-graph"), graph));
     let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
-    let to_val =
-        |s: Pos2| [((s.x - graph.left()) / graph.width() * 255.0).clamp(0.0, 255.0), ((graph.bottom() - s.y) / graph.height() * 255.0).clamp(0.0, 255.0)];
     let mut e = Edit::default();
-    let mut changed = false;
-
-    // Press: hit-test where the button went down (not where a drag is first recognised).
-    let press = resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
-    if press && let Some(pos) = ui.input(|i| i.pointer.press_origin()) {
-        resp.request_focus();
-        let delete = ui.input(|i| i.modifiers.command);
-        match curve_edit::hit(&pts, to_scr, pos, HIT_RADIUS) {
-            Some(i) if delete => {
-                if curve_edit::delete(&mut pts, i) {
-                    changed = true;
-                    e.commit = true;
-                }
-                st.sel = None;
-                st.drag = None;
-            }
-            Some(i) => {
-                st.sel = Some(i);
-                let g = to_val(pos);
-                st.drag = Some((Some(i), [pts[i][0] - g[0], pts[i][1] - g[1]], false));
-            }
-            None if graph.contains(pos) && !delete => {
-                let before = pts.len();
-                st.sel = curve_edit::insert(&mut pts, to_val(pos));
-                changed = pts.len() != before;
-                st.drag = st.sel.map(|i| (Some(i), [0.0, 0.0], false));
-            }
-            None => st.drag = None,
-        }
-    }
-    // Drag: follow the pointer; off the graph the point is removed (back on, it returns).
-    if resp.is_pointer_button_down_on()
-        && !press
-        && let (Some((index, off, removed)), Some(pos)) = (st.drag, ui.input(|i| i.pointer.interact_pos()))
-    {
-        let outside = !graph.expand(DRAG_OFF).contains(pos);
-        let g = to_val(pos);
-        let target = [g[0] + off[0], g[1] + off[1]];
-        match index {
-            Some(i) if outside && curve_edit::can_delete(&pts, i) => {
-                pts.remove(i);
-                st.drag = Some((None, off, true));
-                st.sel = None;
-                changed = true;
-            }
-            Some(i) => changed |= curve_edit::move_to(&mut pts, i, target),
-            None if removed && !outside => {
-                st.sel = curve_edit::insert(&mut pts, target);
-                st.drag = Some((st.sel, off, true));
-                changed |= st.sel.is_some();
-            }
-            None => {}
-        }
-    }
-    if st.drag.is_some() && !resp.is_pointer_button_down_on() {
-        st.drag = None;
-        e.commit = true;
-    }
-    // Keys while the graph has focus: Delete/Backspace removes, arrows nudge (Shift: ×10).
-    if resp.has_focus()
-        && let Some(i) = st.sel.filter(|i| *i < pts.len())
-    {
-        let del = ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::Delete) || inp.consume_key(Modifiers::NONE, Key::Backspace));
-        if del && curve_edit::delete(&mut pts, i) {
-            st.sel = None;
-            changed = true;
-            e.commit = true;
-        } else {
-            let step = if ui.input(|inp| inp.modifiers.shift) { 10.0 } else { 1.0 };
-            let mut d = [0.0f32; 2];
-            for (k, dx, dy) in [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, 1.0), (Key::ArrowDown, 0.0, -1.0)] {
-                if ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, k) || inp.consume_key(Modifiers::SHIFT, k)) {
-                    d = [d[0] + dx * step, d[1] + dy * step];
-                }
-            }
-            let to = [pts[i][0] + d[0], pts[i][1] + d[1]];
-            if d != [0.0, 0.0] && curve_edit::move_to(&mut pts, i, to) {
-                changed = true;
-                e.commit = true;
-            }
-        }
-    }
+    let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
+    let mut changed = interaction.changed;
+    e.commit = interaction.commit;
 
     // Draw: histogram, quarter grid, baseline, gradient bars, other channels, the curve, points.
     let p = ui.painter_at(full.expand(2.0));
@@ -547,7 +399,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     draw_curve(&pts, if ch == 0 { t.text } else { bar_color(&chan, &t) }, 1.5);
     for (i, q) in pts.iter().enumerate() {
         let r = Rect::from_center_size(to_scr(*q), vec2(CURVE_HANDLE_SIZE, CURVE_HANDLE_SIZE));
-        if Some(i) == st.sel {
+        if Some(i) == st.gesture.selected {
             p.rect_filled(r, 0.0, t.text);
             p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::BLACK), StrokeKind::Outside);
         } else {
@@ -559,7 +411,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     // Input / Output of the selected point.
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let i = st.sel.filter(|i| *i < pts.len());
+        let i = st.gesture.selected.filter(|i| *i < pts.len());
         let (mut vi, mut vo) = i.map_or((0.0, 0.0), |i| (pts[i][0], pts[i][1]));
         label(ui, tl!("Input:"));
         let ri = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=255.0, "", 52.0)).inner;
@@ -1371,56 +1223,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
 
 #[cfg(test)]
 mod tests {
-    use super::curve_edit::*;
     use super::*;
-
-    fn line() -> Vec<[f32; 2]> {
-        vec![[0.0, 0.0], [255.0, 255.0]]
-    }
-
-    #[test]
-    fn insert_keeps_order_dedupes_and_respects_the_limit() {
-        let mut p = line();
-        assert_eq!(insert(&mut p, [128.0, 150.0]), Some(1));
-        assert_eq!(insert(&mut p, [64.0, 40.0]), Some(1));
-        assert_eq!(p, vec![[0.0, 0.0], [64.0, 40.0], [128.0, 150.0], [255.0, 255.0]]);
-        // A click on an existing input selects that point instead of stacking a second one.
-        assert_eq!(insert(&mut p, [129.0, 10.0]), Some(2));
-        assert_eq!(p.len(), 4);
-        let mut full: Vec<[f32; 2]> = (0..MAX_POINTS).map(|i| [i as f32 * 10.0, 0.0]).collect();
-        assert_eq!(insert(&mut full, [255.0, 0.0]), None);
-        assert_eq!(insert(&mut p, [-50.0, 900.0]), Some(0), "clamped onto the black point");
-    }
-
-    #[test]
-    fn endpoints_and_the_last_two_points_stay() {
-        let mut p = vec![[0.0, 0.0], [100.0, 120.0], [255.0, 255.0]];
-        assert!(!delete(&mut p, 0) && !delete(&mut p, 2) && !delete(&mut p, 7));
-        assert!(delete(&mut p, 1));
-        assert_eq!(p, line());
-        assert!(!delete(&mut p, 1) && !delete(&mut p, 0));
-        assert_eq!(p.len(), 2);
-    }
-
-    #[test]
-    fn moves_stay_between_neighbours() {
-        let mut p = vec![[0.0, 0.0], [100.0, 120.0], [200.0, 180.0], [255.0, 255.0]];
-        assert!(move_to(&mut p, 1, [250.0, 300.0]));
-        assert_eq!(p[1], [199.0, 255.0]);
-        move_to(&mut p, 0, [150.0, 10.0]);
-        assert_eq!(p[0], [150.0, 10.0]);
-        move_to(&mut p, 3, [10.0, 5.0]);
-        assert_eq!(p[3], [201.0, 5.0]);
-        assert!(!move_to(&mut p, 9, [0.0, 0.0]));
-    }
-
-    #[test]
-    fn hit_test_picks_the_nearest_point_in_radius() {
-        let p = vec![[0.0, 0.0], [100.0, 100.0], [110.0, 110.0], [255.0, 255.0]];
-        let to_scr = |q: [f32; 2]| Pos2::new(q[0], 255.0 - q[1]);
-        assert_eq!(hit(&p, to_scr, Pos2::new(108.0, 146.0), 9.0), Some(2));
-        assert_eq!(hit(&p, to_scr, Pos2::new(50.0, 50.0), 9.0), None);
-    }
 
     #[test]
     fn curve_endpoint_handles_fit_inside_the_allocated_area() {

@@ -107,6 +107,10 @@ pub struct Tokens {
     pub tab_strip: Color32,
     /// Selected list row (layers, history).
     pub row_selected: Color32,
+    /// Scope plot background (histogram, vectorscope, clipping diagnostics).
+    pub histogram_bg: Color32,
+    /// Channel intensity of scope outlines and hue markers.
+    pub histogram_level: u8,
 }
 
 impl Tokens {
@@ -166,6 +170,8 @@ impl Tokens {
                 pro: true,
                 tab_strip: Color32::from_rgb(38, 38, 38),
                 row_selected: Color32::from_rgb(82, 82, 82),
+                histogram_bg: Color32::from_rgb(40, 40, 40),
+                histogram_level: 225,
             },
             ThemeKind::Studio => Tokens {
                 kind,
@@ -200,6 +206,8 @@ impl Tokens {
                 pro: false,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_rgb(14, 14, 15),
+                histogram_level: 225,
             },
             ThemeKind::StudioLight => Tokens {
                 kind,
@@ -234,6 +242,8 @@ impl Tokens {
                 pro: false,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_gray(40),
+                histogram_level: 240,
             },
             ThemeKind::Classic => Tokens {
                 kind,
@@ -268,6 +278,8 @@ impl Tokens {
                 pro: false,
                 tab_strip: Color32::from_rgb(212, 208, 200),
                 row_selected: Color32::from_rgb(10, 36, 106),
+                histogram_bg: Color32::from_gray(40),
+                histogram_level: 240,
             },
         }
     }
@@ -275,6 +287,30 @@ impl Tokens {
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
     pub fn get(ctx: &egui::Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
+    }
+
+    /// Thin RGB outlines; the filled bands use the same hues with subdued coverage.
+    pub fn histogram_color(&self, mask: u8) -> Color32 {
+        let v = self.histogram_level;
+        Color32::from_rgb(if mask & 1 != 0 { v } else { 0 }, if mask & 2 != 0 { v } else { 0 }, if mask & 4 != 0 { v } else { 0 })
+    }
+
+    pub fn histogram_fill(&self, mask: u8) -> Color32 {
+        self.histogram_color(mask).gamma_multiply(0.3)
+    }
+
+    /// Analysis colours are semantic hues, independent of the application accent palette.
+    pub fn scope_hue(&self, h: f32, s: f32) -> Color32 {
+        let v = f32::from(self.histogram_level) / 255.0;
+        let f = |offset: f32| {
+            let k = (offset + h * 6.0).rem_euclid(6.0);
+            (v * (1.0 - s * k.min(4.0 - k).clamp(0.0, 1.0)) * 255.0) as u8
+        };
+        Color32::from_rgb(f(5.0), f(3.0), f(1.0))
+    }
+
+    pub fn histogram_background(&self) -> Color32 {
+        self.histogram_bg
     }
 
     pub fn dark(&self) -> bool {

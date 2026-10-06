@@ -77,15 +77,23 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth:
         if let Some(i) = index
             && resp.double_clicked()
         {
-            open_editor(app, l.id.0, sm, i);
+            open_editor(app, ui.ctx(), l.id.0, sm, i);
         }
     }
 }
 
 /// Re-opens a smart filter's dialog with its recorded parameters; OK runs
 /// `layer.smartFilter.setParams` instead of adding another filter (see `dialogs::confirm`).
-pub fn open_editor(app: &mut PhotocraftApp, layer: u64, sm: &SmartObject, index: usize) {
+pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm: &SmartObject, index: usize) {
     let Some(f) = sm.smart_filters.get(index) else { return };
+    // Camera Raw has its own full-window dialog rather than a generic parameter form.
+    if f.command == photocraft_engine::lens_cmds::RAW {
+        if let Err(e) = crate::camera_raw_ui::open_smart_filter(app, ctx, photocraft_doc::LayerId(layer), index) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
     if !crate::filter_dialog::has_dialog(&f.command) {
         return;
     }

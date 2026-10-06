@@ -552,5 +552,36 @@ mod tests {
                 }
             }
         }
+    /// Camera Raw includes dynamic colour-band labels and contextual labels that the generic
+    /// tl! scanner cannot see. Cover the partial catalog too, without claiming whole-app coverage.
+    #[test]
+    fn camera_raw_labels_are_translated_in_every_available_language() {
+        let sources = [include_str!("../camera_raw_ui.rs"), include_str!("../camera_raw_scope_ui.rs")];
+        let mut labels = std::collections::BTreeSet::new();
+        for source in sources {
+            let code = source.split("#[cfg(test)]").next().unwrap();
+            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "=> \""] {
+                for tail in code.split(marker).skip(1) {
+                    labels.insert(tail.split('"').next().unwrap());
+                }
+            }
+        }
+        let bands = sources[0].split("const BANDS:").nth(1).unwrap().split(" = ").nth(1).unwrap().split(';').next().unwrap();
+        for band in bands.split('"').skip(1).step_by(2) {
+            labels.insert(band);
+        }
+        assert!(labels.len() >= 66, "missing Camera Raw source labels: {labels:?}");
+        for lang in Lang::all().filter(|l| *l != Lang::EN) {
+            let catalog = lang.catalog();
+            let missing: Vec<_> = labels.iter().filter(|s| catalog.contextual("cameraRaw", s).or_else(|| catalog.plain(s)).is_none()).collect();
+            assert!(missing.is_empty(), "{}: Camera Raw labels: {missing:?}", lang.code());
+            assert_ne!(tr_ctx(lang, "cameraRaw", "Highlights"), tr_ctx(lang, "cameraRaw", "Lights"), "{}: distinct curve regions", lang.code());
+            assert_ne!(tr_ctx(lang, "cameraRaw", "Shadows"), tr_ctx(lang, "cameraRaw", "Darks"), "{}: distinct curve regions", lang.code());
+        }
+        let ru = Lang::from_code("ru").unwrap();
+        assert_eq!(tr_ctx(ru, "cameraRaw", "Vibrance"), "Красочность");
+        assert_eq!(tr_ctx(ru, "cameraRaw", "Aqua"), "Голубые");
+        let text = fmt(tr(ru, "Camera Raw Filter ({layer})"), &[("layer", "{Background} 影像")]);
+        assert_eq!(text, "Фильтр Camera Raw ({Background} 影像)", "user layer names are not translated");
     }
 }

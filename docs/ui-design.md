@@ -114,3 +114,10 @@ documents), strings assembled with `format!` that were not converted to `fmt`/`t
 per-language font fallback (the CJK fallback prefers Japanese forms), right-to-left layout,
 locale-aware number and date formats, automatic language detection on the web build (native
 builds read `LANG`/`LC_*`, the macOS preferred languages and the Windows user locale).
+
+Camera Raw has explicit coverage for all seven available languages, including the partial
+Simplified Chinese catalog. Its contextual `cameraRaw` entries distinguish tonal regions,
+colour-band names and font-weight Light. The title uses a `{layer}` placeholder; user layer
+names and the universal RGB/Lab channel symbols stay unchanged. Collapse IDs use English
+source keys, so switching languages preserves open sections. Mixer tabs wrap within the
+panel width. Catalog coverage and actual shell language-switch tests enforce these rules.

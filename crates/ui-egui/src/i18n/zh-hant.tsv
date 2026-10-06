@@ -2009,3 +2009,25 @@
 
 	Rendering mode	渲染模式
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	凍結套索：拖曳以凍結區域，按住 Alt 拖曳以解凍 (L)
+
+	Shadow Clipping Warning (U)	陰影剪裁警告 (U)
+	Highlight Clipping Warning (O)	亮部剪裁警告 (O)
+	Show Lab Color Readouts	顯示 Lab 色彩讀值
+	Show Vectorscope	顯示向量示波器
+	Show Red at 3 o'clock	將紅色顯示在三點鐘方向
+	Show Skin Tone Indicator	顯示膚色指示線
+	Tone Histogram	色調直方圖
+	Show Selected Region	顯示選取區域
+
+cameraRaw	Light	光線
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Camera Raw 濾鏡（{layer}）
+cameraRaw	Lights	亮調
+cameraRaw	Darks	暗調
+cameraRaw	Blacks	黑色色階
+cameraRaw	Whites	白色色階
+cameraRaw	Amount	強度
+cameraRaw	Tint	色偏
+cameraRaw	Masking	遮色片保護
+cameraRaw	Blending	混合

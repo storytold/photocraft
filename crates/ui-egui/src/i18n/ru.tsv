@@ -2295,3 +2295,38 @@
 
 	Rendering mode	Режим отрисовки
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Лассо заморозки: перетащите, чтобы заморозить область; Alt+перетаскивание размораживает (L)
+
+	Shadow Clipping Warning (U)	Предупреждение о клиппинге теней (U)
+	Highlight Clipping Warning (O)	Предупреждение о клиппинге светов (O)
+	Show Lab Color Readouts	Показывать значения Lab
+	Show Vectorscope	Показывать вектороскоп
+	Show Red at 3 o'clock	Красный в положении «3 часа»
+	Show Skin Tone Indicator	Показывать ориентир тона кожи
+	Tone Histogram	Тональная гистограмма
+	Show Selected Region	Показать выделенную область
+
+cameraRaw	Light	Свет
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Фильтр Camera Raw ({layer})
+	Aqua	Голубой
+cameraRaw	Amount	Интенсивность
+cameraRaw	Blacks	Чёрные
+cameraRaw	Vibrance	Красочность
+cameraRaw	Color Grading	Цветовое тонирование
+cameraRaw	Lights	Светлые тона
+cameraRaw	Darks	Тёмные тона
+cameraRaw	Global	Общее
+cameraRaw	Red	Красные
+cameraRaw	Orange	Оранжевые
+cameraRaw	Yellow	Жёлтые
+cameraRaw	Green	Зелёные
+cameraRaw	Aqua	Голубые
+cameraRaw	Blue	Синие
+cameraRaw	Purple	Фиолетовые
+cameraRaw	Magenta	Пурпурные
+cameraRaw	Hue	Тон
+cameraRaw	Blending	Смешивание
+cameraRaw	Luminance Detail	Детализация яркости
+cameraRaw	Color Detail	Детализация цвета
+cameraRaw	Roughness	Неровность

@@ -341,6 +341,17 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
     resp
 }
 
+/// Cached RGB data; drawing work is bounded by the 256 display bins, never the image size.
+pub fn rgb_histogram(ui: &mut Ui, histogram: &photocraft_algo::histogram::RgbHistogram, height: f32) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), height.max(1.0)), egui::Sense::hover());
+    ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
+    let plot = rect.shrink(4.0);
+    crate::rgb_histogram::paint(ui.painter(), plot, histogram, &t);
+    ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+    response
+}
+
 /// Small caps section label.
 pub fn section_label(ui: &mut Ui, text: &str) {
     let t = Tokens::get(ui.ctx());

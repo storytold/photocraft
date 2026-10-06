@@ -304,6 +304,16 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())))
 }
 
+/// The smart object's pixels below smart filter `index` (the input that filter edits): the placed
+/// source and the filters under it, without the filter mask. `Ok(None)` when the source is
+/// unavailable.
+pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Result<Option<Surface>> {
+    let mut below = sm.clone();
+    below.smart_filters.truncate(index);
+    below.filter_mask = None;
+    render(doc, &below)
+}
+
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
 /// unavailable (the cache is then left alone).
 pub fn refresh_layer(doc: &Document, l: &mut Layer) -> Result<bool> {

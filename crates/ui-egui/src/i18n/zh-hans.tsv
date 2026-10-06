@@ -1914,3 +1914,24 @@
 	Erase	擦除
 	Right click with painting tools	使用绘画工具时右键单击
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	冻结套索：拖动以冻结区域，按住 Alt 拖动以解冻 (L)
+
+	Shadow Clipping Warning (U)	阴影剪切警告 (U)
+	Highlight Clipping Warning (O)	高光剪切警告 (O)
+	Show Lab Color Readouts	显示 Lab 颜色读数
+	Show Vectorscope	显示矢量示波器
+	Show Red at 3 o'clock	将红色显示在三点钟方向
+	Show Skin Tone Indicator	显示肤色指示线
+	Tone Histogram	色调直方图
+	Show Selected Region	显示选定区域
+
+cameraRaw	Light	光线
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Camera Raw 滤镜（{layer}）
+cameraRaw	Lights	亮调
+cameraRaw	Darks	暗调
+cameraRaw	Blacks	黑色色阶
+cameraRaw	Amount	强度
+cameraRaw	Tint	色偏
+cameraRaw	Masking	蒙版保护
+cameraRaw	Blending	混合
