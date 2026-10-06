@@ -155,9 +155,9 @@ note = "edit_menu_cmds.rs:714 covers brushes, custom shapes, patterns with reord
 [[item]]
 id = "UI-217-22"
 target = "Stamp Visible into a new layer keeping originals; Alt+Merge keeps originals"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only layer.mergeVisible (edit_cmds.rs:416)"
+note = "layer.stampVisible (Cmd+Alt+Shift+E) and layer.stampLayers (Cmd+Alt+E; one layer: Stamp Down) in layer_multi_cmds.rs; Alt + Merge Visible / Merge Layers / Merge Down in menus.rs alt_variant"
 
 [[item]]
 id = "UI-217-23"

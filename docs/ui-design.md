@@ -22,6 +22,11 @@ Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"
   - Options-bar labels end with a colon ("Size:").
   - Document tabs read "name @ 12.5% (RGB/8)".
   - Toolbar tool groups carry a corner triangle.
+- **⌥ (Alt) variants of menu items:** holding ⌥ while choosing an item can run a different
+  command (`menus::alt_variant`). Layer › Merge Visible becomes Stamp Visible
+  (`layer.stampVisible`, ⌘⌥⇧E: the visible result as a new layer, originals kept) and Merge
+  Layers / Merge Down become Stamp Layers (`layer.stampLayers`, ⌘⌥E: a new "… (merged)" layer,
+  or with one layer a copy merged into the layer below).
 - **Verify every visual change** with `ui.screenshot`, at several window sizes and in every theme.
 
 ## Adding icons

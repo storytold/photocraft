@@ -646,20 +646,9 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         let ids = top_level(doc, &sel);
         let top_id = *ids.last().ok_or_else(|| EngineError::Other("Merge Layers needs two or more layers".into()))?;
         let top = doc.layer(top_id).ok_or(EngineError::NoLayer(top_id))?.clone();
-        let mut solo = doc.clone();
-        solo.layers = ids.iter().filter_map(|id| doc.layer(*id)).filter(|l| l.visible).cloned().collect();
-        if solo.layers.is_empty() {
-            return Err(EngineError::Other("the selected layers are all hidden".into()));
-        }
-        let buf = photocraft_compose::flatten(&solo);
-        let fmt = doc.pixel_format();
-        let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
-        let mut merged = Layer::raster(top.name.clone(), fmt);
+        let layers = ids.iter().filter_map(|id| doc.layer(*id)).cloned().collect();
+        let mut merged = composite_layer(doc, layers, top.name.clone(), "the selected layers are all hidden")?;
         merged.locks = top.locks;
-        let surf = crate::pixels_mut(&mut merged)?;
-        surf.write_region(doc.bounds(), &data);
-        surf.prune();
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
         for id in &ids[..ids.len() - 1] {
@@ -671,6 +660,85 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
     })?;
     reselect(s, vec![mid], Some(mid));
     Ok(json!({ "layer": mid.0 }))
+}
+
+/// The visible ones of `layers`, composited as they look in `doc`, as one raster layer named
+/// `name` (the document's mode, with transparency). `none_visible` is the error when every one
+/// of them is hidden.
+fn composite_layer(doc: &Document, layers: Vec<Layer>, name: String, none_visible: &str) -> Result<Layer> {
+    let mut solo = doc.clone();
+    solo.layers = layers.into_iter().filter(|l| l.visible).collect();
+    if solo.layers.is_empty() {
+        return Err(EngineError::Other(none_visible.into()));
+    }
+    let buf = photocraft_compose::flatten(&solo);
+    let fmt = doc.pixel_format();
+    let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
+    let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
+    let mut layer = Layer::raster(name, fmt);
+    let surf = crate::pixels_mut(&mut layer)?;
+    surf.write_region(doc.bounds(), &data);
+    surf.prune();
+    Ok(layer)
+}
+
+/// Stamp Visible (⌘⌥⇧E): a new layer above the active one holding everything visible, merged;
+/// the original layers stay as they are.
+pub fn stamp_visible(s: &mut Session) -> Result<Value> {
+    let id = s.edit("Stamp Visible", |doc, active| {
+        let name = doc.next_layer_name("Layer");
+        let layer = composite_layer(doc, doc.layers.clone(), name, "there are no visible layers to stamp")?;
+        let id = doc.insert_above(*active, layer);
+        *active = Some(id);
+        Ok(id)
+    })?;
+    reselect(s, vec![id], Some(id));
+    Ok(json!({ "layer": id.0 }))
+}
+
+/// Stamp Layers (⌘⌥E, ⌥ + Merge Layers): Merge Layers that keeps the originals. Several
+/// selected layers are merged into a new "<top> (merged)" layer above the topmost; one layer is
+/// stamped down, a copy of it merged into the layer below.
+pub fn stamp_layers(s: &mut Session) -> Result<Value> {
+    let sel = selected(s);
+    if sel.len() < 2 {
+        return stamp_down(s);
+    }
+    let id = s.edit("Stamp Layers", |doc, active| {
+        let ids = top_level(doc, &sel);
+        let top_id = *ids.last().ok_or_else(|| EngineError::Other("Stamp Layers needs two or more layers".into()))?;
+        let top_name = doc.layer(top_id).ok_or(EngineError::NoLayer(top_id))?.name.clone();
+        let layers = ids.iter().filter_map(|id| doc.layer(*id)).cloned().collect();
+        let layer = composite_layer(doc, layers, format!("{top_name} (merged)"), "the selected layers are all hidden")?;
+        let id = doc.insert_above(Some(top_id), layer);
+        *active = Some(id);
+        Ok(id)
+    })?;
+    reselect(s, vec![id], Some(id));
+    Ok(json!({ "layer": id.0 }))
+}
+
+/// Stamp Down (⌥ + Merge Down): merge a copy of the active layer into the layer below it; the
+/// active layer stays (and stays active).
+fn stamp_down(s: &mut Session) -> Result<Value> {
+    let id = s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?;
+    let lower = s.edit("Stamp Down", |doc, active| {
+        let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
+        let Some((&idx, parent)) = path.split_last() else { return Err(EngineError::NoLayer(id)) };
+        let below_idx = idx.checked_sub(1).ok_or_else(|| EngineError::Other("no layer below to stamp into".into()))?;
+        let mut below = parent.to_vec();
+        below.push(below_idx);
+        let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
+        if lower.is_group() {
+            return Err(EngineError::Other("can't stamp into a group".into()));
+        }
+        let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
+        let merged = crate::pixels::merge_down(doc.bounds(), &lower, &upper, doc.pixel_format());
+        *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
+        *active = Some(id);
+        Ok(lower.id)
+    })?;
+    Ok(json!({ "layer": lower.0 }))
 }
 
 /// Delete Layer with several layers selected.
@@ -794,6 +862,10 @@ pub fn specs() -> Vec<CommandSpec> {
             link_layers(s)
         }),
         spec!("layer.mergeLayers", "Merge Layers", &["Layer"], Some("Cmd+E"), "{} (one layer selected: Merge Down)", has_layer, |s, _| merge_layers(s)),
+        // Photoshop has no menu items for these: they are the ⌥ variants of Merge Visible and
+        // Merge Layers / Merge Down, and their shortcuts.
+        spec!("layer.stampVisible", "Stamp Visible", &[], Some("Cmd+Alt+Shift+E"), "{}", has_doc, |s, _| stamp_visible(s)),
+        spec!("layer.stampLayers", "Stamp Layers", &[], Some("Cmd+Alt+E"), "{} (one layer selected: Stamp Down)", has_layer, |s, _| stamp_layers(s)),
         spec!("layer.new.groupFromLayers", "Group from Layers…", &["Layer", "New"], None, r##"{"name":str?}"##, has_layer, group_layers),
         spec!("layer.arrange.reverse", "Reverse", &["Layer", "Arrange"], None, "{}", two_plus, |s, _| reverse(s)),
         spec!(
@@ -1096,6 +1168,84 @@ mod tests {
             s.execute("layer.mergeLayers", json!({})).unwrap();
             assert_eq!(doc(&s).layer_count(), before - 1);
         }
+    }
+
+    /// Stamp Visible adds the visible composite as a new layer above the active one and leaves
+    /// every original alone (hidden layers stay out of the stamp).
+    #[test]
+    fn stamp_visible_keeps_the_originals() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let a = rect_layer(&mut s, Rect::new(0, 0, 10, 10));
+            let b = rect_layer(&mut s, Rect::new(20, 0, 30, 10));
+            s.execute("layer.setProps", json!({"layer": b.0, "visible": false})).unwrap();
+            select_all(&mut s, &[a]);
+            let before = doc(&s).clone();
+            let st = LayerId(s.execute("layer.stampVisible", json!({})).unwrap()["layer"].as_u64().unwrap());
+            let d = doc(&s);
+            assert_eq!(d.layer_count(), before.layer_count() + 1);
+            for l in &before.layers {
+                assert_eq!(d.layer(l.id), Some(l), "{} unchanged", l.name);
+            }
+            let sl = d.layer(st).unwrap();
+            assert_eq!(sl.name, "Layer 3");
+            let order: Vec<LayerId> = d.layers.iter().map(|l| l.id).collect();
+            let ia = order.iter().position(|x| *x == a).unwrap();
+            assert_eq!(order.get(ia + 1), Some(&st), "directly above the active layer");
+            let px = sl.surface().unwrap();
+            assert_eq!(px.pixel(5, 5)[..4], [1.0, 0.0, 0.0, 1.0], "a is in the stamp");
+            assert_eq!(px.pixel(25, 5)[..4], [1.0, 1.0, 1.0, 1.0], "hidden b is not: the white background shows");
+            assert_eq!(sel(&s), vec![st]);
+            s.undo();
+            assert_eq!(doc(&s).layer_count(), before.layer_count());
+        }
+        // Nothing visible: an error, not an empty layer.
+        let mut s = session(8);
+        let bg = doc(&s).layers[0].id;
+        s.execute("layer.setProps", json!({"layer": bg.0, "visible": false})).unwrap();
+        assert!(s.execute("layer.stampVisible", json!({})).is_err());
+    }
+
+    /// Stamp Layers is Merge Layers that keeps the originals: several selected layers make a new
+    /// "<top> (merged)" layer above the topmost; one layer stamps down into the layer below.
+    #[test]
+    fn stamp_layers_keeps_the_originals() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let a = rect_layer(&mut s, Rect::new(0, 0, 10, 10));
+            let b = rect_layer(&mut s, Rect::new(20, 0, 30, 10));
+            let c = rect_layer(&mut s, Rect::new(40, 0, 50, 10));
+            s.execute("layer.renameLayer", json!({"layer": c.0, "name": "Top"})).unwrap();
+            select_all(&mut s, &[a, c]);
+            let before = doc(&s).clone();
+            let m = LayerId(s.execute("layer.stampLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+            let d = doc(&s);
+            assert_eq!(d.layer_count(), before.layer_count() + 1);
+            for l in &before.layers {
+                assert_eq!(d.layer(l.id), Some(l), "{} unchanged", l.name);
+            }
+            let ml = d.layer(m).unwrap();
+            assert_eq!(ml.name, "Top (merged)");
+            assert_eq!(layer_bounds(ml).unwrap(), Rect::new(0, 0, 50, 10));
+            assert_eq!(ml.surface().unwrap().pixel(25, 5)[3], 0.0, "b was not selected");
+            assert_eq!(d.layers.last().unwrap().id, m, "above the topmost selected layer");
+            assert_eq!(sel(&s), vec![m]);
+            s.undo();
+            assert_eq!(doc(&s).layer_count(), before.layer_count());
+
+            // One layer: a copy of b is merged into a (the layer below); b stays and stays active.
+            select_all(&mut s, &[b]);
+            let r = s.execute("layer.stampLayers", json!({})).unwrap();
+            assert_eq!(r["layer"], json!(a.0));
+            let d = doc(&s);
+            assert_eq!(d.layer_count(), before.layer_count());
+            assert_eq!(d.layer(a).unwrap().surface().unwrap().pixel(25, 5)[..4], [1.0, 0.0, 0.0, 1.0], "b's pixels are in a");
+            assert_eq!(d.layer(b), before.layer(b), "b is unchanged");
+            assert_eq!(s.active().unwrap().active_layer, Some(b));
+        }
+        // The bottom layer has nothing below to stamp into.
+        let mut s = session(8);
+        assert!(s.execute("layer.stampLayers", json!({})).is_err());
     }
 
     #[test]

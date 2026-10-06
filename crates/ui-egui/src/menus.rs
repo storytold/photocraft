@@ -751,9 +751,21 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     nav.store(ui.ctx());
     if let Some(id) = clicked {
         let ctx = ui.ctx().clone();
+        // Photoshop: ⌥ while choosing a merge command stamps instead (keeps the originals).
+        let alt = ctx.input(|i| i.modifiers.alt);
+        let id = alt_variant(&id).filter(|_| alt).map_or(id, str::to_string);
         let _ = invoke(app, &ctx, &id, json!({}));
     }
     right
+}
+
+/// The command a menu item runs when ⌥ (Alt) is held while choosing it, if it has one.
+pub fn alt_variant(id: &str) -> Option<&'static str> {
+    match id {
+        "layer.mergeVisible" => Some("layer.stampVisible"),
+        "layer.mergeLayers" | "layer.mergeDown" => Some("layer.stampLayers"),
+        _ => None,
+    }
 }
 
 /// True only when the pointer can actually reach a menu title. A tall submenu can be
@@ -915,6 +927,40 @@ mod tests {
                 harness.run_steps(3);
                 assert!(harness.query_by_label_contains("Open…").is_some(), "{theme:?}: File menu did not open");
             }
+        }
+    }
+
+    /// ⌥ while choosing Layer › Merge Visible stamps instead: a new layer with the merged
+    /// result, every original kept. Without ⌥ it merges as before.
+    #[test]
+    fn alt_merge_visible_stamps_and_keeps_the_layers() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        assert_eq!(alt_variant("layer.mergeVisible"), Some("layer.stampVisible"));
+        assert_eq!(alt_variant("layer.mergeDown"), Some("layer.stampLayers"));
+        assert_eq!(alt_variant("file.open"), None);
+        for alt in [false, true] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.sync_views();
+            // Tall enough for the whole Layer menu (a shorter window scrolls it).
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 2000.0)).build_ui_state(
+                |ui, app| {
+                    menu_bar(app, ui);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(3);
+            h.get_by_label("Layer").click();
+            h.run_steps(3);
+            // Alt held down on the keyboard while the item is clicked (as the window reports it).
+            let mods = if alt { egui::Modifiers::ALT } else { egui::Modifiers::NONE };
+            h.event(egui::Event::ModifiersChanged(mods));
+            h.query_by_label_contains("Merge Visible").expect("Layer menu is open").click_modifiers(mods);
+            h.run_steps(3);
+            let layers = h.state().session.active().unwrap().doc.layers.len();
+            assert_eq!(layers, if alt { 3 } else { 1 }, "alt: {alt}");
         }
     }
 
