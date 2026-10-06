@@ -2,7 +2,8 @@
 //!
 //! A group's height never follows its content: content taller than the group scrolls inside
 //! it. The last expanded group (Layers by default) fills what the others leave. Drag the gap
-//! between two groups to resize them, double-click a tab (or use the panel menu) to collapse a
+//! between two groups (its grip, #295) to resize them down to their minimum heights, and
+//! double-click it to give both their default heights. Double-click a tab (or use the panel menu) to collapse a
 //! group to its tab strip, and drag a tab strip to move the group up or down the column
 //! (unless Window › Workspace › Lock Workspace is on).
 //!
@@ -366,7 +367,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
     let mut actions: Vec<Action> = Vec::new();
     let mut dragging: Option<Group> = None;
     let mut strips: Vec<StripRects> = Vec::with_capacity(rects.len());
-    for (i, (g, rect)) in rects.iter().copied().enumerate() {
+    for (g, rect) in rects.iter().copied() {
         let collapsed = app.ui.dock.is_collapsed(g);
         let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("dock-group", g.key())).max_rect(rect));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
@@ -432,19 +433,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.close();
             }
         });
-        // Splitter in the gap below this group: resizes it against the next expanded group.
-        if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
-            let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
-            let sresp = ui.interact(gap, ui.id().with(("dock-splitter", g.key())), Sense::drag());
-            if sresp.hovered() || sresp.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                ui.painter().line_segment([gap.left_center(), gap.right_center()], Stroke::new(2.0, t.accent.gamma_multiply(0.7)));
-            }
-            if sresp.dragged() {
-                resize(&mut app.ui.dock, &heights, i, sresp.drag_delta().y);
-            }
-        }
     }
+    // Splitters in the gaps between groups. Registered after every group so they win the
+    // pointer over the tab strip and body edges they overlap.
+    splitters(app, ui, &heights, &rects, &t);
     // Drop indicator while a group is dragged by its tab strip.
     if let (Some(g), Some(p)) = (dragging, ui.ctx().pointer_interact_pos()) {
         let before = drop_before(&order, &rects, g, p.y);
@@ -498,6 +490,64 @@ fn drop_before(order: &[Group], rects: &[(Group, Rect)], dragged: Group, y: f32)
             if after_self { Some(dragged) } else { Some(g) }
         }
         None => None,
+    }
+}
+
+/// How far a splitter's grab area reaches beyond the gap, above and below (points).
+const SPLITTER_SLOP: f32 = 3.0;
+
+/// The splitter below each group that has an expanded group somewhere below it, as
+/// `(index of the group above, grab rect)`. A collapsed group has none: its height is its tab strip.
+pub fn splitter_rects(layout: &DockLayout, rects: &[(Group, Rect)]) -> Vec<(usize, Rect)> {
+    rects
+        .iter()
+        .enumerate()
+        .filter(|(i, (g, _))| !layout.is_collapsed(*g) && rects.iter().skip(i + 1).any(|(n, _)| !layout.is_collapsed(*n)))
+        .map(|(i, (_, r))| (i, Rect::from_min_size(pos2(r.left(), r.bottom()), vec2(r.width(), GAP)).expand2(vec2(0.0, SPLITTER_SLOP))))
+        .collect()
+}
+
+/// Draw and drive the splitters: a short grip in each gap (always visible, so the handle can
+/// be found), a full-width accent line while hovered or dragged, drag to resize the groups on
+/// either side down to their minimum heights, double-click to give both their default heights.
+fn splitters(app: &mut PhotocraftApp, ui: &mut egui::Ui, heights: &[(Group, f32)], rects: &[(Group, Rect)], t: &Tokens) {
+    for (i, grab) in splitter_rects(&app.ui.dock, rects) {
+        let Some(&(g, _)) = rects.get(i) else { continue };
+        let resp = ui.interact(grab, ui.id().with(("dock-splitter", g.key())), Sense::click_and_drag());
+        let gap = grab.shrink2(vec2(0.0, SPLITTER_SLOP));
+        let active = resp.hovered() || resp.dragged();
+        let p = ui.painter();
+        if active {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            p.line_segment([gap.left_center(), gap.right_center()], Stroke::new(2.0, t.accent.gamma_multiply(if resp.dragged() { 1.0 } else { 0.7 })));
+        } else {
+            // Grip: three dots in the middle of the gap.
+            for k in -1..=1 {
+                p.circle_filled(gap.center() + vec2(k as f32 * 5.0, 0.0), 1.0, t.text_faint.gamma_multiply(0.8));
+            }
+        }
+        if resp.double_clicked() {
+            reset_splitter(&mut app.ui.dock, heights, i);
+        } else if resp.dragged() {
+            // Measured from the press with the heights at the press, so the movement before
+            // egui's drag threshold counts and clamping at a minimum doesn't drift.
+            let id = resp.id.with("start");
+            let start = ui.data(|d| d.get_temp::<(Vec<(Group, f32)>, f32)>(id)).filter(|_| !resp.drag_started());
+            let (at_press, y0) = start.unwrap_or_else(|| (heights.to_vec(), ui.input(|inp| inp.pointer.press_origin()).map_or(gap.center().y, |o| o.y)));
+            if let Some(y) = ui.ctx().pointer_interact_pos().map(|q| q.y) {
+                resize(&mut app.ui.dock, &at_press, i, y - y0);
+            }
+            ui.data_mut(|d| d.insert_temp(id, (at_press, y0)));
+        }
+    }
+}
+
+/// Splitter `i` double-clicked: the groups on either side go back to their default heights.
+fn reset_splitter(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize) {
+    let Some(&(g, _)) = heights.get(i) else { return };
+    layout.heights.remove(&g);
+    if let Some((n, _)) = heights.iter().skip(i + 1).find(|(n, _)| !layout.is_collapsed(*n)) {
+        layout.heights.remove(n);
     }
 }
 

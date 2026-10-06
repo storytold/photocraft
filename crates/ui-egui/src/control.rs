@@ -319,7 +319,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
             app.stylus.feed.set(None);
             ok(json!({"status": app.ui.status}))
         }
-        "ui.click" | "ui.move" => {
+        "ui.click" | "ui.move" | "ui.press" | "ui.release" => {
             // Screen coordinates in points (as reported by ui.inspect window size).
             let x = p.get("x").and_then(Value::as_f64).unwrap_or(0.0) as f32;
             let y = p.get("y").and_then(Value::as_f64).unwrap_or(0.0) as f32;
@@ -330,6 +330,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
                 _ => egui::PointerButton::Primary,
             };
             app.synthetic.push(egui::Event::PointerMoved(pos));
+            // ui.press / ui.release: half a click, so a drag can be held across calls (and
+            // screenshotted mid-drag) with ui.move in between.
+            if matches!(req.method.as_str(), "ui.press" | "ui.release") {
+                app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: req.method == "ui.press", modifiers: Default::default() });
+            }
             if req.method == "ui.click" {
                 let clicks = p.get("count").and_then(Value::as_u64).unwrap_or(1);
                 for _ in 0..clicks {

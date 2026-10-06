@@ -566,3 +566,75 @@ fn dock_strips_fit_and_the_chevron_menu_switches_tabs() {
     h.run_steps(3);
     assert_eq!(*h.state(), 3, "Patterns chosen from the chevron menu");
 }
+
+#[test]
+fn splitters_skip_collapsed_groups_and_double_click_resets() {
+    let mut l = DockLayout::default();
+    let shown = [Group::Color, Group::Properties, Group::History, Group::Layers];
+    let rects = |l: &DockLayout| rects_after_layout(&l.heights_for(&shown, 900.0, 28.0), Rect::from_min_size(Pos2::ZERO, vec2(280.0, 900.0)));
+    // One splitter below every group but the last.
+    let s = splitter_rects(&l, &rects(&l));
+    assert_eq!(s.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0, 1, 2]);
+    for (i, r) in &s {
+        let above = rects(&l)[*i].1;
+        assert!(r.contains(Pos2::new(above.center().x, above.bottom() + GAP / 2.0)), "the grab area covers the gap");
+        assert!(r.height() >= GAP + 2.0 * SPLITTER_SLOP - 0.01);
+    }
+    // A collapsed group has no splitter; the one above it resizes against the next expanded group.
+    l.set_collapsed(Group::Properties, true);
+    let s = splitter_rects(&l, &rects(&l));
+    assert_eq!(s.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0, 2]);
+    let hs = l.heights_for(&shown, 900.0, 28.0);
+    let (color, history) = (hs[0].1, hs[2].1);
+    resize(&mut l, &hs, 0, 40.0);
+    assert_eq!(l.height(Group::Color), color + 40.0);
+    assert_eq!(l.height(Group::History), history - 40.0, "History gave the room, not the collapsed Properties");
+    assert!(l.is_collapsed(Group::Properties));
+    // Collapsing the last expanded groups leaves no splitter at all.
+    l.set_collapsed(Group::History, true);
+    l.set_collapsed(Group::Layers, true);
+    let s = splitter_rects(&l, &rects(&l));
+    assert!(s.is_empty(), "{s:?}");
+    // Expanding again brings them back; double-click resets both sides to their defaults.
+    for g in shown {
+        l.set_collapsed(g, false);
+    }
+    let hs = l.heights_for(&shown, 900.0, 28.0);
+    resize(&mut l, &hs, 1, -30.0);
+    assert!(l.heights.contains_key(&Group::Properties) && l.heights.contains_key(&Group::History));
+    let hs = l.heights_for(&shown, 900.0, 28.0);
+    reset_splitter(&mut l, &hs, 1);
+    assert!(!l.heights.contains_key(&Group::Properties) && !l.heights.contains_key(&Group::History));
+    assert!(l.heights.contains_key(&Group::Color), "the other groups keep their sizes");
+    // Out-of-range indices are ignored.
+    reset_splitter(&mut l, &hs, 99);
+    resize(&mut l, &hs, 99, 10.0);
+}
+
+#[test]
+fn a_splitter_drag_shows_the_handle_and_collapse_still_works() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let color = rect_of(&h, Group::Color);
+    let at = Pos2::new(color.center().x, color.bottom() + GAP / 2.0);
+    drag(&mut h, at, at + vec2(0.0, 25.0));
+    assert!((rect_of(&h, Group::Color).height() - (color.height() + 25.0)).abs() < 1.0);
+    // Collapse Color by double-clicking its tab: the group shrinks to its strip and the
+    // splitter below it goes away; expanding restores the dragged height.
+    let tab = rect_of(&h, Group::Color).left_top() + vec2(20.0, 13.0);
+    h.event(egui::Event::PointerMoved(tab));
+    h.run_steps(1);
+    for _ in 0..2 {
+        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(h.state().ui.dock.is_collapsed(Group::Color));
+    let rects = last_rects(&h.ctx);
+    assert!(!splitter_rects(&h.state().ui.dock, &rects).iter().any(|(i, _)| rects[*i].0 == Group::Color));
+    h.state_mut().ui.dock.set_collapsed(Group::Color, false);
+    h.run_steps(3);
+    assert!((rect_of(&h, Group::Color).height() - (color.height() + 25.0)).abs() < 1.0);
+}
