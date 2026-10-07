@@ -183,6 +183,13 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         c
     });
     let (w_changed, h_changed) = (w_row.inner, h_row.inner);
+    // `dim_field` allows negatives for Canvas Size's relative mode, but an image is at least
+    // one pixel: clamp here so the preview shows the size `image.imageSize` will apply.
+    for (key, changed) in [("width", w_changed), ("height", h_changed)] {
+        if changed && num(f, key) < 1.0 {
+            f.insert(key.into(), json!(1.0));
+        }
+    }
     // Photoshop's chain bracket linking width and height (right of the unit dropdowns).
     let x0 = w_row.response.rect.right().max(h_row.response.rect.right()) + 4.0;
     let bracket = Rect::from_min_max(pos2(x0, w_row.response.rect.center().y), pos2(x0 + 14.0, h_row.response.rect.center().y));
@@ -399,5 +406,33 @@ mod tests {
         d.fields.insert("anchor".into(), json!("topLeft"));
         crate::dialogs::confirm(&mut app, id).unwrap();
         assert_eq!(app.session.active().unwrap().doc.size, photocraft_doc::Size::new(120, 50));
+    }
+
+    /// #441: a typed zero width showed "0 px × 1 px" while OK resized to 1×1.
+    #[test]
+    fn typed_zero_width_shows_the_applied_size() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.imageSize").unwrap();
+        h.run_steps(3);
+        let width = h.query_all_by_role(Role::SpinButton).next().map(|n| n.rect()).expect("the Width field");
+        h.hover_at(width.center());
+        h.run_steps(1);
+        h.drag_at(width.center());
+        h.run_steps(1);
+        h.drop_at(width.center());
+        h.run_steps(2);
+        h.event(egui::Event::Text("0".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        let f = h.state().ui.dialogs.first().map(|d| d.fields.clone()).expect("the dialog is open");
+        assert_eq!((num(&f, "width"), num(&f, "height")), (1.0, 1.0), "{f:?}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(1, 1));
     }
 }
