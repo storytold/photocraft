@@ -52,9 +52,10 @@ pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
     }
     post(
         app,
-        tl!("Native file drag-and-drop is unavailable"),
+        "Native file drag-and-drop is unavailable",
         vec![
-            tl!("Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.").into(),
+            "Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`."
+                .into(),
         ],
         false,
         Some(WAYLAND_FILE_DROP_DISMISSED),
@@ -113,7 +114,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     .show(ui, |ui| {
                         ui.set_width(340.0);
                         ui.horizontal(|ui| {
-                            let title = egui::RichText::new(&n.title).strong().color(if n.error { t.warning } else { t.text });
+                            let title = egui::RichText::new(crate::i18n::t(&n.title)).strong().color(if n.error { t.warning } else { t.text });
                             ui.add(egui::Label::new(title).wrap());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                 if ui.add(egui::Button::new(egui::RichText::new("×").color(t.text_dim)).frame(false)).on_hover_text(tl!("Dismiss")).clicked() {
@@ -122,10 +123,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             });
                         });
                         for line in n.lines.iter().take(MAX_LINES) {
+                            let line = crate::i18n::t(line);
                             ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).color(t.text_dim)).wrap());
                         }
                         if n.lines.len() > MAX_LINES {
-                            ui.label(egui::RichText::new(format!("…and {} more", n.lines.len() - MAX_LINES)).color(t.text_faint));
+                            let text = crate::i18n::fmt(tl!("…and {n} more"), &[("n", &(n.lines.len() - MAX_LINES).to_string())]);
+                            ui.label(egui::RichText::new(text).color(t.text_faint));
                         }
                     });
                 ui.add_space(6.0);
@@ -142,6 +145,18 @@ mod tests {
     use crate::{PhotocraftApp, Services};
     use photocraft_engine::Session;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn wayland_guidance_follows_language_changes_after_startup() {
+        let app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
+        let notice = &app.ui.notices[0];
+        let es = crate::i18n::Lang::from_code("es").unwrap();
+        crate::i18n::set_current(es);
+        assert_eq!(crate::i18n::t(&notice.title), "El arrastrar y soltar archivos de forma nativa no está disponible en Wayland");
+        assert_ne!(crate::i18n::t(&notice.lines[0]), notice.lines[0]);
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        assert_eq!(crate::i18n::t(&notice.title), "Native file drag-and-drop is unavailable");
+    }
 
     #[test]
     fn wayland_guidance_is_only_shown_in_wayland_sessions() {
