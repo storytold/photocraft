@@ -110,6 +110,7 @@ photocraft/
 │  │  ── platform + frontends ──
 │  ├─ platform/                photocraft-platform  traits: file dialogs, clipboard, fonts, tablet input, menus, storage; native + web impls
 │  ├─ ui-egui/                 photocraft-ui-egui   the (first) GUI shell: panels, dialogs, canvas widget, theme
+│  ├─ appmenu.rs               craft-appmenu (shared)  Linux global-menu glue in ui-egui; the exporter itself is the shared `craft-appmenu` repo
 │  ├─ automation/              photocraft-automation  MCP server (rmcp) + JSON-RPC over the command registry
 │  └─ testkit/                 photocraft-testkit   golden images, perceptual diff, fixtures, PSD corpus helpers
 ├─ apps/
@@ -141,7 +142,7 @@ photocraft/
  L3  compose · gpu · format
  L2  ops · algo · paint · text · vector
  L1  doc
- L0  geom · cms · color · raster           psd, codecs, raw, adobe-assets (standalone, no workspace deps)
+ L0  geom · cms · color · raster           psd, codecs, raw, adobe-assets (standalone, no workspace deps); plus the shared org crate `craft-appmenu`
 ```
 
 **Rules** (checked by `cargo xtask layers` in CI, which parses `cargo metadata`):

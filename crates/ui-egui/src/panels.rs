@@ -302,7 +302,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // whatever room is left between them, shortened or dropped rather than drawn over them.
             let (mut menus_right, mut controls_left) = (full.left(), full.right());
             ui.horizontal_centered(|ui| {
-                menus_right = crate::menus::menu_bar(app, ui);
+                // While a global menu host serves the menus, the in-window titles would just
+                // duplicate it (the shell owns the menus then): skip them.
+                if !app.global_menu_hosted {
+                    menus_right = crate::menus::menu_bar(app, ui);
+                }
                 controls_left = ui
                     .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;

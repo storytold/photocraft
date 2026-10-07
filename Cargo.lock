@@ -977,6 +977,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-appmenu"
+version = "0.1.0"
+source = "git+https://github.com/probonopd/craft-appmenu?tag=v0.1.3#4bda73d84c5fb734f3d15ba8fc2d533e53a975cc"
+dependencies = [
+ "futures-lite",
+ "log",
+ "serde",
+ "thiserror 2.0.21",
+ "x11rb",
+ "zbus",
+ "zvariant",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3720,6 +3734,7 @@ name = "photocraft-ui-egui"
 version = "0.2.0"
 dependencies = [
  "base64",
+ "craft-appmenu",
  "eframe",
  "egui",
  "egui_extras",
