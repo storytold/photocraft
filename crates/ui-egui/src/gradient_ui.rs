@@ -116,7 +116,7 @@ fn edited_fill(app: &PhotocraftApp, layer: &Layer, canvas: Rect32, cmd: &str, p:
 /// Options-bar params of a new live gradient.
 fn create_params(app: &PhotocraftApp, from: [f32; 2], to: [f32; 2]) -> Value {
     let o = &app.ui.tool_options;
-    json!({"from": from, "to": to, "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity})
+    json!({"from": from, "to": to, "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label()})
 }
 
 fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -571,16 +571,20 @@ pub fn preset_swatch(ui: &mut egui::Ui, stops: &[(f32, [f32; 4])]) {
     let _ = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
 }
 
-/// Live mode: style, reverse and dither changes in the options bar also edit the selected
+/// Live mode: style, reverse, dither and blend mode changes in the options bar also edit the selected
 /// gradient fill layer (one history step each), as in Photoshop.
 pub fn options_changed(app: &mut PhotocraftApp, before: &crate::state::ToolOptions) {
     let o = app.ui.tool_options.clone();
-    if o.gradient_classic
-        || (o.gradient_style == before.gradient_style && o.gradient_reverse == before.gradient_reverse && o.gradient_dither == before.gradient_dither)
-    {
+    if app.ui.tool != Tool::Gradient || o.gradient_classic {
         return;
     }
     let Some((l, ..)) = active_gradient(app) else { return };
+    if o.gradient_blend_mode != before.gradient_blend_mode {
+        let _ = app.run("layer.setProps", json!({"layer": l.id.0, "blend": o.gradient_blend_mode.label()}));
+    }
+    if o.gradient_style == before.gradient_style && o.gradient_reverse == before.gradient_reverse && o.gradient_dither == before.gradient_dither {
+        return;
+    }
     let mut p = json!({"layer": l.id.0});
     if o.gradient_style != before.gradient_style {
         p["style"] = json!(o.gradient_style);
@@ -943,6 +947,48 @@ mod tests {
         app.ui.tool_options.gradient_classic = true;
         drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
         assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "no fill layer in classic mode");
+    }
+
+    #[test]
+    fn gradient_blend_mode_reaches_live_and_classic_drags() {
+        use photocraft_color::BlendMode;
+        for mode in [BlendMode::Difference, BlendMode::Multiply, BlendMode::Screen, BlendMode::Exclusion] {
+            let mut live = app_with_gradient("linear");
+            live.ui.tool_options.gradient_blend_mode = mode;
+            drag(&mut live, [20.0, 60.0], [180.0, 60.0]);
+            let layer = live.session.active().unwrap().doc.layers.last().unwrap();
+            assert_eq!(layer.blend, mode, "live {mode:?}");
+
+            let mut classic = app_with_gradient("linear");
+            classic.ui.tool_options.gradient_classic = true;
+            classic.ui.tool_options.gradient_blend_mode = mode;
+            classic.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+            classic.session.tools.background = [1.0, 0.0, 0.0, 1.0];
+            drag(&mut classic, [20.0, 60.0], [180.0, 60.0]);
+            let st = classic.session.active().unwrap();
+            let px = st.doc.layers[0].surface().unwrap().pixel(60, 60);
+            let expected = match mode {
+                BlendMode::Difference | BlendMode::Exclusion => [0.0, 1.0, 1.0],
+                BlendMode::Multiply => [1.0, 0.0, 0.0],
+                BlendMode::Screen => [1.0, 1.0, 1.0],
+                _ => [1.0, 1.0, 1.0],
+            };
+            for (actual, want) in px.iter().zip(expected) {
+                assert!((actual - want).abs() < 0.02, "classic {mode:?}: {px:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn changing_live_gradient_mode_updates_selected_fill_layer() {
+        use photocraft_color::BlendMode;
+        let mut app = app_with_gradient("linear");
+        drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
+        let before = app.ui.tool_options.clone();
+        app.ui.tool_options.gradient_blend_mode = BlendMode::Difference;
+        options_changed(&mut app, &before);
+        let layer = app.session.active().unwrap().doc.layers.last().unwrap();
+        assert_eq!(layer.blend, BlendMode::Difference);
     }
 
     #[test]

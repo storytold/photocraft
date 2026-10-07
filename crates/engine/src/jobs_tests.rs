@@ -157,6 +157,17 @@ fn progress_is_monotonic_and_reaches_one() {
     assert_eq!((info.state, info.progress), ("done", 1.0));
 }
 
+#[test]
+fn a_preset_filter_job_is_named_after_the_preset() {
+    // #528: the job (progress UI) and its history step say "Blur More", not "Gaussian Blur".
+    let mut s = session(300, 200);
+    let id = job(s.start("filter.blur.blurMore", json!({})).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(e.label, "Blur More");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Blur More"));
+}
+
 /// A fake document job that runs until `gate` opens (or it is cancelled), then inverts nothing
 /// but records one undo step named "Gated Job".
 pub(super) fn gated_job(s: &mut Session, gate: &Arc<std::sync::atomic::AtomicBool>) -> JobId {
@@ -292,6 +303,23 @@ fn wait_job_blocks_until_applied() {
     // Waiting again reports the recorded result.
     assert_eq!(s.wait_job(id).unwrap(), v);
     assert!(s.wait_job(JobId(12345)).is_err());
+}
+
+#[test]
+fn params_that_are_not_an_object_are_rejected_before_running() {
+    let mut s = session(40, 30);
+    let before = s.active().unwrap().history.past_len();
+    for id in ["image.adjustments.invert", "filter.blur.gaussianBlur", "layer.new.layer"] {
+        for p in [json!([3]), json!("x"), json!(5), json!(true)] {
+            let e = s.execute(id, p.clone()).unwrap_err().to_string();
+            assert!(e.contains(id) && e.contains("must be a JSON object"), "{id} {p}: {e}");
+            assert!(s.start(id, p).is_err(), "{id}: background start must reject too");
+        }
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), before, "nothing ran");
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    s.execute("image.adjustments.invert", Value::Null).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), before + 2);
 }
 
 /// Cancel latency on a 24 MP document (6000×4000): from `cancel_job` until the worker thread

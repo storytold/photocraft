@@ -263,7 +263,7 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
             }
             let color = if sel { t.text } else { t.text_dim };
             let font = if i == 0 { theme::semibold(12.0) } else { theme::medium(12.0) };
-            ui.painter().text(egui::pos2(x, r.center().y), egui::Align2::LEFT_CENTER, *name, font, color);
+            ui.painter().text(egui::pos2(x, r.center().y), egui::Align2::LEFT_CENTER, tl!(name), font, color);
             let mut lock_clicked = false;
             if let Some(lock) = section_lock(b, i) {
                 let lr = egui::Rect::from_center_size(egui::pos2(r.right() - 11.0, r.center().y), vec2(18.0, 18.0));
@@ -300,7 +300,7 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         widgets::vline(ui, 482.0);
         ui.vertical(|ui| {
             ui.set_width(WIDTH - 190.0);
-            ui.label(RichText::new(SECTIONS[section].0).font(theme::semibold(12.5)).color(t.text));
+            ui.label(RichText::new(tl!(SECTIONS[section].0)).font(theme::semibold(12.5)).color(t.text));
             ui.add_space(6.0);
             let on = section_flag(&mut b, section).is_none_or(|f| *f);
             egui::ScrollArea::vertical().id_salt(("brush-section", section)).max_height(450.0).auto_shrink([false, false]).show(ui, |ui| {

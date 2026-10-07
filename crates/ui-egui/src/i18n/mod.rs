@@ -34,7 +34,7 @@ pub struct LangInfo {
     /// Catalog file contents (empty for the built-in English).
     pub source: &'static str,
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese and Chinese: always 0;
-    /// Czech: 0 = one, 1 = few (2–4), 2 = other). A catalog's `@plural` entries list one form per
+    /// Czech: 0 = one, 1 = few (2–4), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
     /// index.
     pub plural: fn(u64) -> usize,
     /// Must the catalog cover every menu string? (checked by the tests)
@@ -69,12 +69,17 @@ fn plural_cs(n: u64) -> usize {
     }
 }
 
+/// French: 0 and 1 take the singular, everything else the plural.
+fn plural_fr(n: u64) -> usize {
+    usize::from(n > 1)
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 8] = [
+pub static LANGUAGES: [LangInfo; 9] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
-        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: false, catalog: OnceLock::new()
+        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
     },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
@@ -84,6 +89,7 @@ pub static LANGUAGES: [LangInfo; 8] = [
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
 ];
 
@@ -305,7 +311,7 @@ mod tests {
         assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
         assert_eq!(lang_from_tag("cs_CZ.UTF-8"), Some(CS()));
         assert_eq!(lang_from_tag("cs-CZ"), Some(CS()));
-        assert_eq!(lang_from_tag("fr_FR"), None);
+        assert_eq!(lang_from_tag("de_DE"), None);
         // Traditional Chinese: by region, by script, and with a region after the script.
         assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
         assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));
@@ -334,7 +340,7 @@ mod tests {
     #[test]
     fn macos_language_list_is_parsed() {
         assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
-        assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Some(Lang::EN));
+        assert_eq!(first_supported("(\n    \"de-DE\",\n    \"en-US\"\n)\n"), Some(Lang::EN));
         assert_eq!(first_supported("(\n    \"zh-Hant-TW\",\n    \"en-US\"\n)\n"), Some(ZH()));
         assert_eq!(first_supported("("), None);
     }
@@ -349,6 +355,22 @@ mod tests {
         // `auto` and unknown codes follow the system (English under test).
         assert_eq!(Lang::from_pref("auto"), Lang::EN);
         assert_eq!(Lang::from_pref("xx-unknown"), Lang::EN);
+    }
+
+    #[test]
+    fn simplified_chinese_covers_dynamic_shortcuts_and_layer_counts() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        assert!(zh.complete_menus(), "Simplified Chinese must participate in the coverage gates");
+        assert_eq!(Lang::from_pref("ZH-Hans"), zh);
+        assert_eq!(tr(zh, "Pixel Layer"), "像素图层");
+        assert_eq!(tr(zh, "System Info"), "系统信息");
+        for key in ["⌥", "Alt"] {
+            assert_eq!(fmt(tr(zh, "Add a mask  (from the selection; {key} inverts)"), &[("key", key)]), format!("添加蒙版  （基于选区；{key} 反相）"));
+        }
+        for n in [0, 1, 3] {
+            assert_eq!(trn(zh, n, "{n} layer", "{n} layers"), format!("{n} 个图层"));
+        }
+        assert_eq!(tr(zh, "no such label"), "no such label");
     }
 
     #[test]
@@ -422,6 +444,22 @@ mod tests {
         assert_eq!(fmt("{b} before {a}", &[("a", "x"), ("b", "y"), ("c", "z")]), "y before x");
         assert_eq!(fmt("{missing}", &[]), "{missing}");
         assert_eq!(placeholders("a {x} b {y} {"), ["x", "y"]);
+    }
+
+    #[test]
+    fn french_resolves_and_pluralises() {
+        let fr = Lang::from_code("fr").expect("fr registered");
+        for tag in ["fr", "fr_FR.UTF-8", "fr-CA", "fr_BE", "fr-CH"] {
+            assert_eq!(lang_from_tag(tag), Some(fr), "{tag}");
+        }
+        assert_eq!(tr(fr, "Layer"), "Calque");
+        assert_eq!(tr_id(fr, "select.all", "All"), "Tout sélectionner", "an id override wins over the plain label");
+        assert_eq!(tr(fr, "All"), "Tout");
+        let forms: Vec<usize> = [0, 1, 2, 5, 100, u64::MAX].into_iter().map(plural_fr).collect();
+        assert_eq!(forms, [0, 0, 1, 1, 1, 1]);
+        assert_eq!(trn(fr, 0, "{n} item", "{n} items"), "0 élément");
+        assert_eq!(trn(fr, 1, "{n} item", "{n} items"), "1 élément");
+        assert_eq!(trn(fr, 3, "{n} item", "{n} items"), "3 éléments");
     }
 
     #[test]
@@ -539,6 +577,16 @@ mod tests {
         }
     }
 
+    /// Section names are dynamic labels, so the literal scanner cannot cover them.
+    #[test]
+    fn brush_section_names_are_translated() {
+        for lang in Lang::all().filter(|l| l.complete_menus()) {
+            for (name, _) in crate::brush_panel::SECTIONS {
+                assert!(lang.0.catalog().plain(name).is_some(), "{} missing brush section: {name}", lang.code());
+            }
+        }
+    }
+
     /// Blend mode names come from the colour crate; each must be translated.
     #[test]
     fn blend_mode_names_are_translated() {
@@ -547,5 +595,53 @@ mod tests {
                 assert!(l.catalog().plain(m.label()).is_some(), "{}: blend mode {:?}", l.code, m.label());
             }
         }
+    }
+
+    #[test]
+    fn mixer_brush_ui_strings_have_translations_in_every_registered_language() {
+        const STRINGS: &[&str] = &["Mixer Brush", "Mixer Brush Tool", "Wet", "Load", "Mix", "Flow", "Sample All Layers"];
+        for lang in Lang::all() {
+            for source in STRINGS {
+                let translated = tr(lang, source);
+                if lang == Lang::EN {
+                    assert_eq!(translated, *source, "English source string {source}");
+                } else {
+                    assert_ne!(translated, *source, "{} is missing {source:?}", lang.code());
+                }
+            }
+        }
+    }
+
+    /// Camera Raw includes dynamic colour-band labels and contextual labels that the generic
+    /// tl! scanner cannot see. Cover the partial catalog too, without claiming whole-app coverage.
+    #[test]
+    fn camera_raw_labels_are_translated_in_every_available_language() {
+        let sources = [include_str!("../camera_raw_ui.rs"), include_str!("../camera_raw_scope_ui.rs")];
+        let mut labels = std::collections::BTreeSet::new();
+        for source in sources {
+            let code = source.split("#[cfg(test)]").next().unwrap();
+            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "=> \""] {
+                for tail in code.split(marker).skip(1) {
+                    labels.insert(tail.split('"').next().unwrap());
+                }
+            }
+        }
+        let bands = sources[0].split("const BANDS:").nth(1).unwrap().split(" = ").nth(1).unwrap().split(';').next().unwrap();
+        for band in bands.split('"').skip(1).step_by(2) {
+            labels.insert(band);
+        }
+        assert!(labels.len() >= 66, "missing Camera Raw source labels: {labels:?}");
+        for lang in Lang::all().filter(|l| *l != Lang::EN) {
+            let catalog = lang.catalog();
+            let missing: Vec<_> = labels.iter().filter(|s| catalog.contextual("cameraRaw", s).or_else(|| catalog.plain(s)).is_none()).collect();
+            assert!(missing.is_empty(), "{}: Camera Raw labels: {missing:?}", lang.code());
+            assert_ne!(tr_ctx(lang, "cameraRaw", "Highlights"), tr_ctx(lang, "cameraRaw", "Lights"), "{}: distinct curve regions", lang.code());
+            assert_ne!(tr_ctx(lang, "cameraRaw", "Shadows"), tr_ctx(lang, "cameraRaw", "Darks"), "{}: distinct curve regions", lang.code());
+        }
+        let ru = Lang::from_code("ru").unwrap();
+        assert_eq!(tr_ctx(ru, "cameraRaw", "Vibrance"), "Красочность");
+        assert_eq!(tr_ctx(ru, "cameraRaw", "Aqua"), "Голубые");
+        let text = fmt(tr(ru, "Camera Raw Filter ({layer})"), &[("layer", "{Background} 影像")]);
+        assert_eq!(text, "Фильтр Camera Raw ({Background} 影像)", "user layer names are not translated");
     }
 }

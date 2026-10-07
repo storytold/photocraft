@@ -15,16 +15,16 @@ note = "Tool::Pencil (B group): live aliased strokes on the pixel grid, square c
 [[item]]
 id = "TOOL-213-2"
 target = "Mixer Brush tool on the toolbar"
-status = "partial"
+status = "done"
 issue = 213
-note = "paint.mixerBrush (brush_cmds.rs:337) + panel options; no Tool variant"
+note = "Tool::MixerBrush in the Brush (B) flyout; Wet/Load/Mix/Flow/Sample All Layers options, command/control dispatch and selection-clipping tests"
 
 [[item]]
 id = "TOOL-213-3"
 target = "Patch tool with a live preview of the patched area"
-status = "missing"
+status = "done"
 issue = 213
-note = "No patch command or tool"
+note = "paint.patch (retouch_cmds/patch.rs, source/destination) + Tool::Patch (J group: lasso, then drag the selection); the drag shows the heal live (patch_preview.rs, coarse colour fit: 1000x1000 in 52 ms)"
 
 [[item]]
 id = "TOOL-213-4"
@@ -211,6 +211,6 @@ note = "Engine sampling auto, rect, custom (edit_menu_cmds.rs:324); generic dial
 [[item]]
 id = "TOOL-214-16"
 target = "Liquify: redo (Cmd+Shift+Z)"
-status = "missing"
+status = "done"
 issue = 214
-note = "liquify_ui.rs has undo only"
+note = "liquify_ui.rs supports bounded redo through Cmd+Shift+Z and the control channel; new strokes clear redo"

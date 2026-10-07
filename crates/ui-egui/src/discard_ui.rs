@@ -5,6 +5,7 @@
 //! once every affected document has been answered. Cancel at any point drops it. Documents are
 //! tracked by id, not tab index, so closing one elsewhere while the prompt is up can't retarget it.
 
+use egui::Key;
 use photocraft_doc::DocId;
 use serde_json::{Value, json};
 
@@ -85,6 +86,7 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if intercept(app, EXIT, &Value::Null) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 }
 
@@ -149,7 +151,26 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         };
         (tl!("Unsaved changes"), crate::i18n::fmt(template, &[("name", &name)]))
     };
-    let (mut save_it, mut discard_it, mut cancel) = (false, false, false);
+    // Left to right, as drawn: (label, key, primary, min width, answer).
+    let buttons: &[(&str, Key, bool, f32, Answer)] = if reverts {
+        &[("Cancel", Key::C, false, 84.0, Answer::Cancel), ("Revert", Key::R, true, 84.0, Answer::Discard)]
+    } else {
+        &[("Don't Save", Key::D, false, 100.0, Answer::Discard), ("Cancel", Key::C, false, 84.0, Answer::Cancel), ("Save", Key::S, true, 84.0, Answer::Save)]
+    };
+    let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| i.consume_key(egui::Modifiers::NONE, b.1)).map(|b| b.4));
+    // egui's Tab order follows the right-to-left layout below; walk the buttons left to right instead.
+    let step = ctx.input_mut(|i| {
+        if i.consume_key(egui::Modifiers::SHIFT, Key::Tab) {
+            -1
+        } else if i.consume_key(egui::Modifiers::NONE, Key::Tab) {
+            1
+        } else {
+            0
+        }
+    });
+    if step != 0 {
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
         ui.set_max_width(420.0);
         ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
@@ -160,21 +181,52 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            if reverts {
-                discard_it = crate::widgets::primary_button(ui, tl!("Revert"), 84.0).clicked();
-                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-            } else {
-                save_it = crate::widgets::primary_button(ui, tl!("Save"), 84.0).clicked();
-                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-                discard_it = crate::widgets::secondary_button(ui, tl!("Don't Save"), 100.0).clicked();
+            let mut drawn: Vec<_> = buttons
+                .iter()
+                .rev()
+                .map(|&(label, key, primary, width, a)| {
+                    let label = mnemonic(label, key);
+                    let r = if primary { crate::widgets::primary_button(ui, &label, width) } else { crate::widgets::secondary_button(ui, &label, width) };
+                    if r.clicked() {
+                        answer = Some(a);
+                    }
+                    r
+                })
+                .collect();
+            drawn.reverse();
+            if step != 0 {
+                let n = drawn.len() as i32;
+                let at = drawn.iter().position(|r| r.has_focus()).map_or(if step > 0 { -1 } else { n }, |i| i as i32);
+                if let Some(r) = drawn.get((at + step).rem_euclid(n) as usize) {
+                    r.request_focus();
+                }
             }
         });
     });
-    cancel |= modal.should_close();
-    if cancel {
-        app.discard = None;
-    } else if discard_it || (save_it && save(app, ctx, doc)) {
-        advance(app, ctx);
+    if modal.should_close() {
+        answer = Some(Answer::Cancel);
+    }
+    match answer {
+        Some(Answer::Cancel) => app.discard = None,
+        Some(Answer::Discard) => advance(app, ctx),
+        Some(Answer::Save) if save(app, ctx, doc) => advance(app, ctx),
+        _ => {}
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Answer {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// "(S)ave": the key in parentheses, or appended ("Guardar (S)") when the translation doesn't start with it.
+fn mnemonic(label: &str, key: Key) -> String {
+    let (label, k) = (tl!(label), key.name());
+    match label.split_at_checked(1) {
+        Some((first, rest)) if first.eq_ignore_ascii_case(k) => format!("({first}){rest}"),
+        _ => format!("{label} ({k})"),
     }
 }
 
@@ -289,6 +341,41 @@ mod tests {
         assert!(app.allow_close);
     }
 
+    #[test]
+    fn mnemonic_labels_bracket_the_key() {
+        assert_eq!(mnemonic("Don't Save", Key::D), "(D)on't Save");
+        assert_eq!(mnemonic("Guardar", Key::S), "Guardar (S)");
+        assert_eq!(mnemonic("保存", Key::S), "保存 (S)");
+    }
+
+    #[test]
+    fn tab_walks_the_buttons_left_to_right_and_letters_answer() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = app_with_docs(2);
+        make_dirty(&mut app, 0);
+        make_dirty(&mut app, 1);
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        assert!(intercept(h.state_mut(), "file.closeAll", &Value::Null));
+        h.run_steps(2);
+        let focused = |h: &Harness<'_, PhotocraftApp>| ["(D)on't Save", "(C)ancel", "(S)ave"].into_iter().find(|l| h.get_by_label(l).is_focused());
+        for want in ["(D)on't Save", "(C)ancel", "(S)ave", "(D)on't Save"] {
+            h.key_press(Key::Tab);
+            h.run_steps(2);
+            assert_eq!(focused(&h), Some(want));
+        }
+        h.key_press_modifiers(egui::Modifiers::SHIFT, Key::Tab);
+        h.run_steps(2);
+        assert_eq!(focused(&h), Some("(S)ave"));
+        h.key_press(Key::D);
+        h.run_steps(2);
+        assert_eq!(h.state().discard.as_ref().map(|p| p.docs.len()), Some(1), "D answered the first document");
+        h.key_press(Key::C);
+        h.run_steps(2);
+        assert!(h.state().discard.is_none());
+        assert_eq!(h.state().session.documents().len(), 2, "Cancel closed nothing");
+    }
+
     /// One frame with the window's close button pressed; whether the guard cancelled the close.
     fn press_window_close(app: &mut PhotocraftApp) -> bool {
         let mut info = egui::ViewportInfo::default();
@@ -297,7 +384,10 @@ mod tests {
         input.viewports.insert(egui::ViewportId::ROOT, info);
         let mut out = egui::Context::default().run_ui(input, |ui| guard_window_close(app, ui.ctx()));
         out.textures_delta.clear();
-        out.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose))
+        let commands = &out.viewport_output[&egui::ViewportId::ROOT].commands;
+        let cancelled = commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose));
+        assert_eq!(commands.iter().any(|c| matches!(c, egui::ViewportCommand::Focus)), cancelled);
+        cancelled
     }
 
     #[test]

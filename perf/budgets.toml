@@ -36,6 +36,12 @@ args = ["--no-cpu", "--reps", "5"]
 note = "36 MP document with layer effects, GPU compositor"
 
 [[bench]]
+name = "camera_raw_bench"
+package = "photocraft-ui-egui"
+quick_args = ["--quick"]
+note = "36 MP dense RGB layer: CPU develop, histogram, ICC vectorscope, clipping, nine Lab probes and egui tessellation; excludes GPU upload/presentation"
+
+[[bench]]
 name = "type_bench"
 package = "photocraft-ui-egui"
 quick_args = ["--size", "2000x1500", "--layers", "20", "--steps", "15"]
@@ -343,7 +349,10 @@ id = "P31"
 title = "Camera Raw exposure change (proxy)"
 issue = 211
 target = "≤ 10 ms"
-not_measurable = "the proxy is built inside the dialog; no headless entry point yet"
+bench = "camera_raw_bench"
+row = "exposure proxy update"
+budget_ms = 10
+enforce = false  # not in the 2026-10-05 baseline yet; contributor M4 run 2026-10-06: p95 5.4 ms
 
 [[scenario]]
 id = "P32"
@@ -374,6 +383,15 @@ title = "Marquee drag on 24 MP with Alt/Shift"
 issue = 211
 target = "≤ 17 ms p95"
 not_measurable = "Shift/Alt marquee modifiers don't exist yet (#208) and the drag preview is UI-side"
+
+[[scenario]]
+id = "P36"
+title = "Camera Raw exposure change with all SDR scopes (CPU)"
+issue = 211
+bench = "camera_raw_bench"
+row = "interactive scope update"
+budget_ms = 10
+enforce = false  # not in the 2026-10-05 baseline yet; contributor M4 run 2026-10-06: p95 8.0 ms
 
 # ---- tracked (no budget yet): regressions only -------------------------------------------------
 

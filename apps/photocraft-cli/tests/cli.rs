@@ -143,6 +143,37 @@ fn info_prints_layer_tree_json() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// #518, #523: a truncated JPEG and an animated GIF open, but `info` lists why the image is
+/// incomplete and `convert` prints it on stderr (and still succeeds); complete files stay quiet.
+#[test]
+fn info_and_convert_report_decode_warnings() {
+    let d = tmp("decode-warnings");
+    let noise: Vec<u8> = (0..64 * 48 * 3).map(|i: u32| (i.wrapping_mul(7919) % 251) as u8).collect();
+    let img = photocraft_codecs::Image::from_u8(64, 48, photocraft_codecs::ChannelLayout::Rgb, noise).unwrap();
+    let jpeg = photocraft_codecs::encode(&img, photocraft_codecs::Format::Jpeg, &Default::default()).unwrap();
+    // Three 1x1 frames.
+    let mut gif = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xFF\xFF\xFF".to_vec();
+    for _ in 0..3 {
+        gif.extend_from_slice(b"\x2C\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0");
+    }
+    gif.push(0x3B);
+    let cases = [
+        ("whole.jpg", &jpeg[..], None),
+        ("half.jpg", &jpeg[..jpeg.len() / 2], Some("JPEG data ends early (the file is truncated or damaged); part of the image is missing")),
+        ("anim.gif", &gif[..], Some("only the first of 3 frames was imported")),
+    ];
+    for (name, bytes, warning) in cases {
+        let file = d.join(name);
+        std::fs::write(&file, bytes).unwrap();
+        let (out, _) = ok(bin().arg("info").arg(&file).arg("--compact"));
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["warnings"], json!(warning.into_iter().collect::<Vec<_>>()), "{name}");
+        let (_, err) = ok(bin().arg("convert").arg(&file).arg(d.join(format!("{name}.png"))));
+        assert_eq!(err.trim(), warning.map(|w| format!("warning: {w}")).unwrap_or_default(), "{name}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 #[test]
 fn run_commands_and_save() {
     let d = tmp("run");
@@ -178,6 +209,15 @@ fn run_errors() {
     assert_eq!(o.status.code(), Some(1));
     let o = bin().args(["run", "--new", "{", "--cmd", "x"]).output().unwrap();
     assert_eq!(o.status.code(), Some(1));
+    // Params must be a JSON object, for `--new` and for each `--params`.
+    let o = bin().args(["run", "--new", "[3]", "--cmd", "layer.new.layer"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(e.contains("--new") && e.contains("must be a JSON object"), "{e}");
+    let o = bin().args(["run", "--new", "{}", "--cmd", "layer.new.layer", "--params", "\"x\""]).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let e = String::from_utf8_lossy(&o.stderr);
+    assert!(e.contains("layer.new.layer") && e.contains("must be a JSON object"), "{e}");
 }
 
 #[test]

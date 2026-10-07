@@ -209,3 +209,29 @@ fn curves_points_are_added_selected_and_deleted() {
     h.run_steps(3);
     assert_eq!(curve_of(&layer(&h).1).len(), 2, "endpoints can't be deleted");
 }
+
+/// Capture and history are shared with Camera Raw, but Properties commits on release.
+#[test]
+fn curves_fast_release_commits_one_edit_and_undo_restores_the_curve() {
+    let mut h = app_harness("curves", "rgb", 8);
+    let (id, _) = layer(&h);
+    let graph = curves_graph(&h, id);
+    click(&mut h, graph.center());
+    let (_, before) = layer(&h);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let at = graph.center() + vec2(4.0, 3.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    // Only the release frame supplies the destination, as a very fast physical gesture can.
+    h.drop_at(at + vec2(40.0, -32.0));
+    h.run_steps(3);
+    let after = curve_of(&layer(&h).1);
+    assert_eq!(after.len(), 3);
+    assert!(after[1][0] > 150.0 && after[1][1] > 150.0, "{after:?}");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    assert!(h.state().live_adjust.is_none());
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(layer(&h).1, before);
+}

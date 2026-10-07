@@ -87,7 +87,7 @@ id = "FILE-215-12"
 target = "Camera Raw dialog shows a histogram; settings persist as a PSD Smart Filter"
 status = "partial"
 issue = 215
-note = "No histogram; lens_cmds.rs:268 stores an in-app Smart Filter, PSD drops it"
+note = "Interactive RGB/Lab scopes, clipping, tone zones, nine probes, vectorscope and floating panel; HDR deferred without test hardware. In-app Smart Filter persists, PSD drops it"
 
 [[item]]
 id = "FILE-215-13"

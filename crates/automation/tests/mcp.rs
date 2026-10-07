@@ -287,6 +287,28 @@ async fn open_png_and_inspect() {
     cleanup(&dir);
 }
 
+/// #518, #523: `doc_open` returns why an opened image is incomplete.
+#[tokio::test(flavor = "multi_thread")]
+async fn open_reports_decode_warnings() {
+    let dir = tmp("open-warnings");
+    let jpeg = write_image(&dir, "whole.jpg", photocraft_codecs::Format::Jpeg);
+    std::fs::write(dir.join("cut.jpg"), &jpeg[..jpeg.len() - 4]).unwrap();
+    // Two 1x1 frames.
+    let mut gif = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xFF\xFF\xFF".to_vec();
+    for _ in 0..2 {
+        gif.extend_from_slice(b"\x2C\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0");
+    }
+    gif.push(0x3B);
+    std::fs::write(dir.join("anim.gif"), gif).unwrap();
+    let client = connect(headless_in(&dir)).await;
+    let warnings = async |path: &str| json_of(&call(&client, "doc_open", json!({"path": path})).await)["warnings"].clone();
+    assert_eq!(warnings("whole.jpg").await, json!([]));
+    assert_eq!(warnings("cut.jpg").await, json!(["JPEG data ends early (the file is truncated or damaged); part of the image is missing"]));
+    assert_eq!(warnings("anim.gif").await, json!(["only the first of 2 frames was imported"]));
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
 fn write_image(dir: &std::path::Path, name: &str, format: photocraft_codecs::Format) -> Vec<u8> {
     let img = photocraft_codecs::Image::from_u8(16, 8, photocraft_codecs::ChannelLayout::Rgb, (0..384).map(|i| (i * 7 % 251) as u8).collect()).unwrap();
     let bytes = photocraft_codecs::encode(&img, format, &Default::default()).unwrap();
@@ -406,6 +428,7 @@ async fn fake_app() -> (String, tokio::task::JoinHandle<Vec<Value>>) {
                 "engine.commands" => {
                     json!({"id": id, "ok": true, "result": [{"id": "file.new", "label": "New…", "enabled": true}]})
                 }
+                "ui.pointer" => json!({"id": id, "ok": true, "result": req["params"]}),
                 "ui.screenshot" => {
                     let img = photocraft_codecs::Image::from_u8(40, 20, photocraft_codecs::ChannelLayout::Rgba, vec![9; 3200]).unwrap();
                     let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
@@ -543,6 +566,30 @@ async fn bridge_command_batch_forwards_each_steps_wait() {
     assert_eq!(r["completed"], 2, "{r}");
     assert_eq!(r["results"][0]["result"]["wait"], false, "{r}");
     assert_eq!(r["results"][1]["result"]["wait"], true, "{r}");
+    client.cancel().await.unwrap();
+    app.abort();
+}
+
+/// #514: `ui_pointer` forwards `button` (a right-click opens the layer menu or the Brush Preset
+/// picker) and rejects arguments it doesn't forward instead of dropping them.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_ui_pointer_forwards_the_button_and_rejects_unknown_arguments() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let events = json!([{"kind": "down", "x": 5, "y": 6}, {"kind": "up", "x": 5, "y": 6}]);
+    let sent = json_of(&call(&client, "ui_pointer", json!({"events": events, "button": "right", "modifiers": {"command": true}})).await);
+    assert_eq!(sent, json!({"events": events, "button": "right", "modifiers": {"command": true}}));
+    let sent = json_of(&call(&client, "ui_pointer", json!({"events": events})).await);
+    assert_eq!(sent, json!({"events": events}), "unset fields are not sent");
+    for bad in [json!({"events": events, "buton": "right"}), json!({"events": events, "space": true})] {
+        let Value::Object(args) = bad.clone() else { unreachable!() };
+        let r = client.call_tool(CallToolRequestParams::new("ui_pointer").with_arguments(args)).await;
+        assert!(!r.as_ref().is_ok_and(|r| r.is_error != Some(true)), "{bad} accepted: {r:?}");
+    }
+    let tools = client.list_all_tools().await.unwrap();
+    let schema = &tools.iter().find(|t| t.name == "ui_pointer").unwrap().input_schema;
+    assert_eq!(schema.get("additionalProperties"), Some(&json!(false)), "{schema:?}");
+    assert!(schema.get("properties").and_then(|p| p.get("button")).is_some(), "{schema:?}");
     client.cancel().await.unwrap();
     app.abort();
 }

@@ -84,7 +84,7 @@ the tests enforce it):
 
 - English (`en`), the source language.
 - Japanese (`ja`), complete.
-- Simplified Chinese (`zh-hans`; see [`localization-zh-hans.md`](localization-zh-hans.md)), partial.
+- Simplified Chinese (`zh-hans`; see [`localization-zh-hans.md`](localization-zh-hans.md)), complete.
 - Traditional Chinese (`zh-hant`), complete, in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`,
   `zh-MO` and `zh-Hant-*` locales all resolve to it. The resolver distinguishes the two Chinese
   scripts, so neither catalog is shown to the other script's locales.
@@ -107,10 +107,17 @@ the tests enforce it):
 
 Localised so far: menus, the command palette, dialogs and panels (literals wrapped in `tl!("…")`;
 widgets such as `checkbox`, `slider_row`, `dropdown` and the buttons translate their labels
-themselves). A test fails when a `tl!` literal, a menu string, a blend mode name or a generated
+themselves). A test fails when a `tl!` literal, a menu string, a blend mode name, brush section name or a generated
 preference label has no entry in a language marked `complete_menus`. Not translated: status-bar
 messages and errors (they stay English, also for agents), names that are user data (layers, styles,
 documents), strings assembled with `format!` that were not converted to `fmt`/`trn`. Not done yet:
 per-language font fallback (the CJK fallback prefers Japanese forms), right-to-left layout,
 locale-aware number and date formats, automatic language detection on the web build (native
 builds read `LANG`/`LC_*`, the macOS preferred languages and the Windows user locale).
+
+Camera Raw has explicit coverage for all seven available languages, including the partial
+Simplified Chinese catalog. Its contextual `cameraRaw` entries distinguish tonal regions,
+colour-band names and font-weight Light. The title uses a `{layer}` placeholder; user layer
+names and the universal RGB/Lab channel symbols stay unchanged. Collapse IDs use English
+source keys, so switching languages preserves open sections. Mixer tabs wrap within the
+panel width. Catalog coverage and actual shell language-switch tests enforce these rules.

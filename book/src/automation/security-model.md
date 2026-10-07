@@ -11,7 +11,7 @@ Automation requests are untrusted input with potential effects beyond the active
 | MCP capability scopes | **Partial:** filesystem read/write capabilities only; general tool scopes are absent |
 | Allowed read/write roots | **Implemented:** separate launch-time roots, with absent authority failing closed |
 | Symlink-safe capability filesystem | **Implemented:** relative operations use held directory capabilities and reject link escapes |
-| Request-byte and JSON-depth limits | **Partial:** 1 MiB request-line limit; no explicit JSON-depth policy |
+| Request-byte and JSON-depth limits | **Partial:** 1 MiB request-line limit on TCP and headless JSON-lines stdio (MCP stdio input is not byte-capped); no explicit JSON-depth policy |
 | Batch-step limit | **Implemented:** 256 steps for headless and MCP batches |
 | Reply-size limit | **Implemented:** 8 MiB encoded JSON/MCP result; aggregate batch reply budget |
 | Headless preview budgets | **Implemented:** 2048-pixel requested edge, 67,108,864 source pixels, 5 MiB encoded PNG |

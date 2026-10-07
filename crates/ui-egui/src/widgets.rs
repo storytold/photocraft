@@ -299,6 +299,11 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     // Painted text: name the button for accessibility (and so tests and agents can find it).
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    if resp.has_focus() {
+        // Keyboard focus (Tab); clicks don't focus egui buttons.
+        let r = if t.pro { h / 2.0 } else { t.radius_sm } + 2.0;
+        ui.painter().rect_stroke(rect.expand(2.0), r, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+    }
     if t.pro {
         // Spectrum buttons: fully rounded; primary = filled accent, secondary = outline.
         let down = resp.is_pointer_button_down_on();
@@ -334,6 +339,17 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
     }
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
     resp
+}
+
+/// Cached RGB data; drawing work is bounded by the 256 display bins, never the image size.
+pub fn rgb_histogram(ui: &mut Ui, histogram: &photocraft_algo::histogram::RgbHistogram, height: f32) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(1.0), height.max(1.0)), egui::Sense::hover());
+    ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
+    let plot = rect.shrink(4.0);
+    crate::rgb_histogram::paint(ui.painter(), plot, histogram, &t);
+    ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+    response
 }
 
 /// Small caps section label.
@@ -379,6 +395,53 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, op
             }
         }
     });
+    changed
+}
+
+/// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
+/// closes it. While open, its left edge stays where it first showed (at the swatch, or further
+/// left when the window edge needs it), below the swatch or above it as room allows. The picker's
+/// width follows its value readouts, and placing it anew every frame moved it under the pointer,
+/// flipping it from side to side near the right edge of the window (#534).
+pub fn swatch_popup(swatch: &Response) -> egui::Popup<'static> {
+    // Room for the readouts to widen after the picker opened.
+    const SLACK: f32 = 32.0;
+    let popup = egui::Popup::from_toggle_button_response(swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let ctx = &swatch.ctx;
+    let key = popup.get_id().with("left");
+    if !popup.is_open() {
+        ctx.data_mut(|d| d.remove::<f32>(key));
+        return popup;
+    }
+    // Its width is known from the frame after it opened (egui sizes it unseen first).
+    let left = ctx.data(|d| d.get_temp::<f32>(key)).or_else(|| {
+        let width = popup.get_expected_size()?.x;
+        let screen = ctx.content_rect();
+        let left = swatch.rect.left().min(screen.right() - width - SLACK).max(screen.left());
+        ctx.data_mut(|d| d.insert_temp(key, left));
+        Some(left)
+    });
+    let Some(left) = left else { return popup };
+    popup
+        .anchor(Rect::from_x_y_ranges(left..=left, swatch.rect.y_range()))
+        .align(egui::RectAlign::BOTTOM_START)
+        .align_alternatives(&[egui::RectAlign::TOP_START])
+}
+
+pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str, &str)], width: f32) -> bool {
+    let label = options.iter().find(|(v, _, _)| v == current).map(|(_, l, _)| tl!(l)).unwrap_or("—");
+    let mut changed = false;
+    let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+        for (v, l, tip) in options {
+            if ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip)).clicked() {
+                *current = v.clone();
+                changed = true;
+            }
+        }
+    });
+    if let Some((_, _, tip)) = options.iter().find(|(v, _, _)| v == current) {
+        let _ = response.response.on_hover_text(tl!(tip));
+    }
     changed
 }
 

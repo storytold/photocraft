@@ -287,6 +287,30 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
 }
 
 #[test]
+fn mixer_brush_options_update_the_persisted_mixer_settings() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = options_bar_harness(crate::state::Tool::MixerBrush);
+    for label in ["Wet", "Load", "Mix", "Flow", "Sample All Layers"] {
+        assert!(h.get_by_label(label).rect().is_positive(), "missing Mixer Brush option {label}");
+    }
+
+    let initial = h.state().session.journal.len();
+    let at = h.get_by_label("Sample All Layers").rect().center();
+    h.hover_at(at);
+    h.run();
+    h.drag_at(at);
+    h.run();
+    h.drop_at(at);
+    h.run_steps(2);
+
+    assert!(h.state().session.tools.brush.mixer.sample_all_layers);
+    assert_eq!(h.state().session.journal.len(), initial + 1);
+    let (id, params) = h.state().session.journal.last().unwrap();
+    assert_eq!(id, "tools.setBrush");
+    assert_eq!(params["brush"]["mixer"]["sampleAllLayers"], true);
+}
+
+#[test]
 fn drop_targets_and_actions_reorder_presets() {
     use crate::brushes_tab::{Action, apply, drop_target, group_key};
     let mut app = app();
@@ -422,23 +446,60 @@ fn brushes_panel_groups_collapse_and_filter() {
 /// A fresh session with the Brush tool: shortcuts, the options bar and the Brush Settings window,
 /// in the default theme (#258).
 fn app_harness() -> Harness<'static, PhotocraftApp> {
+    app_harness_with_language(crate::i18n::Lang::EN)
+}
+
+fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PhotocraftApp> {
     let mut app = app();
     app.ui.tool = crate::state::Tool::Brush;
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
+            let previous = crate::i18n::current();
+            crate::i18n::set_current(lang);
             crate::shortcuts::handle(app, &ctx);
             crate::panels::options_bar(app, ui);
             window(app, &ctx);
+            crate::i18n::set_current(previous);
         },
         app,
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
     h.run_steps(4);
     h
+}
+
+#[test]
+fn brush_sections_paint_simplified_chinese_labels_and_heading() {
+    fn collect_text(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let zh = crate::i18n::Lang::from_code("zh-hans").unwrap();
+    let mut h = app_harness_with_language(zh);
+    h.key_press(egui::Key::F5);
+    h.run_steps(3);
+    let mut painted = Vec::new();
+    for shape in &h.output().shapes {
+        collect_text(&shape.shape, &mut painted);
+    }
+    for (name, _) in SECTIONS {
+        let translated = crate::i18n::tr(zh, name);
+        assert!(painted.iter().any(|s| s == translated), "{name} must paint as {translated}");
+        assert!(!painted.iter().any(|s| s == name), "{name} must not paint in English");
+    }
+    let heading = crate::i18n::tr(zh, "Brush Tip Shape");
+    assert_eq!(painted.iter().filter(|s| s.as_str() == heading).count(), 2, "both the section row and heading are translated");
 }
 
 #[test]

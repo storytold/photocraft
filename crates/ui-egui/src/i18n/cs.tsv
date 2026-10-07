@@ -181,8 +181,13 @@
 	Lab Color	Barvy Lab
 	Multichannel	Vícekanálový
 	8 Bits/Channel	8 bitů/kanál
+	8 bit	8 bitů
+	Integer	Celé číslo
 	16 Bits/Channel	16 bitů/kanál
+	16 bit	16 bitů
 	32 Bits/Channel	32 bitů/kanál
+	32 bit (float)	32 bitů (float)
+	Floating point	Číslo s plovoucí desetinnou čárkou
 	Color Table…	Tabulka barev…
 	Bitmap…	Bitmapa…
 	Duotone…	Dvoutón…
@@ -265,6 +270,7 @@
 	Layer Style	Styl vrstvy
 	Blending Options…	Možnosti prolnutí…
 	Bevel & Emboss…	Úkos a reliéf…
+	Use Global Light	Použít globální světlo
 	Inner Shadow…	Vnitřní stín…
 	Inner Glow…	Vnitřní záře…
 	Satin…	Satén…
@@ -970,9 +976,12 @@
 	Drag to move the active shape's path or the Work Path	Tažením přesunete cestu aktivního tvaru nebo pracovní cestu
 	Draw with the Pen tool (P) or make a work path from a selection.	Kreslete nástrojem pero (P) nebo vytvořte pracovní cestu z výběru.
 	Drop an image or PSD anywhere to open it.	Přetáhněte sem obrázek nebo PSD a otevře se.
+	Native file drag-and-drop is unavailable	Nativní přetahování souborů ve Waylandu není dostupné
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Nativní přetahování souborů ve Waylandu zatím není podporováno. Použijte Soubor › Otevřít nebo spusťte PhotoCraft v XWayland s `WAYLAND_DISPLAY= photocraft`.
 	Duplicate Layers…	Duplikovat vrstvy…
 	Duplicate style	Duplikovat styl
 	Edit Toolbar…	Upravit panel nástrojů…
+	Use File › Open to open an image.	Obrázek otevřete přes Soubor › Otevřít.
 	Edit in Quick Mask Mode  (Q)	Upravit v režimu rychlé masky  (Q)
 	Edit in Standard Mode  (Q)	Upravit ve standardním režimu  (Q)
 	Effects	Efekty
@@ -1681,6 +1690,8 @@
 	Doc: {flat}/{layered}	Dok.: {flat}/{layered}
 	Scratch: {size}	Odkládací: {size}
 	Untagged {mode}	{mode} bez profilu
+	Invalid {mode} profile	Neplatný profil {mode}
+	Unnamed {mode} profile	Bezejmenný profil {mode}
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Rozlišení: {dpi} pixelů/palec
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
@@ -1830,6 +1841,7 @@
 	Show only crosshair while painting	Při malování zobrazit jen nitkový kříž
 	Show slice numbers	Zobrazit čísla řezů
 	Show tooltips	Zobrazit popisky nástrojů
+	Show bounding box when dragging layer	Při přetahování vrstvy zobrazit ohraničovací rámeček
 	Show transformation values	Zobrazit hodnoty transformace
 	Slice color	Barva řezů
 	Smart guide color	Barva chytrých vodítek
@@ -1950,6 +1962,7 @@
 	Brush Projection	Projekce štětce
 	Apply the pen's tilt and rotation to the tip shape	Použít náklon a natočení pera na tvar hrotu
 	Mixer Brush	Míchací štětec
+	Mixer Brush Tool	Nástroj Míchací štětec
 	Wet	Vlhkost
 	Mix	Míchání
 	Wetness Jitter	Kolísání vlhkosti
@@ -1996,3 +2009,50 @@
 	Opening…	Otevírání…
 	Reading…	Načítání…
 	Working…	Zpracování…
+
+# Rendering mode and recovery
+	Rendering Mode	Režim vykreslování
+	Automatic (recommended)	Automaticky (doporučeno)
+	CPU / Compatibility	CPU / Kompatibilita
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Automatický režim používá dostupnou GPU a při chybě přejde na CPU.
+	Switched to CPU rendering	Přepnuto na vykreslování CPU
+	GPU acceleration could not continue. Your documents are unchanged.	Akcelerace GPU nemohla pokračovat. Dokumenty zůstaly nezměněny.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft skládá obraz pomocí CPU. Okno může nadále používat grafický adaptér.
+	Retry GPU requires a restart. Save your work first.	Opakování GPU vyžaduje restart. Nejprve uložte práci.
+	Keep Using CPU	Pokračovat s CPU
+	Retry GPU	Zkusit GPU znovu
+	Advanced	Pokročilé
+	GPU Backend	Backend GPU
+	Details	Podrobnosti
+
+	Rendering mode	Režim vykreslování
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Laso zmrazení: tažením zmrazíte oblast, tažením s klávesou Alt ji rozmrazíte (L)
+
+	Shadow Clipping Warning (U)	Varování oříznutí stínů (U)
+	Highlight Clipping Warning (O)	Varování oříznutí světel (O)
+	Show Lab Color Readouts	Zobrazit hodnoty barev Lab
+	Show Vectorscope	Zobrazit vektorskop
+	Show Red at 3 o'clock	Zobrazit červenou na třetí hodině
+	Show Skin Tone Indicator	Zobrazit indikátor pleťových tónů
+	Tone Histogram	Histogram tónů
+	Show Selected Region	Zobrazit vybranou oblast
+
+cameraRaw	Light	Světlo
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Filtr Camera Raw ({layer})
+cameraRaw	Red	Červené
+cameraRaw	Orange	Oranžové
+cameraRaw	Yellow	Žluté
+cameraRaw	Green	Zelené
+cameraRaw	Aqua	Tyrkysové
+cameraRaw	Blue	Modré
+cameraRaw	Purple	Fialové
+cameraRaw	Magenta	Purpurové
+cameraRaw	Blending	Míchání
+cameraRaw	Luminance	Jas
+cameraRaw	Temperature	Barevná teplota
+cameraRaw	Color	Barvy
+	Patch Tool	Nástroj záplata
+	Patch:	Záplata:
+	Lasso around an area, then drag the selection	Obtáhněte oblast lasem a pak přetáhněte výběr
