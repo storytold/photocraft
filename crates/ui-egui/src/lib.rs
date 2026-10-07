@@ -76,6 +76,7 @@ pub mod move_mods;
 pub mod move_ui;
 pub mod new_doc_ui;
 pub mod notices;
+mod opacity_keys;
 pub mod outline;
 pub mod paint_mouse;
 pub mod palette;
@@ -251,6 +252,8 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
+    pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
@@ -377,6 +380,7 @@ impl PhotocraftApp {
             brush_resize: None,
             brush_resize_armed: false,
             alt_sampling: false,
+            opacity_keys: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
             queued_screenshots: Vec::new(),
