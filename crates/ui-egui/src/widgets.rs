@@ -241,6 +241,8 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
         // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
         *value = if lo <= hi { v.clamp(lo, hi) } else { v };
         ui.memory_mut(|m| m.request_focus(resp.id));
+        // The text stays selected, as in Photoshop: typing after a step replaces the value.
+        crate::field_tab::select_all(ui.ctx(), resp.id, &if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
         resp.mark_changed();
     }
     (resp, rect)
@@ -368,6 +370,8 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
         ui.memory_mut(|m| m.request_focus(id));
     }
+    // Tab in a dialog goes from one of these to the next (field_tab.rs).
+    crate::field_tab::register(&ctx, id);
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
