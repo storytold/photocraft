@@ -25,6 +25,42 @@ keyboard nudges and deletion, at most 16 points. Camera Raw commits one `filter.
 OK; scope interaction never edits the document. Double-clicking a Camera Raw smart filter reopens
 this dialog with its stored settings and the pixels below it; OK updates that filter in place.
 
+## PSD Smart Filters
+
+Camera Raw is read and written as a live PSD Smart Filter (`Adobe Camera Raw Filter`, filter id
+2783). The verified subset covers filter-relative Temperature/Tint with custom white balance,
+Light, Texture/Clarity/Dehaze/Vibrance/Saturation, the parametric curve, four point curves,
+all eight HSL bands, all four Color Grading wheels and Blending/Balance, sharpening,
+noise amounts/detail, grain and the numeric post-crop vignette controls. Point curves contain
+2–16 points with integer Input/Output levels; resetting one writes the linear endpoints.
+PSD stores slider levels and curve coordinates as integers while PhotoCraft's sliders are
+continuous: PSD export rounds them to the nearest level (hues of 360° are written as 0°),
+so a re-opened PSD shows whole numbers. Exposure and sharpening radius stay fractional.
+The mapping comes from two revisions of a user-supplied Photoshop PSD written by Camera Raw
+18.4 (process 6). Process 5's
+corresponding version pair is also recognized; other versions remain opaque.
+
+Imported filters keep their original descriptor in `params.__cameraRawPsd`. Unchanged settings,
+including the exact stored exposure double, are preserved; editing patches only changed mapped
+fields. The template survives `.pcraft`, undo and reopening the Camera Raw dialog. Descriptors
+with unrecognized processing fields remain `psd.unsupportedFilter`: their data survives a PSD
+save, but their settings cannot be edited or re-rendered by PhotoCraft. Non-default PhotoCraft
+settings without a verified PSD mapping cause the existing export warning and omission of that
+filter; they are never silently written as default Camera Raw settings.
+
+Active manual lens distortion/vignetting, luminance-noise contrast, color-noise smoothness,
+post-crop vignette style (`PCVS`, still unverified) and highlights, RAW Kelvin white balance,
+masks and HDR still need mapping and/or rendering support. Observed neutral-only controls are
+retained in the template; non-neutral values keep the filter opaque. In the updated fixture,
+Distortion −28, Lens Vignetting 28 and `PCVS=1` keep the entire filter opaque, while all settings
+survive PSD and `.pcraft` saves. Its supported controls are also checked as a descriptor-only
+projection with those three fields removed; that projection does not replace the source filter.
+
+Matching settings does not
+claim matching pixels: PhotoCraft uses its own develop pipeline. PSD round trips and descriptor
+patching are checked locally; reopening PhotoCraft-generated exports in Photoshop is a separate
+acceptance check.
+
 ## Layering and bounds
 
 Analysis lives in L2 `photocraft-algo` (`histogram`, `vectorscope`), colour transforms in L0
@@ -51,7 +87,8 @@ scopes, probes, hover and tessellation). GPU upload and presentation are not inc
 
 - HDR histograms, output and display: no suitable HDR hardware was available for validation.
   Float input and counters outside 0–1 do not imply HDR support.
-- Persisting Camera Raw as a PSD Smart Filter (see the file-compatibility scorecard).
+- PSD Camera Raw settings outside the verified develop subset described above, and
+  pixel-identical Adobe Camera Raw rendering (see the file-compatibility scorecard).
 - Camera Raw's own mask authoring; scopes use the document selection.
 
 References: [Adobe, Make color and tonal adjustments](https://helpx.adobe.com/camera-raw/desktop/using/make-color-tonal-adjustments-camera.html),

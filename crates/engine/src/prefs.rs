@@ -804,8 +804,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.alwaysCreateSmartObjectsWhenPlacing",
     "general.animatedZoom",
     "general.zoomResizesWindows",
-    "general.useLegacyFreeTransform",
-    "interface.uiFontSize",
     "interface.showChannelsInColor",
     "interface.dynamicColorSliders",
     "workspace.autoCollapseIconPanels",
@@ -823,7 +821,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "fileHandling.lowercaseExtension",
     "fileHandling.saveInBackground",
     "fileHandling.ignoreExifProfileTag",
-    "fileHandling.askBeforeSavingLayeredTiff",
     "fileHandling.maximizePsdCompatibility",
     "performance.cacheLevels",
     "performance.effectCacheMb",
@@ -1435,7 +1432,14 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
             for (id, v) in m {
                 let Some(sc) = v.as_str().and_then(normalize_shortcut) else { continue };
                 for (c, def) in bindable() {
-                    if c != id && next.shortcut(c, def).and_then(normalize_shortcut).as_deref() == Some(sc.as_str()) {
+                    // Never strip a command that this same call is assigning:
+                    // two entries for one key are a clash inside the call, which
+                    // the returned conflicts list reports (#719). Stripping
+                    // each other here unbound both silently.
+                    if c == id || m.contains_key(c) {
+                        continue;
+                    }
+                    if next.shortcut(c, def).and_then(normalize_shortcut).as_deref() == Some(sc.as_str()) {
                         next.shortcuts.insert(c.to_string(), String::new());
                     }
                 }

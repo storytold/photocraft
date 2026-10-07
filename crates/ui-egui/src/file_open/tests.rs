@@ -78,6 +78,40 @@ fn file_open_dialog_sets_path_so_save_writes_in_place() {
 }
 
 #[test]
+fn file_open_dialog_opens_every_selected_path() {
+    let dir = std::env::temp_dir().join(format!("photocraft-issue-595-open-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths = ["one.psd", "two.png"].map(|name| {
+        let path = dir.join(name);
+        std::fs::write(&path, b"x").unwrap();
+        path.to_string_lossy().into_owned()
+    });
+    let (mut app, _) = app_with(None, None);
+    let selected = paths.to_vec();
+    app.services.pick_open_paths = Some(Box::new(move || Some(selected.clone())));
+
+    menus::invoke(&mut app, &egui::Context::default(), "file.open", json!({})).unwrap();
+
+    assert_eq!(app.session.documents().len(), 2);
+    assert_eq!(
+        app.session.documents().iter().map(|doc| doc.path.as_deref()).collect::<Vec<_>>(),
+        paths.iter().map(|path| Some(path.as_str())).collect::<Vec<_>>()
+    );
+    assert_eq!(app.ui.recent_files, vec![paths[1].clone(), paths[0].clone()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancelling_multi_file_open_does_not_fall_back_to_single_file_picker() {
+    let (mut app, _) = app_with(Some(("/pics/unexpected.psd".into(), b"x".to_vec())), None);
+    app.services.pick_open_paths = Some(Box::new(|| None));
+
+    menus::invoke(&mut app, &egui::Context::default(), "file.open", json!({})).unwrap();
+
+    assert!(app.session.documents().is_empty());
+}
+
+#[test]
 fn pcraft_documents_save_in_place_but_flat_files_ask() {
     let (mut app, written) = app_with(None, None);
     let ctx = egui::Context::default();
@@ -89,6 +123,28 @@ fn pcraft_documents_save_in_place_but_flat_files_ask() {
     app.open_file("/pics/flat.png", b"x").unwrap();
     assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap_err(), "cancelled");
     assert_eq!(written.borrow().len(), 1);
+}
+
+#[test]
+fn templates_open_as_new_untitled_documents() {
+    let (mut app, written) = app_with(None, None);
+    let ctx = egui::Context::default();
+    app.open_file("/pics/card.PSDT", b"x").unwrap();
+    app.open_file("/pics/card.psdt", b"x").unwrap();
+    let names: Vec<_> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+    assert_eq!(names, ["Untitled-1", "Untitled-2"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none()));
+    assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("/pics/card.psdt"));
+    // File › Save asks for a new name (cancelled here) rather than suggesting the template.
+    let suggested: Rc<RefCell<Vec<String>>> = Rc::default();
+    let rec = suggested.clone();
+    app.services.pick_save = Some(Box::new(move |s: &str| {
+        rec.borrow_mut().push(s.to_string());
+        None
+    }));
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap_err(), "cancelled");
+    assert_eq!(*suggested.borrow(), ["Untitled-2.psd"]);
+    assert!(written.borrow().is_empty());
 }
 
 #[test]

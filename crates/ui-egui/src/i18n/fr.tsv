@@ -515,6 +515,7 @@
 	Flame…	Flamme…
 	Lens Flare…	Reflet d'objectif…
 	Lighting Effects…	Effets d'éclairage…
+	Relight…	Rééclairage…
 	Picture Frame…	Cadre d'image…
 	Tree…	Arbre…
 	Sharpen	Netteté
@@ -950,6 +951,8 @@
 	Divide…	Diviser…
 	Document	Document
 	Don't Save	Ne pas enregistrer
+	No	Non
+	Yes	Oui
 	Done	Terminé
 	Dots	Points
 	Drag a rectangle around the object	Tracez un rectangle autour de l'objet
@@ -2497,3 +2500,13 @@ cameraRaw	Blending	Fusion
 	5 x 5	5 × 5
 	Grid:	Grille :
 	Edit Type	Modifier le texte
+	No patterns	Aucun motif
+	Enable {name}	Activer {name}
+	Hold Alt while drawing for straight segments	Maintenez Alt en dessinant pour des segments droits
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Faites glisser ou cliquez des points de polygone · maintenez Alt pendant le lasso pour des segments droits · {add} ajouter · {sub} avant de dessiner soustrait
+	TIFF Options	Options TIFF
+	Including layers will increase file size.	L'inclusion des calques augmentera la taille du fichier.
+	Discard Layers and Save a Copy	Supprimer les calques et enregistrer une copie
+	Don't show again	Ne plus afficher
+	Save failed: {error}	Échec de l'enregistrement : {error}
+	Save cancelled	Enregistrement annulé

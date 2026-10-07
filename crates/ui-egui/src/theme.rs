@@ -9,6 +9,7 @@
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
+use photocraft_engine::prefs::UiFontSize;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -342,10 +343,79 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
+    let size = ui_font_size(ctx);
+    for (name, data) in &mut fonts.font_data {
+        size_ui_font(ctx, name, Arc::make_mut(data));
+    }
     ctx.set_fonts(fonts);
+    ctx.add_plugin(UiFontSizePlugin { applied: size });
     // Japanese / Chinese / Korean fallback fonts (craft-fonts' Japanese ones if built in, then
     // the system's) are registered on demand (cjk_fonts.rs).
     crate::cjk_fonts::install_with(ctx, cjk);
+}
+
+fn ui_fonts_id() -> egui::Id {
+    egui::Id::new("photocraft-ui-fonts")
+}
+
+fn ui_font_size(ctx: &egui::Context) -> UiFontSize {
+    ctx.data(|d| d.get_temp::<UiFontSize>(ui_fonts_id())).unwrap_or_default()
+}
+
+fn font_scale(size: UiFontSize) -> f32 {
+    match size {
+        UiFontSize::Tiny => 10.0 / 12.0,
+        UiFontSize::Small => 1.0,
+        UiFontSize::Medium => 14.0 / 12.0,
+        UiFontSize::Large => 16.0 / 12.0,
+    }
+}
+
+/// Register the original multiplier before sizing a face, including lazy CJK fallbacks.
+pub(crate) fn size_ui_font(ctx: &egui::Context, name: &str, data: &mut FontData) {
+    ctx.data_mut(|d| d.insert_temp(ui_fonts_id().with(name), data.tweak.scale));
+    data.tweak.scale *= font_scale(ui_font_size(ctx));
+}
+
+/// Apply Interface › UI Font Size independently of display/canvas zoom. Scaling the registered
+/// faces covers explicit RichText and painter font sizes as well as egui's text styles. egui
+/// 0.36 uses these tweaks in shaping and row metrics; the layout tests below guard that contract.
+pub(crate) fn set_ui_font_size(ctx: &egui::Context, size: UiFontSize) {
+    if ui_font_size(ctx) == size {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(ui_fonts_id(), size));
+    ctx.request_repaint();
+}
+
+/// Font access is valid after the first pass, including when preferences load before it.
+/// Keep only the original multipliers, not a second copy of large system font files.
+struct UiFontSizePlugin {
+    applied: UiFontSize,
+}
+
+impl egui::Plugin for UiFontSizePlugin {
+    fn debug_name(&self) -> &'static str {
+        "photocraft-ui-font-size"
+    }
+
+    fn output_hook(&mut self, ctx: &egui::Context, _output: &mut egui::FullOutput) {
+        let size = ui_font_size(ctx);
+        if size == self.applied {
+            return;
+        }
+        // Start from the current stack so lazily registered fallback faces are retained.
+        let mut fonts = ctx.fonts(|f| f.definitions().clone());
+        for (name, data) in &mut fonts.font_data {
+            let id = ui_fonts_id().with(name);
+            let original = ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(data.tweak.scale / font_scale(self.applied));
+            ctx.data_mut(|d| d.insert_temp(id, original));
+            Arc::make_mut(data).tweak.scale = original * font_scale(size);
+        }
+        ctx.set_fonts(fonts);
+        self.applied = size;
+        ctx.request_repaint();
+    }
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -442,6 +512,45 @@ pub fn canvas_bg(t: &Tokens) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text_sizes(ctx: &egui::Context) -> Vec<egui::Vec2> {
+        let mut sizes = Vec::new();
+        // The plugin queues changed fonts at the end of a pass; egui applies them next pass.
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        ctx.run_ui(Default::default(), |ui| {
+            // Include custom painter fonts and explicit RichText sizes, not just text styles.
+            for font in [FontId::proportional(11.5), medium(12.0), semibold(15.0), mono(12.0), TextStyle::Body.resolve(ui.style())] {
+                sizes.push(ui.painter().layout_no_wrap("Interface 123".into(), font, Color32::WHITE).size());
+            }
+            sizes.push(ui.label(egui::RichText::new("Interface 123").size(13.0)).rect.size());
+        })
+        .textures_delta
+        .clear();
+        sizes
+    }
+
+    #[test]
+    fn ui_font_sizes_scale_shaping_and_row_height_without_accumulating() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        apply(&ctx, ThemeKind::Pro);
+        let original = text_sizes(&ctx);
+        let definitions = ctx.fonts(|f| f.definitions().clone());
+        for size in [UiFontSize::Tiny, UiFontSize::Small, UiFontSize::Medium, UiFontSize::Large, UiFontSize::Tiny, UiFontSize::Small] {
+            set_ui_font_size(&ctx, size);
+            let measured = text_sizes(&ctx);
+            for (before, after) in original.iter().zip(&measured) {
+                let expected = *before * font_scale(size);
+                assert!((after.x - expected.x).abs() < 1.0, "{size:?}: width {after:?} vs {expected:?}");
+                // egui rounds ascent/descent and the final row height to pixels separately.
+                assert!((after.y - expected.y).abs() < 1.1, "{size:?}: height {after:?} vs {expected:?}");
+            }
+            set_ui_font_size(&ctx, size);
+            assert_eq!(text_sizes(&ctx), measured, "setting the same size twice is stable");
+        }
+        assert_eq!(ctx.fonts(|f| f.definitions().clone()), definitions, "Small restores original font tweaks exactly");
+        assert_eq!(ctx.zoom_factor(), 1.0);
+    }
 
     #[test]
     fn theme_names_parse() {

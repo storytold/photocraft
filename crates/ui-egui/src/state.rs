@@ -521,6 +521,34 @@ impl Default for ToolOptions {
     }
 }
 
+/// Edit › Transform's mode: what a handle drag does with no modifier keys held.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransformMode {
+    /// Free Transform, Scale and Rotate.
+    #[default]
+    Free,
+    /// Edge handles skew.
+    Skew,
+    /// Corner handles move freely, one at a time; nothing else moves them (no rotating, no
+    /// edges) and nothing snaps.
+    Distort,
+    /// Corner handles move in pairs, mirrored (one-point perspective).
+    Perspective,
+}
+
+impl TransformMode {
+    /// The mode an `edit.transform.*` / `edit.freeTransform` menu id starts.
+    pub fn for_command(id: &str) -> Self {
+        match id {
+            "edit.transform.skew" => Self::Skew,
+            "edit.transform.distort" => Self::Distort,
+            "edit.transform.perspective" => Self::Perspective,
+            _ => Self::Free,
+        }
+    }
+}
+
 /// Free Transform in progress: the source frame `rect` and where its corners currently are.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransformSession {
@@ -546,6 +574,9 @@ pub struct TransformSession {
     /// and OK folds it into the transform's history step (#352).
     #[serde(default)]
     pub copy: bool,
+    /// Edit › Transform › Skew / Distort / Perspective (`Free` for Free Transform).
+    #[serde(default)]
+    pub mode: TransformMode,
 }
 
 /// In-progress inline type editing (Type tool). Offsets are character indices.
@@ -601,6 +632,14 @@ pub struct DockTabs {
     pub character: usize,
 }
 
+/// Color panel state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorPanelState {
+    /// The panel edits the background colour (its chip was clicked), not the foreground.
+    pub background: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
@@ -650,9 +689,9 @@ pub struct UiState {
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
-    /// Recorded actions (Actions panel).
+    /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
-    pub actions: crate::actions::Actions,
+    pub actions: crate::actions::ActionsUi,
     /// Layer Comps panel: the selected comp (by comp id).
     #[serde(default)]
     pub layer_comp_selected: Option<u32>,
@@ -690,6 +729,9 @@ pub struct UiState {
     /// Right-dock group order, heights and collapsed groups (see `dock`).
     #[serde(default)]
     pub dock: crate::dock::DockLayout,
+    /// Which chip the Color panel edits.
+    #[serde(default)]
+    pub color_panel: ColorPanelState,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
     #[serde(default)]
     pub brush_section: usize,
@@ -770,6 +812,7 @@ impl Default for UiState {
             palette_open: false,
             dock_tabs: DockTabs::default(),
             dock: Default::default(),
+            color_panel: Default::default(),
             brush_section: 0,
             brush_tab: 0,
             brushes_panel: Default::default(),

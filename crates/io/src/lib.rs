@@ -13,6 +13,8 @@
 //! * Camera raws (DNG, CR2, uncompressed / lossless TIFF-EP raws) via
 //!   `photocraft-raw`, developed into a 16-bit ProPhoto RGB "Background"
 //!   layer; unsupported raw variants fall back to the embedded JPEG preview.
+//! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
+//!   layers through the PSD path and are written back the same way; see `tiff_layers`.
 //! * Every other format goes through `photocraft-codecs` as a single
 //!   "Background" layer (depth and Gray/RGB/CMYK model preserved).
 //!
@@ -40,6 +42,7 @@ pub mod raw;
 pub mod slices_map;
 pub mod smart_map;
 pub mod text_styles_map;
+pub mod tiff_layers;
 pub mod vector_map;
 
 use photocraft_codecs::{CodecError, EncodeOptions};
@@ -95,13 +98,40 @@ pub struct ExportResult {
     pub warnings: Vec<String>,
 }
 
+/// Which part of the document's XMP packet a flat export embeds. Layered saves (PSD, PSB,
+/// `.pcraft`) always keep everything. Save As and conversions keep the whole packet, as
+/// Photoshop's Save As does; Export As starts at `None`, because the packet lists the text of
+/// every type layer and one id per placed document (#647).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XmpEmbed {
+    /// Embed the document's whole XMP packet.
+    #[default]
+    All,
+    /// Embed no XMP.
+    None,
+}
+
 /// Export options.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ExportOptions {
     /// Codec options for flat formats.
     pub encode: EncodeOptions,
     /// Write PSB even for `.psd` names when the document is small.
     pub force_psb: bool,
+    /// TIFF: keep the layers (Photoshop layer data in tag 37724). Off by default, so scripted
+    /// and agent saves (CLI, batch, MCP) write a flat TIFF unless they ask for layers; the app's
+    /// Save As sets it from its Layers option, which keeps them as Photoshop does. `false` is
+    /// Photoshop's "Discard Layers and Save a Copy".
+    pub tiff_layers: bool,
+    /// Which part of the document's XMP packet a flat export embeds (PSD/PSB/`.pcraft`
+    /// always keep everything). Everything by default, as Save As does; Export As offers None.
+    pub xmp: XmpEmbed,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        ExportOptions { encode: EncodeOptions::default(), force_psb: false, tiff_layers: false, xmp: XmpEmbed::All }
+    }
 }
 
 /// `true` if `bytes` start with the PSD/PSB signature.
@@ -164,7 +194,7 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
         return Ok(ExportResult { bytes: photocraft_format::save_to_bytes(doc, &previews)?, warnings: Vec::new() });
     }
     if ext == "psd" || ext == "psb" {
-        let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb" };
+        let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", ..Default::default() };
         let (file, warnings) = document_to_psd_with(doc, &o);
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;
@@ -172,6 +202,9 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
         return Ok(ExportResult { bytes, warnings });
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
+    if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
+        return tiff_layers::export_layered(doc, opts);
+    }
     flat::export_flat(doc, format, opts)
 }
 

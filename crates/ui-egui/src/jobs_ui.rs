@@ -71,6 +71,7 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 /// Open a file in the background: a tab appears at once and shows the progress; the document
 /// replaces it when decoded. `path` is remembered for File › Save and Open Recent.
 pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
+    let name = &app.open_name(name);
     match app.session.start_open(name, source).map_err(|e| e.to_string())? {
         // Inline (wasm): finish now, like a background open that ended at once.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v),
@@ -193,11 +194,8 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     app.session.set_active(index);
-    if let (Some(p), Some(st)) = (path, app.session.active_mut()) {
-        st.path = Some(p.to_string());
-    }
     if let Some(p) = path {
-        app.push_recent(p);
+        app.opened_from(p);
     }
     app.sync_views();
     app.ui.status = format!("Opened {name}");
@@ -263,7 +261,7 @@ pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(percent(&j)).color(t.text_dim).size(11.5).monospace());
     let (br, _) = ui.allocate_exact_size(vec2(bar_w, bar_h), Sense::hover());
     bar(ui, br, shown_fraction(&j), &t);
-    let label = if more > 0 { format!("{} (+{more})", j.label) } else { j.label.clone() };
+    let label = if more > 0 { format!("{} (+{more})", tl!(&j.label)) } else { tl!(&j.label).to_owned() };
     ui.label(RichText::new(label).color(t.text_dim).size(12.0));
     if xresp.clicked() {
         cancel(app, j.id);
@@ -283,7 +281,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Photoshop doesn't dim the window behind its progress dialog either.
     let modal = egui::Modal::new(egui::Id::new("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
         ui.set_width(360.0);
-        ui.label(RichText::new(&j.label).font(crate::theme::semibold(15.0)));
+        ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(10.0);

@@ -34,7 +34,9 @@ jobs:
         run: |
           "$RUNNER_TEMP/actionlint" -color
       - name: shellcheck
-        run: shellcheck packaging/*.sh packaging/*/*.sh
+        run: shellcheck packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
+      - name: AppImage AppRun desktop integration
+        run: bash packaging/linux/apprun-test.sh
       - name: PowerShell
         shell: pwsh
         run: |

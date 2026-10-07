@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::TransformSession;
+use crate::state::{Tool, TransformMode, TransformSession};
 
 /// Which Split button is armed. The guide follows the pointer and the split is added on release.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,6 +64,8 @@ pub struct TransformPreview {
     /// Option-click places a split without a button armed.
     split_quick: bool,
     steps: Steps,
+    /// The tool the session began with: picking another one applies the transform.
+    tool: Tool,
 }
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
@@ -176,6 +178,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         split_placing: false,
         split_quick: false,
         steps: Steps::default(),
+        tool: app.ui.tool,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -188,6 +191,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         selection: false,
         target: None,
         copy: false,
+        mode: Default::default(),
     });
     start_steps(app);
     Ok(())
@@ -274,6 +278,7 @@ fn begin_lone(
         split_placing: false,
         split_quick: false,
         steps: Steps::default(),
+        tool: app.ui.tool,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -286,6 +291,7 @@ fn begin_lone(
         selection: false,
         target: Some(target),
         copy: false,
+        mode: Default::default(),
     });
     start_steps(app);
     Ok(())
@@ -331,6 +337,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         split_placing: false,
         split_quick: false,
         steps: Steps::default(),
+        tool: app.ui.tool,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -343,6 +350,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         selection: true,
         target: None,
         copy: false,
+        mode: Default::default(),
     });
     start_steps(app);
     Ok(())
@@ -507,6 +515,18 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
 }
 
+/// A transform whose layer or document went away (undo, close) ends silently; picking another tool
+/// applies it. Checked every frame and before each pointer event, so a press with a tool chosen
+/// just before it (`ui.pointer`'s `tool`) goes to that tool.
+pub fn end_if_left(app: &mut PhotocraftApp) {
+    let Some(t) = &app.ui.transform else { return };
+    if app.session.active().and_then(|s| s.doc.layer(LayerId(t.layer))).is_none() {
+        cancel(app);
+    } else if app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool) {
+        commit(app);
+    }
+}
+
 pub fn cancel(app: &mut PhotocraftApp) {
     let copy = app.ui.transform.take().is_some_and(|t| t.copy);
     app.transform_preview = None;
@@ -641,19 +661,50 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 s.pivot = [x, y];
                 h = Hit::Pivot;
             }
-            pv.gesture = Some(Gesture { hit: h, start: [x, y], quad0: t.quad, pivot0: t.pivot });
+            // Distort only moves corners (and the whole box from inside): no rotating, no edges.
+            pv.gesture = distort_allows(t.mode, h).then_some(Gesture { hit: h, start: [x, y], quad0: t.quad, pivot0: t.pivot });
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
             let g = pv.gesture;
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.gesture = None;
             }
+            let legacy = app.session.prefs().general.use_legacy_free_transform;
             if let (Some(g), Some(s)) = (g, app.ui.transform.as_mut()) {
-                apply_drag(s, g, [x, y], mods);
+                apply_drag(s, g, [x, y], mode_mods(t.mode, g.hit, corner_mods(legacy, g.hit, mods)));
             }
         }
     }
     true
+}
+
+/// Preferences › General › Use Legacy Free Transform: corner drags stretch freely and ⇧ keeps
+/// the proportions, the reverse of the default (proportional, ⇧ frees them).
+fn corner_mods(legacy: bool, hit: Hit, mut mods: egui::Modifiers) -> egui::Modifiers {
+    if legacy && matches!(hit, Hit::Corner(_)) && !mods.command {
+        mods.shift = !mods.shift;
+    }
+    mods
+}
+
+/// Skew / Distort / Perspective modes: a handle drag acts as if that gesture's keys were held
+/// (⌘-drag an edge skews, ⌘-drag a corner distorts, ⌘⌥⇧-drag a corner adds perspective).
+fn mode_mods(mode: TransformMode, hit: Hit, mut mods: egui::Modifiers) -> egui::Modifiers {
+    match (mode, hit) {
+        (TransformMode::Skew, Hit::Edge(_)) | (TransformMode::Distort, Hit::Corner(_)) => mods.command = true,
+        (TransformMode::Perspective, Hit::Corner(_)) => {
+            mods.command = true;
+            mods.alt = true;
+            mods.shift = true;
+        }
+        _ => {}
+    }
+    mods
+}
+
+/// In Distort mode only corner drags (and moving the box from inside) do anything.
+fn distort_allows(mode: TransformMode, h: Hit) -> bool {
+    mode != TransformMode::Distort || !matches!(h, Hit::Outside | Hit::Edge(_))
 }
 
 fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Modifiers) {
@@ -780,7 +831,8 @@ fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Mod
                     r[1] = 2.0 * pv - r[3];
                 }
             }
-            // Corners scale proportionally by default (Photoshop CC); ⇧ frees them.
+            // Corners scale proportionally by default; ⇧ frees them (the legacy preference swaps
+            // the two, `corner_mods`).
             let corner = matches!(g.hit, Hit::Corner(_));
             if corner && !mods.shift {
                 let (sx, sy) = (r[2] - r[0], r[3] - r[1]);
@@ -967,6 +1019,11 @@ pub fn edit_session_warp(app: &mut PhotocraftApp, id: &str, params: &serde_json:
     let r = app.session.execute(id, p).map_err(|e| e.to_string())?;
     let raw = r.get("warp").cloned().ok_or_else(|| "warp command returned no mesh".to_string())?;
     let nw: Warp = serde_json::from_value(raw).map_err(|e| e.to_string())?;
+    // A warp-edit command can replace the mesh while pointer input is split across control
+    // requests. Any drag index captured from the old mesh is invalid once that happens.
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.warp_drag = None;
+    }
     if let Some(t) = app.ui.transform.as_mut() {
         t.warp = Some(nw);
     }
@@ -996,7 +1053,11 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon>
         }
         return Some(if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() { CursorIcon::Crosshair } else { CursorIcon::Default });
     }
-    Some(match hit(t, p, tol) {
+    let h = hit(t, p, tol);
+    if !distort_allows(t.mode, h) {
+        return Some(CursorIcon::Default);
+    }
+    Some(match h {
         Hit::Corner(0 | 2) => CursorIcon::ResizeNwSe,
         Hit::Corner(_) => CursorIcon::ResizeNeSw,
         Hit::Edge(0 | 2) => CursorIcon::ResizeVertical,
@@ -1476,6 +1537,7 @@ mod tests {
             selection: false,
             target: None,
             copy: false,
+            mode: Default::default(),
         }
     }
 
@@ -1748,6 +1810,122 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
     }
 
+    /// #670: picking another tool applies the open transform, as one history step.
+    #[test]
+    fn picking_another_tool_applies_the_transform() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Move;
+        let steps = app.session.active().unwrap().history.past_len();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        if let Some(t) = h.state_mut().ui.transform.as_mut() {
+            t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+        }
+        h.run_steps(2);
+        assert!(h.state().ui.transform.is_some(), "open while the tool stays");
+        h.key_press(egui::Key::B);
+        h.run_steps(2);
+        let app = h.state();
+        assert_eq!(app.ui.tool, Tool::Brush);
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+        let st = app.session.active().unwrap();
+        assert_eq!(st.history.past_len(), steps + 1);
+        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(28, 8, 44, 24));
+    }
+
+    /// A control-channel stroke that picks another tool applies the box first, then paints.
+    #[test]
+    fn a_pointer_request_with_another_tool_applies_the_transform_first() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Move;
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        if let Some(t) = app.ui.transform.as_mut() {
+            t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+        }
+        let steps = app.session.active().unwrap().history.past_len();
+        let ev = |kind: &str, x: f64| json!({"kind": kind, "x": x, "y": 50.0});
+        let events = json!([ev("down", 4.0), ev("move", 32.0), ev("move", 60.0), ev("up", 60.0)]);
+        let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", json!({"tool": "brush", "events": events}));
+        let _ = crate::control::handle(&mut app, &ctx, &req);
+        assert!(app.ui.transform.is_none());
+        let st = app.session.active().unwrap();
+        assert_eq!(st.history.past_len(), steps + 2, "the transform, then the stroke");
+        let b = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+        assert!(b.x0 < 8 && b.x1 >= 44 && b.y0 == 8 && b.y1 > 50, "moved square and stroke: {b:?}");
+    }
+
+    /// Drags with real pointer events (snapping off so the drops land exactly).
+    fn press_drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], m: egui::Modifiers) {
+        crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
+        crate::canvas::tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, m);
+    }
+
+    #[test]
+    fn distort_mode_moves_one_corner_and_ignores_rotate_and_edges() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.extras.snap = false;
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "edit.transform.distort", json!({})).unwrap();
+        let q0 = app.ui.transform.as_ref().unwrap().quad;
+        assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Distort);
+        // Outside (rotate) and an edge handle do nothing in Distort.
+        press_drag(&mut app, [44.0, 44.0], [54.0, 10.0], egui::Modifiers::NONE);
+        press_drag(&mut app, [24.0, 16.0], [34.0, 16.0], egui::Modifiers::NONE);
+        assert_eq!(app.ui.transform.as_ref().unwrap().quad, q0);
+        // A corner moves alone, with no keys held.
+        press_drag(&mut app, q0[1], [q0[1][0] + 7.0, q0[1][1] - 5.0], egui::Modifiers::NONE);
+        let q = app.ui.transform.as_ref().unwrap().quad;
+        assert_eq!(q[1], [q0[1][0] + 7.0, q0[1][1] - 5.0]);
+        assert_eq!([q[0], q[2], q[3]], [q0[0], q0[2], q0[3]]);
+        // Free Transform from the menu switches the live box back.
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Free);
+    }
+
+    #[test]
+    fn the_legacy_preference_swaps_corner_proportions() {
+        let none = egui::Modifiers::NONE;
+        let corner = Hit::Corner(1);
+        // Default: proportional (⇧ frees), so the drag keeps its keys.
+        assert!(!corner_mods(false, corner, none).shift);
+        // Legacy: free by default, ⇧ keeps proportions; edges and ⌘ gestures are left alone.
+        assert!(corner_mods(true, corner, none).shift);
+        assert!(!corner_mods(true, corner, egui::Modifiers::SHIFT).shift);
+        assert!(!corner_mods(true, Hit::Edge(1), none).shift);
+        assert!(!corner_mods(true, corner, egui::Modifiers::COMMAND).shift);
+        // Through the box: a plain corner drag on a 16×16 square.
+        for (legacy, proportional) in [(false, true), (true, false)] {
+            let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+            app.ui.extras.snap = false;
+            app.session.prefs.edit(|p| p.general.use_legacy_free_transform = legacy);
+            begin(&mut app, &egui::Context::default()).unwrap();
+            let q0 = app.ui.transform.as_ref().unwrap().quad;
+            press_drag(&mut app, q0[2], [q0[2][0] + 16.0, q0[2][1]], none);
+            let q = app.ui.transform.as_ref().unwrap().quad;
+            let (w, h) = (q[2][0] - q[0][0], q[2][1] - q[0][1]);
+            assert_eq!((w - h).abs() < 1e-6, proportional, "legacy {legacy}: {w} × {h}");
+        }
+    }
+
+    #[test]
+    fn right_click_while_transforming_switches_the_mode() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap();
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        let ids: Vec<&str> = crate::canvas_tool_menu::menu_entries(&menu).iter().map(|e| e.1).collect();
+        assert!(ids.contains(&"edit.transform.distort") && ids.contains(&"edit.freeTransform"));
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.distort");
+        assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Distort);
+    }
+
     fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();
@@ -1918,6 +2096,25 @@ mod tests {
         begin_warp(&mut app, &ctx).unwrap();
         leave_warp(&mut app);
         assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    }
+
+    #[test]
+    fn replacing_the_warp_mesh_cancels_a_pending_point_drag() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+        let ctx = egui::Context::default();
+        begin_warp(&mut app, &ctx).unwrap();
+        for _ in 0..3 {
+            split(&mut app, "edit.transform.splitWarpCrosswise", None).unwrap();
+        }
+
+        pointer(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_some(), "the anchor drag is armed");
+
+        split(&mut app, "edit.transform.removeWarpSplit", None).unwrap();
+        assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none(), "the old mesh index is discarded");
+
+        // A later control-channel move belongs to the old gesture and must be harmless.
+        pointer(&mut app, ToolEvent::Move { x: 40.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
     }
 
     /// A press on a preset warp that misses its points leaves the preset alone (no invisible undo

@@ -527,6 +527,7 @@
 	Flame…	火焰…
 	Lens Flare…	镜头光晕…
 	Lighting Effects…	光照效果…
+	Relight…	重新打光…
 	Picture Frame…	相框…
 	Tree…	树…
 	Sharpen	锐化
@@ -965,6 +966,8 @@
 	Divide…	划分…
 	Document	文档
 	Don't Save	不保存
+	No	否
+	Yes	是
 	Done	完成
 	Dots	点
 	Drag a rectangle around the object	围绕对象拖出矩形
@@ -1922,7 +1925,6 @@
 	5 x 5	5 × 5
 	Grid:	网格：
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	冻结套索：拖动以冻结区域，按住 Alt 拖动以解冻 (L)
-
 	Shadow Clipping Warning (U)	阴影剪切警告 (U)
 	Highlight Clipping Warning (O)	高光剪切警告 (O)
 	Show Lab Color Readouts	显示 Lab 颜色读数
@@ -1931,9 +1933,7 @@
 	Show Skin Tone Indicator	显示肤色指示线
 	Tone Histogram	色调直方图
 	Show Selected Region	显示选定区域
-
 cameraRaw	Light	光线
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 滤镜（{layer}）
 cameraRaw	Lights	亮调
@@ -2048,7 +2048,6 @@ cameraRaw	Blending	混合
 	Use tablet pressure	使用数位板压感
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。
-
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
 	Cancel opening	取消打开
 	Cancelled opening {name}	已取消打开 {name}
@@ -2059,7 +2058,6 @@ cameraRaw	Blending	混合
 	Opening…	正在打开…
 	Reading…	正在读取…
 	Working…	正在处理…
-
 # Rendering mode and recovery
 	Rendering Mode	渲染模式
 	Automatic (recommended)	自动（推荐）
@@ -2076,3 +2074,13 @@ cameraRaw	Blending	混合
 	Details	详细信息
 	Rendering mode	渲染模式
 	Edit Type	编辑文字
+	No patterns	无图案
+	Enable {name}	启用{name}
+	Hold Alt while drawing for straight segments	绘制中按住 Alt 可逐点连接直线
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	拖动圈选或逐点绘制 · 圈选中按住 Alt 画直线 · {add} 添加 · 起笔前按 {sub} 减去
+	TIFF Options	TIFF 选项
+	Including layers will increase file size.	包含图层会增加文件大小。
+	Discard Layers and Save a Copy	扔掉图层并存储副本
+	Don't show again	不再显示
+	Save failed: {error}	存储失败：{error}
+	Save cancelled	已取消存储

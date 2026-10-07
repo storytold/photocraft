@@ -704,7 +704,27 @@ fn label_of(key: &str) -> String {
             out.push(c);
         }
     }
-    out
+    let translated = tl!(&out);
+    if translated != out {
+        return translated.to_owned();
+    }
+    // Fall back to the Title Case filter label's translation, but keep the sentence-case
+    // English when that is untranslated too (English and partial catalogs read as before).
+    let title = crate::filter_dialog::label(key);
+    if title == crate::filter_dialog::source_label(key) { out } else { title }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::label_of;
+
+    #[test]
+    fn untranslated_form_labels_stay_sentence_case() {
+        crate::i18n::with_language(crate::i18n::Lang::EN, || {
+            assert_eq!(label_of("useAntialias"), "Use antialias");
+            assert_eq!(label_of("radius"), "Radius");
+        });
+    }
 }
 
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
@@ -740,11 +760,11 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 Value::Number(n) => {
                     ui.label(label_of(&k));
                     if let Some(mut i) = n.as_i64() {
-                        ui.add(egui::DragValue::new(&mut i));
+                        ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num));
                         json!(i)
                     } else {
                         let mut x = n.as_f64().unwrap_or(0.0);
-                        ui.add(egui::DragValue::new(&mut x).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num));
                         json!(x)
                     }
                 }
@@ -898,12 +918,10 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             json!({"format": ["jpg", "png", "psd", "tiff"]}),
         ),
         "file.automate.batch" => {
-            let a = &app.ui.actions;
-            let action = a.selected.and_then(|i| a.list.get(i)).or(a.list.first());
-            let Some(action) = action else {
+            let Some(action) = crate::actions::selected_action(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
             };
-            let steps: Vec<Value> = action.steps.iter().map(|(id, p)| json!([id, p])).collect();
+            let steps = crate::actions::action_steps(action);
             let name = action.name.clone();
             dialog(
                 app,

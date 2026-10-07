@@ -7,7 +7,7 @@
 //! command, so it is journaled, drivable, and persisted by the preset store.
 
 use egui::{Color32, RichText, Sense, Stroke, pos2, vec2};
-use photocraft_engine::paint::BrushPreset;
+use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
 use serde_json::json;
 
 use crate::brush_panel::{BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, full_uv, grouped_presets, is_current, new_preset_name, run_or_status};
@@ -270,10 +270,17 @@ fn rename_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, acts: &mut Vec<Action>
             resp.request_focus();
         }
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if widgets::primary_button(ui, tl!("OK"), 52.0).clicked() || enter {
+        let clicked = widgets::dialog_buttons(
+            ui,
+            &[
+                widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 52.0),
+                widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 60.0),
+            ],
+        );
+        if clicked == Some(widgets::ButtonRole::Default) || enter {
             acts.push(Action::Rename(r.clone()));
         }
-        if widgets::secondary_button(ui, tl!("Cancel"), 60.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if clicked == Some(widgets::ButtonRole::Cancel) || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             cancel = true;
         }
     });
@@ -293,15 +300,15 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(RichText::new(tl!("Size")).color(t.text_dim));
         let mut lv = b.size.max(1.0).ln();
         ui.add_sized(vec2(WIDTH - 140.0, 18.0), |ui: &mut egui::Ui| {
-            let r = widgets::slider(ui, &mut lv, 0.0..=5000f32.ln(), None);
+            let r = widgets::slider(ui, &mut lv, 0.0..=MAX_BRUSH_SIZE.ln(), None);
             if r.changed() {
-                b.size = lv.exp().round().clamp(1.0, 5000.0);
+                b.size = lv.exp().round().clamp(1.0, MAX_BRUSH_SIZE);
             }
             r
         });
         let mut s = b.size;
-        if widgets::value_field(ui, &mut s, 1.0..=5000.0, "px", 74.0).changed() {
-            b.size = s.round().clamp(1.0, 5000.0);
+        if widgets::value_field(ui, &mut s, 1.0..=MAX_BRUSH_SIZE, "px", 74.0).changed() {
+            b.size = s.round().clamp(1.0, MAX_BRUSH_SIZE);
         }
     });
     commit_gesture(app, ui.ctx(), &before, &b);

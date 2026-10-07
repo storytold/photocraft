@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::state::{Dialog, DialogKind};
+use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 
 /// Where this frame's dialogs are on screen (the canvas reads last frame's: it draws first).
 const RECTS: &str = "pc-dialog-rects";
@@ -169,7 +170,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 if matches!(d.kind, DialogKind::About | DialogKind::Error) {
-                    if crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked() {
+                    if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)]).is_some() {
                         outcome = Some(false);
                     }
                 } else {
@@ -180,15 +181,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     } else {
                         crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                     };
-                    if crate::widgets::primary_button(ui, ok_label, 84.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        outcome = Some(true);
-                    }
-                    if d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&fields) {
+                    let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
+                    let cancel = DialogButton::new(ButtonRole::Cancel, if d.kind == DialogKind::NewDocument { tl!("Close") } else { tl!("Cancel") }, 84.0);
+                    let clicked = if d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&fields) {
                         let changed = crate::prefs_ui::preferences_changed(app, &fields);
-                        apply_requested = ui.add_enabled_ui(changed, |ui| crate::widgets::secondary_button(ui, tl!("Apply"), 84.0)).inner.clicked();
-                    }
-                    if crate::widgets::secondary_button(ui, if d.kind == DialogKind::NewDocument { tl!("Close") } else { tl!("Cancel") }, 84.0).clicked() {
-                        outcome = Some(false);
+                        dialog_buttons(ui, &[ok, cancel, DialogButton::new(ButtonRole::Apply, tl!("Apply"), 84.0).enabled(changed)])
+                    } else {
+                        dialog_buttons(ui, &[ok, cancel])
+                    };
+                    match clicked {
+                        Some(ButtonRole::Cancel) => outcome = Some(false),
+                        Some(ButtonRole::Apply) => apply_requested = true,
+                        Some(_) => outcome = Some(true),
+                        None if ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+                        None => {}
                     }
                 }
             });

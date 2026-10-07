@@ -23,10 +23,11 @@ pub mod orientation;
 pub mod web;
 
 pub use crate::codecs::png::encode_indexed as encode_png_indexed;
+pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::error::CodecError;
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
 pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
-pub use crate::image::{ChannelLayout, DecodeWarning, Image, Metadata, SampleType};
+pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, Metadata, SampleType};
 pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use half::f16;
@@ -85,6 +86,16 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         l.check(img.height(), img.width(), img.layout(), img.sample_type())?;
     }
     img.oriented(o)
+}
+
+/// Deep OpenEXR samples (`deepscanline`/`deeptile`): the structured per-pixel sample lists
+/// (colour, alpha and Z per sample), for callers that composite deep data themselves —
+/// [`decode_as_with`] instead flattens a deep file into a normal [`Image`] with a
+/// [`DecodeWarning::DeepFlattened`]. `Err(Unsupported)` when the file has no deep part.
+pub fn decode_deep_exr(bytes: &[u8], limits: &Limits) -> Result<DeepImage, CodecError> {
+    let mut cur = std::io::Cursor::new(bytes);
+    let meta = ::exr::meta::MetaData::read_from_buffered(&mut cur, false).map_err(|e| CodecError::malformed(Format::OpenExr, e))?;
+    codecs::deep_exr::decode_deep(&meta, bytes, limits)
 }
 
 /// Encode `image` as `format`. Conversions follow the same plan that

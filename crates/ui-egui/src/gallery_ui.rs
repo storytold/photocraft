@@ -357,7 +357,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.rect_filled(title, 0.0, t.dock);
         painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
         let pct = if d.zoom > 0.0 { format!("{:.0}%", d.zoom * 100.0) } else { tl!("Fit").into() };
-        let name = d.effects.get(d.selected).map_or("", |e| e.filter.name());
+        let name = d.effects.get(d.selected).map_or("", |e| tl!(e.filter.name()));
         painter.text(title.center(), Align2::CENTER_CENTER, format!("{name} ({}, {pct})", d.layer_name), FontId::proportional(13.0), t.text);
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
         let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
@@ -395,7 +395,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if widgets::dropdown(&mut zb, "gallery-zoom", &mut z, &opts, 110.0) {
             d.zoom = z;
         }
-        zb.label(egui::RichText::new(format!("preview {:.0} ms", d.preview_ms)).color(t.text_faint).size(11.0));
+        zb.label(egui::RichText::new(format!("{} {:.0} ms", tl!("Preview"), d.preview_ms)).color(t.text_faint).size(11.0));
 
         // ---- Category folders with thumbnails ----
         painter.rect_filled(mid, 0.0, t.dock);
@@ -408,7 +408,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 let r = ui.horizontal(|ui| {
                     let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                     crate::icons::paint(ui, ir, icon, 14.0, t.icon);
-                    ui.add(egui::Label::new(egui::RichText::new(*cat).color(t.text)).sense(Sense::click()))
+                    ui.add(egui::Label::new(egui::RichText::new(tl!(*cat)).color(t.text)).sense(Sense::click()))
                 });
                 if r.inner.clicked() {
                     d.open[ci] = !d.open[ci];
@@ -434,7 +434,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             ui.painter().rect_stroke(r, 0.0, stroke, egui::StrokeKind::Outside);
                             ui.add_sized(
                                 [THUMB[0] as f32, 14.0],
-                                egui::Label::new(egui::RichText::new(f.name()).size(10.5).color(if selected { t.text } else { t.text_dim })).truncate(),
+                                egui::Label::new(egui::RichText::new(tl!(f.name())).size(10.5).color(if selected { t.text } else { t.text_dim })).truncate(),
                             );
                             resp
                         });
@@ -457,11 +457,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut ru = ui.new_child(egui::UiBuilder::new().max_rect(inner));
         ru.spacing_mut().item_spacing.y = 6.0;
         ru.horizontal(|ui| {
-            if widgets::primary_button(ui, tl!("OK"), 120.0).clicked() {
-                action = Some("ok");
-            }
-            if widgets::secondary_button(ui, tl!("Cancel"), 120.0).clicked() {
-                action = Some("cancel");
+            if let Some(role) = widgets::dialog_buttons(
+                ui,
+                &[
+                    widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 120.0),
+                    widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 120.0),
+                ],
+            ) {
+                action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
             }
         });
         ru.add_space(4.0);
@@ -539,7 +542,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.painter().text(
                     row.left_center() + vec2(28.0, 0.0),
                     Align2::LEFT_CENTER,
-                    d.effects[i].filter.name(),
+                    tl!(d.effects[i].filter.name()),
                     FontId::proportional(12.5),
                     if d.effects[i].visible { t.text } else { t.text_faint },
                 );

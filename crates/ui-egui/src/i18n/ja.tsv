@@ -527,6 +527,7 @@
 	Flame…	炎…
 	Lens Flare…	レンズフレア…
 	Lighting Effects…	照明効果…
+	Relight…	再照明…
 	Picture Frame…	フレーム…
 	Tree…	木…
 	Sharpen	シャープ
@@ -965,6 +966,8 @@
 	Divide…	分割…
 	Document	ドキュメント
 	Don't Save	保存しない
+	No	いいえ
+	Yes	はい
 	Done	完了
 	Dots	ドット
 	Drag a rectangle around the object	オブジェクトを囲む矩形をドラッグ
@@ -2009,7 +2012,6 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	グリッド:
-
 # Rendering mode and recovery
 	Rendering Mode	レンダリングモード
 	Automatic (recommended)	自動（推奨）
@@ -2024,10 +2026,8 @@
 	Advanced	詳細設定
 	GPU Backend	GPUバックエンド
 	Details	詳細
-
 	Rendering mode	レンダリングモード
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	フリーズなげなわ：ドラッグで範囲をフリーズ、Alt+ドラッグで解凍 (L)
-
 	Shadow Clipping Warning (U)	シャドウのクリッピング警告 (U)
 	Highlight Clipping Warning (O)	ハイライトのクリッピング警告 (O)
 	Show Lab Color Readouts	Lab カラー値を表示
@@ -2036,9 +2036,7 @@
 	Show Skin Tone Indicator	スキントーン指標を表示
 	Tone Histogram	階調ヒストグラム
 	Show Selected Region	選択範囲を表示
-
 cameraRaw	Light	ライト
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw フィルター ({layer})
 cameraRaw	Lights	明部
@@ -2050,3 +2048,13 @@ cameraRaw	Color	カラー
 	Patch:	パッチ:
 	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
 	Edit Type	文字を編集
+	No patterns	パターンなし
+	Enable {name}	{name}を有効にする
+	Hold Alt while drawing for straight segments	描画中に Alt を押すと直線セグメントになります
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	ドラッグまたは多角形の点をクリック · なげなわ中に Alt で直線セグメント · {add} 追加 · 描画前の {sub} で削除
+	TIFF Options	TIFF オプション
+	Including layers will increase file size.	レイヤーを含めるとファイルサイズが大きくなります。
+	Discard Layers and Save a Copy	レイヤーを破棄してコピーを保存
+	Don't show again	次回から表示しない
+	Save failed: {error}	保存に失敗しました: {error}
+	Save cancelled	保存をキャンセルしました

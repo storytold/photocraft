@@ -517,3 +517,31 @@ fn a_maximized_window_or_an_unknown_monitor_uses_the_whole_window() {
     let h = harness((1366.0, 768.0, 1.0));
     assert_eq!(crate::work_area::visible_rect(&h.ctx), h.ctx.content_rect());
 }
+
+/// One gesture: press a menu title (it opens on the press, not the release), drag down to an
+/// item and release on it to run it. A plain click still opens the menu and leaves it open.
+#[test]
+fn press_drag_release_runs_a_menu_item() {
+    use egui::{Modifiers, PointerButton};
+    let mut h = harness((1280.0, 720.0, 1.0));
+    let rulers = h.state().ui.extras.rulers;
+    let title = h.get_by_label("View").rect().center();
+    h.event(egui::Event::PointerMoved(title));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(Nav::current(&h.ctx).rows.first().is_some_and(|r| !r.is_empty()), "the menu opens on the press");
+    let item = h.get_by_label_contains("Rulers").rect().center();
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(title + (item - title) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: item, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert_eq!(h.state().ui.extras.rulers, !rulers, "releasing on Rulers ran it");
+    assert!(Nav::current(&h.ctx).rows.first().is_none_or(|r| r.is_empty()), "and closed the menu");
+    // A click (press and release on the title) opens the menu and leaves it open.
+    h.get_by_label("View").click();
+    h.run_steps(4);
+    assert!(Nav::current(&h.ctx).rows.first().is_some_and(|r| !r.is_empty()), "a click leaves it open");
+}

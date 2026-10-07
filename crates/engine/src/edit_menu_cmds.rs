@@ -303,10 +303,20 @@ fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
     }
 }
 
-fn rect_param(p: &Value, key: &str) -> Option<Rect> {
-    let a = p.get(key)?.as_array()?;
-    let n = |i: usize| a.get(i).and_then(Value::as_f64).map(|v| v.round() as i32);
-    Some(Rect::new(n(0)?, n(1)?, n(0)? + n(2)?.max(0), n(1)? + n(3)?.max(0)))
+/// `key` as an `[x, y, w, h]` rectangle. The saturating float→int casts bound each component;
+/// the additions saturate too — `area: [1e30, 0, 1e30, 10]` is a whole-canvas window, not an
+/// overflow (it panicked in debug builds before the `saturating_add`).
+fn rect_param(p: &Value, key: &str, cmd: &str) -> Result<Rect> {
+    let a = p.get(key).and_then(Value::as_array).ok_or_else(|| bad(cmd, format!("`{key}` must be [x, y, w, h]")))?;
+    let n = |i: usize| {
+        a.get(i)
+            .and_then(Value::as_f64)
+            .filter(|f| f.is_finite())
+            .map(|v| v.round() as i32)
+            .ok_or_else(|| bad(cmd, format!("`{key}` must be four finite numbers")))
+    };
+    let (x, y, w, h) = (n(0)?, n(1)?, n(2)?, n(3)?);
+    Ok(Rect::new(x, y, x.saturating_add(w.max(0)), y.saturating_add(h.max(0))))
 }
 
 fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
@@ -323,7 +333,7 @@ fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let ext = hb.width().max(hb.height()) as i32;
     let sampling = str_or(p, "sampling", "auto").to_string();
     let custom_mask: Option<Surface> = p.get("channel").and_then(|v| channel_mask(&doc, v)).cloned();
-    let custom_rect = rect_param(p, "area");
+    let custom_rect = if p.get("area").is_some() { Some(rect_param(p, "area", cmd)?) } else { None };
     let window = match sampling.as_str() {
         "auto" => hb.inflate((ext * 3 / 4).max(32)),
         "rectangular" => hb.inflate(int(p, "margin").map_or(ext.max(16), |m| m.clamp(0, 100_000) as i32)),
@@ -730,7 +740,8 @@ fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
             let cursor = s.edit_state.find_cursor;
             let start = cursor.and_then(|(id, _, _)| layers.iter().position(|l| *l == id)).unwrap_or(0);
             for k in 0..=layers.len() {
-                let id = layers[(start + k) % layers.len().max(1)];
+                // `allLayers: false` with a non-type layer active leaves no layers to search (#703).
+                let Some(&id) = layers.get((start + k) % layers.len().max(1)) else { break };
                 let Some(text) = text_of(&doc, id) else { continue };
                 let ms = find_matches(&text, &find, case, whole);
                 let hit = match (k, cursor) {
