@@ -414,20 +414,30 @@ fn update_all(s: &mut Session) -> Result<Value> {
     Ok(json!({"updated": n}))
 }
 
-fn installed_families() -> Vec<String> {
-    photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.families().into_iter().map(|f| f.to_lowercase()).collect()
+fn style_font_missing(fonts: &mut photocraft_text::FontDb, style: &photocraft_doc::text::CharStyle) -> bool {
+    if style.font_family.is_empty() || fonts.has_family(&style.font_family) {
+        return false;
+    }
+    // Match layout's choice: an exact PostScript face wins over the import-time family guess;
+    // a heuristic family is usable only when the stored family is unavailable.
+    if let Some(ps) = &style.postscript_name {
+        let resolved = fonts.resolve_postscript(ps);
+        if resolved.exact || fonts.has_family(&resolved.family) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Font families used by type layers that the font database cannot supply.
 pub fn missing_fonts(doc: &Document) -> Vec<String> {
-    let have = installed_families();
+    let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<String> = Vec::new();
     for (_, _, l) in doc.walk() {
         if let LayerContent::Text(t) = &l.content {
             for r in t.char_runs() {
-                let f = r.style.font_family;
-                if !f.is_empty() && !have.contains(&f.to_lowercase()) && !out.contains(&f) {
-                    out.push(f);
+                if style_font_missing(&mut engine.fonts, &r.style) && !out.contains(&r.style.font_family) {
+                    out.push(r.style.font_family);
                 }
             }
         }
@@ -458,7 +468,11 @@ fn replace_fonts(s: &mut Session, map: &serde_json::Map<String, Value>, all: boo
                 let runs = t.char_runs();
                 let mut at = 0;
                 for r in runs {
-                    if let Some(to) = pick(&r.style.font_family) {
+                    let missing_run = {
+                        let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+                        style_font_missing(&mut engine.fonts, &r.style)
+                    };
+                    if missing_run && let Some(to) = pick(&r.style.font_family) {
                         style_range(t, at, at + r.len, &|st| {
                             st.font_family = to.clone();
                             st.postscript_name = None;

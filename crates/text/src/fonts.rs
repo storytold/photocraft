@@ -79,6 +79,8 @@ pub struct FontDb {
     system_loaded: bool,
     /// PostScript name → (family, weight, italic), filled lazily.
     ps_cache: HashMap<String, Option<ResolvedFont>>,
+    /// Built only after a prefix lookup misses; invalidated with the collection.
+    ps_index: Option<HashMap<String, ResolvedFont>>,
     fallbacks: Vec<String>,
 }
 
@@ -96,6 +98,7 @@ impl FontDb {
             fcx: FontContext { collection, source_cache: SourceCache::default() },
             system_loaded: false,
             ps_cache: HashMap::new(),
+            ps_index: None,
             fallbacks: Vec::new(),
         };
         for (_, bytes) in BUNDLED {
@@ -139,6 +142,7 @@ impl FontDb {
                 self.fcx.collection.load_fonts_from_paths([f]);
             }
             self.ps_cache.clear();
+            self.ps_index = None;
             self.refresh_generics();
         }
     }
@@ -168,6 +172,7 @@ impl FontDb {
         // metrics differ from the public family's.
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
         self.ps_cache.clear();
+        self.ps_index = None;
         self.refresh_generics();
         names
     }
@@ -233,7 +238,7 @@ impl FontDb {
             return r.clone();
         }
         let guess = guess_from_postscript(ps);
-        let exact = self.find_exact(ps, &guess.family);
+        let exact = self.find_exact(ps, &guess.family).or_else(|| self.find_indexed(ps));
         let r = exact.unwrap_or_else(|| {
             // Keep the guessed family only if we have it; otherwise let fallback pick.
             let mut g = guess.clone();
@@ -275,6 +280,33 @@ impl FontDb {
         }
         None
     }
+
+    /// PostScript names need not share a prefix (or a script) with localized family names.
+    /// Keep the common prefix path cheap, but index every face on the first miss.
+    fn find_indexed(&mut self, ps: &str) -> Option<ResolvedFont> {
+        if self.ps_index.is_none() {
+            let mut index = HashMap::new();
+            let mut families: Vec<String> = self.fcx.collection.family_names().map(str::to_string).collect();
+            families.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
+            for family in families {
+                let Some(info) = self.fcx.collection.family_by_name(&family) else { continue };
+                for font in info.fonts() {
+                    let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else { continue };
+                    let Ok(fr) = skrifa::FontRef::from_index(blob.as_ref(), font.index()) else { continue };
+                    for name in fr.localized_strings(StringId::POSTSCRIPT_NAME) {
+                        index.entry(name.to_string()).or_insert_with(|| ResolvedFont {
+                            family: info.name().to_string(),
+                            weight: font.weight().value().round() as u16,
+                            italic: !matches!(font.style(), FontStyle::Normal),
+                            exact: true,
+                        });
+                    }
+                }
+            }
+            self.ps_index = Some(index);
+        }
+        self.ps_index.as_ref()?.get(ps).cloned()
+    }
 }
 
 /// Number of faces in a font file (1 for TTF/OTF, n for TTC/OTC, 0 if unreadable).
@@ -286,11 +318,47 @@ pub fn face_count(bytes: &[u8]) -> usize {
     }
 }
 
+// Conservative CamelCase suffixes: a lowercase family ending in "light" is not a style.
+fn split_trailing_style(ps: &str) -> (&str, &str) {
+    let base = ps.trim_end_matches("MT").trim_end_matches("PS");
+    let mut family = base;
+    for suffix in ["Italic", "Oblique"] {
+        if let Some(rest) = family.strip_suffix(suffix).filter(|s| !s.is_empty()) {
+            family = rest;
+            break;
+        }
+    }
+    for suffix in [
+        "ExtraLight",
+        "UltraLight",
+        "ExtraBold",
+        "UltraBold",
+        "SemiBold",
+        "DemiBold",
+        "Hairline",
+        "Regular",
+        "Medium",
+        "Normal",
+        "Heavy",
+        "Black",
+        "Light",
+        "Thin",
+        "Bold",
+        "Demi",
+    ] {
+        if let Some(rest) = family.strip_suffix(suffix).filter(|s| !s.is_empty()) {
+            family = rest;
+            break;
+        }
+    }
+    if family.len() < base.len() { (family, ps.get(family.len()..).unwrap_or("")) } else { (ps, "") }
+}
+
 /// Heuristic PostScript-name split: `MyriadPro-BoldIt` → ("Myriad Pro", 700, italic).
 pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
-    let (fam, style) = ps.split_once('-').unwrap_or((ps, ""));
+    let (fam, style) = ps.split_once('-').unwrap_or_else(|| split_trailing_style(ps));
     let fam = fam.trim_end_matches("MT").trim_end_matches("PS").trim_end_matches("Std").trim_end_matches("Pro");
-    let pro = ps.split_once('-').map_or(ps, |p| p.0);
+    let pro = ps.split_once('-').map_or_else(|| split_trailing_style(ps).0, |p| p.0);
     let suffix = if pro.ends_with("Pro") {
         " Pro"
     } else if pro.ends_with("Std") {

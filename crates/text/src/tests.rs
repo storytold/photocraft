@@ -811,3 +811,53 @@ fn works_without_craft_fonts() {
         assert!(!fb.iter().any(|f| f.contains("BIZ UD")));
     }
 }
+
+#[test]
+fn korean_postscript_names_split_trailing_styles() {
+    for (ps, family, weight, italic) in [
+        ("GmarketSansBold", "Gmarket Sans", 700, false),
+        ("NanumGothicBold", "Nanum Gothic", 700, false),
+        ("GmarketSansTTFBold", "Gmarket Sans TTF", 700, false),
+        ("ExampleSansSemiBoldItalic", "Example Sans", 600, true),
+        ("ExampleSansExtraLight", "Example Sans", 200, false),
+    ] {
+        let r = fonts::guess_from_postscript(ps);
+        assert_eq!((r.family.as_str(), r.weight, r.italic), (family, weight, italic), "{ps}");
+    }
+}
+
+// Change only the PostScript name in the bundled font's name table, in memory.
+// Same-length replacements leave table offsets intact; no new font fixture is shipped.
+fn font_with_unrelated_postscript() -> Vec<u8> {
+    let mut bytes = fonts::INTER_REGULAR.to_vec();
+    let old: Vec<u8> = "Inter-Regular".encode_utf16().flat_map(u16::to_be_bytes).collect();
+    let new: Vec<u8> = "Other-Regular".encode_utf16().flat_map(u16::to_be_bytes).collect();
+    let mut count = 0;
+    for (from, to) in [(old.as_slice(), new.as_slice()), (b"Inter-Regular".as_slice(), b"Other-Regular".as_slice())] {
+        for at in 0..=bytes.len() - from.len() {
+            if &bytes[at..at + from.len()] == from {
+                bytes[at..at + to.len()].copy_from_slice(to);
+                count += 1;
+            }
+        }
+    }
+    assert!(count > 0);
+    bytes
+}
+
+#[test]
+fn postscript_lookup_finds_a_face_outside_the_family_prefix() {
+    let mut db = fonts::FontDb::new();
+    db.register_font_data(font_with_unrelated_postscript());
+    let r = db.resolve_postscript("Other-Regular");
+    assert_eq!((r.family.as_str(), r.weight, r.exact), ("Inter", 400, true));
+    assert_eq!(db.resolve_postscript("Other-Regular"), r);
+}
+
+#[test]
+fn postscript_lookup_refreshes_after_registering_a_font() {
+    let mut db = fonts::FontDb::new();
+    assert!(!db.resolve_postscript("Other-Regular").exact);
+    db.register_font_data(font_with_unrelated_postscript());
+    assert!(db.resolve_postscript("Other-Regular").exact);
+}

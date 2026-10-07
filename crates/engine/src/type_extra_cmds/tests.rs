@@ -282,3 +282,40 @@ fn rasterize_type_layer() {
     assert!(matches!(s.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Raster(_)));
     assert!(!s.is_enabled("type.rasterizeTypeLayer"));
 }
+
+#[test]
+fn installed_postscript_face_is_not_missing_or_replaced() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "test");
+    let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+    let mut runs = t.char_runs();
+    for run in &mut runs {
+        run.style.font_family = "Imported Wrong Family".into();
+        run.style.postscript_name = Some("Inter-SemiBold".into());
+    }
+    t.runs = runs;
+    assert!(missing_fonts(&s.active().unwrap().doc).is_empty());
+    assert_eq!(s.execute("type.replaceAllMissingFonts", json!({})).unwrap()["replaced"], 0);
+    assert_eq!(text(&s, id).char_runs()[0].style.postscript_name.as_deref(), Some("Inter-SemiBold"));
+}
+
+#[test]
+fn replacing_missing_family_preserves_a_resolved_run_with_the_same_label() {
+    let mut s = session(8);
+    let good = text_layer(&mut s, "good");
+    let bad = text_layer(&mut s, "bad");
+    let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    for (id, ps) in [(good, Some("Inter-SemiBold")), (bad, None)] {
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+        let mut runs = t.char_runs();
+        for run in &mut runs {
+            run.style.font_family = "Imported Wrong Family".into();
+            run.style.postscript_name = ps.map(str::to_owned);
+        }
+        t.runs = runs;
+    }
+    assert_eq!(s.execute("type.replaceAllMissingFonts", json!({})).unwrap()["replaced"], 1);
+    assert_eq!(text(&s, good).char_runs()[0].style.postscript_name.as_deref(), Some("Inter-SemiBold"));
+    assert_eq!(text(&s, bad).char_runs()[0].style.font_family, "Inter");
+}
