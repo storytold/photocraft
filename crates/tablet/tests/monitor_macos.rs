@@ -2,6 +2,15 @@
 //! real tablet `NSEvent`s through `-[NSApplication sendEvent:]` (where AppKit runs local
 //! monitors), and check the samples the callback gets; dropping the monitor removes it.
 
+// Compile the same native adapter with cfg(test), so its private main-thread fixture can
+// inject GC candidates without adding test hooks or features to the production API.
+#[cfg(target_os = "macos")]
+use photocraft_tablet::{Error, Sample, Update, appkit, deliver, motion};
+#[cfg(target_os = "macos")]
+#[path = "../src/macos.rs"]
+#[allow(dead_code)] // harness=false explicitly invokes the main-thread fixture only
+mod native;
+
 #[cfg(target_os = "macos")]
 fn main() {
     use std::cell::RefCell;
@@ -44,7 +53,8 @@ fn main() {
     drop(monitor);
     app.sendEvent(&event(CGEventType::LeftMouseDragged, 0.5, (0.0, 0.0), CGEventMouseSubtype::TabletPoint));
     assert_eq!(seen.borrow().len(), 2, "the monitor is gone after drop");
-    println!("monitor_macos: ok");
+    native::tests::bound_motion_on_main_thread();
+    println!("monitor_macos: pen and bound motion paths ok");
 }
 
 #[cfg(not(target_os = "macos"))]

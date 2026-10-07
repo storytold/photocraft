@@ -69,6 +69,24 @@ If the device is lost while running (#243), every GPU entry point checks the dev
 
 Keys are the field names of `theme::Tokens` (`crates/ui-egui/src/theme.rs`). Edit and save the file while the app runs to see changes immediately, with no recompile. This is compiled out of release builds.
 
+## Brush input
+
+Painting consumes ordered motion events and uses a cached native brush outline. Large outlines,
+pixel-snapped Pencil footprints and the web retain their canvas-drawn cursor fallback.
+On macOS, GC motion adds bounded intermediate points aligned to consecutive OS endpoints.
+The OS cursor and acceleration remain authoritative; absent or ambiguous samples automatically
+use the original endpoint. GC callback order estimates the interior path: GC does not expose a
+reliable timestamp per delta, so delayed callbacks cannot be perfectly synchronized. No waiting
+or retroactive stroke edits are introduced. Supported on macOS 14 and later.
+Windows and Linux reuse eframe's relative mouse events (Windows Raw Input, XInput2, and the
+Wayland relative-pointer protocol when available). Multiple relative samples can add an interior
+curve between OS endpoints. Batched absolute positions, missing samples and uncertain geometry
+keep the OS-only path. These normalized events omit device IDs and individual timestamps;
+arrival order and a frame clock provide estimates, not measured device-rate coordinates.
+Hardware and compositor event delivery determine whether extra points are available; no higher
+sampling rate is guaranteed. Pen/touch input and automation retain their existing paths.
+No input-engine switches or comparison windows are exposed.
+
 ## Driving the app programmatically
 
 Start the app with a private token file. It then accepts authenticated JSON lines on `127.0.0.1:7878`:

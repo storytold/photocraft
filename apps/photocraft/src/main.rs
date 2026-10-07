@@ -139,7 +139,9 @@ fn main() -> eframe::Result {
     // loop returns.
     let stylus_feed = photocraft_ui_egui::stylus::StylusFeed::default();
     #[cfg(target_os = "macos")]
-    let _tablet = tablet::install_macos(&stylus_feed);
+    let mouse_motion = photocraft_tablet::motion::Feed::default();
+    #[cfg(target_os = "macos")]
+    let _tablet = tablet::install_macos(&stylus_feed, &mouse_motion);
 
     // Read the displays' ICC profiles while the window opens (colour-managed canvas; `None`
     // where the platform has no reader).
@@ -282,6 +284,35 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = cc.window_handle()
+                    && let RawWindowHandle::AppKit(handle) = handle.as_raw()
+                {
+                    mouse_motion.bind_view(handle.ns_view.as_ptr() as usize);
+                    app.services.motion_samples = Some(Box::new(move |event, zoom| {
+                        use photocraft_ui_egui::MouseMotion;
+                        if !zoom.is_finite() || zoom <= 0.0 {
+                            mouse_motion.clear();
+                            return Vec::new();
+                        }
+                        let native = |p: egui::Pos2| [f64::from(p.x) * f64::from(zoom), f64::from(p.y) * f64::from(zoom)];
+                        match event {
+                            MouseMotion::Move { from, to } => mouse_motion
+                                .take(native(from), native(to))
+                                .into_iter()
+                                .map(|p| egui::pos2((p[0] / f64::from(zoom)) as f32, (p[1] / f64::from(zoom)) as f32))
+                                .collect(),
+                            MouseMotion::Press { position, button } => {
+                                mouse_motion.begin(native(position), button as u8);
+                                Vec::new()
+                            }
+                            MouseMotion::EndFrame => {
+                                mouse_motion.clear();
+                                Vec::new()
+                            }
+                        }
+                    }));
+                }
             }
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor installed above
             // and the X11 reader write into this feed.

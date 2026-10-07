@@ -22,8 +22,8 @@ pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
 /// Install the AppKit tablet monitor (main thread, before the event loop). Keep the result until
 /// the event loop returns. On failure this logs why: pens then paint like a mouse.
 #[cfg(target_os = "macos")]
-pub fn install_macos(feed: &StylusFeed) -> Option<photocraft_tablet::macos::Monitor> {
-    photocraft_tablet::macos::Monitor::install(sink(feed.clone())).map_err(|e| log::warn!("{e}")).ok()
+pub fn install_macos(feed: &StylusFeed, motion: &photocraft_tablet::motion::Feed) -> Option<photocraft_tablet::macos::Monitor> {
+    photocraft_tablet::macos::Monitor::with_motion(sink(feed.clone()), motion.clone()).map_err(|e| log::warn!("{e}")).ok()
 }
 
 /// Start the XInput2 reader when eframe runs on X11. On Wayland, `$DISPLAY` is Xwayland, which
