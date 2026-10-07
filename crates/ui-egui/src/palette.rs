@@ -1,4 +1,4 @@
-//! ⌘K command palette: fuzzy search over every menu command and tool.
+//! ⌘F command palette: fuzzy search over every menu command and tool.
 
 use egui::{Align2, Color32, CornerRadius, RichText, Sense, Stroke, vec2};
 

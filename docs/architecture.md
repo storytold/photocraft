@@ -189,7 +189,7 @@ Each command registers the following:
 - `kind`: Instant / Dialog / Interactive (hands control to a tool, e.g. Free Transform).
 
 **Consumers:**
-- The GUI builds the menu bar, the ⌘K palette and the shortcut editor from it.
+- The GUI builds the menu bar, the ⌘F palette and the shortcut editor from it.
 - `automation` exposes the registry as MCP tools.
 - `photocraft-cli` exposes `photocraft-cli run in.psd --cmd filter.blur.gaussianBlur --params '{"radius":4}' --out out.png`.
 - Action recording is simply `Vec<CommandInvocation>`.
