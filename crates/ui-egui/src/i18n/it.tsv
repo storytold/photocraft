@@ -1,0 +1,2146 @@
+# Italian (it) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @plural              `source` is `one|other` (English forms); the translation lists
+#                                 the language's forms separated by `|` (see `plural` in i18n/mod.rs)
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Italian computing vocabulary (livello, pennello, selezione, tela ...). No proprietary localisation
+# resource, string table or product UI was consulted or copied; add entries the same way.
+# Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# letters; the trailing … of dialog commands is kept.
+	File	File
+	Edit	Modifica
+	Image	Immagine
+	Layer	Livello
+	Type	Testo
+	Select	Selezione
+	Filter	Filtro
+	View	Vista
+	Window	Finestra
+	Help	Aiuto
+	(coming soon)	(prossimamente)
+	New…	Nuovo…
+	New from Clipboard	Nuovo dagli appunti
+	Open…	Apri…
+	Open As…	Apri come…
+	Open Recent	Apri recenti
+	Clear Recent Files	Cancella file recenti
+	Close	Chiudi
+	Close All	Chiudi tutto
+	Close Others	Chiudi altri
+	Save	Salva
+	Save As…	Salva con nome…
+	Save a Copy…	Salva una copia…
+	Revert	Ripristina
+	Export	Esporta
+	Quick Export as PNG	Esportazione rapida come PNG
+	Export As…	Esporta come…
+	Export Preferences…	Preferenze di esportazione…
+	Save for Web (Legacy)…	Salva per Web (legacy)…
+	Artboards to Files…	Tavole da disegno in file…
+	Artboards to PDF…	Tavole da disegno in PDF…
+	Layers to Files…	Livelli in file…
+	Layer Comps to Files…	Composizioni livelli in file…
+	Color Lookup Tables…	Tabelle ricerca colore…
+	Data Sets as Files…	Set di dati come file…
+	Paths to Illustrator…	Tracciati in Illustrator…
+	Render Video…	Rendering video…
+	Generate	Genera
+	Image Assets	Risorse immagine
+	Place Embedded…	Inserisci incorporato…
+	Place Linked…	Inserisci collegato…
+	Package…	Pacchetto…
+	Automate	Automatizza
+	Batch…	Batch…
+	Create Droplet…	Crea droplet…
+	Crop and Straighten Photos	Ritaglia e raddrizza foto
+	Contact Sheet II…	Provino a contatto II…
+	Conditional Mode Change…	Cambio modo condizionale…
+	Fit Image…	Adatta immagine…
+	Lens Correction…	Correzione lente…
+	Merge to HDR Pro…	Unisci in HDR Pro…
+	Photomerge…	Photomerge…
+	Scripts	Script
+	Image Processor…	Elaborazione immagini…
+	Delete All Empty Layers	Elimina tutti i livelli vuoti
+	Flatten All Layer Effects	Unisci tutti gli effetti livello
+	Flatten All Masks	Unisci tutte le maschere
+	Script Events Manager…	Gestore eventi script…
+	Import	Importa
+	Browse…	Sfoglia…
+	Reveal in Finder	Mostra nel Finder
+	File Info…	Info file…
+	Print…	Stampa…
+	Print One Copy	Stampa una copia
+	Exit	Esci
+	Undo	Annulla
+	Redo	Ripeti
+	Toggle Last State	Alterna ultimo stato
+	Fade…	Dissolvi…
+	Cut	Taglia
+	Copy	Copia
+	Copy Merged	Copia unito
+	Paste	Incolla
+	Paste Special	Incolla speciale
+	Paste in Place	Incolla in posizione
+	Paste Into	Incolla dentro
+	Paste Outside	Incolla fuori
+	Paste Lorem Ipsum	Incolla Lorem Ipsum
+	Clear	Cancella
+	Search…	Cerca…
+	Check Spelling…	Controllo ortografico…
+	Find and Replace Text…	Trova e sostituisci testo…
+	Fill…	Riempi…
+	Stroke…	Traccia…
+	Content-Aware Fill…	Riempimento in base al contenuto…
+	Content-Aware Scale	Scala in base al contenuto
+	Puppet Warp	Altera marionetta
+	Perspective Warp	Altera prospettiva
+	Free Transform	Trasformazione libera
+	Free Transform a Copy	Trasformazione libera di una copia
+	Transform	Trasforma
+	Again	Ripeti
+	Transform Again on a Copy	Trasforma di nuovo su una copia
+	Scale	Scala
+	Rotate	Ruota
+	Skew	Inclina
+	Distort	Distorci
+	Perspective	Prospettiva
+	Warp	Altera
+	Flip Horizontal	Rifletti orizzontale
+	Flip Vertical	Rifletti verticale
+	Rotate 180°	Ruota di 180°
+	Rotate 90° Clockwise	Ruota di 90° orario
+	Rotate 90° Counter Clockwise	Ruota di 90° antiorario
+	180°	180°
+	90° Clockwise	90° orario
+	90° Counter Clockwise	90° antiorario
+	Arbitrary…	Arbitrario…
+	Auto-Align Layers…	Allinea automaticamente livelli…
+	Auto-Blend Layers…	Fondi automaticamente livelli…
+	Define Brush Preset…	Definisci predefinito pennello…
+	Define Pattern…	Definisci pattern…
+	Define Custom Shape…	Definisci forma personale…
+	Purge	Elimina
+	Clipboard	Appunti
+	Histories	Cronologie
+	Video Cache	Cache video
+	All	Tutto
+	Presets	Predefiniti
+	Preset Manager…	Gestore predefiniti…
+	Migrate Presets	Migra predefiniti
+	Export/Import Presets…	Esporta/Importa predefiniti…
+	Color Settings…	Impostazioni colore…
+	Assign Profile…	Assegna profilo…
+	Convert to Profile…	Converti in profilo…
+	Keyboard Shortcuts…	Scorciatoie da tastiera…
+	Menus…	Menu…
+	Toolbar…	Barra strumenti…
+	Preferences	Preferenze
+	General…	Generali…
+	Interface…	Interfaccia…
+	Workspace…	Area di lavoro…
+	Tools…	Strumenti…
+	History Log…	Registro cronologia…
+	File Handling…	Gestione file…
+	Export…	Esportazione…
+	Performance…	Prestazioni…
+	Scratch Disks…	Dischi virtuali…
+	Cursors…	Cursori…
+	Transparency & Gamut…	Trasparenza e gamma…
+	Units & Rulers…	Unità e righelli…
+	Guides, Grid & Slices…	Guide, griglia e sezioni…
+	Plug-ins…	Plug-in…
+	Type…	Testo…
+	Enhanced Controls…	Controlli avanzati…
+	Camera Raw…	Camera Raw…
+	Raw Defaults…	Default Raw…
+	Integrations…	Integrazioni…
+	AI Integrations…	Integrazioni IA…
+	Install Plug-in…	Installa plug-in…
+	Language Options	Opzioni lingua
+	Settings…	Impostazioni…
+	Mode	Metodo
+	Bitmap	Bitmap
+	Grayscale	Scala di grigio
+	Duotone	Duotono
+	Indexed Color	Colore indicizzato
+	RGB Color	Colore RGB
+	CMYK Color	Colore CMYK
+	Lab Color	Colore Lab
+	Multichannel	Multicanale
+	8 Bits/Channel	8 bit/canale
+	8 bit	8 bit
+	Integer	Intero
+	16 Bits/Channel	16 bit/canale
+	16 bit	16 bit
+	32 Bits/Channel	32 bit/canale
+	32 bit (float)	32 bit (virgola mobile)
+	Floating point	Virgola mobile
+	Color Table…	Tabella colori…
+	Bitmap…	Bitmap…
+	Duotone…	Duotono…
+	Indexed Color…	Colore indicizzato…
+	Adjustments	Regolazioni
+	Brightness/Contrast…	Luminosità/Contrasto…
+	Levels…	Livelli…
+	Curves…	Curve…
+	Exposure…	Esposizione…
+	Vibrance…	Vividezza…
+	Hue/Saturation…	Tonalità/Saturazione…
+	Color Balance…	Bilanciamento colore…
+	Black & White…	Bianco e nero…
+	Photo Filter…	Filtro fotografico…
+	Channel Mixer…	Miscelatore canali…
+	Color Lookup…	Ricerca colore…
+	Invert	Inverti
+	Posterize…	Posterizza…
+	Threshold…	Soglia…
+	Gradient Map…	Mappa sfumatura…
+	Selective Color…	Colore selettivo…
+	Shadows/Highlights…	Ombre/Luci…
+	HDR Toning…	Viraggio HDR…
+	Desaturate	Desatura
+	Match Color…	Corrispondenza colore…
+	Replace Color…	Sostituisci colore…
+	Equalize	Equalizza
+	Auto Tone	Tono automatico
+	Auto Contrast	Contrasto automatico
+	Auto Color	Colore automatico
+	Image Size…	Dimensione immagine…
+	Canvas Size…	Dimensione quadro…
+	Image Rotation	Rotazione immagine
+	Flip Canvas Horizontal	Rifletti quadro orizzontalmente
+	Flip Canvas Vertical	Rifletti quadro verticalmente
+	Crop	Ritaglia
+	Trim…	Elimina bordi…
+	Reveal All	Mostra tutto
+	Duplicate…	Duplica…
+	Apply Image…	Applica immagine…
+	Calculations…	Calcoli…
+	Variables	Variabili
+	Define…	Definisci…
+	Data Sets…	Set di dati…
+	Apply Data Set…	Applica set di dati…
+	Variable Data Sets…	Set di dati variabili…
+	Trap…	Sovrastampa…
+	Analysis	Analisi
+	Set Measurement Scale…	Imposta scala misurazione…
+	Select Data Points…	Seleziona punti dati…
+	Record Measurements	Registra misurazioni
+	Ruler Tool	Strumento Righello
+	Count Tool	Strumento Conta
+	Place Scale Marker…	Inserisci indicatore scala…
+	Custom…	Personalizzato…
+	New	Nuovo
+	Layer…	Livello…
+	Group…	Gruppo…
+	Group from Layers…	Gruppo da livelli…
+	Artboard…	Tavola da disegno…
+	Artboard from Group…	Tavola da gruppo…
+	Artboard from Layers…	Tavola da livelli…
+	Layer via Copy	Livello tramite copia
+	Layer via Cut	Livello tramite taglia
+	Layer From Background…	Livello dallo sfondo…
+	Layer from Background…	Livello dallo sfondo…
+	New Shape Layer	Nuovo livello forma
+	New Type Layer	Nuovo livello testo
+	New Fill Layer	Nuovo livello riempimento
+	New Adjustment Layer	Nuovo livello di regolazione
+	New Layer Based Slice	Nuova sezione basata su livello
+	New Smart Object via Copy	Nuovo oggetto avanzato tramite copia
+	New Blank Video Layer	Nuovo livello video vuoto
+	New Video Layer from File…	Nuovo livello video da file…
+	Duplicate Layer…	Duplica livello…
+	Delete Layer	Elimina livello
+	Delete	Elimina
+	Rename Layer	Rinomina livello
+	Create Layer	Crea livello
+	Layer Style	Stile livello
+	Blending Options…	Opzioni di fusione…
+	Bevel & Emboss…	Smusso ed effetto rilievo…
+	Use Global Light	Usa luce globale
+	Inner Shadow…	Ombra interna…
+	Inner Glow…	Bagliore interno…
+	Satin…	Raso…
+	Color Overlay…	Sovrapposizione colore…
+	Gradient Overlay…	Sovrapposizione sfumatura…
+	Pattern Overlay…	Sovrapposizione pattern…
+	Outer Glow…	Bagliore esterno…
+	Drop Shadow…	Ombra esterna…
+	Copy Layer Style	Copia stile livello
+	Paste Layer Style	Incolla stile livello
+	Clear Layer Style	Cancella stile livello
+	Global Light…	Luce globale…
+	Hide All Effects	Nascondi tutti gli effetti
+	Scale Effects…	Scala effetti…
+	Smart Filter	Filtro avanzato
+	Convert for Smart Filters	Converti per filtri avanzati
+	Clear Smart Filters	Cancella filtri avanzati
+	Disable Smart Filters	Disattiva filtri avanzati
+	Delete Filter Mask	Elimina maschera filtro
+	Disable Filter Mask	Disattiva maschera filtro
+	Solid Color…	Colore pieno…
+	Gradient…	Sfumatura…
+	Pattern…	Pattern…
+	Layer Mask	Maschera di livello
+	Vector Mask	Maschera vettoriale
+	Reveal Selection	Mostra selezione
+	Hide Selection	Nascondi selezione
+	Hide All	Nascondi tutto
+	From Transparency	Da trasparenza
+	Delete Vector Mask	Elimina maschera vettoriale
+	Enable Layer Mask	Abilita maschera di livello
+	Disable Layer Mask	Disabilita maschera di livello
+	Enable Vector Mask	Abilita maschera vettoriale
+	Link Layer Mask	Collega maschera di livello
+	Unlink Layer Mask	Scollega maschera di livello
+	Link Vector Mask	Collega maschera vettoriale
+	Add Vector Mask	Aggiungi maschera vettoriale
+	Vector Mask from Current Path	Maschera vettoriale dal tracciato corrente
+	Create Clipping Mask	Crea maschera di ritaglio
+	Release Clipping Mask	Rilascia maschera di ritaglio
+	Smart Objects	Oggetti avanzati
+	Smart Object	Oggetto avanzato
+	Convert to Smart Object	Converti in oggetto avanzato
+	Convert to Embedded	Converti in incorporato
+	Convert to Linked…	Converti in collegato…
+	Edit Contents	Modifica contenuto
+	Replace Contents…	Sostituisci contenuto…
+	Relink to File…	Ricollega al file…
+	Export Contents…	Esporta contenuto…
+	Update Modified Content	Aggiorna contenuto modificato
+	Update All Modified Content	Aggiorna tutto il contenuto modificato
+	Stack Mode	Modalità pila
+	Entropy	Entropia
+	Kurtosis	Curtosi
+	Maximum	Massimo
+	Mean	Media
+	Median	Mediana
+	Minimum	Minimo
+	Range	Intervallo
+	Skewness	Asimmetria
+	Standard Deviation	Deviazione standard
+	Summation	Somma
+	Variance	Varianza
+	Video Layers	Livelli video
+	Interpret Footage…	Interpreta metraggio…
+	Replace Footage…	Sostituisci metraggio…
+	Reload Frame	Ricarica fotogramma
+	Show Altered Video	Mostra video modificato
+	Restore Frame	Ripristina fotogramma
+	Restore All Frames	Ripristina tutti i fotogrammi
+	Insert Blank Frame	Inserisci fotogramma vuoto
+	Delete Frame	Elimina fotogramma
+	Duplicate Frame	Duplica fotogramma
+	Frame from Layers	Fotogramma da livelli
+	Video Frames to Layers…	Fotogrammi video in livelli…
+	Rasterize	Rasterizza
+	Rasterize Type	Rasterizza testo
+	Rasterize Type Layer	Rasterizza livello di testo
+	Rasterize Shape	Rasterizza forma
+	New Guide Layout…	Nuovo layout guide…
+	New Guides From Shape	Nuove guide dalla forma
+	Lock Layers…	Blocca livelli…
+	Link Layers	Collega livelli
+	Select Linked Layers	Seleziona livelli collegati
+	Merge Layers	Unisci livelli
+	Merge Down	Unisci sotto
+	Merge Visible	Unisci visibili
+	Stamp Visible	Unisci visibili in nuovo
+	Select Layer Above	Seleziona livello sopra
+	Select Layer Below	Seleziona livello sotto
+	Select Top Layer	Seleziona livello superiore
+	Select Bottom Layer	Seleziona livello inferiore
+	Add Layer Above to Selection	Aggiungi livello sopra alla selezione
+	Add Layer Below to Selection	Aggiungi livello sotto alla selezione
+	Stamp Down	Fondi sotto
+	Flatten Image	Unisci immagine
+	Matting	Contorna
+	Color Decontaminate…	Decontamina colore…
+	Remove Black Matte	Rimuovi bordo nero
+	Remove White Matte	Rimuovi bordo bianco
+	Defringe…	Elimina frange…
+	Group Layers	Raggruppa livelli
+	Ungroup Layers	Separa livelli
+	Hide Layers	Nascondi livelli
+	Arrange	Disponi
+	Bring to Front	Porta in primo piano
+	Bring Forward	Porta avanti
+	Send Backward	Manda indietro
+	Send to Back	Manda in fondo
+	Reverse	Inverti
+	Combine Shapes	Combina forme
+	Unite Shapes	Unisci forme
+	Subtract Front Shape	Sottrai forma frontale
+	Intersect Shape Areas	Interseca aree forme
+	Exclude Overlapping Shapes	Escludi forme sovrapposte
+	Merge Shape Components	Unisci componenti forma
+	Align	Allinea
+	Top Edges	Bordi superiori
+	Vertical Centers	Centri verticali
+	Bottom Edges	Bordi inferiori
+	Left Edges	Bordi sinistri
+	Horizontal Centers	Centri orizzontali
+	Right Edges	Bordi destri
+	Distribute	Distribuisci
+	Vertically	Verticalmente
+	Horizontally	Orizzontalmente
+	Layer Edges	Bordi livello
+	Isolate Layers	Isola livelli
+	Layer Content Options…	Opzioni contenuto livello…
+	Fill Content	Contenuto riempimento
+	Deselect Layers	Deseleziona livelli
+	Find Layers	Trova livelli
+	Layer Comps	Composizioni livelli
+	Layers	Livelli
+	All Layers	Tutti i livelli
+	Hidden Layers	Livelli nascosti
+	Mask All Objects	Maschera tutti gli oggetti
+	Subject	Soggetto
+	Sky	Cielo
+	Panels	Pannelli
+	Character Panel	Pannello Carattere
+	Paragraph Panel	Pannello Paragrafo
+	Character Styles Panel	Pannello Stili carattere
+	Paragraph Styles Panel	Pannello Stili paragrafo
+	Glyphs Panel	Pannello Glifi
+	Anti-Alias	Anti-alias
+	Sharp	Nitido
+	Crisp	Definito
+	Strong	Forte
+	Smooth	Morbido
+	Windows LCD	LCD Windows
+	Windows	Windows
+	Orientation	Orientamento
+	Horizontal	Orizzontale
+	Vertical	Verticale
+	OpenType	OpenType
+	Standard Ligatures	Legature standard
+	Contextual Alternates	Alternative contestuali
+	Discretionary Ligatures	Legature discrezionali
+	Swash	Fioriture
+	Oldstyle	Cifre old-style
+	Stylistic Alternates	Alternative stilistiche
+	Titling Alternates	Alternative per titoli
+	Ornaments	Ornamenti
+	Ordinals	Ordinali
+	Fractions	Frazioni
+	Create Work Path	Crea tracciato di lavoro
+	Convert to Shape	Converti in forma
+	Warp Text…	Altera testo…
+	Convert to Point Text	Converti in testo a riga
+	Convert to Paragraph Text	Converti in testo a paragrafo
+	Default Features	Funzionalità predefinite
+	East Asian Features	Funzionalità Asia orientale
+	Middle Eastern Features	Funzionalità Medio Oriente
+	Middle Eastern & South Asian Composer	Compositore Medio Oriente e Asia meridionale
+	Update All Text Layers	Aggiorna tutti i livelli di testo
+	Replace All Missing Fonts	Sostituisci tutti i font mancanti
+	Resolve Missing Fonts…	Risolvi font mancanti…
+	Font Preview Size	Dimensione anteprima font
+	None	Nessuno
+	Small	Piccolo
+	Medium	Medio
+	Large	Grande
+	Extra Large	Extra grande
+	Huge	Enorme
+	Load Default Type Styles	Carica stili testo predefiniti
+	Save Default Type Styles	Salva stili testo predefiniti
+	Deselect	Deseleziona
+	Reselect	Riseleziona
+	Inverse	Inverti
+	Inverse Selection	Inverti selezione
+	Similar	Simile
+	Color Range…	Intervallo colori…
+	Focus Area…	Area di messa a fuoco…
+	Select and Mask…	Seleziona e maschera…
+	Modify	Modifica
+	Border…	Bordo…
+	Smooth…	Smussa…
+	Expand…	Espandi…
+	Contract…	Contrai…
+	Feather…	Sfumatura…
+	Grow	Estendi
+	Transform Selection	Trasforma selezione
+	Edit in Quick Mask Mode	Modifica in modalità maschera veloce
+	Load Selection…	Carica selezione…
+	Save Selection…	Salva selezione…
+	Match All	Abbina tutto
+	Last Filter	Ultimo filtro
+	Filter Gallery…	Galleria filtri…
+	Adaptive Wide Angle…	Grandangolo adattivo…
+	Camera Raw Filter…	Filtro Camera Raw…
+	Liquify…	Fluidifica…
+	Vanishing Point…	Punto di fuga…
+	Blur	Sfocatura
+	Blur Gallery	Galleria sfocatura
+	Field Blur…	Sfocatura campo…
+	Iris Blur…	Sfocatura diaframma…
+	Tilt-Shift…	Miniatura…
+	Path Blur…	Sfocatura tracciato…
+	Spin Blur…	Sfocatura rotazione…
+	Blur More	Sfoca più
+	Box Blur…	Sfocatura casella…
+	Gaussian Blur…	Sfocatura gaussiana…
+	Lens Blur…	Sfocatura lente…
+	Motion Blur…	Movimento sfocato…
+	Radial Blur…	Sfocatura radiale…
+	Shape Blur…	Sfocatura forma…
+	Smart Blur…	Sfocatura avanzata…
+	Surface Blur…	Sfocatura superficie…
+	Average	Media
+	Displace…	Sposta…
+	Pinch…	Pizzica…
+	Polar Coordinates…	Coordinate polari…
+	Ripple…	Increspatura…
+	Shear…	Inclina…
+	Spherize…	Sferizza…
+	Twirl…	Vortice…
+	Wave…	Onda…
+	ZigZag…	ZigZag…
+	Noise	Disturbo
+	Add Noise…	Aggiungi disturbo…
+	Despeckle	Elimina macchioline
+	Dust & Scratches…	Polvere e graffi…
+	Median…	Mediana…
+	Reduce Noise…	Riduci disturbo…
+	Pixelate	Pixellatura
+	Color Halftone…	Mezzetinte a colori…
+	Crystallize…	Cristallizza…
+	Facet	Frattale
+	Fragment	Frammento
+	Mezzotint…	Mezzatinta…
+	Mosaic…	Mosaico…
+	Pointillize…	Puntinatura…
+	Render	Rendering
+	Clouds	Nuvole
+	Difference Clouds	Nuvole con differenza
+	Fibers…	Fibre…
+	Flame…	Fiamma…
+	Lens Flare…	Riflesso obiettivo…
+	Lighting Effects…	Effetti di luce…
+	Picture Frame…	Cornice immagine…
+	Tree…	Albero…
+	Sharpen	Contrasta
+	Sharpen Edges	Contrasta bordi
+	Sharpen More	Contrasta più
+	Smart Sharpen…	Contrasto intelligente…
+	Unsharp Mask…	Maschera di contrasto…
+	High Pass…	Passa alto…
+	Stylize	Stilizza
+	Diffuse…	Diffondi…
+	Emboss…	Rilievo…
+	Extrude…	Estrudi…
+	Find Edges	Trova bordi
+	Oil Paint…	Pittura a olio…
+	Solarize	Solarizza
+	Tiles…	Mattonelle…
+	Trace Contour…	Traccia contorno…
+	Wind…	Vento…
+	Video	Video
+	De-Interlace…	Deinterlaccia…
+	NTSC Colors	Colori NTSC
+	Other	Altro
+	Maximum…	Massimo…
+	Minimum…	Minimo…
+	Offset…	Scostamento…
+	Plug-ins	Plug-in
+	Proof Setup	Configurazione prova
+	Proof Colors	Colori di prova
+	Gamut Warning	Avviso gamma
+	Working CMYK	CMYK di lavoro
+	Working Cyan Plate	Lastra ciano di lavoro
+	Working Magenta Plate	Lastra magenta di lavoro
+	Working Yellow Plate	Lastra gialla di lavoro
+	Working Black Plate	Lastra nera di lavoro
+	Working CMY Plate	Lastra CMY di lavoro
+	Legacy Macintosh RGB	RGB legacy Macintosh
+	Internet Standard RGB	RGB standard Internet
+	Monitor RGB	RGB monitor
+	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
+	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
+	Zoom In	Ingrandisci
+	Zoom Out	Riduci
+	Fit on Screen	Adatta a schermo
+	Fit Layer(s) on Screen	Adatta livello/i a schermo
+	Fit Artboard on Screen	Adatta tavola a schermo
+	100%	100%
+	200%	200%
+	75%	75%
+	125%	125%
+	150%	150%
+	175%	175%
+	250%	250%
+	300%	300%
+	Print Size	Dimensione di stampa
+	Pixel Aspect Ratio	Proporzioni pixel
+	Pixel Aspect Ratio Correction	Correzione proporzioni pixel
+	Custom Pixel Aspect Ratio…	Proporzioni pixel personalizzate…
+	Square	Quadrato
+	D1/DV NTSC (0.91)	D1/DV NTSC (0,91)
+	D1/DV NTSC Widescreen (1.21)	D1/DV NTSC widescreen (1,21)
+	D1/DV PAL (1.09)	D1/DV PAL (1,09)
+	D1/DV PAL Widescreen (1.46)	D1/DV PAL widescreen (1,46)
+	Anamorphic 2:1 (2)	Anamorfico 2:1 (2)
+	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1,33)
+	DVCPRO HD 1080/HDV 1080 (1.5)	DVCPRO HD 1080/HDV 1080 (1,5)
+	32-bit Preview Options…	Opzioni anteprima 32 bit…
+	Screen Mode	Modalità schermo
+	Standard Screen Mode	Modalità schermo standard
+	Full Screen Mode With Menu Bar	Modalità schermo intero con barra menu
+	Full Screen Mode	Modalità schermo intero
+	Cycle Screen Mode	Cambia modalità schermo
+	Show	Mostra
+	Extras	Extra
+	Selection Edges	Bordi selezione
+	Target Path	Tracciato di destinazione
+	Current Path	Tracciato corrente
+	Grid	Griglia
+	Guides	Guide
+	Canvas Guides	Guide quadro
+	Artboard Guides	Guide tavola da disegno
+	Count	Conteggio
+	Smart Guides	Guide intelligenti
+	Slices	Sezioni
+	Notes	Note
+	Pixel Grid	Griglia pixel
+	Pixel Art	Pixel art
+	Pixel Art Preview	Anteprima pixel art
+	Pattern Preview	Anteprima pattern
+	Brush Preview	Anteprima pennello
+	Mesh	Mesh
+	Edit Pins	Modifica pin
+	Document Bounds	Limiti documento
+	Show Extras Options…	Opzioni extra…
+	Rulers	Righelli
+	Snap	Ancoraggio
+	Snap To	Ancoraggio a
+	Lock Guides	Blocca guide
+	Clear Guides	Cancella guide
+	Clear Selected Artboard Guides	Cancella guide tavola selezionata
+	Clear Canvas Guides	Cancella guide quadro
+	New Guide…	Nuova guida…
+	Lock Slices	Blocca sezioni
+	Clear Slices	Cancella sezioni
+	Match Zoom	Abbina zoom
+	Match Location	Abbina posizione
+	Match Rotation	Abbina rotazione
+	Cascade	Finestre a cascata
+	Tile	Affianca
+	Tile All Horizontally	Affianca tutto orizzontalmente
+	Tile All Vertically	Affianca tutto verticalmente
+	2-up Horizontal	2 affiancate orizzontali
+	2-up Vertical	2 affiancate verticali
+	3-up Horizontal	3 affiancate orizzontali
+	3-up Stacked	3 affiancate in pila
+	3-up Vertical	3 affiancate verticali
+	4-up	4 affiancate
+	6-up	6 affiancate
+	Consolidate All to Tabs	Raggruppa tutto in schede
+	Float in Window	Flottante in finestra
+	Float All in Windows	Flottante tutto in finestre
+	New Window for Document	Nuova finestra per documento
+	Workspace	Area di lavoro
+	Essentials	Essenziali
+	Graphic and Web	Grafica e web
+	Painting	Pittura
+	Photography	Fotografia
+	New Workspace…	Nuova area di lavoro…
+	Delete Workspace…	Elimina area di lavoro…
+	Reset Workspace	Ripristina area di lavoro
+	Lock Workspace	Blocca area di lavoro
+	Theme	Tema
+	Pro Theme	Tema Pro
+	Pro Medium Gray Theme	Tema Pro grigio medio
+	Studio Theme	Tema Studio
+	Studio Light Theme	Tema Studio chiaro
+	Classic Theme	Tema classico
+	Next Theme	Tema successivo
+	Actions	Azioni
+	Brush Settings	Impostazioni pennello
+	Brushes	Pennelli
+	Channels	Canali
+	Character	Carattere
+	Character Styles	Stili carattere
+	Clone Source	Origine clone
+	Color	Colore
+	Glyphs	Glifi
+	Gradients	Sfumature
+	Histogram	Istogramma
+	History	Cronologia
+	Info	Informazioni
+	Measurement Log	Registro misurazioni
+	Modifier Keys	Tasti modificatori
+	Navigator	Navigatore
+	Options	Opzioni
+	Paragraph	Paragrafo
+	Paragraph Styles	Stili paragrafo
+	Paths	Tracciati
+	Patterns	Pattern
+	Properties	Proprietà
+	Shapes	Forme
+	Styles	Stili
+	Swatches	Campioni
+	Timeline	Timeline
+	Tool Presets	Predefiniti strumento
+	Tools	Strumenti
+	About PhotoCraft	Informazioni su PhotoCraft
+	PhotoCraft Website	Sito web PhotoCraft
+	PhotoCraft on GitHub	PhotoCraft su GitHub
+	ArtCraft Website	Sito web ArtCraft
+	Join the ArtCraft Discord…	Unisciti al Discord di ArtCraft…
+	Report an Issue…	Segnala un problema…
+	WIA Support…	Supporto WIA…
+	Apply	Applica
+	HSB/HSL	HSB/HSL
+	Invert…	Inverti…
+	Load Files into Stack…	Carica file in pila…
+	Motion	Movimento
+	Notes…	Note…
+	Other…	Altro…
+	Remove Warp Split	Rimuovi divisione altera
+	Shape	Forma
+	Split Warp Crosswise	Dividi altera a croce
+	Split Warp Horizontally	Dividi altera orizzontalmente
+	Split Warp Vertically	Dividi altera verticalmente
+	Statistics…	Statistiche…
+@plural	{n} item|{n} items	{n} elemento|{n} elementi
+	Auto	Automatico
+
+# Dialogs and panels
+	(print to the printer)	(stampa sulla stampante)
+	+ Add variable	+ Aggiungi variabile
+	30 frames @ 30 fps	30 fotogrammi @ 30 fps
+	3D LUT File	File LUT 3D
+	Absolute	Assoluto
+	Absolute Colorimetric	Colorimetrico assoluto
+	Action	Azione
+	Adaptive	Adattivo
+	Adaptive Wide Angle isn't open	Grandangolo adattivo non è aperto
+	Add	Aggiungi
+	Add Layer Mask	Aggiungi maschera di livello
+	Add Stop	Aggiungi punto
+	Add a layer style	Aggiungi uno stile livello
+	Add a mask  (from the selection; {key} inverts)	Aggiungi una maschera (dalla selezione; {key} inverte)
+	Add an adjustment	Aggiungi una regolazione
+	Add disk	Aggiungi disco
+	Add space after paragraph	Aggiungi spazio dopo il paragrafo
+	Add space before paragraph	Aggiungi spazio prima del paragrafo
+	Add to Sample	Aggiungi al campione
+	Add to selection  ({key})	Aggiungi alla selezione ({key})
+	Adjust for Zoom	Regola per zoom
+	Adjustment visible	Regolazione visibile
+	Adobe RGB (1998) compatible	Compatibile Adobe RGB (1998)
+	Align and Distribute	Allinea e distribuisci
+	Align and distribute	Allinea e distribuisci
+	Align horizontal centers	Allinea centri orizzontali
+	Align left edges	Allinea bordi sinistri
+	Align right edges	Allinea bordi destri
+	Aligned	Allineato
+	All Caps	Tutto maiuscolo
+	All Slices	Tutte le sezioni
+	All User Slices	Tutte le sezioni utente
+	All shortcuts reset to Photoshop defaults.	Tutte le scorciatoie ripristinate ai default di Photoshop.
+	Alt	Alt
+	Always use pressure for opacity	Usa sempre pressione per opacità
+	Always use pressure for size	Usa sempre pressione per dimensione
+	Amount	Quantità
+	Anchor:	Ancoraggio:
+	Angle	Angolo
+	Angle Gradient	Sfumatura angolare
+	Angle Jitter	Variazione angolo
+	Answer the unsaved-changes prompt first	Rispondi prima all'avviso modifiche non salvate
+	Anti-alias	Anti-alias
+	Appearance	Aspetto
+	Appearance (Layer Style)	Aspetto (stile livello)
+	Apply Layer Mask	Applica maschera di livello
+	Apply Per Tip	Applica per punta
+	Apply next selected layer comp	Applica composizione livelli successiva selezionata
+	Apply previous selected layer comp	Applica composizione livelli precedente selezionata
+	Artboard	Tavola da disegno
+	Artboard Background Color	Colore sfondo tavola da disegno
+	Assign working space	Assegna spazio di lavoro
+	Author:	Autore:
+	Auto Hide	Nascondi automaticamente
+	Auto-Select:	Selezione automatica:
+	Automatically level near-horizontal line segments	Livella automaticamente segmenti quasi orizzontali
+	Automatically straighten and level	Raddrizza e livella automaticamente
+	Automatically straighten near-vertical line segments	Raddrizza automaticamente segmenti quasi verticali
+	Background	Sfondo
+	Background Color	Colore sfondo
+	Background Contents	Contenuto sfondo
+	Balance	Bilanciamento
+	Baseline	Linea base
+	Baseline shift	Scostamento linea base
+	Basic	Base
+	Before (Y)	Prima (Y)
+	Begin recording	Inizia registrazione
+	Bend:	Curvatura:
+	Bicubic	Bicubica
+	Bicubic (smooth gradients)	Bicubica (sfumature morbide)
+	Bilinear	Bilineare
+	Black	Nero
+	Black & White	Bianco e nero
+	Black Point Compensation	Compensazione punto nero
+	Black, White	Nero, bianco
+	Blacks	Neri
+	Blending	Fusione
+	Blending Options	Opzioni di fusione
+	Blue	Blu
+	Blue, Red, Yellow	Blu, rosso, giallo
+	Both	Entrambi
+	Both Axes	Entrambi gli assi
+	Bottom	In basso
+	Brightness	Luminosità
+	Brightness Jitter	Variazione luminosità
+	Brightness/Contrast	Luminosità/Contrasto
+	Bring the selected pin forward	Porta il pin selezionato in primo piano
+	Brush Preset picker	Selettore predefiniti pennello
+	Brush Reconstruct Options	Opzioni ricostruzione pennello
+	Brush Tool Options	Opzioni strumento Pennello
+	Cache Level:	Livello cache:
+	Camera Raw isn't open	Camera Raw non è aperto
+	Cancel	Annulla
+	Cancel (Esc)	Annulla (Esc)
+	Cancel any current edits (Esc)	Annulla modifiche correnti (Esc)
+	Cancel current crop operation  (Esc)	Annulla operazione ritaglio corrente (Esc)
+	Cancel transform (Esc)	Annulla trasformazione (Esc)
+	Cancel warp (Esc)	Annulla altera (Esc)
+	Canvas	Quadro
+	Canvas extension color:	Colore estensione quadro:
+	Capture	Acquisisci
+	Capture the visibility, position and style of every layer with + below, then switch between versions.	Acquisisci visibilità, posizione e stile di ogni livello con + qui sotto, poi passa da una versione all'altra.
+	Catch-up on Stroke End	Recupero a fine tratto
+	Center	Centro
+	Center Crop Marks	Crocini di ritaglio centrati
+	Center text	Centra testo
+	Change	Cambia
+	Change All	Cambia tutto
+	Change Screen Mode  (F)	Cambia modalità schermo (F)
+	Change To:	Cambia in:
+	Channel Mixer	Miscelatore canali
+	Channel:	Canale:
+	Check All Layers	Controlla tutti i livelli
+	Check Spelling	Controllo ortografico
+	Clarity	Chiarezza
+	Clear All	Cancella tutto
+	Clear Override	Rimuovi eccezione
+	Clear Samples	Cancella campioni
+	Click sets foreground · right-click sets background	Click imposta primo piano · click destro imposta sfondo
+	Click the first point or press {key} to close · Esc cancels	Fai click sul primo punto o premi {key} per chiudere · Esc annulla
+	Click to add a point · drag off or {key}-click or Delete to remove	Click per aggiungere un punto · trascina fuori, {key}-click o Canc per rimuovere
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	Click per applicare, {key}-click per rimuovere eccezioni, doppio click per Opzioni stile
+	Click to edit the gradient	Click per modificare la sfumatura
+	Click to restore the current colour	Click per ripristinare il colore corrente
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Click per ingrandire · {key}-click per ridurre · trascina dx/sx per zoom
+	Click with the Note tool to add a note.	Fai click con lo strumento Nota per aggiungere una nota.
+	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Click: angolo · Trascina: morbido · Click primo punto: chiudi · {key} termina · Esc annulla
+	Clip to layer below	Ritaglia al livello sotto
+	Clipped	Ritagliato
+	Close Style Options	Chiudi opzioni stile
+	Cmd	Cmd
+	Coated CMYK	CMYK patinato
+	Color & Swatches	Colore e campioni
+	Color Balance	Bilanciamento colore
+	Color Detail	Dettaglio colore
+	Color Grading	Gradazione colore
+	Color Lookup	Ricerca colore
+	Color Management	Gestione colore
+	Color Mixer	Miscelatore colore
+	Color Mode	Metodo colore
+	Color Priority	Priorità colore
+	Color Range preview	Anteprima intervallo colori
+	Color:	Colore:
+	Colorize	Colorizza
+	Colors	Colori
+	Commit Perspective Warp ({key})	Conferma altera prospettiva ({key})
+	Commit Puppet Warp ({key})	Conferma altera marionetta ({key})
+	Commit any current edits ({key})	Conferma modifiche correnti ({key})
+	Commit current crop operation  ({key})	Conferma operazione ritaglio corrente ({key})
+	Commit transform ({key})	Conferma trasformazione ({key})
+	Commit warp ({key})	Conferma altera ({key})
+	Constant	Costante
+	Constrain proportions	Vincola proporzioni
+	Contact Sheet II	Provino a contatto II
+	Content-Aware	In base al contenuto
+	Contiguous	Contiguo
+	Contrast	Contrasto
+	Control:	Controllo:
+	Convert document's colors to the working space	Converti colori documento in spazio di lavoro
+	Convert to sRGB	Converti in sRGB
+	Copies	Copie
+	Copper	Rame
+	Copyright	Copyright
+	Copyright and Contact Info	Copyright e info contatto
+	Corner Crop Marks	Crocini di ritaglio angolari
+	Corner radius	Raggio angolo
+	Correction	Correzione
+	Count Jitter	Variazione conteggio
+	Create	Crea
+	Create Droplet	Crea droplet
+	Create Texture	Crea texture
+	Create Video Timeline	Crea timeline video
+	Create a new count group	Crea nuovo gruppo conteggio
+	Create a new document or open an existing file.	Crea un nuovo documento o apri un file esistente.
+	Create a new group	Crea nuovo gruppo
+	Create a new layer	Crea nuovo livello
+	Create new action	Crea nuova azione
+	Create new channel	Crea nuovo canale
+	Create new document from current state	Crea nuovo documento dallo stato corrente
+	Create new fill or adjustment layer	Crea nuovo livello di riempimento o regolazione
+	Create new gradient	Crea nuova sfumatura
+	Create new group	Crea nuovo gruppo
+	Create new layer comp	Crea nuova composizione livelli
+	Create new pattern from the selection	Crea nuovo pattern dalla selezione
+	Create new shape from the current path	Crea nuova forma dal tracciato corrente
+	Create new snapshot	Crea nuova istantanea
+	Create new style (from the selected type)	Crea nuovo stile (dal testo selezionato)
+	Create new style from the selected layer	Crea nuovo stile dal livello selezionato
+	Create new tool preset	Crea nuovo predefinito strumento
+	Crop Factor	Fattore ritaglio
+	Ctrl	Ctrl
+	Current & Below	Corrente e inferiori
+	Current Layer	Livello corrente
+	Current Size	Dimensione corrente
+	Current Tool Only	Solo strumento corrente
+	Curve	Curva
+	Curves	Curve
+	Custom	Personalizzato
+	Custom Shapes	Forme personalizzate
+	Cyan	Ciano
+	Cyan  ·  Red	Ciano · Rosso
+	Darken	Scurisci
+	Darks	Scuri
+	Data Sets	Set di dati
+	Default	Predefinito
+	Default colours (D)	Colori predefiniti (D)
+	Default printer	Stampante predefinita
+	Default restored.	Predefiniti ripristinati.
+	Define	Definisci
+	Define at least one variable first.	Definisci almeno una variabile prima.
+	Dehaze	Elimina foschia
+	Delete Cropped Pixels	Elimina pixel ritagliati
+	Delete Group	Elimina gruppo
+	Delete Layer Mask	Elimina maschera di livello
+	Delete Layers	Elimina livelli
+	Delete Shortcut	Elimina scorciatoia
+	Delete Timeline	Elimina timeline
+	Delete Tool Preset	Elimina predefinito strumento
+	Delete count group	Elimina gruppo conteggio
+	Delete current channel	Elimina canale corrente
+	Delete current state	Elimina stato corrente
+	Delete effect layer	Elimina livello effetto
+	Delete layer	Elimina livello
+	Delete layer comp	Elimina composizione livelli
+	Delete note	Elimina nota
+	Delete selected measurements	Elimina misurazioni selezionate
+	Delete style	Elimina stile
+	Delete tool preset	Elimina predefinito strumento
+	Density	Densità
+	Density:	Densità:
+	Depth	Profondità
+	Depth Jitter	Variazione profondità
+	Description	Descrizione
+	Deselect All	Deseleziona tutto
+	Detail	Dettaglio
+	Diamond Gradient	Sfumatura diamante
+	Difference	Differenza
+	Diffusion	Diffusione
+	Discard the embedded profile (don't color manage)	Scarta profilo incorporato (non gestire colore)
+	Discontiguous	Non contiguo
+	Discord	Discord
+	Dismiss	Chiudi
+	Display P3	Display P3
+	Display Text	Testo display
+	Dither	Dithering
+	Divide…	Dividi…
+	Document	Documento
+	Don't Save	Non salvare
+	Done	Fatto
+	Dots	Punti
+	Drag a rectangle around the object	Trascina un rettangolo attorno all'oggetto
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Trascina sull'immagine per aggiungere un vincolo; Maiusc per orizz/vert; click destro per eliminare.
+	Drag to move the active shape's path or the Work Path	Trascina per spostare il tracciato forma attiva o il Tracciato di lavoro
+	Draw with the Pen tool (P) or make a work path from a selection.	Disegna con Penna (P) o crea un tracciato di lavoro da una selezione.
+	Drop an image or PSD anywhere to open it.	Trascina un'immagine o PSD ovunque per aprirlo.
+	Native file drag-and-drop is unavailable	Il drag-and-drop nativo file non è disponibile su Wayland
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Il drag-and-drop nativo non è ancora supportato su Wayland. Usa File › Apri, o avvia PhotoCraft sotto XWayland con `WAYLAND_DISPLAY= photocraft`.
+	Duplicate Layers…	Duplica livelli…
+	Duplicate style	Duplica stile
+	Edit Toolbar…	Modifica barra strumenti…
+	Use File › Open to open an image.	Usa File › Apri per aprire un'immagine.
+	Edit in Quick Mask Mode  (Q)	Modifica in maschera veloce (Q)
+	Edit in Standard Mode  (Q)	Modifica in modalità standard (Q)
+	Effects	Effetti
+	Embed Color Profile	Incorpora profilo colore
+	Embedded Profile Mismatch	Profilo incorporato non corrispondente
+	Enable airbrush-style build-up effects	Abilita effetti accumulo tipo aerografo
+	Enhance Edge	Migliora bordo
+	Entire Font	Font intero
+	Exact	Esatto
+	Expansion:	Espansione:
+	Export Presets	Esporta predefiniti
+	Export selected measurements (CSV)	Esporta misurazioni selezionate (CSV)
+	Exposure	Esposizione
+	Exposure and Gamma	Esposizione e gamma
+	Exposure:	Esposizione:
+	Eyedropper	Contagocce
+	Factor:	Fattore:
+	Faux Bold	Finto grassetto
+	Faux Italic	Finto corsivo
+	Feather	Sfumatura
+	Fewer Points	Meno punti
+	File Settings	Impostazioni file
+	Fill	Riempimento
+	Fill:	Riempimento:
+	Filter for adjustment layers	Filtra per livelli di regolazione
+	Filter for pixel layers	Filtra per livelli pixel
+	Filter for shape layers	Filtra per livelli forma
+	Filter for smart objects	Filtra per oggetti avanzati
+	Filter for type layers	Filtra per livelli testo
+	Filter:	Filtro:
+	Finger Painting	Pittura con dita
+	Fisheye	Fisheye
+	Fit	Adatta
+	Fit Screen	Adatta a schermo
+	Fit in View	Adatta in vista
+	Fixed	Fisso
+	Fixed Ratio	Proporzione fissa
+	Fixed Size	Dimensione fissa
+	Flip	Rifletti
+	Flip X	Rifletti X
+	Flip X Jitter	Variazione riflessione X
+	Flip Y	Rifletti Y
+	Flip Y Jitter	Variazione riflessione Y
+	Flow	Flusso
+	Flow Jitter	Variazione flusso
+	Focal Length	Lunghezza focale
+	Font	Font
+	Font Size:	Dimensione font:
+	Font size	Dimensione font
+	Foreground	Primo piano
+	Foreground to Background	Da primo piano a sfondo
+	Foreground/Background Jitter	Variazione primo piano/sfondo
+	Format	Formato
+	Frame from Layers…	Fotogramma da livelli…
+	Free	Libero
+	Full Spherical	Sferico completo
+	Fuzziness:	Tolleranza:
+	GPU	GPU
+	Gamma Correction	Correzione gamma
+	Gamma:	Gamma:
+	Global	Globale
+	Glow Color	Colore bagliore
+	Gradient Map	Mappa sfumatura
+	Grain	Grana
+	Gray	Grigio
+	Gray Gamma 2.2	Grigio gamma 2.2
+	Green	Verde
+	Group	Gruppo
+	Hardness	Durezza
+	Heart	Cuore
+	Height	Altezza
+	Height:	Altezza:
+	Hide Auto Slices	Nascondi sezioni automatiche
+	Hide Properties	Nascondi proprietà
+	Highlight Compression	Compressione luci
+	Highlight Priority	Priorità luci
+	Highlights	Luci
+	Home	Home
+	Horizontal scale	Scala orizzontale
+	Hue	Tonalità
+	Hue Jitter	Variazione tonalità
+	Hue/Saturation	Tonalità/Saturazione
+	Hyphenate	Sillabazione
+	Ignore	Ignora
+	Ignore All	Ignora tutto
+	Image Size	Dimensione immagine
+	Import Brushes…	Importa pennelli…
+	Import Photoshop brushes (.abr)	Importa pennelli Photoshop (.abr)
+	Import Presets	Importa predefiniti
+	Imported	Importato
+	Indent First	Rientro primo
+	Indent Left	Rientro sinistro
+	Indent Right	Rientro destro
+	Indent first line	Rientra prima riga
+	Indent left margin	Rientra margine sinistro
+	Indent right margin	Rientra margine destro
+	Input:	Input:
+	Inside	Dentro
+	Interlaced	Interlacciato
+	Interpolation:	Interpolazione:
+	Intersect with selection  ({key})	Interseca con selezione ({key})
+	Invert All	Inverti tutto
+	Invert has no settings.	Inverti non ha impostazioni.
+	Italic	Corsivo
+	Join us on Discord	Unisciti al nostro Discord
+	Justify all	Giustifica tutto
+	Justify last centered	Giustifica ultimo centrato
+	Justify last left	Giustifica ultimo a sinistra
+	Justify last right	Giustifica ultimo a destra
+	Kerning	Crenatura
+	Keyboard Shortcuts	Scorciatoie da tastiera
+	Keyboard Shortcuts and Menus	Scorciatoie da tastiera e menu
+	Kind	Tipo
+	Label Size	Dimensione etichetta
+	Labels	Etichette
+	Lanczos (sharp)	Lanczos (nitido)
+	Landscape	Orizzontale
+	Last Document State	Ultimo stato documento
+	Layout	Layout
+	Leading	Interlinea
+	Leading (set to the font size × auto-leading when Auto)	Interlinea (impostata a dimensione font × interlinea auto quando Auto)
+	Leave as is (don't color manage)	Lascia com'è (non gestire colore)
+	Left	Sinistra
+	Left align text	Allinea testo a sinistra
+	Length:	Lunghezza:
+	Level	Livello
+	Levels	Livelli
+	Lighten	Schiarisci
+	Lightness	Chiarezza
+	Lights	Luci
+	Limits:	Limiti:
+	Linear Gradient	Sfumatura lineare
+	Link layers	Collega livelli
+	Link width and height	Collega larghezza e altezza
+	Liquify is not open	Fluidifica non è aperto
+	Load	Carica
+	Load 3D LUT…	Carica LUT 3D…
+	Load Photoshop brushes (.abr)	Carica pennelli Photoshop (.abr)
+	Load channel as selection	Carica canale come selezione
+	Load…	Carica…
+	Localized Color Clusters	Cluster colore localizzati
+	Lock	Blocca
+	Lock all	Blocca tutto
+	Lock image pixels	Blocca pixel immagine
+	Lock layer	Blocca livello
+	Lock position	Blocca posizione
+	Lock transparent pixels	Blocca pixel trasparenti
+	Lock:	Blocca:
+	Logical Length:	Lunghezza logica:
+	Logical Units:	Unità logiche:
+	Luminance	Luminanza
+	Luminance Detail	Dettaglio luminanza
+	Magenta	Magenta
+	Magenta  ·  Green	Magenta · Verde
+	Maintain aspect ratio	Mantieni proporzioni
+	Marker Size	Dimensione indicatore
+	Mask All	Maschera tutto
+	Mask Options	Opzioni maschera
+	Masking	Mascheratura
+	Master	Master
+	Matte	Bordo
+	Median:	Mediana:
+	Menus	Menu
+	Mesh Size	Dimensione mesh
+	Metadata	Metadati
+	Metrics	Metriche
+	Midpoint	Punto medio
+	Midtones	Mezzi toni
+	Midtones from:	Mezzi toni da:
+	Midtones to:	Mezzi toni a:
+	Minimum Depth	Profondità minima
+	Minimum Diameter	Diametro minimo
+	Minimum Roundness	Rotondità minima
+	Mode:	Modalità:
+	Monochrome	Monocromia
+	More Points	Più punti
+	Move effect layer down	Sposta livello effetto giù
+	Move effect layer up	Sposta livello effetto su
+	Move to	Sposta in
+	Name	Nome
+	Name:	Nome:
+	Nearest Neighbor	Vicino più prossimo
+	Nearest Neighbor (hard edges)	Vicino più prossimo (bordi netti)
+	New Size	Nuova dimensione
+	New document…	Nuovo documento…
+	New effect layer	Nuovo livello effetto
+	New selection	Nuova selezione
+	Next frame	Fotogramma successivo
+	Next note	Nota successiva
+	No Color	Nessun colore
+	No Color Management	Nessuna gestione colore
+	No Dither	Nessun dithering
+	No author	Nessun autore
+	No character style	Nessun stile carattere
+	No document	Nessun documento
+	No matching commands	Nessun comando corrispondente
+	No presets for the current tool.	Nessun predefinito per strumento corrente.
+	No presets of this type.	Nessun predefinito di questo tipo.
+	No properties	Nessuna proprietà
+	No tool presets.	Nessun predefinito strumento.
+	Noise Reduction	Riduzione disturbo
+	Normal	Normale
+	Not in Dictionary:	Non nel dizionario:
+	OK	OK
+	Offset	Scostamento
+	Only Web Colors	Solo colori web
+	Opacity	Opacità
+	Opacity Jitter	Variazione opacità
+	Opacity:	Opacità:
+	Open a document to define variables.	Apri un documento per definire variabili.
+	Open a document to select a colour range.	Apri un documento per selezionare un intervallo colori.
+	Open a document to use the timeline.	Apri un documento per usare la timeline.
+	Optical	Ottico
+	Optimized	Ottimizzato
+	Option-click to define a source point to clone from	Opzione-click per definire un punto sorgente da clonare
+	Original	Originale
+	Output Channel:	Canale output:
+	Output Levels:	Livelli output:
+	Output:	Output:
+	Outside	Fuori
+	Overlay Color	Colore sovrapposizione
+	Overlay Opacity	Opacità sovrapposizione
+	Overlay: Rule of Thirds	Sovrapposizione: regola dei terzi
+	Override Pressure	Sovrascrivi pressione
+	Override Rotation	Sovrascrivi rotazione
+	Override Tilt	Sovrascrivi inclinazione
+	PRESET DETAILS	DETTAGLI PREDEFINITO
+	PSD	PSD
+	Paint Overlay	Sovrapposizione pittura
+	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	Le posizioni pannelli sono salvate nell'area di lavoro. Scorciatoie, menu e barra strumenti opzionali.
+	Paper	Carta
+	Path	Tracciato
+	Pattern	Pattern
+	Pattern Size	Dimensione pattern
+	Pause	Pausa
+	Percent	Percentuale
+	Perceptual	Percettivo
+	Perspective Warp is not active	Altera prospettiva non attiva
+	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Altera prospettiva: disegna piani lungo la prospettiva immagine, poi passa ad Altera
+	Photo Filter	Filtro fotografico
+	PhotoCraft	PhotoCraft
+	PhotoCraft Manages Colors	PhotoCraft gestisce i colori
+	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — editor immagini nativo open-source scritto in Rust.
+	Pin Depth:	Profondità pin:
+	Pixel Length:	Lunghezza pixel:
+	Pixels/Centimeter	Pixel/Centimetro
+	Pixels/Inch	Pixel/Pollice
+	Pixels:	Pixel:
+	Play	Riproduci
+	Play selection	Riproduci selezione
+	Portrait	Verticale
+	Position	Posizione
+	Position and Size	Posizione e dimensione
+	Posterize	Posterizza
+	Preserve Details	Conserva dettagli
+	Preserve Luminosity	Conserva luminosità
+	Preset	Predefinito
+	Preset Type	Tipo predefinito
+	Preset:	Predefinito:
+	Presets:	Predefiniti:
+	Press keys…	Premi tasti…
+	Pressure	Pressione
+	Pressure for Opacity	Pressione per opacità
+	Pressure for Size	Pressione per dimensione
+	Prevent auto-nesting in and out of Artboards and Frames	Evita annidamento auto dentro/fuori tavole e cornici
+	Preview	Anteprima
+	Previous frame	Fotogramma precedente
+	Previous note	Nota precedente
+	Print	Stampa
+	Printer	Stampante
+	Printer Manages Colors	Stampante gestisce i colori
+	Printer Setup	Configura stampante
+	Printing Marks	Segni di stampa
+	Progressive	Progressivo
+	Promote	Promuovi
+	Protect Detail	Proteggi dettagli
+	Protect Foreground Color	Proteggi colore primo piano
+	Protect Tones	Proteggi toni
+	Proximity Match	Corrispondenza prossimità
+	Pulled String Mode	Modalità corda tesa
+	Puppet Warp is not active	Altera marionetta non attiva
+	Purity	Purezza
+	Quality	Qualità
+	Quick Actions	Azioni rapide
+	Quick Export As PNG	Esportazione rapida come PNG
+	Radial Gradient	Sfumatura radiale
+	Radius	Raggio
+	Radius:	Raggio:
+	Range:	Intervallo:
+	Rate	Velocità
+	Recently Used	Usati di recente
+	Reconstruct	Ricostruisci
+	Record ● a sequence of edits, then play ▶ it on any document.	Registra ● una sequenza di modifiche, poi riproduci ▶ su qualsiasi documento.
+	Red	Rosso
+	Redefine style by current selection	Ridefinisci stile con selezione corrente
+	Reflected Gradient	Sfumatura riflessa
+	Registration Marks	Crocini di registro
+	Regular	Normale
+	Relative	Relativo
+	Relative Colorimetric	Colorimetrico relativo
+	Remove	Rimuovi
+	Remove All Pins	Rimuovi tutti i pin
+	Remove Background	Rimuovi sfondo
+	Remove Planes	Rimuovi piani
+	Remove stop	Rimuovi punto
+	Remove variable	Rimuovi variabile
+	Rename	Rinomina
+	Rename Group…	Rinomina gruppo…
+	Rename Layer…	Rinomina livello…
+	Rename Tool Preset…	Rinomina predefinito strumento…
+	Rename…	Rinomina…
+	Resample	Ricampiona
+	Reset All to Defaults	Ripristina tutto ai predefiniti
+	Reset Section	Reimposta sezione
+	Reset Transform	Reimposta trasformazione
+	Reset to defaults	Ripristina predefiniti
+	Resolution	Risoluzione
+	Resolution:	Risoluzione:
+	Restore All	Ripristina tutto
+	Restore Defaults	Ripristina predefiniti
+	Restrictive (Web)	Restrittivo (web)
+	Right	Destra
+	Right align text	Allinea testo a destra
+	Rigid	Rigido
+	Rotate:	Rotazione:
+	Rotation	Rotazione
+	Roughness	Rugosità
+	Roundness	Rotondità
+	Roundness Jitter	Variazione rotondità
+	Rulers & Grids	Righelli e griglie
+	Sample All Layers	Campiona tutti i livelli
+	Sample:	Campione:
+	Sampling: Background Swatch	Campionamento: campione sfondo
+	Sampling: Continuous	Campionamento: continuo
+	Sampling: Once	Campionamento: una volta
+	Saturate	Satura
+	Saturation	Saturazione
+	Saturation Jitter	Variazione saturazione
+	Save HTML and Images	Salva HTML e immagini
+	Save as PDF	Salva come PDF
+	Save selection as channel	Salva selezione come canale
+	Save…	Salva…
+	Scale to Fit Media	Scala per adattare al supporto
+	Scatter	Dispersione
+	Scratch disks	Dischi virtuali
+	Search	Cerca
+	Search commands	Cerca comandi
+	Search commands, tools and panels…	Cerca comandi, strumenti e pannelli…
+	Search fonts	Cerca font
+	Select All	Seleziona tutto
+	Select Subject	Seleziona soggetto
+	Select a type layer or click into text to insert glyphs	Seleziona un livello testo o fai click nel testo per inserire glifi
+	Select text to apply a character style	Seleziona testo per applicare uno stile carattere
+	Select:	Selezione:
+	Selections	Selezioni
+	Selective	Selettivo
+	Selective Color	Colore selettivo
+	Send the selected pin backward	Manda indietro il pin selezionato
+	Set additional smoothing options	Imposta opzioni levigatura aggiuntive
+	Set background color	Imposta colore sfondo
+	Set foreground color	Imposta colore primo piano
+	Set painting symmetry options	Imposta opzioni simmetria pittura
+	Set shape fill type	Imposta tipo riempimento forma
+	Set shape stroke type	Imposta tipo traccia forma
+	Set the text color	Imposta colore testo
+	Shadows	Ombre
+	Shape:	Forma:
+	Sharpening	Contrasto
+	Shift	Maiusc
+	Shortcut removed.	Scorciatoia rimossa.
+	Show All Menu Items	Mostra tutte le voci menu
+	Show Backdrop	Mostra sfondo
+	Show Guides	Mostra guide
+	Show Mask	Mostra maschera
+	Show Mesh	Mostra mesh
+	Show Overlay	Mostra sovrapposizione
+	Show Transform Controls	Mostra controlli trasformazione
+	Show or hide the Notes panel	Mostra o nascondi pannello Note
+	Show:	Mostra:
+	Sides	Lati
+	Sides:	Lati:
+	Size	Dimensione
+	Size Jitter	Variazione dimensione
+	Size:	Dimensione:
+	Slice Options…	Opzioni sezione…
+	Slices From Guides	Sezioni da guide
+	Slices are locked (View › Lock Slices)	Sezioni bloccate (Vista › Blocca sezioni)
+	Small Caps	Maiuscoletto
+	Smoothing	Levigatura
+	Space After	Spazio dopo
+	Space Before	Spazio prima
+	Spacing	Spaziatura
+	Spell check complete.	Controllo ortografico completato.
+	Split:	Divisione:
+	Star ratio	Rapporto stella
+	Stop playing/recording	Interrompi riproduzione/registrazione
+	Straighten	Raddrizza
+	Straighten Layer	Raddrizza livello
+	Strength:	Forza:
+	Strikethrough	Barrato
+	Stroke	Traccia
+	Stroke Catch-up	Recupero traccia
+	Stroke:	Traccia:
+	Style	Stile
+	Style Options	Opzioni stile
+	Style Options…	Opzioni stile…
+	Style: Normal	Stile: Normale
+	Subtract from Sample	Sottrai da campione
+	Subtract from selection  ({key})	Sottrai da selezione ({key})
+	Suggestions:	Suggerimenti:
+	Swap colours (X)	Scambia colori (X)
+	Swaps height and width	Scambia altezza e larghezza
+	Switch between free transform and warp modes	Passa tra trasformazione libera e altera
+	Switch theme	Cambia tema
+	Temperature	Temperatura
+	Tetrahedral	Tetraedrica
+	Text Position:	Posizione testo:
+	Texture	Texture
+	Texture Each Tip	Texture per punta
+	Threshold	Soglia
+	Threshold Level	Livello soglia
+	Thumbnail size (smallest: list)	Dimensione miniatura (più piccola: elenco)
+	Tilt X	Inclinazione X
+	Tilt Y	Inclinazione Y
+	Tint	Tinta
+	Toggle count group visibility	Alterna visibilità gruppo conteggio
+	Toggle text orientation	Alterna orientamento testo
+	Tolerance	Tolleranza
+	Tolerance:	Tolleranza:
+	Tone:	Tono:
+	Toolbar	Barra strumenti
+	Top	In alto
+	Total:	Totale:
+	Tracking	Tracking
+	Tracking (1/1000 em)	Tracking (1/1000 em)
+	Transparency	Trasparenza
+	Transparent	Trasparente
+	Trilinear	Trilineare
+	Type Styles	Stili testo
+	Type:	Tipo:
+	Underline	Sottolineato
+	Untitled	Senza titolo
+	Untitled-1	Senza titolo-1
+	Update layer comp (visibility, position and appearance)	Aggiorna composizione livelli (visibilità, posizione e aspetto)
+	Use Default	Usa predefinito
+	Use Legacy	Usa legacy
+	Use Measurement Scale	Usa scala misurazione
+	Use the embedded profile (instead of the working space)	Usa profilo incorporato (invece dello spazio di lavoro)
+	Variables bind a layer's visibility, text or pixels to a named data slot.	Le variabili collegano visibilità, testo o pixel di un livello a uno slot dati nominato.
+	Vertical scale	Scala verticale
+	Vibrance	Vividezza
+	View Options	Opzioni vista
+	Vignetting	Vignettatura
+	Violet, Orange	Viola, arancione
+	Visibility	Visibilità
+	Visible	Visibile
+	Warp:	Altera:
+	Web Snap	Ancoraggio web
+	Weight	Peso
+	Weight:	Peso:
+	White	Bianco
+	White Balance: As Shot	Bilanciamento bianco: Come scattato
+	Whites	Bianchi
+	Width	Larghezza
+	Width:	Larghezza:
+	Work Path	Tracciato di lavoro
+	Yellow	Giallo
+	Yellow  ·  Blue	Giallo · Blu
+	Zoom	Zoom
+	Zoom in	Ingrandisci
+	Zoom out	Riduci
+	command or shortcut	comando o scorciatoia
+	current	corrente
+	image file path	percorso file immagine
+	modified	modificato
+	name	nome
+	new	nuovo
+	{name} options	Opzioni {name}
+	↑↓ navigate   {key} run   esc close	↑↓ naviga {key} esegui esc chiudi
+	Version {version}	Versione {version}
+	New Document	Nuovo documento
+	Error	Errore
+	Command	Comando
+
+# Tool names, brush and style option tables
+	Adjustment layers have nothing to transform	I livelli di regolazione non hanno nulla da trasformare
+	Altitude	Altitudine
+	Android 1080p	Android 1080p
+	Apple Watch 45mm	Apple Watch 45mm
+	Aqua	Acqua
+	Art & Illustration	Arte e illustrazione
+	ArtCraft	ArtCraft
+	Background Eraser Tool	Strumento Gomma per sfondo
+	Bevel & Emboss	Smusso ed effetto rilievo
+	Blend Mode	Metodo di fusione
+	Blues	Blu
+	Blur Tool	Strumento Sfoca
+	Bold	Grassetto
+	Brush	Pennello
+	Brush Pose	Posa pennello
+	Brush Tip Shape	Forma punta pennello
+	Brush Tool	Strumento Pennello
+	Build-up	Accumulo
+	Burn Tool	Strumento Brucia
+	Centimeters	Centimetri
+	Choke	Strozza
+	Classic	Classico
+	Click to add text	Fai click per aggiungere testo
+	Click to fill similar colours	Fai click per riempire colori simili
+	Clone Stamp Tool	Strumento Timbro clone
+	Color Burn	Colore brucia
+	Color Dodge	Colore scherma
+	Color Dynamics	Dinamica colore
+	Color Overlay	Sovrapposizione colore
+	Comic Book	Fumetto
+	Conform	Conforma
+	Content-Aware Fill needs a selection on a pixel layer	Il Riempimento in base al contenuto richiede una selezione su un livello pixel
+	Could not transform: the layer is empty	Impossibile trasformare: livello vuoto
+	Could not use Perspective Warp: the layer is empty	Impossibile usare Altera prospettiva: livello vuoto
+	Could not use Puppet Warp: no opaque pixels	Impossibile usare Altera marionetta: nessun pixel opaco
+	Could not use Puppet Warp: the layer is empty	Impossibile usare Altera marionetta: livello vuoto
+	Crop Tool	Strumento Ritaglia
+	Crosswise	Trasversale
+	Current Tool	Strumento corrente
+	Custom Shape Tool	Strumento Forma personale
+	Cyans	Ciano
+	Default Photoshop Size	Dimensione predefinita Photoshop
+	Delete Workspace	Elimina area di lavoro
+	Diamond	Diamante
+	Dimensions:	Dimensioni:
+	Direction	Direzione
+	Distance	Distanza
+	Document Dimensions	Dimensioni documento
+	Document Profile	Profilo documento
+	Document Sizes	Dimensioni documento
+	Dodge Tool	Strumento Scherma
+	Down	Giù
+	Drag to draw a gradient	Trascina per disegnare una sfumatura
+	Drag to move the active layer	Trascina per spostare livello attivo
+	Drag to pan  ·  hold Space with any tool	Trascina per panoramica · tieni premuto Spazio con qualsiasi strumento
+	Drop Shadow	Ombra esterna
+	Dual Brush	Pennello doppio
+	Edge	Bordo
+	Efficiency	Efficienza
+	Efficiency: 100%	Efficienza: 100%
+	Ellipse Tool	Strumento Ellisse
+	Elliptical Marquee Tool	Strumento Selezione ellittica
+	Emboss	Rilievo
+	Eraser	Gomma
+	Eraser Tool	Strumento Gomma
+	ExtraBold	Extra grassetto
+	ExtraLight	Extra leggero
+	Eyedropper Tool	Strumento Contagocce
+	Fade	Dissolvi
+	Fill Opacity	Opacità riempimento
+	Film & Video	Film e video
+	From	Da
+	General	Generale
+	GitHub	GitHub
+	Gradient Overlay	Sovrapposizione sfumatura
+	Gradient Tool	Strumento Sfumatura
+	Greens	Verdi
+	Hand Tool	Strumento Mano
+	Hard	Duro
+	Hard Mix	Miscela dura
+	Healing Brush Tool	Strumento Pennello correttivo
+	Highlights from:	Luci da:
+	History Brush Tool	Strumento Pennello storia
+	Horizontal Type Tool	Strumento Testo orizzontale
+	Image Size:	Dimensione immagine:
+	Inches	Pollici
+	Indexed	Indicizzato
+	Initial Direction	Direzione iniziale
+	Inner Bevel	Smusso interno
+	Inner Glow	Bagliore interno
+	Inner Shadow	Ombra interna
+	Lab	Lab
+	Landscape, 10 x 8	Orizzontale, 10 x 8
+	Landscape, 6 x 4	Orizzontale, 6 x 4
+	Landscape, 7 x 5	Orizzontale, 7 x 5
+	Lasso	Lazo
+	Lasso Tool	Strumento Lazo
+	Layer Count	Conteggio livelli
+	Layer Knocks Out Drop Shadow	Il livello esclude ombra esterna
+	Legal	Legale
+	Letter	Lettera
+	Light	Leggero
+	Line Tool	Strumento Linea
+	Linear	Lineare
+	Linear Burn	Brucia lineare
+	Linear Height	Altezza lineare
+	Link with Layer	Collega con livello
+	Lorem Ipsum	Lorem Ipsum
+	Magentas	Magenta
+	Magic Eraser Tool	Strumento Gomma magica
+	Magic Wand Tool	Strumento Bacchetta magica
+	Marquee	Selezione
+	Mean:	Media:
+	Measurement Scale	Scala misurazione
+	Measurement Scale Marker	Indicatore scala misurazione
+	Millimeters	Millimetri
+	Mobile	Mobile
+	Move Tool	Strumento Sposta
+	Multiply	Moltiplica
+	My Brushes	I miei pennelli
+	Neutrals	Neutri
+	New Workspace	Nuova area di lavoro
+	Note Tool	Strumento Nota
+	Object Selection Tool	Strumento Selezione oggetto
+	Off	Disattivato
+	Open	Apri
+	Orange	Arancione
+	Original Ratio	Proporzione originale
+	Out Of Gamut	Fuori gamma
+	Outer Bevel	Smusso esterno
+	Outer Glow	Bagliore esterno
+	Overlay	Sovrapponi
+	Paint Bucket Tool	Strumento Secchiello
+	Paints from the document's opening state	Dipinge dallo stato di apertura del documento
+	Path Selection Tool	Strumento Selezione tracciato
+	Pattern Overlay	Sovrapposizione pattern
+	Pen Pressure	Pressione penna
+	Pen Tilt	Inclinazione penna
+	Pen Tool	Strumento Penna
+	Photo	Foto
+	PhotoCraft website	Sito web PhotoCraft
+	Picas	Pica
+	Pillow Emboss	Rilievo cuscino
+	Pixel Replacement	Sostituzione pixel
+	Pixels	Pixel
+	Points	Punti
+	Polygon Tool	Strumento Poligono
+	Polygonal Lasso Tool	Strumento Lazo poligonale
+	Portrait, 4 x 6	Verticale, 4 x 6
+	Portrait, 5 x 7	Verticale, 5 x 7
+	PostScript (72 points/inch)	PostScript (72 punti/pollice)
+	Postcard	Cartolina
+	Poster	Poster
+	Pro (Dark)	Pro (scuro)
+	Pro (Medium Gray)	Pro (grigio medio)
+	Protect Texture	Proteggi texture
+	Purple	Viola
+	Quick Mask	Maschera veloce
+	Quick Selection Tool	Strumento Selezione rapida
+	Radial	Radiale
+	Rasterize Layer	Rasterizza livello
+	Ratio	Proporzione
+	Recent	Recente
+	Rectangle Tool	Strumento Rettangolo
+	Rectangular Marquee Tool	Strumento Selezione rettangolare
+	Reds	Rossi
+	Reflected	Riflesso
+	Sample: foreground colour	Campione: colore primo piano
+	Sampled Colors	Colori campionati
+	Satin	Raso
+	Save Pixel Aspect Ratio	Salva proporzioni pixel
+	Scattering	Dispersione
+	Scratch Sizes	Dimensioni disco virtuale
+	Select Data Points	Seleziona punti dati
+	Selection	Selezione
+	SemiBold	Semi grassetto
+	Shadows up to:	Ombre fino a:
+	Shape Dynamics	Dinamica forma
+	Sharpen Tool	Strumento Contrasta
+	Show Extras Options	Mostra opzioni extra
+	Slice Select Tool	Strumento Selezione sezioni
+	Slice Tool	Strumento Sezione
+	Smart Filters	Filtri avanzati
+	Smudge Tool	Strumento Sfumino
+	Soft	Morbido
+	Soften	Ammorbidisci
+	Source	Sorgente
+	Source: set	Sorgente: impostata
+	Sponge Tool	Strumento Spugna
+	Spot Healing Brush Tool	Strumento Pennello correttivo al volo
+	Spread	Estendi
+	Square, 12 x 12	Quadrato, 12 x 12
+	Square, 5 x 5	Quadrato, 5 x 5
+	Std Dev:	Dev std:
+	Studio (Dark)	Studio (scuro)
+	Studio (Light)	Studio (chiaro)
+	Stylus Wheel	Rotella stilo
+	Subtract	Sottrai
+	Tabloid	Tabloid
+	Text Replacement	Sostituzione testo
+	Thin	Sottile
+	Traditional (72.27 points/inch)	Tradizionale (72,27 punti/pollice)
+	Transfer	Trasferimento
+	Triangle Tool	Strumento Triangolo
+	Unsaved changes	Modifiche non salvate
+	Uses the foreground and background colours.	Usa i colori di primo piano e sfondo.
+	Web	Web
+	Web Large	Web grande
+	Web Minimum	Web minimo
+	Web Most Common	Web più comune
+	WebP (lossless)	WebP (senza perdita)
+	Wet Edges	Bordi bagnati
+	Yellows	Gialli
+	Zoom Tool	Strumento Zoom
+	{name} Properties	Proprietà {name}
+
+# Templates with placeholders
+	Revert “{name}” to the last saved version? Your changes will be lost.	Ripristinare “{name}” all'ultima versione salvata? Le modifiche andranno perse.
+	Do you want to save the changes you made to “{name}” before quitting?	Vuoi salvare le modifiche apportate a “{name}” prima di uscire?
+	Do you want to save the changes you made to “{name}” before closing?	Vuoi salvare le modifiche apportate a “{name}” prima di chiudere?
+	Doc: {flat}/{layered}	Doc: {flat}/{layered}
+	Scratch: {size}	Temporaneo: {size}
+	Untagged {mode}	Senza profilo {mode}
+	Invalid {mode} profile	Profilo {mode} non valido
+	Unnamed {mode} profile	Profilo {mode} senza nome
+	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	Resolution: {dpi} pixels/inch	Risoluzione: {dpi} pixel/pollice
+	Doc: {w} × {h} px	Doc: {w} × {h} px
+	Frame {current} / {total}	Fotogramma {current} / {total}
+	Count: {n}	Conteggio: {n}
+	BLANK DOCUMENT PRESETS ({n})	PREDEFINITI DOCUMENTO VUOTO ({n})
+	Constraints ({n})	Vincoli ({n})
+	Align {what}	Allinea {what}
+@plural	{n} Layer|{n} Layers	{n} livello|{n} livelli
+@plural	{n} layer|{n} layers	{n} livello|{n} livelli
+@plural	Group · {n} layer|Group · {n} layers	Gruppo · {n} livello|Gruppo · {n} livelli
+
+# Preferences (labels are generated from the setting names)
+	Additional plugins folder	Cartella plugin aggiuntiva
+	Adobe	Adobe
+	Adobe rgb	Adobe RGB
+	Allow agent control	Consenti controllo agente
+	Allow scripts to connect	Consenti connessione script
+	Always	Sempre
+	Always create smart objects when placing	Crea sempre oggetti avanzati all'inserimento
+	Animated zoom	Zoom animato
+	Apply auto tone	Applica tono automatico
+	Ask	Chiedi
+	Ask before saving layered tiff	Chiedi prima di salvare TIFF con livelli
+	Auto collapse icon panels	Comprimi automaticamente pannelli icone
+	Auto show hidden panels	Mostra automaticamente pannelli nascosti
+	Auto show home screen	Mostra automaticamente schermata home
+	Autosave	Salvataggio automatico
+	Autosave minutes	Minuti salvataggio automatico
+	Beep when done	Segnale acustico al termine
+	Bicubic automatic	Bicubica automatica
+	Bicubic sharper	Bicubica più nitida
+	Bicubic smoother	Bicubica più morbida
+	Bit depth	Profondità bit
+	Brush preview color	Colore anteprima pennello
+	Cache levels	Livelli cache
+	Cache tile size	Dimensione tile cache
+	Camera Raw Defaults	Default Camera Raw
+	Canvas border	Bordo quadro
+	Canvas color	Colore quadro
+	Canvas custom color	Colore personalizzato quadro
+	Color picker	Selettore colore
+	Color space	Spazio colore
+	Column width	Larghezza colonna
+	Concise	Conciso
+	Control port	Porta controllo
+	Convert to srgb	Converti in sRGB
+	Cursors	Cursori
+	Custom dark	Personalizzato scuro
+	Custom light	Personalizzato chiaro
+	Dark	Scuro
+	Dark gray	Grigio scuro
+	Dashed lines	Linee tratteggiate
+	Destination	Destinazione
+	Detailed	Dettagliato
+	Disks	Dischi
+	Display p3	Display P3
+	Double click layer mask launches select and mask	Doppio click su maschera livello apre Seleziona e maschera
+	Drop shadow	Ombra esterna
+	Dynamic color sliders	Slider colore dinamici
+	East asian	Asia orientale
+	Effect cache mb	Cache effetti MB
+	Enable flick panning	Abilita scorrimento a sfioro
+	Enable floating document window docking	Abilita ancoraggio finestre documento flottanti
+	Enable narrow options bar	Barra opzioni stretta
+	Enabled	Abilitato
+	Enhanced Controls	Controlli avanzati
+	Export clipboard	Esporta appunti
+	Extra large	Extra grande
+	File Handling	Gestione file
+	File path	Percorso file
+	Fill new type layers with placeholder	Riempi nuovi livelli testo con segnaposto
+	Font preview	Anteprima font
+	Full size tip	Punta dimensione reale
+	Gamut warning color	Colore avviso gamma
+	Gamut warning opacity	Opacità avviso gamma
+	Generator enabled	Generatore abilitato
+	Gif	GIF
+	Glossy	Lucido
+	Grid color	Colore griglia
+	Grid colors	Colori griglia
+	Grid size	Dimensione griglia
+	Grid style	Stile griglia
+	Grid unit	Unità griglia
+	Gridline every	Linea griglia ogni
+	Guide color	Colore guide
+	Guide style	Stile guide
+	Guides, Grid & Slices	Guide, griglia e sezioni
+	Gutter	Spazio
+	History Log	Registro cronologia
+	History states	Stati cronologia
+	Ignore exif profile tag	Ignora tag profilo EXIF
+	Image interpolation	Interpolazione immagine
+	Image previews	Anteprime immagine
+	Integrations	Integrazioni
+	Interface	Interfaccia
+	Jpeg quality	Qualità JPEG
+	Jpg	JPG
+	Language	Lingua
+	Large tabs	Schede grandi
+	Legacy compositing	Composizione legacy
+	Light gray	Grigio chiaro
+	Line	Linea
+	Lines	Linee
+	Lowercase extension	Estensione minuscola
+	Maximize psd compatibility	Massimizza compatibilità PSD
+	Medium gray	Grigio medio
+	Memory usage mb	Uso memoria MB
+	Missing glyph protection	Protezione glifi mancanti
+	Modern	Moderno
+	Nearest neighbor	Vicino più prossimo
+	Never	Mai
+	Normal tip	Punta normale
+	Open as smart object	Apri come oggetto avanzato
+	Open documents as tabs	Apri documenti come schede
+	Overscroll	Overscroll
+	Performance	Prestazioni
+	Png	PNG
+	Point size	Dimensione punto
+	Precise	Preciso
+	Preserve details	Conserva dettagli
+	Print resolution	Risoluzione stampa
+	Pro	Pro
+	Pro medium	Pro medio
+	Pro photo	ProPhoto
+	Quick export format	Formato esportazione rapida
+	Quick export location	Posizione esportazione rapida
+	Recent file count	Conteggio file recenti
+	Recent files	File recenti
+	Recent fonts	Font recenti
+	Recover on launch	Recupera all'avvio
+	Remember workspace changes	Ricorda modifiche area di lavoro
+	Resize image during place	Ridimensiona immagine durante inserimento
+	Rotate view with trackpad	Ruota vista con trackpad
+	Same folder	Stessa cartella
+	Save in background	Salva in background
+	Scratch Disks	Dischi virtuali
+	Screen	Schermo
+	Screen resolution	Risoluzione schermo
+	Scrubby slider acceleration	Accelerazione slider scrubby
+	Sessions only	Solo sessioni
+	Sharpen for	Contrasta per
+	Show channels in color	Mostra canali a colori
+	Show crosshair in brush tip	Mostra mirino in punta pennello
+	Show extension panels	Mostra pannelli estensione
+	Show font names in english	Mostra nomi font in inglese
+	Show menu colors	Mostra colori menu
+	Show only crosshair while painting	Mostra solo mirino durante pittura
+	Show slice numbers	Mostra numeri sezioni
+	Show tooltips	Mostra tooltip
+	Show bounding box when dragging layer	Mostra riquadro selezione al trascinamento livello
+	Show transformation values	Mostra valori trasformazione
+	Slice color	Colore sezioni
+	Smart guide color	Colore guide intelligenti
+	Smart quotes	Virgolette intelligenti
+	Snap vector tools and transforms to pixel grid	Ancoraggio strumenti vettoriali e trasformazioni a griglia pixel
+	Srgb	sRGB
+	Standard	Standard
+	Studio	Studio
+	Studio light	Studio chiaro
+	Subdivisions	Suddivisioni
+	System	Sistema
+	Text engine	Motore testo
+	Text file	File di testo
+	Tiny	Minuscolo
+	Touch gestures	Gesti touch
+	Transparency & Gamut	Trasparenza e gamma
+	Type units	Unità testo
+	UI font size	Dimensione font UI
+	UI scale	Scala UI
+	Units & Rulers	Unità e righelli
+	Use additional plugins folder	Usa cartella plugin aggiuntiva
+	Use esc to commit	Usa Esc per confermare
+	Use gpu	Usa GPU
+	Use legacy free transform	Usa trasformazione libera legacy
+	Use shift key for tool switch	Usa Maiusc per cambio strumento
+	Vary round brush hardness on hud	Varia durezza pennello tondo su HUD
+	Webp	WebP
+	World ready	World ready
+	Zoom clicked point to center	Centra punto cliccato al zoom
+	Zoom resizes windows	Zoom ridimensiona finestre
+	Zoom with scroll wheel	Zoom con rotella
+	Zoom with trackpad pinch	Zoom con pinch trackpad
+	Pass Through	Passa attraverso
+	Dissolve	Dissolvi
+	Darker Color	Colore più scuro
+	Linear Dodge (Add)	Scherma lineare (aggiungi)
+	Lighter Color	Colore più chiaro
+	Soft Light	Luce soffusa
+	Hard Light	Luce intensa
+	Vivid Light	Luce vivida
+	Linear Light	Luce lineare
+	Pin Light	Luce puntiforme
+	Exclusion	Esclusione
+	Divide	Dividi
+	Luminosity	Luminosità
+@plural	{n} sample|{n} samples	{n} campione|{n} campioni
+	{added}, {removed} subtracted	{added}, {removed} sottratti
+
+# Added with the rebase onto the dock / brush picker work
+	Adjustment Preview	Anteprima regolazione
+	Airbrush: keeps depositing paint while the pointer rests.	Aerografo: continua a depositare vernice mentre il puntatore è fermo.
+	Angle:	Angolo:
+	Blend If	Fondi se
+	Close Tab Group	Chiudi gruppo schede
+	Collapse	Comprimi
+	Collapse All Groups	Comprimi tutti i gruppi
+	Collapse Panel Group	Comprimi gruppo pannelli
+	Collapse group  ({key}-click: all groups)	Comprimi gruppo ({key}-click: tutti i gruppi)
+	Create new brush from the current settings	Crea nuovo pennello da impostazioni correnti
+	Create new brush from these settings	Crea nuovo pennello da queste impostazioni
+	Delete brush	Elimina pennello
+	Drag the arrow to set the angle, the dots to set the roundness	Trascina la freccia per impostare l'angolo, i puntini per la rotondità
+	Expand	Espandi
+	Expand Panel Group	Espandi gruppo pannelli
+	Expand group  ({key}-click: all groups)	Espandi gruppo ({key}-click: tutti i gruppi)
+	Fade steps	Passi dissolvenza
+	Hide the layer's effects  ({key}-click: all layers)	Nascondi effetti livello ({key}-click: tutti i livelli)
+	Import Brushes… (.abr)	Importa pennelli… (.abr)
+	Move Group Down	Sposta gruppo giù
+	Move Group Up	Sposta gruppo su
+	Reset the brush to the defaults	Reimposta pennello ai predefiniti
+	Restore original size	Ripristina dimensione originale
+	Roundness:	Rotondità:
+	Search Brushes	Cerca pennelli
+	Show the layer's effects  ({key}-click: all layers)	Mostra effetti livello ({key}-click: tutti i livelli)
+	Brush picker	Selettore pennelli
+	Erase	Cancella
+	Right click with painting tools	Click destro con strumenti pittura
+
+# Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
+	System Info…	Info sistema…
+	System Info	Info sistema
+	More panels	Altri pannelli
+	These settings aren't available in PhotoCraft yet.	Queste impostazioni non sono ancora disponibili in PhotoCraft.
+	Graphics	Grafica
+	Reset GPU Backend	Reimposta backend GPU
+	Applies at next launch.	Si applica al prossimo avvio.
+	Click to sample the foreground colour  ·  {key}-click for background	Click per campionare colore primo piano · {key}-click per sfondo
+	{key}-click to set the source	{key}-click per impostare sorgente
+	{key} to subtract	{key} per sottrarre
+	Clone source {n} ({key}-click with Clone Stamp to set)	Sorgente clone {n} ({key}-click con Timbro clone per impostare)
+	Source: not set ({key}-click with Clone Stamp)	Sorgente: non impostata ({key}-click con Timbro clone)
+	Pixel Layer	Livello pixel
+	Type Layer	Livello testo
+	Shape Layer	Livello forma
+	Group Layer	Livello gruppo
+	Fill Layer	Livello riempimento
+	Smart Object Layer	Livello oggetto avanzato
+	Create Warped Text	Crea testo deformato
+	Rasterize Smart Object	Rasterizza oggetto avanzato
+	Rasterize Fill Content	Rasterizza contenuto riempimento
+	Unlock: picking a preset replaces these settings	Sblocca: scegliendo un predefinito sostituisce queste impostazioni
+	Lock: keep these settings when picking another preset	Blocca: mantiene queste impostazioni scegliendo altro predefinito
+	Diameter:	Diametro:
+	Hardness:	Durezza:
+	No brush presets	Nessun predefinito pennello
+	Toggle the Brush Settings panel  (F5)	Alterna pannello Impostazioni pennello (F5)
+	Create new brush preset from the current settings	Crea nuovo predefinito pennello da impostazioni correnti
+	Brush Settings…  (F5): every option of this brush	Impostazioni pennello… (F5): ogni opzione di questo pennello
+	Rename Brush…	Rinomina pennello…
+	Delete Brush	Elimina pennello
+	Group name	Nome gruppo
+	Brush name	Nome pennello
+	Grid view	Vista griglia
+	List view	Vista elenco
+	Off: the speed of the pointer sets the spacing	Off: la velocità del puntatore imposta la spaziatura
+	Tilt Scale	Scala inclinazione
+	Brush Projection	Proiezione pennello
+	Apply the pen's tilt and rotation to the tip shape	Applica inclinazione e rotazione penna alla forma punta
+	Mixer Brush	Pennello miscelatore
+	Mixer Brush Tool	Strumento Pennello miscelatore
+	Wet	Bagnato
+	Mix	Miscela
+	Wetness Jitter	Variazione bagnato
+	Mix Jitter	Variazione miscela
+	Show the layer mask as an overlay	Mostra maschera livello come sovrapposizione
+	Toggle visibility	Alterna visibilità
+	Unlink the mask from the layer	Scollega maschera dal livello
+	Link the mask to the layer	Collega maschera al livello
+	Gradient	Sfumatura
+	Gradient Options	Opzioni sfumatura
+	Align with layer	Allinea con livello
+	Reset Alignment	Reimposta allineamento
+	Centre the gradient (offset 0, 0)	Centra sfumatura (offset 0,0)
+	The current gradient (pick one in Window › Gradients)	Sfumatura corrente (scegline una in Finestra › Sfumature)
+	Select a type layer to edit its character and paragraph settings.	Seleziona un livello testo per modificarne impostazioni carattere e paragrafo.
+	Text color	Colore testo
+	Type Options	Opzioni testo
+	Anti-aliasing method	Metodo anti-alias
+	Horizontal type	Testo orizzontale
+	Vertical type	Testo verticale
+	Fill path with foreground color	Riempi tracciato con colore primo piano
+	Stroke path with brush	Traccia tracciato con pennello
+	Load path as a selection	Carica tracciato come selezione
+	Make work path from selection	Crea tracciato di lavoro da selezione
+	Add vector mask	Aggiungi maschera vettoriale
+	Create new path	Crea nuovo tracciato
+	Delete path	Elimina tracciato
+	Delete vector mask	Elimina maschera vettoriale
+	CPU (no GPU acceleration)	CPU (nessuna accelerazione GPU)
+	DirectX 12	DirectX 12
+	GPU backend	Backend GPU
+	Metal	Metal
+	OpenGL	OpenGL
+	Use tablet pressure	Usa pressione tavoletta
+	Vulkan	Vulkan
+	Alt-click to define a source point to clone from	Alt-click per definire un punto sorgente da clonare
+	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nessun tracciato da cui creare selezione: disegnane uno con Penna o selezionane uno nel pannello Tracciati.
+	Cancel opening	Annulla apertura
+	Cancelled opening {name}	Apertura {name} annullata
+	Cancelled {label}	{label} annullato
+	Esc to cancel	Esc per annullare
+	Opening {name}	Apertura {name}
+	Opening {name}…	Apertura {name}…
+	Opening…	Apertura…
+	Reading…	Lettura…
+	Working…	Elaborazione…
+	3 x 3	3 × 3
+	4 x 4	4 × 4
+	5 x 5	5 × 5
+	Grid:	Griglia:
+
+# Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
+# Italian follows the tool wording used above (Herramienta X).
+	Color Range	Intervallo colori
+	Adaptive Wide Angle	Grandangolo adattivo
+	Chalk & Charcoal	Gessetto e carboncino
+	Charcoal	Carboncino
+	Chrome	Cromo
+	Conté Crayon	Matita Conté
+	Graphic Pen	Penna grafica
+	Halftone Pattern	Pattern mezzetinte
+	Note Paper	Carta da appunti
+	Photocopy	Fotocopia
+	Plaster	Intonaco
+	Reticulation	Reticolazione
+	Stamp	Timbro
+	Torn Edges	Bordi strappati
+	Water Paper	Carta bagnata
+	Move	Sposta
+	Pencil	Matita
+	Clone Stamp	Timbro clone
+	Dodge	Scherma
+	Burn	Brucia
+	Quick Selection	Selezione rapida
+	History Brush	Pennello storia
+	Color Replacement	Sostituzione colore
+	New Group	Nuovo gruppo
+	Layer Comp	Composizione livelli
+	Alpha	Alfa
+	Make	Produttore
+	Model	Modello
+	F	F
+	Artist	Artista
+	Spot Color	Colore spot
+	Roman	Normale
+	Bold Italic	Grassetto corsivo
+	Justification	Giustificazione
+	Symbols	Simboli
+	Punctuation	Punteggiatura
+	Make Work Path	Crea tracciato di lavoro
+	Make Selection	Crea selezione
+	Fill Path	Riempi tracciato
+	Stroke Path	Traccia tracciato
+	Delete Path	Elimina tracciato
+	W	L
+	H	A
+	Ruler	Righello
+	New Layer Comp	Nuova composizione livelli
+	Duplicate Layer Comp	Duplica composizione livelli
+	Rename Layer Comp	Rinomina composizione livelli
+	Apply Layer Comp	Applica composizione livelli
+	Update Layer Comp	Aggiorna composizione livelli
+	Method	Metodo
+	Author	Autore
+	Software	Software
+	Pencil Tool	Strumento Matita
+	Pixel	Pixel
+	Adjustment	Regolazione
+	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Trascina (lazo) o clic su punti (poligonale) · {add} aggiungi · {sub} sottrai
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Trascina un riquadro ritaglio · trascina dentro per spostare · bordi ridimensionano ({ratio} proporzione, {centre} centro) · Spazio sposta durante disegno · {commit} conferma · Esc annulla
+	{mode} Color · {bits} bit	Colore {mode} · {bits} bit
+	Scrubby Zoom	Zoom scrubby
+	Auto Erase	Cancellazione automatica
+	Color Adaptation	Adattamento colore
+	Preserve Transparency	Conserva trasparenza
+	New Style…	Nuovo stile…
+	shortcut	scorciatoia
+	Saved	Salvato
+	Arc	Arco
+	Arch	Arco inferiore
+	Bulge	Rigonfiamento
+	Shell Lower	Conchiglia inferiore
+	Shell Upper	Conchiglia superiore
+	Flag	Bandiera
+	Fish	Pesce
+	Wave	Onda
+	Rise	Ascesa
+	Inflate	Gonfia
+	Twist	Torciglione
+	Squeeze	Compressione
+	Mask	Maschera
+	Channel	Canale
+	Rectangle	Rettangolo
+	New Channel	Nuovo canale
+	Save Selection	Salva selezione
+	Load Selection	Carica selezione
+
+# Command-id override: under Edit > Purge a bare Deshacer reads as an action, not the history.
+@id	edit.purge.undo	Cronologia annullamenti
+# Rendering mode and recovery
+	Rendering Mode	Modalità rendering
+	Automatic (recommended)	Automatico (consigliato)
+	CPU / Compatibility	CPU / Compatibilità
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Automatico usa accelerazione GPU quando disponibile e ripiega su CPU in caso di errori.
+	Switched to CPU rendering	Passato a rendering CPU
+	GPU acceleration could not continue. Your documents are unchanged.	Accelerazione GPU non ha potuto continuare. I documenti sono invariati.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft sta componendo immagini su CPU. La finestra può ancora usare adattatore grafico.
+	Retry GPU requires a restart. Save your work first.	Riprovare GPU richiede riavvio. Salva prima il lavoro.
+	Keep Using CPU	Continua su CPU
+	Retry GPU	Riprova GPU
+	Advanced	Avanzato
+	GPU Backend	Backend GPU
+	Details	Dettagli
+
+	Rendering mode	Modalità rendering
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lazo congela: trascina per congelare un'area, Alt-trascina per scongelare (L)
+
+
+	Shadow Clipping Warning (U)	Avviso clipping ombre (U)
+	Highlight Clipping Warning (O)	Avviso clipping luci (O)
+	Show Lab Color Readouts	Mostra letture colore Lab
+	Show Vectorscope	Mostra vectorscopio
+	Show Red at 3 o'clock	Mostra rosso a ore 3
+	Show Skin Tone Indicator	Mostra indicatore incarnato
+	Tone Histogram	Istogramma tonale
+	Show Selected Region	Mostra regione selezionata
+
+cameraRaw	Light	Luce
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+cameraRaw	Lights	Toni chiari
+cameraRaw	Darks	Toni scuri
+cameraRaw	Red	Rossi
+cameraRaw	Orange	Arancioni
+cameraRaw	Yellow	Gialli
+cameraRaw	Green	Verdi
+cameraRaw	Aqua	Acqua
+cameraRaw	Blue	Blu
+cameraRaw	Purple	Viola
+cameraRaw	Magenta	Magenta
+cameraRaw	Blending	Fusione
+cameraRaw	Tint	Tinta
+cameraRaw	Temperature	Temperatura colore
+cameraRaw	Amount	Quantità
+	Patch Tool	Strumento Toppa
+	Patch:	Toppa:
+	Lasso around an area, then drag the selection	Seleziona un'area con lazo, poi trascina la selezione
+	Edit Type	Modifica testo
