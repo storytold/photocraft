@@ -13,6 +13,10 @@ on:
       fuzz_seconds:
         description: "Seconds per fuzz target"
         default: "600"
+      release_preview:
+        description: "Build a complete ad-hoc macOS release preview"
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +27,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos-release-preview:
+    name: macOS universal release preview
+    if: github.event_name == 'workflow_dispatch' && inputs.release_preview
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out craft-fonts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-release-preview
+      - name: Build complete macOS release package
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: packaging/macos/package.sh --arch universal
+      - name: Verify release package
+        run: packaging/macos/verify.sh --arch universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-macos-release-preview
+          path: dist/release/*
+
+  macos-icon:
+    name: layered macOS icon
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check generated icon layers
+        run: |
+          python3 packaging/macos/generate-icon-layers.py
+          git diff --exit-code -- assets/app-icon/PhotoCraft.icon/Assets
+      - name: Compile Icon Composer document
+        run: packaging/macos/compile-icon.sh "$RUNNER_TEMP/photocraft-icon"
+      - name: Check compiled resources
+        run: |
+          test -s "$RUNNER_TEMP/photocraft-icon/Assets.car"
+          test -s "$RUNNER_TEMP/photocraft-icon/PhotoCraft.icns"
+          file "$RUNNER_TEMP/photocraft-icon/Assets.car" "$RUNNER_TEMP/photocraft-icon/PhotoCraft.icns"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-layered-macos-icon
+          path: ${{ runner.temp }}/photocraft-icon/
+
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

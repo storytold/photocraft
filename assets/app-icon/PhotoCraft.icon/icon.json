@@ -1,0 +1,28 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "extended-srgb:1.00000,0.68627,0.08235,1.00000",
+      "extended-srgb:1.00000,0.59216,0.00000,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "specular": false,
+      "layers": [
+        { "image-name": "03-lettering.svg", "name": "Pc lettering", "glass": false }
+      ]
+    },
+    {
+      "specular": false,
+      "layers": [
+        { "image-name": "02-perforations.svg", "name": "Film perforations", "glass": false }
+      ]
+    },
+    {
+      "layers": [
+        { "image-name": "01-panel.svg", "name": "Inset panel" }
+      ]
+    }
+  ],
+  "supported-platforms": { "squares": "shared" }
+}

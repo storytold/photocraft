@@ -278,11 +278,14 @@ The keychain is deleted at the end of the job.
 
 ## Icons
 
-`assets/app-icon/photocraft.svg` is the canonical icon: the owner's ArtCraft drawing of a
-nine-tailed kitsune, vectorised (MIT OR Apache-2.0, see `LICENSE.txt` there; palette and
-geometry in `README.md`). `packaging/icons.sh` regenerates the 1024 px PNG, the `.icns`, the `.ico` (packed by
-`cargo xtask ico`) and the hicolor PNGs from it. It needs `resvg`, plus `iconutil` on macOS.
-The outputs are committed, so packaging never needs those tools.
+`assets/app-icon/photocraft.svg` is the canonical icon: a vector recreation of the project owner's
+orange filmstrip Pc mark (MIT OR Apache-2.0, see `LICENSE.txt` there; palette and
+geometry in `README.md`). `packaging/icons.sh` regenerates the PNGs, `.ico`, legacy `.icns`,
+hicolor icons, and the unmasked SVG layers in `PhotoCraft.icon`. Release packaging compiles that
+Icon Composer document with Xcode 26+ `actool` into a layered `Assets.car` and `.icns` fallback.
+The bundled app declares `CFBundleIconName=PhotoCraft` and lets macOS render its system effects.
+For a local package build without Xcode, set `PHOTOCRAFT_COMPILED_ICON_DIR` to the icon artifacts
+from CI; packaging verifies their source digest before use.
 
 ## Checks
 

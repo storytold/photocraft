@@ -78,7 +78,12 @@ for f in "$DMG" "$CLI_ZIP"; do
 done
 
 WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/photocraft-verify.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+MOUNTED=0
+cleanup() {
+  if [ "$MOUNTED" = 1 ]; then hdiutil detach "$WORK/mounted" >/dev/null || true; fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 # ---- CLI zip -----------------------------------------------------------------------------------
 echo "==> $(basename "$CLI_ZIP")"
@@ -125,6 +130,15 @@ fi
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> $(basename "$DMG")"
 codesign --verify --strict --verbose=2 "$DMG"
+mkdir -p "$WORK/mounted"
+hdiutil attach -quiet -readonly -nobrowse -mountpoint "$WORK/mounted" "$DMG"
+MOUNTED=1
+APP="$WORK/mounted/PhotoCraft.app"
+codesign --verify --strict --deep --verbose=2 "$APP"
+test -s "$APP/Contents/Resources/Assets.car" || { echo "error: DMG app lacks layered Assets.car" >&2; exit 1; }
+test -s "$APP/Contents/Resources/PhotoCraft.icns" || { echo "error: DMG app lacks icon fallback" >&2; exit 1; }
+icon_name="$(plutil -extract CFBundleIconName raw -o - "$APP/Contents/Info.plist")"
+[ "$icon_name" = PhotoCraft ] || { echo "error: DMG app declares icon $icon_name" >&2; exit 1; }
 if [ "$STRICT" = 1 ]; then
   xcrun stapler validate "$DMG" || fail "no notarization ticket stapled to the DMG"
   assess --assess --type open --context context:primary-signature -vv "$DMG" \

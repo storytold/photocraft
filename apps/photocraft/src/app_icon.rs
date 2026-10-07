@@ -14,8 +14,7 @@
 //! ID would need a Win32 call (`unsafe`, which the workspace forbids) and would then also have to
 //! be stamped on the shortcut, or the taskbar would stop matching the two.
 
-/// Window, taskbar and (when running unbundled) Dock icon. macOS gets the padded 1024 px render
-/// on Apple's icon grid; elsewhere the tighter 256 px hicolor render reads better at small sizes.
+/// Window, taskbar and unbundled Dock icon. macOS gets the padded 1024 px render on Apple's icon grid.
 pub fn window_icon() -> egui::IconData {
     match eframe::icon_data::from_png_bytes(PNG) {
         Ok(icon) => icon,
@@ -24,6 +23,37 @@ pub fn window_icon() -> egui::IconData {
             egui::IconData::default()
         }
     }
+}
+
+/// Eframe substitutes its blue default icon when the viewport has no icon. Its documented
+/// `IconData::default()` sentinel instead keeps the operating system's icon, including the
+/// compiled Icon Composer layers in a packaged macOS app.
+pub fn native_icon() -> egui::IconData {
+    icon_for_bundle(use_bundle_icon())
+}
+
+fn icon_for_bundle(bundled: bool) -> egui::IconData {
+    if bundled { egui::IconData::default() } else { window_icon() }
+}
+
+fn use_bundle_icon() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::current_exe().ok().and_then(|exe| bundled_asset_path(&exe)).is_some_and(|asset| asset.is_file())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn bundled_asset_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    if contents.file_name()? != "Contents" || contents.parent()?.extension()? != "app" {
+        return None;
+    }
+    Some(contents.join("Resources/Assets.car"))
 }
 
 #[cfg(target_os = "macos")]
@@ -51,6 +81,18 @@ mod tests {
         assert!(icon.width >= 256 && icon.width == icon.height, "{}x{}", icon.width, icon.height);
         assert_eq!(icon.rgba.len(), icon.width as usize * icon.height as usize * 4);
         assert!(icon.rgba.chunks(4).any(|p| p[3] > 0), "the icon isn't blank");
+        assert_eq!(icon.rgba[3], 0, "the app icon's top-left corner must be transparent");
+        assert_eq!(icon.rgba[icon.rgba.len() - 1], 0, "the app icon's bottom-right corner must be transparent");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn packaged_app_uses_system_icon() {
+        let exe = std::path::Path::new("/tmp/PhotoCraft.app/Contents/MacOS/PhotoCraft");
+        assert_eq!(bundled_asset_path(exe).as_deref(), Some(std::path::Path::new("/tmp/PhotoCraft.app/Contents/Resources/Assets.car")));
+        assert!(bundled_asset_path(std::path::Path::new("/tmp/photocraft")).is_none());
+        assert_eq!(icon_for_bundle(true), egui::IconData::default());
+        assert_ne!(icon_for_bundle(false), egui::IconData::default());
     }
 
     /// The `.ico` build.rs embeds: every size Windows asks for, each a valid PNG or BMP image.

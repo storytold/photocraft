@@ -1,47 +1,33 @@
 # PhotoCraft app icon
 
-A **nine-tailed kitsune with a brow diamond**: an engraving portrait, seated, looking back at the
-viewer, in the Crafting Apps' owl-template framing (full-bleed field, head and body filling the
-tile, tails running off the edges).
+The canonical logo is a vector recreation of the project owner's supplied orange filmstrip
+mark: a rounded golden frame with four dark sprocket holes per side, an orange inset, and dark
+“Pc” lettering. The master is geometric SVG artwork, with no embedded raster image or font.
+The corners outside the tile are transparent. The dark colour appears only in the sprocket
+holes and lettering.
 
-## Palette
-
-Exactly three colours:
-
-| Colour | Hex | Used for |
-|---|---|---|
-| Ink | `#0b0b0c` | line work and contours |
-| Paper | `#efe9dc` | the figure |
-| PhotoCraft blue (app colour) | `#2f7bf5` | the full-bleed field |
-
-## Geometry
-
-A 512-unit tile (`viewBox="0 0 512 512"`), rounded square with `rx=112`, no border. The macOS
-renders pad it onto Apple's 824/1024 icon grid; the Windows and Linux renders crop 22 units off
-each side so the figure reads at 16–48 px.
-
-## Provenance
-
-The owner's original drawing, made in ArtCraft (2880 px, engraving style, keyed to the palette),
-vectorised with craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source PNG stays in
-craftrules at `assets/app-icons/photocraft/source.png`. License: see `LICENSE.txt`.
+The macOS render pads the rounded 512-unit tile onto the platform icon grid. Windows and
+Linux render the tile tightly with a slightly smaller corner radius, so the mark fills small
+shell icons without clipping the frame or sprocket holes.
 
 ## Files
 
-- `photocraft.svg`: canonical master (traced at 2048 px).
-- `photocraft-small.svg`: lighter trace (traced at 1024 px); also the hicolor scalable icon.
-- `photocraft-1024.png`: 1024 px render on the macOS grid.
-- `photocraft.icns`: macOS bundle icon (`CFBundleIconFile`).
-- `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
-- `hicolor/<size>/apps/ai.storyteller.photocraft.png` (16–512) and `hicolor/scalable/...svg`:
-  Linux icon theme.
+- `photocraft.svg`: full-detail vector master on a 512-unit square.
+- `photocraft-small.svg`: flat-colour version of the tighter icon for tiny/scalable icons.
+- `photocraft-1024.png`, `photocraft.icns`, `photocraft.ico`, and `hicolor/`: generated
+  macOS, Windows, Linux and runtime icons.
+- `PhotoCraft.icon`: Apple Icon Composer document. Its background fill and three unmasked SVG
+  foreground groups let macOS apply system lighting, edge highlights and appearance variants.
+  The SVGs declare a 1024-point intrinsic size so Icon Composer fills its canvas; the dark
+  perforations and letters retain their ink colour. `packaging/macos/generate-icon-layers.py`
+  derives the SVGs from the canonical master.
 
-The app also sets the window icon and Wayland app ID at runtime (`apps/photocraft/src/app_icon.rs`,
-`main.rs`). On Windows the taskbar shows the icon of the Start Menu shortcut that launches the
-exe, so the MSI's `<Icon Id>` keeps the `.exe` extension (ICE50); `app_icon.rs` documents the
-details and tests the `.ico` sizes and the WiX icon references.
+`apps/photocraft/src/app_icon.rs` loads the generated PNG for unpackaged runs. A macOS app bundle
+uses the compiled `Assets.car` from the Icon Composer document and its generated `.icns` fallback;
+the runtime leaves the bundle icon alone. Windows and Linux use the `.ico` and hicolor assets.
 
 ## Regenerate
 
-Replace `photocraft.svg` (and `photocraft-small.svg`), then run `packaging/icons.sh`. It needs
-`resvg`, plus `iconutil` on macOS; the `.ico` is packed by `cargo xtask ico`.
+Run `packaging/icons.sh` after changing the SVG. It uses `resvg` or `rsvg-convert`, `iconutil`
+on macOS, and `cargo xtask ico` to pack the Windows icon.
+The macOS release build additionally needs Xcode 26+ `actool` to compile `PhotoCraft.icon`.

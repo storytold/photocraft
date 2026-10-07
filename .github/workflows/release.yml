@@ -67,7 +67,7 @@ jobs:
   macos:
     name: macOS universal
     needs: version
-    runs-on: macos-15
+    runs-on: macos-26
     environment: release
     env:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}

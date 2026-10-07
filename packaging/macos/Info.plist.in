@@ -30,6 +30,8 @@
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
   <string>PhotoCraft</string>
+  <key>CFBundleIconName</key>
+  <string>PhotoCraft</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
