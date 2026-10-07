@@ -1,20 +1,20 @@
 //! The Patch Tool as a command: heal the selected area with texture from another place.
 //!
 //! The selection is the patch, `offset` is how far the user dragged it. In `source` mode (the
-//! default, Photoshop's "Source") the selected area is repaired with the pixels under the dragged
-//! outline; in `destination` mode the selected pixels are copied to the dragged outline and repair
-//! it. Either way the copied texture is seamless-cloned (`heal_region`, as the Healing Brush), so it
+//! default) the selected area is repaired with the pixels under the dragged outline; in
+//! `destination` mode the selected pixels are copied to the dragged outline and repair it. Either way the copied texture is seamless-cloned (`heal_region`, as the Healing Brush), so it
 //! takes the colour and lighting around the repaired area. A feathered selection blends the result
-//! in by its coverage. Only the targeted surface is read and written, as Photoshop's Patch Tool in
-//! Normal mode samples the current layer.
+//! in by its coverage. Only the targeted surface is read and written: in Normal mode the patch
+//! samples the current layer.
 
 use super::*;
 
 const CMD: &str = "paint.patch";
 
-/// Largest patch, in pixels of the selection's bounding box: the solve holds a few float planes of
-/// it, so this keeps memory to a few GB at worst.
-const MAX_PIXELS: u64 = 64 << 20;
+/// Largest patch, in pixels of the selection's bounding box. The solve holds the two regions, the
+/// result and per-channel float planes of it (on the order of 150 bytes per pixel with four
+/// channels), so this keeps a patch to about 2.5 GB at worst instead of risking an allocation abort.
+const MAX_PIXELS: u64 = 16 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PatchMode {

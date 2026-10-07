@@ -77,7 +77,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 }
 
 /// Patch Tool: a drag that starts inside the selection (without ⇧ or ⌥) drags the patch; any
-/// other drag draws a lasso selection, as in Photoshop.
+/// other drag draws a lasso selection.
 pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modifiers) -> bool {
     if mods.shift || mods.alt {
         return false;
