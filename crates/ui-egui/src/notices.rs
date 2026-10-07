@@ -150,12 +150,13 @@ mod tests {
     fn wayland_guidance_follows_language_changes_after_startup() {
         let app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, ..Default::default() });
         let notice = &app.ui.notices[0];
+        // the notice keeps its English source text and is translated when drawn (`i18n::t` with
+        // the current language); `tr` with an explicit language leaves the process-wide language,
+        // which other tests running in parallel draw with, untouched
         let es = crate::i18n::Lang::from_code("es").unwrap();
-        crate::i18n::set_current(es);
-        assert_eq!(crate::i18n::t(&notice.title), "El arrastrar y soltar archivos de forma nativa no está disponible en Wayland");
-        assert_ne!(crate::i18n::t(&notice.lines[0]), notice.lines[0]);
-        crate::i18n::set_current(crate::i18n::Lang::EN);
-        assert_eq!(crate::i18n::t(&notice.title), "Native file drag-and-drop is unavailable");
+        assert_eq!(crate::i18n::tr(es, &notice.title), "El arrastrar y soltar archivos de forma nativa no está disponible en Wayland");
+        assert_ne!(crate::i18n::tr(es, &notice.lines[0]), notice.lines[0]);
+        assert_eq!(crate::i18n::tr(crate::i18n::Lang::EN, &notice.title), "Native file drag-and-drop is unavailable");
     }
 
     #[test]
