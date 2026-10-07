@@ -2,14 +2,15 @@
 //! each with its own colour, alpha and depth. The `exr` crate rejects deep headers, so the
 //! chunk stream is walked directly from the bytes, per the OpenEXR file-layout specification:
 //! a deep chunk carries its coordinates, the packed size of the sample-count table, the
-//! packed and unpacked sizes of the sample data, then the compressed cumulative count table
-//! and the compressed sample data. Deep data permits only NONE, RLE, ZIPS and ZIP
+//! packed and unpacked sizes of the sample data, then the compressed count table (cumulative
+//! within each row of the block) and the compressed sample data (row by row, each row channel
+//! by channel). The layout was checked against files written by the OpenEXR library. Deep data permits only NONE, RLE, ZIPS and ZIP
 //! compression; we support the first three (one scan line per block, which keeps the count
 //! table unambiguous) and decline ZIP with `unsupported`.
 //!
 //! [`decode_deep`] returns the structured samples ([`DeepImage`]); [`flatten`] composites
 //! them into a flat `Image` — samples sorted by Z, front-to-back `over` with premultiplied
-//! colour, un-premultiplied into straight alpha — because the flat document model has no
+//! colour, un-premultiplied into straight alpha (HDR values are kept, not clamped) — because the flat document model has no
 //! per-pixel depth.
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -106,19 +107,19 @@ fn interleave_byte_blocks(buf: &mut [u8]) {
     buf.copy_from_slice(&out);
 }
 
-/// OpenEXR RLE: a stream of runs; a non-negative byte `n` means `n + 1` literal bytes
-/// follow, a negative byte `n` means the next byte repeats `1 - n` times.
+/// OpenEXR RLE tokens: a negative byte `n` means `-n` literal bytes follow, a non-negative
+/// byte `n` means the next byte repeats `n + 1` times (as `ImfRle.cpp` and the `exr` crate).
 fn rle_decode(src: &[u8], expected: usize, what: &str) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::with_capacity(expected.min(1 << 20));
     let mut i = 0;
     while i < src.len() {
         let count = src[i] as i8;
         i += 1;
-        let n = if count >= 0 { count as usize + 1 } else { (1 - count as i32) as usize };
+        let n = if count < 0 { (-(count as i32)) as usize } else { count as usize + 1 };
         if out.len().saturating_add(n) > expected {
             return Err(err(format!("{what}: RLE data expands past {expected} bytes")));
         }
-        if count >= 0 {
+        if count < 0 {
             let end = i.saturating_add(n);
             let run = src.get(i..end.min(src.len())).ok_or_else(|| err(format!("{what}: RLE run points past the compressed data")))?;
             if run.len() != n {
@@ -146,7 +147,13 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
     }
     match compression {
         Compression::Uncompressed => Err(err(format!("{what}: expected {expected} uncompressed bytes, found {}", packed.len()))),
-        Compression::RLE => rle_decode(packed, expected, what),
+        Compression::RLE => {
+            // Like ZIPS, RLE runs over the predicted, byte-split stream.
+            let mut out = rle_decode(packed, expected, what)?;
+            differences_to_samples(&mut out);
+            interleave_byte_blocks(&mut out);
+            Ok(out)
+        }
         Compression::ZIP1 => {
             let mut out = Vec::with_capacity(expected.min(1 << 20));
             flate2::read::ZlibDecoder::new(packed)
@@ -171,6 +178,9 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
 struct DeepChunk {
     /// Global pixel indices of the block's pixels, in block order (row-major within the block).
     pixels: Vec<usize>,
+    /// Pixels per row of the block (the data window width for a scan line, the clipped tile
+    /// width for a tile).
+    row_w: usize,
     /// Cumulative sample count table of the block: `len == pixels.len() + 1`.
     prefix: Vec<u32>,
     /// File offset of the chunk start.
@@ -265,14 +275,14 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
             }
         }
         // Block coordinates → the block's global pixel range and its slot.
-        let (block_pixels, slot): (Vec<usize>, usize) = match &header.blocks {
+        let (block_pixels, slot, row_w): (Vec<usize>, usize, usize) = match &header.blocks {
             BlockDescription::ScanLines => {
                 let y = i32(&mut cur)?;
                 let row = match y.checked_sub(y0) {
                     Some(d) if d >= 0 && (d as usize) < h => d as usize,
                     _ => return Err(err(format!("scan line block y={y} is outside the data window"))),
                 };
-                ((0..w).map(|x| row * w + x).collect(), row)
+                ((0..w).map(|x| row * w + x).collect(), row, w)
             }
             BlockDescription::Tiles(_) => {
                 let (tx, ty, lx, ly) = (i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?);
@@ -292,7 +302,7 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
                     }
                 }
                 let slot = (ty as usize).saturating_mul(tiles_x) + tx as usize;
-                (px, slot)
+                (px, slot, cols - bx)
             }
         };
         if seen.get(slot).copied().unwrap_or(true) {
@@ -311,15 +321,24 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         }
         let table_bytes = read_exact(&mut cur, packed_table as usize, "the sample-count table")?;
         let expected_table = block_pixels.len().checked_mul(4).ok_or_else(|| err("count table overflows"))?;
-        let raw = decompress(compression, &table_bytes, expected_table, "the sample-count table")?;
+        // An edge tile's table may still be stored at the full tile size (its pixels first, in
+        // rows of the clipped width, then unused entries), as the OpenEXR library writes it.
+        let full_table = tile_w.saturating_mul(tile_h).saturating_mul(4).max(expected_table);
+        let raw = decompress(compression, &table_bytes, full_table, "the sample-count table")
+            .or_else(|_| decompress(compression, &table_bytes, expected_table, "the sample-count table"))?;
 
-        // Cumulative counts within the block; each pixel's own count is the difference.
+        // The table is cumulative within each row of the block (a tile restarts at every row);
+        // `prefix` is cumulative over the whole block, and each pixel's own count is the difference.
         let mut prefix = Vec::with_capacity(block_pixels.len() + 1);
         prefix.push(0u32);
-        let mut prev = 0u32;
+        let (mut row_base, mut prev) = (0u32, 0u32);
         for (i, p) in block_pixels.iter().enumerate() {
             let b: [u8; 4] = raw.get(i * 4..i * 4 + 4).and_then(|s| s.try_into().ok()).ok_or_else(|| err("the count table is short"))?;
             let v = u32::from_le_bytes(b);
+            if row_w > 0 && i % row_w == 0 {
+                row_base = row_base.checked_add(prev).ok_or_else(|| err("the block's sample count overflows"))?;
+                prev = 0;
+            }
             if v < prev {
                 return Err(err("the sample-count table decreases (malformed cumulative counts)"));
             }
@@ -327,14 +346,14 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
                 *c = v - prev;
             }
             prev = v;
-            prefix.push(v);
+            prefix.push(row_base.checked_add(v).ok_or_else(|| err("the block's sample count overflows"))?);
         }
-        let total = prev as u64;
+        let total = prefix.last().copied().unwrap_or(0) as u64;
         let expected_data = total.checked_mul(bytes_per_sample as u64).ok_or_else(|| err("the sample data size overflows"))?;
         if expected_data != unpacked_data {
             return Err(err(format!("the chunk declares {unpacked_data} bytes of sample data, the count table implies {expected_data}")));
         }
-        chunks.push(DeepChunk { pixels: block_pixels, prefix, pos: off, packed_data, unpacked_data });
+        chunks.push(DeepChunk { pixels: block_pixels, row_w, prefix, pos: off, packed_data, unpacked_data });
     }
     if seen.iter().any(|s| !s) {
         let missing = seen.iter().filter(|s| !**s).count();
@@ -384,29 +403,38 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         read_exact(&mut cur, packed_table as usize, "the sample-count table")?;
         let data_bytes = read_exact(&mut cur, chunk.packed_data as usize, "the deep sample data")?;
         let raw = decompress(compression, &data_bytes, chunk.unpacked_data as usize, "the deep sample data")?;
-        let block_total = chunk.prefix.last().copied().unwrap_or(0) as usize;
+        // Row by row (a scan line block is one row), and within a row channel by channel, as
+        // flat tiles are laid out: each pixel's samples are contiguous within its channel.
         let mut in_off = 0usize;
-        for (ci, t) in exr_types.iter().enumerate() {
-            let ch_bytes = block_total.checked_mul(sample_bytes(*t)).ok_or_else(|| err("channel size overflows"))?;
-            let end = in_off.checked_add(ch_bytes).ok_or_else(|| err("channel size overflows"))?;
-            let src = raw.get(in_off..end).ok_or_else(|| err("the sample data is short"))?;
-            in_off = end;
-            let out = channels.get_mut(ci).ok_or_else(|| err("channel index out of range"))?;
-            for (i, p) in chunk.pixels.iter().enumerate() {
-                let from = chunk.prefix.get(i).copied().unwrap_or(0) as usize;
-                let n = chunk.prefix.get(i + 1).copied().unwrap_or(0) as usize - from;
-                let to = deep_counts.get(*p).copied().unwrap_or(0) as usize;
-                for k in 0..n {
-                    let base = (from + k) * sample_bytes(*t);
-                    let v = match t {
-                        ExrSample::F16 => src.get(base..base + 2).map(|b| f16::from_le_bytes([b[0], b[1]]).to_f32()),
-                        ExrSample::F32 => src.get(base..base + 4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
-                        ExrSample::U32 => src.get(base..base + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32),
-                    };
-                    let (Some(v), Some(slot)) = (v, out.samples.get_mut(to + k)) else {
-                        return Err(err("the sample data is short"));
-                    };
-                    *slot = v;
+        let row_w = chunk.row_w.max(1);
+        for (r, row) in chunk.pixels.chunks(row_w).enumerate() {
+            let i0 = r * row_w;
+            let row_from = chunk.prefix.get(i0).copied().unwrap_or(0) as usize;
+            let row_to = chunk.prefix.get(i0 + row.len()).copied().unwrap_or(0) as usize;
+            let row_total = row_to.saturating_sub(row_from);
+            for (ci, t) in exr_types.iter().enumerate() {
+                let sb = sample_bytes(*t);
+                let ch_bytes = row_total.checked_mul(sb).ok_or_else(|| err("channel size overflows"))?;
+                let end = in_off.checked_add(ch_bytes).ok_or_else(|| err("channel size overflows"))?;
+                let src = raw.get(in_off..end).ok_or_else(|| err("the sample data is short"))?;
+                in_off = end;
+                let out = channels.get_mut(ci).ok_or_else(|| err("channel index out of range"))?;
+                for (j, p) in row.iter().enumerate() {
+                    let from = (chunk.prefix.get(i0 + j).copied().unwrap_or(0) as usize).saturating_sub(row_from);
+                    let n = (chunk.prefix.get(i0 + j + 1).copied().unwrap_or(0) as usize).saturating_sub(row_from).saturating_sub(from);
+                    let to = deep_counts.get(*p).copied().unwrap_or(0) as usize;
+                    for k in 0..n {
+                        let base = (from + k) * sb;
+                        let v = match t {
+                            ExrSample::F16 => src.get(base..base + 2).map(|b| f16::from_le_bytes([b[0], b[1]]).to_f32()),
+                            ExrSample::F32 => src.get(base..base + 4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                            ExrSample::U32 => src.get(base..base + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32),
+                        };
+                        let (Some(v), Some(slot)) = (v, out.samples.get_mut(to + k)) else {
+                            return Err(err("the sample data is short"));
+                        };
+                        *slot = v;
+                    }
                 }
             }
         }
@@ -520,7 +548,7 @@ pub(crate) fn flatten(deep: &DeepImage) -> Result<Image, CodecError> {
         let a_out = if a.is_empty() && ar.is_empty() && ag.is_empty() && ab.is_empty() { 1.0 } else { (aacc[0] + aacc[1] + aacc[2]) / 3.0 };
         let a_clamped = a_out.clamp(0.0, 1.0);
         // Un-premultiply into straight alpha (the deep colours are premultiplied).
-        let straight = |c: f32| if a_clamped > 1e-6 { (c / a_clamped).clamp(0.0, 1.0) } else { 0.0 };
+        let straight = |c: f32| if a_clamped > 1e-6 { c / a_clamped } else { 0.0 };
         let base = p * nc;
         for (k, v) in [straight(cacc[0]), straight(cacc[1]), straight(cacc[2]), a_clamped].into_iter().enumerate() {
             if let Some(slot) = out.get_mut(base + k) {

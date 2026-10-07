@@ -14,9 +14,10 @@ use std::io::Write as _;
 // version 2 | deep bit (and the tile bit for tiles), one header with the mandatory
 // attributes in alphabetical order, a chunk offset table, then deep chunks of
 // [y | tile coords][u64 packed table][u64 packed data][u64 unpacked data][table][data].
-// The table holds cumulative u32 sample counts; the sample data is channel-grouped, in
-// pixel order. NONE stores raw; RLE packs runs; ZIPS separates even/odd bytes, applies the
-// +128 difference predictor and deflates.
+// The table holds u32 sample counts, cumulative within each row of the block; the sample
+// data is grouped per row, then per channel, in pixel order (the layout the OpenEXR library
+// writes). NONE stores raw; RLE and ZIPS separate even/odd bytes, apply the +128 predictor,
+// then RLE packs runs and ZIPS deflates.
 
 fn attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
     out.extend_from_slice(name.as_bytes());
@@ -54,18 +55,19 @@ fn rle_bytes(src: &[u8]) -> Vec<u8> {
         while i + run < src.len() && run < 128 && src[i + run] == src[i] {
             run += 1;
         }
+        // OpenEXR tokens: `n >= 0` repeats the next byte n + 1 times, `n < 0` copies -n bytes.
         if run > 1 {
-            out.push((1 - run as i32) as u8);
+            out.push((run - 1) as u8);
             out.push(src[i]);
             i += run;
         } else {
             let start = i;
             i += 1;
-            while i < src.len() && (i - start) < 128 && src[i] != src[i - 1] {
+            while i < src.len() && (i - start) < 127 && src[i] != src[i - 1] {
                 i += 1;
             }
             let n = i - start;
-            out.push((n - 1) as u8);
+            out.push((-(n as i32)) as u8);
             out.extend_from_slice(&src[start..start + n]);
         }
     }
@@ -75,7 +77,11 @@ fn rle_bytes(src: &[u8]) -> Vec<u8> {
 fn compress(kind: u8, raw: &[u8]) -> Vec<u8> {
     match kind {
         1 => {
-            let c = rle_bytes(raw);
+            // Like ZIPS, RLE packs the byte-split, predicted stream.
+            let mut b = raw.to_vec();
+            separate_bytes_fragments(&mut b);
+            samples_to_differences(&mut b);
+            let c = rle_bytes(&b);
             if c.len() < raw.len() { c } else { raw.to_vec() }
         }
         2 => {
@@ -154,9 +160,11 @@ fn gen_deep(
     // The blocks: scan lines (one line each) or the level-0 tiles.
     struct Block {
         pixels: Vec<usize>,
+        /// Pixels per row: the count table restarts and the sample data is grouped per row.
+        row_w: usize,
     }
     let blocks: Vec<Block> = match tile {
-        None => (0..h).map(|y| Block { pixels: (y * w..y * w + w).collect() }).collect(),
+        None => (0..h).map(|y| Block { pixels: (y * w..y * w + w).collect(), row_w: w }).collect(),
         Some((tw, th)) => {
             let tx = w.div_ceil(tw);
             let ty = h.div_ceil(th);
@@ -169,7 +177,7 @@ fn gen_deep(
                             px.push(yy * w + xx);
                         }
                     }
-                    v.push(Block { pixels: px });
+                    v.push(Block { pixels: px, row_w: (bx * tw + tw).min(w) - bx * tw });
                 }
             }
             v
@@ -201,19 +209,23 @@ fn gen_deep(
             }
         }
         let mut table = Vec::with_capacity(b.pixels.len() * 4);
-        let mut acc = 0u32;
-        for &p in &b.pixels {
-            acc += counts[p];
-            table.extend_from_slice(&acc.to_le_bytes());
+        for row in b.pixels.chunks(b.row_w) {
+            let mut acc = 0u32;
+            for &p in row {
+                acc += counts[p];
+                table.extend_from_slice(&acc.to_le_bytes());
+            }
         }
         let mut data = Vec::new();
-        for (ci, ch) in channels.iter().enumerate() {
-            for &p in &b.pixels {
-                for v in sample(p, ci) {
-                    match ch.ty {
-                        1 => data.extend_from_slice(&f16::from_f32(v).to_le_bytes()),
-                        0 => data.extend_from_slice(&(v as u32).to_le_bytes()),
-                        _ => data.extend_from_slice(&v.to_le_bytes()),
+        for row in b.pixels.chunks(b.row_w) {
+            for (ci, ch) in channels.iter().enumerate() {
+                for &p in row {
+                    for v in sample(p, ci) {
+                        match ch.ty {
+                            1 => data.extend_from_slice(&f16::from_f32(v).to_le_bytes()),
+                            0 => data.extend_from_slice(&(v as u32).to_le_bytes()),
+                            _ => data.extend_from_slice(&v.to_le_bytes()),
+                        }
                     }
                 }
             }
@@ -340,6 +352,24 @@ fn opaque_front_hides_back() {
     let (r, g, b, a) = (px[4], px[5], px[6], px[7]);
     assert!((r - 1.0).abs() < 1e-6 && (g - 1.0).abs() < 1e-6 && (b - 0.0).abs() < 1e-6, "colour ({r},{g},{b})");
     assert!((a - 1.0).abs() < 1e-6, "alpha {a}");
+}
+
+/// Deep EXR is HDR: colour above 1.0 survives the composite (it used to be clamped), and a
+/// tiled file whose edge tiles are narrower than the tile size decodes like the scan lines.
+#[test]
+fn hdr_colour_is_kept_and_edge_tiles_match_scanlines() {
+    let (w, h) = (7, 5);
+    let counts: Vec<u32> = (0..w * h).map(|p| (p as u32 * 3) % 4).collect();
+    let sample = |p: usize, ci: usize| -> Vec<f32> {
+        (0..(p as u32 * 3) % 4).map(|k| [1.0, 0.25 * k as f32, 0.5, 2.0 + p as f32 / 8.0, 10.0 - k as f32][ci]).collect()
+    };
+    for compression in [0u8, 1, 2] {
+        let scan = rgba_flat(&gen_deep(w, h, &RGBAZ, compression, None, &counts, &sample));
+        let tiled = rgba_flat(&gen_deep(w, h, &RGBAZ, compression, Some((3, 2)), &counts, &sample));
+        assert_eq!(scan, tiled, "compression {compression}");
+        // Pixel 1 has 3 opaque samples; the front one (k = 2, Z = 8) has R = 2.125.
+        assert!((scan[4] - 2.125).abs() < 1e-5, "compression {compression}: R {}", scan[4]);
+    }
 }
 
 /// Pixels without samples are transparent black, and the structured counts say so.
