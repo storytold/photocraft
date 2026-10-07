@@ -487,6 +487,10 @@ pub struct TransformSession {
     /// the Quick Mask by itself (`None`: the layer, with its linked masks).
     #[serde(default)]
     pub target: Option<serde_json::Value>,
+    /// Free Transform on a copy (⌥⌘T): the copy was made for this session, so Cancel takes it back
+    /// and OK folds it into the transform's history step (#352).
+    #[serde(default)]
+    pub copy: bool,
 }
 
 /// In-progress inline type editing (Type tool). Offsets are character indices.
@@ -501,6 +505,9 @@ pub struct TextEdit {
     pub created: bool,
     #[serde(skip)]
     pub dragging: bool,
+    /// Paragraph-box handle being dragged (0-3 corners from top-left clockwise, 4-7 top/right/bottom/left edges).
+    #[serde(skip)]
+    pub resize: Option<u8>,
     /// IME composition in progress: (start, length) in characters. The preedit text lives in the
     /// layer so it lays out like typed text; each IME update replaces it.
     #[serde(skip)]

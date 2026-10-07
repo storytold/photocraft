@@ -35,7 +35,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given
 - `engine.commands`: list commands with enablement
 - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, menu tree, window size). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
-- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, maskTarget?, selectionMode?, zoom?, center?, fit?, theme?, brushSize?, brushSection?, brushTab?}`: change UI state (`selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520)
+- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, `studioLight` or `classic`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520)
 - `ui.menu.invoke {id}` / `ui.menu.list`: activate a menu item by id; list the menu tree
 - `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background}`, `command {command}`) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog}` / `ui.dialog.cancel {dialog}`
   - Preferences (`ui.menu.invoke {id: "edit.preferences.interface"}`) edits the sections in its `values` field. `ui.dialog.apply {dialog}` saves those values through `prefs.set` and keeps the same dialog and section open. `ui.dialog.confirm` saves and closes; `ui.dialog.cancel` discards only edits made since the last successful Apply. Invalid values return an error without closing the Apply dialog or changing the saved preferences. Settings marked for the next launch still require a restart.
@@ -51,7 +51,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
-- `app.open {path}` / `app.save {path}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. Automation opens and saves never fire script events. `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` reply with `warnings` the same way
+- `app.open {path}` / `app.save {path}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. Automation opens and saves never fire script events. `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` reply with `warnings` the same way
 - `app.quit`
 
 ## Engine commands
@@ -199,11 +199,11 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `engine.commands` | `{filter?}`: registry with params docs and enablement |
 | `session.list` | open documents and the active index |
 | `doc.open` / `doc.new` | `{path}` / `file.new` params |
-| `doc.save` | `{path?, format?, quality?, index?}` (`.pcraft` native, else export by extension) |
+| `doc.save` | `{path?, format?, quality?, index?}` (`.pcraft` native, else export by extension). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged |
 | `doc.inspect` | `{index?}`: same JSON as `document.inspect` |
 | `doc.render` | `{index?, maxSide? (1024; 0 = full), path?}`: PNG to `path`, else `{mime, base64}` |
 | `doc.select` / `doc.close` | `{index}` / `{index?}` |
-| `batch` | `{steps: [{command, params?} \| {method, params?}], stopOnError? (true)}` → `{completed, failed, results}` |
+| `batch` | `{steps: [{command, params?, wait?} \| {method, params?}], stopOnError? (true)}` → `{completed, failed, results}` (a step with `wait: false` starts a long command as a background job, like `engine.execute`) |
 | `methods` | the list above |
 
 ```sh
@@ -214,8 +214,9 @@ printf '%s\n' \
   photocraft-cli serve --automation-read-root /work/project --automation-write-root /work/project
 ```
 
-The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params}], stop_on_error}`),
-in headless and bridge mode.
+The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params, wait?}], stop_on_error}`),
+in headless and bridge mode. A step with `wait: false` returns `{job, pending}` at once, as `command_run`
+does; later steps that edit the same document fail with a message naming the job until it ends.
 
 ## Transport limits
 

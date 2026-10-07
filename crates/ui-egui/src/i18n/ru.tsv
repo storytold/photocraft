@@ -31,6 +31,7 @@
 
 # File
 	New…	Создать…
+	New from Clipboard	Создать из буфера обмена
 	New	Создать
 	Open…	Открыть…
 	Open	Открыть
@@ -1553,6 +1554,7 @@
 
 # Transform / warp overlays
 	Free Transform	Свободное трансформирование
+	Free Transform a Copy	Свободное трансформирование копии
 	Transform	Трансформирование
 	Transform Selection	Трансформировать выделение
 	Switch between free transform and warp modes	Переключение между свободным трансформированием и деформаци
@@ -1678,6 +1680,7 @@
 	90° Counter Clockwise	90° против часовой стрелке
 	AI Integrations…	Интеграции ИИ…
 	Again	Снова
+	Transform Again on a Copy	Дублировать и снова трансформировать
 	Anamorphic 2:1 (2)	Анаморф 2:1 (2)
 	Arbitrary…	Другой угол…
 	Artboard Guides	Направляющие монтажной области
@@ -1759,6 +1762,12 @@
 	Merge Shape Components	Объединить компоненты фигуры
 	Merge Visible	Свести видимые
 	Stamp Visible	Штамп видимых
+	Select Layer Above	Выбрать слой выше
+	Select Layer Below	Выбрать слой ниже
+	Select Top Layer	Выбрать верхний слой
+	Select Bottom Layer	Выбрать нижний слой
+	Add Layer Above to Selection	Добавить слой выше к выбору
+	Add Layer Below to Selection	Добавить слой ниже к выбору
 	Stamp Down	Штамп вниз
 	Mesh	Сетка
 	Middle Eastern & South Asian Composer	Компоновка для Ближнего Востока и Южной Азии

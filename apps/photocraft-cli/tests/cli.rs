@@ -43,6 +43,63 @@ fn usage_and_unknown_command() {
     assert!(out.starts_with("photocraft-cli "));
 }
 
+/// #423: `<subcommand> --help` and `-h` print usage and return at once (no inputs read, no files
+/// written, no server started), whatever else is on the line.
+#[test]
+fn every_subcommand_answers_help() {
+    let d = tmp("help");
+    for sub in ["convert", "info", "run", "batch", "droplet", "commands", "mcp", "serve"] {
+        for help in ["--help", "-h"] {
+            let o = bin().current_dir(&d).arg(sub).arg(help).arg("--out").arg("x.png").stdin(Stdio::null()).output().unwrap();
+            let out = String::from_utf8_lossy(&o.stdout);
+            assert_eq!(o.status.code(), Some(0), "{sub} {help}: {}", String::from_utf8_lossy(&o.stderr));
+            assert!(out.contains("USAGE") && out.contains("photocraft-cli batch"), "{sub} {help}: {out}");
+        }
+    }
+    assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0, "help wrote nothing");
+}
+
+/// #423: a flag the subcommand doesn't take is a usage error naming it, before any work.
+#[test]
+fn unknown_flags_are_usage_errors() {
+    let d = tmp("flags");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    write_png(&input.join("a.png"), 8, 4, 3);
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let out_dir = d.join("out");
+    let fails = |cmd: &mut Command, flag: &str| {
+        let o = cmd.output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{err}");
+        assert!(err.contains(&format!("unknown flag {flag}")), "{err}");
+    };
+    for typo in [&["--fromat", "jpg"][..], &["--fromat=jpg"][..]] {
+        fails(bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir).args(typo), "--fromat");
+        assert!(!out_dir.exists(), "nothing written");
+    }
+    let x = d.join("x.png");
+    fails(bin().arg("run").arg(input.join("a.png")).args(["--cmd", "image.adjustments.invert", "--param", "{}", "--out"]).arg(&x), "--param");
+    assert!(!x.exists());
+    // A flag one subcommand takes is still unknown to another; a bare flag takes no value.
+    fails(bin().args(["info", "--json"]).arg(input.join("a.png")), "--json");
+    let o = bin().args(["commands", "--json=yes"]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--json takes no value"));
+    // Every flag still works in both forms.
+    let (out, _) = ok(bin().args(["commands", "--json", "--filter=gaussian"]));
+    assert!(out.contains("filter.blur.gaussianBlur"), "{out}");
+    ok(bin().args(["batch", "--actions"]).arg(&actions).arg(format!("--in={}", input.display())).arg("--out").arg(&out_dir).args([
+        "--format=jpg",
+        "--quality",
+        "80",
+    ]));
+    assert!(out_dir.join("a.jpg").exists());
+    let (out, _) = ok(bin().arg("info").arg(input.join("a.png")).arg("--compact"));
+    assert!(!out.trim().contains('\n'), "compact JSON is one line");
+}
+
 #[test]
 fn convert_png_pcraft_png_is_lossless() {
     let d = tmp("convert");
@@ -216,6 +273,38 @@ fn mcp_stdio_handshake_and_tool_call() {
     assert_eq!(r["result"]["content"][0]["type"], "image", "{r}");
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// `--format` mapping two inputs to one name fails the second instead of overwriting the first (#420).
+#[test]
+fn batch_fails_inputs_that_share_an_output_name() {
+    let d = tmp("batch-collide");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    write_png(&input.join("a.png"), 8, 4, 3);
+    // Same stem in other formats; `A.tif` differs only in case.
+    let img = photocraft_codecs::Image::from_u8(8, 4, photocraft_codecs::ChannelLayout::Rgb, vec![90; 96]).unwrap();
+    for (name, format) in [("a.bmp", photocraft_codecs::Format::Bmp), ("A.tif", photocraft_codecs::Format::Tiff)] {
+        std::fs::write(input.join(name), photocraft_codecs::encode(&img, format, &Default::default()).unwrap()).unwrap();
+    }
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let out_dir = d.join("out");
+    let o = bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir).args(["--format", "png"]).output().unwrap();
+    let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(
+        !o.status.success(),
+        "a lost result must fail the run
+{out}
+{err}"
+    );
+    assert!(out.contains("1 succeeded, 2 failed"), "{out}");
+    assert_eq!(err.matches("not written").count(), 2, "{err}");
+    assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 1);
+    // Keeping each file's format, every input gets its own output.
+    let out_dir = d.join("same");
+    let (out, _) = ok(bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir));
+    assert!(out.contains("3 succeeded, 0 failed"), "{out}");
 }
 
 #[test]

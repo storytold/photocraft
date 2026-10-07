@@ -31,6 +31,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.extras", "Extras", &["View"], Some("Cmd+H")),
     ("view.show.targetPath", "Target Path", &["View", "Show"], Some("Cmd+Shift+H")),
     ("view.screenMode.cycle", "Cycle Screen Mode", &[], Some("F")),
+    ("edit.freeTransformCopy", "Free Transform a Copy", &[], Some("Cmd+Alt+T")),
     ("view.zoomIn", "Zoom In", &["View"], Some("Cmd+=")),
     ("view.zoomOut", "Zoom Out", &["View"], Some("Cmd+-")),
     ("view.fitOnScreen", "Fit on Screen", &["View"], Some("Cmd+0")),
@@ -225,11 +226,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
         }
         "file.save" => {
+            // Writes back only to a layered file; a flat one goes through Save As.
             let path = params
                 .get("path")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .or_else(|| app.session.active().and_then(|d| d.path.clone()).filter(|p| saves_in_place(p)));
+                .or_else(|| app.session.active().and_then(|d| d.path.clone()).filter(|p| photocraft_engine::file_cmds::saves_in_place(p)));
             app.save_as(path).map(|(p, w)| json!({"path": p, "warnings": w}))
         }
         "file.exit" => {
@@ -368,6 +370,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         | "edit.transform.skew"
         | "edit.transform.distort"
         | "edit.transform.perspective" => crate::transform_tool::begin(app, ctx).map(|_| json!({"transform": app.ui.transform})),
+        "edit.freeTransformCopy" => crate::transform_tool::begin_copy(app, ctx).map(|_| json!({"transform": app.ui.transform})),
         // Edit › Transform › Warp from the menu: interactive Warp mode (with params: the engine).
         "edit.transform.warp" | "layer.smartObjects.warp" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::transform_tool::begin_warp(app, ctx).map(|_| json!({"transform": app.ui.transform}))
@@ -430,13 +433,6 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
     app.open_path(path).map(|w| json!({"warnings": w}))
 }
 
-/// File › Save writes back to the document's own file for layered formats (PSD, PSB, .pcraft);
-/// flat files go through Save As, like Photoshop.
-fn saves_in_place(path: &str) -> bool {
-    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "psd" | "psb" | "pcraft")
-}
-
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
@@ -472,16 +468,17 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "view.proofSetup.custom" => app.session.active().is_some(),
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => true,
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
-        // on an explicit paste: with a clipboard service, Paste stays enabled whenever a document is open.
-        "edit.paste" | "edit.pasteSpecial.pasteInPlace" => {
-            app.session.is_enabled(id) || (app.services.clipboard_get_image.is_some() && app.session.active().is_some())
-        }
+        // on an explicit paste: with a clipboard service these stay enabled. Paste and New from
+        // Clipboard need no document (with none open, Paste makes one); Paste in Place does.
+        "edit.paste" | "file.newFromClipboard" => app.session.is_enabled(id) || app.services.clipboard_get_image.is_some(),
+        "edit.pasteSpecial.pasteInPlace" => app.session.is_enabled(id) || (app.services.clipboard_get_image.is_some() && app.session.active().is_some()),
         "select.selectAndMask" => app.session.is_enabled("select.refineEdge"),
         "select.transformSelection" => app.ui.transform.is_none() && app.session.is_enabled("select.transformSelection"),
         i if (i.starts_with("view.zoom") || i == "view.fitOnScreen" || i == "view.actualPixels") || i == "window.newWindowForDocument" => {
             app.session.active().is_some()
         }
         "edit.freeTransform"
+        | "edit.freeTransformCopy"
         | "edit.transform.scale"
         | "edit.transform.rotate"
         | "edit.transform.skew"
@@ -595,6 +592,9 @@ pub fn is_live(id: &str) -> bool {
         || crate::timeline_ui::handles(id)
 }
 
+/// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
+const PLACE_AFTER: &[(&str, &str)] = &[("file.newFromClipboard", "file.new")];
+
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
     let known = is_live;
@@ -637,9 +637,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     for e in extra {
         let dup = items.iter().any(|i| i.id == e.id || (i.path == e.path && i.label.trim_end_matches('…') == e.label.trim_end_matches('…')));
         if !dup {
-            // Insert after the last item of the same top-level menu, keeping menus contiguous.
+            // Insert after the item it belongs next to, else after the last item of the same
+            // top-level menu, keeping menus contiguous.
             let top = e.path.first().cloned();
-            let at = items.iter().rposition(|i| i.path.first() == top.as_ref()).map_or(items.len(), |p| p + 1);
+            let after = PLACE_AFTER.iter().find(|(id, _)| *id == e.id).and_then(|(_, a)| items.iter().position(|i| i.id == *a));
+            let at = after.or_else(|| items.iter().rposition(|i| i.path.first() == top.as_ref())).map_or(items.len(), |p| p + 1);
             items.insert(at, e);
         }
     }

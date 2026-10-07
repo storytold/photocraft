@@ -39,6 +39,27 @@ use photocraft_ui_egui::PhotocraftApp;
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
+/// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
+/// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
+/// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
+/// different offset every launch (#419). Wayland compositors place windows themselves.
+fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_icon(app_icon::window_icon())
+            .with_app_id(APP_ID)
+            .with_title("PhotoCraft")
+            .with_inner_size([1440.0, 900.0])
+            .with_min_inner_size([760.0, 480.0])
+            .with_drag_and_drop(true)
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false),
+        centered: true,
+        ..Default::default()
+    }
+}
+
 fn main() -> eframe::Result {
     crash_guard::install_hook();
     let mut control_port: Option<u16> = std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
@@ -120,19 +141,7 @@ fn main() -> eframe::Result {
     let monitor = monitor_profile::detect_async();
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
-    let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_icon(app_icon::window_icon())
-            .with_app_id(APP_ID)
-            .with_title("PhotoCraft")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([760.0, 480.0])
-            .with_drag_and_drop(true)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false),
-        ..Default::default()
-    };
+    let mut options = native_options();
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
     // driver moves to a safer one), and lock this start's marker until the first frames render.
     let t_sentinel = std::time::Instant::now();
@@ -241,4 +250,16 @@ fn main() -> eframe::Result {
         s.finish();
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_window_opens_centred_at_its_default_size() {
+        let o = super::native_options();
+        assert!(o.centered, "#419: centred, not cascaded from the top-left corner");
+        assert_eq!(o.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)));
+        // eframe shrinks the start size to the monitor, so the centred position is on-screen.
+        assert_ne!(o.viewport.clamp_size_to_monitor_size, Some(false));
+    }
 }

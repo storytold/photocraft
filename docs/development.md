@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (1.90+). Add the web target with `rustup target add wasm32-unknown-unknown`.
+- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
 - macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
 
 ## Build and run
@@ -94,7 +94,7 @@ See `docs/control-protocol.md` for every method. Tips:
 cargo run -p photocraft-cli -- convert in.psd out.pcraft               # any supported format -> any
 cargo run -p photocraft-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
-                                          --cmd filter.blur.gaussian --params '{"radius":3}' --out out.psd
+                                          --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
 cargo run -p photocraft-cli -- batch --actions actions.json --in photos/ --out done/ --format jpg
 cargo run -p photocraft-cli -- commands --filter blur                    # the command registry
@@ -164,7 +164,7 @@ A typical agent loop:
 
 1. `doc_open {path}`
 2. `command_list {filter:"blur"}`
-3. `command_run {id:"filter.blur.gaussian", params:{radius:4}}`
+3. `command_run {id:"filter.blur.gaussianBlur", params:{radius:4}}`
 4. `doc_render_preview` to check the result
 5. `doc_save {path:"out.pcraft"}`
 

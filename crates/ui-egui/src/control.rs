@@ -7,7 +7,8 @@
 //! - `engine.execute {command, params}`: run any engine or UI command by id
 //! - `engine.commands`: list commands with enablement
 //! - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, menu tree, window size)
-//! - `ui.set {tool?, panels?, zoom?, center?, dark?}`: change UI state
+//! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushSize?}`:
+//!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
 //! - `ui.menu.invoke {id}` / `ui.menu.list`: activate a menu item by id; list the menu tree
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
@@ -65,6 +66,27 @@ pub enum Outcome {
     /// once it has been applied (or with its error / "cancelled").
     AfterJob(photocraft_engine::jobs::JobId),
 }
+
+/// The fields `ui.set` reads. Anything else is rejected before a field is applied, so a typo or
+/// a field the method doesn't have can't reply with success while nothing changes (#412).
+pub const UI_SET_FIELDS: [&str; 16] = [
+    "tool",
+    "panels",
+    "dock",
+    "dockTabs",
+    "dockWidth",
+    "maskTarget",
+    "vectorMaskTarget",
+    "selectionMode",
+    "zoom",
+    "center",
+    "fit",
+    "theme",
+    "brushSection",
+    "brushTab",
+    "brushesView",
+    "brushSize",
+];
 
 fn ok(v: Value) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
@@ -142,6 +164,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.set" => {
+            if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
+                return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
+            }
             if let Some(t) = s("tool") {
                 match Tool::from_name(t) {
                     Some(t) => app.ui.tool = t,
@@ -213,7 +238,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
             if let Some(name) = s("theme") {
                 match crate::theme::ThemeKind::from_name(name) {
                     Some(k) => app.set_theme(ctx, k),
-                    None => return err(format!("unknown theme `{name}` (studio, studioLight, classic)")),
+                    None => {
+                        let names: Vec<_> = crate::theme::ThemeKind::ALL.iter().map(|k| k.id()).collect();
+                        return err(format!("unknown theme `{name}` ({})", names.join(", ")));
+                    }
                 }
             }
             if let Some(i) = u("brushSection") {
@@ -573,6 +601,44 @@ mod tests {
     }
 
     #[test]
+    fn ui_set_rejects_unknown_fields_before_changing_anything() {
+        use crate::theme::ThemeKind;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.set_theme(&ctx, ThemeKind::StudioLight);
+        // `dark` was advertised to MCP clients but never read; a typo looked like success too.
+        for params in [json!({"dark": true}), json!({"thme": "classic"}), json!({"tool": "move", "dark": true})] {
+            let r = call(&mut app, &ctx, "ui.set", params.clone());
+            assert_eq!(r["ok"], false, "{params}: {r}");
+            assert!(r["error"].as_str().unwrap().contains("unknown field"), "{r}");
+        }
+        assert_eq!(app.ui.theme, ThemeKind::StudioLight);
+        assert_eq!(app.ui.tool, Tool::Brush, "a rejected call applies none of its fields");
+        // Every field the method reads gets past the check (a bad value is its own error).
+        for field in UI_SET_FIELDS {
+            let r = call(&mut app, &ctx, "ui.set", json!({ field: null }));
+            assert!(!r.to_string().contains("unknown field"), "{field}: {r}");
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.set", Value::Null)["ok"], true);
+    }
+
+    #[test]
+    fn ui_set_unknown_theme_error_names_every_theme_and_each_name_works() {
+        use crate::theme::ThemeKind;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let r = call(&mut app, &ctx, "ui.set", json!({"theme": "nope"}));
+        assert_eq!(r["ok"], false);
+        let error = r["error"].as_str().unwrap();
+        for kind in ThemeKind::ALL {
+            assert!(error.contains(kind.id()), "{error} lacks {}", kind.id());
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"theme": kind.id()}))["ok"], true);
+            assert_eq!(app.ui.theme, kind);
+            assert_eq!(ThemeKind::from_name(kind.id()), Some(kind));
+        }
+    }
+
+    #[test]
     fn preferences_apply_is_available_over_control_without_closing() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
@@ -667,5 +733,14 @@ mod tests {
         let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
         assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
         assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
+        // Without `path`, only a layered file is written back, like File › Save (#416).
+        call(&mut app, &ctx, "app.open", json!({"path": "in/flat.jpg"}));
+        let r = call(&mut app, &ctx, "app.save", json!({}));
+        assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
+        assert_eq!(written.borrow().len(), 1, "nothing written over the JPEG");
+        call(&mut app, &ctx, "app.open", json!({"path": "in/layered.psd"}));
+        let r = call(&mut app, &ctx, "app.save", json!({}));
+        assert_eq!(r["result"]["path"], "in/layered.psd", "{r}");
+        assert_eq!(written.borrow().last().map(String::as_str), Some("in/layered.psd"));
     }
 }

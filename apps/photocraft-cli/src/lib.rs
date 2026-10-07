@@ -18,10 +18,10 @@ USAGE:
       Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
   photocraft-cli info <file> [--compact]
       Print the document as JSON (size, mode, depth, layer tree).
-  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>]
+  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>]
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
-  photocraft-cli batch --actions <actions.json> --in <dir> --out <dir> [--format <ext>]
+  photocraft-cli batch --actions <actions.json> --in <dir> --out <dir> [--format <ext>] [--quality <1-100>]
       Apply an action list ([{\"command\": id, \"params\": {…}}, …]) to every image in a directory.
   photocraft-cli droplet <file.pcdroplet> <file-or-dir>… [--out <dir>]
       Run a droplet (File › Automate › Create Droplet) on images and folders.
@@ -33,8 +33,12 @@ USAGE:
   photocraft-cli serve [--port <port>] [--control-token <64-hex> | --control-token-file <path>]
       [--automation-read-root <dir>] [--automation-write-root <dir>]
       Keep one headless session open and answer JSON lines ({\"id\",\"method\",\"params\"}) on stdio,
-      or on 127.0.0.1:<port>. Methods: engine.execute, engine.commands, doc.open/new/save/inspect/render/
-      select/close, session.list, batch, methods (docs/control-protocol.md#headless-server).
+      or on 127.0.0.1:<port>. Methods: engine.execute, jobs.list/cancel, engine.commands,
+      doc.open/new/save/inspect/render/select/close, session.list, batch, methods
+      (docs/control-protocol.md#headless-server).
+
+  photocraft-cli <subcommand> --help (or -h) prints this text. A flag the subcommand doesn't take is
+  an error.
 ";
 
 struct Args {
@@ -42,43 +46,67 @@ struct Args {
     flags: Vec<(String, Option<String>)>,
 }
 
-const VALUE_FLAGS: &[&str] = &[
-    "--format",
-    "--quality",
-    "--new",
-    "--cmd",
-    "--params",
-    "--out",
-    "--actions",
-    "--in",
-    "--filter",
-    "--bridge",
-    "--port",
-    "--control-token",
-    "--control-token-file",
-    "--automation-read-root",
-    "--automation-write-root",
+/// A subcommand: the flags it reads (taking a value, or given bare) and what it runs. A flag
+/// outside these is a usage error, so a typo such as `--fromat` can't be silently ignored (#423).
+struct Subcommand {
+    name: &'static str,
+    values: &'static [&'static str],
+    bare: &'static [&'static str],
+    run: fn(&Args, &mut dyn Write, &mut dyn Write) -> R,
+}
+
+const SUBCOMMANDS: &[Subcommand] = &[
+    Subcommand { name: "convert", values: &["--format", "--quality"], bare: &[], run: convert },
+    Subcommand { name: "info", values: &[], bare: &["--compact"], run: |a, out, _| info(a, out) },
+    Subcommand { name: "run", values: &["--new", "--cmd", "--params", "--out", "--format", "--quality"], bare: &[], run: run_cmds },
+    Subcommand { name: "batch", values: &["--actions", "--in", "--out", "--format", "--quality"], bare: &[], run: batch },
+    Subcommand { name: "droplet", values: &["--out"], bare: &[], run: droplet },
+    Subcommand { name: "commands", values: &["--filter"], bare: &["--json"], run: |a, out, _| commands(a, out) },
+    Subcommand {
+        name: "mcp",
+        values: &["--bridge", "--control-token", "--control-token-file", "--automation-read-root", "--automation-write-root"],
+        bare: &[],
+        run: |a, _, _| mcp(a),
+    },
+    Subcommand {
+        name: "serve",
+        values: &["--port", "--control-token", "--control-token-file", "--automation-read-root", "--automation-write-root"],
+        bare: &[],
+        run: |a, _, err| serve(a, err),
+    },
 ];
 
-fn parse(args: &[String]) -> Result<Args, String> {
+/// The subcommand's arguments, or `None` when they ask for help (`--help` or `-h`).
+fn parse(sub: &Subcommand, args: &[String]) -> Result<Option<Args>, String> {
     let mut a = Args { positional: Vec::new(), flags: Vec::new() };
+    let unknown = |flag: &str| format!("unknown flag {flag} for {}", sub.name);
     let mut i = 0;
-    while i < args.len() {
-        let s = &args[i];
+    while let Some(s) = args.get(i) {
+        if s == "--help" || s == "-h" {
+            return Ok(None);
+        }
         if let Some((k, v)) = s.split_once('=').filter(|(k, _)| k.starts_with("--")) {
+            if sub.bare.contains(&k) {
+                return Err(format!("{k} takes no value"));
+            }
+            if !sub.values.contains(&k) {
+                return Err(unknown(k));
+            }
             a.flags.push((k.to_owned(), Some(v.to_owned())));
-        } else if VALUE_FLAGS.contains(&s.as_str()) {
+        } else if sub.values.contains(&s.as_str()) {
             let v = args.get(i + 1).ok_or_else(|| format!("{s} needs a value"))?;
             a.flags.push((s.clone(), Some(v.clone())));
             i += 1;
-        } else if s.starts_with("--") {
+        } else if sub.bare.contains(&s.as_str()) {
             a.flags.push((s.clone(), None));
+        } else if s.starts_with("--") {
+            return Err(unknown(s));
         } else {
             a.positional.push(s.clone());
         }
         i += 1;
     }
-    Ok(a)
+    Ok(Some(a))
 }
 
 impl Args {
@@ -98,22 +126,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         let _ = write!(err, "{USAGE}");
         return 2;
     };
-    let parsed = match parse(&args[1..]) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = writeln!(err, "error: {e}\n\n{USAGE}");
-            return 2;
-        }
-    };
-    let r = match cmd.as_str() {
-        "convert" => convert(&parsed, out, err),
-        "info" => info(&parsed, out),
-        "run" => run_cmds(&parsed, out, err),
-        "batch" => batch(&parsed, out, err),
-        "commands" => commands(&parsed, out),
-        "droplet" => droplet(&parsed, out, err),
-        "mcp" => mcp(&parsed),
-        "serve" => serve(&parsed, err),
+    match cmd.as_str() {
         "-h" | "--help" | "help" => {
             let _ = write!(out, "{USAGE}");
             return 0;
@@ -122,12 +135,25 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             let _ = writeln!(out, "photocraft-cli {}", photocraft_engine::build_info::long_version());
             return 0;
         }
-        other => {
-            let _ = writeln!(err, "error: unknown command `{other}`\n\n{USAGE}");
+        _ => {}
+    }
+    let Some(sub) = SUBCOMMANDS.iter().find(|s| s.name == cmd) else {
+        let _ = writeln!(err, "error: unknown command `{cmd}`\n\n{USAGE}");
+        return 2;
+    };
+    let parsed = match parse(sub, &args[1..]) {
+        Ok(Some(p)) => p,
+        // `<subcommand> --help`: usage, without reading inputs or starting a server.
+        Ok(None) => {
+            let _ = write!(out, "{USAGE}");
+            return 0;
+        }
+        Err(e) => {
+            let _ = writeln!(err, "error: {e}\n\n{USAGE}");
             return 2;
         }
     };
-    match r {
+    match (sub.run)(&parsed, out, err) {
         Ok(()) => 0,
         Err(e) => {
             let _ = writeln!(err, "error: {e}");
@@ -271,11 +297,14 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         std::fs::read_dir(&in_dir).map_err(|e| format!("{}: {e}", in_dir.display()))?.flatten().map(|e| e.path()).filter(|p| is_input(p)).collect();
     inputs.sort();
     let (mut ok, mut failed) = (0, 0);
+    let mut written = photocraft_engine::file_cmds::OutputClaims::default();
     for input in &inputs {
         let ext = a.get("--format").map(str::to_owned).or_else(|| input.extension().map(|e| e.to_string_lossy().into_owned())).unwrap_or_else(|| "png".into());
         let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let target = out_dir.join(format!("{stem}.{ext}"));
+        let target_text = target.to_string_lossy();
         let r = (|| -> Result<Vec<String>, String> {
+            written.check(&target_text)?;
             let mut h = Headless::trusted_local();
             h.open(input).map_err(|e| e.to_string())?;
             for (id, p) in &actions {
@@ -287,6 +316,7 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         match r {
             Ok(ws) => {
                 ok += 1;
+                written.record(&target_text, &input.to_string_lossy());
                 let _ = writeln!(out, "ok    {} -> {}", input.display(), target.display());
                 warn_all(err, &ws);
             }

@@ -22,6 +22,7 @@
 	Help	帮助
 	(coming soon)	（即将推出）
 	New…	新建…
+	New from Clipboard	从剪贴板新建
 	Open…	打开…
 	Open As…	打开为…
 	Open Recent	打开最近文件
@@ -98,8 +99,10 @@
 	Puppet Warp	操控变形
 	Perspective Warp	透视变形
 	Free Transform	自由变换
+	Free Transform a Copy	自由变换副本
 	Transform	变换
 	Again	再次变换
+	Transform Again on a Copy	复制并再次变换
 	Scale	缩放
 	Rotate	旋转
 	Skew	斜切
@@ -345,6 +348,12 @@
 	Merge Down	向下合并
 	Merge Visible	合并可见图层
 	Stamp Visible	盖印可见图层
+	Select Layer Above	选择上方图层
+	Select Layer Below	选择下方图层
+	Select Top Layer	选择顶部图层
+	Select Bottom Layer	选择底部图层
+	Add Layer Above to Selection	将上方图层添加到选择
+	Add Layer Below to Selection	将下方图层添加到选择
 	Stamp Down	向下盖印
 	Flatten Image	拼合图像
 	Matting	修边
