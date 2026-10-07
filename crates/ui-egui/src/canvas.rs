@@ -321,6 +321,11 @@ pub struct ViewXform {
 }
 
 impl ViewXform {
+    /// The main canvas's mapping for the active document as last laid out (inside the rulers).
+    pub fn active(app: &PhotocraftApp) -> Option<Self> {
+        let v = app.ui.views.get(app.session.active_index()?)?;
+        Some(Self { rect: crate::rulers::content_rect(app, app.last_canvas_rect), zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal })
+    }
     pub fn to_screen(&self, x: f32, y: f32) -> Pos2 {
         let sx = if self.flip { -1.0 } else { 1.0 };
         self.rect.center() + vec2((x - self.center[0]) * self.zoom * sx, (y - self.center[1]) * self.zoom)
@@ -1296,6 +1301,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if view.fit_pending && rect.width() > 50.0 {
         fit_view(&mut view, &doc, rect.size());
     }
+    // Preferences › Tools › Overscroll off: clamp before anything is drawn (scrollbars.rs).
+    if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view(&mut view, rect.size()) {
+        ctx.request_repaint();
+    }
     let flip = app.ui.view.flip_horizontal;
     let xf = ViewXform { rect, zoom: view.zoom, center: view.center, flip };
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
@@ -1473,24 +1482,23 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
-    // Navigation: scroll pans, pinch / ⌘-scroll zooms around the pointer.
-    if response.hovered() || free_hover {
-        let (scroll, zoom_delta, pointer) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos()));
-        if zoom_delta != 1.0
-            && let Some(p) = pointer
-        {
-            let nz = (view.zoom * zoom_delta).clamp(0.01, 64.0);
-            zoom_about(&mut view, &xf, p, nz);
-        } else if scroll.y != 0.0
-            && app.session.prefs().general.zoom_with_scroll_wheel
-            && let Some(p) = pointer
-        {
-            // Preferences › General › Zoom with Scroll Wheel.
-            let nz = (view.zoom * (scroll.y / 200.0).exp()).clamp(0.01, 64.0);
-            zoom_about(&mut view, &xf, p, nz);
-        } else if scroll != Vec2::ZERO {
-            view.center[0] -= scroll.x / view.zoom * if flip { -1.0 } else { 1.0 };
-            view.center[1] -= scroll.y / view.zoom;
+    // Navigation (wheel_nav.rs): scroll pans; pinch, ⌘-scroll and ⌥-scroll zoom around the pointer.
+    let wheel = crate::wheel_nav::read(&ctx, app.session.prefs().general.zoom_with_scroll_wheel);
+    // The wheel also scrolls over the scrollbars drawn on top of the canvas (last frame's hover).
+    let bars_id = egui::Id::new(("pc-canvas-bars-hover", idx));
+    let over_bars = ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
+    if response.hovered() || free_hover || over_bars {
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        match (wheel, pointer) {
+            (Some(crate::wheel_nav::Wheel::Zoom(f)), Some(p)) => {
+                let nz = (view.zoom * f).clamp(0.01, 64.0);
+                zoom_about(&mut view, &xf, p, nz);
+            }
+            (Some(crate::wheel_nav::Wheel::Pan(scroll)), _) => {
+                view.center[0] -= scroll.x / view.zoom * if flip { -1.0 } else { 1.0 };
+                view.center[1] -= scroll.y / view.zoom;
+            }
+            _ => {}
         }
     }
 
@@ -1542,6 +1550,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_smoothing(app);
         let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool);
+        // Right-click with the Move tool, or ⌘/Ctrl+right-click: the layers under the pointer.
+        if response.secondary_clicked()
+            && crate::layer_pick_ui::is_gesture(tool, mods)
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            let d = xf.to_doc(p);
+            crate::layer_pick_ui::open(app, [p.x, p.y], d[0], d[1]);
+        }
         // The (temporary) Hand pans above; its gestures never reach the tool underneath.
         if tool == Tool::Hand {
             (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
@@ -1649,6 +1665,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let resizing = crate::brush_resize::draw(app, &painter, &xf);
         draw_transform_controls(app, &painter, &xf);
         crate::paint_mouse::show_picker(app, &ctx);
+        crate::layer_pick_ui::show(app, &ctx);
         crate::snap_ui::draw(app, &painter, &xf);
         if border == photocraft_engine::prefs::CanvasBorder::Line {
             painter.rect_stroke(img_rect, 0.0, Stroke::new(1.0, Color32::from_gray(20)), egui::StrokeKind::Outside);
@@ -1677,6 +1694,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let icon = match tool {
                 // Resizing the brush: the circle stays where the drag began (`brush_resize`).
                 t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
+                // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`).
+                t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
+                    egui::CursorIcon::Crosshair
+                }
                 t if t.is_brushlike() || t == Tool::QuickSelection => {
                     // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
                     // full size), precise crosshair, or the standard pointer.
@@ -1759,7 +1780,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
         }
     }
+    // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
+    let t0 = crate::gpu_canvas::now_ms();
+    let before = view.center;
+    let over_bars = crate::scrollbars::show(ui, rect, &mut view, flip, egui::Id::new(("pc-canvas", idx)));
+    ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
+    if view.center != before {
+        ctx.request_repaint();
+    }
     if primary {
+        app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
     }
     if primary && app.ui.extras.rulers {
@@ -2005,6 +2035,30 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
     }
 }
 
+/// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
+/// foreground colour, as with the Eyedropper itself (#417).
+fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
+    // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
+    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
+}
+
+/// Decided when the press starts, so ⌥ pressed or released mid-stroke never switches between
+/// painting and sampling.
+fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    if matches!(ev, ToolEvent::Down { .. }) {
+        app.alt_sampling = alt_samples(app.ui.tool, mods);
+    }
+    if !app.alt_sampling {
+        return false;
+    }
+    match ev {
+        // Without ⌥: the sample sets the foreground colour, whatever the Eyedropper would do.
+        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, egui::Modifiers::NONE),
+        ToolEvent::Up { .. } => app.alt_sampling = false,
+    }
+    true
+}
+
 fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
     if let Ok(v) = app.run("document.pixel", json!({"x": x.floor(), "y": y.floor()})) {
         let color: Vec<f32> = serde_json::from_value(v).unwrap_or_default();
@@ -2044,6 +2098,9 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    // An Alt+right-drag armed for this press (`paint_mouse`): taken before anything else can
+    // consume the event, so it never outlives the press it was armed for (#297).
+    let armed = std::mem::take(&mut app.brush_resize_armed);
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     let ev = crate::snap_ui::filter_event(app, ev, mods);
@@ -2055,8 +2112,13 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
     let mods = crate::workspace_ui::sticky_mods(app, mods);
-    // Control+Alt-drag with a painting tool resizes the brush instead of painting (#231).
-    if crate::brush_resize::pointer(app, ev, mods) {
+    // Control+Alt-drag or Alt+right-drag with a painting tool resizes the brush instead of
+    // painting (#231, #297).
+    if crate::brush_resize::pointer(app, ev, mods, armed) {
+        return;
+    }
+    // ⌥ (Alt) with a painting tool is the Eyedropper for that press.
+    if alt_eyedropper(app, ev, mods) {
         return;
     }
     // Move tool: ⇧ locks the axis, ⌥ duplicates (move_mods.rs).
@@ -2191,6 +2253,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 && let Some(e) = app.ui.text_edit.as_mut()
             {
                 e.dragging = false;
+                e.resize = None;
             }
             if tool == Tool::Pen {
                 crate::vector_ui::pen_up(app);
@@ -2454,6 +2517,48 @@ mod tests {
 
         tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
         assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
+    }
+
+    #[test]
+    fn alt_with_a_painting_tool_samples_the_foreground_instead_of_painting() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+        app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 20, 20], "fill": "#ff0000"})).unwrap();
+        app.run("shape.create", json!({"kind": "rect", "rect": [20, 0, 20, 20], "fill": "#00ff00"})).unwrap();
+        let alt = egui::Modifiers::ALT;
+        for tool in [Tool::Brush, Tool::Pencil, Tool::Gradient, Tool::PaintBucket] {
+            app.ui.tool = tool;
+            app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]})).unwrap();
+            let rev = app.session.active().unwrap().revision;
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, alt);
+            assert_eq!(app.session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "{tool:?}: ⌥-click sets the foreground");
+            // A drag keeps sampling, even after ⌥ is let go; the background is untouched.
+            tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            assert_eq!(app.session.tools.foreground, [0.0, 1.0, 0.0, 1.0], "{tool:?}");
+            tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 10.0 }, egui::Modifiers::NONE);
+            assert_eq!(app.session.tools.background, [1.0, 1.0, 1.0, 1.0]);
+            assert_eq!(app.session.active().unwrap().revision, rev, "{tool:?}: sampling must not edit the document");
+            assert!(app.drag.is_none() && !app.alt_sampling);
+        }
+        // Agents get the same through `ui.pointer` (MCP `ui_pointer`).
+        app.ui.tool = Tool::Brush;
+        let ctx = egui::Context::default();
+        let events = json!([{"kind": "down", "x": 10, "y": 10}, {"kind": "up", "x": 10, "y": 10}]);
+        let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", json!({"modifiers": {"alt": true}, "events": events}));
+        let _ = crate::control::handle(&mut app, &ctx, &req);
+        assert_eq!(app.session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
+        app.run("tools.setColors", json!({"foreground": [0.0, 1.0, 0.0, 1.0]})).unwrap();
+        // Without ⌥ the Brush paints again, and ⌥ pressed mid-stroke doesn't switch to sampling.
+        app.run("layer.new.layer", json!({})).unwrap();
+        let rev = app.session.active().unwrap().revision;
+        tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 5.0, pressure: 1.0 }, alt);
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 5.0 }, alt);
+        assert_eq!(app.session.tools.foreground, [0.0, 1.0, 0.0, 1.0]);
+        assert!(app.session.active().unwrap().revision > rev, "the stroke was painted");
+        // Control+Alt stays the brush-resize gesture, never a sample.
+        assert!(!alt_samples(Tool::Brush, egui::Modifiers { alt: true, ctrl: true, ..Default::default() }));
+        assert!(!alt_samples(Tool::Eraser, alt), "⌥ with the Eraser is not the Eyedropper");
     }
 
     #[test]

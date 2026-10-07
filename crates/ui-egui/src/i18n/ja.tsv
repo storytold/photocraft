@@ -27,6 +27,7 @@
 	Help	ヘルプ
 	(coming soon)	(近日対応)
 	New…	新規…
+	New from Clipboard	クリップボードから新規作成
 	Open…	開く…
 	Open As…	形式を指定して開く…
 	Open Recent	最近使ったファイルを開く
@@ -103,8 +104,10 @@
 	Puppet Warp	パペットワープ
 	Perspective Warp	遠近法ワープ
 	Free Transform	自由変形
+	Free Transform a Copy	コピーを自由変形
 	Transform	変形
 	Again	もう一度
+	Transform Again on a Copy	複製してもう一度変形
 	Scale	拡大・縮小
 	Rotate	回転
 	Skew	斜体
@@ -345,6 +348,14 @@
 	Merge Layers	レイヤーを結合
 	Merge Down	下のレイヤーと結合
 	Merge Visible	表示レイヤーを結合
+	Stamp Visible	表示レイヤーをスタンプ
+	Select Layer Above	上のレイヤーを選択
+	Select Layer Below	下のレイヤーを選択
+	Select Top Layer	最上位のレイヤーを選択
+	Select Bottom Layer	最下位のレイヤーを選択
+	Add Layer Above to Selection	上のレイヤーを選択に追加
+	Add Layer Below to Selection	下のレイヤーを選択に追加
+	Stamp Down	下のレイヤーにスタンプ
 	Flatten Image	画像を統合
 	Matting	マット処理
 	Color Decontaminate…	カラーの混入を除去…

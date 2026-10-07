@@ -30,6 +30,10 @@ env:
   RUST_BACKTRACE: 1
   PHOTOCRAFT_BUILD_SHA: ${{ github.sha }}
   INPUT_VERSION: ${{ inputs.version }}
+  # craft-fonts (https://github.com/storytold/craft-fonts): shared font assets every release
+  # embeds (today the Japanese fonts). An optional build input for everyone else; see
+  # docs/development.md › Fonts. Bump deliberately; every desktop build job checks out this commit (not web).
+  CRAFT_FONTS_REF: abb83316d96aa59c1cf64784289e378fe9fa5695
 
 jobs:
   version:
@@ -70,6 +74,12 @@ jobs:
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check out craft-fonts (embedded fonts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -90,6 +100,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
         run: packaging/macos/package.sh --arch universal
       # Unpacks the CLI zip and checks the binary users get: Developer ID, hardened runtime,
       # timestamp, and Gatekeeper's notarization lookup (codesign --verify, spctl). Also the DMG's
@@ -129,6 +141,12 @@ jobs:
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check out craft-fonts (embedded fonts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -153,6 +171,8 @@ jobs:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
         run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
@@ -179,6 +199,12 @@ jobs:
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@v4
+      - name: Check out craft-fonts (embedded fonts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - name: Install build and packaging tools
         run: |
           sudo apt-get update
@@ -196,6 +222,9 @@ jobs:
         if: inputs.version != ''
         run: cargo xtask version set "$PHOTOCRAFT_VERSION"
       - name: Build and package (AppImage, deb, rpm, tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
         run: packaging/linux/package.sh
       - name: Check the packages
         run: |
@@ -264,6 +293,12 @@ jobs:
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check out craft-fonts (embedded fonts)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - name: Build and package in a FreeBSD VM (tar.gz)
         # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc
@@ -286,6 +321,8 @@ jobs:
             # target dir back fails on large builds). 4 jobs: more runs the VM out of memory.
             export CARGO_TARGET_DIR=/var/tmp/photocraft-target CARGO_BUILD_JOBS=4
             if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$PHOTOCRAFT_VERSION"; fi
+            # craft-fonts was checked out next to the sources and synced into the VM with them.
+            export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
             bash packaging/freebsd/package.sh
             tar -tzf dist/release/photocraft-*-freebsd-x86_64.tar.gz \
               | grep -E '/bin/photocraft$|/bin/photocraft-cli$|/share/applications/ai\.storyteller\.photocraft\.desktop$|/share/doc/photocraft/LICENSE-MIT$'
@@ -320,6 +357,8 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         run: cargo xtask version set "$PHOTOCRAFT_VERSION"
+      # No craft-fonts here: the wasm32 build never embeds it (crates/text/build.rs), since even
+      # one Japanese font takes the wasm over packaging/web/package.sh's 24 MiB gate.
       - name: Build and zip
         run: packaging/web/package.sh
       - uses: actions/upload-artifact@v4

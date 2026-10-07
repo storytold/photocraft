@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use photocraft_engine::{Session, command_specs};
+use photocraft_engine::{Session, command_specs, file_cmds};
 use photocraft_format::PcraftWriter;
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
@@ -49,6 +49,13 @@ impl Headless {
         Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::Workspace(workspace) }
     }
 
+    /// Apply background jobs that finished since the last request, so every request (save,
+    /// export, inspect, preview, `session.list`, commands) sees their result. Cheap when no job
+    /// runs. The JSON-lines server and the MCP server call it before each request.
+    pub fn sync_jobs(&mut self) {
+        self.session.poll_jobs();
+    }
+
     fn doc_index(&self, index: Option<usize>) -> Result<usize, AutomationError> {
         match index {
             Some(i) if i < self.session.documents().len() => Ok(i),
@@ -91,7 +98,18 @@ impl Headless {
         };
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),
-            (None, Some(p)) => PathBuf::from(p),
+            // Like the desktop's File › Save: without a new path, only a layered file is written
+            // back, in its own format; a flattened or converted copy never replaces it (#416).
+            (None, Some(p)) => {
+                let own = file_cmds::extension(p);
+                let written = format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| own.clone());
+                if !file_cmds::saves_in_place(p) || written != own {
+                    return Err(AutomationError::BadRequest(format!(
+                        "pass `path`: without one, only a PSD, PSB or .pcraft file is written back, in its own format, so `{p}` was left unchanged"
+                    )));
+                }
+                PathBuf::from(p)
+            }
             (None, None) => {
                 return Err(AutomationError::BadRequest("document has no path; pass `path`".into()));
             }
@@ -196,8 +214,8 @@ impl Headless {
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             authorize_engine_command(id, &params)?;
         }
-        // Background jobs that finished since the last request are applied first.
-        self.session.poll_jobs();
+        // Background jobs that finished since the last request (or batch step) are applied first.
+        self.sync_jobs();
         if wait {
             return Ok(self.session.execute(id, params)?);
         }

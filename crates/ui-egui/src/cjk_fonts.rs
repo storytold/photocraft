@@ -11,10 +11,16 @@
 //! Japanese font, Hangul a Korean one, Bopomofo a Traditional Chinese one, and Han the
 //! locale's script (Japanese forms only for a Japanese locale). At most one font is read per
 //! frame, each file at most once, and once every script has been tried the scan stops.
+//!
+//! Builds made with the optional craft-fonts input (`CRAFT_FONTS_DIR`,
+//! [`photocraft_text::craft_fonts`]) carry Japanese fonts (BIZ UDPGothic first): they are tried
+//! before the system Japanese fonts, in the Japanese slot of the same locale order. Without
+//! craft-fonts (and on the web, which never embeds them) nothing changes.
 
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{FontData, FontFamily, FontId, Shape};
 use photocraft_text::cjk::{self, CjkChar, CjkScript, FontFile};
+use photocraft_text::craft_fonts::{self, CraftFont};
 use std::path::PathBuf;
 
 /// Skip absurdly large files (a corrupt or non-font path must not eat memory).
@@ -28,16 +34,28 @@ pub struct Sources {
     pub locale: fn() -> Option<String>,
     pub files: fn(CjkScript) -> Vec<FontFile>,
     pub last_resort: fn() -> Vec<FontFile>,
+    /// Embedded fonts tried before `files` for a script (craft-fonts' Japanese fonts).
+    pub embedded: fn(CjkScript) -> Vec<&'static CraftFont>,
+}
+
+/// craft-fonts' Japanese fonts for the Japanese script, UI face first (empty without craft-fonts).
+pub fn craft_embedded(script: CjkScript) -> Vec<&'static CraftFont> {
+    if script == CjkScript::Japanese { craft_fonts::japanese_for_ui() } else { Vec::new() }
+}
+
+/// No embedded fonts (tests that pin the system-font behaviour).
+pub fn no_embedded(_: CjkScript) -> Vec<&'static CraftFont> {
+    Vec::new()
 }
 
 impl Sources {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn system() -> Self {
-        Self { locale: || cjk::ui_locale().map(str::to_string), files: cjk::font_files, last_resort: cjk::last_resort_files }
+        Self { locale: || cjk::ui_locale().map(str::to_string), files: cjk::font_files, last_resort: cjk::last_resort_files, embedded: craft_embedded }
     }
     #[cfg(target_arch = "wasm32")]
     pub fn system() -> Self {
-        Self { locale: || None, files: |_| Vec::new(), last_resort: Vec::new }
+        Self { locale: || None, files: |_| Vec::new(), last_resort: Vec::new, embedded: craft_embedded }
     }
 }
 
@@ -78,6 +96,9 @@ impl CjkFallback {
                 continue;
             }
             self.tried.push(s);
+            if let Some(f) = self.load_embedded(s) {
+                return Some(f);
+            }
             let files = (self.sources.files)(s);
             if let Some(f) = self.load_first(&files) {
                 return Some(f);
@@ -89,6 +110,20 @@ impl CjkFallback {
             return self.load_first(&files);
         }
         None
+    }
+
+    /// The first embedded (craft-fonts) font for `s`, registered from its static bytes.
+    fn load_embedded(&mut self, s: CjkScript) -> Option<(String, FontData)> {
+        let f = (self.sources.embedded)(s).into_iter().find(|f| !f.bytes.is_empty())?;
+        let path = PathBuf::from(format!("craft-fonts/{} {}", f.family, f.style));
+        if self.loaded.contains(&path) {
+            return None;
+        }
+        self.loaded.push(path.clone());
+        let name = format!("{FONT_PREFIX}-{}", self.registered.len());
+        log::info!("UI font fallback: registered embedded {} as {name}", path.display());
+        self.registered.push((name.clone(), path, 0));
+        Some((name, FontData::from_static(f.bytes)))
     }
 
     fn load_first(&mut self, files: &[FontFile]) -> Option<(String, FontData)> {
@@ -270,6 +305,7 @@ mod tests {
                 _ => vec![],
             },
             last_resort: || vec![fake("font.ttf")],
+            embedded: no_embedded,
         }
     }
 
@@ -299,7 +335,7 @@ mod tests {
             ("zh-Hant-TW", CjkScript::TraditionalChinese),
             ("ko_KR", CjkScript::Korean),
         ] {
-            let mut fb = CjkFallback::new(Sources { locale: || None, files: |_| vec![], last_resort: Vec::new });
+            let mut fb = CjkFallback::new(Sources { locale: || None, files: |_| vec![], last_resort: Vec::new, embedded: no_embedded });
             fb.order = Some(cjk::script_order(Some(loc)));
             assert!(fb.next_font(CjkChar::Han).is_none());
             assert_eq!(fb.tried[0], first, "{loc}");
@@ -352,6 +388,48 @@ mod tests {
         assert!(fonts.font_data.contains_key(&name));
         for (fam, stack) in &fonts.families {
             assert_eq!(stack.last(), Some(&name), "{fam:?}: appended last so Latin keeps Inter");
+        }
+    }
+
+    /// No system fonts at all: craft-fonts alone draws Japanese.
+    fn craft_only(locale: fn() -> Option<String>) -> Sources {
+        Sources { locale, files: |_| vec![], last_resort: Vec::new, embedded: craft_embedded }
+    }
+
+    #[test]
+    fn craft_fonts_render_japanese_without_system_fonts() {
+        let Some(ui_font) = craft_fonts::japanese_for_ui().first().copied() else {
+            eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+            return;
+        };
+        // An English locale tries Chinese first (none here), then Japanese: the craft font.
+        for locale in [(|| Some("en_US".into())) as fn() -> Option<String>, || Some("ja_JP".into()), || None] {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_with(&ctx, craft_only(locale));
+            assert!(render(&ctx, "日本語の文字"), "tofu in 日本語の文字");
+            assert!(render(&ctx, "レイヤー 1"), "tofu in kana");
+            let fonts = ctx.fonts(|f| f.definitions().clone());
+            let name = format!("{FONT_PREFIX}-0");
+            assert!(fonts.font_data.get(&name).is_some_and(|d| std::ptr::eq(d.font.as_ref().as_ptr(), ui_font.bytes.as_ptr())), "BIZ UDPGothic Regular first");
+            for (fam, stack) in &fonts.families {
+                assert_eq!(stack.last(), Some(&name), "{fam:?}: appended last so Latin keeps Inter");
+                assert!(stack.first().is_some_and(|f| f != &name), "{fam:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn ui_works_without_craft_fonts() {
+        // The pre-craft-fonts behaviour: no embedded fonts, no system fonts. Latin renders,
+        // Japanese is tried (and stays missing) without panicking, and the loader exhausts.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_with(&ctx, Sources { locale: || None, files: |_| vec![], last_resort: Vec::new, embedded: no_embedded });
+        assert!(render(&ctx, "Layer 1 – café"));
+        assert!(!render(&ctx, "日本語の文字"));
+        let n = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
+        assert_eq!(n, 0);
+        if craft_fonts::CRAFT_FONTS.is_empty() {
+            assert!(craft_embedded(CjkScript::Japanese).is_empty());
         }
     }
 

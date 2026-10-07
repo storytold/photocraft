@@ -114,6 +114,14 @@ foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
+# Builds made with craft-fonts (CRAFT_FONTS_DIR, all official releases) embed its OFL-1.1 fonts:
+# ship each font's licence as OFL-<family-dir>.txt.
+if ($env:CRAFT_FONTS_DIR) {
+  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    $lic = Join-Path $_.FullName 'OFL.txt'
+    if (Test-Path $lic) { Copy-Item $lic (Join-Path $Portable "OFL-$($_.Name).txt") }
+  }
+}
 # portable.txt beside photocraft.exe switches on portable mode: settings, presets and recovery
 # files go to PhotoCraftData\ next to the exe instead of %APPDATA% (#228; see app_dirs.rs).
 Copy-Item (Join-Path $PSScriptRoot 'portable.txt') $Portable

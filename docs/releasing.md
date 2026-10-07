@@ -61,6 +61,14 @@ Every binary reports its version, the commit and the build date: `photocraft --v
 `PHOTOCRAFT_BUILD_DATE`, and `crates/engine/src/build_info.rs` reads them at compile time. A plain
 `cargo build` doesn't set them and reports `0.2.0 (dev build)`.
 
+Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out [craft-fonts](https://github.com/storytold/craft-fonts)
+at the commit in `CRAFT_FONTS_REF` (top of `release.yml`) and builds with `CRAFT_FONTS_DIR` and
+`CRAFT_FONTS_REQUIRED=1`, so desktop releases embed its Japanese fonts (the web build embeds none: see
+`docs/development.md` › Fonts) and fail rather than ship without them. The packages carry each font's licence as
+`OFL-<family>.txt` (`copy_font_licences` in `packaging/env.sh`; the portable zip on Windows;
+`Contents/Resources/Licenses` in the macOS app). Bump the pin deliberately, together with the one
+in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/development.md` › Fonts.
+
 ### macOS
 
 `packaging/macos/package.sh` builds `aarch64-apple-darwin` and `x86_64-apple-darwin` with

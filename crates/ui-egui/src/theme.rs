@@ -35,6 +35,17 @@ impl ThemeKind {
             ThemeKind::Classic => "Classic",
         }
     }
+    /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
+    /// `window.theme.<id>`.
+    pub fn id(self) -> &'static str {
+        match self {
+            ThemeKind::Pro => "pro",
+            ThemeKind::ProMedium => "proMedium",
+            ThemeKind::Studio => "studio",
+            ThemeKind::StudioLight => "studioLight",
+            ThemeKind::Classic => "classic",
+        }
+    }
     pub fn next(self) -> Self {
         let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
@@ -273,6 +284,11 @@ impl Tokens {
 
 /// Register Inter (UI) and JetBrains Mono (numbers) plus named weights.
 pub fn install_fonts(ctx: &egui::Context) {
+    install_fonts_with(ctx, crate::cjk_fonts::Sources::system());
+}
+
+/// [`install_fonts`] with the CJK fallback fonts taken from `cjk` (tests swap the sources).
+pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
@@ -291,8 +307,9 @@ pub fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
     ctx.set_fonts(fonts);
-    // Japanese / Chinese / Korean system fonts are registered on demand (cjk_fonts.rs).
-    crate::cjk_fonts::install(ctx);
+    // Japanese / Chinese / Korean fallback fonts (craft-fonts' Japanese ones if built in, then
+    // the system's) are registered on demand (cjk_fonts.rs).
+    crate::cjk_fonts::install_with(ctx, cjk);
 }
 
 pub fn medium(size: f32) -> FontId {

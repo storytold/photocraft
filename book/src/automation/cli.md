@@ -13,7 +13,7 @@
 | `mcp` | Start the MCP server on stdio, optionally bridged to the desktop app |
 | `serve` | Start the JSON-lines headless server on stdio or loopback TCP |
 
-Use `photocraft-cli --help` as the executable source of truth. A typical bounded command run is:
+Use `photocraft-cli --help` (or `photocraft-cli <subcommand> --help`) as the executable source of truth. A typical bounded command run is:
 
 ```sh
 photocraft-cli run input.psd \
@@ -21,6 +21,6 @@ photocraft-cli run input.psd \
   --out output.png
 ```
 
-Paths supplied to the current CLI are ordinary operating-system paths. The CLI does not restrict them to a workspace root. Batch output creates the requested output directory, and save operations may create parent directories. Run untrusted action files only in an appropriately isolated account or environment.
+Paths supplied to the current CLI are ordinary operating-system paths. The CLI does not restrict them to a workspace root. Batch output creates the requested output directory, and save operations may create parent directories. `batch` refuses an output directory that is its input directory (the results would replace the originals) unless `--in-place` is given. Run untrusted action files only in an appropriately isolated account or environment.
 
-CLI parsing reports malformed flags and JSON as errors, but it is not a security policy layer. Engine commands remain responsible for validating their own parameters.
+CLI parsing reports malformed flags and JSON as errors, and a flag the subcommand doesn't take (a typo such as `--fromat`) is a usage error (exit status 2) rather than being ignored. It is not a security policy layer. Engine commands remain responsible for validating their own parameters.

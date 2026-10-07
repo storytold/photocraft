@@ -32,17 +32,17 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 
 ## Methods
 
-- `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given
+- `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given. `params` must be a JSON object (omit it or pass `null` for none); an array, string, number or boolean is an error naming the command, in every transport (control channel, `serve`, MCP and the CLI)
 - `engine.commands`: list commands with enablement
-- `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, menu tree, window size). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
-- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, maskTarget?, selectionMode?, zoom?, center?, fit?, theme?, brushSize?, brushSection?, brushTab?}`: change UI state (`selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520)
-- `ui.menu.invoke {id}` / `ui.menu.list`: activate a menu item by id; list the menu tree
-- `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background}`, `command {command}`) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog}` / `ui.dialog.cancel {dialog}`
+- `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size). The menu tree is not included; use `ui.menu.list`. `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
+- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?}`: change UI state; any other field is an error, checked before anything changes (`theme` is `pro`, `proMedium`, `studio`, `studioLight` or `classic`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"]}`, the right-dock groups top to bottom, their heights in points and the groups collapsed to their tab strip; `dockWidth` sets the right dock width in points, clamped to 250..520)
+- `ui.menu.invoke {id, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once
+- `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background}`, `command {command}`) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`. Like `ui.menu.invoke`, `ui.dialog.confirm` waits for a background job its command starts (a filter dialog's OK) and replies with the result; `"wait": false` replies `{job, pending: true}` at once
   - Preferences (`ui.menu.invoke {id: "edit.preferences.interface"}`) edits the sections in its `values` field. `ui.dialog.apply {dialog}` saves those values through `prefs.set` and keeps the same dialog and section open. `ui.dialog.confirm` saves and closes; `ui.dialog.cancel` discards only edits made since the last successful Apply. Invalid values return an error without closing the Apply dialog or changing the saved preferences. Settings marked for the next launch still require a restart.
   - Edit › Fill… (`ui.menu.invoke {id: "edit.fill"}`, Shift+F5, Shift+Backspace) opens the Fill dialog; its fields are `edit.fill`'s params (`contents`, `color`, `pattern`, `colorAdaptation`, `mode`, `opacity`, `preserveTransparency`), and OK remembers them in the preferences (`dialogs["edit.fill"]`).
   - A pixel tool pressed on a type, shape, Smart Object or fill layer (e.g. through `ui.pointer`) opens the "Rasterize?" prompt instead of painting: a dialog with `__rasterize` (`type|shape|smartObject|fill`), `message`, `layer`, `tool` and `at`. `ui.dialog.confirm` runs the `layer.rasterize.*` command and then paints at `at` (two history states, `{"rasterized", "painted"}`); `ui.dialog.cancel` does nothing.
 - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
-- `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?}`: drive the active tool in document coordinates (pressure 0..1, tilt in degrees -90..90, barrel rotation 0..360: a simulated pen); `space: true` holds Space (the Crop frame, marquee, lasso or shape being drawn then moves instead of growing)
+- `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (pressure 0..1, tilt in degrees -90..90, barrel rotation 0..360: a simulated pen). Modifier flags (`shift`, `alt`, `command`, `ctrl`, `space`) go either at the top level or grouped under `modifiers`; when `modifiers` is present, top-level flags are ignored. `space: true` holds Space (the Crop frame, marquee, lasso or shape being drawn then moves instead of growing). `button: "right"` (or `"secondary"`) is the right button: with the Move tool (or `command: true` with any tool) it opens the canvas layer menu instead (`layerMenu` in `ui.inspect` lists the layers there, topmost first; select one with `layer.select`); with a painting tool it opens the Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase. Both menus open at the screen position of the pressed document point, like a mouse right-click's
 - `ui.key {key, command?, shift?, alt?, ctrl?}` (flags may also be grouped under `modifiers`): press and release a key, e.g. `{"key": "ArrowLeft", "shift": true}`
 - `ui.type {text}`: type text (goes to the focused widget, or to the canvas while the Type tool is editing)
 - `ui.resize {width, height}`: resize the main window
@@ -51,7 +51,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
-- `app.open {path}` / `app.save {path}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. Automation opens and saves never fire script events. `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` reply with `warnings` the same way
+- `app.open {path}` / `app.save {path}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. Automation opens and saves never fire script events. `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` reply with `warnings` the same way
 - `app.quit`
 
 ## Engine commands
@@ -76,7 +76,7 @@ UI-level commands (`file.open`, `file.save`, `view.zoomIn`, `window.theme.pro`, 
 
 ### Background jobs (#210)
 
-Long commands (every `filter.*`, `edit.contentAwareFill`, `edit.contentAwareScale`, `file.automate.photomerge`, `brush.presets.importAbr`) and file opens run as background jobs in the desktop app: the window keeps drawing, the status bar shows progress with a Cancel button, and jobs that lock the active document show a modal progress dialog (Esc cancels). `engine.execute` still waits for the result by default; pass `"wait": false` to get `{job, pending: true}` at once, then poll `jobs.list` (`state`: running, done, failed, cancelled; `progress` 0–1; the result or error) and stop it with `jobs.cancel {job}`. A cancelled or failed job leaves the document unchanged. While a job runs, commands that would edit its document fail with "… is still running on this document". `ui.inspect` reports `jobs` (running jobs, opening files). Set `PHOTOCRAFT_INLINE_JOBS=1` to run everything inline.
+Long commands (every `filter.*`, `edit.contentAwareFill`, `edit.contentAwareScale`, `file.automate.photomerge`, `brush.presets.importAbr`) and file opens run as background jobs in the desktop app: the window keeps drawing, the status bar shows progress with a Cancel button, and jobs that lock the active document show a modal progress dialog (Esc cancels). `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` still wait for the result by default; pass `"wait": false` to get `{job, pending: true}` at once, then poll `jobs.list` (`state`: running, done, failed, cancelled; `progress` 0–1; the result or error) and stop it with `jobs.cancel {job}`. A cancelled or failed job leaves the document unchanged. While a job runs, commands that would edit its document fail with "… is still running on this document". `ui.inspect` reports `jobs` (running jobs, opening files). Set `PHOTOCRAFT_INLINE_JOBS=1` to run everything inline.
 
 ## Preferences
 
@@ -157,7 +157,7 @@ How each MCP tool maps onto control methods in bridge mode:
 | `doc_render_preview {max_side?}` | `ui.screenshot`, returned directly as PNG image content |
 | `session_list`, `ui_inspect` | `ui.inspect` |
 | `ui_screenshot {max_side?}` | `ui.screenshot`, returned as PNG image content |
-| `ui_pointer {events, modifiers?}` | `ui.pointer` |
+| `ui_pointer {events, modifiers?, button?}` | `ui.pointer` (other arguments are an error) |
 | `ui_menu_invoke {id}` | `ui.menu.invoke` |
 | `ui_set {fields}` | `ui.set` |
 | `control_call {method, params}` | any method, passed through unchanged |
@@ -195,15 +195,15 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | Method | Params |
 |---|---|
 | `engine.execute` | `{command, params?, wait?}`: any engine command (`wait: false` starts a long one as a background job: `{job, pending}`) |
-| `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs (applying finished ones); cancel one or all |
+| `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs; cancel one or all. Every request (and MCP tool call) first applies the jobs that finished, so `doc.save`, `doc.inspect`, `doc.render` and `session.list` include a finished job's result without polling `jobs.list` first |
 | `engine.commands` | `{filter?}`: registry with params docs and enablement |
 | `session.list` | open documents and the active index |
 | `doc.open` / `doc.new` | `{path}` / `file.new` params |
-| `doc.save` | `{path?, format?, quality?, index?}` (`.pcraft` native, else export by extension) |
+| `doc.save` | `{path?, format?, quality?, index?}` (`.pcraft` native, else export by extension). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged |
 | `doc.inspect` | `{index?}`: same JSON as `document.inspect` |
 | `doc.render` | `{index?, maxSide? (1024; 0 = full), path?}`: PNG to `path`, else `{mime, base64}` |
 | `doc.select` / `doc.close` | `{index}` / `{index?}` |
-| `batch` | `{steps: [{command, params?} \| {method, params?}], stopOnError? (true)}` → `{completed, failed, results}` |
+| `batch` | `{steps: [{command, params?, wait?} \| {method, params?}], stopOnError? (true)}` → `{completed, failed, results}` (a step with `wait: false` starts a long command as a background job, like `engine.execute`) |
 | `methods` | the list above |
 
 ```sh
@@ -214,8 +214,9 @@ printf '%s\n' \
   photocraft-cli serve --automation-read-root /work/project --automation-write-root /work/project
 ```
 
-The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params}], stop_on_error}`),
-in headless and bridge mode.
+The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, params, wait?}], stop_on_error}`),
+in headless and bridge mode. A step with `wait: false` returns `{job, pending}` at once, as `command_run`
+does; later steps that edit the same document fail with a message naming the job until it ends.
 
 ## Transport limits
 
@@ -229,8 +230,16 @@ The desktop and headless TCP listeners currently enforce:
 
 An oversized line, excess connection, unauthenticated request, or unauthorized filesystem path is
 rejected before command dispatch or file effects. The headless JSON-lines stdio server also
-enforces the request and reply byte ceilings. MCP tool results are checked as encoded JSON,
+enforces the request and reply byte ceilings; MCP over stdio (`photocraft-cli mcp`) does not
+cap request bytes, because the MCP SDK reads its own request lines (only MCP tool results are
+checked). A TCP connection is closed after an oversized
+line; on stdio an oversized or non-UTF-8 line gets one error reply (`id: null`), the rest of that
+line is skipped without being dispatched, and the session and its open documents keep serving. MCP tool results are checked as encoded JSON,
 including the text/image content envelope, and the MCP bridge bounds incoming desktop replies.
+A `batch` or `command_batch` stops at the first step whose result no longer fits the reply budget
+(that step may have run; later ones do not). MCP charges each result at its size escaped inside
+the text content, so the reply still lists `completed`, `failed` and every result so far, ending
+with the budget error.
 
 Headless automation previews (`doc.render` / MCP `doc_render_preview`) allow a maximum requested
 edge of 2048 pixels and a source document of at most 67,108,864 pixels. `maxSide: 0` (MCP

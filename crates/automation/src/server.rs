@@ -72,7 +72,9 @@ pub struct NewParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct SaveParams {
     /// Forward-slash relative target beneath the configured automation write root.
-    /// The extension selects the format. Omit to save to the document's own relative path.
+    /// The extension selects the format. Omit to write back to the document's own file, which
+    /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
+    /// `path`, so a flattened or converted copy never replaces the opened file.
     #[serde(default)]
     pub path: Option<String>,
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
@@ -112,7 +114,7 @@ pub struct ListParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
-    /// Command id, e.g. `layer.new.layer`, `filter.blur.gaussian`.
+    /// Command id, e.g. `layer.new.layer`, `filter.blur.gaussianBlur`.
     pub id: String,
     /// Command parameters as a JSON object (see the `params` doc in `command_list`).
     #[serde(default)]
@@ -133,20 +135,30 @@ pub struct JobCancelParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BatchParams {
-    /// Commands to run in order: `[{"id": "layer.new.layer", "params": {"name": "Ink"}}, …]`.
+    /// Commands to run in order: `[{"id": "layer.new.layer", "params": {"name": "Ink"}}, …]`. A
+    /// step with `"wait": false` starts a long command as a background job (its result is
+    /// `{"job": id}`, as in `command_run`); later steps that edit the same document fail until
+    /// the job ends.
     pub steps: Vec<RunParams>,
     /// Stop at the first failing step (default true).
     #[serde(default)]
     pub stop_on_error: Option<bool>,
 }
 
+/// Strict: an argument the tool doesn't forward is an error, not silently dropped.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PointerParams {
     /// Events in document coordinates: `[{"kind":"down|move|up","x":..,"y":..,"pressure":..}]`.
     pub events: Vec<Value>,
-    /// Modifier keys, e.g. `{"shift":true}`.
+    /// Modifier keys, e.g. `{"shift":true}` (also `alt`, `command`, `ctrl`, `space`).
     #[serde(default)]
     pub modifiers: Option<Value>,
+    /// Mouse button: `left` (default), or `right` / `secondary`: with the Move tool or
+    /// `{"command":true}` it opens the canvas layer menu, with a painting tool the Brush Preset
+    /// picker.
+    #[serde(default)]
+    pub button: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -157,7 +169,10 @@ pub struct MenuParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UiSetParams {
-    /// Fields accepted by the control method `ui.set` (tool, panels, zoom, center, dark).
+    /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, maskTarget,
+    /// vectorMaskTarget, selectionMode, zoom, center, fit, theme (pro, proMedium, studio,
+    /// studioLight, classic), brushSection, brushTab, brushesView, brushSize. Other fields are an
+    /// error.
     pub fields: Value,
 }
 
@@ -264,6 +279,7 @@ impl PhotocraftMcp {
                 // of the document (`Session::edit`), so the session is still
                 // consistent: keep serving instead of failing every later call.
                 let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
+                g.sync_jobs();
                 f(&mut g)
             })
             .await
@@ -390,7 +406,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Returns warnings about anything the format cannot hold.")]
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -502,9 +518,11 @@ impl PhotocraftMcp {
             return Ok(fail(format!("batch contains {} steps; maximum is {MAX_BATCH_STEPS}", p.steps.len())));
         }
         let stop = p.stop_on_error.unwrap_or(true);
-        let steps: Vec<Value> = p.steps.into_iter().map(|s| json!({"command": s.id, "params": s.params.unwrap_or_else(|| json!({}))})).collect();
+        let steps: Vec<Value> =
+            p.steps.into_iter().map(|s| json!({"command": s.id, "params": s.params.unwrap_or_else(|| json!({})), "wait": s.wait.unwrap_or(true)})).collect();
         let args = json!({"steps": steps, "stopOnError": stop});
-        if let Some(r) = self.headless_op(move |h| h.batch(&args)).await {
+        // The reply travels as escaped JSON text, so steps are charged their escaped size.
+        if let Some(r) = self.headless_op(move |h| h.batch_with_budget(&args, BatchReplyBudget::escaped())).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
@@ -512,7 +530,7 @@ impl PhotocraftMcp {
         };
         let mut results = Vec::new();
         let mut failed = 0;
-        let mut reply_budget = BatchReplyBudget::default();
+        let mut reply_budget = BatchReplyBudget::escaped();
         for s in &steps {
             let response = b.call("engine.execute", s.clone()).await;
             let was_error = response.is_err();
@@ -538,7 +556,9 @@ impl PhotocraftMcp {
 
     // ----- live-GUI tools (bridge mode) -----
 
-    #[tool(description = "Bridge mode: full UI state of the live app (tool, panels, views, dialogs, menu tree).")]
+    #[tool(
+        description = "Bridge mode: full UI state of the live app (tool, panels, views, dialogs, windows). For the menu tree, call `control_call` with method `ui.menu.list`."
+    )]
     async fn ui_inspect(&self) -> Result<CallToolResult, McpError> {
         match self.bridge_client() {
             Some(b) => to_result(b.call("ui.inspect", json!({})).await),
@@ -562,6 +582,9 @@ impl PhotocraftMcp {
                 if let Some(m) = p.modifiers {
                     params["modifiers"] = m;
                 }
+                if let Some(button) = p.button {
+                    params["button"] = button.into();
+                }
                 to_result(b.call("ui.pointer", params).await)
             }
             None => bridge_only("ui_pointer"),
@@ -576,7 +599,9 @@ impl PhotocraftMcp {
         }
     }
 
-    #[tool(description = "Bridge mode: change UI state (tool, panels, zoom, center, dark).")]
+    #[tool(
+        description = "Bridge mode: change UI state (tool, panels, dock, zoom, center, fit, theme, brush settings; see `fields`). Unknown fields are an error."
+    )]
     async fn ui_set(&self, Parameters(p): Parameters<UiSetParams>) -> Result<CallToolResult, McpError> {
         match self.bridge_client() {
             Some(b) => to_result(b.call("ui.set", p.fields).await),
@@ -683,5 +708,49 @@ mod tests {
         assert!(r.is_err());
         let r = mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap();
         assert!(r.is_ok(), "session still usable after a panic: {r:?}");
+    }
+
+    /// Regression (#504): the batch budget counted plain JSON, but MCP sends the reply as escaped
+    /// text, so a batch the budget stopped could still exceed the tool-result ceiling and the
+    /// client lost every step result.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_command_batch_stopped_by_the_budget_keeps_its_step_results() {
+        let mcp = PhotocraftMcp::headless();
+        let step = |id: &str, params: Value| RunParams { id: id.into(), params: Some(params), wait: None };
+        let mut steps: Vec<RunParams> = (0..MAX_BATCH_STEPS - 1).map(|_| step("command.list", json!({}))).collect();
+        steps.push(step("file.new", json!({"width": 8, "height": 8})));
+        let result = mcp.command_batch(Parameters(BatchParams { steps, stop_on_error: Some(false) })).await.unwrap();
+        assert_ne!(result.is_error, Some(true), "{:?}", result.content.first().and_then(|c| c.as_text()).map(|t| &t.text[..200.min(t.text.len())]));
+        let text = &result.content.first().and_then(|c| c.as_text()).unwrap().text;
+        let reply: Value = serde_json::from_str(text).unwrap();
+        let results = reply["results"].as_array().unwrap();
+        assert!(results.last().unwrap()["error"].as_str().unwrap().contains("batch response budget exceeded"), "{}", results.last().unwrap());
+        assert_eq!(reply["completed"].as_u64().unwrap() as usize, results.len() - 1);
+        assert_eq!(reply["failed"], 1);
+        let docs = mcp.headless_op(|h| Ok(h.session.documents().len())).await.unwrap().unwrap();
+        assert_eq!(docs, 0, "the step after the budget ran out did not run");
+    }
+
+    /// The MCP server applies finished jobs before every tool call too (#503).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_tools_see_a_finished_background_job() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| {
+            h.command_run("file.new", json!({"width": 64, "height": 48}))?;
+            h.command_run("filter.noise.addNoise", json!({"amount": 50}))?;
+            h.command_start("filter.blur.gaussianBlur", json!({"radius": 4}), false)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let t = std::time::Instant::now();
+        loop {
+            let inspected = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+            if inspected["history"].as_array().unwrap().last().unwrap() == "Gaussian Blur" {
+                break;
+            }
+            assert!(t.elapsed().as_secs() < 60, "doc_inspect never saw the finished job: {inspected}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }

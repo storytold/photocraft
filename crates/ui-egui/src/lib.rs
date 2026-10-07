@@ -60,6 +60,7 @@ mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
 pub mod layer_menu_ui;
+pub mod layer_pick_ui;
 pub mod layer_props_ui;
 mod layer_reveal;
 pub mod layer_row_ui;
@@ -75,6 +76,7 @@ pub mod move_mods;
 pub mod move_ui;
 pub mod new_doc_ui;
 pub mod notices;
+mod opacity_keys;
 pub mod outline;
 pub mod paint_mouse;
 pub mod palette;
@@ -91,6 +93,7 @@ pub mod puppet_ui;
 pub mod rasterize_prompt;
 pub mod retouch_ui;
 pub mod rulers;
+pub mod scrollbars;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
@@ -113,6 +116,7 @@ pub mod type_tool;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
 pub mod work_area;
@@ -167,8 +171,21 @@ pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
 pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
 /// Drop the recovery data of a document (by `DocId` value) once it is saved or closed.
 pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
-/// Load recoverable documents left by a previous session: (original path, document).
-pub type RecoverFn = Box<dyn FnMut() -> Vec<(Option<String>, Document)>>;
+/// Load recoverable documents left by a previous session. Their recovery data stays until the
+/// documents are saved or closed.
+pub type RecoverFn = Box<dyn FnMut() -> Vec<Recovered>>;
+/// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
+/// its autosaves replace the entry, and saving or closing it drops the entry.
+pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
+
+/// A document [`RecoverFn`] found.
+pub struct Recovered {
+    /// The recovery entry it was loaded from (see [`AdoptAutosaveFn`]).
+    pub key: String,
+    /// Where the user last saved it, if anywhere.
+    pub path: Option<String>,
+    pub doc: Document,
+}
 /// Append text to a file (History Log).
 pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Requests from the operating system since the last call (see [`OsEvent`]).
@@ -210,6 +227,7 @@ pub struct Services {
     pub autosave: Option<AutosaveFn>,
     pub discard_autosave: Option<DiscardAutosaveFn>,
     pub recover: Option<RecoverFn>,
+    pub adopt_autosave: Option<AdoptAutosaveFn>,
     /// History Log text file output.
     pub append_text: Option<AppendTextFn>,
     /// OS requests (macOS open-documents / quit Apple events), polled every frame.
@@ -242,6 +260,14 @@ pub struct PhotocraftApp {
     last_stroke_end: Option<(DocId, [f64; 2])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
     pub(crate) brush_resize: Option<brush_resize::Resize>,
+    /// The next tool `Down` is an Alt+right-drag that resizes the brush (#297). `tool_event`
+    /// takes it on every event, so a press another handler consumes can't leave it set.
+    pub(crate) brush_resize_armed: bool,
+    /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
+    /// painting until it is released (`canvas::alt_eyedropper`, #417).
+    pub(crate) alt_sampling: bool,
+    /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
+    pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
     /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
@@ -366,6 +392,9 @@ impl PhotocraftApp {
             defer_live_stroke: false,
             last_stroke_end: None,
             brush_resize: None,
+            brush_resize_armed: false,
+            alt_sampling: false,
+            opacity_keys: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
             queued_screenshots: Vec::new(),
@@ -482,11 +511,11 @@ impl PhotocraftApp {
         }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
-        if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace") {
+        if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
             if !clip_read {
                 self.import_os_clipboard();
             }
-            if self.session.clipboard.is_none() && self.session.active().is_some() && self.services.clipboard_get_image.is_some() {
+            if self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
                 // Enabled on the strength of the OS clipboard, which held no image: a quiet no-op.
                 self.ui.status = "Nothing to paste: the clipboard holds no image".into();
                 self.ui.status_error = false;
@@ -637,21 +666,6 @@ impl PhotocraftApp {
         Ok(warnings)
     }
 
-    /// Run one engine command on behalf of automation while suppressing
-    /// user-configured script-event file reads. Interactive commands retain
-    /// their normal event behavior.
-    pub fn run_automation(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        let events_enabled = self.session.prefs().script_events.enabled;
-        if events_enabled {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
-        }
-        let result = self.run(id, params);
-        if events_enabled {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
-        }
-        result
-    }
-
     /// File › Open: the platform dialog returns the chosen file's path (native; the web delivers
     /// picks through the inbox instead).
     pub fn open_dialog_file(&mut self) {
@@ -704,7 +718,10 @@ impl PhotocraftApp {
     /// written and the export warnings (also shown to the user).
     pub fn save_automation(&mut self, path: Option<String>) -> Result<(String, Vec<String>), String> {
         let state = self.session.active().ok_or("no document")?;
-        let target = path.or_else(|| state.path.clone()).ok_or("document has no relative path; pass `path`")?;
+        // As File › Save: without `path` only a layered file is written back (#416).
+        let target = path
+            .or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
+            .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
@@ -1242,6 +1259,9 @@ mod move_auto_select_tests;
 mod marquee_tests;
 
 #[cfg(test)]
+mod stamp_tests;
+
+#[cfg(test)]
 mod clipboard_tests {
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -1308,6 +1328,40 @@ mod clipboard_tests {
         let mut plain = PhotocraftApp::new(Session::new(), Services::default());
         plain.session.execute("file.new", serde_json::json!({"width": 8, "height": 8})).unwrap();
         assert!(!crate::menus::is_enabled(&plain, "edit.paste"));
+    }
+
+    /// #368: an image copied in another app opens as a document of its own, from File › New
+    /// from Clipboard or from Paste with nothing open.
+    #[test]
+    fn os_clipboard_image_becomes_a_new_document() {
+        let (os, reads) = (OsClip::default(), Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+        let (b, n) = (os.clone(), Arc::clone(&reads));
+        let get = move || {
+            n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            b.lock().unwrap().clone()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
+        let ctx = egui::Context::default();
+        // Listed right after File › New…, enabled without reading the clipboard.
+        let items = crate::menus::menu_items(&app);
+        let at = items.iter().position(|i| i.id == "file.new").unwrap();
+        assert_eq!(items[at + 1].id, "file.newFromClipboard");
+        assert!(items[at + 1].enabled && crate::menus::is_enabled(&app, "edit.paste"));
+        assert!(!crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"), "Paste in Place needs a document");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // An empty clipboard is a quiet no-op.
+        let r = crate::menus::invoke(&mut app, &ctx, "file.newFromClipboard", serde_json::json!({})).unwrap();
+        assert_eq!(r["pasted"], serde_json::json!(false));
+        assert!(app.session.documents().is_empty() && !app.ui.status_error);
+        // Paste with nothing open makes the document.
+        *os.lock().unwrap() = Some((5, 3, [0u8, 0, 255, 255].repeat(15)));
+        crate::menus::invoke(&mut app, &ctx, "edit.paste", serde_json::json!({})).unwrap();
+        let d = &app.session.active().unwrap().doc;
+        assert_eq!((d.size.width, d.size.height, d.layers.len()), (5, 3, 1));
+        assert_eq!(app.ui.views.len(), 1, "the new document has a view");
+        // New from Clipboard with a document open adds another.
+        crate::menus::invoke(&mut app, &ctx, "file.newFromClipboard", serde_json::json!({})).unwrap();
+        assert_eq!(app.session.documents().len(), 2);
     }
 
     #[test]

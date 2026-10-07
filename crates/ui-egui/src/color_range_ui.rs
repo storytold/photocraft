@@ -613,15 +613,17 @@ mod tests {
         open(h.state_mut());
         h.run_steps(4);
         let area = egui::Id::new(("dialog", dialog_id(h.state())));
-        let height = |h: &Harness<'static, PhotocraftApp>| h.ctx.memory(|m| m.area_rect(area)).map_or(0.0, |r| r.height());
+        let rect = |h: &Harness<'static, PhotocraftApp>| h.ctx.memory(|m| m.area_rect(area)).unwrap_or(egui::Rect::NOTHING);
         set(&mut h, "select", json!("outOfGamut"));
-        let short = height(&h);
+        let short = rect(&h);
         set(&mut h, "select", json!("midtones"));
-        let tall = height(&h);
-        assert!(tall > short + 40.0, "Midtones adds two sliders: {short} → {tall}");
+        let tall = rect(&h);
+        assert!(tall.height() > short.height() + 40.0, "Midtones adds two sliders: {short:?} → {tall:?}");
+        assert_eq!(tall.min, short.min, "the dialog grows downward, it doesn't re-centre");
         set(&mut h, "select", json!("outOfGamut"));
-        let back = height(&h);
-        assert!((back - short).abs() < 1.0, "the dialog must shrink back, not keep an empty band above OK: {short} → {tall} → {back}");
+        let back = rect(&h);
+        assert!((back.height() - short.height()).abs() < 1.0, "the dialog must shrink back, not keep an empty band above OK: {short:?} → {tall:?} → {back:?}");
+        assert_eq!(back.min, short.min);
     }
 
     #[test]

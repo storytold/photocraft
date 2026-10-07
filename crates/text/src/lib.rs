@@ -2,7 +2,8 @@
 //!
 //! * [`fonts::FontDb`]: bundled fonts (Inter, JetBrains Mono; always available, including on the
 //!   web), optional system fonts from a directory scan (no fontconfig), user font data, TrueType
-//!   collections, PostScript-name lookup.
+//!   collections, PostScript-name lookup. Builds made with the optional craft-fonts input
+//!   (`CRAFT_FONTS_DIR`, see [`craft_fonts`]) also carry its Japanese fonts as fallbacks.
 //! * [`layout`]: shaping and line layout with [parley] (HarfRust shaping, bidi, line breaking),
 //!   point and paragraph (box) text, per-run styles, Photoshop leading/indent/spacing rules.
 //! * [`render`]: anti-aliased rasterization (exact-area accumulation, f32 coverage) into a
@@ -15,6 +16,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod cjk;
+pub mod craft_fonts;
 pub mod engine_data;
 pub mod fonts;
 pub mod glyphs;
@@ -30,6 +32,7 @@ pub mod warp;
 use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
 
+pub use craft_fonts::{CRAFT_FONTS, CraftFont};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{ClusterInfo, LineInfo, PlacedGlyph, TextLayout};
 pub use render::Rendered;

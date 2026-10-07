@@ -751,3 +751,63 @@ fn japanese_box_text_preserves_wrap_boundaries() {
     }
     assert_eq!(end, text.text.len());
 }
+
+/// Which craft-fonts family drew the glyphs of `l` (matched by the embedded bytes).
+fn craft_family_of(l: &crate::TextLayout) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    for g in &l.glyphs {
+        let Some(face) = l.faces.get(g.face as usize) else { continue };
+        let data: &[u8] = face.font.data.as_ref();
+        if let Some(f) = crate::CRAFT_FONTS.iter().find(|f| std::ptr::eq(f.bytes.as_ptr(), data.as_ptr()) && f.bytes.len() == data.len())
+            && !v.contains(&f.family)
+        {
+            v.push(f.family);
+        }
+    }
+    v
+}
+
+#[test]
+fn craft_fonts_cover_japanese_without_system_fonts() {
+    if !crate::CRAFT_FONTS.iter().any(|f| f.is_japanese()) {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    }
+    let mut e = TextEngine::new();
+    let text = "日本語の文字、カタカナ。";
+    let l = e.layout(&point(text, 24.0), 72.0);
+    assert_eq!(l.glyphs.len(), text.chars().count());
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef with craft-fonts");
+    // Sans (Inter) runs fall back to the Gothic UI family.
+    assert_eq!(craft_family_of(&l), vec![crate::craft_fonts::UI_JAPANESE_FAMILY]);
+    // Serif runs fall back to a Mincho face when the build has one (not the web build).
+    if crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
+        let mut t = point(text, 24.0);
+        t.font_family = "Times New Roman".into();
+        let l = e.layout(&t, 72.0);
+        assert!(l.glyphs.iter().all(|g| g.id != 0));
+        let fams = craft_family_of(&l);
+        assert!(fams.len() == 1 && fams[0].contains("Mincho"), "{fams:?}");
+    }
+    // Latin keeps Inter.
+    let l = e.layout(&point("Layer 1", 24.0), 72.0);
+    assert!(craft_family_of(&l).is_empty());
+}
+
+#[test]
+fn works_without_craft_fonts() {
+    // Whatever the build: the bundled fonts load, Latin lays out, and Japanese never panics
+    // (without craft-fonts or system fonts it may be .notdef).
+    let mut e = TextEngine::new();
+    assert!(e.fonts.has_family("Inter"));
+    let l = e.layout(&point("日本語 Latin", 12.0), 72.0);
+    assert_eq!(l.glyphs.len(), "日本語 Latin".chars().count());
+    for f in crate::CRAFT_FONTS {
+        assert!(e.fonts.has_family(f.family), "{} registered under its manifest name", f.family);
+    }
+    if crate::CRAFT_FONTS.is_empty() {
+        assert!(crate::craft_fonts::japanese_families().is_empty());
+        let fb = fonts::fallback_candidates(&crate::cjk::script_order(Some("ja")));
+        assert!(!fb.iter().any(|f| f.contains("BIZ UD")));
+    }
+}

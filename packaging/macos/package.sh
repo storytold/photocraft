@@ -103,6 +103,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
+# Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
+if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
+  mkdir -p "$APP/Contents/Resources/Licenses"
+  copy_font_licences "$APP/Contents/Resources/Licenses"
+fi
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${PHOTOCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"

@@ -953,7 +953,12 @@ fn style_props(st: &CharStyle, k: f32, fallback: &[String], idx: u32) -> Vec<Sty
     if !st.font_family.is_empty() {
         fam.push(quote(&st.font_family));
     }
-    fam.extend(fallback.iter().map(|f| quote(f)));
+    // Serif runs fall back to a Mincho face for Japanese (craft-fonts), others to a Gothic one.
+    if crate::craft_fonts::is_serif_family(&st.font_family) {
+        fam.extend(crate::craft_fonts::mincho_first(fallback).iter().map(|f| quote(f)));
+    } else {
+        fam.extend(fallback.iter().map(|f| quote(f)));
+    }
     fam.push("sans-serif".into());
     let feats = feature_list(st);
     let vars: Vec<String> = st.variations.iter().filter(|v| v.axis.len() == 4 && v.axis.is_ascii()).map(|v| format!("\"{}\" {}", v.axis, v.value)).collect();

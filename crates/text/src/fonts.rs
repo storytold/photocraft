@@ -1,6 +1,7 @@
-//! Font database: bundled fonts (always available, also on the web), optional system fonts found
-//! by scanning the platform font directories (no fontconfig), user-registered font data, and
-//! PostScript-name lookup for PSD import.
+//! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
+//! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
+//! fonts found by scanning the platform font directories (no fontconfig), user-registered font
+//! data, and PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -41,6 +42,11 @@ const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
     for s in order {
+        // craft-fonts' Japanese fonts (if built in) go ahead of the installed Japanese fonts, in
+        // the Japanese slot of the locale order, so shared Han keeps the locale's forms.
+        if *s == crate::cjk::CjkScript::Japanese {
+            v.extend(crate::craft_fonts::japanese_families());
+        }
         v.extend_from_slice(crate::cjk::families(*s));
     }
     v.extend_from_slice(FALLBACK_LAST);
@@ -95,6 +101,11 @@ impl FontDb {
         for (_, bytes) in BUNDLED {
             db.register_font_data(bytes.to_vec());
         }
+        // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
+        // wasm32), before any system font.
+        for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese()) {
+            db.register_static_font(f.bytes);
+        }
         db.refresh_generics();
         db
     }
@@ -134,7 +145,16 @@ impl FontDb {
 
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
-        let added = self.fcx.collection.register_fonts(Blob::new(Arc::new(bytes)), None);
+        self.register_blob(Blob::new(Arc::new(bytes)))
+    }
+
+    /// Registers embedded font data without copying it.
+    fn register_static_font(&mut self, bytes: &'static [u8]) -> Vec<String> {
+        self.register_blob(Blob::new(Arc::new(bytes)))
+    }
+
+    fn register_blob(&mut self, blob: Blob<u8>) -> Vec<String> {
+        let added = self.fcx.collection.register_fonts(blob, None);
         let mut names = Vec::new();
         for (id, _) in added {
             if let Some(n) = self.fcx.collection.family_name(id)

@@ -21,7 +21,7 @@ This plan sets out:
 **Principles**
 
 1. **Engine-first, headless-first.** Every feature is reachable without a GUI: from tests, the CLI and MCP. The GUI is one client of the engine.
-2. **Everything is a command.** Each user-visible action has a stable `CommandId` (such as `filter.blur.gaussian`) with typed, serializable parameters. The menu, command palette, shortcuts, recorded actions/macros, CLI, MCP and plugins all dispatch the same commands.
+2. **Everything is a command.** Each user-visible action has a stable `CommandId` (such as `filter.blur.gaussianBlur`) with typed, serializable parameters. The menu, command palette, shortcuts, recorded actions/macros, CLI, MCP and plugins all dispatch the same commands.
 3. **Data describes the UI; toolkits draw it.** Tools produce *overlay primitives* (lines, handles, marching-ants paths) as data. Filter and adjustment dialogs are generated from *parameter schemas*. A new toolkit implements one renderer for each, not about 150 bespoke dialogs.
 4. **One algorithm, one parameter struct.** Every algorithm has a CPU reference implementation (Rust + rayon, deterministic). Some also get a GPU implementation (WGSL). Both read the same `#[repr(C)]` `bytemuck::Pod` parameter struct. We never keep hand-synced copies of an algorithm in several languages.
 5. **Immutable snapshots, copy-on-write tiles.** Pixel data is stored in `Arc`-shared 256² tiles. Taking a document snapshot is O(layers), which makes undo, background jobs, autosave and UI reads cheap and lock-free.
@@ -180,7 +180,7 @@ pub struct CommandInvocation { pub id: CommandId, pub params: serde_json::Value 
 ### 4.2 `CommandRegistry`: the menu, palette and automation catalogue
 
 Each command registers the following:
-- `id` (`"filter.blur.gaussian"`), `label`, `menu_path` (`["Filter","Blur"]`), and a `default_shortcut`.
+- `id` (`"filter.blur.gaussianBlur"`), `label`, `menu_path` (`["Filter","Blur"]`), and a `default_shortcut`.
 - `params: schemars::Schema`, plus optional `ui_hints` (slider ranges, units, log scale, grouping).
 - `enabled(&DocSnapshot, &ToolState) -> bool` and `checked(...) -> Option<bool>`.
 - `preview: PreviewMode` (None / Live / Proxy). This lets dialogs show on-canvas preview generically.
@@ -189,7 +189,7 @@ Each command registers the following:
 **Consumers:**
 - The GUI builds the menu bar, the ⌘K palette and the shortcut editor from it.
 - `automation` exposes the registry as MCP tools.
-- `photocraft-cli` exposes `photocraft run --cmd filter.blur.gaussian --param radius=4 in.psd out.png`.
+- `photocraft-cli` exposes `photocraft-cli run in.psd --cmd filter.blur.gaussianBlur --params '{"radius":4}' --out out.png`.
 - Action recording is simply `Vec<CommandInvocation>`.
 
 ### 4.3 Tools: pointer events in, ops and overlays out
@@ -281,6 +281,7 @@ pub enum LayerContent {
 - **Every mutation is an `Op`**, such as `SetLayerProps`, `PaintTiles{layer, tiles_before, tiles_after}`, `AddLayer`, `MoveLayer` or `ApplyFilter`.
 - **A command produces a `Transaction` of ops** with a label ("Gaussian Blur").
 - **History stores transactions.** Because tiles are `Arc`-shared, "before" states cost only the tiles that actually changed. Undo means swapping `Arc`s, so no pixel copies are made.
+- **Each state remembers its targeted layers** (the active layer and the layer selection, as they were when the state was created: when the document was opened, or right after the step that made it). Selecting layers is not a step and doesn't change any state's target, but undo and redo target the restored state's layers again, as Photoshop does.
 - **Brush strokes** accumulate into one transaction per stroke. Tiles are published incrementally with damage regions, so the viewport updates live.
 - **Snapshots for readers.** After each committed op the engine publishes a new `Arc<DocSnapshot>` through `arc-swap`. The UI, background jobs (filters, AI inference, export) and autosave read snapshots without locks.
 - **Background jobs** compute from snapshot N and commit as a transaction. If the doc changed meanwhile, the job rebases, meaning it re-targets the same layer id if it still exists, or reports a conflict.
@@ -476,7 +477,7 @@ members = ["crates/*", "apps/*", "xtask"]
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"        # decision pending, see §16
-rust-version = "1.90"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # foundation

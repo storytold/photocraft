@@ -54,6 +54,23 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      # The same tests built with the optional craft-fonts input (crates/text/build.rs), so the
+      # Japanese font tests that skip without it run here. Linux only.
+      - name: Check out craft-fonts
+        if: runner.os == 'Linux'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          path: craft-fonts
+
+      - name: Test with craft-fonts
+        if: runner.os == 'Linux'
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: cargo test --workspace --locked
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 

@@ -23,6 +23,7 @@
 	Help	Ayuda
 	(coming soon)	(próximamente)
 	New…	Nuevo…
+	New from Clipboard	Nuevo desde el portapapeles
 	Open…	Abrir…
 	Open As…	Abrir como…
 	Open Recent	Archivos recientes
@@ -99,8 +100,10 @@
 	Puppet Warp	Deformación de clavos
 	Perspective Warp	Deformación en perspectiva
 	Free Transform	Transformación libre
+	Free Transform a Copy	Transformación libre de una copia
 	Transform	Transformar
 	Again	Repetir
+	Transform Again on a Copy	Duplicar y repetir la transformación
 	Scale	Escalar
 	Rotate	Rotar
 	Skew	Sesgar
@@ -341,6 +344,14 @@
 	Merge Layers	Combinar capas
 	Merge Down	Combinar hacia abajo
 	Merge Visible	Combinar visibles
+	Stamp Visible	Estampar visibles
+	Select Layer Above	Seleccionar la capa de arriba
+	Select Layer Below	Seleccionar la capa de abajo
+	Select Top Layer	Seleccionar la capa superior
+	Select Bottom Layer	Seleccionar la capa inferior
+	Add Layer Above to Selection	Añadir la capa de arriba a la selección
+	Add Layer Below to Selection	Añadir la capa de abajo a la selección
+	Stamp Down	Estampar hacia abajo
 	Flatten Image	Acoplar imagen
 	Matting	Matizado
 	Color Decontaminate…	Descontaminar color…
@@ -1975,3 +1986,92 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Rejilla:
+
+# Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
+# Spanish follows the tool wording used above (Herramienta X).
+	Color Range	Gama de colores
+	Adaptive Wide Angle	Gran angular adaptativo
+	Chalk & Charcoal	Tiza y carboncillo
+	Charcoal	Carboncillo
+	Chrome	Cromo
+	Conté Crayon	Lápiz Conté
+	Graphic Pen	Pluma gráfica
+	Halftone Pattern	Patrón de semitono
+	Note Paper	Papel de notas
+	Photocopy	Fotocopia
+	Plaster	Yeso
+	Reticulation	Reticulación
+	Stamp	Sello
+	Torn Edges	Bordes rasgados
+	Water Paper	Papel húmedo
+	Move	Mover
+	Pencil	Lápiz
+	Clone Stamp	Sello de clonar
+	Dodge	Subexponer
+	Burn	Sobreexponer
+	Quick Selection	Selección rápida
+	History Brush	Pincel de historia
+	Color Replacement	Sustitución de color
+	New Group	Nuevo grupo
+	Layer Comp	Composición de capa
+	Alpha	Alfa
+	Make	Fabricante
+	Model	Modelo
+	F	Número f
+	Artist	Artista
+	Spot Color	Color plano
+	Roman	Normal
+	Bold Italic	Negrita cursiva
+	Justification	Justificación
+	Symbols	Símbolos
+	Punctuation	Puntuación
+	Make Work Path	Crear trazado de trabajo
+	Make Selection	Crear selección
+	Fill Path	Rellenar trazado
+	Stroke Path	Contornear trazado
+	Delete Path	Eliminar trazado
+	W	An
+	H	Al
+	Ruler	Regla
+	New Layer Comp	Nueva composición de capa
+	Duplicate Layer Comp	Duplicar composición de capa
+	Rename Layer Comp	Cambiar nombre de la composición de capa
+	Apply Layer Comp	Aplicar composición de capa
+	Update Layer Comp	Actualizar composición de capa
+	Method	Método
+	Author	Autor
+	Software	Software
+	Pencil Tool	Herramienta Lápiz
+	Pixel	Píxel
+	Adjustment	Ajuste
+	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Arrastre (lazo) o haga clic en los puntos (poligonal) · {add} añadir · {sub} restar
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Arrastre un marco de recorte · arrastre dentro para mover · los bordes cambian el tamaño ({ratio} proporción, {centre} centro) · Espacio mueve mientras dibuja · {commit} aplica · Esc cancela
+	{mode} Color · {bits} bit	Color {mode} · {bits} bits
+	Scrubby Zoom	Zoom por arrastre
+	Auto Erase	Borrado automático
+	Color Adaptation	Adaptación de color
+	Preserve Transparency	Conservar transparencia
+	New Style…	Nuevo estilo…
+	shortcut	atajo
+	Saved	Guardado
+	Arc	Arco
+	Arch	Arco inferior
+	Bulge	Abultamiento
+	Shell Lower	Concha inferior
+	Shell Upper	Concha superior
+	Flag	Bandera
+	Fish	Pez
+	Wave	Onda
+	Rise	Ascenso
+	Inflate	Inflar
+	Twist	Torsión
+	Squeeze	Compresión
+	Mask	Máscara
+	Channel	Canal
+	Rectangle	Rectángulo
+	New Channel	Nuevo canal
+	Save Selection	Guardar selección
+	Load Selection	Cargar selección
+
+# Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
+@id	edit.purge.undo	Historial de deshacer
