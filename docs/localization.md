@@ -17,6 +17,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | 繁體中文 | `zh-hant` | one form |
 | Español | `es` | one / other |
 | Čeština | `cs` | one / few / other |
+| Deutsch | `de` | one / other |
 | Bahasa Indonesia | `id` | one form |
 
 Every non-English catalog covers the current menu labels, `tl!` literals, blend mode names,

@@ -75,7 +75,7 @@ fn plural_fr(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 10] = [
+pub static LANGUAGES: [LangInfo; 11] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
@@ -92,6 +92,7 @@ pub static LANGUAGES: [LangInfo; 10] = [
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -355,7 +356,8 @@ mod tests {
         assert_eq!(lang_from_tag("cs_CZ.UTF-8"), Some(CS()));
         assert_eq!(lang_from_tag("cs-CZ"), Some(CS()));
         assert_eq!(lang_from_tag("fr_FR"), Lang::from_code("fr"));
-        assert_eq!(lang_from_tag("de_DE"), None);
+        assert_eq!(lang_from_tag("de_DE"), Lang::from_code("de"));
+        assert_eq!(lang_from_tag("de-AT"), Lang::from_code("de"));
         // Traditional Chinese: by region, by script, and with a region after the script.
         assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
         assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));
@@ -385,7 +387,7 @@ mod tests {
     fn macos_language_list_is_parsed() {
         assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
         assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Lang::from_code("fr"));
-        assert_eq!(first_supported("(\n    \"de-DE\",\n    \"en-US\"\n)\n"), Some(Lang::EN));
+        assert_eq!(first_supported("(\n    \"de-DE\",\n    \"en-US\"\n)\n"), Lang::from_code("de"));
         assert_eq!(first_supported("(\n    \"zh-Hant-TW\",\n    \"en-US\"\n)\n"), Some(ZH()));
         assert_eq!(first_supported("("), None);
     }
