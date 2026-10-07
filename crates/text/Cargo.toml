@@ -21,3 +21,7 @@ photocraft-psd = { workspace = true }
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
 skrifa = "0.44"
 flate2 = { workspace = true }
+log = { workspace = true }
+
+[build-dependencies]
+flate2 = { workspace = true }

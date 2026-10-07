@@ -48,11 +48,12 @@ in the dialog.
 
 | Platform | Artifacts | Built on |
 |---|---|---|
-| macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
-| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
-| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
+| macOS 11+ Apple silicon | `photocraft-<v>-macos-aarch64.dmg`, `photocraft-cli-<v>-macos-aarch64.zip` | `macos-15` |
+| macOS 11+ Intel | `photocraft-<v>-macos-x86_64.dmg`, `photocraft-cli-<v>-macos-x86_64.zip` | `macos-15` |
+| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip`, `photocraft-cli-<v>-windows-x64.zip` | `windows-latest` |
+| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip`, `photocraft-cli-<v>-windows-x86.zip` | `windows-latest` |
+| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}`, `photocraft-cli-<v>-linux-x86_64.tar.gz` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
+| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}`, `photocraft-cli-<v>-linux-aarch64.tar.gz` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
 | FreeBSD 14 x86_64 | `photocraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM on `ubuntu-latest` |
 | Web | `photocraft-web-<v>.zip` (static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
 
@@ -60,6 +61,29 @@ Every binary reports its version, the commit and the build date: `photocraft --v
 `photocraft-cli --version`, and *Help › About PhotoCraft*. CI sets `PHOTOCRAFT_BUILD_SHA` and
 `PHOTOCRAFT_BUILD_DATE`, and `crates/engine/src/build_info.rs` reads them at compile time. A plain
 `cargo build` doesn't set them and reports `0.2.0 (dev build)`.
+
+
+### Native size profile and separate command-line downloads
+
+Mac, Windows and Linux packages use `cargo build --profile native-release`. It uses fat LTO,
+size optimization for shell/command/dependency code, and speed optimization for pixel, codec,
+vector and text paths. Native panic unwinding remains enabled so the shell can recover from
+escaped panics. The regular `release` profile remains the performance comparison baseline.
+
+Windows MSI/portable ZIP and Linux AppImage/deb/rpm/tar/Flatpak contain the GUI only. Install
+`photocraft-cli` from the separate archive for conversion, batch commands and headless MCP.
+The optional live app control channel remains in the GUI. Windows ARM64 remains supported
+with its own MSI, portable ZIP and CLI ZIP.
+
+Packaging retains matching dSYMs, PDBs or ELF debug files outside `dist/release` before
+stripping/signing. CI keeps them as separate `diagnostics-*` artifacts for 30 days; they are
+excluded from GitHub Release downloads. Preserve those artifacts longer if needed for support.
+Mac symbol stripping happens before signing; Windows PDBs are never archive inputs; Linux
+`objcopy` and stripping failures stop packaging. ZIPs use optimal compression, gzip tarballs
+use level 9, and DMGs retain zlib level 9. Existing default/fallback fonts, accessibility, codecs
+and GPU backends remain available; the shared bundled-font bytes avoid duplicate embeddings.
+Japanese craft-font payloads use lossless build-time gzip and one-time bounded cached decoding,
+shared between UI and document text. All font bytes/glyphs are preserved; no subsetting.
 
 Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out [craft-fonts](https://github.com/storytold/craft-fonts)
 at the commit in `CRAFT_FONTS_REF` (top of `release.yml`) and builds with `CRAFT_FONTS_DIR` and
@@ -71,8 +95,11 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
 
 ### macOS
 
-`packaging/macos/package.sh` builds `aarch64-apple-darwin` and `x86_64-apple-darwin` with
-`MACOSX_DEPLOYMENT_TARGET=11.0`, joins them with `lipo`, and assembles `PhotoCraft.app`:
+`packaging/macos/package.sh --arch aarch64|x86_64` builds one architecture with
+`MACOSX_DEPLOYMENT_TARGET=11.0` and assembles `PhotoCraft.app`. Release CI runs a separate job
+for each architecture; there is no universal artifact. Both GUI and CLI are checked for the
+exact requested architecture. Matching dSYMs and UUID records are captured before stripping
+local symbols and debug data, then signing:
 
 - `Info.plist` is generated from `Info.plist.in`. The bundle id is `ai.storyteller.photocraft`.
   The plist sets `LSMinimumSystemVersion` 11.0, `NSHighResolutionCapable`, and document types:
@@ -85,14 +112,14 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   ticket is stapled to the app. The app goes on a DMG (`hdiutil`, with an `Applications` link
   to drag onto). The DMG is signed, notarized and stapled too. The script checks the results
   with `codesign --verify --strict`, `stapler validate` and `spctl -a -vvv`.
-- **CLI:** the universal `photocraft-cli` is signed with the same Developer ID, the hardened
+- **CLI:** the architecture-specific `photocraft-cli` is signed with the same Developer ID, the hardened
   runtime and a secure timestamp (identifier `ai.storyteller.photocraft-cli`), zipped, and the zip
   is sent to `notarytool`. Only `.app`, `.dmg` and `.pkg` can hold a stapled ticket, not a bare
   Mach-O, so Gatekeeper looks the CLI's ticket up online the first time a downloaded
   (quarantined) copy runs. Offline, that first run can be refused until the Mac is online again.
 - **Verification:** `packaging/macos/verify.sh` checks the artifacts as users download them. It
-  unpacks the CLI zip and requires, for the binary inside, `codesign --verify --strict`, both
-  architectures, the hardened runtime flag, a `Developer ID Application` authority from
+  unpacks the CLI zip and requires, for the binary inside, `codesign --verify --strict`, the exact
+  requested architecture, the hardened runtime flag, a `Developer ID Application` authority from
   `APPLE_TEAM_ID`, a timestamp, and `spctl --assess --type install` reporting
   `source=Notarized Developer ID` (the same online lookup Gatekeeper does). For the DMG it runs
   `codesign --verify`, `stapler validate` and `spctl --type open`. The release workflow runs it
@@ -104,8 +131,9 @@ Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and ski
 That's enough to check the bundle and the DMG on your own Mac:
 
 ```sh
-packaging/macos/package.sh                    # universal; needs both rustup targets
-packaging/macos/package.sh --arch aarch64     # quicker, host-only
+packaging/macos/package.sh                    # host architecture
+packaging/macos/package.sh --arch aarch64     # Apple silicon
+packaging/macos/package.sh --arch x86_64      # Intel
 open dist/release/photocraft-*-macos-*.dmg
 ```
 
@@ -150,7 +178,7 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`, then
 ### Linux
 
 `packaging/linux/package.sh` stages one FHS tree and makes every format from it. The tree
-holds both binaries, `ai.storyteller.photocraft.desktop`, hicolor icons from 16 px to 512 px
+holds the GUI binary, `ai.storyteller.photocraft.desktop`, hicolor icons from 16 px to 512 px
 plus a scalable SVG, AppStream metainfo, and a shared-mime-info file for `.pcraft`, `.psb` and
 `.qoi`.
 
@@ -176,7 +204,7 @@ Why these formats:
   runtime. It does no Rust build and needs no network inside `flatpak-builder`, so the bundle
   holds the same binaries as the other formats. A separate `flatpak` job per architecture
   (`ubuntu-24.04` and `ubuntu-24.04-arm`, for flatpak-builder 1.4) downloads the Linux job's
-  artifact, runs the script, installs the bundle and runs `photocraft-cli --version` inside the
+  artifact, runs the script, installs the bundle and runs `photocraft --version` inside the
   sandbox as a smoke test. The bundle names Flathub as its runtime repo, so users install
   it with:
 

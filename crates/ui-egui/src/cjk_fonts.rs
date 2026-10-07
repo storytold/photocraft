@@ -124,7 +124,13 @@ impl CjkFallback {
 
     /// The first embedded (craft-fonts) font for `s`, registered from its static bytes.
     fn load_embedded(&mut self, s: CjkScript) -> Option<(String, FontData)> {
-        let f = (self.sources.embedded)(s).into_iter().find(|f| !f.bytes.is_empty())?;
+        let (f, bytes) = (self.sources.embedded)(s).into_iter().find_map(|f| match f.bytes() {
+            Ok(bytes) => Some((f, bytes)),
+            Err(error) => {
+                log::warn!("could not decode embedded font {} {}: {error}; retaining system fallback", f.family, f.style);
+                None
+            }
+        })?;
         let path = PathBuf::from(format!("craft-fonts/{} {}", f.family, f.style));
         if self.loaded.contains(&path) {
             return None;
@@ -133,7 +139,7 @@ impl CjkFallback {
         let name = format!("{FONT_PREFIX}-{}", self.registered.len());
         log::info!("UI font fallback: registered embedded {} as {name}", path.display());
         self.registered.push((name.clone(), path, 0));
-        Some((name, FontData::from_static(f.bytes)))
+        Some((name, FontData::from_static(bytes)))
     }
 
     fn load_first(&mut self, files: &[FontFile]) -> Option<(String, FontData)> {
@@ -458,7 +464,10 @@ mod tests {
             assert!(render(&ctx, "レイヤー 1"), "tofu in kana");
             let fonts = ctx.fonts(|f| f.definitions().clone());
             let name = format!("{FONT_PREFIX}-0");
-            assert!(fonts.font_data.get(&name).is_some_and(|d| std::ptr::eq(d.font.as_ref().as_ptr(), ui_font.bytes.as_ptr())), "BIZ UDPGothic Regular first");
+            assert!(
+                fonts.font_data.get(&name).is_some_and(|d| std::ptr::eq(d.font.as_ref().as_ptr(), ui_font.bytes().unwrap().as_ptr())),
+                "BIZ UDPGothic Regular first"
+            );
             for (fam, stack) in &fonts.families {
                 assert_eq!(stack.last(), Some(&name), "{fam:?}: appended last so Latin keeps Inter");
                 assert!(stack.first().is_some_and(|f| f != &name), "{fam:?}");

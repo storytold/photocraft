@@ -1,0 +1,156 @@
+# Unsigned architecture/package verification on PRs; no release environment or secrets.
+name: Native packaging
+on:
+  push:
+    branches: ["codex/**"]
+    paths: ["Cargo.toml", "Cargo.lock", "packaging/**", "crates/text/**", "crates/ui-egui/src/cjk_fonts.rs", ".github/workflows/native-packaging.yml", "scripts/test_release_packaging.py"]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "packaging/**", "crates/text/**", "crates/ui-egui/src/cjk_fonts.rs", ".github/workflows/native-packaging.yml", "scripts/test_release_packaging.py"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-packaging-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CRAFT_FONTS_REF: abb83316d96aa59c1cf64784289e378fe9fa5695
+  CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+  CRAFT_FONTS_REQUIRED: "1"
+jobs:
+  macos:
+    name: Mac ${{ matrix.arch }} packages
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: aarch64, target: aarch64-apple-darwin }
+          - { arch: x86_64, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out pinned release fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-packaging-macos-${{ matrix.arch }}
+      - name: Build and package
+        run: packaging/macos/package.sh --arch ${{ matrix.arch }}
+      - name: Verify shipped architecture and signatures
+        run: packaging/macos/verify.sh --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: check-macos-${{ matrix.arch }}
+          path: dist/release/*
+          retention-days: 7
+  windows:
+    name: Windows ${{ matrix.arch }} packages
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out pinned release fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-packaging-windows-${{ matrix.arch }}
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Build and package
+        shell: pwsh
+        run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
+      - name: Verify separate payloads and installed MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gui = (Get-ChildItem dist/release/*-portable.zip).FullName
+          $cli = (Get-ChildItem dist/release/photocraft-cli-*.zip).FullName
+          Expand-Archive $gui gui
+          Expand-Archive $cli cli
+          if (Get-ChildItem gui -Recurse -Filter photocraft-cli.exe) { throw 'CLI in GUI ZIP' }
+          if (Get-ChildItem cli -Recurse -Filter photocraft.exe) { throw 'GUI in CLI ZIP' }
+          if (-not (Get-ChildItem gui -Recurse -Filter portable.txt)) { throw 'Missing portable marker' }
+          $exe = (Get-ChildItem cli -Recurse -Filter photocraft-cli.exe).FullName
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'CLI smoke failed' }
+          $msi = (Get-ChildItem dist/release/*.msi).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "MSI install failed: $($p.ExitCode)" }
+          $dir = if ('${{ matrix.arch }}' -eq 'x86') { Join-Path ${env:ProgramFiles(x86)} 'PhotoCraft' } else { Join-Path $env:ProgramFiles 'PhotoCraft' }
+          if (-not (Test-Path (Join-Path $dir 'photocraft.exe'))) { throw 'GUI not installed' }
+          if (Test-Path (Join-Path $dir 'photocraft-cli.exe')) { throw 'CLI in GUI MSI' }
+          if (@(Get-ChildItem $dir -Filter OFL-*.txt).Count -ne 3) { throw 'Missing font notices in MSI' }
+          foreach ($payload in 'gui', 'cli') {
+            if (@(Get-ChildItem $payload -Recurse -Filter OFL-*.txt).Count -ne 3) { throw "Missing font notices in $payload" }
+            if (Get-ChildItem $payload -Recurse -Filter *.pdb) { throw "PDB in $payload download" }
+          }
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'MSI uninstall failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: check-windows-${{ matrix.arch }}
+          path: dist/release/*
+          retention-days: 7
+  linux:
+    name: Linux ${{ matrix.arch }} packages
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out pinned release fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-packaging-linux-${{ matrix.arch }}
+      - name: Packaging regression tests
+        run: python3 scripts/test_release_packaging.py
+      - name: Build and package separate archives
+        run: packaging/linux/package.sh --formats tar
+      - name: Verify shipped payloads
+        run: |
+          mkdir gui cli
+          version="$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version = /{gsub(/"/, "", $3); print $3; exit}' Cargo.toml)"
+          tar -xzf "dist/release/photocraft-$version-linux-${{ matrix.arch }}.tar.gz" -C gui
+          tar -xzf "dist/release/photocraft-cli-$version-linux-${{ matrix.arch }}.tar.gz" -C cli
+          test -z "$(find gui -name photocraft-cli)"
+          test -z "$(find cli -name photocraft)"
+          "$(find gui -type f -name photocraft)" --version
+          "$(find cli -type f -name photocraft-cli)" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: check-linux-${{ matrix.arch }}
+          path: dist/release/*
+          retention-days: 7

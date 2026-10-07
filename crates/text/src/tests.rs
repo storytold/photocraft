@@ -758,7 +758,8 @@ fn craft_family_of(l: &crate::TextLayout) -> Vec<&'static str> {
     for g in &l.glyphs {
         let Some(face) = l.faces.get(g.face as usize) else { continue };
         let data: &[u8] = face.font.data.as_ref();
-        if let Some(f) = crate::CRAFT_FONTS.iter().find(|f| std::ptr::eq(f.bytes.as_ptr(), data.as_ptr()) && f.bytes.len() == data.len())
+        if let Some(f) =
+            crate::CRAFT_FONTS.iter().find(|f| f.bytes().is_ok_and(|bytes| std::ptr::eq(bytes.as_ptr(), data.as_ptr()) && bytes.len() == data.len()))
             && !v.contains(&f.family)
         {
             v.push(f.family);

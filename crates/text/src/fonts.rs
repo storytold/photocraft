@@ -104,7 +104,12 @@ impl FontDb {
         // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
         // wasm32), before any system font.
         for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese()) {
-            db.register_static_font(f.bytes);
+            match f.bytes() {
+                Ok(bytes) => {
+                    db.register_static_font(bytes);
+                }
+                Err(error) => log::warn!("could not decode embedded font {} {}: {error}; retaining system fallback", f.family, f.style),
+            }
         }
         db.refresh_generics();
         db

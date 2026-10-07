@@ -6,7 +6,7 @@
 #                                                    Developer ID signed with the hardened runtime,
 #                                                    timestamped and notarized
 #
-# Usage: packaging/macos/verify.sh [--arch universal|aarch64|x86_64]
+# Usage: packaging/macos/verify.sh [--arch aarch64|x86_64]
 #
 # With a real signing identity and notarization credentials in the environment (the same
 # MACOS_SIGN_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID that package.sh uses), every
@@ -22,16 +22,16 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-ARCH=universal
+ARCH="$(uname -m)"
+[ "$ARCH" != arm64 ] || ARCH=aarch64
 while [ $# -gt 0 ]; do
   case "$1" in
-    --arch) ARCH="$2"; shift 2 ;;
+    --arch) [ $# -ge 2 ] || { echo "error: --arch needs a value" >&2; exit 2; }; ARCH="$2"; shift 2 ;;
     -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$ARCH" in
-  universal) WANT_ARCHS="x86_64 arm64" ;;
   aarch64) WANT_ARCHS="arm64" ;;
   x86_64) WANT_ARCHS="x86_64" ;;
   *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
@@ -78,7 +78,36 @@ for f in "$DMG" "$CLI_ZIP"; do
 done
 
 WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/photocraft-verify.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+MOUNT="$WORK/mount"
+MOUNTED=0
+cleanup() {
+  if [ "$MOUNTED" = 1 ]; then hdiutil detach "$MOUNT" -quiet || true; fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+check_arch() {
+  local binary="$1" archs
+  archs="$(lipo -archs "$binary")"
+  if [ "$archs" != "$WANT_ARCHS" ]; then
+    echo "error: $binary must contain only $WANT_ARCHS (has: $archs)" >&2
+    exit 1
+  fi
+}
+smoke_version() {
+  local binary="$1"
+  if [ "$ARCH" = x86_64 ] && [ "$(uname -m)" = arm64 ]; then
+    if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+      /usr/bin/arch -x86_64 "$binary" --version
+    else
+      warn "Intel runtime smoke skipped: Rosetta is unavailable; architecture and signature verified"
+    fi
+  elif [ "$ARCH" = aarch64 ] && [ "$(uname -m)" != arm64 ]; then
+    warn "Apple silicon runtime smoke skipped on Intel host; architecture and signature verified"
+  else
+    "$binary" --version
+  fi
+}
 
 # ---- CLI zip -----------------------------------------------------------------------------------
 echo "==> $(basename "$CLI_ZIP")"
@@ -89,13 +118,7 @@ if [ ! -x "$CLI" ]; then
   exit 1
 fi
 
-archs="$(lipo -archs "$CLI")"
-for a in $WANT_ARCHS; do
-  case " $archs " in
-    *" $a "*) ;;
-    *) echo "error: photocraft-cli lacks $a (has: $archs)" >&2; exit 1 ;;
-  esac
-done
+check_arch "$CLI"
 
 # Integrity first: this must hold even for ad-hoc builds.
 codesign --verify --strict --verbose=2 "$CLI"
@@ -120,7 +143,7 @@ else
   printf '%s\n' "$gk"
   fail "Gatekeeper rejects photocraft-cli (not notarized?)"
 fi
-"$CLI" --version
+smoke_version "$CLI"
 
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> $(basename "$DMG")"
@@ -130,6 +153,26 @@ if [ "$STRICT" = 1 ]; then
   assess --assess --type open --context context:primary-signature -vv "$DMG" \
     || fail "Gatekeeper rejects the DMG"
 fi
+
+# Verify the executable inside the shipped DMG, including exact single architecture.
+mkdir -p "$MOUNT"
+hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$MOUNT" -quiet
+MOUNTED=1
+APP="$MOUNT/PhotoCraft.app"
+GUI="$APP/Contents/MacOS/PhotoCraft"
+if [ ! -x "$GUI" ]; then
+  echo "error: DMG has no PhotoCraft.app executable" >&2
+  exit 1
+fi
+check_arch "$GUI"
+codesign --verify --strict --deep --verbose=2 "$APP"
+if [ "$STRICT" = 1 ]; then
+  xcrun stapler validate "$APP" || fail "no notarization ticket stapled to PhotoCraft.app"
+  assess --assess --type execute -vv "$APP" || fail "Gatekeeper rejects PhotoCraft.app"
+fi
+smoke_version "$GUI"
+hdiutil detach "$MOUNT" -quiet
+MOUNTED=0
 
 if [ "$FAILED" != 0 ]; then
   echo "error: macOS artifacts failed verification" >&2

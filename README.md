@@ -274,11 +274,11 @@ flatpak install --user photocraft-<version>-linux-x86_64.flatpak   # or -linux-a
 flatpak run ai.storyteller.photocraft
 ```
 
-On macOS, the command-line tool comes as `photocraft-cli-<version>-macos-universal.zip`. The binary is signed with the same Developer ID as the app and notarized by Apple. A bare binary can't carry a stapled notarization ticket the way the DMG does, so the first time you run it macOS checks the notarization online. You can confirm it yourself:
+On macOS, the command-line tool comes as `photocraft-cli-<version>-macos-<arch>.zip`. Choose `aarch64` for Apple silicon or `x86_64` for Intel. Windows and Linux also offer the CLI as a separate archive for each architecture. The Mac binary is signed with the same Developer ID as the app and notarized by Apple. A bare binary can't carry a stapled notarization ticket the way the DMG does, so the first time you run it macOS checks the notarization online. You can confirm it yourself:
 
 ```sh
-ditto -x -k photocraft-cli-<version>-macos-universal.zip .
-spctl --assess --type install -vv photocraft-cli-<version>-macos-universal/photocraft-cli
+ditto -x -k photocraft-cli-<version>-macos-<arch>.zip .
+spctl --assess --type install -vv photocraft-cli-<version>-macos-<arch>/photocraft-cli
 # ... accepted, source=Notarized Developer ID
 ```
 

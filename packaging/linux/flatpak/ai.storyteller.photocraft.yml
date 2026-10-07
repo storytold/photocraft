@@ -44,8 +44,8 @@ modules:
         CARGO_HOME: /run/build/photocraft/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p photocraft --features heif
-      - install -Dm755 target/release/photocraft /app/bin/photocraft
+      - cargo --offline build --profile native-release --locked -p photocraft --features heif
+      - install -Dm755 target/native-release/photocraft /app/bin/photocraft
       - install -Dm644 packaging/linux/ai.storyteller.photocraft.desktop /app/share/applications/ai.storyteller.photocraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.photocraft.mime.xml /app/share/mime/packages/ai.storyteller.photocraft.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/

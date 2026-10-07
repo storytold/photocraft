@@ -5,9 +5,9 @@ name: Packaging lint
 on:
   push:
     branches: [main, release]
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**", "scripts/test_release_packaging.py", "Cargo.toml"]
   pull_request:
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**", "scripts/test_release_packaging.py", "Cargo.toml"]
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends shellcheck desktop-file-utils appstream libxml2-utils python3-yaml
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" actionlint
+      - name: Packaging regression tests
+        run: python3 scripts/test_release_packaging.py
       - name: actionlint
         run: |
           "$RUNNER_TEMP/actionlint" -color

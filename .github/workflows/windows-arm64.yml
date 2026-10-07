@@ -76,7 +76,7 @@ jobs:
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
           $dir = Join-Path $env:ProgramFiles 'PhotoCraft'
-          foreach ($exe in 'photocraft.exe', 'photocraft-cli.exe') {
+          foreach ($exe in 'photocraft.exe') {
             $path = Join-Path $dir $exe
             if (-not (Test-Path $path)) { throw "$exe not installed in $dir" }
             $bytes = [System.IO.File]::ReadAllBytes($path)
@@ -84,8 +84,14 @@ jobs:
             if ($machine -ne 0xAA64) { throw "$exe is for machine 0x$('{0:X}' -f $machine), not ARM64" }
             Write-Output "ok $path (ARM64)"
           }
-          # The installed CLI runs natively on ARM64.
-          $cli = Join-Path $dir 'photocraft-cli.exe'
+          if (Test-Path (Join-Path $dir 'photocraft-cli.exe')) { throw 'GUI MSI unexpectedly installed the CLI' }
+          # The CLI ships separately and runs natively on ARM64.
+          $cliZip = (Get-ChildItem dist/photocraft-cli-*-windows-arm64.zip | Select-Object -First 1).FullName
+          Expand-Archive -Path $cliZip -DestinationPath cli
+          $cli = (Get-ChildItem cli -Recurse -Filter photocraft-cli.exe | Select-Object -First 1).FullName
+          $bytes = [System.IO.File]::ReadAllBytes($cli)
+          $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne 0xAA64) { throw 'separate CLI is not ARM64' }
           $out = & $cli --version 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "photocraft-cli --version exited $LASTEXITCODE" }
           Write-Output "ok photocraft-cli --version: $($out.Trim())"

@@ -99,3 +99,61 @@ opt-level = 3
 opt-level = 3
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
+
+# Native installers use a size-oriented profile without sacrificing panic recovery.
+# Packaging extracts private diagnostic symbols, then strips BEFORE signing.
+# Hot pixel, codec, vector and text paths retain speed optimization; release stays
+# unchanged as the performance oracle for same-source size/performance comparisons.
+[profile.native-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+debug = "line-tables-only"
+strip = "none"
+
+[profile.native-release.package.photocraft-geom]
+opt-level = 3
+[profile.native-release.package.photocraft-color]
+opt-level = 3
+[profile.native-release.package.photocraft-cms]
+opt-level = 3
+[profile.native-release.package.photocraft-raster]
+opt-level = 3
+[profile.native-release.package.photocraft-compose]
+opt-level = 3
+[profile.native-release.package.photocraft-algo]
+opt-level = 3
+[profile.native-release.package.photocraft-paint]
+opt-level = 3
+[profile.native-release.package.photocraft-codecs]
+opt-level = 3
+[profile.native-release.package.photocraft-raw]
+opt-level = 3
+[profile.native-release.package.photocraft-vector]
+opt-level = 3
+[profile.native-release.package.photocraft-text]
+opt-level = 3
+[profile.native-release.package.parley]
+opt-level = 3
+[profile.native-release.package.skrifa]
+opt-level = 3
+[profile.native-release.package.harfrust]
+opt-level = 3
+[profile.native-release.package.vello_cpu]
+opt-level = 3
+[profile.native-release.package.image]
+opt-level = 3
+[profile.native-release.package.png]
+opt-level = 3
+[profile.native-release.package.tiff]
+opt-level = 3
+[profile.native-release.package.exr]
+opt-level = 3
+[profile.native-release.package.zune-jpeg]
+opt-level = 3
+[profile.native-release.package.jpeg-encoder]
+opt-level = 3
+[profile.native-release.package.image-webp]
+opt-level = 3

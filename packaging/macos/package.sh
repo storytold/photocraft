@@ -4,7 +4,7 @@
 #   $DIST/photocraft-<version>-macos-<arch>.dmg          PhotoCraft.app on a drag-to-Applications DMG
 #   $DIST/photocraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
-# Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+# Usage: packaging/macos/package.sh [--arch aarch64|x86_64] [--skip-build]
 #
 # Signing (env):
 #   MACOS_SIGN_IDENTITY   codesign identity (name or SHA-1). Default "-" = ad-hoc (local testing;
@@ -17,18 +17,18 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
 
-ARCH=universal
+ARCH="$(uname -m)"
+[ "$ARCH" != arm64 ] || ARCH=aarch64
 SKIP_BUILD=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --arch) ARCH="$2"; shift 2 ;;
+    --arch) [ $# -ge 2 ] || { echo "error: --arch needs a value" >&2; exit 2; }; ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$ARCH" in
-  universal) TARGETS=(aarch64-apple-darwin x86_64-apple-darwin) ;;
   aarch64) TARGETS=(aarch64-apple-darwin) ;;
   x86_64) TARGETS=(x86_64-apple-darwin) ;;
   *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
@@ -38,7 +38,9 @@ esac
 export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
-WORK="$CARGO_TARGET_DIR/macos-package"
+WORK="$CARGO_TARGET_DIR/macos-package-$ARCH"
+# Private matching symbols stay outside the published artifact directory.
+DIAGNOSTICS="$CARGO_TARGET_DIR/release-diagnostics/$VERSION/${PHOTOCRAFT_BUILD_SHA:-unknown}/macos-$ARCH"
 APP="$WORK/PhotoCraft.app"
 DMG="$DIST/photocraft-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/photocraft-cli-$VERSION-macos-$ARCH.zip"
@@ -58,15 +60,28 @@ echo "==> PhotoCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: 
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif "${args[@]}")
+  (cd "$ROOT" && cargo build --profile native-release --locked -p photocraft -p photocraft-cli --features heif "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
+mkdir -p "$DIAGNOSTICS"
+WANT_ARCH=x86_64
+[ "$ARCH" != aarch64 ] || WANT_ARCH=arm64
 for bin in photocraft photocraft-cli; do
-  inputs=()
-  for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
-  lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
+  input="$CARGO_TARGET_DIR/${TARGETS[0]}/native-release/$bin"
+  archs="$(lipo -archs "$input")"
+  if [ "$archs" != "$WANT_ARCH" ]; then
+    echo "error: $input must contain only $WANT_ARCH (has: $archs)" >&2
+    exit 1
+  fi
+  # Generate diagnostics before stripping while the build objects still exist.
+  # Failure is fatal rather than silently losing release crash diagnostics.
+  rm -rf "$DIAGNOSTICS/$bin.dSYM"
+  xcrun dsymutil "$input" -o "$DIAGNOSTICS/$bin.dSYM"
+  xcrun dwarfdump --uuid "$input" >"$DIAGNOSTICS/$bin.uuid.txt"
+  cp "$input" "$WORK/bin/$bin"
+  strip -S -x "$WORK/bin/$bin"
   lipo -info "$WORK/bin/$bin"
 done
 
@@ -135,11 +150,30 @@ mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/PhotoCraft.app"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
+# Avoid create -srcfolder (flaky on CI). makehybrid synthesizes FinderInfo on
+# resource files, so clear that metadata on a writable image before compression;
+# otherwise the app's valid signature fails strict verification inside the DMG.
 hdiutil makehybrid -hfs -hfs-volume-name "PhotoCraft $VERSION" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+hdiutil convert "$WORK/raw.dmg" -format UDRW -o "$WORK/writable.dmg"
+MOUNT="$WORK/dmg-clean"
+MOUNTED=0
+cleanup_mount() {
+  if [ "$MOUNTED" = 1 ]; then hdiutil detach "$MOUNT" -quiet || true; fi
+}
+trap cleanup_mount EXIT
+mkdir -p "$MOUNT"
+hdiutil attach "$WORK/writable.dmg" -nobrowse -mountpoint "$MOUNT" -quiet
+MOUNTED=1
+# Preserve all other attributes, including notarization metadata. Do not follow
+# the /Applications symlink or touch volume-level Finder presentation metadata.
+find "$MOUNT/PhotoCraft.app" -xattrname com.apple.FinderInfo \
+  -exec xattr -d com.apple.FinderInfo {} +
+codesign --verify --strict --deep --verbose=2 "$MOUNT/PhotoCraft.app"
+hdiutil detach "$MOUNT" -quiet
+MOUNTED=0
+trap - EXIT
+hdiutil convert "$WORK/writable.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+rm -f "$WORK/raw.dmg" "$WORK/writable.dmg"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [ "$NOTARIZE" = 1 ]; then
@@ -165,6 +199,17 @@ ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # Gatekeeper looks the notarization up online when a quarantined copy first runs.
 if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
-"$WORK/bin/photocraft-cli" --version
+# Run the packaged, signed CLI; cross-architecture execution needs OS support.
+if [ "$ARCH" = x86_64 ] && [ "$(uname -m)" = arm64 ]; then
+  if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+    /usr/bin/arch -x86_64 "$CLI_DIR/photocraft-cli" --version
+  else
+    warn "Intel CLI runtime smoke skipped: Rosetta is unavailable; architecture and signature verified"
+  fi
+elif [ "$ARCH" = aarch64 ] && [ "$(uname -m)" != arm64 ]; then
+  warn "Apple silicon CLI runtime smoke skipped on Intel host; architecture and signature verified"
+else
+  "$CLI_DIR/photocraft-cli" --version
+fi
 echo "==> done (check the artifacts as shipped with packaging/macos/verify.sh --arch $ARCH)"
 ls -lh "$DMG" "$CLI_ZIP"

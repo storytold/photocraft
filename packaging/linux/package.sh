@@ -5,7 +5,8 @@
 #   $DIST/photocraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
 #   $DIST/photocraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
 #   $DIST/photocraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
-#   $DIST/photocraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/photocraft-<version>-linux-<arch>.tar.gz    GUI FHS-style tree (bin/, share/)
+#   $DIST/photocraft-cli-<version>-linux-<arch>.tar.gz separate headless CLI
 #
 # Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
 #
@@ -32,27 +33,42 @@ done
 
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64) DEB_ARCH=amd64 ;;
-  aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
+  x86_64) DEB_ARCH=amd64; TARGET=x86_64-unknown-linux-gnu ;;
+  aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64; TARGET=aarch64-unknown-linux-gnu ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
 export PHOTOCRAFT_MAINTAINER="${PHOTOCRAFT_MAINTAINER:-PhotoCraft maintainers <photocraft@storyteller.ai>}"
 BASENAME="photocraft-$VERSION-linux-$ARCH"
+CLI_BASENAME="photocraft-cli-$VERSION-linux-$ARCH"
 
 echo "==> PhotoCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif)
+  (cd "$ROOT" && cargo build --profile native-release --target "$TARGET" --locked -p photocraft -p photocraft-cli --features heif)
 fi
-BIN="$CARGO_TARGET_DIR/release"
+BIN="$CARGO_TARGET_DIR/$TARGET/native-release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
+CLI_STAGE="$WORK/cli/$CLI_BASENAME"
+# Private debug data lives outside DIST and is archived separately by release CI.
+SYMBOLS="$CARGO_TARGET_DIR/release-symbols/linux-$ARCH"
 rm -rf "$WORK"
 
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/photocraft" "$STAGE/usr/bin/photocraft"
-install -Dm755 "$BIN/photocraft-cli" "$STAGE/usr/bin/photocraft-cli"
-strip "$STAGE/usr/bin/photocraft" "$STAGE/usr/bin/photocraft-cli" 2>/dev/null || true
+install -Dm755 "$BIN/photocraft-cli" "$CLI_STAGE/bin/photocraft-cli"
+mkdir -p "$SYMBOLS"
+for binary in photocraft photocraft-cli; do
+  # Fail closed: missing objcopy, missing debug info extraction or strip failure must not
+  # silently ship an unexpectedly large binary or lose diagnostics. Keep the ELF build ID.
+  objcopy --only-keep-debug "$BIN/$binary" "$SYMBOLS/$binary.debug"
+done
+strip --strip-unneeded "$STAGE/usr/bin/photocraft" "$CLI_STAGE/bin/photocraft-cli"
+mkdir -p "$CLI_STAGE/share/doc/photocraft-cli"
+copy_docs "$CLI_STAGE/share/doc/photocraft-cli"
+# The CLI is always a separate download, including when only installers are requested.
+tar -C "$WORK/cli" -cf - "$CLI_BASENAME" | gzip -9 >"$DIST/$CLI_BASENAME.tar.gz"
+echo "wrote $DIST/$CLI_BASENAME.tar.gz"
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -76,7 +92,7 @@ has() { case " $FORMATS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 if has tar; then
   mkdir -p "$WORK/tar"
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
-  tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
+  tar -C "$WORK/tar" -cf - "$BASENAME" | gzip -9 >"$DIST/$BASENAME.tar.gz"
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
@@ -96,7 +112,6 @@ fi
 if has appimage; then
   APPDIR="$WORK/PhotoCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   ln -s usr/bin/photocraft "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
@@ -135,6 +150,7 @@ if has appimage; then
   fi
 fi
 
-"$STAGE/usr/bin/photocraft-cli" --version
+"$CLI_STAGE/bin/photocraft-cli" --version
+"$STAGE/usr/bin/photocraft" --version
 echo "==> done"
 ls -lh "$DIST"

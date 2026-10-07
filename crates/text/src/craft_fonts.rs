@@ -5,13 +5,23 @@
 //! fonts: BIZ UDPGothic (UI) and Shippori Mincho / BIZ UDMincho (serif document text). The web
 //! build (wasm32) embeds none of them: they don't fit its size cap (see `build.rs`).
 
+use std::io::Read;
+use std::sync::OnceLock;
+
+/// Maximum decoded size of one embedded font.
+const MAX_CRAFT_FONT_BYTES: usize = 32 << 20;
+
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {
     pub family: &'static str,
     pub style: &'static str,
     /// ISO 15924 scripts the font is for, e.g. `"Jpan"`.
     pub scripts: &'static [&'static str],
-    pub bytes: &'static [u8],
+    compressed: &'static [u8],
+    original_len: usize,
+    decoded: OnceLock<Result<Vec<u8>, String>>,
+    #[cfg(test)]
+    original: &'static [u8],
 }
 
 include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
@@ -19,7 +29,29 @@ include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
 /// The preferred UI family for Japanese.
 pub const UI_JAPANESE_FAMILY: &str = "BIZ UDPGothic";
 
+fn decompress_font(compressed: &[u8], expected: usize) -> Result<Vec<u8>, String> {
+    if expected == 0 || expected > MAX_CRAFT_FONT_BYTES {
+        return Err("embedded font length exceeds the supported limit or is empty".into());
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected.saturating_add(1)).map_err(|e| format!("embedded font allocation: {e}"))?;
+    flate2::read::MultiGzDecoder::new(compressed)
+        .take(expected.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("embedded font decompression: {e}"))?;
+    if bytes.len() != expected {
+        return Err("embedded font decoded length does not match its manifest".into());
+    }
+    Ok(bytes)
+}
+
 impl CraftFont {
+    /// Decode once and share the same immutable font bytes between document text and the UI.
+    /// Corrupt, truncated or oversized embedded data returns a cached error.
+    pub fn bytes(&'static self) -> Result<&'static [u8], &'static str> {
+        self.decoded.get_or_init(|| decompress_font(self.compressed, self.original_len)).as_ref().map(Vec::as_slice).map_err(String::as_str)
+    }
+
     /// True for a font meant for Japanese text.
     pub fn is_japanese(&self) -> bool {
         self.scripts.contains(&"Jpan")
@@ -105,6 +137,49 @@ pub fn is_serif_family(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn compressed_font_rejects_invalid_lengths_and_data() {
+        let encoded = gzip(b"a font payload");
+        assert_eq!(decompress_font(&encoded, 14).unwrap(), b"a font payload");
+        assert!(decompress_font(b"garbage", 14).is_err());
+        assert!(decompress_font(&encoded[..encoded.len() - 4], 14).is_err());
+        assert!(decompress_font(&encoded, 13).is_err());
+        assert!(decompress_font(&encoded, 15).is_err());
+        assert!(decompress_font(&encoded, 0).is_err());
+        assert!(decompress_font(&encoded, MAX_CRAFT_FONT_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn invalid_embedded_font_error_is_cached() {
+        static BAD: CraftFont = CraftFont {
+            family: "test",
+            style: "Regular",
+            scripts: &[],
+            compressed: b"invalid gzip",
+            original_len: 14,
+            decoded: OnceLock::new(),
+            original: b"a font payload",
+        };
+        let first = BAD.bytes().unwrap_err();
+        assert!(std::ptr::eq(first.as_ptr(), BAD.bytes().unwrap_err().as_ptr()));
+    }
+
+    #[test]
+    fn every_shipped_font_is_lossless_and_cached() {
+        for font in CRAFT_FONTS {
+            let bytes = font.bytes().unwrap();
+            assert_eq!(bytes, font.original);
+            assert!(std::ptr::eq(bytes.as_ptr(), font.bytes().unwrap().as_ptr()));
+        }
+    }
+
     #[test]
     fn mincho_first_reorders_only_craft_families() {
         let fams = japanese_families();
@@ -145,6 +220,6 @@ mod tests {
             return;
         };
         assert_eq!((first.family, first.style), (UI_JAPANESE_FAMILY, "Regular"));
-        assert!(v.iter().all(|f| f.is_japanese() && !f.bytes.is_empty()));
+        assert!(v.iter().all(|f| f.is_japanese() && f.bytes().is_ok_and(|bytes| !bytes.is_empty())));
     }
 }

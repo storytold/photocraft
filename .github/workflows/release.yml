@@ -65,9 +65,15 @@ jobs:
           echo "### PhotoCraft v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
   macos:
-    name: macOS universal
+    name: macOS ${{ matrix.arch }}
     needs: version
     runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: aarch64, target: aarch64-apple-darwin }
+          - { arch: x86_64, target: x86_64-apple-darwin }
     environment: release
     env:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
@@ -82,10 +88,10 @@ jobs:
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-macos-universal
+          key: release-macos-${{ matrix.arch }}
       - name: Apply version override
         if: inputs.version != ''
         run: cargo xtask version set "$PHOTOCRAFT_VERSION"
@@ -102,7 +108,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: packaging/macos/package.sh --arch universal
+        run: packaging/macos/package.sh --arch ${{ matrix.arch }}
       # Unpacks the CLI zip and checks the binary users get: Developer ID, hardened runtime,
       # timestamp, and Gatekeeper's notarization lookup (codesign --verify, spctl). Also the DMG's
       # stapled ticket. Strict when the signing secrets are present, warnings otherwise.
@@ -111,12 +117,18 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: packaging/macos/verify.sh --arch universal
+        run: packaging/macos/verify.sh --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: release-macos
+          name: release-macos-${{ matrix.arch }}
           path: dist/release/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-macos-${{ matrix.arch }}
+          path: target/release-diagnostics/
+          if-no-files-found: error
+          retention-days: 30
       - name: Remove temporary keychain
         if: always()
         run: |
@@ -179,6 +191,12 @@ jobs:
           name: release-windows-${{ matrix.arch }}
           path: dist/release/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-windows-${{ matrix.arch }}
+          path: target/windows-diagnostics/
+          if-no-files-found: error
+          retention-days: 30
 
   linux:
     name: Linux ${{ matrix.arch }}
@@ -230,7 +248,7 @@ jobs:
         run: |
           dpkg-deb --info dist/release/*.deb
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/photocraft$|metainfo|applications'
-          ldd target/release/photocraft
+          ldd target/${{ matrix.arch }}-unknown-linux-gnu/native-release/photocraft
           python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.photocraft.yml')); assert m['id'] == 'ai.storyteller.photocraft'"
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
@@ -244,6 +262,12 @@ jobs:
           name: release-linux-${{ matrix.arch }}
           path: dist/release/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-linux-${{ matrix.arch }}
+          path: target/release-symbols/linux-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 30
 
   flatpak:
     name: Flatpak ${{ matrix.arch }}
