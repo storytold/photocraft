@@ -2005,9 +2005,8 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Griglia:
-
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
-# Italian follows the tool wording used above (Herramienta X).
+# Italian follows the tool wording used above (Strumento X).
 	Color Range	Intervallo colori
 	Adaptive Wide Angle	Grandangolo adattivo
 	Chalk & Charcoal	Gessetto e carboncino
@@ -2091,39 +2090,33 @@
 	New Channel	Nuovo canale
 	Save Selection	Salva selezione
 	Load Selection	Carica selezione
-
-# Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
+# Command-id override: under Edit > Purge a bare Deshacer reads as an action, not the history.
 @id	edit.purge.undo	Cronologia annullamenti
 # Rendering mode and recovery
 	Rendering Mode	Modalità rendering
 	Automatic (recommended)	Automatico (consigliato)
 	CPU / Compatibility	CPU / Compatibilità
-	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Automatico usa accelerazione GPU quando disponibile e ripiega su CPU in caso di errori.
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Automatico usa accelerazione GPU quando disponibile e ripiega su rendering CPU in caso di errori.
 	Switched to CPU rendering	Passato a rendering CPU
-	GPU acceleration could not continue. Your documents are unchanged.	Accelerazione GPU non ha potuto continuare. I documenti sono invariati.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft sta componendo immagini su CPU. La finestra può ancora usare adattatore grafico.
-	Retry GPU requires a restart. Save your work first.	Riprovare GPU richiede riavvio. Salva prima il lavoro.
+	GPU acceleration could not continue. Your documents are unchanged.	L'accelerazione GPU non ha potuto continuare. I documenti sono invariati.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft sta componendo le immagini su CPU. La finestra può ancora usare l'adattatore grafico.
+	Retry GPU requires a restart. Save your work first.	Per riprovare la GPU è necessario riavviare. Salva prima il lavoro.
 	Keep Using CPU	Continua su CPU
 	Retry GPU	Riprova GPU
 	Advanced	Avanzato
 	GPU Backend	Backend GPU
 	Details	Dettagli
-
 	Rendering mode	Modalità rendering
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lazo congela: trascina per congelare un'area, Alt-trascina per scongelare (L)
-
-
 	Shadow Clipping Warning (U)	Avviso clipping ombre (U)
 	Highlight Clipping Warning (O)	Avviso clipping luci (O)
 	Show Lab Color Readouts	Mostra letture colore Lab
-	Show Vectorscope	Mostra vectorscopio
+	Show Vectorscope	Mostra vettorscopio
 	Show Red at 3 o'clock	Mostra rosso a ore 3
 	Show Skin Tone Indicator	Mostra indicatore incarnato
 	Tone Histogram	Istogramma tonale
 	Show Selected Region	Mostra regione selezionata
-
 cameraRaw	Light	Luce
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
 cameraRaw	Lights	Toni chiari
@@ -2142,5 +2135,5 @@ cameraRaw	Temperature	Temperatura colore
 cameraRaw	Amount	Quantità
 	Patch Tool	Strumento Toppa
 	Patch:	Toppa:
-	Lasso around an area, then drag the selection	Seleziona un'area con lazo, poi trascina la selezione
+	Lasso around an area, then drag the selection	Seleziona un'area con il lazo, poi trascina la selezione
 	Edit Type	Modifica testo
