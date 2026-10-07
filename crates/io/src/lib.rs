@@ -118,8 +118,10 @@ pub struct ExportOptions {
     pub encode: EncodeOptions,
     /// Write PSB even for `.psd` names when the document is small.
     pub force_psb: bool,
-    /// TIFF: keep the layers (Photoshop layer data in tag 37724). `false` is Photoshop's
-    /// "Discard Layers and Save a Copy": a flat TIFF.
+    /// TIFF: keep the layers (Photoshop layer data in tag 37724). Off by default, so scripted
+    /// and agent saves (CLI, batch, MCP) write a flat TIFF unless they ask for layers; the app's
+    /// Save As sets it from its Layers option, which keeps them as Photoshop does. `false` is
+    /// Photoshop's "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
     /// Which part of the document's XMP packet a flat export embeds (PSD/PSB/`.pcraft`
     /// always keep everything). Everything by default, as Save As does; Export As offers None.
@@ -128,7 +130,7 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        ExportOptions { encode: EncodeOptions::default(), force_psb: false, tiff_layers: true, xmp: XmpEmbed::All }
+        ExportOptions { encode: EncodeOptions::default(), force_psb: false, tiff_layers: false, xmp: XmpEmbed::All }
     }
 }
 
