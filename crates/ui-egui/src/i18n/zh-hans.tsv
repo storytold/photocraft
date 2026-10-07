@@ -345,6 +345,12 @@
 	Merge Down	向下合并
 	Merge Visible	合并可见图层
 	Stamp Visible	盖印可见图层
+	Select Layer Above	选择上方图层
+	Select Layer Below	选择下方图层
+	Select Top Layer	选择顶部图层
+	Select Bottom Layer	选择底部图层
+	Add Layer Above to Selection	将上方图层添加到选择
+	Add Layer Below to Selection	将下方图层添加到选择
 	Stamp Down	向下盖印
 	Flatten Image	拼合图像
 	Matting	修边

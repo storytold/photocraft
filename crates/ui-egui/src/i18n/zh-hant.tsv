@@ -350,6 +350,12 @@
 	Merge Down	向下合併圖層
 	Merge Visible	合併可見圖層
 	Stamp Visible	蓋印可見圖層
+	Select Layer Above	選取上方圖層
+	Select Layer Below	選取下方圖層
+	Select Top Layer	選取最上層圖層
+	Select Bottom Layer	選取最下層圖層
+	Add Layer Above to Selection	將上方圖層加入選取
+	Add Layer Below to Selection	將下方圖層加入選取
 	Stamp Down	向下蓋印
 	Flatten Image	影像平面化
 	Matting	修邊

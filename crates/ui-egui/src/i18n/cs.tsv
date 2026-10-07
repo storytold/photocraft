@@ -350,6 +350,12 @@
 	Merge Down	Sloučit dolů
 	Merge Visible	Sloučit viditelné
 	Stamp Visible	Otisknout viditelné
+	Select Layer Above	Vybrat vrstvu nad
+	Select Layer Below	Vybrat vrstvu pod
+	Select Top Layer	Vybrat horní vrstvu
+	Select Bottom Layer	Vybrat spodní vrstvu
+	Add Layer Above to Selection	Přidat vrstvu nad do výběru
+	Add Layer Below to Selection	Přidat vrstvu pod do výběru
 	Stamp Down	Otisknout dolů
 	Flatten Image	Sloučit do jedné vrstvy
 	Matting	Začištění okrajů

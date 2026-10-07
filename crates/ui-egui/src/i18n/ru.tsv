@@ -1759,6 +1759,12 @@
 	Merge Shape Components	Объединить компоненты фигуры
 	Merge Visible	Свести видимые
 	Stamp Visible	Штамп видимых
+	Select Layer Above	Выбрать слой выше
+	Select Layer Below	Выбрать слой ниже
+	Select Top Layer	Выбрать верхний слой
+	Select Bottom Layer	Выбрать нижний слой
+	Add Layer Above to Selection	Добавить слой выше к выбору
+	Add Layer Below to Selection	Добавить слой ниже к выбору
 	Stamp Down	Штамп вниз
 	Mesh	Сетка
 	Middle Eastern & South Asian Composer	Компоновка для Ближнего Востока и Южной Азии
