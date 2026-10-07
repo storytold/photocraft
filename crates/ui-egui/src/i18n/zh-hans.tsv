@@ -903,8 +903,6 @@
 	Create new pattern from the selection	从选区创建图案
 	Create new shape from the current path	从当前路径创建形状
 	Create new snapshot	创建快照
-	Create new style (from the selected type)	创建样式（基于选中的文字）
-	Create new style from the selected layer	从选中的图层创建样式
 	Create new tool preset	创建工具预设
 	Crop Factor	裁切系数
 	Ctrl	Ctrl
@@ -1503,6 +1501,7 @@
 	Comic Book	漫画
 	Conform	拉伸
 	Content-Aware Fill needs a selection on a pixel layer	内容识别填充需要像素图层上的选区
+	Couldn't place {name}: {error}	无法置入 {name}：{error}
 	Could not transform: the layer is empty	无法变换：图层为空
 	Could not use Perspective Warp: the layer is empty	无法使用透视变形：图层为空
 	Could not use Puppet Warp: no opaque pixels	无法使用操控变形：没有不透明像素
@@ -2074,10 +2073,25 @@ cameraRaw	Blending	混合
 	Details	详细信息
 	Rendering mode	渲染模式
 	Edit Type	编辑文字
+
+
+	New Style…	新建样式…
+	Style {name} saved	已保存样式 {name}
+
+	Create new style (from the selected type)	新建样式（基于所选文本）
+	Create new style from the selected layer	从所选图层新建样式
+
+	Make Default	设为默认
+	Reset to Default	重置为默认
+	Full-resolution preview unavailable	全分辨率预览不可用
 	No patterns	无图案
 	Enable {name}	启用{name}
 	Hold Alt while drawing for straight segments	绘制中按住 Alt 可逐点连接直线
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	拖动圈选或逐点绘制 · 圈选中按住 Alt 画直线 · {add} 添加 · 起笔前按 {sub} 减去
+	Move	移动
+	Extend	扩展
+	Structure:	结构：
+	Content-Aware Move Tool	内容感知移动工具
 	TIFF Options	TIFF 选项
 	Including layers will increase file size.	包含图层会增加文件大小。
 	Discard Layers and Save a Copy	扔掉图层并存储副本

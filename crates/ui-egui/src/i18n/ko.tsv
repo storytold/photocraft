@@ -2034,6 +2034,14 @@ cameraRaw	Color	색상
 	175%	175%
 	250%	250%
 	300%	300%
+	Full-resolution preview unavailable	전체 해상도 미리보기를 사용할 수 없습니다
+
+
+	New Style…	새 스타일…
+	Style {name} saved	{name} 스타일을 저장했습니다
+
+	Make Default	기본값으로 만들기
+	Reset to Default	기본값으로 되돌리기
 
 # Additional generated filter labels and Photoshop-aligned UI terminology.
 @id	select.all	모두 선택
@@ -2656,9 +2664,14 @@ cameraRaw	Color	색상
 @id	filter.sharpen.sharpen	선명하게
 	Hold Alt while drawing for straight segments	그리는 중 Alt를 누르면 직선 구간
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	드래그하거나 다각형 점 클릭 · 올가미 중 Alt를 누르면 직선 구간 · {add} 추가 · 그리기 전 {sub} 빼기
+	Move	이동
+	Extend	확장
+	Structure:	구조:
+	Content-Aware Move Tool	내용 인식 이동 도구
 	TIFF Options	TIFF 옵션
 	Including layers will increase file size.	레이어를 포함하면 파일 크기가 커집니다.
 	Discard Layers and Save a Copy	레이어를 삭제하고 사본 저장
 	Don't show again	다시 표시 안 함
 	Save failed: {error}	저장 실패: {error}
 	Save cancelled	저장이 취소되었습니다
+	Couldn't place {name}: {error}	{name}을(를) 가져올 수 없습니다: {error}

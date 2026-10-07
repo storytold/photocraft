@@ -300,6 +300,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::Sponge
             | Tool::Lasso
             | Tool::Patch
+            | Tool::ContentAwareMove
             | Tool::QuickSelection
     )
 }
@@ -485,10 +486,13 @@ fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>
     }
     // Layer Style dialog: show its effects live (Cancel just drops the preview).
     let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);
-    if style.is_none() {
+    // The Preview checkbox off shows the document as it was when the dialog opened;
+    // edits still land in the dialog state and OK applies them whatever it says.
+    let preview_on = style.and_then(|d| d.fields.get("preview")).and_then(serde_json::Value::as_bool).unwrap_or(true);
+    if style.is_none() || !preview_on {
         app.style_preview = None;
     }
-    if let Some(d) = style
+    if let Some(d) = style.filter(|_| preview_on)
         && app.session.active_index() == Some(idx)
     {
         let key = (crate::layer_style::preview_hash(&d.fields) ^ st.revision.wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1 << 63;
@@ -937,6 +941,8 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
 
 /// Tabs + canvas for the active document, or the start screen.
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    app.drop_canvas_rect = None;
+    app.tab_strip = None;
     retain_gpu_documents(app);
     crate::transform_tool::track_steps(app, ui.ctx());
     let n = app.session.documents().len();
@@ -952,7 +958,8 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     }
     if !app.ui.view.hides_tabs() || opening {
-        tabs(app, ui);
+        app.tab_strip = Some(tabs(app, ui));
+        drop_slot_line(app, ui);
     }
     if let Some(job) = app.jobs.focus.or_else(|| (n == 0).then(|| app.jobs.opens.last().map(|o| o.job)).flatten()) {
         crate::jobs_ui::open_card(app, ui, job);
@@ -961,6 +968,7 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(idx) = app.session.active_index() else { return };
     let rect = ui.available_rect_before_wrap();
     app.last_canvas_rect = rect;
+    app.drop_canvas_rect = Some(rect);
     let n = app.session.documents().len();
     // Window › Arrange: tiled / n-up layouts show several documents side by side; the active one
     // takes input, a click elsewhere activates that document.
@@ -988,7 +996,8 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     canvas_view(app, ui, idx, rect, view, true);
 }
 
-fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// The tab strip; returns where its document tabs are.
+fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
     if t.pro {
         return pro_tabs(app, ui);
@@ -1000,7 +1009,8 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let tab_count = app.session.documents().len();
     let (mut focus_open, mut cancel_open) = (None, None);
     let focused_open = app.jobs.focus.is_some();
-    egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
+    let mut doc_tabs = Vec::with_capacity(tab_count);
+    let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, st) in app.session.documents().iter().enumerate() {
@@ -1011,6 +1021,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let meta_g = ui.painter().layout_no_wrap(meta, egui::FontId::proportional(10.5), t.text_faint);
                 let w = name_g.size().x + meta_g.size().x + 44.0;
                 let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), Sense::click());
+                doc_tabs.push(r);
                 if sel {
                     ui.painter().rect_filled(r, t.radius_sm, t.card);
                     ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
@@ -1077,6 +1088,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+    TabStrip { rect: frame.response.rect, tabs: doc_tabs }
 }
 
 /// All tab actions go through the same guarded File commands as the menu bar, including the
@@ -1121,7 +1133,7 @@ fn open_tab_clicks(
 }
 
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
-fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
     let active = app.session.active_index().filter(|_| app.jobs.focus.is_none());
     let (mut activate, mut close) = (None, None);
@@ -1130,6 +1142,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
     let mut x = strip.left();
+    let mut doc_tabs = Vec::with_capacity(tab_count);
     for (i, st) in app.session.documents().iter().enumerate() {
         let zoom = app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0);
         // Photoshop: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask is targeted;
@@ -1142,6 +1155,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let title = format!("{} @ {}% ({layer}{model}/{}){}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" });
         let g = ui.painter().layout_no_wrap(title, egui::FontId::proportional(11.5), t.text);
         let r = Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(g.size().x + 42.0, strip.height()));
+        doc_tabs.push(r);
         let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click());
         let sel = Some(i) == active;
         if sel {
@@ -1200,6 +1214,35 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+    TabStrip { rect: strip, tabs: doc_tabs }
+}
+
+/// Where the document tabs were drawn (opening files' tabs aren't slots): a file dropped on the
+/// strip opens at the slot under the pointer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabStrip {
+    pub rect: Rect,
+    /// The document tabs, left to right.
+    pub tabs: Vec<Rect>,
+}
+
+impl TabStrip {
+    /// The tab position a drop at `x` opens at: before the first tab whose middle is right of it.
+    pub fn slot(&self, x: f32) -> usize {
+        self.tabs.iter().filter(|r| r.center().x < x).count()
+    }
+}
+
+/// While files are dragged over the tab strip, an insertion line where they would open.
+fn drop_slot_line(app: &mut PhotocraftApp, ui: &egui::Ui) {
+    if ui.input(|i| i.raw.hovered_files.is_empty()) {
+        return;
+    }
+    let at = app.services.cursor_pos.as_mut().and_then(|f| f(ui.ctx()));
+    let crate::file_open::DropTarget::Tabs(slot) = app.drop_target(ui.ctx(), at) else { return };
+    let Some(tabs) = app.tab_strip.as_ref().map(|s| &s.tabs) else { return };
+    let Some((r, after)) = tabs.get(slot).map(|r| (*r, false)).or_else(|| tabs.last().map(|r| (*r, true))) else { return };
+    crate::widgets::drop_line(ui, r, after, true, &crate::theme::Tokens::get(ui.ctx()));
 }
 
 /// Photoshop-style zoom label: "33.3", "100", "12.5".
@@ -1826,7 +1869,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if app.ui.transform.is_some() && response.double_clicked() {
             crate::transform_tool::commit(app);
         }
-        if tool == Tool::Type && response.double_clicked() {
+        if tool.is_type() && response.double_clicked() {
             crate::type_tool::select_word(app);
         }
         if app.ui.extras.grid && app.ui.view.extras {
@@ -1928,7 +1971,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     }
                 }
                 // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
-                Tool::Move | Tool::Type | Tool::Eyedropper if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise => {
+                Tool::Move | Tool::Type | Tool::VerticalType | Tool::Eyedropper
+                    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
+                {
                     egui::CursorIcon::Crosshair
                 }
                 Tool::Move => egui::CursorIcon::Move,
@@ -1946,7 +1991,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                         egui::CursorIcon::ZoomIn
                     }
                 }
-                Tool::Type => egui::CursorIcon::Text,
+                Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
                 _ => egui::CursorIcon::Crosshair,
             };
             ui.ctx().set_cursor_icon(icon);
@@ -2194,8 +2239,8 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             };
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
-        // Patch Tool dragging the patch: the selection outline follows the pointer.
-        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+        // Patch / Content-Aware Move dragging the selection: its outline follows the pointer.
+        Tool::Patch | Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             let start = d.start;
             let [dx, dy] = crate::retouch_ui::patch_offset(app, start, last);
             if let Some((_, _, segs)) = &app.outline_cache {
@@ -2203,7 +2248,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
                 marching_ants_segments(painter, xf, &moved, painter.ctx().input(|i| i.time));
             }
         }
-        Tool::Lasso | Tool::Patch => {
+        Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let mut pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
             if let Some(lasso) = &d.lasso {
                 pts.push(xf.to_screen(lasso.cursor[0] as f32, lasso.cursor[1] as f32));
@@ -2218,7 +2263,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             painter.circle_filled(a, 3.0, Color32::WHITE);
             painter.circle_filled(b, 3.0, Color32::WHITE);
         }
-        Tool::Type => {
+        Tool::Type | Tool::VerticalType => {
             let r = Rect::from_two_pos(xf.to_screen(d.start[0] as f32, d.start[1] as f32), xf.to_screen(last[0] as f32, last[1] as f32));
             let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
             painter.add(egui::Shape::line(pts.to_vec(), Stroke::new(1.0, Color32::WHITE)));
@@ -2282,7 +2327,7 @@ pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option
 /// and update the live stroke once (see `canvas_view`).
 fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui::Modifiers) {
     let tool = app.ui.tool;
-    if tool == Tool::Type && app.drag.is_none() {
+    if tool.is_type() && app.drag.is_none() {
         crate::type_tool::pointer_move(app, x, y);
     }
     if tool == Tool::Pen {
@@ -2459,7 +2504,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     polygon_click(app, x, y, mods);
                     return;
                 }
-                Tool::Type if crate::type_tool::pointer_down(app, x, y, mods.shift) => return,
+                Tool::Type | Tool::VerticalType if crate::type_tool::pointer_down(app, x, y, mods.shift) => return,
                 _ => {}
             }
             crate::paint_mouse::sync_tool_smoothing(app);
@@ -2484,7 +2529,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             feed_live_stroke(app);
         }
         ToolEvent::Up { x, y } => {
-            if tool == Tool::Type
+            if tool.is_type()
                 && let Some(e) = app.ui.text_edit.as_mut()
             {
                 e.dragging = false;
@@ -2596,7 +2641,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.modifiers),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
-        Tool::Type => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
+        Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
             let live = app.live_stroke.take();
             let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
@@ -2626,7 +2671,10 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             let _ = app.run("select.rect", json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "antiAlias": aa, "feather": feather}));
         }
         Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
-        Tool::Lasso | Tool::Patch => {
+        Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
+        }
+        Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);
@@ -3222,7 +3270,10 @@ mod tests {
         let id = crate::layer_style::open(&mut app, Some("colorOverlay")).unwrap();
         let (shown, key) = display_doc(&mut app, 0);
         assert_eq!((fx(&shown), fx(&app.session.documents()[0].doc)), (1, 0), "previewed, not committed");
-        app.ui.dialog_mut(id).unwrap().fields.insert("on:stroke".into(), json!(true));
+        // Adding a stroke through the dialog's instance list re-renders the canvas.
+        if let Some(d) = app.ui.dialog_mut(id) {
+            d.fields["effects"].as_array_mut().unwrap().push(json!({"id": "fx9", "kind": "stroke", "on": true, "params": {"size": 3}}));
+        }
         let (shown, key2) = display_doc(&mut app, 0);
         assert_eq!(fx(&shown), 2);
         assert_ne!(key, key2, "an edit re-renders the canvas");

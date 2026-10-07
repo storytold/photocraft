@@ -889,8 +889,6 @@
 	Create new pattern from the selection	Créer un nouveau motif à partir de la sélection
 	Create new shape from the current path	Créer une nouvelle forme à partir du tracé actif
 	Create new snapshot	Créer un nouvel instantané
-	Create new style (from the selected type)	Créer un nouveau style (d'après le texte sélectionné)
-	Create new style from the selected layer	Créer un nouveau style d'après le calque sélectionné
 	Create new tool preset	Créer un nouveau préréglage d'outil
 	Crop Factor	Facteur de recadrage
 	Ctrl	Ctrl
@@ -2343,7 +2341,6 @@
 	Auto Erase	Effacement automatique
 	Color Adaptation	Adaptation des couleurs
 	Preserve Transparency	Préserver la transparence
-	New Style…	Nouveau style…
 	shortcut	raccourci
 	Go to Layer	Aller au calque
 	Saved	Enregistré
@@ -2500,13 +2497,28 @@ cameraRaw	Blending	Fusion
 	5 x 5	5 × 5
 	Grid:	Grille :
 	Edit Type	Modifier le texte
+
+
+	New Style…	Nouveau style…
+	Style {name} saved	Style {name} enregistré
+
+	Create new style (from the selected type)	Créer un nouveau style (à partir du texte sélectionné)
+	Create new style from the selected layer	Créer un nouveau style à partir du calque sélectionné
+
+	Make Default	Définir par défaut
+	Reset to Default	Rétablir par défaut
+	Full-resolution preview unavailable	Aperçu en pleine résolution indisponible
 	No patterns	Aucun motif
 	Enable {name}	Activer {name}
 	Hold Alt while drawing for straight segments	Maintenez Alt en dessinant pour des segments droits
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Faites glisser ou cliquez des points de polygone · maintenez Alt pendant le lasso pour des segments droits · {add} ajouter · {sub} avant de dessiner soustrait
+	Extend	Extension
+	Structure:	Structure :
+	Content-Aware Move Tool	Outil Déplacement selon le contenu
 	TIFF Options	Options TIFF
 	Including layers will increase file size.	L'inclusion des calques augmentera la taille du fichier.
 	Discard Layers and Save a Copy	Supprimer les calques et enregistrer une copie
 	Don't show again	Ne plus afficher
 	Save failed: {error}	Échec de l'enregistrement : {error}
 	Save cancelled	Enregistrement annulé
+	Couldn't place {name}: {error}	Impossible d'importer {name} : {error}

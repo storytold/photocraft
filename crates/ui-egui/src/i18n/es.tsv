@@ -899,8 +899,6 @@
 	Create new pattern from the selection	Crear un patrón nuevo a partir de la selección
 	Create new shape from the current path	Crear una forma nueva a partir del trazado actual
 	Create new snapshot	Crear una instantánea nueva
-	Create new style (from the selected type)	Crear un estilo nuevo (del texto seleccionado)
-	Create new style from the selected layer	Crear un estilo nuevo a partir de la capa seleccionada
 	Create new tool preset	Crear un preajuste de herramienta nuevo
 	Crop Factor	Factor de recorte
 	Ctrl	Ctrl
@@ -1493,6 +1491,7 @@
 	Comic Book	Cómic
 	Conform	Conformar
 	Content-Aware Fill needs a selection on a pixel layer	El relleno de contenido necesita una selección en una capa de píxeles
+	Couldn't place {name}: {error}	No se pudo colocar {name}: {error}
 	Could not transform: the layer is empty	No se pudo transformar: la capa está vacía
 	Could not use Perspective Warp: the layer is empty	No se pudo usar la deformación en perspectiva: la capa está vacía
 	Could not use Puppet Warp: no opaque pixels	No se pudo usar la deformación de clavos: no hay píxeles opacos
@@ -2072,7 +2071,6 @@
 	Auto Erase	Borrado automático
 	Color Adaptation	Adaptación de color
 	Preserve Transparency	Conservar transparencia
-	New Style…	Nuevo estilo…
 	shortcut	atajo
 	Saved	Guardado
 	Arc	Arco
@@ -2140,10 +2138,24 @@ cameraRaw	Amount	Cantidad
 	Patch:	Parche:
 	Lasso around an area, then drag the selection	Rodee un área con el lazo y arrastre la selección
 	Edit Type	Editar texto
+
+
+	New Style…	Nuevo estilo…
+	Style {name} saved	Estilo {name} guardado
+
+	Create new style (from the selected type)	Crear estilo nuevo (del texto seleccionado)
+	Create new style from the selected layer	Crear estilo nuevo de la capa seleccionada
+
+	Make Default	Predeterminar
+	Reset to Default	Restablecer predeterminado
+	Full-resolution preview unavailable	Vista previa a resolución completa no disponible
 	No patterns	Sin motivos
 	Enable {name}	Activar {name}
 	Hold Alt while drawing for straight segments	Mantenga Alt al dibujar para segmentos rectos
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Arrastre o haga clic en los puntos del polígono · mantenga Alt durante el lazo para segmentos rectos · {add} añadir · {sub} antes de dibujar resta
+	Extend	Extender
+	Structure:	Estructura:
+	Content-Aware Move Tool	Herramienta Mover según el contenido
 	TIFF Options	Opciones de TIFF
 	Including layers will increase file size.	Incluir las capas aumentará el tamaño del archivo.
 	Discard Layers and Save a Copy	Descartar capas y guardar una copia

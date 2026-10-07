@@ -41,6 +41,10 @@ pub struct CameraRawDialog {
     pub(crate) pw: usize,
     pub(crate) ph: usize,
     full_w: usize,
+    full_h: usize,
+    preview_ppp: f32,
+    pub(crate) detail: super::camera_raw_detail_ui::DetailPreview,
+    pub(crate) viewport: Option<ERect>,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
     before_tex: Option<TextureHandle>,
@@ -59,7 +63,7 @@ pub struct CameraRawDialog {
 }
 
 impl CameraRawDialog {
-    pub fn describe(&self, view: &crate::state::CameraRawScopeState) -> Value {
+    pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
             "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
@@ -70,6 +74,13 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter => None,
         });
+        result["view"] = json!(navigation);
+        result["sourceSize"] = json!([self.full_w, self.full_h]);
+        result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
+        result["detailPending"] = json!(self.detail.pending());
+        result["detailError"] = json!(self.detail.error);
+        result["viewportRect"] = json!(self.viewport.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
+        result["zoom"] = json!(self.viewport.map(|r| navigation.scale(r, vec2(self.full_w as f32, self.full_h as f32) / self.preview_ppp)));
         result["scope"] = serde_json::to_value(view).unwrap_or(Value::Null);
         result["hasScopeSelection"] = json!(self.selection.is_some());
         result["vectorscope"] = json!(
@@ -204,9 +215,18 @@ fn open_pixels(
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    let area = surf.content_bounds().intersect(&canvas);
-    let area = if area.is_empty() { canvas } else { area };
-    let (w, h) = (area.width() as usize, area.height() as usize);
+    // Use the engine filter domain, including pixels outside the canvas: spatial Camera Raw
+    // stages (vignette, grain, local contrast) must agree with the committed result.
+    let area = canvas.union(&surf.content_bounds());
+    let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
+    let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
+    let (Some(w), Some(h)) = (width, height) else {
+        return Err("Camera Raw preview bounds are too large".into());
+    };
+    let (w, h) = (w as usize, h as usize);
+    if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
+        return Err("Camera Raw preview bounds are too large".into());
+    }
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
     let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
     let mut proxy = vec![[0.0f32; 4]; pw * ph];
@@ -250,6 +270,7 @@ fn open_pixels(
     {
         app.ui.camera_raw_scope = view;
     }
+    app.ui.camera_raw_preview = Default::default();
     app.ui.camera_raw_scope.samplers.clear();
     // Keep Camera Raw compact on open; vectorscope is an opt-in context-menu view.
     app.ui.camera_raw_scope.vectorscope = false;
@@ -276,6 +297,20 @@ fn open_pixels(
         pw,
         ph,
         full_w: w,
+        full_h: h,
+        preview_ppp: ctx.pixels_per_point(),
+        detail: super::camera_raw_detail_ui::DetailPreview::new(
+            surf,
+            area,
+            match coverage {
+                Coverage::Selection => {
+                    st.doc.selection.clone().map(super::camera_raw_detail_ui::Coverage::Selection).unwrap_or(super::camera_raw_detail_ui::Coverage::None)
+                }
+                Coverage::Mask(mask) => super::camera_raw_detail_ui::Coverage::Mask(mask),
+                Coverage::None => super::camera_raw_detail_ui::Coverage::None,
+            },
+        ),
+        viewport: None,
         float,
         tex: None,
         before_tex: None,
@@ -300,7 +335,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(Err("Camera Raw params must be an object".into()));
     };
     if fields.is_empty() {
-        return Some(open(app, ctx).map(|_| app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope)).unwrap_or(Value::Null)));
+        return Some(
+            open(app, ctx).map(|_| app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)),
+        );
     }
     if let Some(sf) = params.get("smartFilter") {
         let opened = (|| {
@@ -310,7 +347,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
             let layer = sf.get("layer").and_then(Value::as_u64).ok_or("smartFilter.layer must be a layer id")?;
             let index = sf.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or("smartFilter.index must be a filter index")?;
             open_smart_filter(app, ctx, LayerId(layer), index)?;
-            Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope)).unwrap_or(Value::Null))
+            Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null))
         })();
         return Some(opened);
     }
@@ -320,7 +357,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" => {}
+            "set" | "scope" | "view" => {}
             "before" | "commit" | "cancel" if value.is_boolean() => {}
             "before" | "commit" | "cancel" => return Some(Err(format!("Camera Raw {key} must be a boolean"))),
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -331,6 +368,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     }
     let was_closed = app.camera_raw.is_none();
     let previous_view = app.ui.camera_raw_scope.clone();
+    let previous_navigation = app.ui.camera_raw_preview;
     if was_closed && let Err(e) = open(app, ctx) {
         return Some(Err(e));
     }
@@ -338,6 +376,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     if was_closed && result.as_ref().is_some_and(Result::is_err) {
         app.camera_raw = None;
         app.ui.camera_raw_scope = previous_view;
+        app.ui.camera_raw_preview = previous_navigation;
     }
     result
 }
@@ -375,7 +414,17 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         },
         None => None,
     };
+    let navigation = match ui.get("view") {
+        Some(view) => match super::camera_raw_preview_ui::prepare(app.ui.camera_raw_preview, view) {
+            Ok(next) => Some(next),
+            Err(e) => return Some(Err(e)),
+        },
+        None => None,
+    };
     let d = app.camera_raw.as_mut()?;
+    if let Some(view) = navigation {
+        app.ui.camera_raw_preview = view;
+    }
     if d.params.point_curve != next_params.point_curve {
         d.curve_state = Default::default();
     }
@@ -403,7 +452,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("commit").and_then(Value::as_bool) == Some(true) {
         return Some(commit(app));
     }
-    Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope)).unwrap_or(Value::Null)))
+    Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
 }
 
 fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
@@ -537,17 +586,45 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
         let scope = &mut app.ui.camera_raw_scope;
-        // Preview.
-        let view = ERect::from_min_max(body.min, pos2(body.right() - PANEL_W, body.bottom())).shrink(16.0);
-        painter.rect_filled(view, 0.0, t.canvas);
+        // Clip both pixels and scope overlays before painting the settings dock/footer.
+        let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+        let view = ERect::from_min_max(
+            preview_body.min + vec2(16.0, 16.0),
+            pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
+        );
+        d.viewport = Some(view);
+        d.preview_ppp = ctx.pixels_per_point();
+        let size = vec2(d.full_w as f32, d.full_h as f32) / ctx.pixels_per_point();
+        let navigation = &mut app.ui.camera_raw_preview;
+        let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
+        preview.set_clip_rect(view.intersect(ui.clip_rect()));
+        preview.painter().rect_filled(view, 0.0, t.canvas);
+        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut scope.sampler_tool);
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
         if let Some(tex) = tex {
-            let s = (view.width() / d.pw as f32).min(view.height() / d.ph as f32);
-            let r = ERect::from_center_size(view.center(), vec2(d.pw as f32 * s, d.ph as f32 * s));
-            widgets::checker(&painter, r, 8.0);
-            painter.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // Never tile a checker across the offscreen extent of a highly zoomed image.
+            widgets::checker(preview.painter(), r.intersect(view), 8.0);
+            preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            let detail_needed = r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32;
+            d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed);
+            if d.detail.pending() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
             d.scope.preview_rect = Some(r);
-            super::camera_raw_scope_ui::preview(ui, d, scope, r);
+            super::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+        }
+        if let Some(region) = zoom_box {
+            preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        }
+        let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
+        let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
+        super::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
+        if d.detail.pending() {
+            nav_ui.spinner();
+        }
+        if let Some(error) = &d.detail.error {
+            nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
         }
         // Panels.
         let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
@@ -797,6 +874,20 @@ mod tests {
         menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
         assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"smartFilter": {"layer": layer.0, "index": 7}})).unwrap().is_err());
         assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"smartFilter": {"layer": "x"}})).unwrap().is_err());
+    }
+
+    #[test]
+    fn distant_sparse_pixels_cannot_trigger_an_unbounded_proxy_scan() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":64,"height":48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let mut source = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        source.write_region(Rect::new(30_000, 30_000, 30_001, 30_001), &[0.5, 0.5, 0.5, 1.0]);
+        let result = open_pixels(&mut app, &ctx, layer, source, CameraRaw::default(), Coverage::None, Target::NewFilter);
+        assert!(result.unwrap_err().contains("bounds are too large"));
+        assert!(app.camera_raw.is_none());
     }
 
     #[test]
