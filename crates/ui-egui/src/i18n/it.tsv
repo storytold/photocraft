@@ -2092,7 +2092,7 @@
 	Save Selection	Salva selezione
 	Load Selection	Carica selezione
 
-# Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
+# Command-id override: under Edit > Purge a bare Deshacer reads as an action, not the history.
 @id	edit.purge.undo	Cronologia annullamenti
 # Rendering mode and recovery
 	Rendering Mode	Modalità rendering
