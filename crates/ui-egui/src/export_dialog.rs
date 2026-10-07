@@ -97,7 +97,11 @@ fn s_fmt(f: &Map<String, Value>) -> String {
 }
 
 fn settings(f: &Map<String, Value>) -> ExportSettings {
-    ExportSettings { jpeg_quality: (s_fmt(f) == "jpg").then(|| n(f, "quality", 85.0).clamp(1.0, 100.0) as u8), xmp_all: s(f, "metadata") == "all", ..Default::default() }
+    ExportSettings {
+        jpeg_quality: (s_fmt(f) == "jpg").then(|| n(f, "quality", 85.0).clamp(1.0, 100.0) as u8),
+        xmp_all: s(f, "metadata") == "all",
+        ..Default::default()
+    }
 }
 
 /// Estimated size (bytes) from a ≤512 px proxy encode, scaled by pixel count.
