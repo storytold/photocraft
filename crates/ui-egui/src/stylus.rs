@@ -3,10 +3,11 @@
 //!
 //! Sources, by platform (eframe 0.36.2, egui-winit 0.36.2, winit 0.30.13):
 //!
-//! - **Windows**: winit turns `WM_POINTER` pen and touch input into `WindowEvent::Touch` with a
-//!   normalised force (`POINTER_PEN_INFO::pressure / 1024`); egui-winit forwards it as
-//!   `egui::Event::Touch { force }` alongside the emulated pointer. [`Stylus::update`] reads it.
-//!   winit drops the pen's tilt and rotation, so those stay 0.
+//! - **Windows**: for a pen, the desktop app's window subclass (`photocraft-tablet` › `windows`)
+//!   takes the pen over from winit, synthesizing standard mouse messages and feeding the sample
+//!   here, so a pen's buttons need nothing special in the UI. A pen through winit alone would
+//!   arrive as `egui::Event::Touch { force }` (which [`Stylus::update`] also reads), without
+//!   tilt or rotation.
 //! - **Web**: eframe forwards touch force but not pen pointer events, so the web runner listens
 //!   to `pointerdown`/`pointermove` itself and writes `pressure`, `tiltX`, `tiltY`, `twist` and
 //!   the eraser button of `pointerType == "pen"` events into the [`StylusFeed`].
@@ -61,19 +62,46 @@ impl PenSample {
     }
 }
 
-/// Shared slot a platform backend writes the current pen sample into (`None` = no pen down).
-/// Cloning shares the slot.
+/// Shared slot a platform backend writes the current pen sample into (`None` = no pen down), plus
+/// the last sample set (so a contact that starts and ends between two UI frames still paints its
+/// tap dab at the pressure it touched with) and a pending cancel of the pen contact (Windows
+/// Ink's system gestures). Cloning shares the slot.
 #[derive(Clone, Debug, Default)]
-pub struct StylusFeed(Arc<Mutex<Option<PenSample>>>);
+pub struct StylusFeed(Arc<Mutex<FeedState>>);
+
+#[derive(Debug, Default)]
+struct FeedState {
+    sample: Option<PenSample>,
+    /// The last non-`None` sample ever set, kept until [`StylusFeed::take_seen`].
+    seen: Option<PenSample>,
+    cancel: bool,
+}
 
 impl StylusFeed {
     pub fn set(&self, s: Option<PenSample>) {
-        if let Ok(mut g) = self.0.lock() {
-            *g = s.map(PenSample::sanitized);
+        let mut g = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let s = s.map(PenSample::sanitized);
+        if let Some(p) = s {
+            g.seen = Some(p);
         }
+        g.sample = s;
     }
     pub fn get(&self) -> Option<PenSample> {
-        self.0.lock().ok().and_then(|g| *g)
+        self.0.lock().ok().and_then(|g| g.sample)
+    }
+    /// The last sample set since the previous take, if any (`sample` is left alone).
+    fn take_seen(&self) -> Option<PenSample> {
+        self.0.lock().ok().and_then(|mut g| g.seen.take())
+    }
+    /// The pen monitor's contact was cancelled (Windows Ink's press-and-hold right click): the UI
+    /// must drop the stroke the contact's synthesized mouse messages started.
+    pub fn push_cancel(&self) {
+        let mut g = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.cancel = true;
+    }
+    /// Take the pending cancel, if any.
+    pub fn take_cancel(&self) -> bool {
+        self.0.lock().ok().is_some_and(|mut g| std::mem::take(&mut g.cancel))
     }
 }
 
@@ -92,13 +120,30 @@ pub struct Stylus {
     touch: Option<f32>,
     /// The contact ended this frame: keep its force for this frame's last tool events, clear next frame.
     lifted: bool,
+    /// The feed sample kept through the frame the feed cleared (the pen lifted): the monitor
+    /// clears the feed a frame before the UI consumes the lift's mouse messages, and the stroke's
+    /// last frame must still see the pressure the pen left with (as `lifted` does for touch).
+    lifted_feed: Option<PenSample>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
     pub(crate) stroke: Vec<[f32; 3]>,
+    /// A pen contact was cancelled (Windows Ink press-and-hold): the gesture must not commit a
+    /// stroke. Taken by `take_pen_cancel`.
+    cancel: bool,
 }
 
 impl Default for Stylus {
     fn default() -> Self {
-        Self { feed: StylusFeed::default(), use_pressure: true, end: None, tool_before_eraser: None, touch: None, lifted: false, stroke: Vec::new() }
+        Self {
+            feed: StylusFeed::default(),
+            use_pressure: true,
+            end: None,
+            tool_before_eraser: None,
+            touch: None,
+            lifted: false,
+            lifted_feed: None,
+            stroke: Vec::new(),
+            cancel: false,
+        }
     }
 }
 
@@ -107,6 +152,16 @@ impl Stylus {
     pub fn update(&mut self, events: &[egui::Event]) {
         if std::mem::take(&mut self.lifted) {
             self.touch = None;
+        }
+        // The feed clears before the UI consumes the lift's synthesized mouse messages, so the
+        // frame that ends the stroke keeps the last sample (also for a tap shorter than one
+        // frame); from the next frame on, a mouse paints at full pressure again.
+        self.lifted_feed = None;
+        if self.feed.get().is_none() {
+            self.lifted_feed = self.feed.take_seen();
+        }
+        if self.feed.take_cancel() {
+            self.cancel = true;
         }
         for e in events {
             if let egui::Event::Touch { phase, force, .. } = e {
@@ -128,7 +183,7 @@ impl Stylus {
         if !self.use_pressure {
             return None;
         }
-        self.feed.get().or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
+        self.feed.get().or(self.lifted_feed).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
     }
 
     /// Did the pen just flip to its eraser end (`Some(true)`) or back to its tip (`Some(false)`)?
@@ -167,6 +222,12 @@ impl Stylus {
     /// Pressure for the next tool event (1 for a mouse).
     pub fn pressure(&self) -> f32 {
         self.sample().map_or(1.0, |s| s.pressure)
+    }
+
+    /// The pen monitor cancelled the pen contact (Windows Ink's press-and-hold right click);
+    /// taken once, so the canvas suppresses exactly the events that contact produced.
+    pub fn take_pen_cancel(&mut self) -> bool {
+        std::mem::take(&mut self.cancel)
     }
 
     /// Start recording a drag's tilt/rotation.
@@ -244,6 +305,55 @@ mod tests {
         assert_eq!(s.pressure(), 0.3);
     }
 
+    /// The monitor clears the feed the moment the lift frame arrives, but the synthesized mouse
+    /// release is only consumed by the UI a frame later: that frame must still see the pressure
+    /// the pen left with — otherwise the stroke's tail jumps to full pressure (the Windows pen
+    /// subclass posts its mouse messages, so its feed always runs one step ahead of them).
+    #[test]
+    fn a_cleared_feed_keeps_the_last_sample_for_one_frame() {
+        let mut s = Stylus::default();
+        s.update(&[]);
+        s.feed.set(Some(PenSample { pressure: 0.25, ..Default::default() }));
+        s.update(&[]);
+        assert_eq!(s.pressure(), 0.25);
+        // The lift: the feed cleared before this frame's update, the release is processed now.
+        s.feed.set(None);
+        s.update(&[]);
+        assert_eq!(s.pressure(), 0.25, "the lift frame keeps the pen's last pressure");
+        assert_eq!(s.sample().map(|p| p.eraser), Some(false));
+        s.update(&[]);
+        assert_eq!(s.pressure(), 1.0, "from the next frame on, a mouse is a mouse");
+        // A new contact replaces the kept sample instead of extending the keep.
+        s.feed.set(Some(PenSample { pressure: 0.6, ..Default::default() }));
+        s.update(&[]);
+        s.feed.set(None);
+        s.update(&[]);
+        assert_eq!(s.pressure(), 0.6);
+        assert_eq!(s.sample().map(|p| p.pressure), Some(0.6));
+        s.update(&[]);
+        assert_eq!(s.pressure(), 1.0);
+    }
+
+    /// A contact that starts and ends between two updates (a very fast pen tap: the feed is
+    /// already `None` at the frame that processes the tap's click) still keeps its sample, so
+    /// the tap dab paints at the pressure it touched with — not at full strength.
+    #[test]
+    fn a_contact_never_seen_at_an_update_still_keeps_its_sample() {
+        let mut s = Stylus::default();
+        s.update(&[]);
+        s.feed.set(Some(PenSample { pressure: 0.4, ..Default::default() }));
+        s.feed.set(None);
+        s.update(&[]);
+        assert_eq!(s.pressure(), 0.4, "the tap's own pressure, not full strength");
+        s.update(&[]);
+        assert_eq!(s.pressure(), 1.0, "and only for that one frame");
+        // The keep survives sanitization: the tap's out-of-range tilt is clamped like any sample.
+        s.feed.set(Some(PenSample { pressure: 0.7, tilt_x: 120.0, ..Default::default() }));
+        s.feed.set(None);
+        s.update(&[]);
+        assert_eq!(s.sample(), Some(PenSample { pressure: 0.7, tilt_x: 90.0, tilt_y: 0.0, rotation: 0.0, eraser: false }));
+    }
+
     #[test]
     fn pen_samples_reach_the_brush_stroke() {
         use crate::canvas::{ToolEvent, tool_event};
@@ -295,6 +405,16 @@ mod tests {
         assert_eq!((s.sample(), s.pressure()), (None, 1.0));
         s.begin_stroke();
         assert_eq!(s.stroke_points(&[[1.0, 2.0, 1.0]]), vec![vec![1.0, 2.0, 1.0]], "no tilt either");
+    }
+
+    #[test]
+    fn a_pen_cancel_is_taken_once_through_update() {
+        let mut s = Stylus::default();
+        s.feed.push_cancel();
+        assert!(!s.take_pen_cancel(), "update() latches it, not the take");
+        s.update(&[]);
+        assert!(s.take_pen_cancel(), "the canvas sees it that frame");
+        assert!(!s.take_pen_cancel(), "and only once");
     }
 
     #[test]

@@ -3432,6 +3432,7 @@ dependencies = [
  "photocraft-raster",
  "photocraft-tablet",
  "photocraft-ui-egui",
+ "raw-window-handle",
  "rfd",
  "ron",
  "serde_json",
@@ -3714,6 +3715,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "windows",
  "x11rb",
 ]
 

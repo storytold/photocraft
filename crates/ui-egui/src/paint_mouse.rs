@@ -1,8 +1,11 @@
 //! Mouse buttons on the canvas. Tools follow the left button. The right button never paints with
-//! the tool: with a painting tool it opens the Brush Preset picker at the pointer (Photoshop), or,
-//! with Preferences › Tools › Right-click with painting tools set to Erase, a right drag with the
-//! Brush erases with the current brush (Krita, Paint). Each right stroke is one `paint.stroke`
-//! with `"erase": true`, so one undo step, with the pen pressure and tilt of a normal stroke.
+//! the tool: with a painting tool its press opens the Brush Preset picker at the pointer
+//! (Photoshop), or, with Preferences › Tools › Right-click with painting tools set to Erase, a
+//! right drag with the Brush erases with the current brush (Krita, Paint). Each right stroke is
+//! one `paint.stroke` with `"erase": true`, so one undo step, with the pen pressure and tilt of a
+//! normal stroke. A tablet pen needs nothing special here: the Windows pen monitor
+//! (`photocraft-tablet` › `windows`) synthesizes the pen's mouse messages with a real right
+//! button, so its barrel click and drag arrive through the routes above.
 
 use egui::{PointerButton, Response};
 use photocraft_engine::prefs::RightClickPaint;
@@ -62,7 +65,25 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
 /// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
-    let (mods, right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    let (mods, right_down, primary_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down(), i.pointer.primary_down()));
+    // Windows Ink's press-and-hold cancels the pen contact whose left-button messages the pen
+    // monitor had already synthesized: drop the gesture they started and let nothing reach the
+    // tool until that button comes back up — the cancel can land a frame before the up. The
+    // gesture's own right click arrives separately, as an ordinary right-button click.
+    let mut cancelled = false;
+    if app.stylus.take_pen_cancel() {
+        app.pen_cancel_gesture = true;
+    }
+    if app.pen_cancel_gesture {
+        if app.drag.take().is_some() {
+            app.trail = None;
+            app.live_stroke = None;
+        }
+        cancelled = true;
+        if !primary_down {
+            app.pen_cancel_gesture = false;
+        }
+    }
     // Alt+right-drag resizes the brush (brush_resize.rs); its events reach `tool_event` like a
     // left drag's, and nothing paints. A resize whose release was missed ends here.
     crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary));
@@ -78,29 +99,40 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && response.drag_started_by(PointerButton::Secondary);
     let right_click = response.secondary_clicked();
-    if right_click
-        && !erase
-        && !layer_menu
+    // Press-to-open: the picker appears the moment the barrel goes down, not on the release. A pen
+    // user holds the barrel while choosing a preset, so waiting for egui's click (a release that
+    // never drifted past the click distance) left the picker closed after every hold or drag. The
+    // gestures that own the right button — Alt resize, ⌘/Ctrl layer menu, Erase — keep it.
+    let resize_gesture = crate::brush_resize::applies(tool) && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods));
+    // A right press over the canvas (a press on the open picker is the picker's, not the canvas's).
+    let right_press = response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary))
+        && response.ctx.input(|i| i.pointer.interact_pos().is_some_and(|p| response.rect.contains(p)));
+    let right_open = right_press && !resize_gesture && !resizing && !layer_menu && !erase;
+    if right_open
         && has_brush_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
         app.ui.brush_picker = Some([p.x, p.y]);
+        // The picker's outside-press close must not consume this same press.
+        app.brush_picker_open_press = true;
     }
     let erase_click = erase && right_click;
     app.secondary_erase = right_start || erase_click;
     let right_drag = right_stroke || resizing;
     Buttons {
-        started: response.drag_started_by(PointerButton::Primary) || right_start || resize_start,
-        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && response.dragged_by(PointerButton::Secondary)),
-        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
-        clicked: response.clicked() || erase_click,
+        started: (!cancelled && response.drag_started_by(PointerButton::Primary)) || right_start || resize_start,
+        dragged: (!cancelled && response.dragged_by(PointerButton::Primary)) || (right_drag && response.dragged_by(PointerButton::Secondary)),
+        stopped: (!cancelled && response.drag_stopped_by(PointerButton::Primary)) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
+        clicked: (!cancelled && response.clicked()) || erase_click,
     }
 }
 
 /// `ui.pointer` with `"button": "secondary"`: true when its events should reach the tool (an
 /// Alt+right-drag brush resize, `brush_resize_armed` for its `Down`; or an erasing right stroke,
 /// `secondary_erase` armed for its `Down`). Otherwise a right-click with a painting tool opens
-/// the Brush Preset picker at screen point `at`, and nothing paints.
+/// the Brush Preset picker at screen point `at`, and nothing paints. Automation's simulated pen
+/// right-clicks come through here, so they already carry the button (`"button": "secondary"`);
+/// a real pen's barrel goes through [`canvas_buttons`] instead.
 pub fn pointer_secondary(app: &mut PhotocraftApp, down: bool, mods: egui::Modifiers, at: [f32; 2]) -> bool {
     let tool = app.ui.tool;
     if crate::brush_resize::applies(tool) && (crate::brush_resize::is_right_gesture(mods) || app.brush_resize.is_some_and(|r| r.secondary)) {
@@ -113,12 +145,14 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, down: bool, mods: egui::Modifi
     }
     if down && has_brush_picker(tool) {
         app.ui.brush_picker = Some(at);
+        // The picker's outside-press close must not consume this same down.
+        app.brush_picker_open_press = true;
     }
     false
 }
 
-/// The Brush Preset picker a right-click opened, at the pointer. It edits the session brush like
-/// the options-bar chip's; a click outside, Escape or Enter closes it.
+/// The Brush Preset picker a right-button press opened, at the pointer. It edits the session brush
+/// like the options-bar chip's; a press outside, Escape or Enter closes it.
 pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some([x, y]) = app.ui.brush_picker else { return };
     if !has_brush_picker(app.ui.tool) || ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
@@ -140,7 +174,10 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         crate::brush_picker::apply(app, ui.ctx(), pick);
     });
-    let outside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
+    // Press-to-open: the press that opened the picker is this frame's, so skip the outside-press
+    // close once — otherwise the picker would close in the frame it opened.
+    let opened_this_press = std::mem::take(&mut app.brush_picker_open_press);
+    let outside = !opened_this_press && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
     if outside {
         app.ui.brush_picker = None;
     }
@@ -231,6 +268,7 @@ mod tests {
         h.event(egui::Event::PointerMoved(c));
         h.run_steps(1);
         press(&mut h, c, PointerButton::Secondary, true);
+        assert_eq!(h.state().ui.brush_picker, Some([c.x, c.y]), "press-to-open: up while the barrel is still held");
         press(&mut h, c, PointerButton::Secondary, false);
         assert_eq!(h.state().ui.brush_picker, Some([c.x, c.y]), "opened at the pointer");
         assert!(strokes(&h).is_empty());
@@ -248,9 +286,11 @@ mod tests {
                 assert!(h.query_by_label(n).is_some(), "{n} listed");
             }
         }
-        // A right drag doesn't paint either.
-        drag(&mut h, PointerButton::Secondary);
+        // A right drag doesn't paint either — and press-to-open means the held-and-dragged barrel
+        // has the picker up the whole time, not just when the release counts as a click.
+        let (a, _) = drag(&mut h, PointerButton::Secondary);
         assert!(strokes(&h).is_empty(), "right-drag never paints with the brush picker preference");
+        assert_eq!(h.state().ui.brush_picker, Some([a.x, a.y]), "the dragged press opened the picker at its start point");
         assert_eq!(h.state().session.active().unwrap().history.past_len(), undo, "no edit");
         // Escape closes it.
         h.state_mut().ui.brush_picker = Some([c.x, c.y]);
@@ -271,6 +311,41 @@ mod tests {
         press(&mut h, far, PointerButton::Primary, true);
         press(&mut h, far, PointerButton::Primary, false);
         assert_eq!(h.state().ui.brush_picker, None);
+    }
+
+    /// Windows Ink press-and-hold: the tip contact goes down as a plain left drag/tap first, and
+    /// the pen monitor reports the system's cancel (`photocraft-tablet` › `Signal::Cancel`, fed
+    /// through `StylusFeed::push_cancel`) when the hold gesture fires. Nothing may reach the tool,
+    /// and the next real stroke must still work.
+    #[test]
+    fn press_and_hold_cancels_the_gesture_its_contact_started() {
+        let mut h = harness(None);
+        let undo = h.state().session.active().unwrap().history.past_len();
+        let c = h.state().last_canvas_rect.center();
+        // A drag under way when the hold fires.
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(1);
+        press(&mut h, c, PointerButton::Primary, true);
+        h.event(egui::Event::PointerMoved(c + vec2(60.0, 0.0)));
+        h.run_steps(1);
+        h.state_mut().stylus.feed.push_cancel();
+        h.run_steps(1);
+        press(&mut h, c + vec2(60.0, 0.0), PointerButton::Primary, false);
+        h.run_steps(2);
+        assert!(strokes(&h).is_empty(), "the cancelled contact never paints");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), undo, "no edit");
+        assert_eq!(h.state().ui.brush_picker, None);
+        // The tap variant: the cancel lands between down and up, so no dot either.
+        h.state_mut().stylus.feed.push_cancel();
+        press(&mut h, c, PointerButton::Primary, true);
+        press(&mut h, c, PointerButton::Primary, false);
+        h.run_steps(2);
+        assert!(strokes(&h).is_empty() && h.state().ui.brush_picker.is_none(), "the cancelled tap paints nothing");
+        // And the pen still paints afterwards.
+        press(&mut h, c, PointerButton::Primary, true);
+        press(&mut h, c, PointerButton::Primary, false);
+        h.run_steps(2);
+        assert_eq!(strokes(&h).len(), 1, "the next stroke is unaffected");
     }
 
     #[test]

@@ -3,11 +3,14 @@ name = "photocraft-tablet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit) and Linux X11 (XInput2)"
+description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit), Windows (WM_POINTER) and Linux X11 (XInput2)"
 
 # The one isolated `unsafe` helper crate (craftrules never-crash, AGENTS.md): the AppKit event
-# monitor needs Objective-C interop. Only `src/macos.rs` allows `unsafe`; everything else is
-# denied, and every other crate keeps the workspace's `unsafe_code = "forbid"`.
+# monitor needs Objective-C interop and the Windows pen monitors subclass the window to take the
+# `WM_POINTER` pen frames over from winit (or read the driver's Wintab packets). Only
+# `src/macos.rs`, `src/windows.rs` and `src/wintab.rs` allow `unsafe`; everything else is denied,
+# and every other crate keeps the workspace's `unsafe_code = "forbid"`.
+
 [lints.rust]
 unsafe_code = "deny"
 
@@ -26,6 +29,19 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 # Pure-Rust X11 client (no unsafe in the RustConnection path we use).
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "=0.13.2", default-features = false, features = ["xinput"] }
+
+# The window subclass, the POINTER_* calls and the synthesized mouse messages (already in
+# Cargo.lock via eframe/wgpu; pinned exactly like the other platform deps: review the diff before
+# bumping).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.62.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # Tests build real tablet NSEvents (from CGEvents) and read them through the monitor's path.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

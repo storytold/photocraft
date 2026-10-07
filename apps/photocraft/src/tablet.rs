@@ -1,10 +1,13 @@
-//! Pen tablet pressure, tilt, rotation and eraser end on macOS and Linux X11 (issue #79).
+//! Pen tablet pressure, tilt, rotation and eraser end on macOS, Windows and Linux X11 (issue #79).
 //!
-//! winit 0.30 drops tablet data on both, so `photocraft-tablet` reads it beside winit (an AppKit
-//! local event monitor; XInput2 raw events on a second X connection) and this module writes each
-//! sample into the UI's [`StylusFeed`], where the canvas reads it exactly like the web runner's
-//! Pointer Events and automation's simulated pen. Windows needs nothing here: winit forwards
-//! `WM_POINTER` pressure as touch force. Wayland has no tablet input yet (see the crate docs).
+//! winit 0.30 drops tablet data on all three, so `photocraft-tablet` reads it beside winit (an
+//! AppKit local event monitor; a `WM_POINTER` window subclass; XInput2 raw events on a second X
+//! connection) and this module writes each sample into the UI's [`StylusFeed`], where the canvas
+//! reads it exactly like the web runner's Pointer Events and automation's simulated pen. On
+//! Windows the subclass also takes the pen's mouse path over from winit (which turns the pen into
+//! an emulated touch): it synthesizes the pen's mouse messages, so a barrel click is a real right
+//! click and a press-and-hold releases cleanly, and passes the system's cancel on through the
+//! feed. Wayland has no tablet input yet (see the crate docs).
 
 use photocraft_tablet::Sample;
 use photocraft_ui_egui::stylus::{PenSample, StylusFeed};
@@ -24,6 +27,52 @@ pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
 #[cfg(target_os = "macos")]
 pub fn install_macos(feed: &StylusFeed) -> Option<photocraft_tablet::macos::Monitor> {
     photocraft_tablet::macos::Monitor::install(sink(feed.clone())).map_err(|e| log::warn!("{e}")).ok()
+}
+
+/// The Windows pen monitor in whichever flavour the Wacom driver's "Use Windows Ink" checkbox
+/// picked (`photocraft_tablet::wacom`). The variants are never read: `main` forgets the monitor
+/// wholesale (it must outlive the window, and the process is its end) — the enum only chooses
+/// which monitor is kept.
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+pub enum WindowsMonitor {
+    /// Windows Ink: the `WM_POINTER` subclass synthesizes the pen's mouse messages and applies
+    /// the driver's Tip Feel curve itself (`photocraft_tablet::windows`).
+    Ink(photocraft_tablet::windows::Monitor),
+    /// Wintab: the driver synthesizes the mouse and applies its own feel; this monitor only
+    /// reads packets (`photocraft_tablet::wintab`).
+    Wintab(photocraft_tablet::wintab::Monitor),
+}
+
+/// Subclass the window for pen frames (window thread, once eframe created it). Keep the result
+/// until the window is gone: dropping it removes the subclass. On, the subclass takes the pen's
+/// mouse path over from winit (which turns the pen into an emulated touch); off, the driver does
+/// the mouse itself and the Wintab monitor only carries the sample. Either way this callback
+/// carries the stylus sample (and the system's cancel on the Ink path). On failure this logs why:
+/// a pen then paints as an emulated touch.
+#[cfg(target_os = "windows")]
+pub fn install_windows(feed: &StylusFeed, hwnd: *mut std::ffi::c_void) -> Option<WindowsMonitor> {
+    use photocraft_tablet::Signal;
+    let sample_feed = feed.clone();
+    let signals = feed.clone();
+    let on_signal = move |s| match s {
+        Signal::Sample(s) => sink(sample_feed.clone())(s),
+        // Windows Ink's press-and-hold cancelled the pen contact: clear the sample (the contact
+        // is gone) and let the UI drop the gesture its synthesized mouse messages had started.
+        Signal::Cancel => {
+            sample_feed.set(None);
+            signals.push_cancel();
+        }
+    };
+    // The scope matching this executable, else "All"; an absent file or flag reads as the
+    // Windows Ink default.
+    let use_ink = photocraft_tablet::wacom::load(None).is_none_or(|f| f.use_ink);
+    let installed = if use_ink {
+        photocraft_tablet::windows::Monitor::install(hwnd, on_signal).map(WindowsMonitor::Ink)
+    } else {
+        photocraft_tablet::wintab::Monitor::install(hwnd, on_signal).map(WindowsMonitor::Wintab)
+    };
+    installed.map_err(|e| log::warn!("{e}")).ok()
 }
 
 /// Start the XInput2 reader when eframe runs on X11. On Wayland, `$DISPLAY` is Xwayland, which

@@ -29,8 +29,8 @@ mod gpu_startup;
 mod linux_libs;
 mod monitor_profile;
 mod services;
-// Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+// Handles pen input beside winit on macOS, Windows and Linux; the web runner has its own listener.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 mod tablet;
 mod ui_state;
 
@@ -288,6 +288,22 @@ fn main() -> eframe::Result {
             app.stylus.feed = stylus_feed;
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
+            // winit turns a pen into an emulated touch on Windows, dropping its buttons and its
+            // cancel: subclass the window so the pen monitor synthesizes the pen's mouse messages
+            // itself (a barrel click is a real right click, a press-and-hold releases cleanly)
+            // beside feeding the sample. The monitor must outlive the window; this closure runs
+            // once, so forget it (it dies with the process, like the macOS monitor).
+            #[cfg(target_os = "windows")]
+            {
+                use raw_window_handle::HasWindowHandle as _;
+                if let Ok(handle) = cc.window_handle()
+                    && let raw_window_handle::RawWindowHandle::Win32(w) = handle.as_raw()
+                {
+                    std::mem::forget(tablet::install_windows(&app.stylus.feed, w.hwnd.get() as *mut std::ffi::c_void));
+                } else {
+                    log::warn!("pen monitor: no Win32 window handle; the pen paints as an emulated touch (no right click)");
+                }
+            }
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             // Portable marker found but its data folder isn't writable (#228): say where settings went.

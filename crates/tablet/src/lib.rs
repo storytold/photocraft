@@ -5,8 +5,18 @@
 //!   each `NSEvent` (`pressure`, `tilt`, `rotation`, `subtype`, and `pointingDeviceType` from
 //!   proximity events) before winit sees the event, so every pointer event the UI handles already
 //!   has its pen sample. AppKit's block-based monitor API needs Objective-C interop, so
-//!   `macos.rs` is the only module in the workspace that allows `unsafe` (craftrules
-//!   never-crash: an isolated, tested helper crate).
+//!   `macos.rs` allows the workspace's `unsafe` (craftrules never-crash: an isolated, tested
+//!   helper crate; `windows.rs` does the same for the Win32 subclass).
+//! - **Windows** ([`windows::Monitor`]): a window subclass takes the pen over from winit. winit
+//!   0.30 turns `WM_POINTER` into `WindowEvent::Touch` and lets egui emulate the mouse from it,
+//!   dropping the frame's buttons and its cancel flag: a barrel/right click painted as a left
+//!   tap, and a press-and-hold left the emulated button down for good. The subclass swallows the
+//!   pen's frames and synthesizes the standard mouse messages instead (hover, tip drag, a real
+//!   right click for the barrel and for Windows Ink's right-click gestures), which winit and
+//!   egui handle natively; the pressure, tilt, rotation and eraser end come through the callback.
+//!   Finger touches pass through to winit unchanged. When Wacom's per-application "Use Windows
+//!   Ink" checkbox is off ([`wacom`]), the driver synthesizes the mouse itself and serves the pen
+//!   through Wintab instead, which [`wintab::Monitor`] reads.
 //! - **Linux X11** ([`x11::spawn`]): a second, pure-Rust X connection (x11rb) selects XInput2
 //!   raw events on the root window and maps the tablet device's valuators ("Abs Pressure",
 //!   "Abs Tilt X/Y", "Abs Rotary Z") to samples. Raw events reach every client that asks, also
@@ -16,8 +26,9 @@
 //!   `unsafe` foreign-display interop, and binding it makes compositors stop emulating the
 //!   pointer for the pen, so pen motion would have to be re-injected into egui as well.
 //!
-//! The platform glue only reads raw values and hands them to the pure mapping in [`appkit`] and
-//! [`xi`], which normalise, clamp and track pen state and are tested on every platform.
+//! The platform glue only reads raw values and hands them to the pure mapping in [`appkit`],
+//! [`pointer`] and [`xi`], which normalise, clamp and track pen state and are tested on every
+//! platform.
 //!
 //! A sample is reported through a callback: `Some(sample)` while a pen is in use (hovering or
 //! touching), `None` when the pointer is a mouse again.
@@ -25,10 +36,17 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod appkit;
+pub mod pointer;
 pub mod xi;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod wacom;
+#[cfg(target_os = "windows")]
+pub mod windows;
+#[cfg(target_os = "windows")]
+pub mod wintab;
 #[cfg(target_os = "linux")]
 pub mod x11;
 
@@ -77,6 +95,16 @@ pub enum Update {
     Set(Option<Sample>),
 }
 
+/// What a platform pen monitor reports to the UI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Signal {
+    /// The current pen sample (`None` = the contact ended or a mouse is in use).
+    Sample(Option<Sample>),
+    /// The system cancelled the pen contact (Windows Ink press-and-hold): the mouse messages the
+    /// monitor already synthesized for it must not commit a stroke.
+    Cancel,
+}
+
 /// Why tablet input could not be started.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -104,6 +132,16 @@ impl std::error::Error for Error {}
 /// through an Objective-C block or a detached thread would abort or silently stop input).
 pub fn deliver(callback: &dyn Fn(Option<Sample>), sample: Option<Sample>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(sample.map(Sample::sanitized))));
+}
+
+/// [`deliver`] for the Windows monitors' [`Signal`] callbacks.
+#[cfg(target_os = "windows")]
+pub(crate) fn deliver_signal(callback: &dyn Fn(Signal), signal: Signal) {
+    let signal = match signal {
+        Signal::Sample(Some(s)) => Signal::Sample(Some(s.sanitized())),
+        s => s,
+    };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(signal)));
 }
 
 #[cfg(test)]

@@ -22,7 +22,8 @@ photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
-# Pen tablet pressure/tilt on macOS and X11 (the workspace's one isolated unsafe helper crate).
+# Pen tablet pressure/tilt and pen buttons on macOS, Windows and X11 (the workspace's one
+# isolated unsafe helper crate).
 photocraft-tablet = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence"] }
 egui = { workspace = true }
@@ -35,6 +36,11 @@ arboard = { version = "3.6", features = ["wayland-data-control"] }
 open = "5"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
 ron = "0.12"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The pen monitor subclasses the eframe window: read the window's HWND from the creation context
+# through its raw handle. Already in Cargo.lock (eframe/winit pull it in); pinned exactly.
+raw-window-handle = "=0.6.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events; this small audited crate
