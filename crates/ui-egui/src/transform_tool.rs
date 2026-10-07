@@ -1013,11 +1013,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
                     painter.rect_stroke(r, 0.0, line, egui::StrokeKind::Inside);
                 } else {
                     // Arm to the nearest anchor along the row/column.
-                    let (ai, aj) = if i.is_multiple_of(3) {
-                        (i, if j % 3 == 1 { j - 1 } else { j + 1 })
-                    } else {
-                        (if i % 3 == 1 { i - 1 } else { i + 1 }, j)
-                    };
+                    let (ai, aj) = if i.is_multiple_of(3) { (i, if j % 3 == 1 { j - 1 } else { j + 1 }) } else { (if i % 3 == 1 { i - 1 } else { i + 1 }, j) };
                     painter.line_segment([scr(m.point(ai, aj)), p], line);
                     painter.circle_filled(p, 3.5, Color32::WHITE);
                     painter.circle_stroke(p, 3.5, line);
