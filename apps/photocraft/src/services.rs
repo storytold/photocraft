@@ -199,10 +199,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                     Some(c) => c,
                     None => slot.insert(arboard::Clipboard::new().ok()?),
                 };
-                if let Ok(img) = cb.get_image() {
-                    return Some((img.width as u32, img.height as u32, img.bytes.into_owned()));
+                // Copied files first: Finder also puts the file's icon on the clipboard as an
+                // image, which would otherwise paste instead of the file.
+                if let Some(img) = cb.get().file_list().ok().and_then(|paths| image_from_files(&paths)) {
+                    return Some(img);
                 }
-                image_from_files(&cb.get().file_list().ok()?)
+                let img = cb.get_image().ok()?;
+                Some((img.width as u32, img.height as u32, img.bytes.into_owned()))
             })
         }),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
