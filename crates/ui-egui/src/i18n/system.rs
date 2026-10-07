@@ -92,6 +92,7 @@ mod tests {
             (vec!["sv-SE", "ar-SA"], "en"),
             (vec!["de-AT", "en-US"], "de"),
             (vec!["pt-PT"], "pt-br"),
+            (vec!["it-IT"], "it-IT"),
             (vec![], "en"),
         ] {
             with_system_tags(&tags, || assert_eq!(system_lang().code(), expected));
