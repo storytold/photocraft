@@ -38,7 +38,7 @@
 	Save	Speichern
 	Save As…	Speichern unter…
 	Save a Copy…	Kopie speichern…
-	Revert	Wiederherstellen
+	Revert	Zurücksetzen
 	Export	Exportieren
 	Quick Export as PNG	Schnellexport als PNG
 	Export As…	Exportieren als…
@@ -83,7 +83,7 @@
 	Undo	Rückgängig
 	Redo	Wiederholen
 	Toggle Last State	Letzten Status umschalten
-	Fade…	Abblenden…
+	Fade…	Verblassen…
 	Cut	Ausschneiden
 	Copy	Kopieren
 	Copy Merged	Zusammengefügt kopieren
@@ -211,7 +211,7 @@
 	Match Color…	Farbabgleich…
 	Replace Color…	Farbe ersetzen…
 	Equalize	Angleichen
-	Auto Tone	Automatischer Farbton
+	Auto Tone	Automatische Tonwertkorrektur
 	Auto Contrast	Automatischer Kontrast
 	Auto Color	Automatische Farbe
 	Image Size…	Bildgröße…
@@ -567,8 +567,8 @@
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Farbenblindheit — Protanopie-Typ
 	Color Blindness — Deuteranopia-type	Farbenblindheit — Deuteranopie-Typ
-	Zoom In	Einzoomen
-	Zoom Out	Auszoomen
+	Zoom In	Vergrößern
+	Zoom Out	Verkleinern
 	Fit on Screen	Auf den Bildschirm einpassen
 	Fit Layer(s) on Screen	Ebenen auf den Bildschirm einpassen
 	Fit Artboard on Screen	Zeichenbereich auf den Bildschirm einpassen
@@ -818,7 +818,7 @@
 	Change All	Alle ändern
 	Change Screen Mode  (F)	Bildschirmmodus wechseln  (F)
 	Change To:	Ändern in:
-	Channel Mixer	Kanalmischer
+	Channel Mixer	Kanalmixer
 	Channel:	Kanal:
 	Check All Layers	Alle Ebenen prüfen
 	Check Spelling	Rechtschreibung prüfen
@@ -1025,7 +1025,7 @@
 	Frame from Layers…	Frame aus Ebenen…
 	Free	Frei
 	Full Spherical	Vollständig sphärisch
-	Fuzziness:	Unschärfe:
+	Fuzziness:	Toleranz:
 	GPU	GPU
 	Gamma Correction	Gammakorrektur
 	Gamma:	Gamma:
@@ -1207,7 +1207,7 @@
 	Percent	Prozent
 	Perceptual	Wahrnehmung
 	Perspective Warp is not active	Perspektivische Verkrümmung ist nicht aktiv
-	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Perspektivische Verkrümmung: zeichne Ebenen entlang der Bildperspektive, wechsle dann zu Verkrümmen
+	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Perspektivische Verkrümmung: zeichne Flächen entlang der Bildperspektive, wechsle dann zu Verkrümmen
 	Photo Filter	Foto-Filter
 	PhotoCraft	PhotoCraft
 	PhotoCraft Manages Colors	PhotoCraft verwaltet die Farben
@@ -1272,7 +1272,7 @@
 	Remove	Entfernen
 	Remove All Pins	Alle Pins entfernen
 	Remove Background	Hintergrund entfernen
-	Remove Planes	Ebenen entfernen
+	Remove Planes	Flächen entfernen
 	Remove stop	Stopp entfernen
 	Remove variable	Variable entfernen
 	Rename	Umbenennen
@@ -1520,7 +1520,7 @@
 	ExtraBold	Extrafett
 	ExtraLight	Extraleicht
 	Eyedropper Tool	Pipetten-Werkzeug
-	Fade	Abblenden
+	Fade	Verblassen
 	Fill Opacity	Füll-Deckkraft
 	Film & Video	Film & Video
 	From	Von
@@ -1551,7 +1551,7 @@
 	Lasso Tool	Lasso-Werkzeug
 	Layer Count	Ebenenzahl
 	Layer Knocks Out Drop Shadow	Ebene stanzt den Schlagschatten aus
-	Legal	Rechtliches
+	Legal	Legal
 	Letter	Letter
 	Light	Light
 	Line Tool	Linien-Werkzeug
@@ -1561,7 +1561,7 @@
 	Link with Layer	Mit Ebene verknüpfen
 	Lorem Ipsum	Lorem Ipsum
 	Magentas	Magentatöne
-	Magic Eraser Tool	Magischer Radiergummi-Werkzeug
+	Magic Eraser Tool	Magischer-Radiergummi-Werkzeug
 	Magic Wand Tool	Zauberstab-Werkzeug
 	Marquee	Auswahlrahmen
 	Mean:	Mittelwert:
@@ -1694,7 +1694,7 @@
 	Always	Immer
 	Always create smart objects when placing	Beim Platzieren immer Smart-Objekte erstellen
 	Animated zoom	Animierter Zoom
-	Apply auto tone	Automatischen Farbton anwenden
+	Apply auto tone	Automatische Tonwertkorrektur anwenden
 	Ask	Nachfragen
 	Ask before saving layered tiff	Vor dem Speichern von mehrschichtigen TIFFs nachfragen
 	Auto collapse icon panels	Symbol-Bedienfelder automatisch einklappen
@@ -1867,7 +1867,7 @@
 	Linear Light	Lineares Licht
 	Pin Light	Lichtpunkt
 	Exclusion	Ausschluss
-	Divide	Unterteilen
+	Divide	Dividieren
 	Luminosity	Luminanz
 @plural	{n} sample|{n} samples	{n} Probe|{n} Proben
 	{added}, {removed} subtracted	{added}, {removed} abgezogen
@@ -1887,7 +1887,7 @@
 	Expand	Ausklappen
 	Expand Panel Group	Bedienfeldgruppe ausklappen
 	Expand group  ({key}-click: all groups)	Gruppe ausklappen  ({key}-Klick: alle Gruppen)
-	Fade steps	Abblendschritte
+	Fade steps	Verblassen-Schritte
 	Hide the layer's effects  ({key}-click: all layers)	Effekte der Ebene ausblenden  ({key}-Klick: alle Ebenen)
 	Import Brushes… (.abr)	Pinsel importieren… (.abr)
 	Move Group Down	Gruppe nach unten
@@ -1995,7 +1995,7 @@
 	Conté Crayon	Conté-Kreide
 	Graphic Pen	Grafikstift
 	Halftone Pattern	Halbtonmuster
-	Note Paper	Notenpapier
+	Note Paper	Notizpapier
 	Photocopy	Fotokopie
 	Plaster	Gips
 	Reticulation	Netzbildung
@@ -2085,7 +2085,7 @@
 	GPU Backend	GPU-Backend
 	Details	Details
 	Rendering mode	Rendering-Modus
-	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Friert-Lasso: ziehen friert einen Bereich ein, Alt-Ziehen taut ihn auf (L)
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Einfrier-Lasso: ziehen friert einen Bereich ein, Alt-Ziehen taut ihn auf (L)
 	3 x 3	3 x 3
 	4 x 4	4 x 4
 	5 x 5	5 x 5
@@ -2101,10 +2101,10 @@
 	Show Selected Region	Ausgewählten Bereich anzeigen
 	Show Skin Tone Indicator	Hautton-Indikator anzeigen
 	Show Vectorscope	Vektorskop anzeigen
-	Tone Histogram	Tonworthistogramm
-	75%	75%
-	125%	125%
-	150%	150%
-	175%	175%
-	250%	250%
-	300%	300%
+	Tone Histogram	Tonwerthistogramm
+	75%	75 %
+	125%	125 %
+	150%	150 %
+	175%	175 %
+	250%	250 %
+	300%	300 %
