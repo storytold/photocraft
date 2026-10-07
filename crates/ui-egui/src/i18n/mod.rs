@@ -552,6 +552,8 @@ mod tests {
                 }
             }
         }
+    }
+
     /// Camera Raw includes dynamic colour-band labels and contextual labels that the generic
     /// tl! scanner cannot see. Cover the partial catalog too, without claiming whole-app coverage.
     #[test]
