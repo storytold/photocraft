@@ -492,7 +492,7 @@ mod tests {
         let src_rect = Rect::new(-14, -14, 40, 34);
         let mut img = Image::new(src_rect, 4);
         let mut s = 0x6c07_8965u32;
-        for px in img.data.chunks_exact_mut(4) {
+        for px in img.data.as_chunks_mut::<4>().0 {
             for v in px.iter_mut() {
                 s ^= s << 13;
                 s ^= s >> 17;
