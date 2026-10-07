@@ -2023,3 +2023,11 @@ cameraRaw	Color	색상
 
 # Type layer thumbnails (#598)
 	Edit Type	문자 편집
+
+# UI scale steps (#611)
+	75%	75%
+	125%	125%
+	150%	150%
+	175%	175%
+	250%	250%
+	300%	300%
