@@ -1,8 +1,8 @@
 # Italian (it) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
 #
 #   context  empty                a plain UI string; `source` is the English text in the code
-#            @plural              `source` is "one|other" (English forms); the translation lists
-#                                 the language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#            @plural              `source` is `one|other` (English forms); the translation lists
+#                                 the language's forms separated by `|` (see `plural` in i18n/mod.rs)
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
 #
