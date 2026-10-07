@@ -1144,8 +1144,6 @@
 	Midtones	中间调
 	Midtones from:	中间调下限：
 	Midtones to:	中间调上限：
-	Mix	混合
-	Mixer Brush	混合笔刷
 	Mixer Brush Tool	混合画笔工具
 	Minimum Depth	最小深度
 	Minimum Diameter	最小直径
@@ -1677,7 +1675,6 @@
 	Web Minimum	Web 最小尺寸
 	Web Most Common	Web 常用尺寸
 	WebP (lossless)	WebP（无损）
-	Wet	湿度
 	Wet Edges	湿边
 	Yellows	黄色
 	Zoom Tool	缩放工具
@@ -2052,3 +2049,19 @@ cameraRaw	Blending	混合
 	Opening…	正在打开…
 	Reading…	正在读取…
 	Working…	正在处理…
+
+# Rendering mode and recovery
+	Rendering Mode	渲染模式
+	Automatic (recommended)	自动（推荐）
+	CPU / Compatibility	CPU / 兼容模式
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	自动模式会在可用时使用 GPU 加速，出错时改用 CPU 渲染。
+	Switched to CPU rendering	已切换到 CPU 渲染
+	GPU acceleration could not continue. Your documents are unchanged.	GPU 加速无法继续。您的文档未更改。
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft 正在使用 CPU 合成图像。窗口仍可能使用您的显卡。
+	Retry GPU requires a restart. Save your work first.	重试 GPU 需要重新启动。请先保存您的工作。
+	Keep Using CPU	继续使用 CPU
+	Retry GPU	重试 GPU
+	Advanced	高级
+	GPU Backend	GPU 后端
+	Details	详细信息
+	Rendering mode	渲染模式
