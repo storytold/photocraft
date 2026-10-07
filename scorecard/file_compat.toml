@@ -17,7 +17,7 @@ id = "FILE-215-2"
 target = "Smart Filters survive PSD save and re-open (filterFX descriptor read and written)"
 status = "partial"
 issue = 215
-note = "smart_map.rs: 14 filters mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) are left out of filterFX with a warning"
+note = "smart_map.rs: 14 filters plus a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
 
 [[item]]
 id = "FILE-215-3"
@@ -87,7 +87,7 @@ id = "FILE-215-12"
 target = "Camera Raw dialog shows a histogram; settings persist as a PSD Smart Filter"
 status = "partial"
 issue = 215
-note = "Interactive RGB/Lab scopes, clipping, tone zones, nine probes, vectorscope and floating panel; HDR deferred without test hardware. In-app Smart Filter persists, PSD drops it"
+note = "Interactive RGB/Lab scopes. PSD WB/Light/Presence, curves, HSL, grading, sharpening/noise detail, grain and numeric vignette controls mapped with descriptor preservation. Active manual Optics and unverified vignette style keep the updated ACR 18.4 fixture opaque; PSD/.pcraft saves preserve it. HDR, remaining settings and Photoshop acceptance still open"
 
 [[item]]
 id = "FILE-215-13"

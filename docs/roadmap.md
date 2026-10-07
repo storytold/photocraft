@@ -78,6 +78,16 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 | Platforms | macOS (notarized), Windows, Linux (AppImage/deb/rpm/Flatpak bundle), web | medium-high | Flathub later (#173); Windows signing material pending. |
 | Localisation | 2026-10-07: 10 UI languages; menu, `tl!`, blend mode, preference and brush-section coverage enforced by tests; live switching and scoped Preferences previews | medium | Engine errors/status messages still partly English; CJK web fonts, browser-locale detection, and RTL remain open. |
 
+2026-10-07: Camera Raw PSD mapping covers relative custom white balance, Light/Presence,
+parametric and four point curves, HSL, Color Grading, sharpening/noise detail, grain and numeric
+post-crop vignette controls. Two revisions of one supplied Photoshop ACR 18.4 PSD preserve their
+filter descriptors without edits. The updated revision stays opaque because of active manual
+Optics and unverified vignette style; a descriptor projection verifies its supported controls.
+Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filter stack, mask and
+undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
+acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
+unchanged.
+
 ### Where we're going (priority order)
 
 1. **Ship the fixes:** cut 0.2.1 once the current batch lands, so users validate them.

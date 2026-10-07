@@ -304,6 +304,12 @@ opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / 
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
 
+Imported PSD Camera Raw filters whose processing settings are all mapped or neutral use this
+same editor. `params.__cameraRawPsd` is reserved import/export metadata: preserve it when editing
+stored parameters. Other processing fields or versions remain opaque Photoshop filters. See
+[PSD Smart Filters](camera-raw-histogram.md#psd-smart-filters) for the supported settings and export
+limits.
+
 The response and `ui.inspect.cameraRaw` contain:
 
 - `histogram`: `source` (`before` | `after`), `size`, `approximate`, 256-bin `red` / `green` /
