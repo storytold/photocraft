@@ -101,6 +101,7 @@
 	Free Transform	自由变换
 	Transform	变换
 	Again	再次变换
+	Transform Again on a Copy	复制并再次变换
 	Scale	缩放
 	Rotate	旋转
 	Skew	斜切
