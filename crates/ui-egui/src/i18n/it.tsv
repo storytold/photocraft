@@ -1,4 +1,4 @@
-# Italian (it) - PhotoCraft UI strings.		context	source	translation
+# Italian (it) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
 #
 #   context  empty                a plain UI string; `source` is the English text in the code
 #            @plural              `source` is `one|other` (English forms); the translation lists
