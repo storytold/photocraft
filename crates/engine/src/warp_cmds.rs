@@ -234,9 +234,21 @@ pub enum Split {
     Remove,
 }
 
+/// The default warp draws rule-of-thirds guides on its single patch. Make those real sections
+/// before a split, so the cut divides the grid on screen instead of replacing it.
+fn commit_default_sections(mesh: &mut BezierMesh) {
+    let _ = mesh.split_u(1.0 / 3.0);
+    let _ = mesh.split_u(2.0 / 3.0);
+    let _ = mesh.split_v(1.0 / 3.0);
+    let _ = mesh.split_v(2.0 / 3.0);
+}
+
 /// Applies a split (or removes the split nearest `at`) on `w`'s mesh (presets become custom).
 pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
     let mut mesh = w.to_mesh(1, 1);
+    if !matches!(how, Split::Remove) && w.style == WarpStyle::Custom && mesh.us.len() == 2 && mesh.vs.len() == 2 {
+        commit_default_sections(&mut mesh);
+    }
     let (s, t) = match at {
         Some(p) => mesh.param_at(p),
         None => (0.5, 0.5),
@@ -449,6 +461,32 @@ mod tests {
         s.execute("edit.transform.warp", json!({"mesh": m})).unwrap();
         let b = active_surface(&s).content_bounds();
         assert!(b.x1 >= 69 && b.y1 >= 49, "{b:?}");
+    }
+
+    #[test]
+    fn split_cuts_existing_sections_instead_of_replacing_the_grid() {
+        let b = [0.0, 0.0, 90.0, 60.0];
+        let plain = Warp::custom(BezierMesh::identity(b, 1, 1), b);
+        let cut = split_warp(&plain, Some([b[0] + 0.25 * 90.0, 30.0]), Split::Vertical).unwrap();
+        let m = cut.mesh.unwrap();
+        for u in [0.0, 0.25, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
+            assert!(m.us.iter().any(|k| (k - u).abs() < 1e-6), "default guides stay, cut at 0.25: {:?}", m.us);
+        }
+        assert_eq!(m.vs, vec![0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
+        let grid = BezierMesh::identity(b, 3, 3);
+        let cut = split_warp(&Warp::custom(grid.clone(), b), Some([45.0, 10.0]), Split::Vertical).unwrap();
+        let m = cut.mesh.unwrap();
+        assert_eq!(m.vs, grid.vs);
+        assert_eq!(m.us.len(), grid.us.len() + 1);
+        for u in [0.0, 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0] {
+            assert!(m.us.iter().any(|k| (k - u).abs() < 1e-6), "{:?}", m.us);
+        }
+        let (nx0, nx1) = (grid.nx(), m.nx());
+        for j in 0..grid.ny() {
+            for i in 0..3 {
+                assert_eq!(m.points[j * nx1 + i], grid.points[j * nx0 + i]);
+            }
+        }
     }
 
     #[test]
