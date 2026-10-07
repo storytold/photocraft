@@ -394,6 +394,202 @@ pub fn skin_mask(w: usize, h: usize, ch: usize, img: &[f32]) -> Vec<f32> {
 mod tests {
     use super::*;
 
+    /// The straightforward implementation the per-seam carver replaced (full energy map, fresh
+    /// seam search and a new buffer per seam), kept as the oracle for `carver_matches_reference`.
+    mod reference {
+        use super::super::{PROTECT_ENERGY, resize_bilinear, transpose};
+
+        pub(super) fn energy(w: usize, h: usize, ch: usize, img: &[f32]) -> Vec<f32> {
+            let mut e = vec![0.0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let (xl, xr) = (x.saturating_sub(1), (x + 1).min(w - 1));
+                    let (yu, yd) = (y.saturating_sub(1), (y + 1).min(h - 1));
+                    let at = |xx: usize, yy: usize, c: usize| img[(yy * w + xx) * ch + c];
+                    let mut s = 0.0;
+                    for c in 0..ch {
+                        let v = at(x, y, c);
+                        s += (at(xr, y, c) - v).abs() + (v - at(xl, y, c)).abs();
+                        s += (at(x, yd, c) - v).abs() + (v - at(x, yu, c)).abs();
+                    }
+                    e[y * w + x] = s * 0.5;
+                }
+            }
+            e
+        }
+        pub(super) fn find_seam(w: usize, h: usize, energy: &[f32]) -> Vec<usize> {
+            let mut cost = energy[..w].to_vec();
+            let mut from = vec![0u8; w * h]; // 0 = up-left, 1 = up, 2 = up-right
+            let mut next = vec![0.0f32; w];
+            for y in 1..h {
+                for x in 0..w {
+                    let mut best = (cost[x], 1u8);
+                    if x > 0 && cost[x - 1] < best.0 {
+                        best = (cost[x - 1], 0);
+                    }
+                    if x + 1 < w && cost[x + 1] < best.0 {
+                        best = (cost[x + 1], 2);
+                    }
+                    next[x] = best.0 + energy[y * w + x];
+                    from[y * w + x] = best.1;
+                }
+                std::mem::swap(&mut cost, &mut next);
+            }
+            let mut x = (0..w).min_by(|a, b| cost[*a].total_cmp(&cost[*b])).unwrap_or(0);
+            let mut seam = vec![0usize; h];
+            for y in (0..h).rev() {
+                seam[y] = x;
+                if y > 0 {
+                    x = match from[y * w + x] {
+                        0 => x - 1,
+                        2 => x + 1,
+                        _ => x,
+                    };
+                }
+            }
+            seam
+        }
+        fn remove_seam(w: usize, h: usize, ch: usize, img: &[f32], seam: &[usize]) -> Vec<f32> {
+            let mut out = Vec::with_capacity((w - 1) * h * ch);
+            for (y, &sx) in seam.iter().enumerate().take(h) {
+                let row = &img[y * w * ch..(y + 1) * w * ch];
+                out.extend_from_slice(&row[..sx * ch]);
+                out.extend_from_slice(&row[(sx + 1) * ch..]);
+            }
+            out
+        }
+        pub(super) fn carve_width(w: usize, h: usize, ch: usize, img: &[f32], protect: Option<&[f32]>, new_w: usize) -> Vec<f32> {
+            let new_w = new_w.max(1);
+            if new_w == w || w == 0 || h == 0 {
+                return img.to_vec();
+            }
+            let protect_e = |e: &mut [f32], p: Option<&Vec<f32>>| {
+                if let Some(p) = p {
+                    for (e, p) in e.iter_mut().zip(p) {
+                        *e += p.clamp(0.0, 1.0) * PROTECT_ENERGY;
+                    }
+                }
+            };
+            if new_w < w {
+                let (mut cur, mut cw) = (img.to_vec(), w);
+                let mut prot = protect.map(<[f32]>::to_vec);
+                while cw > new_w {
+                    let mut e = energy(cw, h, ch, &cur);
+                    protect_e(&mut e, prot.as_ref());
+                    let seam = find_seam(cw, h, &e);
+                    cur = remove_seam(cw, h, ch, &cur, &seam);
+                    prot = prot.map(|p| remove_seam(cw, h, 1, &p, &seam));
+                    cw -= 1;
+                }
+                return cur;
+            }
+            // Enlarge in rounds of at most half the current width, each duplicating the k lowest seams.
+            let (mut cur, mut cw) = (img.to_vec(), w);
+            let mut prot = protect.map(<[f32]>::to_vec);
+            while cw < new_w {
+                let k = (new_w - cw).min((cw / 2).max(1));
+                // Find k seams on a shrinking copy, mapping each back to original columns.
+                let mut idx: Vec<Vec<usize>> = (0..h).map(|_| (0..cw).collect()).collect();
+                let (mut tmp, mut tw) = (cur.clone(), cw);
+                let mut tprot = prot.clone();
+                let mut dup: Vec<Vec<usize>> = vec![Vec::with_capacity(k); h];
+                for _ in 0..k {
+                    // A 1 px wide image's only seam is its one column: take it, so it is duplicated.
+                    if tw == 0 {
+                        break;
+                    }
+                    let mut e = energy(tw, h, ch, &tmp);
+                    protect_e(&mut e, tprot.as_ref());
+                    let seam = find_seam(tw, h, &e);
+                    for (y, &sx) in seam.iter().enumerate() {
+                        dup[y].push(idx[y].remove(sx));
+                    }
+                    tmp = remove_seam(tw, h, ch, &tmp, &seam);
+                    tprot = tprot.map(|p| remove_seam(tw, h, 1, &p, &seam));
+                    tw -= 1;
+                }
+                let added = dup[0].len();
+                if added == 0 {
+                    break;
+                }
+                let nw = cw + added;
+                let mut out = Vec::with_capacity(nw * h * ch);
+                let mut nprot = prot.as_ref().map(|_| Vec::with_capacity(nw * h));
+                for (y, d) in dup.iter_mut().enumerate() {
+                    d.sort_unstable();
+                    let row = &cur[y * cw * ch..(y + 1) * cw * ch];
+                    let mut di = 0;
+                    for x in 0..cw {
+                        out.extend_from_slice(&row[x * ch..(x + 1) * ch]);
+                        if let (Some(np), Some(p)) = (nprot.as_mut(), prot.as_ref()) {
+                            np.push(p[y * cw + x]);
+                        }
+                        while di < d.len() && d[di] == x {
+                            let xr = (x + 1).min(cw - 1);
+                            for c in 0..ch {
+                                out.push((row[x * ch + c] + row[xr * ch + c]) * 0.5);
+                            }
+                            if let (Some(np), Some(p)) = (nprot.as_mut(), prot.as_ref()) {
+                                np.push(p[y * cw + x]);
+                            }
+                            di += 1;
+                        }
+                    }
+                }
+                cur = out;
+                prot = nprot;
+                cw = nw;
+            }
+            cur
+        }
+
+        pub(super) fn carve(w: usize, h: usize, ch: usize, img: &[f32], protect: Option<&[f32]>, new_w: usize, new_h: usize) -> Vec<f32> {
+            let (new_w, new_h) = (new_w.max(1), new_h.max(1));
+            let wide = carve_width(w, h, ch, img, protect, new_w);
+            if new_h == h {
+                return wide;
+            }
+            let prot_t = protect.map(|p| transpose(new_w, h, 1, &resize_bilinear(w, h, 1, p, new_w, h)));
+            let t = transpose(new_w, h, ch, &wide);
+            let tall = carve_width(h, new_w, ch, &t, prot_t.as_deref(), new_h);
+            transpose(new_h, new_w, ch, &tall)
+        }
+    }
+
+    /// The carver gives bit-identical output to the reference implementation it replaced, over
+    /// random shapes (including 1 px wide and tall), channel counts, tie-heavy quantised noise,
+    /// protection, shrinking, enlarging past half the width and both axes at once.
+    #[test]
+    fn carver_matches_reference() {
+        let mut seed = 1u32;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as usize % n
+        };
+        for case in 0..400u32 {
+            let (w, h, ch) = (1 + next(24), 1 + next(18), [1, 3, 4][next(3)]);
+            let levels = [2, 5, 255, 65_536][next(4)];
+            let img = noise(w * h * ch, levels, 11 + case);
+            let protect = (next(3) == 0).then(|| noise(w * h, 3, 101 + case));
+            let (nw, nh) = (1 + next(2 * w + 2), 1 + next(2 * h + 2));
+            let got = carve(w, h, ch, &img, protect.as_deref(), nw, nh);
+            let want = reference::carve(w, h, ch, &img, protect.as_deref(), nw, nh);
+            let bits = |v: &[f32]| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&got), bits(&want), "case {case}: {w}x{h}x{ch} -> {nw}x{nh}, levels {levels}, protect {}", protect.is_some());
+        }
+        // The seam search alone, on raw energy maps full of ties.
+        for case in 0..200u32 {
+            let (w, h) = (1 + next(40), 1 + next(30));
+            let e = noise(w * h, [2, 3, 1000][next(3)], 7 + case);
+            assert_eq!(find_seam(w, h, &e), reference::find_seam(w, h, &e), "seam case {case}: {w}x{h}");
+            let img = noise(w * h * 3, 7, 3 + case);
+            let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+            assert_eq!(bits(energy(w, h, 3, &img)), bits(reference::energy(w, h, 3, &img)), "energy case {case}");
+        }
+    }
+
     #[test]
     fn cancelled_carve_stops() {
         let (w, h) = (40, 20);
