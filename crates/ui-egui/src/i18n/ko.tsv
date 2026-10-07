@@ -2111,6 +2111,8 @@ cameraRaw	Color	색상
 	Gloss	광택
 	Metallic	금속성
 	Ambience	주변광
+	Ambient	주변광 비율
+	Warmth	따뜻함
 	White Is High	흰색이 높음
 	Reduce Color Noise	색상 노이즈 감소
 	Sharpen Details	세부 묘사 선명하게
