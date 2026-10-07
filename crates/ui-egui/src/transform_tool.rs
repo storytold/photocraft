@@ -19,8 +19,7 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::TransformSession;
 
-/// Which Split button is armed. The guide follows the pointer and the split is added on release,
-/// the way Photoshop's warp split tools work.
+/// Which Split button is armed. The guide follows the pointer and the split is added on release.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplitTool {
     Cross,
@@ -61,7 +60,7 @@ pub struct TransformPreview {
     /// Document point the split guide is following (a drag, or the hover while placing).
     split_pointer: Option<[f64; 2]>,
     split_placing: bool,
-    /// Option-click places a split without a button armed (Photoshop's quick split).
+    /// Option-click places a split without a button armed.
     split_quick: bool,
 }
 
@@ -648,7 +647,7 @@ fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Mod
     }
 }
 
-/// An anchor or a handle on a section edge. The inner control points of a patch are not shown.
+/// An anchor or a handle on a section line. The inner control points of a patch are not shown.
 fn on_section_edge(i: usize, j: usize) -> bool {
     i.is_multiple_of(3) || j.is_multiple_of(3)
 }
@@ -673,8 +672,8 @@ fn single_patch(mesh: &BezierMesh) -> bool {
     mesh.us.len() == 2 && mesh.vs.len() == 2
 }
 
-/// Option-click picks the split Photoshop would: crosswise in the open, and the perpendicular
-/// split when the pointer is close to an existing grid line.
+/// Option-click picks the split: crosswise in the open, and the perpendicular split when the
+/// pointer is close to an existing grid line.
 fn quick_split_kind(mesh: &BezierMesh, bounds: [f64; 4], p: [f64; 2]) -> SplitTool {
     let (s, t) = mesh.param_at(p);
     let w = (bounds[2] - bounds[0]).abs().max(1.0);
@@ -744,9 +743,9 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
     }
 }
 
-/// Drags a warp control point. Anchors (patch corners) carry their handles along, as in
-/// Photoshop. Preset warps turn into a custom mesh on the first drag. An armed split tool (or
-/// Option) places a split where the pointer is released instead of moving a point.
+/// Drags a warp control point. Anchors (patch corners) carry their handles along. Preset warps
+/// turn into a custom mesh on the first drag. An armed split tool (or Option) places a split
+/// where the pointer is released instead of moving a point.
 fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Modifiers) {
     if split_gesture(app, ev, mods) {
         return;
@@ -787,23 +786,33 @@ fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Mo
     }
 }
 
-/// Applies a split-warp command to the mesh being edited (at the box centre unless `at`).
-pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<(), String> {
+/// Runs a warp-edit command against the mesh in the open Warp session and writes the mesh back.
+pub fn edit_session_warp(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Result<(), String> {
     let Some(w) = app.ui.transform.as_ref().and_then(|t| t.warp.clone()) else { return Err("not warping".into()) };
-    let mut p = json!({"warp": w});
-    if let Some(a) = at {
-        p["at"] = json!(a);
+    let mut p = if params.is_object() { params.clone() } else { json!({}) };
+    if p.get("warp").is_none() {
+        p["warp"] = serde_json::to_value(&w).map_err(|e| e.to_string())?;
     }
     let r = app.session.execute(id, p).map_err(|e| e.to_string())?;
-    let nw: Warp = serde_json::from_value(r["warp"].clone()).map_err(|e| e.to_string())?;
+    let raw = r.get("warp").cloned().ok_or_else(|| "warp command returned no mesh".to_string())?;
+    let nw: Warp = serde_json::from_value(raw).map_err(|e| e.to_string())?;
     if let Some(t) = app.ui.transform.as_mut() {
         t.warp = Some(nw);
     }
     Ok(())
 }
 
-/// Cursor for hovering a document point while transforming. `alt` is Option, which arms
-/// Photoshop's quick split while a warp is active.
+/// Applies a split-warp command to the mesh being edited (at the box centre unless `at`).
+pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<(), String> {
+    let mut p = json!({});
+    if let Some(a) = at {
+        p["at"] = json!(a);
+    }
+    edit_session_warp(app, id, &p)
+}
+
+/// Cursor for hovering a document point while transforming. `alt` is Option, which arms a quick
+/// split while a warp is active.
 pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon> {
     let t = app.ui.transform.as_ref()?;
     let tol = 8.0 / app.current_zoom().max(0.01) as f64;
@@ -953,14 +962,18 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
                     continue;
                 }
                 let p = scr(m.point(i, j));
-                let anchor = i % 3 == 0 && j % 3 == 0;
+                let anchor = i.is_multiple_of(3) && j.is_multiple_of(3);
                 if anchor {
                     let r = egui::Rect::from_center_size(p, vec2(7.0, 7.0));
                     painter.rect_filled(r, 0.0, Color32::WHITE);
                     painter.rect_stroke(r, 0.0, line, egui::StrokeKind::Inside);
                 } else {
                     // Arm to the nearest anchor along the row/column.
-                    let (ai, aj) = if i % 3 == 0 { (i, if j % 3 == 1 { j - 1 } else { j + 1 }) } else { (if i % 3 == 1 { i - 1 } else { i + 1 }, j) };
+                    let (ai, aj) = if i.is_multiple_of(3) {
+                        (i, if j % 3 == 1 { j - 1 } else { j + 1 })
+                    } else {
+                        (if i % 3 == 1 { i - 1 } else { i + 1 }, j)
+                    };
                     painter.line_segment([scr(m.point(ai, aj)), p], line);
                     painter.circle_filled(p, 3.5, Color32::WHITE);
                     painter.circle_stroke(p, 3.5, line);
@@ -1168,18 +1181,14 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
                 "5" => Some(5),
                 _ => None,
             }
-            && let Some(t) = app.ui.transform.as_mut()
-            && let Some(cur) = t.warp.as_mut()
         {
-            let src = cur.mesh.clone().unwrap_or(mesh);
-            cur.mesh = Some(resize_warp_mesh(&src, n));
-            cur.style = WarpStyle::Custom;
+            let _ = edit_session_warp(app, "edit.transform.warpGrid", &json!({ "size": n }));
         }
     }
 }
 
-/// Photoshop's warp Grid menu: Default is 1×1, the numbered entries are uniform n×n patches,
-/// and anything split by hand reads as Custom.
+/// Grid menu readout: Default is 1×1, the numbered entries are uniform n×n patches, and anything
+/// split by hand reads as Custom.
 fn warp_grid_id(mesh: &BezierMesh) -> &'static str {
     let cols = mesh.us.len().saturating_sub(1);
     let rows = mesh.vs.len().saturating_sub(1);
@@ -1200,32 +1209,11 @@ fn warp_grid_id(mesh: &BezierMesh) -> &'static str {
     }
 }
 
-/// Photoshop's Grid presets: `n`×`n` even patches (Default is 1). The surface stays; the new
-/// lines are real splits at `i/n`, with an anchor wherever they cross.
-fn resize_warp_mesh(mesh: &BezierMesh, n: usize) -> BezierMesh {
-    let n = n.clamp(1, 64);
-    let knots = |n: usize| (0..=n).map(|i| i as f64 / n as f64).collect();
-    BezierMesh::fit(&|s, t| mesh.eval(s, t), knots(n), knots(n))
-}
-
 /// One of the three Split icons. `on` is the armed tool: the line then follows the pointer.
 fn split_icon(ui: &mut egui::Ui, kind: &str, tip: &str, on: bool) -> egui::Response {
-    let t = crate::theme::Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::click());
-    if on {
-        ui.painter().rect_filled(rect, t.radius_sm, t.accent_soft);
-        ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.accent_border), egui::StrokeKind::Inside);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
-    }
+    let ink = crate::icons::button_chrome(ui, rect, on, resp.hovered());
     let c = rect.center();
-    let ink = if on {
-        t.accent_text
-    } else if resp.hovered() {
-        t.text
-    } else {
-        t.icon
-    };
     let stroke = Stroke::new(1.15, ink);
     let box_r = egui::Rect::from_center_size(c, vec2(13.0, 13.0));
     ui.painter().rect_stroke(box_r, 2.0, stroke, egui::StrokeKind::Inside);
@@ -1251,7 +1239,7 @@ fn split_icon(ui: &mut egui::Ui, kind: &str, tip: &str, on: bool) -> egui::Respo
     resp.on_hover_text(tip)
 }
 
-/// Warp switch, cancel and commit, right-aligned like Photoshop's transform bar.
+/// Warp switch, cancel and commit, kept on the right of the options bar.
 fn transform_actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, warping: bool) {
     ui.add_space(8.0);
     let commit_tip = if warping {
@@ -1368,17 +1356,20 @@ mod tests {
     }
 
     #[test]
-    fn interior_patch_points_are_not_drawn_or_hit() {
+    fn interior_patch_points_are_hidden_and_grid_anchors_stay() {
         assert!(on_section_edge(0, 0) && on_section_edge(1, 0) && on_section_edge(0, 2));
         assert!(!on_section_edge(1, 1) && !on_section_edge(2, 2));
         let b = [0.0, 0.0, 30.0, 30.0];
         let w = Warp::custom(BezierMesh::identity(b, 1, 1), b);
-        assert!(warp_hit(&w, [10.0, 10.0], 4.0).is_none(), "the point inside the section is not a handle");
+        assert!(warp_hit(&w, [10.0, 10.0], 4.0).is_none(), "the point inside the patch is not shown");
         assert_eq!(warp_hit(&w, [0.0, 0.0], 4.0), Some(0));
+        let grid = Warp::custom(BezierMesh::identity(b, 3, 3), b);
+        assert_eq!(warp_hit(&grid, [10.0, 10.0], 4.0), Some(33), "a grid-corner anchor stays draggable");
+        assert!(warp_hit(&grid, [30.0 / 9.0, 30.0 / 9.0], 2.0).is_none());
     }
 
     #[test]
-    fn warp_grid_menu_follows_photoshop_sizes() {
+    fn grid_menu_reads_default_and_even_presets() {
         let b = [0.0, 0.0, 100.0, 80.0];
         let plain = BezierMesh::identity(b, 1, 1);
         assert_eq!(warp_grid_id(&plain), "default");
@@ -1389,25 +1380,8 @@ mod tests {
         let mut split = plain.clone();
         assert!(split.split_u(0.5));
         assert_eq!(warp_grid_id(&split), "custom");
-        let mut bent = plain.clone();
-        bent.points[0][0] += 12.0;
-        let fitted = resize_warp_mesh(&bent, 4);
-        assert_eq!(warp_grid_id(&fitted), "4");
-        assert!((fitted.eval(0.0, 0.0)[0] - bent.eval(0.0, 0.0)[0]).abs() < 1e-3);
-        assert!((fitted.eval(1.0, 1.0)[0] - 100.0).abs() < 1e-3);
-        // 3×3 / 4×4 / 5×5 are even real splits (an anchor at every crossing), not guide-thirds.
         assert!(single_patch(&plain));
-        for n in [3usize, 4, 5] {
-            let g = resize_warp_mesh(&plain, n);
-            assert!(!single_patch(&g));
-            assert_eq!(g.nx(), 3 * n + 1);
-            for i in 0..=n {
-                let u = i as f64 / n as f64;
-                assert!((g.us[i] - u).abs() < 1e-9 && (g.vs[i] - u).abs() < 1e-9, "{:?}", g.us);
-                let p = g.eval(u, 0.0);
-                assert!((p[0] - u * 100.0).abs() < 1e-3, "{p:?}");
-            }
-        }
+        assert!(!single_patch(&BezierMesh::identity(b, 3, 3)));
     }
 
     #[test]
