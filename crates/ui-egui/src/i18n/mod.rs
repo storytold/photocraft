@@ -84,7 +84,7 @@ pub static LANGUAGES: [LangInfo; 8] = [
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "id", name: "Indonesian", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -286,6 +286,15 @@ mod tests {
     const JA: fn() -> Lang = || Lang::from_code("ja").expect("ja registered");
     const ZH: fn() -> Lang = || Lang::from_code("zh-hant").expect("zh-hant registered");
     const CS: fn() -> Lang = || Lang::from_code("cs").expect("cs registered");
+    const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
+
+    #[test]
+    fn indonesian_tags_resolve() {
+        for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");
+        }
+        assert_eq!(ID().name(), "Bahasa Indonesia");
+    }
 
     #[test]
     fn tags_map_to_languages() {
