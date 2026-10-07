@@ -1,4 +1,4 @@
-//! Camera Raw Filter descriptors observed in Photoshop-authored PSDs (ACR 18.4, process 6).
+//! Camera Raw Filter descriptors observed in real PSD files (filter version 18.4, process 6).
 //! Verified develop controls are editable. Other processing versions
 //! or settings retain the entire filter through the existing opaque-filter path.
 use photocraft_algo::camera_raw::CameraRaw;
@@ -348,7 +348,7 @@ mod tests {
     use crate::smart_map::{UNSUPPORTED_FILTER, filter_from_item, item_for_filter};
     use photocraft_color::BlendMode;
 
-    // Parameter values observed in the supplied ACR 18.4 PSD. No source pixels or private
+    // Parameter values observed in the supplied 18.4 PSD. No source pixels or private
     // document metadata are included in this synthetic regression fixture.
     fn source_item() -> Descriptor {
         let mut d = Descriptor::new(CLASS)
@@ -512,8 +512,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a user-supplied Photoshop Camera Raw PSD"]
-    fn photoshop_all_sliders_fixture() {
+    #[ignore = "requires a user-supplied Camera Raw PSD"]
+    fn all_sliders_fixture() {
         let path = std::env::var("PHOTOCRAFT_CAMERA_RAW_PSD").expect("set PHOTOCRAFT_CAMERA_RAW_PSD");
         let doc = crate::import("fixture.psd", &std::fs::read(path).unwrap()).unwrap().document;
         let original = doc
@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn photoshop_light_curve_and_hsl_are_editable_without_rewriting_unchanged_settings() {
+    fn light_curve_and_hsl_are_editable_without_rewriting_unchanged_settings() {
         let source = source_item().with("futureOuterData", Value::RawData(vec![1, 2, 3, 4]));
         let mut f = filter_from_item(&source);
         assert_eq!(f.command, COMMAND);

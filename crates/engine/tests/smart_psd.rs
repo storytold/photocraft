@@ -217,10 +217,10 @@ fn camera_raw_psd_filters_survive_re_editing_native_save_and_undo() {
 }
 
 /// Private, user-supplied files remain outside the repository. Set PHOTOCRAFT_CAMERA_RAW_PSD
-/// to check an ACR fixture and PHOTOCRAFT_SMART_PSD_OUT to retain exports for Photoshop checks.
+/// to check a Camera Raw fixture and PHOTOCRAFT_SMART_PSD_OUT to retain exports for manual checks.
 #[test]
-#[ignore = "requires a user-supplied Photoshop Camera Raw PSD"]
-fn camera_raw_photoshop_fixture() {
+#[ignore = "requires a user-supplied Camera Raw PSD"]
+fn camera_raw_psd_fixture() {
     let path = std::env::var("PHOTOCRAFT_CAMERA_RAW_PSD").expect("set PHOTOCRAFT_CAMERA_RAW_PSD");
     let bytes = std::fs::read(&path).unwrap();
     let imported = photocraft_io::import("fixture.psd", &bytes).unwrap();
