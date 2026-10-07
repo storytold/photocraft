@@ -94,7 +94,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 44] = [
+    pub const ALL: [Tool; 45] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
