@@ -1,4 +1,4 @@
-//! Number keys set opacity, as in Photoshop (#352): 1 = 10% … 9 = 90%, 0 = 100%; two digits
+//! Number keys set opacity (#352): 1 = 10% … 9 = 90%, 0 = 100%; two digits
 //! typed quickly set an exact value (4 then 5 = 45%, 0 then 0 = 0%). With the Brush, Pencil or
 //! Eraser they set the brush's Opacity (⇧: Flow); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
