@@ -302,6 +302,11 @@ fn kern_pair(app: &mut PhotocraftApp, id: LayerId, caret: usize, by: f32) {
 /// typed text) and replaced by every update; `commit` makes the result final.
 fn ime_update(app: &mut PhotocraftApp, s: &str, commit: bool) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
+    // Hosts may clear the IME when enabling it or after commit. With nothing marked, that
+    // notification must not delete the user's selection (including the new-layer placeholder).
+    if s.is_empty() && ed.preedit.is_none() {
+        return;
+    }
     let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
     let n = text.chars().count();
     let s = s.replace("\r\n", "\n").replace('\r', "\n");
@@ -444,8 +449,12 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         };
         handled[k] = true;
         match ev {
+            // Ownership follows event order, not frame boundaries. winit filters keys consumed
+            // by the IME; a forwarded key before preedit or after clear/commit must still run.
+            egui::Event::Text(_) | egui::Event::Key { .. } | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_) if ed.preedit.is_some() => {}
             egui::Event::Text(s) | egui::Event::Paste(s) => insert(app, s),
-            // A bare line break from the IME is the Enter key, which the key arm handles.
+            // A bare line break is the Enter key, not replacement text. Outside composition
+            // the key arm handles it; while composing it belongs to the IME.
             egui::Event::Ime(egui::ImeEvent::Preedit { text: s, .. } | egui::ImeEvent::Commit(s)) if s == "\n" || s == "\r" => handled[k] = false,
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => ime_update(app, text, false),
             egui::Event::Ime(egui::ImeEvent::Commit(s)) => ime_update(app, s, true),
@@ -1458,6 +1467,138 @@ mod tests {
         app.ui.text_edit.as_mut().unwrap().preedit = Some((10, 5));
         ime_update(&mut app, "x", true);
         assert_eq!(layer_text(&app), "日本語x");
+    }
+
+    fn korean_frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            crate::shortcuts::handle(app, ui.ctx());
+        });
+        out.textures_delta.clear();
+    }
+
+    fn korean_preedit(text: &str) -> egui::Event {
+        let n = text.chars().count();
+        egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: Some(n..n) })
+    }
+
+    fn korean_key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    #[test]
+    #[allow(deprecated)] // Also exercise the legacy Enabled event; current egui uses Preedit.
+    fn korean_ime_syllables_replace_preedit_and_commit_once() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Enabled)]);
+        for text in ["ㅎ", "하", "한"] {
+            korean_frame(&mut app, &ctx, vec![korean_preedit(text)]);
+            assert_eq!(layer_text(&app), text);
+        }
+        korean_frame(&mut app, &ctx, vec![korean_preedit(""), egui::Event::Ime(egui::ImeEvent::Commit("한".into()))]);
+        for text in ["ㄱ", "그", "글"] {
+            korean_frame(&mut app, &ctx, vec![korean_preedit(text)]);
+            assert_eq!(layer_text(&app), format!("한{text}"));
+        }
+        korean_frame(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("글".into())), korean_preedit("")]);
+        assert_eq!(layer_text(&app), "한글");
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, None);
+        korean_frame(&mut app, &ctx, vec![korean_key(egui::Key::Backspace, egui::Modifiers::NONE)]);
+        assert_eq!(layer_text(&app), "한", "after commit Backspace deletes one full syllable");
+    }
+
+    #[test]
+    fn korean_ime_preserves_navigation_before_composition_in_same_frame() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "한글");
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![korean_key(egui::Key::ArrowLeft, egui::Modifiers::NONE), korean_preedit("ㄱ")]);
+        assert_eq!(layer_text(&app), "한ㄱ글", "the earlier arrow moves the insertion point before composition starts");
+    }
+
+    #[test]
+    fn korean_ime_preserves_navigation_after_commit_in_same_frame() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "한");
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![korean_preedit("글")]);
+        korean_frame(
+            &mut app,
+            &ctx,
+            vec![
+                korean_preedit(""),
+                egui::Event::Ime(egui::ImeEvent::Commit("글".into())),
+                korean_key(egui::Key::ArrowLeft, egui::Modifiers::NONE),
+                egui::Event::Text("!".into()),
+            ],
+        );
+        assert_eq!(layer_text(&app), "한!글", "the independently forwarded arrow runs after the commit");
+    }
+
+    #[test]
+    fn korean_ime_preserves_backspace_after_clear_in_same_frame() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "한");
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![korean_preedit("ㄱ")]);
+        korean_frame(&mut app, &ctx, vec![korean_preedit(""), korean_key(egui::Key::Backspace, egui::Modifiers::NONE)]);
+        assert_eq!(layer_text(&app), "", "a forwarded Backspace after the IME clear is an independent editing key");
+    }
+
+    #[test]
+    fn korean_ime_line_break_outside_composition_remains_an_enter_key() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "한글");
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("\n".into())), korean_key(egui::Key::Enter, egui::Modifiers::NONE)]);
+        assert_eq!(layer_text(&app), "한글\n");
+    }
+
+    #[test]
+    fn korean_ime_idle_clear_preserves_selection() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![korean_preedit("")]);
+        assert_eq!(layer_text(&app), PLACEHOLDER, "an idle IME clear must preserve the selection");
+        let ed = app.ui.text_edit.as_ref().unwrap();
+        assert_eq!((ed.anchor, ed.caret), (0, PLACEHOLDER.chars().count()));
+    }
+
+    #[test]
+    fn korean_ime_owns_text_keys_and_shortcuts_until_composition_ends() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "한");
+        let ctx = egui::Context::default();
+        korean_frame(&mut app, &ctx, vec![korean_preedit("글")]);
+        korean_frame(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::Text("r".into()),
+                egui::Event::Paste("paste".into()),
+                korean_key(egui::Key::Z, egui::Modifiers::COMMAND),
+                korean_key(egui::Key::ArrowLeft, egui::Modifiers::NONE),
+                korean_key(egui::Key::Escape, egui::Modifiers::NONE),
+            ],
+        );
+        assert!(app.ui.text_edit.is_some(), "Escape belongs to the IME while composing");
+        assert_eq!(layer_text(&app), "한글", "text, clipboard and shortcuts must not disturb preedit");
+        // A key consumed by the macOS IME produces preedit updates, not an extra Key event.
+        korean_frame(&mut app, &ctx, vec![korean_preedit("그")]);
+        assert_eq!(layer_text(&app), "한그", "IME Backspace updates only the composing syllable");
+        korean_frame(&mut app, &ctx, vec![korean_preedit("")]);
+        assert_eq!(layer_text(&app), "한", "clearing composition must not delete the preceding committed syllable");
+        korean_frame(&mut app, &ctx, vec![korean_preedit("ㄱ")]);
+        korean_frame(&mut app, &ctx, vec![korean_preedit("")]);
+        assert!(app.ui.text_edit.is_some(), "cancelling composition keeps text editing active");
+        assert_eq!(layer_text(&app), "한");
     }
 
     #[test]

@@ -411,3 +411,28 @@ fn foreground_colour_recolours_only_selected_type() {
     assert_eq!((rgb_at(&app, id, 6), rgb_at(&app, id, 10)), ([0, 255, 0, 255], [0, 255, 0, 255]));
     assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1, "one step for the session");
 }
+
+#[test]
+fn fresh_text_session_enables_ime_before_first_keystroke() {
+    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        new_app()
+    });
+    h.run_steps(6);
+    let p = xf(h.state()).to_screen(250.0, 200.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    press(&mut h, p, true);
+    press(&mut h, p, false);
+    assert!(h.state().ui.text_edit.is_some());
+    assert!(h.output().platform_output.ime.is_some(), "the creation frame must enable the OS IME before typing");
+    for text in ["ㅎ", "하", "한"] {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: Some(1..1) }));
+        h.run_steps(1);
+        let ime = h.output().platform_output.ime.as_ref().expect("composition must keep IME enabled");
+        assert!(!ime.should_interrupt_composition, "the full app must not reset a newly started composition");
+        let app = h.state();
+        let ed = app.ui.text_edit.as_ref().unwrap();
+        assert_eq!(text_layer(&app.session.active().unwrap().doc, LayerId(ed.layer)).unwrap().text, text);
+    }
+}
