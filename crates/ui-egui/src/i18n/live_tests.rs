@@ -114,14 +114,82 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
 }
 
 fn harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
-    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+    harness_with_services(Services::default())
+}
+
+fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.run("file.new", json!({"name": "User layer name", "width": 64, "height": 64})).expect("new document");
         app
     });
     harness.run_steps(4);
     harness
+}
+
+#[test]
+fn first_launch_renders_the_system_language_without_overwriting_auto() {
+    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr")] {
+        system::with_system_tags(&[tag], || {
+            with_language(Lang::EN, || {
+                let h = harness();
+                assert_eq!(h.state().session.prefs().interface.language, "auto");
+                assert_eq!(current(), lang(code), "{tag}");
+                assert!(drawn_text(&h).iter().any(|text| text.as_str() == tr(lang(code), "File")), "first-launch menu: {tag}");
+            });
+        });
+    }
+}
+
+#[test]
+fn missing_or_unsupported_system_languages_render_english() {
+    for tags in [vec![], vec!["sv-SE", "ar-SA"]] {
+        system::with_system_tags(&tags, || {
+            with_language(Lang::EN, || {
+                let h = harness();
+                assert_eq!(h.state().session.prefs().interface.language, "auto");
+                assert_eq!(current(), Lang::EN);
+                assert!(drawn_text(&h).iter().any(|text| text == "File"));
+            });
+        });
+    }
+}
+
+#[test]
+fn older_preferences_without_a_language_follow_the_system() {
+    system::with_system_tags(&["fr-CA"], || {
+        with_language(Lang::EN, || {
+            let services = Services { load_prefs: Some(Box::new(|| Some(r#"{"interface":{"uiScale":"125"}}"#.into()))), ..Default::default() };
+            let h = harness_with_services(services);
+            assert_eq!(h.state().session.prefs().interface.language, "auto");
+            assert_eq!(h.state().session.prefs().interface.ui_scale, photocraft_engine::prefs::UiScale::P125);
+            assert_eq!(current(), lang("fr"));
+        });
+    });
+}
+
+#[test]
+fn an_explicit_language_survives_restart_on_a_different_system_language() {
+    let saved = system::with_system_tags(&["ja-JP"], || {
+        with_language(Lang::EN, || {
+            let mut h = harness();
+            assert_eq!(current(), lang("ja"));
+            h.state_mut().run("prefs.set", json!({"path":"interface.language","value":"ko"})).expect("choose language");
+            h.step();
+            assert_eq!(current(), lang("ko"));
+            h.state().session.prefs_to_json()
+        })
+    });
+    system::with_system_tags(&["fr-FR"], || {
+        with_language(Lang::EN, || {
+            let services = Services { load_prefs: Some(Box::new(move || Some(saved.clone()))), ..Default::default() };
+            let h = harness_with_services(services);
+            assert_eq!(h.state().session.prefs().interface.language, "ko");
+            assert_eq!(current(), lang("ko"));
+            assert!(drawn_text(&h).iter().any(|text| text.as_str() == tr(lang("ko"), "File")));
+        });
+    });
 }
 
 #[test]
@@ -173,6 +241,26 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         let mut restored = photocraft_engine::Session::new();
         restored.load_prefs_json(&saved).expect("reload preferences");
         assert_eq!(restored.prefs().interface.language, "ko");
+    });
+}
+
+#[test]
+fn keyboard_shortcuts_list_commands_in_the_selected_language() {
+    with_language(Lang::EN, || {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "pt-br"})).expect("language");
+        h.step();
+        let ctx = h.ctx.clone();
+        let id = crate::menus::invoke(h.state_mut(), &ctx, "edit.keyboardShortcuts", json!({})).expect("dialog")["dialog"].as_u64().expect("id");
+        // Search matches the translated label and the English one.
+        for filter in ["salvar como", "save as"] {
+            h.state_mut().ui.dialog_mut(id).expect("shortcuts").fields.insert("filter".into(), json!(filter));
+            h.run_steps(3);
+            let text = drawn_text(&h);
+            assert!(text.iter().any(|text| text == "Arquivo"), "{filter}: the menu heading must be translated");
+            assert!(text.iter().any(|text| text.trim() == "Salvar como…"), "{filter}: the command must be translated: {text:?}");
+            assert!(!text.iter().any(|text| text.trim() == "Save As…"), "{filter}: no English command labels");
+        }
     });
 }
 

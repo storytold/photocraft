@@ -39,15 +39,15 @@ A compact file declares oversized dimensions, excessive channels, nested descrip
 
 ### Filesystem authority abuse
 
-An automation client supplies an absolute path, traversal sequence, symlink, junction, or replaced path to read or overwrite data outside the intended project. Current automation uses caller-supplied OS paths and has no workspace policy. This scenario is a known limitation.
+An automation client supplies an absolute path, traversal sequence, symlink, junction, or replaced path to read or overwrite data outside the intended project. Remote filesystem methods use separately configured directory capabilities, and engine commands that still require ambient paths fail closed at the automation boundary. This is not yet a general per-command capability model, and trusted desktop operations can still use ambient paths.
 
 ### Local control takeover
 
-Another process on the same host connects to the loopback control server, discovers methods, drives UI input, executes commands, or opens/saves files. Loopback reduces network exposure but does not authenticate the client.
+Another process on the same host connects to the loopback control server, discovers methods, drives UI input, executes commands, or opens/saves files. A 256-bit bearer token is required before method dispatch, but authentication does not grant per-client or per-tool capabilities.
 
 ### Resource exhaustion
 
-A client opens many TCP connections, sends an extremely long JSON line, creates a huge batch, requests full-size rendering, or repeatedly invokes expensive commands. Current automation transports lack explicit request, batch, and connection budgets.
+A client opens many TCP connections, sends an extremely long JSON line, creates a huge batch, requests full-size rendering, or repeatedly invokes expensive commands. Request-line, connection, batch, and preview limits mitigate some cases; explicit JSON-depth, document-memory, and command-duration budgets remain absent.
 
 ### Supply-chain compromise
 

@@ -523,6 +523,7 @@
 	Flame…	Llama…
 	Lens Flare…	Destello de lente…
 	Lighting Effects…	Efectos de iluminación…
+	Relight…	Reiluminar…
 	Picture Frame…	Marco de imagen…
 	Tree…	Árbol…
 	Sharpen	Enfocar
@@ -960,6 +961,8 @@
 	Divide…	Dividir…
 	Document	Documento
 	Don't Save	No guardar
+	No	No
+	Yes	Sí
 	Done	Hecho
 	Dots	Puntos
 	Drag a rectangle around the object	Arrastre un rectángulo alrededor del objeto
@@ -2005,7 +2008,6 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Rejilla:
-
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
 # Spanish follows the tool wording used above (Herramienta X).
 	Color Range	Gama de colores
@@ -2091,7 +2093,6 @@
 	New Channel	Nuevo canal
 	Save Selection	Guardar selección
 	Load Selection	Cargar selección
-
 # Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
 @id	edit.purge.undo	Historial de deshacer
 # Rendering mode and recovery
@@ -2108,11 +2109,8 @@
 	Advanced	Avanzado
 	GPU Backend	Motor GPU
 	Details	Detalles
-
 	Rendering mode	Modo de renderizado
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lazo de congelación: arrastre para congelar un área; Alt+arrastrar para descongelarla (L)
-
-
 	Shadow Clipping Warning (U)	Aviso de recorte de sombras (U)
 	Highlight Clipping Warning (O)	Aviso de recorte de luces (O)
 	Show Lab Color Readouts	Mostrar valores de color Lab
@@ -2121,9 +2119,7 @@
 	Show Skin Tone Indicator	Mostrar indicador de tono de piel
 	Tone Histogram	Histograma tonal
 	Show Selected Region	Mostrar región seleccionada
-
 cameraRaw	Light	Luz
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
 cameraRaw	Lights	Tonos claros
@@ -2144,3 +2140,13 @@ cameraRaw	Amount	Cantidad
 	Patch:	Parche:
 	Lasso around an area, then drag the selection	Rodee un área con el lazo y arrastre la selección
 	Edit Type	Editar texto
+	No patterns	Sin motivos
+	Enable {name}	Activar {name}
+	Hold Alt while drawing for straight segments	Mantenga Alt al dibujar para segmentos rectos
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Arrastre o haga clic en los puntos del polígono · mantenga Alt durante el lazo para segmentos rectos · {add} añadir · {sub} antes de dibujar resta
+	TIFF Options	Opciones de TIFF
+	Including layers will increase file size.	Incluir las capas aumentará el tamaño del archivo.
+	Discard Layers and Save a Copy	Descartar capas y guardar una copia
+	Don't show again	No volver a mostrar
+	Save failed: {error}	Error al guardar: {error}
+	Save cancelled	Guardado cancelado

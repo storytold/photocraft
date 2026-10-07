@@ -49,11 +49,27 @@ pub struct Drag {
     /// The reposition key (Space) is held: pointer moves move the whole gesture instead of
     /// sizing it (marquees, lasso, shapes; `hold_keys`).
     pub reposition: bool,
+    /// A marquee or lasso drag that started inside the selection moves it instead of drawing:
+    /// `Some(false)` moves the outline, `Some(true)` moves the floating piece (`select.float`).
+    pub sel_move: Option<bool>,
+    pub lasso: Option<crate::lasso_ui::Lasso>,
 }
 
 impl Drag {
     pub fn new(tool: Tool, start: [f64; 2], points: Vec<[f64; 3]>, modifiers: egui::Modifiers, erase: bool) -> Self {
-        Self { tool, start, points, modifiers, erase, constrain: None, live: modifiers, released: egui::Modifiers::NONE, reposition: false }
+        Self {
+            tool,
+            start,
+            points,
+            modifiers,
+            erase,
+            constrain: None,
+            live: modifiers,
+            released: egui::Modifiers::NONE,
+            reposition: false,
+            sel_move: None,
+            lasso: None,
+        }
     }
 
     /// Reposition: move the start and every point so the last one lands on `to` (same size).
@@ -74,7 +90,7 @@ impl Drag {
     }
 
     /// Record the modifiers of a pointer event.
-    fn track(&mut self, mods: egui::Modifiers) {
+    pub(crate) fn track(&mut self, mods: egui::Modifiers) {
         self.live = mods;
         self.released.shift |= !mods.shift;
         self.released.alt |= !mods.alt;
@@ -124,6 +140,7 @@ pub(crate) fn draw_readout(ctx: &egui::Context, id: &str, cursor: Pos2, labels: 
     let t = crate::theme::Tokens::get(ctx);
     let font = egui::FontId::proportional(11.5);
     let width = |text: &str| ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), t.text).size().x);
+    let labels = labels.map(|label| tl!(label));
     let (lw, vw) = (labels.map(width), [width(&values[0]), width(&values[1])]);
     let (label_col, value_col) = (lw[0].max(lw[1]), vw[0].max(vw[1]));
     egui::Area::new(egui::Id::new(id)).order(egui::Order::Tooltip).fixed_pos(cursor + vec2(16.0, 18.0)).interactable(false).constrain(true).show(ctx, |ui| {
@@ -304,6 +321,16 @@ fn pointer_moves(events: &[egui::Event], button: egui::PointerButton, down_at_st
     out
 }
 
+/// Modifiers attached to the pointer event itself. Some input sources provide these without a
+/// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
+/// frame-wide modifier state.
+fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton) -> Option<egui::Modifiers> {
+    events.iter().rev().find_map(|e| match e {
+        egui::Event::PointerButton { button: b, modifiers, .. } if *b == button => Some(*modifiers),
+        _ => None,
+    })
+}
+
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ToolEvent {
@@ -467,9 +494,12 @@ fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>
         let key = (crate::layer_style::preview_hash(&d.fields) ^ st.revision.wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1 << 63;
         if app.style_preview.as_ref().map(|p| p.0) != Some(key) {
             let shown = crate::layer_style::preview_document(&st.doc, &app.session.patterns, &d.fields).map(std::sync::Arc::new);
+            if let Err(error) = &shown {
+                log::warn!("Layer Style preview: {error}");
+            }
             app.style_preview = Some((key, shown));
         }
-        if let Some((_, Some(doc))) = &app.style_preview {
+        if let Some((_, Ok(doc))) = &app.style_preview {
             return (doc.clone(), key);
         }
     }
@@ -1570,7 +1600,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         if let Some((_, _, segs)) = &app.outline_cache {
             let time = ui.input(|i| i.time);
-            marching_ants_segments(&painter, &xf, segs, time);
+            // A floating piece (and a selection being dragged) draws its ants where it is shown.
+            let mut shown = xf;
+            if let Some((dx, dy)) = selection_shown_offset(app) {
+                shown.center = [xf.center[0] - dx as f32, xf.center[1] - dy as f32];
+            }
+            marching_ants_segments(&painter, &shown, segs, time);
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
@@ -1662,8 +1697,22 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_smoothing(app);
         let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool);
+        // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
+        // Skew, Distort, Perspective).
+        let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
+        if response.secondary_clicked()
+            && transforming
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            crate::canvas_tool_menu::open_transform(app, [p.x, p.y]);
+        }
+        if tool == Tool::Lasso {
+            crate::lasso_ui::canvas_input(app, &ctx, &xf, &response);
+            (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
+        }
         // Right-click with the Move tool, or ⌘/Ctrl+right-click: the layers under the pointer.
         if response.secondary_clicked()
+            && !transforming
             && crate::layer_pick_ui::is_gesture(tool, mods)
             && let Some(p) = response.interact_pointer_pos()
         {
@@ -1672,6 +1721,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             crate::layer_pick_ui::open(app, [p.x, p.y], d[0], d[1]);
         }
         if response.secondary_clicked()
+            && !transforming
             && !crate::layer_pick_ui::is_gesture(tool, mods)
             && let Some(p) = response.interact_pointer_pos()
         {
@@ -1750,10 +1800,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if buttons.clicked
             && let Some(p) = response.interact_pointer_pos()
         {
+            let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
+            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
             let d = xf.to_doc(p);
             match tool {
                 Tool::Zoom => {
-                    let nz = zoom_step(view.zoom, if zoom_out(mods.alt) { -1 } else { 1 });
+                    let nz = zoom_step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 });
                     zoom_about(&mut view, &xf, p, nz);
                 }
                 // A click with the (temporary) Hand does nothing, never the tool underneath.
@@ -1766,8 +1818,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     if tool == Tool::Move && app.ui.transform.is_none() {
                         begin_transform_controls_at(app, &ctx, &xf, p);
                     }
-                    tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: 1.0 }, mods);
-                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+                    tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: 1.0 }, click_mods);
+                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
                 }
             }
         }
@@ -1813,6 +1865,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| crate::crop_ui::cursor(app, xf.to_doc(p))) {
             ui.ctx().set_cursor_icon(c);
+        } else if app.drag.as_ref().is_some_and(|d| d.sel_move.is_some())
+            || response.hover_pos().is_some_and(|p| app.drag.is_none() && selection_drag_kind(app, tool, xf.to_doc(p), ui.input(|i| i.modifiers)).is_some())
+        {
+            // Over the ants with a marquee or lasso: a press drags the selection.
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
         } else if let Some(p) = response.hover_pos() {
             let alt = ui.input(|i| i.modifiers.alt);
             let icon = match tool {
@@ -2101,6 +2158,10 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         app.trail = None;
         return;
     };
+    // Dragging the selection: its own ants follow the pointer (`selection_shown_offset`).
+    if d.sel_move.is_some() {
+        return;
+    }
     let last = d.points.last().map(|p| [p[0], p[1]]).unwrap_or(d.start);
     let marquee = matches!(d.tool, Tool::RectMarquee | Tool::EllipseMarquee).then(|| marquee_corners(&app.ui.tool_options, d, last));
     if let Some((a, b)) = marquee {
@@ -2143,7 +2204,10 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             }
         }
         Tool::Lasso | Tool::Patch => {
-            let pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
+            let mut pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
+            if let Some(lasso) = &d.lasso {
+                pts.push(xf.to_screen(lasso.cursor[0] as f32, lasso.cursor[1] as f32));
+            }
             crate::tool_feedback::draw_ants(painter, &pts, false);
         }
         Tool::Gradient => {
@@ -2245,10 +2309,21 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     // An Alt+right-drag armed for this press (`paint_mouse`): taken before anything else can
     // consume the event, so it never outlives the press it was armed for (#297).
     let armed = std::mem::take(&mut app.brush_resize_armed);
+    crate::transform_tool::end_if_left(app);
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
+    // A press anywhere but on the floating piece (or with ⇧ / ⌥, to draw) drops it first.
+    if let ToolEvent::Down { x, y, .. } = raw
+        && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some())
+        && selection_drag_kind(app, app.ui.tool, [x, y], mods) != Some(true)
+    {
+        let _ = app.run("select.drop", json!({}));
+    }
     let ev = crate::snap_ui::filter_event(app, ev, mods);
-    if crate::transform_tool::pointer(app, ev, mods) {
+    // Free Transform picks the handle under the press where the user clicked: the snapped press
+    // can land outside the corner's grab area and turn a corner drag into a move of the whole box.
+    let transform_ev = if matches!(raw, ToolEvent::Down { .. }) { raw } else { ev };
+    if crate::transform_tool::pointer(app, transform_ev, mods) {
         return;
     }
     if crate::distort_ui::pointer(app, ev, mods) {
@@ -2256,6 +2331,11 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
     let mods = crate::workspace_ui::sticky_mods(app, mods);
+    // ⌘⌥⌃-click with any tool selects the topmost layer with pixels there (quick_pick.rs); it
+    // must run before the ⌃⌥ brush resize below, which the same keys would trigger.
+    if crate::quick_pick::pointer(app, ev, mods) {
+        return;
+    }
     // Control+Alt-drag or Alt+right-drag with a painting tool resizes the brush instead of
     // painting (#231, #297).
     if crate::brush_resize::pointer(app, ev, mods, armed) {
@@ -2281,6 +2361,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // Gradient tool, live mode: draw and edit Gradient Fill layers.
     if crate::gradient_ui::pointer(app, ev, mods) {
+        return;
+    }
+    if crate::lasso_ui::pointer(app, ev, mods) {
         return;
     }
     let tool = app.ui.tool;
@@ -2329,6 +2412,22 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
             if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
+                return;
+            }
+            // Marquee / lasso inside the selection: drag the outline, or ⌘-drag to cut the selected
+            // pixels into a floating piece (`select.float`) and drag that.
+            if let Some(cut) = selection_drag_kind(app, tool, [x, y], mods) {
+                if cut
+                    && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_none())
+                    && let Err(e) = app.run("select.float", json!({"dx": 0, "dy": 0}))
+                {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                    return;
+                }
+                let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
+                d.sel_move = Some(cut);
+                app.drag = Some(d);
                 return;
             }
             match tool {
@@ -2419,8 +2518,71 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
 }
 
-fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+/// Is document point `p` inside the active document's selection?
+fn inside_selection(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    let Some(sel) = app.session.active().and_then(|st| st.doc.selection.as_ref()) else { return false };
+    let mut v = [0.0f32];
+    sel.read_pixel(p[0].floor() as i32, p[1].floor() as i32, &mut v);
+    v[0] > 0.0
+}
+
+/// Does a press with `tool` at `p` drag the selection rather than draw a new one? `Some(true)`
+/// moves the floating piece (⌘ cuts one first; a floating piece moves with a plain drag),
+/// `Some(false)` just the outline (no ⇧ / ⌥ and the options bar on New Selection, so a combining
+/// drag still draws).
+pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<bool> {
+    if !matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso) {
+        return None;
+    }
+    if let Some(f) = app.session.active().and_then(photocraft_engine::float_cmds::floating) {
+        let on = inside_selection(app, [p[0] - f64::from(f.offset.0), p[1] - f64::from(f.offset.1)]);
+        return (on && !mods.shift && !mods.alt).then_some(true);
+    }
+    if !inside_selection(app, p) {
+        return None;
+    }
+    if mods.command && !mods.shift && !mods.alt {
+        return Some(true);
+    }
+    (!mods.command && selection_mode(app, mods) == "replace").then_some(false)
+}
+
+/// Whole-pixel offset of a selection drag in progress (`Drag::sel_move`).
+pub(crate) fn selection_drag_delta(app: &PhotocraftApp) -> Option<(i32, i32)> {
+    let d = app.drag.as_ref().filter(|d| d.sel_move.is_some())?;
+    let end = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
+    Some(((end[0] - d.start[0]).round().clamp(-1e7, 1e7) as i32, (end[1] - d.start[1]).round().clamp(-1e7, 1e7) as i32))
+}
+
+/// Where the selection is drawn relative to where it is: a floating piece's offset plus a drag
+/// in progress.
+fn selection_shown_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
+    crate::move_ui::floating_offset(app).or_else(|| selection_drag_delta(app))
+}
+
+/// End of a selection drag: move the outline, or the floating piece. A click without moving
+/// deselects, like a marquee click (a click on a floating piece leaves it floating).
+fn finish_selection_drag(app: &mut PhotocraftApp, floating: bool, start: [f64; 2], end: [f64; 2]) {
+    let (dx, dy) = ((end[0] - start[0]).round(), (end[1] - start[1]).round());
+    let r = match (floating, dx == 0.0 && dy == 0.0) {
+        (true, true) => return,
+        (false, true) if app.session.is_enabled("select.deselect") => app.run("select.deselect", json!({})),
+        (false, true) => return,
+        (true, false) => app.run("select.float", json!({"dx": dx, "dy": dy})),
+        (false, false) => app.run("select.transformSelection", json!({"dx": dx, "dy": dy})),
+    };
+    if let Err(e) = r {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     let end = d.points.last().copied().unwrap_or([d.start[0], d.start[1], 1.0]);
+    if let Some(floating) = d.sel_move {
+        finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
+        return;
+    }
     // Where the next ⇧-click line starts.
     if crate::stroke_constraint::connects(d.tool)
         && let Some(st) = app.session.active()

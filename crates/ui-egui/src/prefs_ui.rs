@@ -210,6 +210,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.session.prefs.edit(|p| p.interface.theme = t);
         app.prefs_rt.theme_pref = Some(t);
     }
+    crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
     presets_store(app);
     sync_tooltips(app, ctx);
     app.sync_recent();
@@ -986,11 +987,11 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                     let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
                     if n.is_u64() || n.is_i64() {
                         let mut x = n.as_i64().unwrap_or(0);
-                        ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64));
+                        ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num));
                         obj.insert(k, json!(x));
                     } else {
                         let mut x = n.as_f64().unwrap_or(0.0);
-                        ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3));
+                        ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num));
                         obj.insert(k, json!(x));
                     }
                 }
@@ -1059,6 +1060,11 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     let mut capture = f.get("capture").and_then(Value::as_bool).unwrap_or(false);
     let mut message = f.get("message").and_then(Value::as_str).unwrap_or("").to_string();
     let items = shortcut_items(app);
+    // Menu path and command label as shown in the menus, in the UI language.
+    let shown = |id: &str, label: &str, path: &[String]| -> (Vec<String>, String) {
+        let lang = crate::i18n::current();
+        (path.iter().map(|p| crate::i18n::tr(lang, p).to_string()).collect(), crate::i18n::tr_id(lang, id, label).to_string())
+    };
     let eff = |overrides: &BTreeMap<String, String>, id: &str, def: &Option<String>| -> Option<String> {
         match overrides.get(id) {
             Some(s) if s.is_empty() => None,
@@ -1088,7 +1094,10 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                 let clash: Vec<String> = items
                     .iter()
                     .filter(|(id, _, _, def)| *id != selected && eff(&overrides, id, def).as_deref().and_then(prefs::normalize_shortcut) == Some(sc.clone()))
-                    .map(|(_, label, path, _)| format!("{} › {}", path.join(" › "), label.trim_end_matches('…')))
+                    .map(|(id, label, path, _)| {
+                        let (path, label) = shown(id, label, path);
+                        format!("{} › {}", path.join(" › "), label.trim_end_matches('…'))
+                    })
                     .collect();
                 overrides.insert(selected.clone(), sc.clone());
                 message = if clash.is_empty() {
@@ -1106,14 +1115,16 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
         egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(true).show(ui, |ui| {
             for (id, label, path, def) in &items {
                 let cur = eff(&overrides, id, def);
-                let hay = format!("{} {} {}", path.join(" "), label, cur.clone().unwrap_or_default()).to_ascii_lowercase();
+                let (shown_path, shown_label) = shown(id, label, path);
+                // Match what is shown and the English name (commands are documented in English).
+                let hay = format!("{} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, cur.clone().unwrap_or_default()).to_lowercase();
                 if !needle.is_empty() && !hay.contains(&needle) && !id.to_ascii_lowercase().contains(&needle) {
                     continue;
                 }
                 if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() {
                     continue;
                 }
-                let top = path.first().cloned().unwrap_or_else(|| tl!("Other").into());
+                let top = shown_path.first().cloned().unwrap_or_else(|| tl!("Other").into());
                 if top != last_top {
                     ui.label(RichText::new(&top).font(crate::theme::semibold(12.5)).color(t.text));
                     ui.label("");
@@ -1121,7 +1132,10 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     ui.end_row();
                     last_top = top;
                 }
-                let name = if path.len() > 1 { format!("{} › {}", path[1..].join(" › "), label) } else { label.clone() };
+                let name = match shown_path.get(1..) {
+                    Some(rest) if !rest.is_empty() => format!("{} › {}", rest.join(" › "), shown_label),
+                    _ => shown_label,
+                };
                 let sel = selected == *id;
                 if ui.selectable_label(sel, RichText::new(format!("   {name}")).color(t.text_dim)).clicked() {
                     selected = id.clone();
@@ -1591,6 +1605,31 @@ mod tests {
     }
 
     #[test]
+    fn ui_font_size_commands_follow_themes_and_dpi_and_reset_live() {
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, ThemeKind::Pro);
+        let mut input = egui::RawInput::default();
+        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
+        for (theme, scale, expected) in
+            [("pro", "100", 1.0), ("studio", "auto", 1.5), ("studioLight", "200", 2.0), ("proMedium", "100", 1.0), ("classic", "auto", 1.5)]
+        {
+            app.run("prefs.set", json!({"values": {"interface.uiFontSize": "large", "interface.theme": theme, "interface.uiScale": scale}})).unwrap();
+            for _ in 0..3 {
+                ctx.run_ui(input.clone(), |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
+            }
+            assert!((ctx.pixels_per_point() - expected).abs() < 1e-4);
+            assert_eq!(ctx.fonts(|f| f.definitions().font_data["Inter"].tweak.scale), 16.0 / 12.0);
+        }
+        app.run("prefs.reset", json!({"path": "interface.uiFontSize"})).unwrap();
+        for _ in 0..2 {
+            ctx.run_ui(input.clone(), |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
+        }
+        assert_eq!(ctx.fonts(|f| f.definitions().font_data["Inter"].tweak.scale), 1.0);
+        assert!((ctx.pixels_per_point() - 1.5).abs() < 1e-4, "resetting font size keeps UI Scale");
+    }
+
+    #[test]
     fn recent_files_survive_a_restart_and_honour_the_count() {
         let (mut app, store) = app_with_store();
         let ctx = egui::Context::default();
@@ -1651,6 +1690,7 @@ mod tests {
         assert!(prefs::is_hidden("rawDefaults.applyAutoTone"));
         assert!(!prefs::is_hidden("general.autoShowHomeScreen"));
         assert!(!prefs::is_hidden("interface.uiScale"));
+        assert!(!prefs::is_hidden("interface.uiFontSize"));
         // Hidden values still round-trip through the dialog untouched.
         let (mut app, _) = app_with_store();
         app.run("prefs.set", json!({"values": {"type.smartQuotes": false}})).unwrap();
@@ -1747,6 +1787,7 @@ mod tests {
 
         let values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap();
         values["interface"]["theme"] = json!("studioLight");
+        values["interface"]["uiFontSize"] = json!("large");
         values["performance"]["historyStates"] = json!(12);
         h.run_steps(2);
         assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
@@ -1755,6 +1796,7 @@ mod tests {
 
         assert_eq!(h.state().session.prefs().performance.history_states, 12);
         assert_eq!(h.state().ui.theme, ThemeKind::StudioLight);
+        assert_eq!(h.ctx.fonts(|f| f.definitions().font_data["Inter"].tweak.scale), 16.0 / 12.0);
         assert!(!h.state().session.prefs().type_.smart_quotes, "hidden settings round-trip unchanged");
         let d = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap();
         assert_eq!(d.fields["section"], "interface");
@@ -1763,6 +1805,7 @@ mod tests {
         let saved: Value = serde_json::from_str(store.lock().unwrap().as_ref().unwrap()).unwrap();
         assert_eq!(saved["performance"]["historyStates"], 12);
         assert_eq!(saved["interface"]["theme"], "studioLight");
+        assert_eq!(saved["interface"]["uiFontSize"], "large");
 
         // Repeated Apply starts from the validated values, not the dialog's original snapshot.
         h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["performance"]["historyStates"] = json!(22);
@@ -1771,16 +1814,19 @@ mod tests {
         h.run_steps(4);
         assert_eq!(h.state().session.prefs().performance.history_states, 22);
         h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["performance"]["historyStates"] = json!(33);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiFontSize"] = json!("tiny");
         h.run_steps(2);
         h.get_by_label("Cancel").click();
         h.run_steps(4);
         assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
         assert_eq!(h.state().session.prefs().performance.history_states, 22);
+        assert_eq!(h.ctx.fonts(|f| f.definitions().font_data["Inter"].tweak.scale), 16.0 / 12.0);
         let saved = store.lock().unwrap().clone().unwrap();
         let (mut restarted, _) = app_with_saved(Some(saved));
         tick(&mut restarted, &egui::Context::default());
         assert_eq!(restarted.session.prefs().performance.history_states, 22);
         assert_eq!(restarted.ui.theme, ThemeKind::StudioLight);
+        assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
     }
 
     #[test]

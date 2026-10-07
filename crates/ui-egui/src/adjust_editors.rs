@@ -11,7 +11,7 @@ use crate::state::CurvesEditorState as CurveUi;
 use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use photocraft_doc::adjust::ToneSpace;
+use photocraft_doc::adjust::{HueRange, ToneSpace};
 use photocraft_doc::{Adjustment, LayerId};
 use photocraft_engine::adjust_params::{self, HUE_RANGES, PHOTO_FILTERS};
 use serde_json::{Value, json};
@@ -688,6 +688,22 @@ fn hue_color(deg: f32) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
+fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
+    let mut b = HueRange::canonical_bounds(bounds);
+    if k >= b.len() {
+        return b;
+    }
+    if k == 0 {
+        let delta = (deg - b[0] + 180.0).rem_euclid(360.0) - 180.0;
+        b[0] = (b[0] + delta).min(b[1]).max(b[1] - 180.0);
+    } else {
+        let rel = (deg - b[0]).rem_euclid(360.0);
+        let hi = if k == 3 { b[0] + 359.0 } else { b[k + 1] };
+        b[k] = (b[0] + rel).clamp(b[k - 1], hi);
+    }
+    b
+}
+
 /// The spectrum bar after the adjustment (what each hue becomes), sampled at `n` hues.
 fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
     let adj = photocraft_engine::commands::adjustment_from_params("hueSaturation", v);
@@ -790,7 +806,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if range > 0 {
         let key = HUE_RANGES[range - 1];
         let neutral = photocraft_doc::adjust::HueRange::neutral(range - 1).bounds;
-        let mut b = nums(&v[key], "range", neutral);
+        let mut b = HueRange::canonical_bounds(nums(&v[key], "range", neutral));
         let xof = |deg: f32| bars.left() + deg.rem_euclid(360.0) / 360.0 * w;
         let deg_of = |x: f32| ((x - bars.left()) / w * 360.0).clamp(0.0, 360.0);
         let mid = bars.center().y;
@@ -826,14 +842,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             let k = k as usize;
             let deg = deg_of(pos.x);
             let before = b;
-            if k == 0 {
-                let delta = (deg - b[0] + 180.0).rem_euclid(360.0) - 180.0;
-                b[0] = (b[0] + delta).min(b[1]).max(b[1] - 180.0);
-            } else {
-                let rel = (deg - b[0]).rem_euclid(360.0);
-                let hi = if k == 3 { b[0] + 359.0 } else { b[k + 1] };
-                b[k] = (b[0] + rel).clamp(b[k - 1], hi);
-            }
+            b = move_hue_range_handle(b, k, deg);
             if b != before {
                 v[key]["range"] = json!(b.map(|x| x.round()));
                 e.changed = true;
@@ -1224,6 +1233,15 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hue_range_drag_canonicalizes_bounds_before_clamping() {
+        let moved = move_hue_range_handle([0.0, 350.0, 100.0, 200.0], 2, 354.0);
+        assert_eq!(moved, [-360.0, -10.0, -6.0, -1.0]);
+
+        let canonical = move_hue_range_handle([0.0, 30.0, 60.0, 90.0], 2, 65.0);
+        assert_eq!(canonical, [0.0, 30.0, 65.0, 90.0]);
+    }
 
     #[test]
     fn curve_endpoint_handles_fit_inside_the_allocated_area() {

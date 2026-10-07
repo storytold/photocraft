@@ -66,6 +66,13 @@ fn clone_stamp_copies_exactly_at_all_depths() {
 }
 
 #[test]
+fn retouch_rejects_brushes_larger_than_the_raster_budget() {
+    let mut s = session(32, 32, 8, "rgb");
+    let result = s.execute("paint.dodge", json!({"points": [[10, 10]], "size": 1e30}));
+    assert!(result.is_err(), "retouch must reject an oversized brush before footprint allocation");
+}
+
+#[test]
 fn clone_stamp_samples_pre_stroke_state_and_non_aligned_returns_source() {
     let mut s = session(80, 20, 16, "rgb");
     paint_layer(&mut s, |x, _| [x as f32 / 80.0, 0.0, 0.0, 1.0]);
@@ -518,6 +525,25 @@ fn sample_all_layers_smudge_drags_colour_from_below() {
     // A mask target ignores Sample All Layers (nothing to sample from other layers).
     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
     s.execute("paint.smudge", json!({"points": [[20, 25], [70, 25]], "size": 6, "sampleAllLayers": true, "target": "mask"})).unwrap();
+}
+
+#[test]
+fn sample_all_layers_spot_healing_heals_onto_an_empty_layer() {
+    // #731: the blemish below is healed onto the empty layer.
+    for depth in DEPTHS {
+        let heal = |all: bool| {
+            let mut s = session(100, 30, depth, "rgb");
+            paint_layer(&mut s, blemished(46));
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("paint.spotHealing", json!({"points": [[50, 24]], "size": 12, "hardness": 100, "sampleAllLayers": all})).unwrap();
+            s
+        };
+        assert_eq!(rgba(&heal(false), 50, 24)[3], 0.0, "depth {depth}: without Sample All Layers the layer stays empty");
+        let s = heal(true);
+        let (p, t) = (rgba(&s, 50, 24), texture(50, 24));
+        assert!(p[3] > 0.99 && (p[0] - t[0]).abs() < 0.1 && (p[1] - t[1]).abs() < 0.1, "depth {depth}: healed, not red: {p:?} want {t:?}");
+        assert_eq!(rgba(&s, 80, 15)[3], 0.0, "depth {depth}: outside the stroke untouched");
+    }
 }
 
 #[test]

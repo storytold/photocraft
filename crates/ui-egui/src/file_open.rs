@@ -5,6 +5,7 @@
 //! Recent. Failures are shown as errors (status bar + notice); import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use photocraft_engine::file_cmds::{is_template, untitled_name};
 
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
@@ -37,11 +38,28 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let warnings = self.open_bytes(&display_name(path), bytes)?;
-        if let Some(st) = self.session.active_mut() {
+        self.opened_from(path);
+        Ok(warnings)
+    }
+
+    /// Record that the active document was just opened from `path`: File › Save writes back to it
+    /// (unless it's a template) and it goes to the top of Open Recent.
+    pub(crate) fn opened_from(&mut self, path: &str) {
+        if !is_template(path)
+            && let Some(st) = self.session.active_mut()
+        {
             st.path = Some(path.to_string());
         }
         self.push_recent(path);
-        Ok(warnings)
+    }
+
+    /// The name a file called `name` opens under: its own, or the first free "Untitled-N" for a
+    /// template.
+    pub(crate) fn open_name(&self, name: &str) -> String {
+        if !is_template(name) {
+            return name.to_string();
+        }
+        untitled_name(tl!("Untitled"), |n| self.session.documents().iter().any(|d| d.doc.name == n) || self.jobs.opens.iter().any(|o| o.name == n))
     }
 
     /// Read and open the file at `path` (see [`open_file`](Self::open_file)).

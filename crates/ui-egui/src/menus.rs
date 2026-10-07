@@ -377,7 +377,17 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         | "edit.transform.rotate"
         | "edit.transform.skew"
         | "edit.transform.distort"
-        | "edit.transform.perspective" => crate::transform_tool::begin(app, ctx).map(|_| json!({"transform": app.ui.transform})),
+        | "edit.transform.perspective" => {
+            // While a box is up, Scale / Rotate / Skew / Distort / Perspective (and Free Transform)
+            // switch its mode; otherwise they start one in that mode.
+            if app.ui.transform.is_none() {
+                crate::transform_tool::begin(app, ctx)?;
+            }
+            if let Some(t) = app.ui.transform.as_mut() {
+                t.mode = crate::state::TransformMode::for_command(id);
+            }
+            Ok(json!({"transform": app.ui.transform}))
+        }
         "edit.freeTransformCopy" => crate::transform_tool::begin_copy(app, ctx).map(|_| json!({"transform": app.ui.transform})),
         // Edit › Transform › Warp from the menu: interactive Warp mode (with params: the engine).
         "edit.transform.warp" | "layer.smartObjects.warp" if params.as_object().is_none_or(|o| o.is_empty()) => {
@@ -496,13 +506,16 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         i if (i.starts_with("view.zoom") || i == "view.fitOnScreen" || i == "view.actualPixels") || i == "window.newWindowForDocument" => {
             app.session.active().is_some()
         }
+        "edit.freeTransformCopy" => app.ui.transform.is_none() && app.session.active().and_then(|s| s.active_layer).is_some(),
         "edit.freeTransform"
-        | "edit.freeTransformCopy"
         | "edit.transform.scale"
         | "edit.transform.rotate"
         | "edit.transform.skew"
         | "edit.transform.distort"
-        | "edit.transform.perspective" => app.ui.transform.is_none() && app.session.active().and_then(|s| s.active_layer).is_some(),
+        | "edit.transform.perspective" => match &app.ui.transform {
+            Some(t) => t.warp.is_none(),
+            None => app.session.active().and_then(|s| s.active_layer).is_some(),
+        },
         i => app.session.is_enabled(i),
     }
 }
@@ -612,7 +625,7 @@ pub fn is_live(id: &str) -> bool {
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
-const PLACE_AFTER: &[(&str, &str)] = &[("file.newFromClipboard", "file.new")];
+const PLACE_AFTER: &[(&str, &str)] = &[("file.newFromClipboard", "file.new"), ("filter.render.relight", "filter.render.lightingEffects")];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
@@ -758,16 +771,41 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
             nav.bar_bottom = Some(ui.max_rect().bottom());
             let mut buttons = Vec::with_capacity(TOP_MENUS.len());
             for top in TOP_MENUS {
-                let r = ui.menu_button(egui::RichText::new(crate::i18n::tr(lang, top)).color(t.text_dim), |ui| {
-                    let items = items.get_or_init(|| menu_items(app_ref));
-                    let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
-                    ui.set_min_width(220.0);
-                    if mine.is_empty() {
-                        ui.weak(crate::i18n::tr(lang, "(coming soon)"));
-                    }
-                    render_level(ui, &mine, 1, &mut clicked, &mut nav);
-                });
-                buttons.push(r.response);
+                // egui's menu_button toggles on release; these titles open on the press (one
+                // gesture can press, drag to an item and release), so each drives its popup.
+                let title = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(lang, top)).color(t.text_dim)));
+                // The bar's close behaviour and style, as a menu (not bar) config so submenus inside
+                // render as submenus.
+                let bar = egui::containers::menu::MenuConfig::find(ui);
+                let config = egui::containers::menu::MenuConfig::new().close_behavior(bar.close_behavior).style(bar.style.clone());
+                let open = title_press(ui.ctx(), &title);
+                // The release ending the press that opened this menu is a click "outside" the
+                // popup: it must not close it again.
+                let opening = title.clicked() && ui.ctx().data(|d| d.get_temp::<bool>(press_gesture_id())).unwrap_or(false);
+                let close = if opening { egui::PopupCloseBehavior::IgnoreClicks } else { config.close_behavior };
+                egui::Popup::menu(&title)
+                    .open_memory(open)
+                    .close_behavior(close)
+                    .style(config.style.clone())
+                    .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(egui::containers::menu::MenuConfig::MENU_CONFIG_TAG, config))
+                    .show(|ui| {
+                        let items = items.get_or_init(|| menu_items(app_ref));
+                        let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
+                        ui.set_min_width(220.0);
+                        if mine.is_empty() {
+                            ui.weak(crate::i18n::tr(lang, "(coming soon)"));
+                        }
+                        if top == "Help" {
+                            // The search field scrolls with the rows, as part of the menu's content.
+                            crate::menu_nav::level(ui, 1, &mut nav, |ui, nav| {
+                                help_search(ui, items, &mut clicked, nav);
+                                render_level_rows(ui, &mine, 1, &mut clicked, nav);
+                            });
+                        } else {
+                            render_level(ui, &mine, 1, &mut clicked, &mut nav);
+                        }
+                    });
+                buttons.push(title);
             }
             right = buttons.iter().map(|b| b.rect.right()).fold(right, f32::max);
             switch_on_hover(ui.ctx(), &buttons);
@@ -776,6 +814,10 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         });
     });
     nav.store(ui.ctx());
+    // The press-drag gesture ends with the button (its release was handled by the rows above).
+    if ui.input(|i| i.pointer.primary_released() || !i.pointer.primary_down()) {
+        ui.ctx().data_mut(|d| d.remove::<bool>(press_gesture_id()));
+    }
     if let Some(id) = clicked {
         let ctx = ui.ctx().clone();
         let id = alt_click(id, ctx.input(|i| i.modifiers.alt));
@@ -784,6 +826,34 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         }
     }
     right
+}
+
+fn press_gesture_id() -> egui::Id {
+    egui::Id::new("menu-press-gesture")
+}
+
+/// A menu title's open/close command this frame, the press opens a closed menu (and
+/// starts a press-drag gesture: releasing on an item runs it) or closes an open one; the release
+/// never toggles, so the menu doesn't blink.
+fn title_press(ctx: &egui::Context, title: &egui::Response) -> Option<egui::SetOpenCommand> {
+    // A press this frame on the title (still down, or a whole click within one frame).
+    let pressed = ctx.input(|i| i.pointer.primary_pressed()) && (title.is_pointer_button_down_on() || title.clicked());
+    if !pressed {
+        return None;
+    }
+    let open = egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(title));
+    if !open {
+        ctx.data_mut(|d| d.insert_temp(press_gesture_id(), true));
+    }
+    Some(egui::SetOpenCommand::Bool(!open))
+}
+
+/// Did the press-drag gesture that opened the menus end over `item` (released on it)?
+fn released_on(ui: &egui::Ui, item: &egui::Response) -> bool {
+    item.enabled()
+        && item.contains_pointer()
+        && ui.input(|i| i.pointer.primary_released())
+        && ui.ctx().data(|d| d.get_temp::<bool>(press_gesture_id())).unwrap_or(false)
 }
 
 /// True only when the pointer can actually reach a menu title. A tall submenu can be
@@ -811,6 +881,98 @@ fn switch_on_hover(ctx: &egui::Context, buttons: &[egui::Response]) {
         egui::Popup::open_id(ctx, ids[i]);
         ctx.request_repaint();
     }
+}
+
+/// Most results the Help menu search lists.
+const HELP_SEARCH_MAX: usize = 15;
+
+/// How well `query` (lowercase) matches a menu item: its label starting with it, then a word of
+/// the label starting with it, then anywhere in the label, then anywhere in its menu path.
+/// `None` when it doesn't match at all.
+pub fn search_rank(query: &str, label: &str, path: &[String]) -> Option<u8> {
+    let l = label.to_lowercase();
+    if l.starts_with(query) {
+        Some(0)
+    } else if l.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(query)) {
+        Some(1)
+    } else if l.contains(query) {
+        Some(2)
+    } else if path.iter().any(|p| p.to_lowercase().contains(query)) {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+/// Menu items matching `query`, best first (Photoshop order within a rank). Both the English
+/// labels and their `lang` translations match, so a search works in the UI language and in
+/// English; untranslated strings are simply their English text.
+pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::Lang) -> Vec<&'a MenuItem> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let rank = |it: &MenuItem| {
+        let english = search_rank(&q, &it.label, &it.path);
+        let path: Vec<String> = it.path.iter().map(|p| crate::i18n::tr(lang, p).to_string()).collect();
+        let local = search_rank(&q, crate::i18n::tr_id(lang, &it.id, &it.label), &path);
+        english.into_iter().chain(local).min()
+    };
+    let mut hits: Vec<(u8, usize, &MenuItem)> =
+        items.iter().enumerate().filter(|(_, it)| it.label != "---").filter_map(|(i, it)| rank(it).map(|r| (r, i, it))).collect();
+    hits.sort_by_key(|(r, i, _)| (*r, *i));
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter().filter(|(_, _, it)| seen.insert(it.id.as_str())).take(HELP_SEARCH_MAX).map(|(_, _, it)| it).collect()
+}
+
+/// Help › Search : a field at the top of the Help menu that finds any menu command
+/// by name. Results show their menu path; click, ↓ then ↩, or ↩ in the field runs one.
+fn help_search(ui: &mut egui::Ui, items: &[MenuItem], clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
+    let ctx = ui.ctx().clone();
+    let lang = crate::i18n::current();
+    let text_id = egui::Id::new("help-menu-search");
+    let pass_id = text_id.with("pass");
+    // A fresh opening of the Help menu starts empty, with the field focused.
+    let pass = ctx.cumulative_pass_nr();
+    let reopened = ctx.data(|d| d.get_temp::<u64>(pass_id)).is_none_or(|p| p + 1 < pass);
+    ctx.data_mut(|d| d.insert_temp(pass_id, pass));
+    let mut query: String = if reopened { String::new() } else { ctx.data(|d| d.get_temp(text_id)).unwrap_or_default() };
+    let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
+    if reopened {
+        field.request_focus();
+    }
+    let results = search_items(items, &query, lang);
+    if field.lost_focus()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        && let Some(it) = results.iter().find(|it| it.enabled)
+    {
+        *clicked = Some(it.id.clone());
+        ui.close();
+    }
+    ctx.data_mut(|d| d.insert_temp(text_id, query.clone()));
+    if !query.trim().is_empty() {
+        if results.is_empty() {
+            ui.weak(crate::i18n::tr(lang, "No matching commands"));
+        }
+        for it in results {
+            let mut trail: Vec<&str> = it.path.iter().map(|p| crate::i18n::tr(lang, p)).collect();
+            trail.push(crate::i18n::tr_id(lang, &it.id, &it.label));
+            let mut b = egui::Button::new(trail.join(" › "));
+            if let Some(sc) = &it.shortcut {
+                b = b.shortcut_text(crate::shortcuts::pretty(sc));
+            }
+            let hit = nav.row(ui, 0, it.enabled, Some(&it.id), |ui, _| {
+                let r = ui.add_enabled(it.enabled, b);
+                let hit = r.clicked() || released_on(ui, &r);
+                (r, hit)
+            });
+            if hit {
+                *clicked = Some(it.id.clone());
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
 }
 
 fn render_level(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
@@ -865,7 +1027,7 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
                     "image.mode.bits32" => r.on_hover_text(crate::i18n::tr(lang, "Floating point")),
                     _ => r,
                 };
-                let hit = r.clicked();
+                let hit = r.clicked() || released_on(ui, &r);
                 (r, hit)
             });
             if hit {
@@ -1041,6 +1203,36 @@ mod tests {
         harness.run_steps(4);
         assert!(harness.query_by_label_contains("Open…").is_none(), "File menu should close");
         assert!(harness.query_by_label_contains("Duplicate…").is_some(), "Image menu should open on hover");
+    }
+
+    #[test]
+    fn help_search_finds_commands_by_any_word() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let items = menu_items(&app);
+        let ids = |q: &str| search_items(&items, q, crate::i18n::Lang::EN).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        let di = ids("DI");
+        assert!(di.contains(&"edit.transform.distort".to_string()), "{di:?}");
+        assert!(di.len() <= HELP_SEARCH_MAX);
+        // A word inside the label matches too, and a label match outranks a path-only match.
+        assert!(ids("selection").contains(&"select.transformSelection".to_string()));
+        assert_eq!(search_rank("dis", "Distort", &[]), Some(0));
+        assert_eq!(search_rank("sel", "Transform Selection", &[]), Some(1));
+        assert_eq!(search_rank("orm", "Transform Selection", &[]), Some(2));
+        assert_eq!(search_rank("trans", "Distort", &["Edit".into(), "Transform".into()]), Some(3));
+        assert!(ids("   ").is_empty());
+        assert!(ids("zzzzqqq").is_empty());
+    }
+
+    /// In another UI language both the translated and the English names match.
+    #[test]
+    fn help_search_matches_the_ui_language_and_english() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let items = menu_items(&app);
+        let Some(fr) = crate::i18n::Lang::from_code("fr") else { return };
+        let ids = |q: &str| search_items(&items, q, fr).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        assert!(!ids("calque").is_empty(), "French menu name");
+        assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
+        assert!(ids("zzzzqqq").is_empty());
     }
 
     #[test]

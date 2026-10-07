@@ -948,7 +948,8 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Fill Path", |doc, _| {
         let area = doc.bounds();
         let r = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE);
-        let area = r.pixel_bounds().map_or(area, |b| b.inflate(feather.ceil() as i32 * 2).intersect(&area));
+        let feather_pad = (feather.ceil() as i32).saturating_mul(2);
+        let area = r.pixel_bounds().map_or(area, |b| b.inflate(feather_pad).intersect(&area));
         if area.is_empty() {
             return Ok(());
         }
@@ -1011,6 +1012,7 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         "brush" | "eraser" => {}
         o => return Err(bad("path.stroke", format!("unknown tool `{o}` (brush|pencil|eraser)"))),
     }
+    crate::brush_cmds::validate_brush_size(&brush, "path.stroke")?;
     let lines = vector::flatten_path(&path, 0.1);
     let id = layer_id(s, p)?;
     let bg = s.tools.background;
@@ -1368,7 +1370,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.stroke",
             "Stroke Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser"="brush","size":px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise)"##,
+            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser"="brush","size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise)"##,
             has_layer,
             path_stroke
         ),

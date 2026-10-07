@@ -19,6 +19,9 @@
 //!   translators may reorder placeholders freely.
 
 mod catalog;
+mod system;
+
+pub use system::system_lang;
 
 use std::cell::Cell;
 use std::sync::OnceLock;
@@ -74,8 +77,13 @@ fn plural_fr(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Portuguese: 0 and 1 take the singular, everything else the plural.
+fn plural_pt(n: u64) -> usize {
+    usize::from(n > 1)
+}
+
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 10] = [
+pub static LANGUAGES: [LangInfo; 12] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
@@ -92,6 +100,16 @@ pub static LANGUAGES: [LangInfo; 10] = [
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        source: include_str!("pt-br.tsv"),
+        plural: plural_pt,
+        complete_menus: true,
+        catalog: OnceLock::new(),
+    },
 ];
 
 impl LangInfo {
@@ -173,6 +191,10 @@ fn candidates(tag: &str) -> Vec<String> {
         let script = if parts.iter().any(|p| matches!(*p, "tw" | "hk" | "mo")) { "zh-hant" } else { "zh-hans" };
         out.insert(out.len() - 1, script.to_string());
     }
+    if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
+        // The only Portuguese catalog is Brazilian; other regions use it rather than English.
+        out.insert(out.len() - 1, "pt-br".to_string());
+    }
     out
 }
 
@@ -184,52 +206,6 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
         return Some(Lang::EN);
     }
     cands.iter().find_map(|c| Lang::from_code(c))
-}
-
-/// The system language (cached). English when it can't be determined.
-pub fn system_lang() -> Lang {
-    // Tests drive the UI by its English labels whatever the developer's locale is.
-    if cfg!(test) {
-        return Lang::EN;
-    }
-    static SYSTEM: OnceLock<Lang> = OnceLock::new();
-    *SYSTEM.get_or_init(detect_system_lang)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn detect_system_lang() -> Lang {
-    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(l) = std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| lang_from_tag(&v)) {
-            return l;
-        }
-    }
-    // Apps started from the Finder don't inherit LANG: use the macOS preferred-languages list.
-    // The absolute path keeps a `defaults` earlier on PATH from running; any failure means English.
-    #[cfg(target_os = "macos")]
-    if let Ok(out) = std::process::Command::new("/usr/bin/defaults").args(["read", "-g", "AppleLanguages"]).output()
-        && out.status.success()
-        && let Some(l) = first_supported(&String::from_utf8_lossy(&out.stdout))
-    {
-        return l;
-    }
-    // Windows sets no LANG: fall back to the OS locale the text engine already reads for its CJK
-    // font order (`HKCU\Control Panel\International` › `LocaleName`, e.g. `zh-TW`; on macOS the
-    // preferences plist). `PHOTOCRAFT_LOCALE` overrides it there too.
-    if let Some(l) = photocraft_text::cjk::ui_locale().and_then(lang_from_tag) {
-        return l;
-    }
-    Lang::EN
-}
-
-/// The first supported language in a `defaults read` list like `(\n    "ja-JP",\n    "en-US"\n)`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn first_supported(list: &str) -> Option<Lang> {
-    list.split(['(', ')', ',', '"', '\n']).map(str::trim).filter(|s| !s.is_empty()).find_map(lang_from_tag)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn detect_system_lang() -> Lang {
-    Lang::EN
 }
 
 thread_local! {
@@ -355,7 +331,8 @@ mod tests {
         assert_eq!(lang_from_tag("cs_CZ.UTF-8"), Some(CS()));
         assert_eq!(lang_from_tag("cs-CZ"), Some(CS()));
         assert_eq!(lang_from_tag("fr_FR"), Lang::from_code("fr"));
-        assert_eq!(lang_from_tag("de_DE"), None);
+        assert_eq!(lang_from_tag("de_DE"), Lang::from_code("de"));
+        assert_eq!(lang_from_tag("de-AT"), Lang::from_code("de"));
         // Traditional Chinese: by region, by script, and with a region after the script.
         assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
         assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));
@@ -379,15 +356,6 @@ mod tests {
         assert_eq!(candidates("zh_TW"), ["zh-tw", "zh-hant", "zh"]);
         assert_eq!(candidates("zh-CN"), ["zh-cn", "zh-hans", "zh"]);
         assert_eq!(candidates("zh-Hant-HK"), ["zh-hant-hk", "zh-hant", "zh"]);
-    }
-
-    #[test]
-    fn macos_language_list_is_parsed() {
-        assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
-        assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Lang::from_code("fr"));
-        assert_eq!(first_supported("(\n    \"de-DE\",\n    \"en-US\"\n)\n"), Some(Lang::EN));
-        assert_eq!(first_supported("(\n    \"zh-Hant-TW\",\n    \"en-US\"\n)\n"), Some(ZH()));
-        assert_eq!(first_supported("("), None);
     }
 
     #[test]
@@ -418,6 +386,37 @@ mod tests {
         assert_eq!(tr(zh, "no such label"), "no such label");
     }
 
+    /// Keep the Korean tool/menu vocabulary aligned with the Photoshop equivalents.
+    /// Sources and the product-specific vocabulary policy are recorded in `ko.tsv`.
+    #[test]
+    fn korean_uses_photoshop_terminology() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        for (source, expected) in [
+            ("Shape", "모양"),
+            ("Stroke", "획"),
+            ("Smudge Tool", "손가락 도구"),
+            ("Eyedropper Tool", "스포이드 도구"),
+            ("Rectangular Marquee Tool", "사각형 선택 윤곽 도구"),
+            ("Elliptical Marquee Tool", "원형 선택 윤곽 도구"),
+            ("Zoom Tool", "돋보기 도구"),
+            ("Horizontal Type Tool", "수평 문자 도구"),
+            ("Puppet Warp", "퍼펫 뒤틀기"),
+            ("Liquify…", "픽셀 유동화…"),
+            ("Gaussian Blur…", "가우시안 흐림 효과…"),
+            ("Gaussian Blur", "가우시안 흐림 효과"),
+            ("Adaptive Wide Angle…", "응용 광각…"),
+            ("Render", "렌더"),
+            ("Sharpen", "선명 효과"),
+            ("Vibrance", "활기"),
+            ("Layer Comps", "레이어 구성 요소"),
+            ("Vivid Light", "선명한 라이트"),
+            ("Hard Mix", "하드 혼합"),
+        ] {
+            assert_eq!(tr(ko, source), expected, "{source}");
+        }
+        assert_eq!(tr_id(ko, "filter.sharpen.sharpen", "Sharpen"), "선명하게");
+    }
+
     #[test]
     fn spanish_resolves_and_pluralises() {
         let es = Lang::from_code("es").expect("es registered");
@@ -427,6 +426,19 @@ mod tests {
         assert_eq!(tr(es, "Layer"), "Capa");
         assert_eq!(trn(es, 1, "{n} item", "{n} items"), "1 elemento");
         assert_eq!(trn(es, 3, "{n} item", "{n} items"), "3 elementos");
+    }
+
+    #[test]
+    fn brazilian_portuguese_resolves_and_pluralises() {
+        let pt = Lang::from_code("pt-br").expect("pt-br registered");
+        for tag in ["pt", "pt-BR", "pt_BR.UTF-8", "pt-PT", "pt_PT.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(pt), "{tag}");
+        }
+        assert_eq!(candidates("pt_PT"), ["pt-pt", "pt-br", "pt"]);
+        assert_eq!(tr(pt, "Layer"), "Camada");
+        assert_eq!(trn(pt, 0, "{n} item", "{n} items"), "0 item");
+        assert_eq!(trn(pt, 1, "{n} item", "{n} items"), "1 item");
+        assert_eq!(trn(pt, 2, "{n} item", "{n} items"), "2 itens");
     }
 
     #[test]

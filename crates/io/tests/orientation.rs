@@ -96,9 +96,15 @@ fn stale_orientation_in_document_metadata_is_never_exported() {
     let mut d = import("IMG_0001.JPG", &iphone_jpeg()).unwrap().document;
     d.metadata.exif = Some(std::sync::Arc::new(exif(6)));
     d.metadata.xmp = Some(r#"<rdf:Description tiff:Orientation="6"/>"#.into());
-    let jpg = export(&d, "jpg", &ExportOptions::default()).unwrap().bytes;
+    let none = ExportOptions { xmp: photocraft_io::XmpEmbed::None, ..ExportOptions::default() };
+    let jpg = export(&d, "jpg", &none).unwrap().bytes;
     let back = decode(&jpg).unwrap();
     assert_eq!(exif_orientation(back.meta.exif.as_deref().unwrap()), 1);
+    // Export As's Metadata: None carries no XMP at all (#647), so nothing stale can hide in it;
+    // when the packet is embedded (the default), the orientation inside is rewritten upright.
+    assert!(back.meta.xmp.is_none());
+    let jpg = export(&d, "jpg", &ExportOptions::default()).unwrap().bytes;
+    let back = decode(&jpg).unwrap();
     assert!(back.meta.xmp.as_deref().unwrap().contains(r#"tiff:Orientation="1""#));
     assert_upright(&back, "jpg");
 

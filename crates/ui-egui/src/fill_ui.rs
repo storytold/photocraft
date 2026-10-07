@@ -157,7 +157,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
                 let mut pat = get_str(f, "pattern", "");
                 let opts: Vec<(String, &str)> = app.session.patterns.items.iter().map(|p| (p.id.clone(), p.display_name())).collect();
                 if opts.is_empty() {
-                    ui.label(egui::RichText::new("No patterns").color(Tokens::get(ui.ctx()).text_faint));
+                    ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
                 } else if crate::widgets::dropdown(ui, "fill-pattern", &mut pat, &opts, 170.0) {
                     f.insert("pattern".into(), json!(pat));
                 }

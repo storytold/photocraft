@@ -43,6 +43,10 @@ their #209–#211 targets (first baseline, taken on a heavily loaded machine), a
 nudge scenario crashes the GPU compositor; the open area issues' checklists (#203–#220) are
 almost entirely missing or partial.
 
+2026-10-07: UI Font Size now applies to interface text, including CJK fallbacks, independently
+of display and canvas zoom (#532). The current preference audit drops from 59 to 58 unread
+settings out of 135; see the regenerated scorecard.
+
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
 workflow depth and the plug-in ecosystem. Most fixes since 0.2.0 have passed our tests but have
@@ -77,6 +81,16 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 | Ecosystem | Sandboxed WebAssembly plug-ins instead of .8BF; no ExtendScript/UXP/.atn; no Adobe Fonts/Libraries/cloud docs | low | By design for 8BF; scripting compatibility open. |
 | Platforms | macOS (notarized), Windows, Linux (AppImage/deb/rpm/Flatpak bundle), web | medium-high | Flathub later (#173); Windows signing material pending. |
 | Localisation | 2026-10-07: 10 UI languages; menu, `tl!`, blend mode, preference and brush-section coverage enforced by tests; live switching and scoped Preferences previews | medium | Engine errors/status messages still partly English; CJK web fonts, browser-locale detection, and RTL remain open. |
+
+2026-10-07: Camera Raw PSD mapping covers relative custom white balance, Light/Presence,
+parametric and four point curves, HSL, Color Grading, sharpening/noise detail, grain and numeric
+post-crop vignette controls. Two revisions of one supplied Photoshop ACR 18.4 PSD preserve their
+filter descriptors without edits. The updated revision stays opaque because of active manual
+Optics and unverified vignette style; a descriptor projection verifies its supported controls.
+Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filter stack, mask and
+undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
+acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
+unchanged.
 
 ### Where we're going (priority order)
 

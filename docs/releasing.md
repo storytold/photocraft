@@ -156,12 +156,23 @@ plus a scalable SVG, AppStream metainfo, and a shared-mime-info file for `.pcraf
 
 Why these formats:
 
-- **AppImage** runs on any distribution without installing anything. It's the
+- **AppImage** runs on any distribution without installing anything. The
   download-and-go option and the fallback for distros the packages don't cover. It's built
   with the maintained `AppImage/appimagetool`, whose static runtime doesn't need libfuse2.
   Each AppImage embeds update information (`gh-releases-zsync|…|latest|…`, #349) and ships
   with a `.zsync` beside it, so AppImageUpdate, AppImageLauncher and similar tools can find
   the next release and download only the blocks that changed.
+  Its `AppRun` (`packaging/linux/AppRun`) also integrates with the desktop on launch: on
+  Wayland the dock icon comes from the compositor resolving the window's app_id against an
+  *installed* `.desktop` file, which an AppImage alone never provides — without this every
+  AppImage run shows the generic Wayland logo (#593). Best effort: it installs
+  `~/.local/share/applications/ai.storyteller.photocraft.desktop` with `Exec` rewritten to
+  the AppImage's path (`TryExec` dropped, the binary isn't on the host PATH) and the
+  hicolor icons beside it, rewriting only when the content changed, and any failure leaves
+  the launch untouched. `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; to uninstall, `rm
+  ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
+  ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
+  covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.
 - **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
   and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
   `postinst.sh` hook) and uninstall cleanly. Both are built by

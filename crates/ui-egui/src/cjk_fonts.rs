@@ -245,6 +245,7 @@ fn add_to_all_families(ctx: &egui::Context, name: String, mut data: FontData) {
         }
     }
     let families = families.into_iter().map(|family| InsertFontFamily { family, priority: FontPriority::Lowest }).collect();
+    crate::theme::size_ui_font(ctx, &name, &mut data);
     ctx.add_font(FontInsert { name, data, families });
 }
 
@@ -302,6 +303,31 @@ pub fn install_with(ctx: &egui::Context, sources: Sources) {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn lazy_fallbacks_follow_ui_font_size_and_survive_size_changes() {
+        use photocraft_engine::prefs::UiFontSize;
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        crate::theme::set_ui_font_size(&ctx, UiFontSize::Large);
+        let name = "test-lazy-fallback".to_string();
+        add_to_all_families(&ctx, name.clone(), FontData::from_static(photocraft_text::fonts::INTER_REGULAR));
+        for (size, scale) in [(UiFontSize::Large, 16.0 / 12.0), (UiFontSize::Tiny, 10.0 / 12.0), (UiFontSize::Small, 1.0)] {
+            crate::theme::set_ui_font_size(&ctx, size);
+            for _ in 0..2 {
+                ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            }
+            let fonts = ctx.fonts(|f| f.definitions().clone());
+            let fallback = fonts.font_data.get(&name).unwrap();
+            assert_eq!(fallback.tweak.scale, scale);
+            assert_eq!(fallback.tweak.y_offset_factor, 0.0, "same face as Inter keeps its baseline");
+            for stack in fonts.families.values() {
+                assert_eq!(stack.iter().filter(|n| *n == &name).count(), 1);
+                assert_eq!(stack.last(), Some(&name), "fallback stays at the lowest priority");
+            }
+        }
+    }
 
     static DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 

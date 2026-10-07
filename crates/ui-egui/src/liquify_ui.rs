@@ -590,7 +590,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.rect_filled(title, 0.0, t.dock);
         painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
         let pct = if d.zoom > 0.0 { d.zoom * 100.0 } else { 100.0 };
-        painter.text(title.center(), Align2::CENTER_CENTER, format!("Liquify ({}, {:.0}%)", d.layer_name, pct), FontId::proportional(13.0), t.text);
+        painter.text(
+            title.center(),
+            Align2::CENTER_CENTER,
+            format!("{} ({}, {:.0}%)", tl!("Liquify…").trim_end_matches('…'), d.layer_name, pct),
+            FontId::proportional(13.0),
+            t.text,
+        );
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
         // Left tool strip.
         let left = ERect::from_min_size(body.min, vec2(LEFT_W, body.height()));
@@ -670,11 +676,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Footer buttons.
         let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
         let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        if widgets::primary_button(&mut fb, tl!("OK"), 84.0).clicked() {
-            action = Some("ok");
-        }
-        if widgets::secondary_button(&mut fb, tl!("Cancel"), 84.0).clicked() {
-            action = Some("cancel");
+        if let Some(role) = widgets::dialog_buttons(
+            &mut fb,
+            &[
+                widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 84.0),
+                widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 84.0),
+            ],
+        ) {
+            action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
         // Preview.
         let area = ERect::from_min_max(pos2(left.right(), body.top()), pos2(right.left(), body.bottom()));
