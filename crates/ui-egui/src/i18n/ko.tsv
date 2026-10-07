@@ -2106,6 +2106,8 @@ cameraRaw	Color	색상
 	Cone	원뿔
 	Hotspot	핫스폿
 	Elevation	고도
+	Ambient	주변광
+	Warmth	따뜻함
 	Gloss	광택
 	Metallic	금속성
 	Ambience	주변광
