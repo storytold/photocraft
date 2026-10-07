@@ -650,7 +650,7 @@ fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Mod
 
 /// An anchor or a handle on a section edge. The inner control points of a patch are not shown.
 fn on_section_edge(i: usize, j: usize) -> bool {
-    i % 3 == 0 || j % 3 == 0
+    i.is_multiple_of(3) || j.is_multiple_of(3)
 }
 
 /// Index of the warp control point within `tol` of `p` (nearest anchor or handle).
