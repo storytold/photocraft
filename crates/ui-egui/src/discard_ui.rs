@@ -154,14 +154,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let buttons: &[(&str, Key, bool, f32, Answer)] = if reverts {
         &[("Cancel", Key::C, false, 84.0, Answer::Cancel), ("Revert", Key::R, true, 84.0, Answer::Discard)]
     } else {
-        &[
-            ("Don't Save", Key::D, false, 100.0, Answer::Discard),
-            ("Cancel", Key::C, false, 84.0, Answer::Cancel),
-            ("Save", Key::S, true, 84.0, Answer::Save),
-        ]
+        &[("Don't Save", Key::D, false, 100.0, Answer::Discard), ("Cancel", Key::C, false, 84.0, Answer::Cancel), ("Save", Key::S, true, 84.0, Answer::Save)]
     };
-    let mut answer =
-        ctx.input_mut(|i| buttons.iter().find(|b| i.consume_key(egui::Modifiers::NONE, b.1)).map(|b| b.4));
+    let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| i.consume_key(egui::Modifiers::NONE, b.1)).map(|b| b.4));
     // egui's Tab order follows the right-to-left layout below; walk the buttons left to right instead.
     let step = ctx.input_mut(|i| {
         if i.consume_key(egui::Modifiers::SHIFT, Key::Tab) {
@@ -190,11 +185,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 .rev()
                 .map(|&(label, key, primary, width, a)| {
                     let label = mnemonic(label, key);
-                    let r = if primary {
-                        crate::widgets::primary_button(ui, &label, width)
-                    } else {
-                        crate::widgets::secondary_button(ui, &label, width)
-                    };
+                    let r = if primary { crate::widgets::primary_button(ui, &label, width) } else { crate::widgets::secondary_button(ui, &label, width) };
                     if r.clicked() {
                         answer = Some(a);
                     }
@@ -366,9 +357,7 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         assert!(intercept(h.state_mut(), "file.closeAll", &Value::Null));
         h.run_steps(2);
-        let focused = |h: &Harness<'_, PhotocraftApp>| {
-            ["(D)on't Save", "(C)ancel", "(S)ave"].into_iter().find(|l| h.get_by_label(l).is_focused())
-        };
+        let focused = |h: &Harness<'_, PhotocraftApp>| ["(D)on't Save", "(C)ancel", "(S)ave"].into_iter().find(|l| h.get_by_label(l).is_focused());
         for want in ["(D)on't Save", "(C)ancel", "(S)ave", "(D)on't Save"] {
             h.key_press(Key::Tab);
             h.run_steps(2);
