@@ -193,15 +193,17 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         // Adobe-style CMYK is stored inverted (255 = no ink).
         ColorSpace::CMYK => px.iter_mut().for_each(|v| *v = 255 - *v),
         ColorSpace::YCCK => {
+            // Adobe APP14 transform 2 (what Photoshop writes for CMYK JPEGs): the YCbCr
+            // carries the *inverted* inks and K passes through — libjpeg's `ycck_cmyk_convert`
+            // (YCbCr→RGB, then CMY = 255−RGB) and zune-jpeg decode it the same way.
             for p in px.as_chunks_mut::<4>().0 {
                 let (y, cb, cr) = (p[0] as f32, p[1] as f32 - 128.0, p[2] as f32 - 128.0);
-                let c = y + 1.402 * cr;
-                let m = y - 0.344_136 * cb - 0.714_136 * cr;
-                let yy = y + 1.772 * cb;
-                p[0] = c.round().clamp(0.0, 255.0) as u8;
-                p[1] = m.round().clamp(0.0, 255.0) as u8;
-                p[2] = yy.round().clamp(0.0, 255.0) as u8;
-                p[3] = 255 - p[3];
+                let r = y + 1.402 * cr;
+                let g = y - 0.344_136 * cb - 0.714_136 * cr;
+                let b = y + 1.772 * cb;
+                p[0] = 255 - r.round().clamp(0.0, 255.0) as u8;
+                p[1] = 255 - g.round().clamp(0.0, 255.0) as u8;
+                p[2] = 255 - b.round().clamp(0.0, 255.0) as u8;
             }
         }
         _ => {}
@@ -224,10 +226,22 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             return Err(CodecError::encode(F, "JPEG dimensions are limited to 65535"));
         }
     };
-    let ct = match img.layout() {
-        ChannelLayout::Gray => jpeg_encoder::ColorType::Luma,
-        ChannelLayout::Rgb => jpeg_encoder::ColorType::Rgb,
-        ChannelLayout::Cmyk => jpeg_encoder::ColorType::Cmyk,
+    // Adobe CMYK JPEGs are YCCK (APP14 transform 2): the YCbCr carries the *inverted* inks and
+    // K is straight — what Photoshop writes and libjpeg/zune decode. `jpeg-encoder`'s
+    // `CmykAsYcck` takes YCbCr over the values it is given and stores K inverted, so hand it
+    // the inverted buffer: the file then holds YCbCr(R,G,B) and K.
+    let (data, ct): (std::borrow::Cow<[u8]>, _) = match img.layout() {
+        ChannelLayout::Gray => (std::borrow::Cow::Borrowed(img.data()), jpeg_encoder::ColorType::Luma),
+        ChannelLayout::Rgb => (std::borrow::Cow::Borrowed(img.data()), jpeg_encoder::ColorType::Rgb),
+        ChannelLayout::Cmyk => {
+            let mut v = img.data().to_vec();
+            for p in v.as_chunks_mut::<4>().0 {
+                for s in p {
+                    *s = 255 - *s;
+                }
+            }
+            (std::borrow::Cow::Owned(v), jpeg_encoder::ColorType::CmykAsYcck)
+        }
         l => return Err(CodecError::encode(F, format!("unsupported layout {l:?}"))),
     };
     let mut out = Vec::new();
@@ -265,6 +279,6 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     {
         enc.add_icc_profile(icc).map_err(e)?;
     }
-    enc.encode(img.data(), w16, h16, ct).map_err(e)?;
+    enc.encode(&data, w16, h16, ct).map_err(e)?;
     Ok(out)
 }

@@ -109,19 +109,29 @@ fn jpeg_grayscale_decodes_as_gray() {
 fn jpeg_cmyk_roundtrip_with_adobe_marker() {
     let img = synth(40, 30, ChannelLayout::Cmyk, SampleType::U8, 3, 0.02);
     let bytes = encode(&img, Format::Jpeg, &EncodeOptions { jpeg_quality: 95, ..Default::default() }).unwrap();
-    assert!(bytes.windows(5).any(|w| w == b"Adobe"), "APP14 Adobe marker");
+    // Transform 2 = YCCK, the flavour Photoshop writes for CMYK JPEGs.
+    assert!(bytes.windows(12).any(|w| w == b"Adobe\0\0\0\0\0\0\x02"), "APP14 Adobe transform 2 marker");
     let back = decode(&bytes).unwrap();
     assert_eq!(back.layout(), ChannelLayout::Cmyk);
     assert!(psnr(&img, &back) > 35.0, "{}", psnr(&img, &back));
 }
 
 #[test]
-fn jpeg_ycck_decodes_to_cmyk() {
+fn jpeg_adobe_ycck_decodes_to_cmyk() {
     let img = synth(40, 32, ChannelLayout::Cmyk, SampleType::U8, 4, 0.02);
+    // An Adobe transform-2 file as Photoshop writes it: the YCbCr carries the inverted inks
+    // and K is straight. Feeding the inverted buffer lands the encoder on exactly that
+    // layout (this is what libjpeg's `ycck_cmyk_convert` inverts back on decode).
+    let mut inverted = img.data().to_vec();
+    for p in inverted.as_chunks_mut::<4>().0 {
+        for s in p {
+            *s = 255 - *s;
+        }
+    }
     let mut bytes = Vec::new();
     let mut enc = jpeg_encoder::Encoder::new(&mut bytes, 95);
     enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
-    enc.encode(img.data(), 40, 32, jpeg_encoder::ColorType::CmykAsYcck).unwrap();
+    enc.encode(&inverted, 40, 32, jpeg_encoder::ColorType::CmykAsYcck).unwrap();
     let back = decode(&bytes).unwrap();
     assert_eq!(back.layout(), ChannelLayout::Cmyk);
     assert!(psnr(&img, &back) > 32.0, "{}", psnr(&img, &back));
