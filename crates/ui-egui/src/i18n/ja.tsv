@@ -2050,3 +2050,9 @@ cameraRaw	Color	カラー
 	Patch:	パッチ:
 	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
 	Edit Type	文字を編集
+	Square 1:1	正方形 1:1
+	Portrait 4:5	縦向き 4:5
+	Story 9:16	ストーリー 9:16
+	Full HD Portrait	フルHD 縦向き
+	QHD 1440p	QHD 1440p
+	UHD 4K Portrait	UHD 4K 縦向き

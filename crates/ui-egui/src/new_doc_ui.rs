@@ -59,6 +59,9 @@ pub const CATEGORIES: &[(&str, &[Preset])] = &[
             ("iPad Pro 13\"", 2064, 2752, 72.0),
             ("Android 1080p", 1080, 1920, 72.0),
             ("Apple Watch 45mm", 396, 484, 72.0),
+            ("Square 1:1", 1080, 1080, 72.0),
+            ("Portrait 4:5", 1080, 1350, 72.0),
+            ("Story 9:16", 1080, 1920, 72.0),
         ],
     ),
     (
@@ -69,11 +72,30 @@ pub const CATEGORIES: &[(&str, &[Preset])] = &[
             ("UHD 4K", 3840, 2160, 72.0),
             ("DCI 4K", 4096, 2160, 72.0),
             ("UHD 8K", 7680, 4320, 72.0),
+            ("Full HD Portrait", 1080, 1920, 72.0),
+            ("QHD 1440p", 2560, 1440, 72.0),
+            ("UHD 4K Portrait", 2160, 3840, 72.0),
         ],
     ),
 ];
 
 const DEPTH_OPTIONS: &[(u64, &str, &str)] = &[(8, "8 bit", "Integer"), (16, "16 bit", "Integer"), (32, "32 bit (float)", "Floating point")];
+
+fn set_resolution(f: &mut Map<String, Value>, ppi: f32) {
+    if !ppi.is_finite() {
+        return;
+    }
+    let old = get_f(f, "resolution", 72.0);
+    let new = ppi.clamp(1.0, 30_000.0);
+    if get_s(f, "__unit", "px") != "px" && old.is_finite() && old > 0.0 {
+        for key in ["width", "height"] {
+            let physical = to_unit(get_f(f, key, 1.0), "in", old);
+            f.insert(key.into(), px_value(from_unit(physical, "in", new)));
+        }
+    }
+    f.insert("resolution".into(), json!(new));
+    f.remove("__preset");
+}
 
 /// Width/Height units: (key, label, units per inch; 0 = pixels).
 pub const UNITS: &[(&str, &str, f32)] =
@@ -246,6 +268,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if icons::button(ui, icon, 24.0, (h > w) == portrait, if portrait { "Portrait" } else { "Landscape" }).clicked() && (h > w) != portrait {
                         f.insert("width".into(), px_value(h));
                         f.insert("height".into(), px_value(w));
+                        f.remove("__preset");
                     }
                 }
             });
@@ -255,7 +278,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let per_cm = get_s(f, "__resUnit", "in") == "cm";
                 let mut r = if per_cm { ppi / 2.54 } else { ppi };
                 if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).changed() {
-                    f.insert("resolution".into(), json!(if per_cm { r * 2.54 } else { r }));
+                    set_resolution(f, if per_cm { r * 2.54 } else { r });
                 }
                 let mut ru = get_s(f, "__resUnit", "in");
                 if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0)
@@ -339,6 +362,62 @@ mod tests {
         s.execute("file.new", p).unwrap();
         let d = &s.active().unwrap().doc;
         assert_eq!((d.size.width, d.size.height, d.resolution_dpi), (2480, 3508, 300.0));
+    }
+
+    #[test]
+    fn physical_size_changes_pixel_dimensions_with_resolution() {
+        let mut f = crate::state::UiState::new_document_fields();
+        f.insert("__unit".into(), json!("in"));
+        f.insert("width".into(), json!(720));
+        f.insert("height".into(), json!(360));
+        set_resolution(&mut f, 300.0);
+        let p = command_params(&f);
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", p).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!((d.size.width, d.size.height, d.resolution_dpi), (3000, 1500, 300.0));
+    }
+
+    #[test]
+    fn resolution_preserves_physical_size_in_each_unit() {
+        for unit in ["in", "cm", "mm", "pt", "pica"] {
+            let mut f = crate::state::UiState::new_document_fields();
+            f.insert("__unit".into(), json!(unit));
+            f.insert("width".into(), json!(720));
+            f.insert("height".into(), json!(360));
+            set_resolution(&mut f, 300.0);
+            assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(3000), Some(1500)), "{unit}");
+        }
+    }
+
+    #[test]
+    fn new_presets_follow_category_defaults_and_have_translations() {
+        let mobile = CATEGORIES.iter().find(|c| c.0 == "Mobile").unwrap().1;
+        let film = CATEGORIES.iter().find(|c| c.0 == "Film & Video").unwrap().1;
+        assert_eq!(mobile[0].0, "iPhone 16");
+        assert_eq!(film[0].0, "HDTV 1080p");
+        for name in ["Square 1:1", "Portrait 4:5", "Story 9:16"] {
+            assert!(mobile.iter().any(|p| p.0 == name));
+        }
+        for name in ["Full HD Portrait", "QHD 1440p", "UHD 4K Portrait"] {
+            assert!(film.iter().any(|p| p.0 == name));
+        }
+        for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
+            for name in ["Square 1:1", "Portrait 4:5", "Story 9:16", "Full HD Portrait", "QHD 1440p", "UHD 4K Portrait"] {
+                assert!(crate::i18n::has(lang, name), "{}: {name}", lang.code());
+            }
+            for name in ["Square 1:1", "Portrait 4:5", "Story 9:16", "Full HD Portrait", "UHD 4K Portrait"] {
+                assert_ne!(crate::i18n::tr(lang, name), name, "{}: {name}", lang.code());
+            }
+        }
+    }
+
+    #[test]
+    fn pixel_size_stays_fixed_when_only_ppi_changes() {
+        let mut f = crate::state::UiState::new_document_fields();
+        set_resolution(&mut f, 300.0);
+        assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(1920), Some(1080)));
+        assert_eq!(f["resolution"], 300.0);
     }
     /// The real dialog (#254): a typed size must reach `file.new`, however it is confirmed.
     mod dialog {
@@ -462,6 +541,21 @@ mod tests {
             type_into(&mut h, 1, "1.5");
             enter(&mut h);
             assert_eq!(created(&h), (600, 450, 300.0));
+        }
+
+        #[test]
+        fn changing_resolution_in_inches_preserves_physical_dimensions() {
+            let mut h = harness();
+            let mut f = fields(&h);
+            f.insert("__unit".into(), serde_json::json!("in"));
+            f.insert("width".into(), serde_json::json!(720));
+            f.insert("height".into(), serde_json::json!(360));
+            set_fields(&mut h, f);
+            type_into(&mut h, 2, "300");
+            let f = fields(&h);
+            assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(3000), Some(1500)));
+            enter(&mut h);
+            assert_eq!(created(&h), (3000, 1500, 300.0));
         }
 
         #[test]
