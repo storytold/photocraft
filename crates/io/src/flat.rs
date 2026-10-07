@@ -278,8 +278,8 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
     let mut warnings = Vec::new();
     let mut img = document_to_image(doc, &mut warnings)?;
     if opts.xmp == XmpEmbed::None {
-        // The default flat export carries none of the document's XMP: the packet lists the
-        // text of every type layer and one id per placed document (#647).
+        // Export As's Metadata: None: the packet lists the text of every type layer and one id
+        // per placed document (#647).
         img.meta.xmp = None;
     }
     if img.layout().has_alpha() && !format.caps().alpha {

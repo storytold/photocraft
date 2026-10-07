@@ -1,6 +1,6 @@
-//! #647: flat exports embed none of the document's XMP by default (the packet lists the text
-//! of every type layer and one id per placed document); `XmpEmbed::All` opts in, and layered
-//! saves (PSD, `.pcraft`) always keep everything.
+//! #647: Export As's Metadata: None (`XmpEmbed::None`) embeds none of the document's XMP (the
+//! packet lists the text of every type layer and one id per placed document); the default,
+//! `XmpEmbed::All`, keeps it as Save As does, and layered saves (PSD, `.pcraft`) always keep it.
 
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, Size};
@@ -27,15 +27,17 @@ fn leaks_xmp(bytes: &[u8]) -> bool {
 }
 
 #[test]
-fn flat_exports_default_to_no_xmp() {
+fn metadata_none_embeds_no_xmp() {
+    let opts = ExportOptions { xmp: XmpEmbed::None, ..ExportOptions::default() };
     for ext in ["png", "jpg", "webp", "tif"] {
-        let r = export(&doc_with_xmp(), &format!("out.{ext}"), &ExportOptions::default()).expect(ext);
+        let r = export(&doc_with_xmp(), &format!("out.{ext}"), &opts).expect(ext);
         assert!(!leaks_xmp(&r.bytes), "{ext}: the document XMP leaked into the export");
     }
 }
 
 #[test]
-fn all_embeds_the_whole_packet() {
+fn all_embeds_the_whole_packet_and_is_the_default() {
+    assert_eq!(ExportOptions::default().xmp, XmpEmbed::All);
     let opts = ExportOptions { xmp: XmpEmbed::All, ..ExportOptions::default() };
     for ext in ["png", "jpg", "webp"] {
         let r = export(&doc_with_xmp(), &format!("out.{ext}"), &opts).expect(ext);
@@ -45,7 +47,7 @@ fn all_embeds_the_whole_packet() {
 
 #[test]
 fn layered_saves_keep_the_xmp_whatever_the_option() {
-    for opts in [ExportOptions::default(), ExportOptions { xmp: XmpEmbed::All, ..ExportOptions::default() }] {
+    for opts in [ExportOptions::default(), ExportOptions { xmp: XmpEmbed::None, ..ExportOptions::default() }] {
         let psd = export(&doc_with_xmp(), "out.psd", &opts).expect("psd");
         assert!(leaks_xmp(&psd.bytes), "PSD always keeps the document XMP");
         let pcraft = export(&doc_with_xmp(), "out.pcraft", &opts).expect("pcraft");

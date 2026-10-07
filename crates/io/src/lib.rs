@@ -99,14 +99,15 @@ pub struct ExportResult {
 }
 
 /// Which part of the document's XMP packet a flat export embeds. Layered saves (PSD, PSB,
-/// `.pcraft`) always keep everything; a flat web image defaults to none of it, because the
-/// packet lists the text of every type layer and one id per placed document (#647).
+/// `.pcraft`) always keep everything. Save As and conversions keep the whole packet, as
+/// Photoshop's Save As does; Export As starts at `None`, because the packet lists the text of
+/// every type layer and one id per placed document (#647).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum XmpEmbed {
     /// Embed the document's whole XMP packet.
+    #[default]
     All,
     /// Embed no XMP.
-    #[default]
     None,
 }
 
@@ -121,13 +122,13 @@ pub struct ExportOptions {
     /// "Discard Layers and Save a Copy": a flat TIFF.
     pub tiff_layers: bool,
     /// Which part of the document's XMP packet a flat export embeds (PSD/PSB/`.pcraft`
-    /// always keep everything).
+    /// always keep everything). Everything by default, as Save As does; Export As offers None.
     pub xmp: XmpEmbed,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        ExportOptions { encode: EncodeOptions::default(), force_psb: false, tiff_layers: true, xmp: XmpEmbed::None }
+        ExportOptions { encode: EncodeOptions::default(), force_psb: false, tiff_layers: true, xmp: XmpEmbed::All }
     }
 }
 

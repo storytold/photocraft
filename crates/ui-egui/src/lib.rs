@@ -151,14 +151,15 @@ pub struct ExportSettings {
     pub jpeg_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
-    /// Embed the document's whole XMP packet (`false` by default: the packet can carry the
-    /// text of every type layer, #647).
+    /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
+    /// Export As starts at Metadata: None, since the packet can carry the text of every type
+    /// layer and one id per placed document (#647).
     pub xmp_all: bool,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        ExportSettings { jpeg_quality: None, tiff_layers: true, xmp_all: false }
+        ExportSettings { jpeg_quality: None, tiff_layers: true, xmp_all: true }
     }
 }
 
