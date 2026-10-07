@@ -414,13 +414,15 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
 }
 
 /// Whether a type layer still has the name it got from its text, so the name follows edits to
-/// the text, like Photoshop. A layer renamed to anything else keeps its name (#483).
+/// the text. A layer renamed to anything else keeps its name (#483).
 pub(crate) fn is_auto_named(l: &Layer) -> bool {
     matches!(&l.content, LayerContent::Text(t) if l.name == layer_name(&t.text))
 }
 
-pub(crate) fn layer_name(text: &str) -> String {
-    let first = text.lines().next().unwrap_or("").trim();
+/// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
+/// The Type tool names new layers with this too, so `is_auto_named` recognises them.
+pub fn layer_name(text: &str) -> String {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let name: String = first.chars().take(40).collect();
     if name.is_empty() { "Type Layer".into() } else { name }
 }
@@ -804,6 +806,16 @@ mod tests {
         assert_eq!(layer_name_of(&s, id), "Title");
         assert!(s.undo());
         assert_eq!(layer_name_of(&s, id), "Type Layer");
+    }
+
+    #[test]
+    fn auto_name_skips_leading_blank_lines() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "\n  \nHello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+        assert_eq!(layer_name_of(&s, id), "Hello");
+        s.execute("type.edit", json!({"layer": id, "replace": {"start": 0, "end": 0, "text": "\n"}})).unwrap();
+        s.execute("type.edit", json!({"layer": id, "text": "\n\nGoodbye"})).unwrap();
+        assert_eq!(layer_name_of(&s, id), "Goodbye");
     }
 
     #[test]
