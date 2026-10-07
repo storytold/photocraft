@@ -612,6 +612,16 @@ fn reverse(s: &mut Session) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Refuses an edit that left `doc` nested deeper than [`photocraft_doc::MAX_GROUP_DEPTH`]
+/// groups. Called at the end of a `Session::edit` closure, so an `Err` leaves the document and
+/// history untouched.
+pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
+    if doc.max_group_depth() > photocraft_doc::MAX_GROUP_DEPTH {
+        return Err(EngineError::Other(format!("{what} would nest layers deeper than {} groups", photocraft_doc::MAX_GROUP_DEPTH)));
+    }
+    Ok(())
+}
+
 /// Group Layers (⌘G) / Group from Layers: the explicit layer, or every selected layer, moves
 /// into a new group placed where the top-most of them was. Bottom-to-top order is preserved.
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
@@ -633,9 +643,7 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
         }
         *doc.layer_mut(gid).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(gid))? = children;
-        if doc.max_group_depth() > photocraft_doc::MAX_GROUP_DEPTH {
-            return Err(EngineError::Other(format!("Group Layers would nest layers deeper than {} groups", photocraft_doc::MAX_GROUP_DEPTH)));
-        }
+        check_group_depth(doc, "Group Layers")?;
         *active = Some(gid);
         Ok(gid)
     })?;
