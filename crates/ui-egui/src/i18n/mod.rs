@@ -83,7 +83,7 @@ fn plural_pt(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 12] = [
+pub static LANGUAGES: [LangInfo; 13] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
@@ -101,7 +101,6 @@ pub static LANGUAGES: [LangInfo; 12] = [
     LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "it", name: "Italian", source: include_str!("it.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
     LangInfo {
         code: "pt-br",
@@ -111,6 +110,7 @@ pub static LANGUAGES: [LangInfo; 12] = [
         complete_menus: true,
         catalog: OnceLock::new(),
     },
+    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -334,6 +334,8 @@ mod tests {
         assert_eq!(lang_from_tag("fr_FR"), Lang::from_code("fr"));
         assert_eq!(lang_from_tag("de_DE"), Lang::from_code("de"));
         assert_eq!(lang_from_tag("de-AT"), Lang::from_code("de"));
+        assert_eq!(lang_from_tag("it_IT.UTF-8"), Lang::from_code("it"));
+        assert_eq!(lang_from_tag("it-CH"), Lang::from_code("it"));
         // Traditional Chinese: by region, by script, and with a region after the script.
         assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
         assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));

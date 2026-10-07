@@ -17,10 +17,10 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | 繁體中文 | `zh-hant` | one form |
 | Español | `es` | one / other |
 | Čeština | `cs` | one / few / other |
-| Italiano | `it` | one / other |
 | Deutsch | `de` | one / other |
 | Bahasa Indonesia | `id` | one form |
 | Português (Brasil) | `pt-br` | singular for 0 and 1 / plural for 2+ |
+| Italiano | `it` | one / other |
 
 Every non-English catalog covers the current menu labels, `tl!` literals, blend mode names,
 and generated preference labels. Tests enforce that coverage. This does not include every

@@ -173,10 +173,10 @@
 	Lab Color	Colore Lab
 	Multichannel	Multicanale
 	8 Bits/Channel	8 bit/canale
-	8 bit	8 bit
+	8 bit	8 bit/canale
 	Integer	Intero
 	16 Bits/Channel	16 bit/canale
-	16 bit	16 bit
+	16 bit	16 bit/canale
 	32 Bits/Channel	32 bit/canale
 	32 bit (float)	32 bit (virgola mobile)
 	Floating point	Virgola mobile
@@ -2007,7 +2007,7 @@
 	Grid:	Griglia:
 
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
-# Italian follows the tool wording used above (Herramienta X).
+# Italian follows the tool wording used above (Strumento X).
 	Color Range	Intervallo colori
 	Adaptive Wide Angle	Grandangolo adattivo
 	Chalk & Charcoal	Gessetto e carboncino
@@ -2092,7 +2092,7 @@
 	Save Selection	Salva selezione
 	Load Selection	Carica selezione
 
-# Command-id override: under Edit > Purge a bare Deshacer reads as an action, not the history.
+# Command-id override: under Edit > Purge a bare Annulla reads as an action, not the history.
 @id	edit.purge.undo	Cronologia annullamenti
 # Rendering mode and recovery
 	Rendering Mode	Modalità rendering
@@ -2144,3 +2144,23 @@ cameraRaw	Amount	Quantità
 	Patch:	Toppa:
 	Lasso around an area, then drag the selection	Seleziona un'area con lazo, poi trascina la selezione
 	Edit Type	Modifica testo
+
+# Strings added on main after this catalog was written (2026-10).
+	Relight…	Riillumina…
+	No patterns	Nessun pattern
+	Enable {name}	Attiva {name}
+	Hold Alt while drawing for straight segments	Tieni premuto Alt mentre disegni per segmenti dritti
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Trascina o fai clic sui punti del poligono · tieni premuto Alt durante il lazo per segmenti dritti · {add} aggiunge · {sub} prima di disegnare sottrae
+	TIFF Options	Opzioni TIFF
+	Including layers will increase file size.	Includere i livelli aumenterà le dimensioni del file.
+	Discard Layers and Save a Copy	Elimina i livelli e salva una copia
+	Don't show again	Non mostrare più
+	Save failed: {error}	Salvataggio non riuscito: {error}
+	Save cancelled	Salvataggio annullato
+	Extend	Estendi
+	Structure:	Struttura:
+	Style {name} saved	Stile {name} salvato
+	Make Default	Imposta come predefinito
+	Reset to Default	Ripristina predefinito
+	Couldn't place {name}: {error}	Impossibile inserire {name}: {error}
+	Full-resolution preview unavailable	Anteprima a piena risoluzione non disponibile

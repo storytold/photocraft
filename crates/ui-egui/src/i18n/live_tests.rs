@@ -10,7 +10,7 @@ fn lang(code: &str) -> Lang {
 
 #[test]
 fn requested_languages_resolve_regional_preferences() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr"), ("it-IT", "it"), ("id-ID", "id")] {
+    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("fr-CA", "fr"), ("id-ID", "id")] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
     assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
