@@ -16,7 +16,7 @@ photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-codecs = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["unbounded_depth"] }
 thiserror = { workspace = true }
 flate2 = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }

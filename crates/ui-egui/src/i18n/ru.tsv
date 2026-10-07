@@ -106,6 +106,11 @@
 	16 Bits/Channel	16 бит/канал
 	32 Bits/Channel	32 бита/канал
 	8 Bits/Channel	8 бит/канал
+	8 bit	8 бит
+	Integer	Целое число
+	16 bit	16 бит
+	32 bit (float)	32 бит (float)
+	Floating point	С плавающей точкой
 	Mode	Режим
 	Grayscale	Градации серого
 	RGB Color	RGB
@@ -186,6 +191,7 @@
 	Outer Glow…	Внешнее свечение…
 	Inner Glow…	Внутреннее свечение…
 	Bevel & Emboss…	Фаска и рельеф…
+	Use Global Light	Использовать глобальный свет
 	Satin…	Глянец…
 	Color Overlay…	Наложение цвета…
 	Gradient Overlay…	Наложение градиента…
@@ -467,6 +473,7 @@
 	Quick Selection	Быстрое выделение
 	Magnetic Lasso	Магнитное лассо
 	Mixer Brush	Смешивающая кисть
+	Mixer Brush Tool	Инструмент «Смешивающая кисть»
 	History Brush	Кисть истории
 	Art History Brush	Кисть истории искусств
 	Pattern Stamp	Узорный штамп
@@ -1361,6 +1368,9 @@
 	BLANK DOCUMENT PRESETS ({n})	НАБОРЫ ПУСТЫХ ДОКУМЕНТОВ ({n})
 	Create a new document or open an existing file.	Создайте новый документ или откройте существующий файл.
 	Drop an image or PSD anywhere to open it.	Перетащите изображение или PSD в любое место окна, чтобы открыть.
+	Use File › Open to open an image.	Чтобы открыть изображение, выберите Файл › Открыть.
+	Native file drag-and-drop is unavailable	Нативное перетаскивание файлов в Wayland недоступно
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Нативное перетаскивание файлов в Wayland пока не поддерживается. Откройте файл через Файл › Открыть или запустите PhotoCraft в XWayland с `WAYLAND_DISPLAY= photocraft`.
 	Photo	Фото
 	Print	Печать
 	Art & Illustration	Искусство и иллюстрация
@@ -1401,6 +1411,8 @@
 	{name} options	Параметры: {name}
 	Align {what}	Выровнять: {what}
 	Untagged {mode}	Без профиля ({mode})
+	Invalid {mode} profile	Недопустимый профиль {mode}
+	Unnamed {mode} profile	Безымянный профиль {mode}
 	Constraints ({n})	Ограничения ({n})
 	Count: {n}	Счёт: {n}
 	Click to add a point · drag off or {key}-click or Delete to remove	Щёлкните, чтобы добавить точку · уведите или {key}-клик, либо Delete — удалить
@@ -2218,6 +2230,7 @@
 	Show only crosshair while painting	Только перекрестье при рисовании
 	Show slice numbers	Показывать номера фрагментов
 	Show tooltips	Показывать подсказки
+	Show bounding box when dragging layer	Показывать рамку при перетаскивании слоя
 	Show transformation values	Показывать значения трансформации
 	Slice color	Цвет фрагмента
 	Smart guide color	Цвет умных направляющих
@@ -2268,3 +2281,59 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Сетка:
+
+# Rendering mode and recovery
+	Rendering Mode	Режим отрисовки
+	Automatic (recommended)	Автоматически (рекомендуется)
+	CPU / Compatibility	CPU / Совместимость
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Автоматический режим использует GPU, когда он доступен, и переходит на CPU при ошибках.
+	Switched to CPU rendering	Включена отрисовка на CPU
+	GPU acceleration could not continue. Your documents are unchanged.	Ускорение GPU остановлено. Документы не изменены.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft обрабатывает изображения на CPU. Окно может продолжать использовать графический адаптер.
+	Retry GPU requires a restart. Save your work first.	Для повтора GPU нужен перезапуск. Сначала сохраните работу.
+	Keep Using CPU	Продолжить с CPU
+	Retry GPU	Повторить GPU
+	GPU Backend	Бэкенд GPU
+	Details	Подробности
+	GPU	GPU
+
+	Rendering mode	Режим отрисовки
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Лассо заморозки: перетащите, чтобы заморозить область; Alt+перетаскивание размораживает (L)
+
+	Shadow Clipping Warning (U)	Предупреждение о клиппинге теней (U)
+	Highlight Clipping Warning (O)	Предупреждение о клиппинге светов (O)
+	Show Lab Color Readouts	Показывать значения Lab
+	Show Vectorscope	Показывать вектороскоп
+	Show Red at 3 o'clock	Красный в положении «3 часа»
+	Show Skin Tone Indicator	Показывать ориентир тона кожи
+	Tone Histogram	Тональная гистограмма
+	Show Selected Region	Показать выделенную область
+
+cameraRaw	Light	Свет
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Фильтр Camera Raw ({layer})
+	Aqua	Голубой
+cameraRaw	Amount	Интенсивность
+cameraRaw	Blacks	Чёрные
+cameraRaw	Vibrance	Красочность
+cameraRaw	Color Grading	Цветовое тонирование
+cameraRaw	Lights	Светлые тона
+cameraRaw	Darks	Тёмные тона
+cameraRaw	Global	Общее
+cameraRaw	Red	Красные
+cameraRaw	Orange	Оранжевые
+cameraRaw	Yellow	Жёлтые
+cameraRaw	Green	Зелёные
+cameraRaw	Aqua	Голубые
+cameraRaw	Blue	Синие
+cameraRaw	Purple	Фиолетовые
+cameraRaw	Magenta	Пурпурные
+cameraRaw	Hue	Тон
+cameraRaw	Blending	Смешивание
+cameraRaw	Luminance Detail	Детализация яркости
+cameraRaw	Color Detail	Детализация цвета
+cameraRaw	Roughness	Неровность
+	Patch Tool	Заплатка
+	Patch:	Заплатка:
+	Lasso around an area, then drag the selection	Обведите область лассо, затем перетащите выделение

@@ -268,6 +268,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
         tool,
         Tool::Brush
             | Tool::Pencil
+            | Tool::MixerBrush
             | Tool::Eraser
             | Tool::BackgroundEraser
             | Tool::HistoryBrush
@@ -281,6 +282,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::Burn
             | Tool::Sponge
             | Tool::Lasso
+            | Tool::Patch
             | Tool::QuickSelection
     )
 }
@@ -424,6 +426,10 @@ fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>
     if let Some(shown) = crate::move_ui::display_doc(app, idx) {
         return shown;
     }
+    // Patch Tool drag: the selection healed from where the pointer is.
+    if let Some(shown) = crate::patch_preview::display_doc(app, idx) {
+        return shown;
+    }
     let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc.clone(), l.display_key());
@@ -497,9 +503,9 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     {
         return Some(t.id());
     }
-    // While a Move drag is under way the navigator keeps its image and catches up on release.
+    // While a Move or Patch drag is under way the navigator keeps its image and catches up on release.
     if let Some((_, _, t)) = &cached
-        && crate::move_ui::showing(app)
+        && (crate::move_ui::showing(app) || crate::patch_preview::showing(app))
     {
         return Some(t.id());
     }
@@ -608,6 +614,13 @@ fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u6
     if (seen.0 == now.0 || (seen.0 + 1 == now.0 && last_damage.is_some_and(|r| r.is_empty())))
         && let Some(st) = app.session.documents().get(idx)
         && let Some(r) = crate::move_ui::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
+    // Between a Patch drag's previews: the areas they healed.
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::patch_preview::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
@@ -869,6 +882,7 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
 /// Tabs + canvas for the active document, or the start screen.
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     retain_gpu_documents(app);
+    crate::transform_tool::track_steps(app, ui.ctx());
     let n = app.session.documents().len();
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
@@ -926,6 +940,8 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let active = app.session.active_index();
     let mut activate = None;
     let mut close = None;
+    let mut tab_action = None;
+    let tab_count = app.session.documents().len();
     let (mut focus_open, mut cancel_open) = (None, None);
     let focused_open = app.jobs.focus.is_some();
     egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
@@ -960,6 +976,9 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if resp.clicked() {
                     activate = Some(i);
                 }
+                resp.context_menu(|ui| {
+                    tab_action = tab_context_menu(ui, i, tab_count);
+                });
             }
             // Files opening in the background: a tab with a progress underline; × cancels.
             for (job, name, frac) in crate::jobs_ui::open_tabs(app) {
@@ -996,6 +1015,33 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(i) = close {
         let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
     }
+    if let Some((id, params)) = tab_action
+        && let Err(e) = crate::menus::invoke(app, ui.ctx(), id, params)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// All tab actions go through the same guarded File commands as the menu bar, including the
+/// unsaved-changes prompt. The clicked tab is explicit even when another document is active.
+fn tab_context_items(index: usize, count: usize) -> [(&'static str, &'static str, serde_json::Value, bool); 3] {
+    [
+        ("Close", "file.close", json!({"document": index}), true),
+        ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
+        ("Close All", "file.closeAll", json!({}), true),
+    ]
+}
+
+fn tab_context_menu(ui: &mut egui::Ui, index: usize, count: usize) -> Option<(&'static str, serde_json::Value)> {
+    ui.set_min_width(170.0);
+    for (label, id, params, enabled) in tab_context_items(index, count) {
+        if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
+            ui.close();
+            return Some((id, params));
+        }
+    }
+    None
 }
 
 /// Apply tab-strip clicks: a document tab shows that document, an opening tab its progress, and
@@ -1023,6 +1069,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let active = app.session.active_index().filter(|_| app.jobs.focus.is_none());
     let (mut activate, mut close) = (None, None);
+    let mut tab_action = None;
+    let tab_count = app.session.documents().len();
     let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
     let mut x = strip.left();
@@ -1055,6 +1103,9 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         } else if resp.clicked() {
             activate = Some(i);
         }
+        resp.context_menu(|ui| {
+            tab_action = tab_context_menu(ui, i, tab_count);
+        });
         x = r.right();
     }
     // Files opening in the background (#210): "name (Opening… 45%)" with a progress underline.
@@ -1086,6 +1137,12 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     open_tab_clicks(app, activate, focus_open, cancel_open);
     if let Some(i) = close {
         let _ = crate::menus::invoke(app, ui.ctx(), "file.close", json!({"document": i}));
+    }
+    if let Some((id, params)) = tab_action
+        && let Err(e) = crate::menus::invoke(app, ui.ctx(), id, params)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
@@ -1179,7 +1236,7 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
             ui.add_space(22.0);
             ui.horizontal(|ui| {
-                let msg = tl!("Drop an image or PSD anywhere to open it.");
+                let msg = start_screen_drop_hint(app.services.is_wayland);
                 let g = ui.painter().layout_no_wrap(msg.into(), egui::FontId::proportional(12.5), t.text_faint);
                 ui.add_space(((card.width() - g.size().x - 24.0) / 2.0).max(0.0));
                 let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::hover());
@@ -1196,6 +1253,10 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::links::link_row(app, ui);
         });
     });
+}
+
+fn start_screen_drop_hint(is_wayland: bool) -> &'static str {
+    if is_wayland { tl!("Use File › Open to open an image.") } else { tl!("Drop an image or PSD anywhere to open it.") }
 }
 
 /// Recent files listed on the Home screen.
@@ -1444,7 +1505,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
 
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = doc.selection.as_ref().filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges)) {
+    if let Some(sel) = doc.selection.as_ref().filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it.
         let step = (1.0 / view.zoom.max(1e-3)).log2().floor().exp2().clamp(1.0, 64.0) as u32;
@@ -1532,12 +1593,28 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     };
 
     if under_dialog {
-        if let Some(d) = crate::dialogs::pan_delta(&ctx, rect, app.ui.tool == Tool::Hand) {
+        // With the Color Picker on top the image is its eyedropper, whatever the tool; Space and
+        // the middle button still pan (`color_picker_ui::sample_at`).
+        let picking = primary && crate::color_picker_ui::top(app).is_some();
+        let hand = app.ui.tool == Tool::Hand && !picking;
+        if let Some(d) = crate::dialogs::pan_delta(&ctx, rect, hand) {
             view.center[0] -= d.x / view.zoom * if flip { -1.0 } else { 1.0 };
             view.center[1] -= d.y / view.zoom;
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-        } else if free_hover && (space_pan || app.ui.tool == Tool::Hand) {
+        } else if free_hover && (space_pan || hand) {
             ctx.set_cursor_icon(egui::CursorIcon::Grab);
+        } else if picking && let Some(p) = crate::dialogs::free_pointer_over(&ctx, rect) {
+            if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+            } else {
+                // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
+                crate::icons::cursor(&ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
+                ctx.set_cursor_icon(egui::CursorIcon::None);
+            }
+            if let Some(p) = crate::dialogs::free_press(&ctx, rect) {
+                let d = xf.to_doc(p);
+                crate::color_picker_ui::sample_at(app, d[0], d[1]);
+            }
         }
     }
     if tool == Tool::Hand && response.dragged() {
@@ -1556,7 +1633,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && let Some(p) = response.interact_pointer_pos()
         {
             let d = xf.to_doc(p);
+            app.ui.canvas_tool_menu = None;
             crate::layer_pick_ui::open(app, [p.x, p.y], d[0], d[1]);
+        }
+        if response.secondary_clicked()
+            && !crate::layer_pick_ui::is_gesture(tool, mods)
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            crate::canvas_tool_menu::open(app, tool, [p.x, p.y]);
         }
         // The (temporary) Hand pans above; its gestures never reach the tool underneath.
         if tool == Tool::Hand {
@@ -1639,6 +1723,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
                 // A click with the (temporary) Hand does nothing, never the tool underneath.
                 Tool::Hand => {}
+                // Double-clicking closes the polygonal lasso: the first click placed the last
+                // vertex (or already closed it), so the second never starts a new polygon. egui
+                // reports it as a triple click when a vertex went down shortly before.
+                Tool::PolygonLasso if response.double_clicked() || response.triple_clicked() => commit_polygon(app),
                 _ => {
                     if tool == Tool::Move && app.ui.transform.is_none() {
                         begin_transform_controls_at(app, &ctx, &xf, p);
@@ -1666,6 +1754,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         draw_transform_controls(app, &painter, &xf);
         crate::paint_mouse::show_picker(app, &ctx);
         crate::layer_pick_ui::show(app, &ctx);
+        crate::canvas_tool_menu::show(app, &ctx);
         crate::snap_ui::draw(app, &painter, &xf);
         if border == photocraft_engine::prefs::CanvasBorder::Line {
             painter.rect_stroke(img_rect, 0.0, Stroke::new(1.0, Color32::from_gray(20)), egui::StrokeKind::Outside);
@@ -1940,7 +2029,8 @@ fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> 
 /// The interior stays the normal Move-tool drag target.
 fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
     let handles = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
-    handles.iter().any(|h| h.distance(p) <= 8.0) || (r.expand(18.0).contains(p) && !r.expand(5.0).contains(p))
+    let grab = crate::transform_tool::HANDLE_PX as f32;
+    handles.iter().any(|h| h.distance(p) <= grab) || (r.expand(18.0).contains(p) && !r.expand(5.0).contains(p))
 }
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed.
@@ -2008,7 +2098,16 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             };
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
-        Tool::Lasso => {
+        // Patch Tool dragging the patch: the selection outline follows the pointer.
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            let start = d.start;
+            let [dx, dy] = crate::retouch_ui::patch_offset(app, start, last);
+            if let Some((_, _, segs)) = &app.outline_cache {
+                let moved: Vec<crate::outline::Segment> = segs.iter().map(|(a, b)| ([a[0] + dx, a[1] + dy], [b[0] + dx, b[1] + dy])).collect();
+                marching_ants_segments(painter, xf, &moved, painter.ctx().input(|i| i.time));
+            }
+        }
+        Tool::Lasso | Tool::Patch => {
             let pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
             crate::tool_feedback::draw_ants(painter, &pts, false);
         }
@@ -2060,12 +2159,22 @@ fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
 }
 
 fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    if let Ok(v) = app.run("document.pixel", json!({"x": x.floor(), "y": y.floor()})) {
-        let color: Vec<f32> = serde_json::from_value(v).unwrap_or_default();
-        if color.len() == 4 && color[3] > 0.0 {
-            let key = if mods.alt { "background" } else { "foreground" };
-            let _ = app.run("tools.setColors", json!({ key: [color[0], color[1], color[2], 1.0] }));
-        }
+    if let Some([r, g, b]) = composite_color(app, x, y) {
+        let key = if mods.alt { "background" } else { "foreground" };
+        let _ = app.run("tools.setColors", json!({ key: [r, g, b, 1.0] }));
+    }
+}
+
+/// The active document's composite colour at document point (x, y): what the Eyedropper picks.
+/// `None` off the image or over transparency.
+pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
+    if !(x.is_finite() && y.is_finite()) {
+        return None;
+    }
+    let v = app.run("document.pixel", json!({"x": x.floor(), "y": y.floor()})).ok()?;
+    match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
+        [r, g, b, a] if a > 0.0 => Some([r, g, b]),
+        _ => None,
     }
 }
 
@@ -2213,15 +2322,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     return;
                 }
                 Tool::PolygonLasso => {
-                    // Click adds a vertex; clicking near the first vertex closes the polygon.
-                    let close = app.ui.polygon.first().is_some_and(|p0| {
-                        app.ui.polygon.len() >= 3 && ((p0[0] - x).powi(2) + (p0[1] - y).powi(2)).sqrt() < 8.0 / app.current_zoom().max(0.01) as f64
-                    });
-                    if close {
-                        commit_polygon(app, mods);
-                    } else {
-                        app.ui.polygon.push([x, y]);
-                    }
+                    polygon_click(app, x, y, mods);
                     return;
                 }
                 Tool::Type if crate::type_tool::pointer_down(app, x, y, mods.shift) => return,
@@ -2335,7 +2436,8 @@ fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             let (aa, feather) = (app.ui.tool_options.anti_alias, app.ui.tool_options.feather);
             let _ = app.run("select.rect", json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "antiAlias": aa, "feather": feather}));
         }
-        Tool::Lasso => {
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
+        Tool::Lasso | Tool::Patch => {
             let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);
@@ -2351,7 +2453,7 @@ fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
                 let bg = app.session.tools.background;
                 let _ = app.run(
                     "paint.gradient",
-                    json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "colors": [hex(fg), hex(bg)], "opacity": o.fill_opacity, "target": paint_target(app)}),
+                    json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "colors": [hex(fg), hex(bg)], "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": paint_target(app)}),
                 );
             }
         }
@@ -2398,11 +2500,36 @@ fn selection_mode(app: &PhotocraftApp, m: egui::Modifiers) -> &'static str {
     crate::tool_feedback::selection_mode(Tool::Lasso, app.ui.selection_mode, m)
 }
 
-/// Close the polygonal lasso and make the selection.
-pub fn commit_polygon(app: &mut PhotocraftApp, mods: egui::Modifiers) {
+/// A polygonal lasso click adds a vertex; clicking near the first vertex closes the polygon. The
+/// first click fixes the selection mode; a new-selection polygon hides the old outline while it is
+/// drawn, and replaces it in one history step when it closes.
+fn polygon_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let close = app
+        .ui
+        .polygon
+        .first()
+        .is_some_and(|p0| app.ui.polygon.len() >= 3 && ((p0[0] - x).powi(2) + (p0[1] - y).powi(2)).sqrt() < 8.0 / app.current_zoom().max(0.01) as f64);
+    if close {
+        commit_polygon(app);
+        return;
+    }
+    if app.ui.polygon.is_empty() {
+        app.ui.polygon_mode = selection_mode(app, mods).into();
+    }
+    app.ui.polygon.push([x, y]);
+}
+
+/// A new-selection polygonal lasso is being drawn, so the selection it will replace is hidden.
+pub fn polygon_replaces_selection(app: &PhotocraftApp) -> bool {
+    !app.ui.polygon.is_empty() && app.ui.polygon_mode == "replace"
+}
+
+/// Close the polygonal lasso and make the selection in the mode it started in.
+pub fn commit_polygon(app: &mut PhotocraftApp) {
     let pts = std::mem::take(&mut app.ui.polygon);
+    let mode = std::mem::take(&mut app.ui.polygon_mode);
     if pts.len() >= 3 {
-        let mode = selection_mode(app, mods);
+        let mode = if mode.is_empty() { selection_mode(app, egui::Modifiers::NONE).to_owned() } else { mode };
         let _ = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": app.ui.tool_options.anti_alias}));
     }
 }
@@ -2447,6 +2574,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tab_context_uses_clicked_document_and_existing_close_commands() {
+        let items = tab_context_items(2, 3);
+        assert_eq!(items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.close", "file.closeOthers", "file.closeAll"]);
+        assert_eq!(items[0].2, json!({"document": 2}));
+        assert_eq!(items[1].2, json!({"document": 2}));
+        assert_eq!(items[2].2, json!({}));
+        assert!(!tab_context_items(0, 1)[1].3);
+        assert!(items.iter().all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some()));
+    }
+
+    #[test]
+    fn tab_close_others_prompts_for_unsaved_nonactive_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Keep"})).unwrap();
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Edited"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert_eq!(app.session.active_index(), Some(1));
+        let (_, id, params, _) = tab_context_items(0, 2)[1].clone();
+        crate::menus::invoke(&mut app, &egui::Context::default(), id, params).unwrap();
+        assert!(app.discard.is_some(), "close others must ask before discarding the edited tab");
+        assert_eq!(app.session.documents().len(), 2);
+    }
+
+    #[test]
+    fn wayland_start_screen_hint_does_not_claim_file_drop_works() {
+        assert_ne!(start_screen_drop_hint(true), start_screen_drop_hint(false));
+    }
+
+    #[test]
     fn pointer_moves_are_bounded_by_the_press_and_release() {
         use egui::{Event, PointerButton, pos2};
         let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
@@ -2467,9 +2623,18 @@ mod tests {
 
     #[test]
     fn freehand_tools_are_the_ones_that_follow_a_path() {
-        for t in
-            [Tool::Brush, Tool::Pencil, Tool::Eraser, Tool::BackgroundEraser, Tool::CloneStamp, Tool::Smudge, Tool::Dodge, Tool::Lasso, Tool::QuickSelection]
-        {
+        for t in [
+            Tool::Brush,
+            Tool::Pencil,
+            Tool::MixerBrush,
+            Tool::Eraser,
+            Tool::BackgroundEraser,
+            Tool::CloneStamp,
+            Tool::Smudge,
+            Tool::Dodge,
+            Tool::Lasso,
+            Tool::QuickSelection,
+        ] {
             assert!(freehand_tool(t), "{t:?} paints or retouches along a path");
         }
         for t in [Tool::Move, Tool::Eyedropper, Tool::Gradient, Tool::Crop, Tool::RectMarquee, Tool::Type, Tool::Hand] {

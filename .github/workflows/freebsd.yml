@@ -52,7 +52,12 @@ jobs:
             git config --global --add safe.directory "*"
             rustc --version
             CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked
-            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked
+            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked --exclude photocraft-ui-egui
+            CARGO_PROFILE_DEV_DEBUG=0 cargo test -p photocraft-ui-egui --locked --lib
+            CARGO_PROFILE_DEV_DEBUG=0 cargo test -p photocraft-ui-egui --locked --doc
+            # The VM's software Vulkan driver crashes (SIGSEGV) when several tests set up a GPU
+            # device at once, so the GPU integration tests run one at a time here.
+            CARGO_PROFILE_DEV_DEBUG=0 cargo test -p photocraft-ui-egui --locked --test '*' -- --test-threads=1
             # The release package, as release.yml builds it. Free the debug build's disk first.
             rm -rf target/debug
             CARGO_BUILD_JOBS=4 bash packaging/freebsd/package.sh

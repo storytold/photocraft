@@ -5,9 +5,10 @@
 # with a single Chinese form. Other contexts disambiguate the English meaning.
 # Escapes inside columns: \n, \t, \\. Keep {name} placeholders and trailing ….
 #
-# Original translations from the meaning of the English source keys in PhotoCraft
-# PR #169 (c1fb8909c4b3b176eead12d66b04338a103cf63d). No proprietary translation
-# resources were consulted or extracted. Licensed MIT OR Apache-2.0, as the code.
+# Original translations from the meaning of PhotoCraft's English source keys,
+# including the current menus, panels and platform-specific shortcut templates.
+# No proprietary translation resources were consulted or extracted.
+# Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
 	File	文件
@@ -175,8 +176,13 @@
 	Lab Color	Lab 颜色
 	Multichannel	多通道
 	8 Bits/Channel	8 位/通道
+	8 bit	8 位
+	Integer	整数
 	16 Bits/Channel	16 位/通道
+	16 bit	16 位
 	32 Bits/Channel	32 位/通道
+	32 bit (float)	32 位（浮点）
+	Floating point	浮点数
 	Color Table…	颜色表…
 	Bitmap…	位图…
 	Duotone…	双色调…
@@ -260,6 +266,7 @@
 	Layer Style	图层样式
 	Blending Options…	混合选项…
 	Bevel & Emboss…	斜面和浮雕…
+	Use Global Light	使用全局光
 	Inner Shadow…	内阴影…
 	Inner Glow…	内发光…
 	Satin…	光泽…
@@ -959,9 +966,12 @@
 	Drag to move the active shape's path or the Work Path	拖动以移动当前形状的路径或工作路径
 	Draw with the Pen tool (P) or make a work path from a selection.	使用钢笔工具（P）绘制，或从选区创建工作路径。
 	Drop an image or PSD anywhere to open it.	将图像或 PSD 拖放到任意位置即可打开。
+	Native file drag-and-drop is unavailable	Wayland 上不支持原生文件拖放
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland 尚不支持原生文件拖放。请使用“文件 › 打开”，或通过 `WAYLAND_DISPLAY= photocraft` 在 XWayland 下运行 PhotoCraft。
 	Duplicate Layers…	复制图层…
 	Duplicate style	复制样式
 	Edit Toolbar…	编辑工具栏…
+	Use File › Open to open an image.	使用“文件 › 打开”打开图像。
 	Edit in Quick Mask Mode  (Q)	在快速蒙版模式下编辑  （Q）
 	Edit in Standard Mode  (Q)	在标准模式下编辑  （Q）
 	Effects	效果
@@ -1134,6 +1144,7 @@
 	Midtones	中间调
 	Midtones from:	中间调下限：
 	Midtones to:	中间调上限：
+	Mixer Brush Tool	混合画笔工具
 	Minimum Depth	最小深度
 	Minimum Diameter	最小直径
 	Minimum Roundness	最小圆度
@@ -1674,6 +1685,8 @@
 	Doc: {flat}/{layered}	文档：{flat}/{layered}
 	Scratch: {size}	暂存：{size}
 	Untagged {mode}	未标记的 {mode}
+	Invalid {mode} profile	无效的 {mode} 配置文件
+	Unnamed {mode} profile	未命名的 {mode} 配置文件
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	分辨率：{dpi} 像素/英寸
 	Doc: {w} × {h} px	文档：{w} × {h} px
@@ -1821,6 +1834,7 @@
 	Show only crosshair while painting	绘画时仅显示十字线
 	Show slice numbers	显示切片编号
 	Show tooltips	显示工具提示
+	Show bounding box when dragging layer	拖动图层时显示边界框
 	Show transformation values	显示变换值
 	Slice color	切片颜色
 	Smart guide color	智能参考线颜色
@@ -1901,3 +1915,157 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	网格：
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	冻结套索：拖动以冻结区域，按住 Alt 拖动以解冻 (L)
+
+	Shadow Clipping Warning (U)	阴影剪切警告 (U)
+	Highlight Clipping Warning (O)	高光剪切警告 (O)
+	Show Lab Color Readouts	显示 Lab 颜色读数
+	Show Vectorscope	显示矢量示波器
+	Show Red at 3 o'clock	将红色显示在三点钟方向
+	Show Skin Tone Indicator	显示肤色指示线
+	Tone Histogram	色调直方图
+	Show Selected Region	显示选定区域
+
+cameraRaw	Light	光线
+
+# Camera Raw: contextual controls and window title
+	Camera Raw Filter ({layer})	Camera Raw 滤镜（{layer}）
+cameraRaw	Lights	亮调
+cameraRaw	Darks	暗调
+cameraRaw	Blacks	黑色色阶
+cameraRaw	Amount	强度
+cameraRaw	Tint	色偏
+cameraRaw	Masking	蒙版保护
+cameraRaw	Blending	混合
+	Patch Tool	修补工具
+	Patch:	修补：
+	Lasso around an area, then drag the selection	用套索圈出区域，然后拖动选区
+# Current shell labels and shortcut templates. Keep {key} platform-dependent.
+	Add a mask  (from the selection; {key} inverts)	添加蒙版  （基于选区；{key} 反相）
+	Add to selection  ({key})	添加到选区  （{key}）
+	Click the first point or press {key} to close · Esc cancels	单击起点或按 {key} 闭合 · Esc 取消
+	Click to add a point · drag off or {key}-click or Delete to remove	单击添加点 · 拖离、按 {key} 单击或按 Delete 移除
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	单击应用，按 {key} 单击清除覆盖设置，双击打开样式选项
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	单击放大  ·  按 {key} 单击缩小  ·  向右或向左拖动以放大或缩小
+	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	单击：角点 · 拖动：平滑点 · 单击起点：闭合 · {key} 完成 · Esc 取消
+	Commit Perspective Warp ({key})	应用透视变形（{key}）
+	Commit Puppet Warp ({key})	应用操控变形（{key}）
+	Commit any current edits ({key})	应用当前所有编辑（{key}）
+	Commit current crop operation  ({key})	应用当前裁剪操作  （{key}）
+	Commit transform ({key})	应用变换（{key}）
+	Commit warp ({key})	应用变形（{key}）
+	Create a new layer	创建图层
+	Intersect with selection  ({key})	与选区相交  （{key}）
+	New document…	新建文档…
+	Search commands	搜索命令
+	Show Guides	显示参考线
+	Subtract from selection  ({key})	从选区中减去  （{key}）
+	↑↓ navigate   {key} run   esc close	↑↓ 导航   {key} 运行   esc 关闭
+@plural	{n} layer|{n} layers	{n} 个图层
+	Collapse group  ({key}-click: all groups)	折叠组  （按 {key} 单击：所有组）
+	Expand group  ({key}-click: all groups)	展开组  （按 {key} 单击：所有组）
+	Hide the layer's effects  ({key}-click: all layers)	隐藏图层效果  （按 {key} 单击：所有图层）
+	Show the layer's effects  ({key}-click: all layers)	显示图层效果  （按 {key} 单击：所有图层）
+	System Info…	系统信息…
+	System Info	系统信息
+	More panels	更多面板
+	These settings aren't available in PhotoCraft yet.	PhotoCraft 暂不支持这些设置。
+	Graphics	图形
+	Reset GPU Backend	重置 GPU 后端
+	Applies at next launch.	下次启动时生效。
+	Click to sample the foreground colour  ·  {key}-click for background	单击拾取前景色  ·  按 {key} 单击拾取背景色
+	{key}-click to set the source	按 {key} 单击设置源点
+	{key} to subtract	按 {key} 从选区中减去
+	Clone source {n} ({key}-click with Clone Stamp to set)	仿制源 {n}（使用仿制图章时按 {key} 单击设置）
+	Source: not set ({key}-click with Clone Stamp)	源点：未设置（使用仿制图章时按 {key} 单击）
+	Pixel Layer	像素图层
+	Type Layer	文字图层
+	Shape Layer	形状图层
+	Group Layer	图层组
+	Fill Layer	填充图层
+	Smart Object Layer	智能对象图层
+	Create Warped Text	创建变形文字
+	Rasterize Smart Object	栅格化智能对象
+	Rasterize Fill Content	栅格化填充内容
+	Unlock: picking a preset replaces these settings	解锁：选择预设时替换这些设置
+	Lock: keep these settings when picking another preset	锁定：选择其他预设时保留这些设置
+	Diameter:	直径：
+	Hardness:	硬度：
+	No brush presets	没有画笔预设
+	Toggle the Brush Settings panel  (F5)	切换画笔设置面板  （F5）
+	Create new brush preset from the current settings	根据当前设置创建画笔预设
+	Brush Settings…  (F5): every option of this brush	画笔设置…  （F5）：此画笔的全部选项
+	Rename Brush…	重命名画笔…
+	Delete Brush	删除画笔
+	Group name	组名称
+	Brush name	画笔名称
+	Grid view	网格视图
+	List view	列表视图
+	Off: the speed of the pointer sets the spacing	关闭：由指针移动速度决定间距
+	Tilt Scale	倾斜缩放
+	Brush Projection	画笔投影
+	Apply the pen's tilt and rotation to the tip shape	将笔的倾斜和旋转应用于笔尖形状
+	Mixer Brush	混合器画笔
+	Wet	湿润
+	Mix	混合
+	Wetness Jitter	湿润度抖动
+	Mix Jitter	混合抖动
+	Show the layer mask as an overlay	以叠加方式显示图层蒙版
+	Toggle visibility	切换可见性
+	Unlink the mask from the layer	取消蒙版与图层的链接
+	Link the mask to the layer	将蒙版与图层链接
+	Gradient	渐变
+	Gradient Options	渐变选项
+	Align with layer	与图层对齐
+	Reset Alignment	重置对齐
+	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
+	The current gradient (pick one in Window › Gradients)	当前渐变（在“窗口 › 渐变”中选择）
+	Select a type layer to edit its character and paragraph settings.	选择文字图层以编辑字符和段落设置。
+	Text color	文字颜色
+	Type Options	文字选项
+	Anti-aliasing method	消除锯齿方式
+	Horizontal type	横排文字
+	Vertical type	直排文字
+	Fill path with foreground color	以前景色填充路径
+	Stroke path with brush	用画笔描边路径
+	Load path as a selection	将路径载入选区
+	Make work path from selection	从选区生成工作路径
+	Add vector mask	添加矢量蒙版
+	Create new path	创建路径
+	Delete path	删除路径
+	Delete vector mask	删除矢量蒙版
+	CPU (no GPU acceleration)	CPU（无 GPU 加速）
+	DirectX 12	DirectX 12
+	GPU backend	GPU 后端
+	Metal	Metal
+	OpenGL	OpenGL
+	Use tablet pressure	使用数位板压感
+	Vulkan	Vulkan
+	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。
+
+# Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
+	Cancel opening	取消打开
+	Cancelled opening {name}	已取消打开 {name}
+	Cancelled {label}	已取消 {label}
+	Esc to cancel	按 Esc 取消
+	Opening {name}	正在打开 {name}
+	Opening {name}…	正在打开 {name}…
+	Opening…	正在打开…
+	Reading…	正在读取…
+	Working…	正在处理…
+
+# Rendering mode and recovery
+	Rendering Mode	渲染模式
+	Automatic (recommended)	自动（推荐）
+	CPU / Compatibility	CPU / 兼容模式
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	自动模式会在可用时使用 GPU 加速，出错时改用 CPU 渲染。
+	Switched to CPU rendering	已切换到 CPU 渲染
+	GPU acceleration could not continue. Your documents are unchanged.	GPU 加速无法继续。您的文档未更改。
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft 正在使用 CPU 合成图像。窗口仍可能使用您的显卡。
+	Retry GPU requires a restart. Save your work first.	重试 GPU 需要重新启动。请先保存您的工作。
+	Keep Using CPU	继续使用 CPU
+	Retry GPU	重试 GPU
+	Advanced	高级
+	GPU Backend	GPU 后端
+	Details	详细信息
+	Rendering mode	渲染模式

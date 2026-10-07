@@ -29,6 +29,29 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Most points a Camera Raw point curve accepts from commands and the control channel.
+pub const MAX_CURVE_POINTS: usize = 16;
+
+/// Checks a point curve from untrusted input: empty (linear) or 2..=16 finite points in 0..=255
+/// with inputs increasing by at least one level. Deserialization stays lenient on purpose:
+/// earlier editors saved curves this rejects, and [`curve_lut`] already sorts and de-duplicates
+/// them, so stored Smart Filters keep rendering.
+pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
+    if points.len() == 1 {
+        return Err("a nonempty curve needs at least two points".into());
+    }
+    if points.len() > MAX_CURVE_POINTS {
+        return Err(format!("at most {MAX_CURVE_POINTS} curve points"));
+    }
+    if !points.iter().flatten().all(|v| v.is_finite() && (0.0..=255.0).contains(v)) {
+        return Err("curve coordinates must be finite and in 0..=255".into());
+    }
+    if points.windows(2).any(|w| w[1][0] - w[0][0] < 1.0) {
+        return Err("curve inputs must increase by at least one level".into());
+    }
+    Ok(())
+}
+
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
 /// One colour grading wheel.
@@ -437,6 +460,33 @@ pub fn band_weights(h: f32) -> [f32; 8] {
 }
 
 impl CameraRaw {
+    /// Rejects malformed point curves in new settings (see [`validate_curve`]).
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, curve) in [
+            ("pointCurve", &self.point_curve),
+            ("pointCurveRed", &self.point_curve_red),
+            ("pointCurveGreen", &self.point_curve_green),
+            ("pointCurveBlue", &self.point_curve_blue),
+        ] {
+            validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
+        }
+        Ok(())
+    }
+    /// [`validate`](Self::validate) for an edit of `stored` settings: a curve left as stored is
+    /// accepted, so editing another control of an older Smart Filter still works.
+    pub fn validate_changes(&self, stored: &CameraRaw) -> Result<(), String> {
+        for (name, curve, kept) in [
+            ("pointCurve", &self.point_curve, &stored.point_curve),
+            ("pointCurveRed", &self.point_curve_red, &stored.point_curve_red),
+            ("pointCurveGreen", &self.point_curve_green, &stored.point_curve_green),
+            ("pointCurveBlue", &self.point_curve_blue, &stored.point_curve_blue),
+        ] {
+            if curve != kept {
+                validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
+            }
+        }
+        Ok(())
+    }
     fn wb_neutral(&self) -> bool {
         self.temperature == 0.0 && self.tint == 0.0 && self.exposure == 0.0
     }
@@ -868,6 +918,44 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_curves_are_validated_but_saved_curves_still_load_and_render() {
+        for field in ["pointCurve", "pointCurveRed", "pointCurveGreen", "pointCurveBlue"] {
+            for points in [
+                serde_json::json!([[128, 128]]),
+                serde_json::json!([[255, 255], [0, 0]]),
+                serde_json::json!([[0, 0], [0, 255]]),
+                serde_json::json!([[0, -1], [255, 255]]),
+                serde_json::json!([[0, 0], [256, 255]]),
+                serde_json::json!([[0, 0], [1e30, 255]]),
+                serde_json::json!((0..17).map(|i| [i * 15, i * 15]).collect::<Vec<_>>()),
+            ] {
+                let p: CameraRaw = serde_json::from_value(serde_json::json!({field: points})).unwrap();
+                assert!(p.validate().is_err(), "{field}: {points}");
+            }
+            for points in
+                [serde_json::json!([]), serde_json::json!([[0, 0], [255, 255]]), serde_json::json!((0..16).map(|i| [i * 17, i * 17]).collect::<Vec<_>>())]
+            {
+                let p: CameraRaw = serde_json::from_value(serde_json::json!({field: points})).unwrap();
+                assert!(p.validate().is_ok(), "{field}: {points}");
+            }
+        }
+        assert_eq!(serde_json::from_str::<CameraRaw>("{}").unwrap(), CameraRaw::default());
+        // An older editor could stack two points on one input and exceed 16 points; such a
+        // saved Smart Filter must still develop instead of silently disappearing.
+        let mut legacy: Vec<[f32; 2]> = (0..20).map(|i| [i as f32 * 12.0, i as f32 * 12.0]).collect();
+        legacy.insert(5, [60.0, 200.0]);
+        let p: CameraRaw = serde_json::from_value(serde_json::json!({"pointCurve": legacy})).unwrap();
+        assert!(p.validate().is_err());
+        let edited = CameraRaw { exposure: 1.0, ..p.clone() };
+        assert!(edited.validate_changes(&p).is_ok(), "an unchanged stored curve stays editable");
+        let broken = CameraRaw { point_curve: vec![[10.0, 10.0]], ..p.clone() };
+        assert!(broken.validate_changes(&p).is_err(), "a changed curve is validated");
+        let mut px = img(4, 4);
+        develop(&mut px, 4, 4, &p, false);
+        assert!(px.iter().flatten().all(|v| v.is_finite()));
+    }
 
     fn img(w: usize, h: usize) -> Vec<[f32; 4]> {
         (0..w * h)

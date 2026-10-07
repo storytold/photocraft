@@ -246,6 +246,9 @@ fn parse_bevel(d: &Descriptor) -> Bevel {
 }
 
 fn parse_one(key: &str, d: &Descriptor) -> Option<Effect> {
+    if matches!(d.get("present"), Some(Value::Boolean(false))) {
+        return None;
+    }
     Some(match key {
         "DrSh" => Effect::DropShadow(parse_shadow(d, false)),
         "IrSh" => Effect::InnerShadow(parse_shadow(d, true)),
@@ -735,6 +738,23 @@ mod tests {
         // Kind order is canonical: shadows first ... strokes last.
         assert!(matches!(back[0], Effect::DropShadow(_)));
         assert!(matches!(back.last().unwrap(), Effect::Stroke(_)));
+    }
+
+    #[test]
+    fn lfx2_ignores_absent_effects_but_keeps_disabled_configured_effects() {
+        let d = Descriptor::new("null")
+            .with("DrSh", Value::Descriptor(Descriptor::new("DrSh").with("present", Value::Boolean(false)).with("enab", Value::Boolean(false))))
+            .with("FrFX", Value::Descriptor(Descriptor::new("FrFX").with("present", Value::Boolean(true)).with("enab", Value::Boolean(false))))
+            .with("SoFi", Value::Descriptor(Descriptor::new("SoFi").with("enab", Value::Boolean(false))));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor::new(d).to_bytes());
+
+        let (_, effects) = parse_lfx2(&data).unwrap();
+
+        assert_eq!(effects.len(), 2);
+        assert!(effects.iter().all(|effect| !effect.enabled()));
+        assert!(effects.iter().any(|effect| effect.label() == "Stroke"));
+        assert!(effects.iter().any(|effect| effect.label() == "Color Overlay"));
     }
 
     #[test]

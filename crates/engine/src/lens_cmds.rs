@@ -346,6 +346,8 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cr = raw_params(RAW, p)?;
+    // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
+    cr.validate().map_err(|e| bad(RAW, e))?;
     let t0 = Stopwatch::start();
     let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
@@ -529,6 +531,12 @@ mod tests {
         assert!(active_px(&s, 10, 40)[1] < inside_before[1]);
         assert_eq!(active_px(&s, 100, 40), outside_before);
         assert!(s.execute(RAW, json!({"exposure": "bright"})).is_err());
+        let legacy_curve = json!([[0, 0], [60, 40], [60, 200], [255, 255]]);
+        assert!(s.execute(RAW, json!({"pointCurve": legacy_curve})).is_err(), "new curves are validated");
+        // A curve an older editor saved must still re-apply as a Smart Filter.
+        let surf = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let stored = apply_to_surface(RAW, &json!({"pointCurve": legacy_curve, "exposure": 1.0}), &surf, Rect::new(0, 0, 120, 80));
+        assert!(stored.is_some(), "a stored legacy curve must not drop the whole filter");
         // Smart filter.
         let mut s = session(8);
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();

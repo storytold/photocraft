@@ -228,6 +228,12 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 }
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
+    // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
+    // below it covers the canvas, so canvas zoom keys are blocked too.
+    if app.camera_raw.is_some() {
+        return;
+    }
     // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu.
     if crate::menu_nav::is_open(ctx) {
         return;
@@ -301,7 +307,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.ui.polygon.is_empty() || app.ui.crop_rect.is_some() {
         if pressed(Key::Enter) {
             if !app.ui.polygon.is_empty() {
-                crate::canvas::commit_polygon(app, Modifiers::NONE);
+                crate::canvas::commit_polygon(app);
             } else {
                 crate::canvas::commit_crop(app);
             }
@@ -309,6 +315,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         if pressed(Key::Escape) {
             app.ui.polygon.clear();
+            app.ui.polygon_mode.clear();
             app.ui.crop_rect = None;
             app.crop.drag = None;
             return;

@@ -292,6 +292,9 @@ pub enum ContentM {
         warp: Option<photocraft_geom::warp::Warp>,
         #[serde(default)]
         stack_mode: Option<photocraft_doc::StackMode>,
+        /// Distort / Perspective placement (row-major 3×3); absent for affine placements.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        perspective: Option<[f64; 9]>,
     },
 }
 

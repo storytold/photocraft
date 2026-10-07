@@ -4,7 +4,7 @@
 use egui::{Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use photocraft_doc::LayerContent;
+use photocraft_doc::{Effect, LayerContent};
 use serde_json::json;
 
 use super::{Indicator, RowRects, layout, recorded};
@@ -133,6 +133,23 @@ fn the_fx_triangle_hides_and_shows_the_effects_rows() {
     let p = h.get_by_label(&format!("Expand effects {}", top.name)).rect().center();
     click(&mut h, p);
     assert!(h.state().session.active().unwrap().fx_collapsed.is_empty());
+}
+
+#[test]
+fn a_configured_but_disabled_effect_stays_discoverable_in_the_panel() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let layer_id = session.execute("layer.new.layer", json!({"name": "Styled"})).unwrap()["layer"].as_u64().unwrap();
+    session.execute("layer.layerStyle.dropShadow", json!({"layer": layer_id})).unwrap();
+    let state = session.active_mut().unwrap();
+    let doc = std::sync::Arc::make_mut(&mut state.doc);
+    let layer = doc.layers.iter_mut().find(|layer| layer.id.0 == layer_id).unwrap();
+    let Some(Effect::DropShadow(shadow)) = layer.effects.items.first_mut() else { panic!("drop shadow was configured") };
+    shadow.common.enabled = false;
+
+    let h = harness(session, 1.0, "promedium", 290.0);
+    let effect_row = h.get_by_label("Drop Shadow").rect();
+    assert!(effect_row.is_positive(), "a configured disabled effect remains visible for discovery");
 }
 
 fn groups_open(s: &photocraft_engine::Session) -> Vec<bool> {

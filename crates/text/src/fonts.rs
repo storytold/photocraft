@@ -424,6 +424,21 @@ mod tests {
         }
     }
 
+    /// The bundled UI fonts cover French (the `fr` UI language) on their own: every accented
+    /// letter, the ligatures, the guillemets and the no-break space used before `: ; ? !`.
+    #[test]
+    fn bundled_fonts_cover_french() {
+        use skrifa::MetadataProvider;
+        let french = "àâæçéèêëîïôœùûüÿ";
+        let letters: String = french.chars().chain(french.chars().flat_map(char::to_uppercase)).chain("«»\u{a0}’".chars()).collect();
+        for (name, bytes) in super::BUNDLED {
+            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let cmap = font.charmap();
+            let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
+            assert!(missing.is_empty(), "{name} lacks French glyphs: {missing:?}");
+        }
+    }
+
     #[test]
     fn missing_font_dirs_are_skipped() {
         let mut files = Vec::new();

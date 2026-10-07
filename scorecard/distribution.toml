@@ -64,9 +64,9 @@ note = "No bug report dialog in crates"
 [[item]]
 id = "DIST-220-4"
 target = "Translation coverage per language reported by xtask; RTL layout for Arabic and Hebrew"
-status = "missing"
+status = "partial"
 issue = 220
-note = "No i18n in crates or xtask (waits on #169)"
+note = "`cargo xtask i18n-coverage` reports per-language coverage (#427); no RTL layout yet"
 
 [[item]]
 id = "DIST-220-5"
