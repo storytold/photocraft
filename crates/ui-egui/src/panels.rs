@@ -2427,7 +2427,9 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
             ui.painter().line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
         }
         let eye = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 9.0), vec2(18.0, 18.0));
-        icons::paint(ui, eye, if on { "eye" } else { "eye-off" }, 12.0, if on { t.icon } else { t.text_faint });
+        if on {
+            icons::paint(ui, eye, "eye", 12.0, t.icon);
+        }
         let x = rect.left() + indent + if i == 0 { 0.0 } else { 16.0 };
         if i == 0 {
             icons::paint(ui, Rect::from_center_size(pos2(x - 12.0, rect.center().y), vec2(14.0, 14.0)), "sparkles", 11.0, t.text_dim);
