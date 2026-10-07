@@ -111,7 +111,12 @@ The desktop app stores them in `preferences.json` in the platform config directo
 `$XDG_CONFIG_HOME/photocraft`; override with `PHOTOCRAFT_CONFIG_DIR`); autosaves go to its
 `Recovery` folder. In portable mode (a `portable.txt` or `PhotoCraft.portable` file beside the
 executable, as in the Windows portable zip) that directory is `PhotoCraftData` next to the
-executable instead. The web build keeps them in `localStorage`.
+executable instead. The web build keeps them in `localStorage`. A save writes only the values
+this instance changed since it last loaded or saved them over what storage holds now, so a second
+browser tab (or app window) never reverts the other's changes; for a value changed in both, the
+latest save wins. A failed write stays pending and is retried (after 2 s, doubling up to 30 s, and
+sooner after a further change); the status bar reports the first failure and a notice a
+persistent one.
 
 User and imported (`.abr`) brush presets live in the config directory's `Presets` folder: one
 `.pcbrushes` JSON file per preset group, content-addressed tip bitmaps under `tips/`, and an
