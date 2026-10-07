@@ -2041,3 +2041,14 @@ cameraRaw	Blending	混合
 	Use tablet pressure	使用数位板压感
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。
+
+# Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
+	Cancel opening	取消打开
+	Cancelled opening {name}	已取消打开 {name}
+	Cancelled {label}	已取消 {label}
+	Esc to cancel	按 Esc 取消
+	Opening {name}	正在打开 {name}
+	Opening {name}…	正在打开 {name}…
+	Opening…	正在打开…
+	Reading…	正在读取…
+	Working…	正在处理…
