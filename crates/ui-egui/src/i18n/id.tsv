@@ -2471,3 +2471,9 @@ cameraRaw	Blending	Pembauran
 	GPU Backend	Backend GPU
 	Details	Detail
 	Rendering mode	Mode rendering
+
+# Warp grid presets (#388)
+	3 x 3	3 × 3
+	4 x 4	4 × 4
+	5 x 5	5 × 5
+	Grid:	Kisi-kisi:
