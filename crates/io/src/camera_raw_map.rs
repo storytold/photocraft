@@ -122,9 +122,11 @@ fn read_curve(value: &Value) -> Option<J> {
         return None;
     }
     let points: Option<Vec<[f32; 2]>> = values
-        .chunks_exact(2)
-        .map(|pair| {
-            let (Value::Integer(x), Value::Integer(y)) = (pair.first()?, pair.get(1)?) else { return None };
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|[x, y]| {
+            let (Value::Integer(x), Value::Integer(y)) = (x, y) else { return None };
             Some([*x as f32, *y as f32])
         })
         .collect();
