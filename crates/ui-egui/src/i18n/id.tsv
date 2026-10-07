@@ -991,7 +991,7 @@
 	Flip X Jitter	Jitter Balik X
 	Flip Y	Balik Y
 	Flip Y Jitter	Jitter Balik Y
-	Flow	Flow
+	Flow	Aliran
 	Flow Jitter	Jitter Flow
 	Focal Length	Panjang Fokal
 	Font	Font
@@ -1915,7 +1915,7 @@
 	Tilt Scale	Skala Kemiringan
 	Brush Projection	Proyeksi Kuas
 	Apply the pen's tilt and rotation to the tip shape	Terapkan kemiringan dan rotasi pena ke bentuk ujung
-	Mixer Brush	Mixer Brush
+	Mixer Brush	Kuas Pencampur
 	Wet	Basah
 	Mix	Campur
 	Wetness Jitter	Jitter Kebasahan
@@ -2422,3 +2422,52 @@
 	Select Bottom Layer	Pilih Layer Terbawah
 	Add Layer Above to Selection	Tambah Layer di Atas ke Seleksi
 	Add Layer Below to Selection	Tambah Layer di Bawah ke Seleksi
+
+# Labels added on main after this catalog (depth labels, Wayland drop, profiles, Camera Raw, Patch tool, rendering mode)
+	8 bit	8 bit (bilangan bulat)
+	Integer	Bilangan bulat
+	16 bit	16 bit (bilangan bulat)
+	32 bit (float)	32 bit (titik mengambang)
+	Floating point	Titik mengambang
+	Use Global Light	Gunakan Cahaya Global
+	Native file drag-and-drop is unavailable	Seret dan lepas berkas native tidak tersedia
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Seret dan lepas berkas native belum didukung di Wayland. Gunakan Berkas › Buka, atau jalankan PhotoCraft di XWayland dengan `WAYLAND_DISPLAY= photocraft`.
+	Use File › Open to open an image.	Gunakan Berkas › Buka untuk membuka gambar.
+	Mixer Brush Tool	Alat Kuas Pencampur
+	Invalid {mode} profile	Profil {mode} tidak valid
+	Unnamed {mode} profile	Profil {mode} tanpa nama
+	Show bounding box when dragging layer	Tampilkan kotak pembatas saat menyeret layer
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lasso Bekukan: seret untuk membekukan area, seret dengan Alt untuk mencairkannya (L)
+	Shadow Clipping Warning (U)	Peringatan Clipping Bayangan (U)
+	Highlight Clipping Warning (O)	Peringatan Clipping Highlight (O)
+	Show Lab Color Readouts	Tampilkan Nilai Warna Lab
+	Show Vectorscope	Tampilkan Vectorscope
+	Show Red at 3 o'clock	Tampilkan Merah di Posisi Jam 3
+	Show Skin Tone Indicator	Tampilkan Indikator Warna Kulit
+	Tone Histogram	Histogram Nada
+	Show Selected Region	Tampilkan Wilayah Terpilih
+cameraRaw	Light	Cahaya
+	Camera Raw Filter ({layer})	Filter Camera Raw ({layer})
+cameraRaw	Lights	Nada Terang
+cameraRaw	Darks	Nada Gelap
+cameraRaw	Blacks	Hitam
+cameraRaw	Amount	Jumlah
+cameraRaw	Tint	Rona
+cameraRaw	Masking	Masking
+cameraRaw	Blending	Pembauran
+	Patch Tool	Alat Patch
+	Patch:	Patch:
+	Lasso around an area, then drag the selection	Lingkari area dengan lasso, lalu seret seleksinya
+	Rendering Mode	Mode Rendering
+	Automatic (recommended)	Otomatis (disarankan)
+	CPU / Compatibility	CPU / Kompatibilitas
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	Mode otomatis memakai akselerasi GPU bila tersedia dan beralih ke rendering CPU jika terjadi galat.
+	Switched to CPU rendering	Beralih ke rendering CPU
+	GPU acceleration could not continue. Your documents are unchanged.	Akselerasi GPU tidak dapat dilanjutkan. Dokumen Anda tidak berubah.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft menggunakan kompositor gambar CPU. Jendela mungkin masih menggunakan adaptor grafis Anda.
+	Retry GPU requires a restart. Save your work first.	Mencoba GPU lagi memerlukan mulai ulang. Simpan pekerjaan Anda terlebih dahulu.
+	Keep Using CPU	Tetap Gunakan CPU
+	Retry GPU	Coba GPU Lagi
+	GPU Backend	Backend GPU
+	Details	Detail
+	Rendering mode	Mode rendering
