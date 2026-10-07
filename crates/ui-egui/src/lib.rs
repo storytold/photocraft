@@ -648,6 +648,7 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+        let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
@@ -697,7 +698,8 @@ impl PhotocraftApp {
     fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let (doc, warnings) = import(name, bytes)?;
-        self.session.add_document(doc, Some(name.to_string()));
+        // The caller records the path it read from.
+        self.session.add_document(doc, None);
         self.sync_views();
         self.ui.status = format!("Opened {name}");
         self.ui.status_error = false;

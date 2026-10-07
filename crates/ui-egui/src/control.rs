@@ -556,13 +556,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
                     None => Err("automation read authority is not configured".into()),
                 };
                 wrap(opened.and_then(|(name, bytes)| {
+                    let name = app.open_name(&name);
                     let warnings = app.open_automation_bytes(&name, &bytes)?;
                     // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
                     if !crate::preset_files_ui::is_preset_file(&name) {
-                        if let Some(state) = app.session.active_mut() {
-                            state.path = Some(path.to_string());
-                        }
-                        app.push_recent(path);
+                        app.opened_from(path);
                     }
                     Ok(json!({"path": path, "name": name, "warnings": warnings}))
                 }))
@@ -891,5 +889,11 @@ mod tests {
         let r = call(&mut app, &ctx, "app.save", json!({}));
         assert_eq!(r["result"]["path"], "in/layered.psd", "{r}");
         assert_eq!(written.borrow().last().map(String::as_str), Some("in/layered.psd"));
+        // A template opens untitled, so a save without `path` never writes over it.
+        let r = call(&mut app, &ctx, "app.open", json!({"path": "in/card.psdt"}));
+        assert_eq!(r["result"]["name"], "Untitled-1", "{r}");
+        assert_eq!(app.session.active().unwrap().path, None);
+        let r = call(&mut app, &ctx, "app.save", json!({}));
+        assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
     }
 }

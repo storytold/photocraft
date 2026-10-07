@@ -92,6 +92,28 @@ fn pcraft_documents_save_in_place_but_flat_files_ask() {
 }
 
 #[test]
+fn templates_open_as_new_untitled_documents() {
+    let (mut app, written) = app_with(None, None);
+    let ctx = egui::Context::default();
+    app.open_file("/pics/card.PSDT", b"x").unwrap();
+    app.open_file("/pics/card.psdt", b"x").unwrap();
+    let names: Vec<_> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+    assert_eq!(names, ["Untitled-1", "Untitled-2"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none()));
+    assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("/pics/card.psdt"));
+    // File › Save asks for a new name (cancelled here) rather than suggesting the template.
+    let suggested: Rc<RefCell<Vec<String>>> = Rc::default();
+    let rec = suggested.clone();
+    app.services.pick_save = Some(Box::new(move |s: &str| {
+        rec.borrow_mut().push(s.to_string());
+        None
+    }));
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap_err(), "cancelled");
+    assert_eq!(*suggested.borrow(), ["Untitled-2.psd"]);
+    assert!(written.borrow().is_empty());
+}
+
+#[test]
 fn import_warnings_reach_status_notice_and_control_response() {
     let dir = std::env::temp_dir().join(format!("photocraft-open-warn-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
