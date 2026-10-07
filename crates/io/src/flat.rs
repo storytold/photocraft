@@ -8,7 +8,7 @@ use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
-use crate::{ExportOptions, ExportResult, ImportResult, IoError};
+use crate::{ExportOptions, ExportResult, ImportResult, IoError, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -277,6 +277,11 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
     }
     let mut warnings = Vec::new();
     let mut img = document_to_image(doc, &mut warnings)?;
+    if opts.xmp == XmpEmbed::None {
+        // The default flat export carries none of the document's XMP: the packet lists the
+        // text of every type layer and one id per placed document (#647).
+        img.meta.xmp = None;
+    }
     if img.layout().has_alpha() && !format.caps().alpha {
         // Flattened over white, as saving a transparent document without transparency does.
         img = matte_over_white(&img)?;

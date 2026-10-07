@@ -99,6 +99,12 @@ fn stale_orientation_in_document_metadata_is_never_exported() {
     let jpg = export(&d, "jpg", &ExportOptions::default()).unwrap().bytes;
     let back = decode(&jpg).unwrap();
     assert_eq!(exif_orientation(back.meta.exif.as_deref().unwrap()), 1);
+    // Flat exports carry no XMP at all by default (#647), so nothing stale can hide in it;
+    // when the packet is embedded on purpose, the orientation inside is rewritten upright.
+    assert!(back.meta.xmp.is_none());
+    let all = ExportOptions { xmp: photocraft_io::XmpEmbed::All, ..ExportOptions::default() };
+    let jpg = export(&d, "jpg", &all).unwrap().bytes;
+    let back = decode(&jpg).unwrap();
     assert!(back.meta.xmp.as_deref().unwrap().contains(r#"tiff:Orientation="1""#));
     assert_upright(&back, "jpg");
 

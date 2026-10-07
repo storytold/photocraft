@@ -22,6 +22,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("quality".into(), json!(85));
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
+    f.insert("metadata".into(), json!("none"));
     f.insert("__w".into(), json!(st.doc.size.width));
     f.insert("__h".into(), json!(st.doc.size.height));
     Ok(app.ui.open_dialog(DialogKind::Command, f))
@@ -96,7 +97,7 @@ fn s_fmt(f: &Map<String, Value>) -> String {
 }
 
 fn settings(f: &Map<String, Value>) -> ExportSettings {
-    ExportSettings { jpeg_quality: (s_fmt(f) == "jpg").then(|| n(f, "quality", 85.0).clamp(1.0, 100.0) as u8), ..Default::default() }
+    ExportSettings { jpeg_quality: (s_fmt(f) == "jpg").then(|| n(f, "quality", 85.0).clamp(1.0, 100.0) as u8), xmp_all: s(f, "metadata") == "all", ..Default::default() }
 }
 
 /// Estimated size (bytes) from a ≤512 px proxy encode, scaled by pixel count.
@@ -136,6 +137,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::checkbox(ui, &mut tr, tl!("Transparency"));
                 f.insert("transparency".into(), json!(tr));
             }
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
+                let mut m = s(f, "metadata");
+                let opts: Vec<(String, &str)> = vec![("none".into(), tl!("None")), ("all".into(), tl!("All"))];
+                if crate::widgets::dropdown(ui, "export-metadata", &mut m, &opts, 130.0) {
+                    f.insert("metadata".into(), json!(m));
+                }
+            });
             ui.add_space(8.0);
             ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
             let mut sc = n(f, "scale", 100.0) as f32;
@@ -153,8 +162,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.vertical(|ui| {
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
-            let sig =
-                format!("{}{}{}{}", s_fmt(f), n(f, "quality", 85.0), f.get("transparency").map(|v| v.to_string()).unwrap_or_default(), n(f, "scale", 100.0));
+            let sig = format!(
+                "{}{}{}{}{}",
+                s_fmt(f),
+                n(f, "quality", 85.0),
+                f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
+                n(f, "scale", 100.0),
+                s(f, "metadata")
+            );
             let cached: Option<(String, Option<u64>, Arc<egui::TextureHandle>)> = ui.data(|d| d.get_temp(key));
             let (size, tex) = match cached.filter(|c| c.0 == sig) {
                 Some((_, size, tex)) => (size, tex),

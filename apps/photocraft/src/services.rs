@@ -156,6 +156,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 opts.encode.jpeg_quality = q;
             }
             opts.tiff_layers = settings.tiff_layers;
+            opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
         pick_open: Some(Box::new(|| {

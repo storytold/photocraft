@@ -120,10 +120,15 @@ fn metadata_roundtrip_png() {
     d.resolution_dpi = 300.0;
     d.icc_profile = Some(std::sync::Arc::new(sample_icc()));
     d.metadata.xmp = Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into());
+    // DPI and ICC always travel with the file; XMP only when asked for (#647).
     let r = export(&d, "png", &ExportOptions::default()).unwrap();
     let back = import("x.png", &r.bytes).unwrap().document;
     assert!((back.resolution_dpi - 300.0).abs() < 1.0);
     assert_eq!(back.icc_profile, d.icc_profile);
+    assert_eq!(back.metadata.xmp, None);
+    let all = ExportOptions { xmp: photocraft_io::XmpEmbed::All, ..ExportOptions::default() };
+    let r = export(&d, "png", &all).unwrap();
+    let back = import("x.png", &r.bytes).unwrap().document;
     assert_eq!(back.metadata.xmp, d.metadata.xmp);
 }
 
