@@ -45,3 +45,6 @@ photocraft-codecs = { workspace = true }
 photocraft-testkit = { workspace = true }
 # Only for examples/perf_scenarios.rs (a 500-brush .abr for the #210 import row).
 photocraft-psd = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }

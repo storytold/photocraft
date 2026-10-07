@@ -2093,3 +2093,36 @@ cameraRaw	Color	Barvy
 	Magnetic Lasso Tool	Nástroj magnetické laso
 	Frequency	Frekvence
 	Use tablet pressure to change pen width	Měnit šířku pera přítlakem tabletu
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	O aplikaci
+	Contributors	Přispěvatelé
+	Models	Modely
+	Sort	Řadit
+	Username	Uživatelské jméno
+	Display name	Zobrazované jméno
+	Real name	Skutečné jméno
+	Reverse the order	Obrátit pořadí
+	Grab bag	Výčet
+	Table	Tabulka
+	Name (A–Z)	Jméno (A–Z)
+	Merged PRs	Sloučené PR
+	Commits	Commity
+	Lines added	Přidané řádky
+	Lines deleted	Smazané řádky
+	Line delta	Rozdíl řádků
+	Binary assets added	Přidané binární soubory
+	Binary assets removed	Odebrané binární soubory
+	First commit	První commit
+	First	První
+	Last commit	Poslední commit
+	Last	Poslední
+	Contributors: {contributors} · Commits: {commits}	Přispěvatelé: {contributors} · Commity: {commits}
+	No contributor data was built into this copy.	Tato kopie neobsahuje údaje o přispěvatelích.
+	No model credits were built into this copy.	Tato kopie neobsahuje údaje o modelech.
+	Company	Společnost
+	Model	Model
+	Version	Verze
+	% of all commits	% všech commitů
+	Lines +/−	Řádky +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, commity: {commits}, řádky +{added} / −{deleted} (Δ {delta}), binární soubory +{binAdded} / −{binDeleted}, {first} – {last}

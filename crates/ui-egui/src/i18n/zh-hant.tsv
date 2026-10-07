@@ -2071,3 +2071,36 @@ cameraRaw	Blending	混合
 	Magnetic Lasso Tool	磁性套索工具
 	Frequency	頻率
 	Use tablet pressure to change pen width	使用繪圖板壓力以變更鋼筆寬度
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	關於
+	Contributors	貢獻者
+	Models	模型
+	Sort	排序
+	Username	使用者名稱
+	Display name	顯示名稱
+	Real name	真實姓名
+	Reverse the order	反轉順序
+	Grab bag	清單
+	Table	表格
+	Name (A–Z)	名稱 (A–Z)
+	Merged PRs	已合併的 PR
+	Commits	提交
+	Lines added	新增行數
+	Lines deleted	刪除行數
+	Line delta	行數增減
+	Binary assets added	新增二進位檔
+	Binary assets removed	刪除二進位檔
+	First commit	首次提交
+	First	首次
+	Last commit	最近提交
+	Last	最近
+	Contributors: {contributors} · Commits: {commits}	貢獻者：{contributors} · 提交：{commits}
+	No contributor data was built into this copy.	此副本未內建貢獻者資料。
+	No model credits were built into this copy.	此副本未內建模型致謝。
+	Company	公司
+	Model	模型
+	Version	版本
+	% of all commits	佔全部提交的 %
+	Lines +/−	行數 +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 個 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二進位檔 +{binAdded} / −{binDeleted}，{first} – {last}

@@ -2526,3 +2526,35 @@ cameraRaw	Blending	Fusion
 	Magnetic Lasso Tool	Outil Lasso magnétique
 	Frequency	Fréquence
 	Use tablet pressure to change pen width	Utiliser la pression de la tablette pour modifier la largeur de la plume
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	À propos
+	Contributors	Contributeurs
+	Models	Modèles
+	Sort	Trier
+	Username	Nom d'utilisateur
+	Display name	Nom affiché
+	Real name	Nom réel
+	Reverse the order	Inverser l'ordre
+	Grab bag	Vrac
+	Table	Tableau
+	Name (A–Z)	Nom (A–Z)
+	Merged PRs	PR fusionnées
+	Commits	Commits
+	Lines added	Lignes ajoutées
+	Lines deleted	Lignes supprimées
+	Line delta	Solde de lignes
+	Binary assets added	Fichiers binaires ajoutés
+	Binary assets removed	Fichiers binaires supprimés
+	First commit	Premier commit
+	First	Premier
+	Last commit	Dernier commit
+	Last	Dernier
+	Contributors: {contributors} · Commits: {commits}	Contributeurs : {contributors} · Commits : {commits}
+	No contributor data was built into this copy.	Aucune donnée de contributeurs n'est incluse dans cette copie.
+	No model credits were built into this copy.	Aucun crédit de modèle n'est inclus dans cette copie.
+	Company	Société
+	Version	Version
+	% of all commits	% de tous les commits
+	Lines +/−	Lignes +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login} : {prs} PR, {commits} commits, +{added} / −{deleted} lignes (Δ {delta}), +{binAdded} / −{binDeleted} fichiers binaires, {first} – {last}

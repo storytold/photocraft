@@ -2534,3 +2534,34 @@ cameraRaw	Whites	Brancos
 	Magnetic Lasso Tool	Ferramenta Laço magnético
 	Frequency	Frequência
 	Use tablet pressure to change pen width	Usar a pressão da mesa digitalizadora para alterar a largura da caneta
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	Sobre
+	Contributors	Colaboradores
+	Models	Modelos
+	Sort	Ordenar
+	Username	Nome de usuário
+	Display name	Nome de exibição
+	Real name	Nome real
+	Reverse the order	Inverter a ordem
+	Grab bag	Lista corrida
+	Table	Tabela
+	Name (A–Z)	Nome (A–Z)
+	Merged PRs	PRs mesclados
+	Commits	Commits
+	Lines added	Linhas adicionadas
+	Lines deleted	Linhas removidas
+	Line delta	Saldo de linhas
+	Binary assets added	Arquivos binários adicionados
+	Binary assets removed	Arquivos binários removidos
+	First commit	Primeiro commit
+	First	Primeiro
+	Last commit	Último commit
+	Last	Último
+	Contributors: {contributors} · Commits: {commits}	Colaboradores: {contributors} · Commits: {commits}
+	No contributor data was built into this copy.	Esta cópia não inclui dados de colaboradores.
+	No model credits were built into this copy.	Esta cópia não inclui créditos de modelos.
+	Company	Empresa
+	Version	Versão
+	% of all commits	% de todos os commits
+	Lines +/−	Linhas +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{binAdded} / −{binDeleted} arquivos binários, {first} – {last}

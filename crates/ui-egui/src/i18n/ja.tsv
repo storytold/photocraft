@@ -2077,3 +2077,36 @@ cameraRaw	Color	カラー
 	Magnetic Lasso Tool	マグネット選択ツール
 	Frequency	頻度
 	Use tablet pressure to change pen width	タブレットの筆圧を使用してペンの幅を変更
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	バージョン情報
+	Contributors	コントリビューター
+	Models	モデル
+	Sort	並べ替え
+	Username	ユーザー名
+	Display name	表示名
+	Real name	本名
+	Reverse the order	順序を反転
+	Grab bag	一覧
+	Table	表
+	Name (A–Z)	名前 (A–Z)
+	Merged PRs	マージされた PR
+	Commits	コミット
+	Lines added	追加行数
+	Lines deleted	削除行数
+	Line delta	行数の増減
+	Binary assets added	追加したバイナリ
+	Binary assets removed	削除したバイナリ
+	First commit	最初のコミット
+	First	最初
+	Last commit	最後のコミット
+	Last	最後
+	Contributors: {contributors} · Commits: {commits}	コントリビューター: {contributors} · コミット: {commits}
+	No contributor data was built into this copy.	このコピーにはコントリビューターのデータが含まれていません。
+	No model credits were built into this copy.	このコピーにはモデルのクレジットが含まれていません。
+	Company	会社
+	Model	モデル
+	Version	バージョン
+	% of all commits	全コミットに占める割合 (%)
+	Lines +/−	行数 +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR {prs} 件、コミット {commits} 件、行 +{added} / −{deleted} (Δ {delta})、バイナリ +{binAdded} / −{binDeleted}、{first} – {last}

@@ -41,6 +41,7 @@ pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
+pub mod credits;
 pub mod crop_ui;
 pub mod dialogs;
 pub mod discard_ui;

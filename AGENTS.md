@@ -66,6 +66,8 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 
 9. **Never panic on input** (see *Never crash* above). A command's `run` closure and anything it calls must return `Err`, never panic, for *any* params or document state: validate params, check bounds before indexing or dividing, and reject absurd sizes before allocating. The `panic_hunt` integration test fuzzes every command with adversarial params and must stay green.
 
+10. **Contributor credits are compiled in.** Help ▸ About PhotoCraft ▸ Contributors/Models come from `contributors/contributors.json`, baked into the binary by `crates/ui-egui/build.rs` (never read at run time). Regenerate it with `python3 ../craftrules/scripts/contributors.py .` and commit it; never hand-edit it. GitHub usernames only; display and real names only with consent recorded in craftrules `contributors/people.toml`. See `docs/contributors.md`.
+
 ## 4. Picking work
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.

@@ -2513,3 +2513,35 @@ cameraRaw	Blending	Pembauran
 	Magnetic Lasso Tool	Alat Magnetic Lasso
 	Frequency	Frekuensi
 	Use tablet pressure to change pen width	Gunakan tekanan tablet untuk mengubah lebar pena
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	Tentang
+	Contributors	Kontributor
+	Models	Model
+	Sort	Urutkan
+	Username	Nama pengguna
+	Display name	Nama tampilan
+	Real name	Nama asli
+	Reverse the order	Balik urutan
+	Grab bag	Daftar bebas
+	Table	Tabel
+	Name (A–Z)	Nama (A–Z)
+	Merged PRs	PR yang digabung
+	Commits	Commit
+	Lines added	Baris ditambah
+	Lines deleted	Baris dihapus
+	Line delta	Selisih baris
+	Binary assets added	Berkas biner ditambah
+	Binary assets removed	Berkas biner dihapus
+	First commit	Commit pertama
+	First	Pertama
+	Last commit	Commit terakhir
+	Last	Terakhir
+	Contributors: {contributors} · Commits: {commits}	Kontributor: {contributors} · Commit: {commits}
+	No contributor data was built into this copy.	Salinan ini tidak memuat data kontributor.
+	No model credits were built into this copy.	Salinan ini tidak memuat kredit model.
+	Company	Perusahaan
+	Version	Versi
+	% of all commits	% dari semua commit
+	Lines +/−	Baris +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} baris (Δ {delta}), +{binAdded} / −{binDeleted} berkas biner, {first} – {last}

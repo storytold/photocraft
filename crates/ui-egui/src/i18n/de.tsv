@@ -2135,3 +2135,34 @@
 	Magnetic Lasso Tool	Magnetisches-Lasso-Werkzeug
 	Frequency	Frequenz
 	Use tablet pressure to change pen width	Tablettdruck zum Ändern der Stiftbreite verwenden
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	Über
+	Contributors	Mitwirkende
+	Models	Modelle
+	Sort	Sortieren
+	Username	Benutzername
+	Display name	Anzeigename
+	Real name	Echter Name
+	Reverse the order	Reihenfolge umkehren
+	Grab bag	Wortwolke
+	Table	Tabelle
+	Name (A–Z)	Name (A–Z)
+	Merged PRs	Gemergte PRs
+	Commits	Commits
+	Lines added	Hinzugefügte Zeilen
+	Lines deleted	Gelöschte Zeilen
+	Line delta	Zeilensaldo
+	Binary assets added	Hinzugefügte Binärdateien
+	Binary assets removed	Entfernte Binärdateien
+	First commit	Erster Commit
+	First	Erster
+	Last commit	Letzter Commit
+	Last	Letzter
+	Contributors: {contributors} · Commits: {commits}	Mitwirkende: {contributors} · Commits: {commits}
+	No contributor data was built into this copy.	In diese Kopie wurden keine Mitwirkendendaten eingebaut.
+	No model credits were built into this copy.	In diese Kopie wurden keine Modellnennungen eingebaut.
+	Company	Firma
+	Version	Version
+	% of all commits	% aller Commits
+	Lines +/−	Zeilen +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} Commits, +{added} / −{deleted} Zeilen (Δ {delta}), +{binAdded} / −{binDeleted} Binärdateien, {first} – {last}
