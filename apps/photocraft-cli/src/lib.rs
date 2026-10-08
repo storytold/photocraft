@@ -125,7 +125,6 @@ impl Args {
 
 type R = Result<(), String>;
 
-/// Run the CLI. Returns the process exit code (0 ok, 1 failure, 2 usage).
 /// [`run`] on the raw process arguments. An argument that is not valid Unicode is a usage error
 /// naming its position and a lossy rendering (exit 2), never a panic: `std::env::args()` aborts
 /// the process on one (issue #1108).
@@ -143,6 +142,7 @@ pub fn run_os(args: &[std::ffi::OsString], out: &mut dyn Write, err: &mut dyn Wr
     run(&strings, out, err)
 }
 
+/// Run the CLI. Returns the process exit code (0 ok, 1 failure, 2 usage).
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let Some(cmd) = args.first() else {
         let _ = write!(err, "{USAGE}");
