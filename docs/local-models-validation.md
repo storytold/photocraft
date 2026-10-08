@@ -79,9 +79,9 @@ cargo run --release -p photocraft-engine --features local-ml --example local_mod
   it does not establish a sub-100 ms budget for the optional models.
 
 The dedicated `local-models.yml` workflow runs Linux, Windows and macOS CPU runtime tests and
-native build checks. The [initial cross-platform run](https://github.com/mighty-programmer/photocraft/actions/runs/37780207526)
-passes on all three platforms. Final document-state regression tests are being rerun in the
-same matrix before this contribution leaves draft. Upstream PR CI needs maintainer approval for
+native build checks. The [final cross-platform run](https://github.com/mighty-programmer/photocraft/actions/runs/37783114338)
+passes on all three platforms, including the final document-state and input regression tests.
+The contribution is ready for review. Upstream PR CI needs maintainer approval for
 this first contribution. Quantitative accuracy evaluation, packaged installer / sandbox download
 checks, web inference, point prompts and GPU acceleration remain separate work.
 
