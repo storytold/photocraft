@@ -94,9 +94,11 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked
 
-      # The crates that use the optional craft-fonts input (crates/text/build.rs, and the UI's CJK
-      # font fallback), tested again with it, so the Japanese font tests that skip without it run
-      # here. Linux only.
+      # The same tests built with the optional craft-fonts input (crates/text/build.rs), so the
+      # Japanese font tests that skip without it run here. Linux only. Keep the exact `--workspace
+      # --features heif` of the Test step: any other package or feature selection resolves a
+      # different feature set, recompiles the whole dependency graph into the same target dir and
+      # runs the runner out of disk (as `-p photocraft-text -p photocraft-ui-egui` did after #800).
       - name: Check out craft-fonts
         if: runner.os == 'Linux'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -110,7 +112,7 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: cargo test -p photocraft-text -p photocraft-ui-egui --locked
+        run: cargo test --workspace --locked --features heif
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
