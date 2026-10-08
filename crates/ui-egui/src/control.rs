@@ -571,6 +571,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "app.open" => match s("path") {
             Some(path) => {
+                if matches!(path.rsplit('.').next().map(str::to_ascii_lowercase).as_deref(), Some("psd" | "psb" | "psdt"))
+                    && let Some(import) = app.services.automation_import_path.clone()
+                {
+                    return run_waiting(app, wait, |app| crate::jobs_ui::open_authorized(app, path.into(), import));
+                }
                 let opened = match app.services.automation_read.as_mut() {
                     Some(read) => read(path),
                     None => Err("automation read authority is not configured".into()),
@@ -587,7 +592,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             None => err("missing `path`"),
         },
-        "app.save" => wrap(app.save_automation(s("path").map(str::to_string)).map(|(p, w)| json!({"path": p, "warnings": w}))),
+        "app.save" => run_waiting(app, wait, |app| {
+            let (path, warnings) = app.save_automation(s("path").map(str::to_string))?;
+            Ok(app.jobs.last_started.map_or_else(|| json!({"path": path, "warnings": warnings}), |job| json!({"job": job.0, "pending": true, "path": path})))
+        }),
         "app.quit" => {
             app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

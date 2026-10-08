@@ -338,6 +338,14 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
+    /// Record an atomically saved snapshot without marking subsequent edits clean. A closed
+    /// document stays closed, and changing the active tab during a save has no effect.
+    pub fn mark_saved_snapshot(&mut self, id: photocraft_doc::DocId, path: String, revision: u64) {
+        if let Some(state) = self.docs.iter_mut().find(|state| state.doc.id == id) {
+            state.path = Some(path);
+            state.saved_revision = revision;
+        }
+    }
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);

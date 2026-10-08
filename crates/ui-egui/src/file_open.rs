@@ -92,8 +92,16 @@ impl PhotocraftApp {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))?;
             return Ok(Vec::new());
         }
-        let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
-        self.open_file(path, &bytes)
+        let large_psd = matches!(ext.as_str(), "psd" | "psb" | "psdt") && std::fs::metadata(path).is_ok_and(|m| m.len() >= 64 << 20);
+        if !large_psd {
+            let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+            return self.open_file(path, &bytes);
+        }
+        let name = self.open_name(&display_name(path));
+        let imported = photocraft_io::import_path_with(&name, std::path::Path::new(path), &photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())?;
+        let warnings = self.opened_document(&name, imported.document, imported.warnings);
+        self.opened_from(path);
+        Ok(warnings)
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -175,6 +175,9 @@ impl Default for ExportSettings {
 
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
+/// Native atomic encoder. Workers receive a document snapshot and bounded cancellation/progress.
+pub type ExportPathFn =
+    std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &photocraft_raster::Interrupt<'_>) -> Result<Vec<String>, String> + Send + Sync>;
 /// The picked file's name and its bytes, or why it could not be read (shown like any other open
 /// failure); `None` when the dialog was cancelled.
 pub type PickOpenFn = Box<dyn FnMut() -> Option<(String, Result<Vec<u8>, String>)>>;
@@ -184,6 +187,7 @@ pub type PickSaveFn = Box<dyn FnMut(&str) -> Option<String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
+pub type AutomationImportPathFn = std::sync::Arc<dyn Fn(&str, &photocraft_raster::Interrupt<'_>) -> Result<(Document, Vec<String>), String> + Send + Sync>;
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// Reject engine commands which still perform ambient filesystem I/O.
@@ -235,6 +239,9 @@ pub struct Services {
     pub import: Option<ImportFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
+    pub export_path: Option<ExportPathFn>,
+    /// The equivalent encoder through the automation write capability.
+    pub automation_export_path: Option<ExportPathFn>,
     /// Show a single-file picker for commands that import one file (Open As, presets, scripts).
     pub pick_open: Option<PickOpenFn>,
     /// Show File › Open's multi-file picker; returns the selected paths.
@@ -246,6 +253,7 @@ pub struct Services {
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `pick_open`, `pick_save` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
+    pub automation_import_path: Option<AutomationImportPathFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
@@ -745,6 +753,10 @@ impl PhotocraftApp {
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let (doc, warnings) = import(name, bytes)?;
+        Ok(self.opened_document(name, doc, warnings))
+    }
+
+    pub(crate) fn opened_document(&mut self, name: &str, doc: Document, warnings: Vec<String>) -> Vec<String> {
         // Edit › Color Settings policies apply on open; mismatches can ask what to do.
         // No path yet: a bare name isn't a location to save back to (`open_file` sets the path).
         let (_, color) = self.session.open_document(doc, None);
@@ -759,7 +771,7 @@ impl PhotocraftApp {
         if ask && (color.get("mismatch").and_then(Value::as_bool) == Some(true) || color.get("missing").is_some()) {
             prefs_ui::open_mismatch(self, &color);
         }
-        Ok(warnings)
+        warnings
     }
 
     /// Open bytes supplied by an authenticated automation client without
@@ -844,6 +856,9 @@ impl PhotocraftApp {
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
     /// document's path. Returns the path and the export warnings (also shown to the user).
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings) -> Result<(String, Vec<String>), String> {
+        if let Some(export) = self.services.export_path.clone() {
+            return jobs_ui::save(self, path, settings.clone(), export, false);
+        }
         let st = self.session.active().ok_or("no document")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
@@ -875,6 +890,9 @@ impl PhotocraftApp {
         let target = path
             .or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
             .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?;
+        if let Some(export) = self.services.automation_export_path.clone() {
+            return jobs_ui::save(self, target, ExportSettings::default(), export, true);
+        }
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;

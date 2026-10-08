@@ -129,6 +129,11 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
+    let automation_import_path = automation.clone().map(|workspace| {
+        std::sync::Arc::new(move |path: &str, ctl: &photocraft_raster::Interrupt<'_>| {
+            crate::crash_guard::guard("Open", || workspace.read_document(path, ctl).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))
+        }) as photocraft_ui_egui::AutomationImportPathFn
+    });
     let automation_read = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let bytes = workspace.read(path).map_err(|error| error.to_string())?;
@@ -138,6 +143,30 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
+    });
+    let automation_export_path = automation.clone().map(|workspace| {
+        std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_raster::Interrupt<'_>| {
+            let mut warnings = Vec::new();
+            crate::crash_guard::guard("Save", || {
+                workspace
+                    .write_stream(path, |file| {
+                        if path.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("psb"))
+                            || path.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("psd"))
+                                && (doc.size.width > 30_000 || doc.size.height > 30_000)
+                        {
+                            warnings = photocraft_io::export_psb_into(doc, file, ctl).map_err(|e| std::io::Error::other(e.to_string()))?;
+                        } else {
+                            let result = photocraft_io::export(doc, path, &export_options(settings)).map_err(|e| std::io::Error::other(e.to_string()))?;
+                            ctl.check().map_err(|_| std::io::Error::other("cancelled"))?;
+                            std::io::Write::write_all(file, &result.bytes)?;
+                            warnings = result.warnings;
+                        }
+                        ctl.check().map_err(|_| std::io::Error::other("cancelled"))
+                    })
+                    .map_err(|e| e.to_string())?;
+                Ok(warnings)
+            })
+        }) as photocraft_ui_egui::ExportPathFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
@@ -163,6 +192,12 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
+        export_path: Some(std::sync::Arc::new(|doc, path, settings, ctl| {
+            crate::crash_guard::guard("Save", || {
+                photocraft_io::export_path_with(doc, Path::new(path), &export_options(settings), ctl).map_err(|e| e.to_string())
+            })
+        })),
+        automation_export_path,
         pick_open: Some(Box::new(|| {
             let path = rfd::FileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]).pick_file()?;
             // A read failure goes back to the app, which reports it like any other open failure.
@@ -189,6 +224,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
+        automation_import_path,
         automation_write,
         automation_command,
         automation_authorize,
@@ -240,6 +276,20 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         is_wayland: false,
         ..recovery_services(recovery_dir())
     }
+}
+
+fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_io::ExportOptions {
+    let mut opts = photocraft_io::ExportOptions::default();
+    if let Some(q) = settings.jpeg_quality {
+        opts.encode.jpeg_quality = q;
+    }
+    opts.encode.webp_lossless = settings.webp_lossless;
+    if let Some(q) = settings.webp_quality {
+        opts.encode.webp_quality = q;
+    }
+    opts.tiff_layers = settings.tiff_layers;
+    opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+    opts
 }
 
 /// Flat-image import via photocraft-codecs (kept for reference/tests; the app uses photocraft-io).

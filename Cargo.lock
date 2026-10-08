@@ -3503,6 +3503,7 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
+ "photocraft-raster",
  "rmcp",
  "schemars",
  "serde",

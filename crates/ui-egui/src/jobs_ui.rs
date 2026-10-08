@@ -49,6 +49,8 @@ pub struct JobsUi {
     pub focus: Option<JobId>,
     /// The job the latest [`run`] started (the control channel waits on it).
     pub(crate) last_started: Option<JobId>,
+    /// Destinations claimed synchronously, before the save worker begins.
+    saves: Vec<(JobId, String)>,
 }
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
@@ -85,6 +87,173 @@ pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, sou
             app.ui.status_error = false;
             Ok(())
         }
+    }
+}
+
+pub(crate) fn open_authorized(app: &mut PhotocraftApp, path: String, import: crate::AutomationImportPathFn) -> Result<Value, String> {
+    let name = app.open_name(&crate::file_open::display_name(&path));
+    let worker_path = path.clone();
+    let apply_name = name.clone();
+    let apply_path = path.clone();
+    match app
+        .session
+        .start_job(
+            OPEN_JOB,
+            json!({"path": path}),
+            "Opening",
+            false,
+            move |ctx| {
+                ctx.stage(0.0, 1.0, "Decoding", |ctl| import(&worker_path, ctl))
+                    .map_err(|e| if ctx.cancelled() { photocraft_engine::EngineError::Cancelled } else { photocraft_engine::EngineError::Other(e) })
+            },
+            move |session, (mut doc, warnings)| {
+                doc.name = apply_name.clone();
+                let (index, color) = session.open_document(doc, Some(apply_path.clone()));
+                Ok(json!({"document": index, "name": apply_name, "warnings": warnings, "color": color, "path": apply_path, "automation": true}))
+            },
+        )
+        .map_err(|e| e.to_string())?
+    {
+        Started::Done(v) => {
+            finish_open(app, &name, Some(&path), &v, None)?;
+            Ok(v)
+        }
+        Started::Job(job) => {
+            app.jobs.opens.push(OpenTab { job, name, path: Some(path), slot: None });
+            app.jobs.focus = Some(job);
+            app.jobs.last_started = Some(job);
+            app.ui.chrome.home = None;
+            app.ui.status_error = false;
+            Ok(json!({"job": job.0, "pending": true}))
+        }
+    }
+}
+
+/// Snapshot saves run off the UI thread. Only the saved snapshot revision becomes clean;
+/// edits made while writing remain dirty, and a closed document is never resurrected.
+pub(crate) fn save(
+    app: &mut PhotocraftApp,
+    path: String,
+    settings: crate::ExportSettings,
+    export: crate::ExportPathFn,
+    automation: bool,
+) -> Result<(String, Vec<String>), String> {
+    let state = app.session.active().ok_or("no document")?;
+    let id = state.doc.id;
+    let revision = state.revision;
+    let doc = state.doc.clone();
+    if app.jobs.saves.iter().any(|(_, target)| *target == path) {
+        return Err("a save to this destination is already running".into());
+    }
+    let target = path.clone();
+    let apply_path = path.clone();
+    let apply = move |session: &mut photocraft_engine::Session, warnings: Vec<String>| {
+        session.mark_saved_snapshot(id, apply_path.clone(), revision);
+        Ok(json!({"path": apply_path, "warnings": warnings, "savedDocument": id.0, "automation": automation}))
+    };
+    if !app.background_jobs || !app.session.prefs().file_handling.save_in_background {
+        let warnings = export(&doc, &path, &settings, &photocraft_raster::Interrupt::NONE)?;
+        let v = apply(&mut app.session, warnings.clone()).map_err(|e: photocraft_engine::EngineError| e.to_string())?;
+        finish_save(app, &v);
+        return Ok((path, warnings));
+    }
+    match app
+        .session
+        .start_job(
+            "app.save.stream",
+            json!({"path": path}),
+            "Saving",
+            false,
+            move |ctx| {
+                ctx.progress(0.0, &target);
+                ctx.stage(0.0, 1.0, &target, |ctl| export(&doc, &target, &settings, ctl))
+                    .map_err(|e| if ctx.cancelled() { photocraft_engine::EngineError::Cancelled } else { photocraft_engine::EngineError::Other(e) })
+            },
+            apply,
+        )
+        .map_err(|e| e.to_string())?
+    {
+        Started::Job(job) => {
+            app.jobs.last_started = Some(job);
+            app.jobs.saves.push((job, path.clone()));
+            app.ui.status = format!("Saving {path}");
+            app.ui.status_error = false;
+        }
+        Started::Done(v) => finish_save(app, &v),
+    }
+    Ok((path, Vec::new()))
+}
+
+fn finish_save(app: &mut PhotocraftApp, v: &Value) {
+    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+    let warnings: Vec<String> =
+        v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+    app.ui.status = format!("Saved {path}");
+    app.ui.status_error = false;
+    notices::io_warnings(app, &format!("Saved {}", crate::file_open::display_name(path)), &warnings);
+    if v.get("automation").and_then(Value::as_bool) != Some(true)
+        && let Some(id) = v.get("savedDocument").and_then(Value::as_u64)
+        && let Some(i) = app.session.documents().iter().position(|s| s.doc.id.0 == id)
+    {
+        let _ = photocraft_engine::automate_cmds::document_saved(&mut app.session, i);
+    }
+    app.sync_views();
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+    #[test]
+    fn background_save_preference_can_request_inline_publication() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.session.edit_prefs(|p| p.file_handling.save_in_background = false);
+        app.background_jobs = true;
+        let export: crate::ExportPathFn = Arc::new(|_, _, _, _| Ok(Vec::new()));
+        save(&mut app, "inline.psb".into(), Default::default(), export, true).unwrap();
+        assert!(!app.session.has_jobs());
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("inline.psb"));
+        assert!(app.jobs.last_started.is_none());
+    }
+    #[test]
+    fn background_save_keeps_newer_edits_dirty_and_tracks_the_snapshot_tab() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let id = app.session.active().unwrap().doc.id;
+        let saved = app.session.active().unwrap().revision;
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let gate = Arc::new(std::sync::Mutex::new(ready_rx));
+        let export: crate::ExportPathFn = Arc::new(move |_, _, _, _| {
+            gate.lock().unwrap().recv().unwrap();
+            Ok(vec!["test warning".into()])
+        });
+        app.background_jobs = true;
+        save(&mut app, "out.psb".into(), Default::default(), export.clone(), true).unwrap();
+        assert!(save(&mut app, "out.psb".into(), Default::default(), export, true).is_err());
+        app.session
+            .edit("newer edit", |doc, _| {
+                doc.name = "newer".into();
+                Ok(())
+            })
+            .unwrap();
+        app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let active = app.session.active().unwrap().doc.id;
+        ready_tx.send(()).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.session.has_jobs() && std::time::Instant::now() < until {
+            tick(&mut app, &egui::Context::default());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.session.has_jobs());
+        let original = app.session.documents().iter().find(|s| s.doc.id == id).unwrap();
+        assert_eq!(original.saved_revision, saved);
+        assert!(original.is_dirty());
+        assert_eq!(original.path.as_deref(), Some("out.psb"));
+        assert_eq!(app.session.active().unwrap().doc.id, active);
+        assert!(app.session.active().unwrap().path.is_none());
+        app.session.close(0);
+        app.session.mark_saved_snapshot(id, "closed.psb".into(), saved);
+        assert_eq!(app.session.documents().len(), 1);
     }
 }
 
@@ -133,6 +302,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) {
 }
 
 fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
+    app.jobs.saves.retain(|(id, _)| *id != e.id);
     // Control requests waiting on this job.
     let reply = match &e.outcome {
         JobOutcome::Done(v) => json!({"ok": true, "result": v}),
@@ -165,6 +335,7 @@ fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
         return;
     }
     match e.outcome {
+        JobOutcome::Done(v) if e.command == "app.save.stream" => finish_save(app, &v),
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
@@ -209,7 +380,9 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     app.ui.status_error = false;
     notices::io_warnings(app, &format!("Opened {name}"), &warnings);
     // Script events bound to "Open Document".
-    photocraft_engine::automate_cmds::document_opened(&mut app.session);
+    if v.get("automation").and_then(Value::as_bool) != Some(true) {
+        photocraft_engine::automate_cmds::document_opened(&mut app.session);
+    }
     app.sync_views();
     let color = v.get("color").cloned().unwrap_or(Value::Null);
     let ask = color.get("ask").and_then(Value::as_bool) == Some(true);

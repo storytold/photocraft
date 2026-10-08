@@ -21,6 +21,7 @@ pub struct Prompt {
     /// The document the command was aimed at (`document` param, else the active one), if it has one.
     target: Option<DocId>,
     docs: Vec<DocId>,
+    saving: Option<photocraft_engine::jobs::JobId>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -65,7 +66,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
+    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, saving: None };
     match &app.discard {
         None => app.discard = Some(prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -121,8 +122,18 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     let Some(i) = index_of(app, doc) else { return false };
     app.session.set_active(i);
+    app.jobs.last_started = None;
     match crate::menus::invoke_unguarded(app, ctx, "file.save", json!({})) {
-        Ok(_) => true,
+        Ok(_) => {
+            if let Some(job) = app.jobs.last_started.take() {
+                if let Some(prompt) = app.discard.as_mut() {
+                    prompt.saving = Some(job);
+                }
+                false
+            } else {
+                true
+            }
+        }
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == "cancelled" => false,
         Err(e) => {
@@ -134,6 +145,20 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if let Some(job) = app.discard.as_ref().and_then(|p| p.saving) {
+        if app.session.jobs().iter().any(|j| j.id == job) {
+            return;
+        }
+        let done = app.session.jobs_with_recent().iter().any(|j| j.id == job && j.state == "done");
+        let clean = app.discard.as_ref().and_then(|p| p.docs.first()).and_then(|id| index_of(app, *id)).is_some_and(|i| !app.session.documents()[i].is_dirty());
+        if let Some(prompt) = app.discard.as_mut() {
+            prompt.saving = None;
+        }
+        if done && clean {
+            advance(app, ctx);
+            return;
+        }
+    }
     let Some(p) = &app.discard else { return };
     let Some(&doc) = p.docs.first() else { return };
     let (exits, reverts) = (p.id == EXIT, p.id == "file.revert");
@@ -220,6 +245,35 @@ fn mnemonic(label: &str, key: Key) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_before_close_waits_for_background_publication() {
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.session.active_mut().unwrap().path = Some("out.psb".into());
+        let id = doc_id(&app, 0);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let gate = std::sync::Mutex::new(rx);
+        app.services.export_path = Some(std::sync::Arc::new(move |_, _, _, _| {
+            gate.lock().unwrap().recv().unwrap();
+            Ok(Vec::new())
+        }));
+        app.background_jobs = true;
+        let ctx = egui::Context::default();
+        assert!(intercept(&mut app, "file.close", &json!({})));
+        assert!(!save(&mut app, &ctx, id));
+        show(&mut app, &ctx);
+        assert_eq!(app.session.documents().len(), 1, "the document cannot close while its save is pending");
+        tx.send(()).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.session.has_jobs() && std::time::Instant::now() < until {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        show(&mut app, &ctx);
+        assert!(app.discard.is_none());
+        assert!(app.session.documents().is_empty());
+    }
 
     fn app_with_docs(n: usize) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
