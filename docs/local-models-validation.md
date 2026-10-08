@@ -2,8 +2,9 @@
 
 Recorded 2026-10-08 on an Apple M3 Max with 36 GiB RAM, Rust 1.98.0, native CPU inference
 and the immutable model exports listed in [local-models.md](local-models.md). No learned weights
-are included in this repository. This is an initial integration and performance check, not a
-labelled accuracy benchmark or evidence that a model always improves on the classical method.
+are included in this repository. The integration/performance checks below are supplemented by a
+fixed 22-case evaluation. Its 20 labelled COCO targets are exploratory evidence, not a representative
+or held-out benchmark, a soft-alpha matting assessment, or evidence of a universal winner.
 
 ## Preferences before and after
 
@@ -41,8 +42,8 @@ selection, SAM object selection.
 ![Actual command outputs](images/local-models-comparison.png)
 
 The classical method works well on this example. BiRefNet supplies continuous edge alpha;
-SAM leaves some unwanted holes. These results support keeping both choices available and
-requiring a labelled multi-image benchmark before a general accuracy claim.
+SAM leaves some unwanted holes. These results support keeping both choices available. The
+exploratory multi-image evaluation below also includes failures and cases where Classical is better.
 
 Repeated BiRefNet runs initially exhausted memory with ONNX Runtime's default CPU arena and
 memory-pattern caching. Disabling both while retaining only the current model's weights let
@@ -54,6 +55,44 @@ Reproduce using verified, explicitly installed models and a public-domain 24–3
 cargo run --release -p photocraft-engine --features local-ml --example local_models_bench -- \
   /absolute/model-cache /absolute/image.png /absolute/comparison-directory
 ```
+
+## Fixed multi-image evaluation
+
+The [33-page comparison PDF and public reproducibility supplement](https://github.com/mighty-programmer/photocraft/releases/tag/model-evaluation-2026-10-08)
+contain all 22 distinct cases: 20 COCO val2017 images with independent binary instance references,
+plus two user-supplied LEGO photos for visual inspection. There are 44 paired comparisons,
+88 final method outcomes and 86 actual exported cutouts. BiRefNet's no-subject chair result and
+Classical's empty zebra object selection are explicit failures, counted as zero rather than omitted.
+
+| Feature | Classical mean target IoU | Learned mean target IoU | Learned wins / losses / near-ties |
+|---|---:|---:|---:|
+| Remove Background | 31.5% | 51.5% (BiRefNet HR Matting) | 15 / 2 / 3 |
+| Box Object Selection | 52.5% | 79.1% (SAM 2.1 Large) | 16 / 3 / 1 |
+
+Cases were selected using a fixed hash seed before inference, one from each of 20 categories.
+Alpha is thresholded at 128/255, and a win/loss requires over one percentage point of IoU change.
+Object boxes are derived from the annotation with 10% padding and reused for both methods.
+The two unlabelled LEGO photos are excluded from the means. Each background-removal reference
+contains one instance; keeping other plausible foreground subjects counts as a false positive.
+COCO polygons cannot establish hair, soft-alpha or transparent-glass matting quality. This selected
+pilot may overlap training data, and its annotation-derived boxes are easier than imperfect user boxes.
+
+Median warm command times on the M3 Max / 36 GiB were 0.19 / 26.63 seconds for Classical /
+BiRefNet removal and 0.20 / 5.59 seconds for Classical / SAM selection. These single-pass observations
+exclude image import/export and initial/model-loading cases; they are not Windows/Linux timings.
+Storage pressure interrupted two exports, which were rerun; the supplement preserves all 90 raw
+attempts, 88 final outcomes and the recovery notes. Sampled resumed-run peak RSS was 13.35 GiB;
+initial memory samples were not saved.
+
+All methods ran in the same release engine at benchmark commit
+`6e2b7bc9b20938787cf1f7af9718a832a2edf716`. The Classical algorithm sources match stock 0.3.0
+`60224d3fb7d4006bcfcc97603c1611b9b756aebd`; the installed stock GUI was not timed separately.
+Later UI/account changes were not re-benchmarked. The release tag identifies the tested engine,
+and the supplement supplies the exact rectangles, annotation polygons/reference masks, source
+hashes, command logs, CSV scores, model revisions and Rust harness. Its helper downloads and
+hash-checks the 20 public inputs; model installation stays explicit. The report retains photo and
+annotation attribution. Standalone user-photo originals, full-resolution cutouts and model weights
+are not bundled in the public supplement or software repository.
 
 ## Checks
 
@@ -79,11 +118,11 @@ cargo run --release -p photocraft-engine --features local-ml --example local_mod
   it does not establish a sub-100 ms budget for the optional models.
 
 The dedicated `local-models.yml` workflow runs Linux, Windows and macOS CPU runtime tests and
-native build checks. The [final cross-platform run](https://github.com/mighty-programmer/photocraft/actions/runs/37783114338)
+native build checks. The [cross-platform run at `1904396`](https://github.com/mighty-programmer/photocraft/actions/runs/37849240044)
 passes on all three platforms, including the final document-state and input regression tests.
 The contribution is ready for review. Upstream PR CI needs maintainer approval for
-this first contribution. Quantitative accuracy evaluation, packaged installer / sandbox download
-checks, web inference, point prompts and GPU acceleration remain separate work.
+this first contribution. Representative held-out/matting evaluation, packaged installer / sandbox
+download checks, web inference, point prompts and GPU acceleration remain separate work.
 
 Image sources and licences: [SOURCES.md](images/SOURCES.md),
 [LICENSE-local-models.txt](images/LICENSE-local-models.txt).

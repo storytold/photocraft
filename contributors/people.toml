@@ -92,4 +92,5 @@ sync_github_name = false
 sync_github_name = true
 
 [people.mighty-programmer]
+real_name = "John Pantrakis"
 sync_github_name = true
