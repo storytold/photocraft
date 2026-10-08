@@ -281,6 +281,19 @@ pub struct Plan<'a> {
     pub root: Slot,
     /// Effect layers in dependency order (a group's inner effect layers come first).
     pub fx: Vec<FxLayer<'a>>,
+    /// Complete root stack units, where only the accumulated backdrop remains live.
+    pub checkpoints: Vec<Checkpoint>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// First root layer included after occlusion pruning.
+    pub layer_start: usize,
+    /// Root layers below this boundary (including the complete clipping unit).
+    pub layer_end: usize,
+    /// Resume at this pass with `slot` restored.
+    pub pass_end: usize,
+    pub slot: Slot,
 }
 
 /// Document-level inputs of a plan.
@@ -322,7 +335,7 @@ pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.
     let start = doc.layers.iter().rposition(|l| photocraft_compose::occludes_below(l, doc.mode)).unwrap_or(0);
-    let root = p.stack(doc.layers.get(start..).unwrap_or(&doc.layers), root)?;
+    let root = p.stack_inner(doc.layers.get(start..).unwrap_or(&doc.layers), root, Some(start))?;
     Ok(p.finish(root))
 }
 
@@ -332,6 +345,7 @@ struct Planner<'a> {
     refs: Vec<u32>,
     cx: DocCtx<'a>,
     fx: Vec<FxLayer<'a>>,
+    checkpoints: Vec<Checkpoint>,
 }
 
 /// Coverage source of an effect paint (`kind` in `fs_fxpaint`); flags refine it.
@@ -401,11 +415,11 @@ pub const SHAPE_MAP: usize = usize::MAX;
 
 impl<'a> Planner<'a> {
     fn new(cx: DocCtx<'a>) -> Self {
-        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new() }
+        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new() }
     }
 
     fn finish(self, root: Slot) -> Plan<'a> {
-        Plan { passes: self.passes, slots: self.refs.len() as u32, root, fx: self.fx }
+        Plan { passes: self.passes, slots: self.refs.len() as u32, root, fx: self.fx, checkpoints: self.checkpoints }
     }
 
     fn alloc(&mut self) -> Slot {
@@ -449,7 +463,11 @@ impl<'a> Planner<'a> {
     }
 
     /// composite_stack: returns the new backdrop (consumes `backdrop`).
-    fn stack(&mut self, layers: &'a [Layer], mut backdrop: Slot) -> Result<Slot, Unsupported> {
+    fn stack(&mut self, layers: &'a [Layer], backdrop: Slot) -> Result<Slot, Unsupported> {
+        self.stack_inner(layers, backdrop, None)
+    }
+
+    fn stack_inner(&mut self, layers: &'a [Layer], mut backdrop: Slot, root_start: Option<usize>) -> Result<Slot, Unsupported> {
         let mut i = 0;
         while i < layers.len() {
             let base = &layers[i];
@@ -470,6 +488,11 @@ impl<'a> Planner<'a> {
                 }
             }
             i = j.max(i + 1);
+            if let Some(start) = root_start
+                && self.refs.iter().enumerate().all(|(slot, &refs)| refs == u32::from(slot == backdrop as usize))
+            {
+                self.checkpoints.push(Checkpoint { layer_start: start, layer_end: start.saturating_add(i), pass_end: self.passes.len(), slot: backdrop });
+            }
         }
         Ok(backdrop)
     }
@@ -1758,6 +1781,35 @@ mod tests {
             let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
             let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
             assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
+    }
+
+    #[test]
+    fn root_checkpoints_have_only_one_live_input_and_keep_clips_whole() {
+        for mode in [BlendMode::Normal, BlendMode::PassThrough] {
+            let mut d = Document::with_background("t", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let mut clip = Layer::new("clip", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.3, 0.7, 0.4))));
+            clip.clipped = true;
+            let mut group = Layer::group(
+                "group",
+                vec![
+                    Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgba(0.9, 0.1, 0.3, 0.6)))),
+                    Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert)),
+                ],
+            );
+            group.blend = mode;
+            d.layers.extend([group, clip, Layer::new("top", LayerContent::Adjustment(Adjustment::Invert))]);
+            let plan = plan(&d).unwrap();
+            assert_eq!(plan.checkpoints.iter().map(|c| c.layer_end).collect::<Vec<_>>(), vec![1, 3, 4]);
+            for checkpoint in &plan.checkpoints {
+                let mut written = std::collections::HashSet::from([checkpoint.slot]);
+                for pass in &plan.passes[checkpoint.pass_end..] {
+                    for input in [pass.a, pass.b, pass.c, pass.d].into_iter().flatten() {
+                        assert!(written.contains(&input), "a suffix must not need another saved slot: {checkpoint:?}");
+                    }
+                    written.insert(pass.dst);
+                }
+                assert!(written.contains(&plan.root));
+            }
         }
     }
 

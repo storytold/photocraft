@@ -32,6 +32,29 @@ fn doc() -> Document {
 }
 
 #[test]
+fn composite_reuse_reports_held_bytes_and_honors_the_canvas_override() {
+    let _gpu = gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let g = GpuCanvas::new(&rs);
+    let mut d = doc();
+    d.layers.push(photocraft_doc::Layer::new("top", photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Solid(Color::rgba(0.8, 0.1, 0.2, 0.5)))));
+    g.set_memory_budget(1 << 30);
+    g.set_composite_cache_budget(0);
+    assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
+    assert_eq!(g.compositor_bytes().unwrap().1, 0, "no effect maps or composite chunks");
+    g.set_composite_cache_budget(512 << 20);
+    assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
+    let bpp = if photocraft_gpu::Compositor::preferred_acc_format(&rs.adapter) == eframe::wgpu::TextureFormat::Rgba32Float { 16 } else { 8 };
+    assert_eq!(g.compositor_bytes().unwrap().1 as u64, d.size.area() * bpp);
+    d.layers[1].opacity = 0.4;
+    assert!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits > 0);
+    g.set_composite_cache_budget(0);
+    g.set_memory_budget(512 << 20);
+    assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
+    assert_eq!(g.compositor_bytes().unwrap().1, 0, "override survives the overall budget update");
+}
+
+#[test]
 fn injected_loss_stops_gpu_work_without_panicking() {
     let _gpu = gpu_lock();
     let Some(rs) = render_state() else { return };

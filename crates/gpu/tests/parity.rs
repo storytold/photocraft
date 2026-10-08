@@ -154,6 +154,161 @@ fn first_frame_renders() {
 }
 
 #[test]
+fn stack_prefix_reuse_matches_uncached_gpu_and_cpu_at_every_depth() {
+    let Some(mut g) = gpu() else { return };
+    let mut uncached = Compositor::new(&g.device);
+    uncached.set_composite_cache_budget(0);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::new("reuse", Size::new(300, 70), ColorMode::Rgb, depth);
+        for seed in 1..=4 {
+            doc.layers.push(noise_layer("layer", doc.pixel_format(), doc.bounds(), seed, 0.2));
+        }
+        check(&mut g, &doc, "populate prefix");
+        for (opacity, fill, blend, visible) in [
+            (0.4, 1.0, BlendMode::Normal, true),
+            (0.9, 0.5, BlendMode::Multiply, true),
+            (0.8, 0.7, BlendMode::Screen, false),
+            (1.0, 1.0, BlendMode::Normal, true),
+        ] {
+            let top = doc.layers.last_mut().unwrap();
+            top.opacity = opacity;
+            top.fill_opacity = fill;
+            top.blend = blend;
+            top.visible = visible;
+            let stats = diff_rect(&mut g, &doc, doc.bounds(), "top properties").unwrap();
+            assert!(stats.prefix_hits > 0, "{depth:?}");
+            assert!(stats.prefix_passes_skipped > 0);
+            let cached = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+            let cold = render_to_vec(&mut uncached, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+            assert_eq!(cached, cold, "reuse preserves the GPU accumulator exactly");
+        }
+        let old = doc.clone();
+        doc.layers[1].surface_mut().unwrap().write_pixel(5, 5, &[0.8, 0.2, 0.6, 0.7]);
+        assert_eq!(diff_rect(&mut g, &doc, doc.bounds(), "middle COW edit").unwrap().prefix_hits, 0);
+        doc.layers[1].opacity = 0.3;
+        assert!(diff_rect(&mut g, &doc, doc.bounds(), "repeat middle edit").unwrap().prefix_hits > 0);
+        check(&mut g, &old, "undo snapshot");
+        check(&mut g, &doc, "redo snapshot");
+        for opacity in [0.7, 0.5, 0.9] {
+            doc.layers[0].opacity = opacity;
+            assert_eq!(diff_rect(&mut g, &doc, doc.bounds(), "bottom edit").unwrap().prefix_hits, 0);
+        }
+    }
+}
+
+#[test]
+fn root_checkpoints_keep_clipping_groups_and_adjustments_whole() {
+    let Some(mut g) = gpu() else { return };
+    for mode in [BlendMode::PassThrough, BlendMode::Normal] {
+        let mut doc = base_doc(300, 70);
+        let mut clipped = noise_layer("clip", PixelFormat::RGBA8, doc.bounds(), 5, 0.1);
+        clipped.clipped = true;
+        let mut group = Layer::group(
+            "group",
+            vec![noise_layer("child", PixelFormat::RGBA8, doc.bounds(), 4, 0.1), clipped, Layer::new("adjust", LayerContent::Adjustment(Adjustment::Invert))],
+        );
+        group.blend = mode;
+        group.opacity = 0.8;
+        group.mask = Some(mask(Rect::new(0, 0, 270, 60), 8, 1.0));
+        doc.layers.push(group);
+        let mut clip = noise_layer("outer clip", PixelFormat::RGBA8, doc.bounds(), 7, 0.1);
+        clip.clipped = true;
+        doc.layers.push(clip);
+        doc.layers.push(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 9, 0.1));
+        check(&mut g, &doc, "populate group prefix");
+        doc.layers[3].opacity = 0.4;
+        assert!(diff_rect(&mut g, &doc, doc.bounds(), "top above complete group").unwrap().prefix_hits > 0);
+        doc.layers[2].opacity = 0.3;
+        assert_eq!(diff_rect(&mut g, &doc, doc.bounds(), "clipping unit invalidates").unwrap().prefix_hits, 0);
+        if let LayerContent::Group(group) = &mut doc.layers[1].content {
+            group.children[0].surface_mut().unwrap().write_pixel(2, 2, &[1.0, 0.0, 0.0, 0.5]);
+            group.children[2].content = LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.2, offset: 0.0, gamma: 1.0 });
+        }
+        check(&mut g, &doc, "nested pixels and adjustment changed");
+        doc.layers[1].mask.as_mut().unwrap().density = 0.3;
+        check(&mut g, &doc, "group mask changed");
+        doc.layers[3].opacity = 0.9;
+        check(&mut g, &doc, "reuse below changed group");
+    }
+}
+
+#[test]
+fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = base_doc(600, 300);
+    doc.layers.push(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2));
+    doc.layers.push(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2));
+    check(&mut g, &doc, "full prefix");
+    let region = Rect::new(10, 10, 50, 45);
+    doc.layers[2].opacity = 0.4;
+    assert_eq!(diff_rect(&mut g, &doc, region, "new partial rectangle").unwrap().prefix_hits, 0);
+    doc.layers[2].opacity = 0.7;
+    assert!(diff_rect(&mut g, &doc, region, "same partial rectangle").unwrap().prefix_hits > 0);
+    doc.layers[0].surface_mut().unwrap().write_pixel(550, 270, &[1.0, 0.0, 1.0, 0.9]);
+    check(&mut g, &doc, "offscreen lower edit");
+    diff_rect(&mut g, &doc, Rect::new(500, 250, 580, 290), "disjoint damage after invalidation").unwrap();
+    doc.global_light.angle += 15.0;
+    assert_eq!(diff_rect(&mut g, &doc, doc.bounds(), "global context").unwrap().prefix_hits, 0);
+    doc.layers.push(Layer::new("opaque cover", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+    check(&mut g, &doc, "occlusion starts above old prefix");
+    doc.layers.last_mut().unwrap().opacity = 0.5;
+    check(&mut g, &doc, "occlusion removed");
+    doc.layers.swap(0, 1);
+    check(&mut g, &doc, "reorder");
+    doc.layers.remove(1);
+    check(&mut g, &doc, "delete");
+    doc.size = Size::new(300, 200);
+    check(&mut g, &doc, "resize");
+    let budget = g.comp.memory_budget();
+    g.comp.set_composite_cache_budget(1024);
+    assert!(g.comp.composite_cache_bytes() <= 1024);
+    assert_eq!(g.comp.memory_budget(), budget);
+    check(&mut g, &doc, "tiny cache");
+    assert!(g.comp.composite_cache_bytes() <= 1024);
+    g.comp.set_composite_cache_budget(0);
+    assert_eq!(diff_rect(&mut g, &doc, doc.bounds(), "disabled cache").unwrap().prefix_hits, 0);
+    assert_eq!(g.comp.composite_cache_bytes(), 0);
+    g.comp.set_memory_budget(1 << 30);
+    assert_eq!(g.comp.memory_budget(), 1 << 30);
+    check(&mut g, &doc, "restore budget");
+    assert!(g.comp.composite_cache_bytes() > 0);
+    g.comp.forget_doc(doc.id);
+    assert_eq!(g.comp.composite_cache_bytes(), 0);
+    check(&mut g, &doc, "after close/reopen");
+    g.comp.set_texture_limit(256);
+    assert_eq!(g.comp.composite_cache_bytes(), 0);
+    check(&mut g, &doc, "after paging change");
+    g.comp.set_composite_cache_budget(1 << 20);
+    check(&mut g, &doc, "bounded admission");
+    assert!(g.comp.composite_cache_bytes() <= 1 << 20);
+    assert!(diff_rect(&mut g, &doc, doc.bounds(), "bounded cache keeps its hits").unwrap().prefix_hits > 0);
+    doc.layers[0].blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 40], white: [255, 255] }, photocraft_doc::BlendRange::FULL]);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
+    assert_eq!(g.comp.composite_cache_bytes(), 0);
+}
+
+#[test]
+fn discarded_encode_neither_consumes_nor_populates_prefixes() {
+    let Some(mut g) = gpu() else { return };
+    // Analytic fills isolate checkpoint submission from the pre-existing input-page staging.
+    let mut doc = Document::new("encoder", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new("lower", LayerContent::Fill(Fill::Solid(Color::rgba(0.4, 0.1, 0.7, 0.8)))));
+    doc.layers.push(Layer::new("upper", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.6, 0.3, 0.5)))));
+    let mut encoder = g.device.create_command_encoder(&Default::default());
+    let stats = g.comp.encode(&g.device, &g.queue, &mut encoder, &doc, doc.bounds(), &mut |_, _| {}).unwrap();
+    assert_eq!(stats.prefix_hits, 0);
+    assert_eq!(g.comp.composite_cache_bytes(), 0);
+    drop(encoder);
+    check(&mut g, &doc, "render after discarded cold encoder");
+    doc.layers[1].opacity = 0.4;
+    let mut encoder = g.device.create_command_encoder(&Default::default());
+    let stats = g.comp.encode(&g.device, &g.queue, &mut encoder, &doc, doc.bounds(), &mut |_, _| {}).unwrap();
+    assert_eq!(stats.prefix_hits, 0);
+    drop(encoder);
+    assert!(diff_rect(&mut g, &doc, doc.bounds(), "render after discarded warm encoder").unwrap().prefix_hits > 0);
+}
+
+#[test]
 fn blend_modes() {
     let Some(mut g) = gpu() else { return };
     for mode in BlendMode::layer_modes() {
@@ -1896,6 +2051,8 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
     let Some(g) = gpu() else { return };
     let d = big_doc();
     let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    // Exercise input-page residency itself: prefix hits can legitimately skip those pages.
+    comp.set_composite_cache_budget(0);
     comp.set_texture_limit(PAGED_LIMIT);
     let view = Rect::new(520, 300, 760, 500);
     photocraft_gpu::render_to_vec(&mut comp, &g.device, &g.queue, &d, view).unwrap();
