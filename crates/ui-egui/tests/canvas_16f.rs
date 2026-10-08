@@ -61,7 +61,7 @@ fn native_gpu_composite_does_not_write_into_reduced_stream_pages() {
     for (page, factor, b) in [(1, 2, &small), (2, 1, &native)] {
         assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page, size: [86400, 43200], factor, depth: d.depth, limit: 8 << 20, core: r }, b));
     }
-    g.composite(&d, r, false).expect("regional GPU composition");
+    g.composite_resident(&d, r, false).expect("regional GPU composition");
     let (_, _, px) = g.read_page(d.id.0, 2).expect("native page");
     let reference = photocraft_compose::render(&d, r);
     for (p, q) in px.iter().zip(reference.px.iter()) {
@@ -71,6 +71,21 @@ fn native_gpu_composite_does_not_write_into_reduced_stream_pages() {
         }
     }
     assert!(g.read_page(d.id.0, 1).expect("reduced page").2.iter().all(|p| *p == [0.0; 4]));
+    assert!(g.fault().is_none());
+}
+
+#[test]
+fn stream_budget_includes_full_canvas_entries_of_other_documents() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let old = gradient(SampleType::U8, 512, 512, 0.0, 1.0);
+    g.upload_composite(old.id.0, &old, None);
+    assert!(g.has(old.id.0, [512, 512]));
+    let doc = Document::new("large", Size::new(86400, 43200), ColorMode::Rgb, SampleType::U8);
+    let r = Rect::new(64000, 22000, 64512, 22512);
+    let b = photocraft_compose::Buffer::transparent(r);
+    assert!(g.upload_page(gpu_canvas::PageUpload { key: doc.id.0, page: 1, size: [86400, 43200], factor: 1, depth: doc.depth, limit: 2 << 20, core: r }, &b));
+    assert!(!g.has(old.id.0, [512, 512]), "the older full canvas must count against the shared cap");
     assert!(g.fault().is_none());
 }
 

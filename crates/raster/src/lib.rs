@@ -63,6 +63,10 @@ impl Tile {
             None => Ok(bytes),
         }
     }
+    /// Nonblocking residency check; use [`spill::try_resident_scope`] to keep it stable.
+    pub fn is_resident(&self) -> bool {
+        self.cell.is_resident()
+    }
     /// Byte length, without touching the pixels (they may be on disk).
     pub fn len(&self) -> usize {
         self.cell.len()

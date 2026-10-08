@@ -824,6 +824,7 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
     let _ = idx;
     // Graphics resources have their own cap. Reserve space for visible output pages and staging.
     let output = (allowance / 8).clamp(8 << 20, 256 << 20);
+    gpu.set_output_budget(output);
     let staging = (allowance / 16).max(4 << 20);
     let budget = allowance.saturating_sub(output).saturating_sub(staging).saturating_mul(4) / 5;
     let budget = budget.max(8 << 20);
@@ -1520,7 +1521,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs).
     let mut on_gpu = false;
     // A flipped view draws through the CPU path (the GPU canvas shader has no mirroring).
-    if doc.size.area() > 16 << 20 {
+    if doc.size.area() > 16 << 20 || doc.size.area().saturating_mul(16) > (u64::from(app.session.prefs().performance.gpu_memory_mb) << 20) / 8 {
         let revision = app.session.documents().get(idx).map_or(0, |s| s.revision);
         let (render_doc, preview) = display_doc(app, idx);
         let (display, display_key) = canvas_display(app, &render_doc, output);
@@ -1534,6 +1535,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let count = (app.streams.len() + 1).max(1) as u64;
         let s = app.streams.entry((doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id(), idx)).value())).or_default();
         let encode_srgb = display.as_ref().is_some_and(|d| d.encode_srgb);
+        if let Some(target) = wanted.first()
+            && let Some(damage) = app.session.documents().get(idx).and_then(|s| s.last_damage)
+        {
+            let damage = if damage.is_empty() { damage } else { damage.inflate(effect_reach(&render_doc.layers)) };
+            s.rebase_damage(&render_doc, *target, damage, gpu.as_ref());
+        }
         s.update(
             &ctx,
             render_doc.clone(),

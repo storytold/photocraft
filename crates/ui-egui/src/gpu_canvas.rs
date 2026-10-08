@@ -224,6 +224,21 @@ impl GpuCanvas {
         let c = r.callback_resources.get::<Resources>()?.compositor.as_ref()?;
         Some((c.resident_bytes(), c.fx_cache_bytes()))
     }
+    /// Shared display-texture cap across every document, including older full-canvas entries.
+    pub fn set_output_budget(&self, bytes: u64) {
+        let mut r = self.rs.renderer.write();
+        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+            res.output_budget = Some(bytes);
+        }
+    }
+    /// Re-key an unchanged region after a local edit without copying or uploading pixels.
+    pub fn rename_page(&self, doc: u64, old: u64, new: u64) -> bool {
+        let mut r = self.rs.renderer.write();
+        let Some(d) = r.callback_resources.get_mut::<Resources>().and_then(|r| r.docs.get_mut(&doc)) else { return false };
+        let Some(t) = d.tiles.iter_mut().find(|t| t.stream_key == old) else { return false };
+        t.stream_key = new;
+        true
+    }
 
     /// Set the checkerboard and gamut warning colours.
     pub fn set_style(&self, style: CanvasStyle) {
@@ -272,6 +287,9 @@ impl GpuCanvas {
         let mut renderer = self.rs.renderer.write();
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
         if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
+            if !res.admit_output(doc, u64::from(size[0]) * u64::from(size[1]) * texel_bytes(format) * 3 / 2) {
+                return;
+            }
             let tex = DocTextures::new(device, res, size, self.tile, format);
             res.docs.insert(doc, tex);
         }
@@ -394,6 +412,10 @@ impl GpuCanvas {
             return Err(photocraft_gpu::Unsupported("layers exceed the GPU memory budget; full refresh on the CPU".into()));
         }
         if fresh {
+            if !res.admit_output(key, u64::from(size[0]) * u64::from(size[1]) * texel_bytes(format) * 3 / 2) {
+                res.compositor = Some(comp);
+                return Err(photocraft_gpu::Unsupported("display texture exceeds the GPU budget; use visible pages".into()));
+            }
             let tex = DocTextures::new(device, res, size, self.tile, format);
             res.docs.insert(key, tex);
         }
@@ -471,6 +493,31 @@ impl GpuCanvas {
         }
         res.compositor = Some(comp);
         result
+    }
+
+    /// The interactive stream never reads scratch on the UI thread. Simple raster documents
+    /// can reuse the GPU compositor while all its inputs are resident; otherwise the already
+    /// prepared worker page is displayed by the same GPU canvas.
+    pub fn composite_resident(
+        &self,
+        doc: &photocraft_doc::Document,
+        region: photocraft_geom::Rect,
+        encode_srgb: bool,
+    ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
+        let _scope = photocraft_raster::spill::try_resident_scope().ok_or_else(|| photocraft_gpu::Unsupported("scratch transfer in progress".into()))?;
+        for (_, _, layer) in doc.walk() {
+            if !matches!(layer.content, photocraft_doc::LayerContent::Raster(_) | photocraft_doc::LayerContent::Group(_))
+                || layer.mask.is_some()
+                || layer.vector_mask.is_some()
+                || layer.effects.enabled && !layer.effects.items.is_empty()
+            {
+                return Err(photocraft_gpu::Unsupported("derived inputs are prepared on a worker".into()));
+            }
+            if layer.surface().is_some_and(|s| s.tiles().any(|(_, t)| !t.is_resident())) {
+                return Err(photocraft_gpu::Unsupported("pixel inputs are on scratch".into()));
+            }
+        }
+        self.composite(doc, region, encode_srgb)
     }
 
     /// Bring document `key`'s display texture up to date with `doc`: only `damage` when given (a
@@ -556,6 +603,9 @@ impl GpuCanvas {
             let mut renderer = self.rs.renderer.write();
             let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
             if res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format) {
+                if !res.admit_output(key, u64::from(size[0]) * u64::from(size[1]) * texel_bytes(format) * 3 / 2) {
+                    return;
+                }
                 let tex = DocTextures::new(device, res, size, self.tile, format);
                 res.docs.insert(key, tex);
             }
@@ -781,29 +831,24 @@ impl GpuCanvas {
         if let Some(d) = res.docs.get_mut(&key) {
             d.tiles.retain(|t| t.stream_key != page);
         }
-        let mut live: u64 = res
-            .docs
-            .values()
-            .filter(|d| d.streamed)
-            .flat_map(|d| d.tiles.iter().map(move |t| u64::from(t.texture.width()) * u64::from(t.texture.height()) * texel_bytes(d.format)))
-            .sum();
+        let mut live: u64 = res.docs.values().map(DocTextures::bytes).sum();
         if bytes > limit {
             return false;
         }
         while live.saturating_add(bytes) > limit {
-            let cold = res
-                .docs
-                .iter()
-                .filter(|(_, d)| d.streamed)
-                .flat_map(|(id, d)| d.tiles.iter().enumerate().map(move |(i, t)| (*id, i, t.stamp)))
-                .min_by_key(|(_, _, stamp)| *stamp);
+            let cold = res.docs.iter().flat_map(|(id, d)| d.tiles.iter().enumerate().map(move |(i, t)| (*id, i, t.stamp))).min_by_key(|(_, _, stamp)| *stamp);
             let Some((id, index, _)) = cold else { return false };
             if let Some(d) = res.docs.get_mut(&id) {
                 if index >= d.tiles.len() {
                     return false;
                 }
-                let t = d.tiles.remove(index);
-                live = live.saturating_sub(u64::from(t.texture.width()) * u64::from(t.texture.height()) * texel_bytes(d.format));
+                if d.streamed {
+                    let t = d.tiles.remove(index);
+                    live = live.saturating_sub(texture_bytes(&t.texture, d.format));
+                } else {
+                    live = live.saturating_sub(d.bytes());
+                    res.docs.remove(&id);
+                }
             }
         }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1318,6 +1363,7 @@ struct Resources {
     /// GPU memory the compositor may hold (`None`: its default), and the document area the
     /// view shows; applied before every composite.
     compositor_budget: Option<u64>,
+    output_budget: Option<u64>,
     compositor_focus: Option<photocraft_geom::Rect>,
     encode_bgl: wgpu::BindGroupLayout,
     encode_pipeline: wgpu::RenderPipeline,
@@ -1393,6 +1439,32 @@ struct DocTextures {
     format: wgpu::TextureFormat,
     tiles: Vec<Tile>,
     streamed: bool,
+}
+
+fn texture_bytes(t: &wgpu::Texture, format: wgpu::TextureFormat) -> u64 {
+    (0..t.mip_level_count()).map(|l| u64::from((t.width() >> l).max(1)) * u64::from((t.height() >> l).max(1)) * texel_bytes(format)).sum()
+}
+
+impl DocTextures {
+    fn bytes(&self) -> u64 {
+        self.tiles.iter().map(|t| texture_bytes(&t.texture, self.format)).sum()
+    }
+}
+
+impl Resources {
+    fn admit_output(&mut self, key: u64, bytes: u64) -> bool {
+        let Some(limit) = self.output_budget else { return true };
+        if bytes > limit {
+            return false;
+        }
+        while self.docs.iter().filter(|(id, _)| **id != key).map(|(_, d)| d.bytes()).sum::<u64>().saturating_add(bytes) > limit {
+            let cold =
+                self.docs.iter().filter(|(id, _)| **id != key).min_by_key(|(_, d)| d.tiles.iter().map(|t| t.stamp).max().unwrap_or(0)).map(|(id, _)| *id);
+            let Some(id) = cold else { return false };
+            self.docs.remove(&id);
+        }
+        true
+    }
 }
 
 struct Tile {
@@ -1584,6 +1656,7 @@ impl Resources {
             compositor_failed: None,
             health: photocraft_gpu::DeviceHealth::new(),
             compositor_budget: None,
+            output_budget: None,
             compositor_focus: None,
             encode_bgl,
             encode_pipeline,

@@ -38,7 +38,12 @@ impl PageKey {
     }
     pub fn core(self, doc: &Document) -> Rect {
         let side = PAGE_SIDE.saturating_mul(self.factor);
-        Rect::from_xywh(self.x.saturating_mul(side) as i32, self.y.saturating_mul(side) as i32, side, side).intersect(&doc.bounds())
+        let Some(x) = self.x.checked_mul(side).and_then(|x| i32::try_from(x).ok()) else { return Rect::EMPTY };
+        let Some(y) = self.y.checked_mul(side).and_then(|y| i32::try_from(y).ok()) else { return Rect::EMPTY };
+        if self.factor == 0 || self.factor > 1 << 16 {
+            return Rect::EMPTY;
+        }
+        Rect::from_xywh(x, y, side, side).intersect(&doc.bounds())
     }
     pub fn source(self, doc: &Document) -> Rect {
         self.core(doc).inflate(self.factor as i32).intersect(&doc.bounds())
@@ -177,6 +182,34 @@ fn compute(
 }
 
 impl Stream {
+    /// Carry unaffected derived pages across a single local edit. Jobs still in flight retain
+    /// their old identity and are cancelled by update; no stale worker result is rebased.
+    pub fn rebase_damage(&mut self, doc: &Document, target: PageKey, damage: Rect, gpu: Option<&GpuCanvas>) {
+        if target.preview != 0 {
+            return;
+        }
+        let keys: Vec<_> = self
+            .cache
+            .keys()
+            .copied()
+            .filter(|k| {
+                k.doc == target.doc
+                    && k.revision.checked_add(1) == Some(target.revision)
+                    && k.preview == 0
+                    && k.display == target.display
+                    && k.source(doc).intersect(&damage).is_empty()
+            })
+            .collect();
+        for key in keys {
+            let new = PageKey { snapshot: target.snapshot, revision: target.revision, ..key };
+            if let Some(mut p) = self.cache.remove(&key) {
+                if p.gpu {
+                    p.gpu = gpu.is_some_and(|g| g.rename_page(key.doc, key.id(), new.id()));
+                }
+                self.cache.insert(new, p);
+            }
+        }
+    }
     pub fn gpu_keys(&self) -> Vec<u64> {
         self.cache.keys().map(|k| k.id()).collect()
     }
@@ -331,7 +364,7 @@ impl Stream {
                         )
                     });
                     if page.gpu {
-                        if key.factor == 1 && g.composite(doc, key.source(doc), encode_srgb).is_ok() {
+                        if key.factor == 1 && g.composite_resident(doc, key.source(doc), encode_srgb).is_ok() {
                             self.stats.gpu_composites += 1;
                         }
                         self.stats.uploads += 1;
@@ -393,6 +426,33 @@ mod tests {
         let p = pages(&d, d.bounds(), 0.5, 1, 0, 0);
         assert!(p.iter().all(|p| p.source(&d).width() <= 514 * p.factor));
         assert!(p.iter().all(|p| p.source(&d).x0 % p.factor as i32 == 0));
+    }
+
+    #[test]
+    fn local_damage_reuses_only_unaffected_pages() {
+        let d = Document::new("d", photocraft_doc::Size::new(2048, 512), ColorMode::Rgb, SampleType::U8);
+        let old = pages(&d, d.bounds(), 1.0, 1, 0, 0);
+        let mut s = Stream::default();
+        for key in &old {
+            s.cache.insert(
+                *key,
+                Page {
+                    buffer: None,
+                    rect: key.core(&d),
+                    image: egui::ColorImage::filled([1, 1], Color32::RED),
+                    texture: None,
+                    gpu: false,
+                    exact: true,
+                    touched: 0,
+                },
+            );
+        }
+        let target = PageKey { revision: 2, snapshot: 123, ..old[0] };
+        let damage = Rect::new(10, 10, 20, 20);
+        s.rebase_damage(&d, target, damage, None);
+        assert_eq!(s.cache.keys().filter(|k| k.revision == 2).count(), 3);
+        assert!(s.cache.keys().filter(|k| k.revision == 2).all(|k| k.source(&d).intersect(&damage).is_empty()));
+        assert_eq!(PageKey { x: u32::MAX, ..target }.core(&d), Rect::EMPTY);
     }
 
     #[test]
