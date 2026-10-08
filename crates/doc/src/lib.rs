@@ -830,6 +830,28 @@ impl Document {
         self.layer_at_mut(&path)
     }
 
+    /// A [`Layer::link_group`] id no layer uses yet: one above the highest stored id, or, when a
+    /// loaded file already holds `u64::MAX` (#961), the smallest free id from 1. Never wraps, so a
+    /// new link can't join an unrelated group. `None` only if every id is taken.
+    pub fn unused_link_group(&self) -> Option<u64> {
+        let mut used: Vec<u64> = self.walk().iter().filter_map(|(_, _, l)| l.link_group).collect();
+        used.sort_unstable();
+        used.dedup();
+        if let Some(next) = used.last().map_or(Some(1), |g| g.checked_add(1)) {
+            return Some(next);
+        }
+        let mut free = 1u64;
+        for g in used {
+            if g > free {
+                break;
+            }
+            if g == free {
+                free = free.checked_add(1)?;
+            }
+        }
+        Some(free)
+    }
+
     pub fn layer_at(&self, path: &[usize]) -> Option<&Layer> {
         let (first, rest) = path.split_first()?;
         let mut cur = self.layers.get(*first)?;
@@ -923,6 +945,29 @@ mod tests {
 
     fn doc() -> Document {
         Document::with_background("t", Size::new(100, 50), ColorMode::Rgb, SampleType::U8, Color::WHITE)
+    }
+
+    #[test]
+    fn unused_link_group_never_wraps() {
+        let mut d = doc();
+        assert_eq!(d.unused_link_group(), Some(1));
+        let with = |d: &mut Document, groups: &[u64]| {
+            d.layers.truncate(1);
+            for g in groups {
+                let mut l = Layer::raster("l", PixelFormat::RGBA8);
+                l.link_group = Some(*g);
+                d.layers.push(l);
+            }
+        };
+        with(&mut d, &[3, 7]);
+        assert_eq!(d.unused_link_group(), Some(8));
+        with(&mut d, &[u64::MAX - 1]);
+        assert_eq!(d.unused_link_group(), Some(u64::MAX));
+        // A stored maximal id would wrap to 0 (#961): take the smallest free id instead.
+        with(&mut d, &[u64::MAX]);
+        assert_eq!(d.unused_link_group(), Some(1));
+        with(&mut d, &[0, 1, 2, 4, u64::MAX]);
+        assert_eq!(d.unused_link_group(), Some(3));
     }
 
     #[test]
