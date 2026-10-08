@@ -77,7 +77,8 @@ pub fn needed(app: &PhotocraftApp) -> Option<(Kind, photocraft_doc::LayerId)> {
     let st = app.session.active()?;
     let id = st.active_layer?;
     let l = st.doc.layer(id)?;
-    if l.locks.all || l.locks.pixels {
+    let locks = st.doc.effective_locks(id);
+    if locks.all || locks.pixels {
         return None;
     }
     use photocraft_doc::LayerContent as C;
