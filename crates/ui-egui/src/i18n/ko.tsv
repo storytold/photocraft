@@ -25,6 +25,9 @@
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
 	Close	닫기
+	Minimize	최소화
+	Maximize	최대화
+	Restore	이전 크기로 복원
 	Close All	모두 닫기
 	Close Others	다른 문서 닫기
 	Save	저장
@@ -297,6 +300,7 @@
 	Smart Object	스마트 오브젝트
 	Convert to Smart Object	스마트 오브젝트로 변환
 	Convert to Embedded	포함된 오브젝트로 변환
+	Convert to Layers	레이어로 변환
 	Convert to Linked…	연결된 오브젝트로 변환…
 	Edit Contents	내용 편집
 	Replace Contents…	내용 대체…
@@ -951,6 +955,7 @@
 	Drag a rectangle around the object	오브젝트를 둘러싸는 사각형을 드래그하세요
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	이미지 위에서 드래그하여 제약 조건 추가; Shift 키로 수평/수직 유지; 오른쪽 클릭하여 삭제.
 	Drag to move the active shape's path or the Work Path	드래그하여 활성 모양의 패스 또는 작업 패스 이동
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	클릭: 기준점 선택 · 드래그: 기준점, 핸들 또는 세그먼트 이동 · {shift}-클릭: 추가 · {alt}-클릭: 하위 패스 전체
 	Draw with the Pen tool (P) or make a work path from a selection.	펜 도구(P)로 그리거나 선택 영역에서 작업 패스를 만드세요.
 	Drop an image or PSD anywhere to open it.	이미지나 PSD를 아무 곳에나 놓아 여세요.
 	Duplicate Layers…	레이어 복제…
@@ -1574,6 +1579,7 @@
 	Paint Bucket Tool	페인트 통 도구
 	Paints from the document's opening state	문서를 열었을 때의 상태로 칠하기
 	Path Selection Tool	패스 선택 도구
+	Direct Selection Tool	직접 선택 도구
 	Pattern Overlay	패턴 오버레이
 	Pen Pressure	펜 압력
 	Pen Tilt	펜 기울기
