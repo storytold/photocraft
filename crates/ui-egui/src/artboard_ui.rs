@@ -65,7 +65,9 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     let v = &mut app.ui.views[i];
     // Leave room for the name above the board.
     v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32).clamp(0.01, 64.0);
-    v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
+    // Widen before adding: a board near ±2^30, or one whose far edge saturated at i32::MAX,
+    // overflows an i32 sum (#981).
+    v.center = [((f64::from(b.x0) + f64::from(b.x1)) / 2.0) as f32, ((f64::from(b.y0) + f64::from(b.y1)) / 2.0) as f32];
     v.fit_pending = false;
     Ok(json!({"zoom": v.zoom, "artboard": id.0, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
@@ -190,6 +192,26 @@ mod tests {
         menu(&mut app, &ctx, "window.panel.layerComps", json!({})).unwrap();
         assert!(app.ui.panels.history);
         assert_eq!(app.ui.dock_tabs.history, 2);
+    }
+
+    #[test]
+    fn fit_artboard_centres_a_board_with_large_coordinates() {
+        // #981: `(b.x0 + b.x1) as f32` overflowed i32 for boards near ±2^30 and for a board
+        // whose far edge saturated at i32::MAX, panicking outside any dispatch guard.
+        for (params, want) in [
+            (json!({"x": 2147483600, "y": 0, "width": 1000, "height": 1000}), [(2147483600.0 + 2147483647.0) / 2.0, 500.0]),
+            (json!({"x": 1073741824, "width": 50, "height": 20}), [1073741849.0, 10.0]),
+            (json!({"y": -1073741840, "width": 50, "height": 20}), [25.0, -1073741830.0]),
+        ] {
+            let (mut app, ctx) = app();
+            let i = app.session.active_index().unwrap();
+            app.run("layer.new.artboard", params.clone()).unwrap();
+            app.sync_views();
+            menu(&mut app, &ctx, "view.fitArtboardOnScreen", json!({})).unwrap();
+            // The view centre is f32, so compare against the true midpoint rounded to f32.
+            let c = app.ui.views[i].center;
+            assert_eq!(c, [want[0] as f32, want[1] as f32], "{params}");
+        }
     }
 
     #[test]
