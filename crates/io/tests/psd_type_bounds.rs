@@ -43,7 +43,7 @@ fn style(size: f64, leading: Option<f64>) -> E {
 }
 
 /// Photoshop-shaped EngineData for `text` (paragraphs separated by `\r`).
-fn engine_data(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>) -> E {
+fn engine_data(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>, font: &str) -> E {
     let ed_text = format!("{text}\r");
     let n16 = ed_text.encode_utf16().count() as i64;
     let mut sruns = Vec::new();
@@ -63,7 +63,7 @@ fn engine_data(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>) -> E {
         ("Cookie".into(), E::Dict(vec![("Photoshop".into(), E::Dict(photoshop))])),
     ]);
     let resources = E::Dict(vec![
-        ("FontSet".into(), E::Array(vec![E::Dict(vec![("Name".into(), E::String("Inter-Regular".into())), ("Script".into(), E::Int(0))])])),
+        ("FontSet".into(), E::Array(vec![E::Dict(vec![("Name".into(), E::String(font.into())), ("Script".into(), E::Int(0))])])),
         ("StyleSheetSet".into(), E::Array(vec![E::Dict(vec![("Name".into(), E::String("Normal RGB".into())), ("StyleSheetData".into(), style(12.0, None))])])),
         ("ParagraphSheetSet".into(), E::Array(vec![E::Dict(vec![("Name".into(), E::String("Normal RGB".into())), ("Properties".into(), para.clone())])])),
     ]);
@@ -89,6 +89,11 @@ fn engine_data(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>) -> E {
 
 /// A `TySh` block as Photoshop writes it.
 fn tysh(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>, transform: Affine, ink: [f64; 4]) -> Vec<u8> {
+    tysh_with_font(text, runs, box_bounds, transform, ink, "Inter-Regular")
+}
+
+/// A `TySh` block whose runs use the font with PostScript name `font`.
+fn tysh_with_font(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>, transform: Affine, ink: [f64; 4], font: &str) -> Vec<u8> {
     let rect = |cls: &str| {
         D::Descriptor(
             Descriptor::new(cls)
@@ -106,7 +111,7 @@ fn tysh(text: &str, runs: &[Run], box_bounds: Option<[f64; 4]>, transform: Affin
         .with("bounds", rect("bounds"))
         .with("boundingBox", rect("boundingBox"))
         .with("TextIndex", D::Integer(0))
-        .with("EngineData", D::RawData(photocraft_text::engine_data::write(&engine_data(text, runs, box_bounds))));
+        .with("EngineData", D::RawData(photocraft_text::engine_data::write(&engine_data(text, runs, box_bounds, font))));
     let bounds = [ink[0].floor() as i32, ink[1].floor() as i32, ink[2].ceil() as i32, ink[3].ceil() as i32];
     write_tysh(&TySh { transform, text: desc, warp: None, bounds })
 }
@@ -299,4 +304,55 @@ fn point_text_height_follows_the_type_size() {
     let (drawn300, ..) = import_case(&c);
     let ratio = drawn300.height() as f32 / drawn.height() as f32;
     assert!((ratio - 300.0 / 72.0).abs() < 0.2, "300 dpi H {} vs 72 dpi H {}", drawn300.height(), drawn.height());
+}
+
+#[test]
+fn type_layers_without_pixels_are_rendered_on_import() {
+    // ag-psd, GIMP and other writers leave type layers without image data (Photoshop re-renders
+    // them on open). The model must import and the layer must be drawn from it, not shown as
+    // empty pixels until it is edited.
+    let c = &cases()[0];
+    let mut doc = Document::new("t", Size::new(900, 700), ColorMode::Rgb, SampleType::U8);
+    doc.resolution_dpi = c.dpi;
+    let data = tysh(c.text, &c.runs, c.box_bounds, c.transform, [40.0, 50.0, 400.0, 110.0]);
+    let mut t = photocraft_text::psd::text_layer_from_tysh(&data, c.dpi).unwrap();
+    t.cache = None;
+    t.psd_raw = Some(std::sync::Arc::new(data));
+    doc.layers.push(Layer::new(c.name, LayerContent::Text(t)));
+    let bytes = photocraft_io::export(&doc, "t.psd", &Default::default()).unwrap().bytes;
+    let back = photocraft_io::import("t.psd", &bytes).unwrap().document;
+    let LayerContent::Text(bt) = &back.layers[0].content else { panic!("not a type layer") };
+    assert_eq!(bt.text, c.text);
+    let drawn = bt.cache.as_ref().expect("rendered on import").content_bounds();
+    assert!(!drawn.is_empty(), "nothing rendered");
+    // The same text rendered by the engine lands on the same pixels.
+    let mut engine = photocraft_text::TextEngine::new();
+    let (_, ours) = engine.render(bt, back.resolution_dpi, back.pixel_format());
+    assert!(close(ours.surface.content_bounds(), drawn, 1), "{:?} vs {drawn:?}", ours.surface.content_bounds());
+    // With pixels in the file, they stay the cache (Photoshop's rendering is authoritative).
+    let (drawn, t, ..) = import_case(c);
+    assert_eq!(t.cache.as_ref().map(|s| s.content_bounds()), Some(drawn));
+}
+
+#[test]
+fn postscript_font_names_resolve_to_the_installed_family_on_import() {
+    // The family guessed from a PostScript name is not always the installed one: the bundled
+    // JetBrains Mono is "JetBrainsMono-Regular", which splits into "Jet Brains Mono". The run
+    // must name the family the font database really has, so nothing reports it missing.
+    let c = &cases()[0];
+    let mut doc = Document::new("t", Size::new(900, 700), ColorMode::Rgb, SampleType::U8);
+    doc.resolution_dpi = c.dpi;
+    let data = tysh_with_font(c.text, &c.runs, c.box_bounds, c.transform, [40.0, 50.0, 400.0, 110.0], "JetBrainsMono-Regular");
+    let probe = photocraft_text::psd::text_layer_from_tysh(&data, c.dpi).unwrap();
+    assert_eq!(probe.runs[0].style.font_family, "Jet Brains Mono", "the guess the import must correct");
+    let mut t = probe;
+    t.cache = None;
+    t.psd_raw = Some(std::sync::Arc::new(data));
+    doc.layers.push(Layer::new(c.name, LayerContent::Text(t)));
+    let bytes = photocraft_io::export(&doc, "t.psd", &Default::default()).unwrap().bytes;
+    let back = photocraft_io::import("t.psd", &bytes).unwrap().document;
+    let LayerContent::Text(bt) = &back.layers[0].content else { panic!("not a type layer") };
+    assert_eq!(bt.runs[0].style.font_family, "JetBrains Mono");
+    assert_eq!(bt.runs[0].style.postscript_name.as_deref(), Some("JetBrainsMono-Regular"));
+    assert!(bt.cache.as_ref().is_some_and(|s| !s.content_bounds().is_empty()));
 }

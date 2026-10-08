@@ -40,6 +40,7 @@ mod psd_export;
 mod psd_import;
 pub mod raw;
 pub mod slices_map;
+mod text_import;
 pub mod smart_map;
 pub mod svg;
 pub mod text_styles_map;
@@ -175,6 +176,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
         ctl.progress(0.05);
         let (mut document, warnings) = psd_import::psd_to_document_with(&file, ctl).ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
+        text_import::prepare(&mut document);
         return Ok(ImportResult { document, warnings });
     }
     if raw::is_raw(bytes) {

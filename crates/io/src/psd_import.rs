@@ -289,7 +289,12 @@ impl Ctx<'_> {
             if let Some(txt2) = &self.txt2 {
                 photocraft_text::psd::apply_txt2(&mut t, &data, txt2);
             }
-            t.cache = Some(self.record_surface(rec, &name));
+            // Photoshop's pixels are the cache only when the file has some: ag-psd, GIMP and
+            // other writers leave type layers without image data (Photoshop re-renders them on
+            // open), and an empty cache would show nothing until the layer is edited; the import
+            // renders such a layer from its model instead (`text_import::prepare`).
+            let cache = self.record_surface(rec, &name);
+            t.cache = (!cache.content_bounds().is_empty()).then_some(cache);
             t.psd_raw = principal(b"TySh");
             LayerContent::Text(t)
         } else if let Some(k) = smart_key {
