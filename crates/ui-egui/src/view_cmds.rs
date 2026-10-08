@@ -88,8 +88,6 @@ pub struct ViewOptions {
     pub pixel_art_preview: bool,
     /// Window › Arrange layout of the document area: "tabs" or a tile/n-up layout id.
     pub arrange: String,
-    /// Type › Font Preview Size: "small" | "medium" | "large" | "extraLarge" | "huge".
-    pub font_preview_size: String,
     /// Type › Language Options: "defaultFeatures" | "eastAsianFeatures" | "middleEasternFeatures",
     /// and the Middle Eastern & South Asian composer.
     pub language_features: String,
@@ -115,7 +113,6 @@ impl Default for ViewOptions {
             pattern_preview: false,
             pixel_art_preview: false,
             arrange: "tabs".into(),
-            font_preview_size: "medium".into(),
             language_features: "defaultFeatures".into(),
             middle_eastern_composer: false,
             guide_layout: default_guide_layout(),
@@ -348,7 +345,8 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return PIXEL_ASPECTS.contains(&k).then(|| o.pixel_aspect == k);
     }
     if let Some(k) = id.strip_prefix("type.fontPreviewSize.") {
-        return FONT_PREVIEW.contains(&k).then(|| o.font_preview_size == k);
+        // The same setting as Preferences › Type › Font Preview Size.
+        return FONT_PREVIEW.contains(&k).then(|| app.session.prefs().type_.font_preview.name() == k);
     }
     if let Some(k) = id.strip_prefix("type.languageOptions.") {
         return if k == "middleEasternAndSouthAsianComposer" {
@@ -484,6 +482,10 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         }
         return Ok(json!({"panel": panel, "tab": tab, "visible": visible}));
     }
+    if let Some(k) = id.strip_prefix("type.fontPreviewSize.") {
+        app.run("prefs.set", json!({"values": {"type.fontPreview": k}}))?;
+        return Ok(json!(k));
+    }
     let o = &mut app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
         if k == "all" {
@@ -528,10 +530,7 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         o.pixel_aspect = k.to_string();
         return Ok(json!({"pixelAspectRatio": pixel_aspect_ratio(k)}));
     }
-    if let Some(k) = id.strip_prefix("type.fontPreviewSize.") {
-        o.font_preview_size = k.to_string();
-        return Ok(json!(k));
-    }
+
     if let Some(k) = id.strip_prefix("type.languageOptions.") {
         if k == "middleEasternAndSouthAsianComposer" {
             o.middle_eastern_composer = flag_param(p, o.middle_eastern_composer);

@@ -639,7 +639,10 @@ pub struct TypePrefs {
     pub text_engine: TextEngine,
     pub font_preview: FontPreview,
     pub fill_new_type_layers_with_placeholder: bool,
+    /// How many recently used fonts the font menu lists first (0 hides the section).
     pub recent_fonts: u32,
+    /// Font families most recently picked in a font menu, newest first.
+    pub recent_font_list: Vec<String>,
 }
 
 impl Default for TypePrefs {
@@ -653,6 +656,7 @@ impl Default for TypePrefs {
             font_preview: FontPreview::Medium,
             fill_new_type_layers_with_placeholder: true,
             recent_fonts: 10,
+            recent_font_list: Vec::new(),
         }
     }
 }
@@ -845,9 +849,7 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "type.showFontNamesInEnglish",
     "type.useEscToCommit",
     "type.textEngine",
-    "type.fontPreview",
     "type.fillNewTypeLayersWithPlaceholder",
-    "type.recentFonts",
     "enhancedControls.scrubbySliderAcceleration",
     "enhancedControls.touchGestures",
     "enhancedControls.zoomWithTrackpadPinch",

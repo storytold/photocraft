@@ -59,6 +59,7 @@ pub mod file_open;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
+pub mod font_menu;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;

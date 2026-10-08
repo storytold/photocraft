@@ -99,38 +99,66 @@ impl FontDb {
     }
 }
 
-/// An 8-bit coverage preview of one character in a `px`-pixel em box, centred horizontally on
-/// the baseline at 80 % of the box: (width = height = `px`, alpha bytes).
-pub fn preview(engine: &mut crate::TextEngine, style: &CharStyle, c: char, px: u32) -> (u32, Vec<u8>) {
-    let px = px.clamp(4, 512);
-    let text = c.to_string();
+/// One unadorned line of `text` in `style` at `size_pt` (72 dpi: points are pixels), without
+/// underline, strikethrough, tracking or baseline shift.
+fn line_layout(engine: &mut crate::TextEngine, style: &CharStyle, text: &str, size_pt: f32) -> crate::TextLayout {
     let mut st = style.clone();
-    st.size_pt = px as f32 * 0.72;
+    st.size_pt = size_pt;
     st.underline = false;
     st.strikethrough = false;
     st.tracking = 0.0;
     st.baseline_shift_pt = 0.0;
-    let layer = TextLayer { runs: vec![TextRun { len: text.len(), style: st }], text, ..Default::default() };
-    let layout = engine.layout(&layer, 72.0);
+    let layer = TextLayer { runs: vec![TextRun { len: text.len(), style: st }], text: text.to_string(), ..Default::default() };
+    engine.layout(&layer, 72.0)
+}
+
+/// 8-bit coverage of `layout` drawn at `(tx, ty)` into a `w` × `h` box.
+fn coverage(layout: &crate::TextLayout, tx: f32, ty: f32, w: u32, h: u32) -> Vec<u8> {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let r = crate::render::rasterize_warped(layout, &Affine::translate(f64::from(tx), f64::from(ty)), fmt, photocraft_doc::text::AntiAlias::Smooth, None);
+    let mut rgba = vec![[0u8; 4]; (w as usize) * (h as usize)];
+    r.surface.read_rgba8_into(photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &mut rgba);
+    rgba.into_iter().map(|p| p[3]).collect()
+}
+
+/// An 8-bit coverage preview of one character in a `px`-pixel em box, centred horizontally on
+/// the baseline at 80 % of the box: (width = height = `px`, alpha bytes).
+pub fn preview(engine: &mut crate::TextEngine, style: &CharStyle, c: char, px: u32) -> (u32, Vec<u8>) {
+    let px = px.clamp(4, 512);
+    let layout = line_layout(engine, style, &c.to_string(), px as f32 * 0.72);
     let w = layout.bounds().map_or(0.0, |b| b[2] - b[0]);
     let x0 = layout.bounds().map_or(0.0, |b| b[0]);
-    let tx = (px as f32 - w) / 2.0 - x0;
-    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
-    let r = crate::render::rasterize_warped(
-        &layout,
-        &Affine::translate(f64::from(tx), f64::from(px as f32 * 0.78)),
-        fmt,
-        photocraft_doc::text::AntiAlias::Smooth,
-        None,
-    );
-    let mut rgba = vec![[0u8; 4]; (px * px) as usize];
-    r.surface.read_rgba8_into(photocraft_geom::Rect::new(0, 0, px as i32, px as i32), &mut rgba);
-    (px, rgba.into_iter().map(|p| p[3]).collect())
+    (px, coverage(&layout, (px as f32 - w) / 2.0 - x0, px as f32 * 0.78, px, px))
+}
+
+/// An 8-bit coverage preview of a line of text `px` pixels tall (an em of 80 % of it, the
+/// baseline at 76 %), as wide as the text (at most 16 × `px`): (width, height, alpha bytes).
+/// The font menu's samples.
+pub fn preview_text(engine: &mut crate::TextEngine, style: &CharStyle, text: &str, px: u32) -> (u32, u32, Vec<u8>) {
+    let px = px.clamp(4, 512);
+    let layout = line_layout(engine, style, text, px as f32 * 0.8);
+    let (x0, x1) = layout.bounds().map_or((0.0, 1.0), |b| (b[0], b[2]));
+    let w = ((x1 - x0).ceil() as u32).clamp(1, px * 16);
+    (w, px, coverage(&layout, -x0, px as f32 * 0.76, w, px))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_previews_are_as_wide_as_the_text() {
+        let mut eng = crate::TextEngine::new();
+        let st = CharStyle { font_family: crate::fonts::DEFAULT_FAMILY.into(), ..Default::default() };
+        let (w, h, a) = preview_text(&mut eng, &st, "Sample", 20);
+        assert_eq!((h, a.len()), (20, (w * h) as usize));
+        assert!(w > 40 && w < 120, "{w}");
+        assert!(a.iter().filter(|v| **v > 128).count() > 40, "the text was drawn");
+        let (w1, _, _) = preview_text(&mut eng, &st, "S", 20);
+        assert!(w1 < w);
+        let (w0, h0, a0) = preview_text(&mut eng, &st, "", 0);
+        assert_eq!((w0, h0, a0.len()), (1, 4, 4), "empty text and a zero size stay valid");
+    }
 
     #[test]
     fn bundled_charmap_and_categories() {

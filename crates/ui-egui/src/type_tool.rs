@@ -689,29 +689,6 @@ pub fn styles(family: &str) -> Vec<String> {
     if v.is_empty() { vec![tl!("Regular").into()] } else { v }
 }
 
-/// Searchable font-family combo box.
-fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    let mut changed = false;
-    let search_id = ui.id().with("font-search");
-    egui::ComboBox::from_id_salt("type-font").selected_text(current.as_str()).width(width).height(460.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
-        let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(200.0));
-        if !r.has_focus() && q.is_empty() {
-            r.request_focus();
-        }
-        ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
-        let ql = q.to_lowercase();
-        for f in families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
-            if ui.selectable_label(f == current, f).clicked() {
-                *current = f.clone();
-                changed = true;
-                ui.data_mut(|d| d.remove::<String>(search_id));
-            }
-        }
-    });
-    changed
-}
-
 /// The type layer the options bar edits: the one being edited, else the active layer if it is type.
 fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
     if let Some(ed) = &app.ui.text_edit {
@@ -791,7 +768,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
-    if font_picker(ui, &mut fam, 170.0) {
+    if crate::font_menu::picker(app, ui, "type-font", &mut fam, 170.0) {
         app.ui.tool_options.type_font = fam.clone();
         let st = styles(&fam);
         style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
@@ -1095,7 +1072,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let w = field_width(full, 2, LABEL_W);
         let mut fam = c.font_family.clone();
         row(ui, &mut |ui| {
-            if font_picker(ui, &mut fam, full) {
+            if crate::font_menu::picker(app, ui, "type-font-panel", &mut fam, full) {
                 app.ui.tool_options.type_font = fam.clone();
                 let st = styles(&fam);
                 let style = if st.contains(&c.font_style) { c.font_style.clone() } else { st.first().cloned().unwrap_or_else(|| tl!("Regular").into()) };

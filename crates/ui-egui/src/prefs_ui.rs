@@ -1771,8 +1771,10 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
+        // Font Preview Size and the recent fonts drive the font menu (#540).
+        assert!(has_visible_fields(&values, "type"));
         // Every setting of these sections is still unimplemented.
-        for section in ["type", "enhancedControls", "rawDefaults", "integrations", "scratchDisks"] {
+        for section in ["enhancedControls", "rawDefaults", "integrations", "scratchDisks"] {
             assert!(!has_visible_fields(&values, section), "{section}");
         }
         assert!(prefs::is_hidden("rawDefaults.applyAutoTone"));
