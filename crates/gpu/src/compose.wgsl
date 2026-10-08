@@ -888,7 +888,8 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
     let first = (op.flags & F_FIRST) != 0u;
     var cover = 0.0;
     var lay_a = 0.0;
-    if (!first || outline) {
+    let vector = (op.flags & F_VECTOR) != 0u;
+    if (!first || outline || !vector) {
         let cv = textureLoad(tex_c, p, 0);
         cover = cv.r;
         lay_a = cv.g;
@@ -897,7 +898,15 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
     if (outline) {
         k = k * outline_share(a, lay_a);
     } else if (a > INSIDE_EPS) {
-        k = select(1.0, 0.0, (op.flags & F_VECTOR) != 0u);
+        // Pixel layers: the stroke shows beneath only through the part the shape leaves
+        // (`effects.rs`): (1 - a) / (1 - layer alpha), 1 under an opaque layer.
+        if (vector) {
+            k = 0.0;
+        } else if (lay_a >= 1.0) {
+            k = 1.0;
+        } else {
+            k = clamp((1.0 - clamp(a, 0.0, 1.0)) / (1.0 - lay_a), 0.0, 1.0);
+        }
     }
     let share = k * op.opacity * (1.0 - cover);
     if (op.kind == 1) { return vec4(cover + share, lay_a, 0.0, 0.0); }

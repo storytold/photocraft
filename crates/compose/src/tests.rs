@@ -423,6 +423,29 @@ fn outside_stroke_width() {
 }
 
 #[test]
+fn outside_stroke_at_zero_fill_leaves_the_interior_clear() {
+    // Fill 0 % + an Outside stroke is the classic "outline only" look: the stroke lies outside
+    // the layer's pixels, so the interior shows the backdrop, not the stroke colour.
+    for (depth, fmt) in [(SampleType::U8, PixelFormat::RGBA8), (SampleType::U16, PixelFormat::RGBA16), (SampleType::F32, PixelFormat::RGBA32F)] {
+        let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, depth, Color::WHITE);
+        let mut l = Layer::raster("sq", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 1.0]);
+        l.effects.items = vec![stroke(3.0, StrokePosition::Outside)];
+        l.fill_opacity = 0.0;
+        d.layers.push(l);
+        assert!(close4(px(&d, 20, 20), [1.0; 4]), "{depth:?}: interior shows the white backdrop: {:?}", px(&d, 20, 20));
+        assert!(close4(px(&d, 11, 20), [1.0; 4]), "{depth:?}: just inside the edge too: {:?}", px(&d, 11, 20));
+        assert!(close4(px(&d, 8, 20), [0.0, 0.0, 1.0, 1.0]), "{depth:?}: the stroke itself stays: {:?}", px(&d, 8, 20));
+        // Partial fill: the interior is the layer at that fill over the backdrop, still no stroke.
+        d.layers[1].fill_opacity = 0.5;
+        assert!(close4(px(&d, 20, 20), [1.0, 0.5, 0.5, 1.0]), "{depth:?}: {:?}", px(&d, 20, 20));
+        // 100 % fill is unchanged.
+        d.layers[1].fill_opacity = 1.0;
+        assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]), "{depth:?}: {:?}", px(&d, 20, 20));
+    }
+}
+
+#[test]
 fn inside_and_center_strokes() {
     let d = fx_doc(vec![stroke(2.0, StrokePosition::Inside)]);
     assert!(close4(px(&d, 10, 20), [0.0, 0.0, 1.0, 1.0]));

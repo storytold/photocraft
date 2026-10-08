@@ -1357,7 +1357,17 @@ pub(crate) fn composite_with_effects_prepared(
                 let k = if maps.outline {
                     band * outline_share(shape.v[i], lay.px[i][3])
                 } else if inside(shape.v[i]) {
-                    if vector_shape { 0.0 } else { 1.0 }
+                    if vector_shape {
+                        0.0
+                    } else {
+                        // The stroke lies outside the layer's pixels. Beneath the layer it may show
+                        // only through the part of the pixel the shape doesn't cover (1 - a); the
+                        // layer composited on top covers c = a × fill, so the share beneath is
+                        // (1 - a) / (1 - c). At 100 % fill that is 1 (the layer hides the rest, as
+                        // before); at 0 % fill the interior stays clear (Fill 0 % + Outside stroke).
+                        let c = lay.px[i][3].clamp(0.0, 1.0);
+                        if c >= 1.0 { 1.0 } else { ((1.0 - shape.v[i].clamp(0.0, 1.0)) / (1.0 - c)).clamp(0.0, 1.0) }
+                    }
                 } else {
                     band
                 };
