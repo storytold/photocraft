@@ -3178,3 +3178,8 @@ cameraRaw	Roughness	Chropowatość
 	% of all commits	% wszystkich commitów
 	Lines +/−	Wiersze +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, commity: {commits}, wiersze +{added} / −{deleted} (Δ {delta}), pliki binarne +{binAdded} / −{binDeleted}, {first} – {last}
+	Open in camera raw	Otwórz w Camera Raw
+	System title bar	Systemowy pasek tytułu
+	More documents	Więcej dokumentów
+	Developing {name}	Wywoływanie {name}
+	Camera Raw ({name})	Camera Raw ({name})
