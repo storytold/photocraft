@@ -847,7 +847,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let main = ctx.content_rect();
     egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
         let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
-        ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(110));
+        ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
@@ -1138,6 +1138,37 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
         let pixel = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(0, 0);
         assert!((pixel[0] - 128.0 / 255.0).abs() < 0.0001);
+    }
+
+    /// Closing Camera Raw's window is Cancel. Without a multi-window backend egui embeds the
+    /// "window" (`ViewportClass::EmbeddedWindow`), and the close request comes from the window
+    /// it is drawn in; the overlay fallback (`embed_viewports`) keeps the dialog open.
+    #[test]
+    fn closing_the_camera_raw_window_cancels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+        let steps = app.session.active().unwrap().history.past_len();
+        let frame = |app: &mut PhotocraftApp, close: bool| {
+            let mut input = egui::RawInput::default();
+            if close {
+                let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+                info.events.push(egui::ViewportEvent::Close);
+            }
+            ctx.run_ui(input, |ui| show(app, ui.ctx())).textures_delta.clear();
+        };
+        open(&mut app, &ctx).unwrap();
+        frame(&mut app, false);
+        assert!(app.camera_raw.is_some(), "drawn over the main window");
+        ctx.set_embed_viewports(false);
+        frame(&mut app, false);
+        assert!(app.camera_raw.is_some(), "drawn in its window");
+        frame(&mut app, true);
+        assert!(app.camera_raw.is_none(), "closing the window is Cancel");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     }
 
     #[test]

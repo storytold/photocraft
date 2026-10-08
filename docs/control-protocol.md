@@ -309,6 +309,14 @@ a driver process crash is detected by the startup marker on the next launch.
 
 On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel. Where the platform has no extra windows (the web build) it is drawn over the main window.
 
+**Screenshots:** `ui.screenshot` captures the main window only, and eframe cannot capture an
+immediate viewport, so while Camera Raw has its own window the PNG shows the dimmed main window,
+not the dialog. Read the dialog's state through `ui.inspect` (`cameraRaw`: params, histogram,
+zoom, control rectangles) and drive it with the `ui` params below. To *see* it, render offscreen
+(`cargo run -p photocraft-ui-egui --example snapshot -- --script '[["ui.menu.invoke", {"id": "filter.cameraRaw"}]]'`
+or an `egui_kittest` harness): those embed
+viewports, so the dialog is drawn over the main window and appears in the image.
+
 `ui.menu.invoke {"id":"filter.cameraRaw","params":{}}` opens Camera Raw on the active
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the

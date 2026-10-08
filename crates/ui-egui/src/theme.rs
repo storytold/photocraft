@@ -115,6 +115,8 @@ pub struct Tokens {
     /// The custom title bar's Close button while hovered (Windows' red), and its glyph.
     pub caption_close: Color32,
     pub caption_close_text: Color32,
+    /// Dims the main window behind a modal that takes all input (Camera Raw).
+    pub scrim: Color32,
 }
 
 impl Tokens {
@@ -178,6 +180,7 @@ impl Tokens {
                 histogram_level: 225,
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
             ThemeKind::Studio => Tokens {
                 kind,
@@ -216,6 +219,7 @@ impl Tokens {
                 histogram_level: 225,
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
             ThemeKind::StudioLight => Tokens {
                 kind,
@@ -254,6 +258,7 @@ impl Tokens {
                 histogram_level: 240,
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
             ThemeKind::Classic => Tokens {
                 kind,
@@ -292,6 +297,7 @@ impl Tokens {
                 histogram_level: 240,
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
         }
     }
@@ -699,7 +705,8 @@ pub mod live {
                 danger,
                 warning,
                 tab_strip,
-                row_selected
+                row_selected,
+                scrim
             );
         }
         unknown
