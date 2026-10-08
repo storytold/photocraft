@@ -31,7 +31,35 @@ struct Decode<'a, R> {
     ctl: Interrupt<'a>,
     done: u64,
     total: u64,
+    scratch_expected: bool,
 }
+
+fn tile_footprint(r: photocraft_psd::Rect, bytes_per_pixel: usize) -> u64 {
+    if r.is_empty() {
+        return 0;
+    }
+    let side = i64::from(photocraft_geom::TILE_SIZE);
+    let columns = ((i64::from(r.right) - 1).div_euclid(side) - i64::from(r.left).div_euclid(side) + 1) as u64;
+    let rows = ((i64::from(r.bottom) - 1).div_euclid(side) - i64::from(r.top).div_euclid(side) + 1) as u64;
+    columns.saturating_mul(rows).saturating_mul(side as u64 * side as u64).saturating_mul(bytes_per_pixel as u64)
+}
+
+fn ram_tile_capacity(scratch: bool, resident: u64, budget: u64, growth: u64) -> Result<(), IoError> {
+    if !scratch && resident.checked_add(growth).is_none_or(|required| required > budget) {
+        return Err(IoError::Unsupported("decoded PSB tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
+    }
+    Ok(())
+}
+
+fn require_scratch(expected: bool) -> Result<(), IoError> {
+    if expected && !photocraft_raster::spill::enabled() {
+        return Err(IoError::Unsupported(
+            photocraft_raster::spill::last_error().unwrap_or_else(|| "scratch storage was disabled while loading; retry the import".into()),
+        ));
+    }
+    Ok(())
+}
+
 impl<R: Read + Seek> Decode<'_, R> {
     fn surface(&mut self, layer: usize, rec: &LayerRecord, ids: &[i16], fmt: PixelFormat, default: &[f32]) -> Result<Surface, IoError> {
         let r = if ids.len() == 1 { rec.channel_rect(*ids.first().ok_or_else(|| IoError::Unsupported("empty channel set".into()))?) } else { rec.rect };
@@ -84,7 +112,17 @@ impl<R: Read + Seek> Decode<'_, R> {
             }
             let top = i32::try_from(i64::from(r.top) + y as i64).map_err(|_| IoError::Unsupported("layer coordinates overflow".into()))?;
             let bottom = top.checked_add(rows as i32).ok_or_else(|| IoError::Unsupported("layer coordinates overflow".into()))?;
-            out.write_interleaved(Rect::new(r.left, top, r.right, bottom), &bytes);
+            let band = Rect::new(r.left, top, r.right, bottom);
+            let scratch = photocraft_raster::spill::enabled();
+            require_scratch(self.scratch_expected)?;
+            if !scratch {
+                let missing = band.tiles().filter(|c| out.tile(*c).is_none()).count() as u64;
+                let growth = missing.saturating_mul((photocraft_geom::TILE_SIZE as u64).pow(2)).saturating_mul(fmt.bytes_per_pixel() as u64);
+                ram_tile_capacity(false, photocraft_raster::spill::stats().resident_bytes as u64, photocraft_raster::memory::stats().1.tile_bytes, growth)?;
+            }
+            out.write_interleaved(band, &bytes);
+            // A final band can trigger a scratch write failure too.
+            require_scratch(self.scratch_expected)?;
             y += rows;
             self.done = self.done.saturating_add(rows as u64 * ids.len() as u64);
             self.ctl.progress(0.05 + 0.85 * self.done as f32 / self.total.max(1) as f32);
@@ -93,6 +131,7 @@ impl<R: Read + Seek> Decode<'_, R> {
             reader.finish()?;
         }
         out.prune();
+        require_scratch(self.scratch_expected)?;
         Ok(out)
     }
 }
@@ -108,8 +147,22 @@ pub(crate) fn import<R: Read + Seek>(open: &dyn Fn() -> std::io::Result<R>, inde
     };
     let sample = crate::pixels::sample_for_depth(file.header.depth);
     let fmt = PixelFormat::new(mode, sample, true);
+    let scratch_expected = photocraft_raster::spill::enabled();
+    if !scratch_expected {
+        let budget = photocraft_raster::memory::refresh();
+        let required = file.layers().iter().fold(0_u64, |sum, rec| {
+            let mut bytes = tile_footprint(rec.rect, fmt.bytes_per_pixel());
+            for id in [-2, -3] {
+                if rec.channel(id).is_some() {
+                    bytes = bytes.saturating_add(tile_footprint(rec.channel_rect(id), sample.bytes()));
+                }
+            }
+            sum.saturating_add(bytes)
+        });
+        ram_tile_capacity(false, photocraft_raster::spill::stats().resident_bytes as u64, budget.tile_bytes, required)?;
+    }
     let total = file.layers().iter().map(|r| r.channel_rect(0).size().map_or(0, |(_, h)| h as u64 * (mode.color_channels() as u64 + 1))).sum();
-    let mut decoder = Decode { open, index, ctl, done: 0, total };
+    let mut decoder = Decode { open, index, ctl, done: 0, total, scratch_expected };
     let mut surfaces = HashMap::new();
     for (i, rec) in file.layers().iter().enumerate() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -282,4 +335,61 @@ pub(crate) fn export_into<W: Write + Seek>(doc: &photocraft_doc::Document, out: 
     result?;
     photocraft_raster::spill::check_since(before).map_err(IoError::Unsupported)?;
     Ok(warnings)
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    use photocraft_psd::{Compression, Version};
+    use std::io::Cursor;
+
+    #[test]
+    fn tile_footprint_counts_partial_negative_tiles_at_each_depth() {
+        let side = photocraft_geom::TILE_SIZE as u64;
+        for bpp in [1, 2, 4, 8, 16, 20] {
+            let rect = photocraft_psd::Rect::from_xywh(-1, -1, 2, 2);
+            assert_eq!(tile_footprint(rect, bpp), 4 * side * side * bpp as u64);
+            let aligned = photocraft_psd::Rect::from_xywh(-(side as i32), 0, side as u32, side as u32);
+            assert_eq!(tile_footprint(aligned, bpp), side * side * bpp as u64);
+        }
+        assert_eq!(tile_footprint(photocraft_psd::Rect::default(), 16), 0);
+        let hostile = photocraft_psd::Rect { top: i32::MIN, left: i32::MIN, bottom: i32::MAX, right: i32::MAX };
+        assert_eq!(tile_footprint(hostile, 16), u64::MAX);
+    }
+
+    #[test]
+    fn ram_only_admission_accounts_for_live_tiles_and_overflow() {
+        assert!(ram_tile_capacity(false, 60, 100, 40).is_ok());
+        assert!(ram_tile_capacity(false, 60, 100, 41).is_err());
+        assert!(ram_tile_capacity(false, u64::MAX, u64::MAX, 1).is_err());
+        assert!(ram_tile_capacity(true, 60, 100, 1000).is_ok());
+    }
+
+    #[test]
+    fn oversized_ram_only_import_is_rejected_before_opening_channels() {
+        assert!(!photocraft_raster::spill::enabled());
+        let file = photocraft_psd::testgen::layered(Version::Psb, photocraft_psd::ColorMode::Rgb, 32, Compression::Raw);
+        let bytes = file.to_bytes().unwrap();
+        let mut index = Index::read(&mut Cursor::new(&bytes), 128 << 20, &|| false).unwrap();
+        // Valid dimensions would need over a terabyte; the source remains a tiny fixture.
+        index.metadata.layers_mut()[0].rect = photocraft_psd::Rect::from_xywh(0, 0, 300_000, 300_000);
+        let opened = std::cell::Cell::new(0);
+        let result = import(
+            &|| {
+                opened.set(opened.get() + 1);
+                Ok(Cursor::new(&bytes))
+            },
+            &index,
+            Interrupt::NONE,
+        );
+        assert!(matches!(result, Err(IoError::Unsupported(ref message)) if message.contains("enable a scratch disk")));
+        assert_eq!(opened.get(), 0);
+    }
+
+    #[test]
+    fn missing_scratch_is_not_silently_treated_as_ram_only() {
+        assert!(!photocraft_raster::spill::enabled());
+        assert!(require_scratch(false).is_ok());
+        assert!(require_scratch(true).is_err());
+    }
 }
