@@ -46,6 +46,16 @@ import, the import fails instead of continuing to accumulate pixels in RAM.
 Flattened files, extra merged channels and unsupported modes use the guarded byte importer.
 Preserved metadata is bounded; oversized opaque blocks produce an actionable error.
 
+Native single-part flat scanline EXR import also reads one compression block directly into
+tiles, retaining source dimensions and HDR values as F32 GrayA/RGBA (HALF samples promote
+exactly to F32). Missing alpha is opaque. Rec. 709 linear RGB is tagged with the existing
+linear-sRGB profile. Cancellation, scratch failure and the RAM-only admission guard apply
+before publishing a document. It allocates neither the whole compressed file nor full channels.
+The bounded reader admits at most 8 MiB/4096 metadata attributes, 64 channels, 262144 pixels
+per dimension and 64 MiB per uncompressed block. Tiled/deep/multipart files, subsampled
+channels and explicit chromaticities retain the guarded legacy decoder; they are not covered
+by this streaming route. EXR export still uses the whole-buffer path.
+
 Native PSB saves write original-depth layer channels and a band-composited merged image into a
 seekable temporary file, then publish it atomically. Cancellation or disk failure preserves the
 previous destination. The streaming writer uses raw channels, so its file can be substantially

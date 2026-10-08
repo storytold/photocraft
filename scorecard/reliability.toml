@@ -35,7 +35,7 @@ id = "REL-212-1"
 target = "Fallible allocation for paste/erase/fill/transform/save/import, clear out-of-memory error"
 status = "partial"
 issue = 212
-note = "Native layered PSD/PSB import and PSB export stream rows; memory admission guards byte import/export, filters and lens operations. Large global filters fail without changing the document. Other editing operations and nested smart-object decode still need allocation admission."
+note = "Native layered PSD/PSB and flat scanline EXR import, plus PSB export, stream bands; memory admission guards byte import/export, filters and lens operations. Large global filters fail without changing the document. Other editing operations and nested smart-object decode still need allocation admission."
 
 [[item]]
 id = "REL-212-2"
