@@ -987,6 +987,7 @@
 	Native file drag-and-drop is unavailable	Wayland 不支援原生檔案拖放
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland 尚未支援原生檔案拖放。請使用「檔案 › 開啟」，或在檔案管理員中複製影像後使用 {paste} 貼上。
 	To drop files, start PhotoCraft under XWayland: `{command}`	若要拖放檔案，請在 XWayland 下啟動 PhotoCraft：`{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	或將 偏好設定 › 效能 › Linux 顯示伺服器 設為 X11：PhotoCraft 之後一律在 XWayland 下啟動。
 	Edit › Paste	「編輯 › 貼上」
 	Duplicate Layers…	複製圖層…
 	Duplicate style	複製樣式
@@ -2010,6 +2011,8 @@
 	CPU (no GPU acceleration)	CPU (無 GPU 加速)
 	DirectX 12	DirectX 12
 	GPU backend	GPU 後端
+	Linux display server	Linux 顯示伺服器
+	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	使用繪圖板壓力
