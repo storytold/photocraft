@@ -43,6 +43,11 @@ use photocraft_ui_egui::PhotocraftApp;
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
+/// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
+/// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
+/// keeps its traffic lights over the integrated title strip.
+const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
+
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
 /// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
@@ -56,6 +61,7 @@ fn native_options() -> eframe::NativeOptions {
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
+            .with_decorations(!CUSTOM_TITLEBAR)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false),
@@ -267,6 +273,7 @@ fn main() -> eframe::Result {
             }
             let mut app = PhotocraftApp::new(Session::new(), services);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            app.custom_titlebar = CUSTOM_TITLEBAR;
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
             #[cfg(target_os = "macos")]
             mac_window::disable_native_title_drag();

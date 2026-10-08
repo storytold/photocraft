@@ -21,6 +21,7 @@ pub mod adjust_preview;
 pub mod adjust_ui;
 pub mod analysis_ui;
 pub mod artboard_ui;
+mod brand;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preview;
@@ -44,6 +45,7 @@ pub mod control;
 pub mod credits;
 pub mod crop_ui;
 pub mod dialogs;
+pub mod direct_select;
 pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
@@ -71,6 +73,7 @@ pub mod layer_props_ui;
 mod layer_reveal;
 pub mod layer_row_ui;
 pub mod layer_style;
+mod layer_transfer;
 pub mod layer_tree_ui;
 pub mod links;
 pub mod liquify_ui;
@@ -120,6 +123,7 @@ mod tab_strip;
 pub mod theme;
 pub mod tiff_options_ui;
 mod timeline_ui;
+mod titlebar;
 pub mod tone;
 pub mod tool_feedback;
 pub mod transform_tex;
@@ -341,6 +345,9 @@ pub struct PhotocraftApp {
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
     pub integrated_titlebar: bool,
+    /// Windows and Linux: the window has no OS decorations and the app's top bar is the title bar
+    /// (caption buttons, window dragging and edge resizing, `titlebar`).
+    pub custom_titlebar: bool,
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
@@ -477,6 +484,7 @@ impl PhotocraftApp {
             frame: 0,
             styled: false,
             integrated_titlebar: false,
+            custom_titlebar: false,
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             drop_canvas_rect: None,
@@ -633,6 +641,7 @@ impl PhotocraftApp {
             }
         }
         // Long commands become background jobs when enabled (`jobs_ui`); the rest run inline.
+        let params = self.with_mask_target(id, params);
         let r = jobs_ui::run(self, id, params);
         if r.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
             self.clip_external = false;
@@ -1077,6 +1086,9 @@ impl eframe::App for PhotocraftApp {
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
+        if self.custom_titlebar {
+            titlebar::resize_zones(ui);
+        }
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);
         self.automation_input = false;
@@ -1105,6 +1117,28 @@ fn read_dropped(_f: &dyn egui::DroppedFile) -> Result<Vec<u8>, String> {
 }
 
 impl PhotocraftApp {
+    /// `params` aimed at the active layer's mask (`"target":"mask"`) when the Layers panel targets
+    /// it and command `id` edits the target (adjustments, filters, fills) without naming one:
+    /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
+    /// mode wins, as the engine routes those itself.
+    pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
+        if !self.ui.mask_target || !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
+            return params;
+        }
+        let Some(st) = self.session.active() else { return params };
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+        if !composite || st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) {
+            return params;
+        }
+        match params {
+            Value::Object(mut m) => {
+                m.insert("target".into(), Value::from("mask"));
+                Value::Object(m)
+            }
+            _ => serde_json::json!({ "target": "mask" }),
+        }
+    }
+
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask).
     fn sync_mask_targets(&mut self) {
