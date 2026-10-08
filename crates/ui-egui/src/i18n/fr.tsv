@@ -1772,6 +1772,8 @@
 	Maximize psd compatibility	Maximiser la compatibilité PSD
 	Medium gray	Gris moyen
 	Memory usage mb	Utilisation de la mémoire (Mo)
+	GPU memory mb	Mémoire GPU (Mo)
+	Memory usage percent	Utilisation de la mémoire (%)
 	Missing glyph protection	Protection contre les glyphes manquants
 	Modern	Moderne
 	Nearest neighbor	Au plus proche

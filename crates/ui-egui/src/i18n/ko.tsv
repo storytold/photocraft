@@ -1767,6 +1767,8 @@
 	Maximize psd compatibility	PSD 호환성 최대화
 	Medium gray	중간 회색
 	Memory usage mb	메모리 사용량(MB)
+	GPU memory mb	GPU 메모리(MB)
+	Memory usage percent	메모리 사용 비율(%)
 	Missing glyph protection	누락된 글리프 보호
 	Modern	현대적
 	Nearest neighbor	최근접 이웃

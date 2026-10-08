@@ -2191,6 +2191,8 @@
 	Maximize psd compatibility	Максимальная совместимость PSD
 	Medium gray	Средне-серая
 	Memory usage mb	Память (МБ)
+	GPU memory mb	Память GPU (МБ)
+	Memory usage percent	Использование памяти (%)
 	Metal	Metal
 	Missing glyph protection	Защита от отсутствующих глифов
 	Modern	Современный

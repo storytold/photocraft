@@ -1799,6 +1799,8 @@
 	Maximize psd compatibility	PSD の互換性を最大にする
 	Medium gray	中間グレー
 	Memory usage mb	メモリ使用量 (MB)
+	GPU memory mb	GPU メモリ (MB)
+	Memory usage percent	メモリ使用率 (%)
 	Missing glyph protection	字形欠落の保護
 	Modern	モダン
 	Nearest neighbor	ニアレストネイバー

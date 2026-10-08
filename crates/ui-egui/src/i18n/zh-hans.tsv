@@ -1801,6 +1801,8 @@
 	Maximize psd compatibility	最大化 PSD 兼容性
 	Medium gray	中灰色
 	Memory usage mb	内存使用量 (MB)
+	GPU memory mb	GPU 内存 (MB)
+	Memory usage percent	内存使用比例 (%)
 	Missing glyph protection	缺失字形保护
 	Modern	现代
 	Nearest neighbor	邻近

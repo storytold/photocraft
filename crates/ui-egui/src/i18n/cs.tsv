@@ -1807,6 +1807,8 @@
 	Maximize psd compatibility	Maximalizovat kompatibilitu PSD
 	Medium gray	Středně šedá
 	Memory usage mb	Využití paměti (MB)
+	GPU memory mb	Paměť GPU (MB)
+	Memory usage percent	Využití paměti (%)
 	Missing glyph protection	Ochrana proti chybějícím glyfům
 	Modern	Moderní
 	Nearest neighbor	Nejbližší soused
