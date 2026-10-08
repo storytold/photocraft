@@ -58,7 +58,7 @@ id = "AUTO-219-7"
 target = "Local ONNX models behind a flag, managed in Preferences; subject select, background removal"
 status = "partial"
 issue = 219
-note = "local-ml: CPU BiRefNet alpha / SAM 2.1 box selection, pinned verified explicit downloads in Preferences; labelled accuracy benchmarks and web inference remain open"
+note = "local-ml: CPU BiRefNet alpha / SAM 2.1 box selection, pinned verified explicit downloads in Preferences; exploratory 20-target COCO comparison in docs/local-models-validation.md; representative matting quality and web inference remain open"
 
 [[item]]
 id = "AUTO-219-8"

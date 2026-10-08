@@ -134,10 +134,14 @@ PHOTOCRAFT_MODEL_TEST_DOWNLOAD=1 \
   cargo test -p photocraft-ml --features onnx real_models_cpu_smoke -- --ignored --nocapture
 ```
 
-Omit `PHOTOCRAFT_MODEL_TEST_DOWNLOAD` to test existing verified files offline. A quantitative
-accuracy benchmark with labelled hair, fine structures, multiple objects and transparent
-materials remains necessary before making a general improvement claim. This initial contribution
-keeps the smart-features scorecard partial for that reason.
+Omit `PHOTOCRAFT_MODEL_TEST_DOWNLOAD` to test existing verified files offline. The
+[22-case PDF and public supplement](https://github.com/mighty-programmer/photocraft/releases/tag/model-evaluation-2026-10-08)
+include an exploratory comparison on 20 fixed COCO polygon targets plus two visual-only photos.
+The protocol, model failures, measured scores and reproducible harness are documented in
+[local-models-validation.md](local-models-validation.md). These binary instance references do not
+establish labelled hair/soft-alpha/transparency matting quality. Representative quality evaluation
+and web inference remain open, so the smart-features scorecard stays partial.
 
 See [validation and comparison](local-models-validation.md) for the measured 24 MP timings,
-before/after Preferences screenshots, actual exported masks and outstanding platform checks.
+before/after Preferences screenshots, actual exported masks, completed three-platform native
+CI and outstanding packaged-installer/production checks.
