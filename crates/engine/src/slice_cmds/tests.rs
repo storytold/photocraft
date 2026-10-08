@@ -104,7 +104,7 @@ fn divide_wide_slice_preserves_exact_edges_and_history() {
             let parts = &doc(&s).slices.list;
             assert_eq!(parts.len(), 9);
             assert_eq!(parts[0].name, "wide");
-            for row in parts.chunks_exact(3) {
+            for row in parts.as_chunks::<3>().0 {
                 assert_eq!(row[0].rect.x0, rect.x0);
                 assert_eq!(row[2].rect.x1, rect.x1);
                 assert_eq!(row.iter().map(|s| u64::from(s.rect.width())).sum::<u64>(), u64::from(rect.width()));
