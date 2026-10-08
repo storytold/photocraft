@@ -7,7 +7,8 @@
 //! - A structure change (a new Open Recent file, a language switch) rebuilds the menu; anything
 //!   else (labels, enabled, checked) is updated in place.
 //! - A chosen item is a click or a key equivalent: AppKit's current event says which. Key
-//!   equivalents go back to egui as key presses, so PhotoCraft's key rules still apply.
+//!   equivalents go back to egui as the key press that was made (the event's modifiers, not the
+//!   item's: AppKit may match ⌘R to a ⇧⌘R item), so PhotoCraft's key rules still apply.
 //! - Hide is a custom item calling `NSApplication hide:`, as the predefined one always takes ⌘H.
 
 use std::collections::HashMap;
@@ -37,9 +38,9 @@ struct Entry {
 /// How an item was chosen, read from AppKit's current event while it calls the handler.
 struct Chosen {
     id: String,
-    /// A key press (not a mouse click), with ⌘ or ⌃ held.
+    /// A key press (not a mouse click), and the modifiers held: ⌘, ⌃, ⌥, ⇧.
     key: bool,
-    command_or_control: bool,
+    mods: [bool; 4],
 }
 
 pub struct MacMenu {
@@ -59,9 +60,10 @@ impl MacMenu {
             // equivalent is a key-down, a click a mouse-up (or ↩ inside the open menu).
             let event = MainThreadMarker::new().and_then(|mtm| NSApplication::sharedApplication(mtm).currentEvent());
             let key = event.as_ref().is_some_and(|ev| ev.r#type() == NSEventType::KeyDown);
-            let command_or_control =
-                event.as_ref().is_some_and(|ev| ev.modifierFlags().intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control));
-            let _ = tx.send(Chosen { id: e.id.0, key, command_or_control });
+            let flags = event.as_ref().map(|ev| ev.modifierFlags()).unwrap_or(NSEventModifierFlags::empty());
+            let mods = [NSEventModifierFlags::Command, NSEventModifierFlags::Control, NSEventModifierFlags::Option, NSEventModifierFlags::Shift]
+                .map(|m| flags.contains(m));
+            let _ = tx.send(Chosen { id: e.id.0, key, mods });
             // Wake egui, so the item runs now rather than on the next mouse move.
             repaint.request_repaint();
         }));
@@ -74,17 +76,23 @@ impl MacMenu {
         }
         self.entries.clear();
         let menu = Menu::new();
+        let mut special = Vec::new();
         for m in &bar.menus {
             let sub = Submenu::new(escape(&m.title), true);
             self.append(&sub, &m.children);
-            match m.role {
-                MenuRole::Window => sub.set_as_windows_menu_for_nsapp(),
-                MenuRole::Help => sub.set_as_help_menu_for_nsapp(),
-                MenuRole::App | MenuRole::Normal => {}
-            }
             let _ = menu.append(&sub);
+            if matches!(m.role, MenuRole::Window | MenuRole::Help) {
+                special.push((m.role, sub));
+            }
         }
         menu.init_for_nsapp();
+        // Only once the menu is NSApp's: muda looks the submenus up in the installed main menu.
+        for (role, sub) in special {
+            match role {
+                MenuRole::Window => sub.set_as_windows_menu_for_nsapp(),
+                _ => sub.set_as_help_menu_for_nsapp(),
+            }
+        }
         self.menu = Some(menu);
         self.structure = native_menu::structure_key(bar);
     }
@@ -191,8 +199,14 @@ impl Backend for MacMenu {
                 continue;
             }
             // A key-down chose it: its key equivalent, unless it was ↩ or Space inside the open
-            // menu (no ⌘ or ⌃, and the item's shortcut needs one).
-            let key = e.chord.clone().filter(|c| chosen.key && (chosen.command_or_control || !(c.cmd || c.ctrl)));
+            // menu (no ⌘ or ⌃, and the item's shortcut needs one). The key is the item's (AppKit
+            // matched on it); the modifiers are the ones held.
+            let [cmd, ctrl, alt, shift] = chosen.mods;
+            let key = e
+                .chord
+                .as_ref()
+                .filter(|c| chosen.key && (cmd || ctrl || !(c.cmd || c.ctrl)))
+                .map(|c| Chord { cmd, ctrl, alt, shift, key: c.key.clone() });
             out.push(match key {
                 Some(chord) if e.command != native_menu::MINIMIZE => Event::Key(chord),
                 _ => Event::Click(e.command.clone()),

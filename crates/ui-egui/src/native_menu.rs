@@ -836,4 +836,26 @@ mod tests {
         let bar = synced.borrow().last().cloned().unwrap();
         assert_eq!(bar.find("window.panel.layers").unwrap().checked, Some(!before));
     }
+
+    /// With the Mac menu bar the title bar draws no menu titles: each title shows once fewer.
+    #[test]
+    fn the_title_bar_hides_its_menus_with_the_mac_menu_bar() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let counts = |native: bool| -> Vec<usize> {
+            let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                let mut app = app(true);
+                if native {
+                    app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: Default::default(), events: Vec::new() })));
+                }
+                app
+            });
+            h.run_steps(4);
+            crate::menus::TOP_MENUS.iter().map(|t| h.query_all_by_label(t).count()).collect()
+        };
+        let (in_window, native) = (counts(false), counts(true));
+        for (i, title) in crate::menus::TOP_MENUS.iter().enumerate() {
+            assert_eq!(native[i] + 1, in_window[i], "{title}: {} in-window, {} with the Mac menu bar", in_window[i], native[i]);
+        }
+    }
 }
