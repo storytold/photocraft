@@ -403,6 +403,9 @@ pub struct PhotocraftApp {
     pub(crate) gradient: gradient_ui::LiveGradient,
     /// Filter › Camera Raw Filter dialog (camera_raw_ui).
     pub(crate) camera_raw: Option<camera_raw_ui::CameraRawDialog>,
+    /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
+    /// on the next frame, which has the egui context).
+    pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// Signature of the image we last put on the OS clipboard (to tell ours from other apps').
@@ -523,6 +526,7 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
+            pending_raw_open: None,
             wide_angle: None,
             tone_hist: None,
             doc_hist: None,
@@ -760,7 +764,12 @@ impl PhotocraftApp {
         self.sync_views();
         self.ui.status = format!("Opened {name}");
         self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Opened {name}"), &warnings);
+        if camera_raw_ui::wants_open_dialog(self, &warnings) {
+            camera_raw_ui::queue_open_dialog(self, name, None, Some(bytes));
+            notices::io_warnings(self, &format!("Opened {name}"), &camera_raw_ui::without_develop_note(&warnings));
+        } else {
+            notices::io_warnings(self, &format!("Opened {name}"), &warnings);
+        }
         // Script events bound to "Open Document".
         photocraft_engine::automate_cmds::document_opened(&mut self.session);
         self.sync_views();

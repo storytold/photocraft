@@ -2204,6 +2204,7 @@
 	Never	Никогда
 	Normal tip	Контур кисти (50%)
 	Open as smart object	Открывать как смарт-объект
+	Open in camera raw	Открывать в Camera Raw
 	Open documents as tabs	Открывать документы во вкладках
 	OpenGL	OpenGL
 	Orange	Оранжевая
@@ -2322,6 +2323,7 @@
 cameraRaw	Light	Свет
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Фильтр Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 	Aqua	Голубой
 cameraRaw	Amount	Интенсивность
 cameraRaw	Blacks	Чёрные

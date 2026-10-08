@@ -1820,6 +1820,7 @@
 	Never	Nikdy
 	Normal tip	Normální hrot
 	Open as smart object	Otevřít jako chytrý objekt
+	Open in camera raw	Otevírat v Camera Raw
 	Open documents as tabs	Otevírat dokumenty jako záložky
 	Overscroll	Posouvání za okraj
 	Performance	Výkon
@@ -2055,6 +2056,7 @@
 cameraRaw	Light	Světlo
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtr Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Red	Červené
 cameraRaw	Orange	Oranžové
 cameraRaw	Yellow	Žluté

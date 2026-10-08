@@ -317,6 +317,17 @@ opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / 
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
 
+**Opening a raw file.** An interactive open (File › Open, Open Recent, drag and drop, the
+command line) of a camera raw developed from its sensor data shows this dialog first, titled
+"Camera Raw (name)", with **Open** and **Cancel**, as Photoshop opens raws in Adobe Camera Raw.
+`ui.inspect.cameraRaw.openingRaw` is then `{name, path}`. Commit (Open) re-develops the raw when
+Temperature, Tint or Exposure changed (as-shot white-balance gains and develop exposure on the
+sensor data; without an as-shot white balance, or without the file's bytes, they stay RGB
+adjustments), applies the remaining settings as one `filter.cameraRaw` step and leaves the
+document unmodified; its result is `{document, redeveloped, filter?}`. Cancel closes the
+document. `app.open` and other automation opens never show the dialog. The preference
+`rawDefaults.openInCameraRaw` (default `true`) turns it off.
+
 Imported PSD Camera Raw filters whose processing settings are all mapped or neutral use this
 same editor. `params.__cameraRawPsd` is reserved import/export metadata: preserve it when editing
 stored parameters. Other processing fields or versions remain opaque Photoshop filters. See

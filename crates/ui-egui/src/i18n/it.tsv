@@ -1803,6 +1803,7 @@
 	Never	Mai
 	Normal tip	Punta normale
 	Open as smart object	Apri come oggetto avanzato
+	Open in camera raw	Apri in Camera Raw
 	Open documents as tabs	Apri documenti come schede
 	Overscroll	Overscroll
 	Performance	Prestazioni
@@ -2132,6 +2133,7 @@ cameraRaw	Light	Luce
 
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Toni chiari
 cameraRaw	Darks	Toni scuri
 cameraRaw	Red	Rossi

@@ -1806,6 +1806,7 @@
 	Never	永不
 	Normal tip	一般筆尖
 	Open as smart object	以智慧型物件開啟
+	Open in camera raw	在 Camera Raw 中開啟
 	Open documents as tabs	以索引標籤開啟文件
 	Overscroll	超出捲動
 	Performance	效能
@@ -2037,6 +2038,7 @@
 cameraRaw	Light	光線
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 濾鏡（{layer}）
+	Camera Raw ({name})	Camera Raw（{name}）
 cameraRaw	Lights	亮調
 cameraRaw	Darks	暗調
 cameraRaw	Blacks	黑色色階

@@ -1779,6 +1779,7 @@
 	Never	안 함
 	Normal tip	표준 브러시 끝
 	Open as smart object	스마트 오브젝트로 열기
+	Open in camera raw	Camera Raw에서 열기
 	Open documents as tabs	문서를 탭으로 열기
 	Overscroll	캔버스 밖으로 스크롤
 	Performance	성능
@@ -2016,6 +2017,7 @@
 	Show Selected Region	선택한 영역 표시
 cameraRaw	Light	밝게
 	Camera Raw Filter ({layer})	Camera Raw 필터 ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	밝은 중간 영역
 cameraRaw	Blending	혼합
 cameraRaw	Blacks	검정 계열

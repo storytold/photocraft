@@ -60,6 +60,8 @@ pub struct CameraRawDialog {
     pub show_before: bool,
     mixer_tab: usize,
     pub render_ms: f64,
+    /// Set for the open-time dialog ([`Target::OpenRaw`]).
+    raw_open: Option<RawOpen>,
 }
 
 impl CameraRawDialog {
@@ -72,8 +74,9 @@ impl CameraRawDialog {
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
         result["smartFilter"] = json!(match self.target {
             Target::SmartFilter(index) => Some(index),
-            Target::NewFilter => None,
+            Target::NewFilter | Target::OpenRaw => None,
         });
+        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
@@ -110,17 +113,7 @@ impl CameraRawDialog {
 
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
-        let full = serde_json::to_value(&self.params).unwrap_or(json!({}));
-        let def = serde_json::to_value(CameraRaw::default()).unwrap_or(json!({}));
-        let mut out = serde_json::Map::new();
-        if let (Value::Object(f), Value::Object(d)) = (full, def) {
-            for (k, v) in f {
-                if k != "pixelScale" && d.get(&k) != Some(&v) {
-                    out.insert(k, v);
-                }
-            }
-        }
-        Value::Object(out)
+        non_defaults(&self.params)
     }
 
     fn image(px: &[[f32; 4]], w: usize, h: usize) -> egui::ColorImage {
@@ -166,6 +159,141 @@ impl CameraRawDialog {
 enum Target {
     NewFilter,
     SmartFilter(usize),
+    /// The open-time dialog of a raw file just opened (File › Open): OK is **Open**, Cancel
+    /// closes the document again. See [`RawOpen`].
+    OpenRaw,
+}
+
+/// A raw file opened interactively, shown in Camera Raw before it is kept (as Photoshop opens
+/// raws in Adobe Camera Raw first). The document is already developed with the defaults; Open
+/// re-develops it when Temperature, Tint or Exposure changed (those act on the sensor data, see
+/// [`photocraft_io::raw::import_raw_tuned`]) and applies the other settings as one Camera Raw
+/// step, then marks the document unmodified. Cancel closes it.
+#[derive(Clone, Debug)]
+pub struct RawOpen {
+    pub document: photocraft_doc::DocId,
+    pub name: String,
+    pub path: Option<String>,
+    /// The file, when it was opened from bytes (no path to read it again from).
+    pub bytes: Option<std::sync::Arc<Vec<u8>>>,
+}
+
+/// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
+/// the import's: only a raw developed from its sensor data qualifies (not a preview fallback).
+pub fn wants_open_dialog(app: &PhotocraftApp, warnings: &[String]) -> bool {
+    app.session.prefs().raw_defaults.open_in_camera_raw && warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE))
+}
+
+/// `warnings` without the "developed with default settings" note: the open-time dialog shows
+/// how the raw is developed.
+pub fn without_develop_note(warnings: &[String]) -> Vec<String> {
+    warnings.iter().filter(|w| !w.contains(photocraft_io::raw::DEVELOPED_NOTE)).cloned().collect()
+}
+
+/// Queues the open-time dialog for the active document (shown on the next frame).
+pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>, bytes: Option<&[u8]>) {
+    if let Some(st) = app.session.active() {
+        app.pending_raw_open = Some(RawOpen {
+            document: st.doc.id,
+            name: name.to_string(),
+            path: path.map(str::to_string),
+            bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
+        });
+    }
+}
+
+/// Opens the queued open-time dialog on its document's (only) layer.
+fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
+    let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
+    app.session.set_active(index);
+    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::None, Target::OpenRaw)?;
+    if let Some(d) = app.camera_raw.as_mut() {
+        d.layer_name = raw.name.clone();
+        d.raw_open = Some(raw);
+    }
+    Ok(())
+}
+
+fn document_index(app: &PhotocraftApp, id: photocraft_doc::DocId) -> Option<usize> {
+    app.session.documents().iter().position(|st| st.doc.id == id)
+}
+
+/// The non-default settings of `p` as engine params.
+fn non_defaults(p: &CameraRaw) -> Value {
+    let full = serde_json::to_value(p).unwrap_or(json!({}));
+    let def = serde_json::to_value(CameraRaw::default()).unwrap_or(json!({}));
+    let mut out = serde_json::Map::new();
+    if let (Value::Object(f), Value::Object(d)) = (full, def) {
+        for (k, v) in f {
+            if k != "pixelScale" && d.get(&k) != Some(&v) {
+                out.insert(k, v);
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+/// Open: re-develop for raw-stage settings, apply the rest, keep the document unmodified.
+fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -> Result<Value, String> {
+    let mut index = document_index(app, raw.document).ok_or("the raw document was closed")?;
+    let mut rest = params.clone();
+    let tuning = photocraft_io::raw::RawTuning { temperature: params.temperature, tint: params.tint, exposure: params.exposure };
+    let mut redeveloped = false;
+    if tuning != photocraft_io::raw::RawTuning::default() {
+        let bytes = match (&raw.bytes, &raw.path) {
+            (Some(b), _) => Some(b.as_ref().clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            (None, Some(p)) => std::fs::read(p).ok(),
+            _ => None,
+        };
+        // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
+        if let Some(bytes) = bytes {
+            let (r, wb) = photocraft_io::raw::import_raw_tuned(&raw.name, &bytes, &tuning).map_err(|e| e.to_string())?;
+            rest.exposure = 0.0;
+            if wb {
+                rest.temperature = 0.0;
+                rest.tint = 0.0;
+            }
+            let path = app.session.documents().get(index).and_then(|st| st.path.clone());
+            app.session.close(index);
+            let (opened, _) = app.session.open_document(r.document, path);
+            if let Ok(moved) = app.run("document.move", json!({"document": opened, "to": index})) {
+                index = moved.get("document").and_then(Value::as_u64).map_or(opened, |i| i as usize);
+            } else {
+                index = opened;
+            }
+            app.session.set_active(index);
+            crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &r.warnings);
+            redeveloped = true;
+        }
+    }
+    let mut result = json!({"document": index, "redeveloped": redeveloped});
+    if !rest.is_identity() {
+        let layer = app.session.active().and_then(|st| st.active_layer).ok_or("no layer to develop")?;
+        let mut p = non_defaults(&rest);
+        p["layer"] = json!(layer.0);
+        result["filter"] = app.run("filter.cameraRaw", p)?;
+    }
+    // Developing in Camera Raw is part of opening: the document starts unmodified.
+    if let Some(st) = app.session.active_mut() {
+        st.saved_revision = st.revision;
+    }
+    app.sync_views();
+    Ok(result)
+}
+
+/// Cancel: closes the dialog; for the open-time dialog also the document it was opening.
+fn cancel(app: &mut PhotocraftApp) {
+    let Some(d) = app.camera_raw.take() else { return };
+    if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open)
+        && let Some(index) = document_index(app, raw.document)
+    {
+        app.session.close(index);
+        app.sync_views();
+        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &raw.name)]);
+        app.ui.status_error = false;
+    }
 }
 
 /// What limits the preview: the document selection (a new filter applies through it, as the
@@ -320,6 +448,7 @@ fn open_pixels(
         curve_state: Default::default(),
         curve_rect: None,
         render_ms: 0.0,
+        raw_open: None,
     };
     d.render(ctx);
     app.camera_raw = Some(d);
@@ -446,7 +575,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     }
     super::camera_raw_scope_ui::persist(app, ctx);
     if ui.get("cancel").and_then(Value::as_bool) == Some(true) {
-        app.camera_raw = None;
+        cancel(app);
         return Some(Ok(json!({"cancelled": true})));
     }
     if ui.get("commit").and_then(Value::as_bool) == Some(true) {
@@ -472,6 +601,11 @@ fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
                 m.remove("pixelScale");
             }
             app.run("layer.smartFilter.setParams", json!({"layer": d.layer.0, "index": index, "params": params}))?
+        }
+        Target::OpenRaw => {
+            let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
+            let params = d.params.clone();
+            commit_open_raw(app, &params, &raw)?
         }
     };
     app.camera_raw = None;
@@ -562,6 +696,14 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.camera_raw.is_none()
+        && let Some(raw) = app.pending_raw_open.take()
+        && let Err(e) = open_raw(app, ctx, raw)
+    {
+        // The document stays open, developed with the defaults.
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
     if app.camera_raw.is_none() {
         return;
     }
@@ -581,7 +723,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
         painter.rect_filled(title, 0.0, t.dock);
         painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
-        let window_title = crate::i18n::fmt(tl!("Camera Raw Filter ({layer})"), &[("layer", &d.layer_name)]);
+        let window_title = if d.target == Target::OpenRaw {
+            crate::i18n::fmt(tl!("Camera Raw ({name})"), &[("name", &d.layer_name)])
+        } else {
+            crate::i18n::fmt(tl!("Camera Raw Filter ({layer})"), &[("layer", &d.layer_name)])
+        };
+        let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         painter.text(title.center(), Align2::CENTER_CENTER, window_title, FontId::proportional(13.0), t.text);
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
@@ -751,7 +898,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(role) = widgets::dialog_buttons(
             &mut fu,
             &[
-                widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("OK"), 90.0),
+                widgets::DialogButton::new(widgets::ButtonRole::Default, ok_label, 90.0),
                 widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 90.0),
             ],
         ) {
@@ -776,7 +923,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 app.ui.status = e;
             }
         }
-        Some("cancel") => app.camera_raw = None,
+        Some("cancel") => cancel(app),
         _ => {}
     }
 }
@@ -912,5 +1059,72 @@ mod tests {
         let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
         assert_eq!(r["cancelled"], true);
         assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
+    }
+
+    /// An app whose importer is the real one, opening a synthetic DNG.
+    fn raw_app() -> (PhotocraftApp, Vec<u8>) {
+        use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+        let services = crate::Services {
+            import: Some(Box::new(|name: &str, b: &[u8]| photocraft_io::import(name, b).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
+            ..Default::default()
+        };
+        let (w, h) = (48, 32);
+        let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000));
+        spec.as_shot_neutral = Some([0.5, 1.0, 0.7]);
+        (PhotocraftApp::new(photocraft_engine::Session::new(), services), spec.build())
+    }
+
+    fn mean_red(app: &PhotocraftApp) -> f32 {
+        let st = app.session.active().unwrap();
+        let s = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+        (0..8).map(|i| s.rgba(4 + i * 4, 16)[0]).sum::<f32>() / 8.0
+    }
+
+    #[test]
+    fn raw_opens_in_camera_raw_and_open_redevelops() {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        let warnings = app.open_bytes("IMG_0001.dng", &dng).unwrap();
+        assert!(warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "{warnings:?}");
+        let raw = app.pending_raw_open.take().expect("a raw open queues the dialog");
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let d = app.camera_raw.as_ref().unwrap();
+        assert_eq!(d.target, Target::OpenRaw);
+        assert_eq!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["openingRaw"]["name"], "IMG_0001.dng");
+        let before = mean_red(&app);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+        assert_eq!(r["redeveloped"], true, "{r}");
+        assert!(r.get("filter").is_some(), "contrast is applied as a Camera Raw step: {r}");
+        assert!(app.camera_raw.is_none());
+        assert_eq!(app.session.documents().len(), 1);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
+        assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
+        assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
+    }
+
+    #[test]
+    fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("a.dng", &dng).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+        assert_eq!(r["cancelled"], true);
+        assert!(app.session.documents().is_empty(), "Cancel closes the raw being opened");
+        // Unchanged settings: Open keeps the default develop and adds no step.
+        app.open_bytes("b.dng", &dng).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+        assert_eq!(r, json!({"document": 0, "redeveloped": false}));
+        // Preference off: raws open straight away.
+        app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
+        app.open_bytes("c.dng", &dng).unwrap();
+        assert!(app.pending_raw_open.is_none());
+        // A non-raw never queues the dialog; a closed document is an error, not a panic.
+        assert!(open_raw(&mut app, &ctx, RawOpen { document: photocraft_doc::DocId(u64::MAX), name: "x".into(), path: None, bytes: None }).is_err());
     }
 }

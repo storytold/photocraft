@@ -1806,6 +1806,7 @@
 	Never	Nunca
 	Normal tip	Punta normal
 	Open as smart object	Abrir como objeto inteligente
+	Open in camera raw	Abrir en Camera Raw
 	Open documents as tabs	Abrir los documentos como pestañas
 	Overscroll	Sobredesplazamiento
 	Performance	Rendimiento
@@ -2127,6 +2128,7 @@
 cameraRaw	Light	Luz
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Tonos claros
 cameraRaw	Darks	Tonos oscuros
 cameraRaw	Red	Rojos

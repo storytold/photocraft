@@ -3826,6 +3826,7 @@ dependencies = [
  "photocraft-plugins",
  "photocraft-psd",
  "photocraft-raster",
+ "photocraft-raw",
  "photocraft-testkit",
  "photocraft-text",
  "photocraft-vector",
