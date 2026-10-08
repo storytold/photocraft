@@ -775,16 +775,18 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     action = Some(("path.rename", json!({"name": "work", "to": format!("Path {n}")})));
                 }
                 resp.context_menu(|ui| {
-                    ui.set_min_width(190.0);
-                    let entry = PathEntry { name: name.clone(), path: path.clone(), kind: *kind };
-                    let can_paint = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| l.surface().is_some());
-                    for (label, cmd, params) in path_context_actions(&entry, &doc) {
-                        let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
-                        if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
-                            action = Some((cmd, params));
-                            ui.close();
+                    crate::widgets::menu_scroll(ui, |ui| {
+                        ui.set_min_width(190.0);
+                        let entry = PathEntry { name: name.clone(), path: path.clone(), kind: *kind };
+                        let can_paint = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| l.surface().is_some());
+                        for (label, cmd, params) in path_context_actions(&entry, &doc) {
+                            let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
+                            if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
+                                action = Some((cmd, params));
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
                 ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
             }

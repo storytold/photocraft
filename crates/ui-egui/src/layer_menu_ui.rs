@@ -79,44 +79,46 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
 /// Render the menu. Pushes `(command, params)` actions; `Value::Null` params mean "invoke like the
 /// menu item" (opens the command's dialog when it has one).
 pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, actions: &mut Vec<(String, Value)>) -> bool {
-    ui.set_min_width(220.0);
-    let mut rename = false;
-    let mut last_sep = true;
-    let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
-    for e in entries(l, on_set, has_selection) {
-        match e {
-            None => {
-                if !last_sep {
-                    ui.separator();
-                }
-                last_sep = true;
-            }
-            Some((label, id)) => {
-                // Skip commands this build doesn't have rather than showing dead items.
-                if photocraft_engine::commands::find(id).is_none() && !crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) {
-                    continue;
-                }
-                last_sep = false;
-                // Enablement is exact for the active layer (or the selection); another row is
-                // selected first when clicked, so its items stay available.
-                let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
-                let enabled = if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
-                    if !on_set {
-                        actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+    crate::widgets::menu_scroll(ui, |ui| {
+        ui.set_min_width(220.0);
+        let mut rename = false;
+        let mut last_sep = true;
+        let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
+        for e in entries(l, on_set, has_selection) {
+            match e {
+                None => {
+                    if !last_sep {
+                        ui.separator();
                     }
-                    actions.push((id.into(), Value::Null));
-                    ui.close();
+                    last_sep = true;
+                }
+                Some((label, id)) => {
+                    // Skip commands this build doesn't have rather than showing dead items.
+                    if photocraft_engine::commands::find(id).is_none() && !crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) {
+                        continue;
+                    }
+                    last_sep = false;
+                    // Enablement is exact for the active layer (or the selection); another row is
+                    // selected first when clicked, so its items stay available.
+                    let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
+                    let enabled = if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
+                    if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
+                        if !on_set {
+                            actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+                        }
+                        actions.push((id.into(), Value::Null));
+                        ui.close();
+                    }
                 }
             }
         }
-    }
-    ui.separator();
-    if ui.button(tl!("Rename Layer…")).clicked() {
-        rename = true;
-        ui.close();
-    }
-    rename
+        ui.separator();
+        if ui.button(tl!("Rename Layer…")).clicked() {
+            rename = true;
+            ui.close();
+        }
+        rename
+    })
 }
 
 #[cfg(test)]
@@ -168,6 +170,43 @@ mod tests {
             h.state_mut().session.set_active(0);
             assert_eq!(h.state().session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(smart)));
         }
+    }
+
+    #[test]
+    fn a_long_layer_menu_stays_inside_a_short_window_and_scrolls() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        let layer = {
+            let st = app.session.active().unwrap();
+            st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+        };
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0));
+        let id = egui::Id::new("layer-menu-probe");
+        let mut content = 0.0;
+        for _ in 0..4 {
+            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                // Opened low in the window, like a right-click on a bottom Layers row.
+                egui::Area::new(id).order(egui::Order::Foreground).default_pos(egui::pos2(300.0, 250.0)).show(ui.ctx(), |ui| {
+                    egui::Frame::menu(ui.style()).show(ui, |ui| {
+                        let start = ui.next_widget_position().y;
+                        show(&app, ui, &layer, false, &mut Vec::new());
+                        content = ui.min_rect().bottom() - start;
+                    });
+                });
+            });
+            out.textures_delta.clear();
+        }
+        let rect = ctx.memory(|m| m.area_rect(id)).expect("the menu was shown");
+        assert!(screen.contains_rect(rect), "the menu moves up and stays inside the window: {rect:?}");
+        assert!(rect.height() < screen.height(), "{rect:?}");
+        let rows = entries(&layer, false, false).iter().flatten().count();
+        assert!(rows >= 15, "Photoshop's layer menu is long: {rows} rows");
+        assert!(content < rect.height() + 1.0, "the rows scroll inside the menu instead of running off the window");
     }
 
     #[test]
