@@ -2168,3 +2168,35 @@ cameraRaw	Amount	Quantità
 	Magnetic Lasso Tool	Strumento Lazo magnetico
 	Frequency	Frequenza
 	Use tablet pressure to change pen width	Usa pressione tavoletta per cambiare la larghezza della penna
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	Informazioni
+	Contributors	Collaboratori
+	Models	Modelli
+	Sort	Ordina
+	Username	Nome utente
+	Display name	Nome visualizzato
+	Real name	Nome reale
+	Reverse the order	Inverti l'ordine
+	Grab bag	Elenco libero
+	Table	Tabella
+	Name (A–Z)	Nome (A–Z)
+	Merged PRs	PR unite
+	Commits	Commit
+	Lines added	Righe aggiunte
+	Lines deleted	Righe eliminate
+	Line delta	Differenza righe
+	Binary assets added	Risorse binarie aggiunte
+	Binary assets removed	Risorse binarie rimosse
+	First commit	Primo commit
+	First	Primo
+	Last commit	Ultimo commit
+	Last	Ultimo
+	Contributors: {contributors} · Commits: {commits}	Collaboratori: {contributors} · Commit: {commits}
+	No contributor data was built into this copy.	Questa copia non include dati sui collaboratori.
+	No model credits were built into this copy.	Questa copia non include i crediti dei modelli.
+	Company	Azienda
+	Version	Versione
+	% of all commits	% di tutti i commit
+	Lines +/−	Righe +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} righe (Δ {delta}), +{binAdded} / −{binDeleted} risorse binarie, {first} – {last}
