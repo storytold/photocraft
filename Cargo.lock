@@ -3795,6 +3795,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sys-locale",
+ "toml",
 ]
 
 [[package]]
