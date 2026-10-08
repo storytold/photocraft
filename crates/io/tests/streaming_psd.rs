@@ -2,8 +2,13 @@
 use photocraft_psd::{ColorMode, Compression, Version};
 use photocraft_raster::Interrupt;
 
+// Native imports and exports reserve the same process-wide working-memory allowance.
+// Keep fidelity fixtures from rejecting each other solely because the test runner is parallel.
+static WORKING_MEMORY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn seekable_import_matches_byte_import_pixels_masks_and_metadata() {
+    let _test = WORKING_MEMORY_TESTS.lock().unwrap();
     let path = std::env::temp_dir().join(format!("photocraft-stream-parity-{}.psb", std::process::id()));
     for version in [Version::Psd, Version::Psb] {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
@@ -38,6 +43,7 @@ fn seekable_import_matches_byte_import_pixels_masks_and_metadata() {
 
 #[test]
 fn cancelled_and_truncated_imports_publish_no_document() {
+    let _test = WORKING_MEMORY_TESTS.lock().unwrap();
     let path = std::env::temp_dir().join(format!("photocraft-stream-cancel-{}.psb", std::process::id()));
     let mut file = photocraft_psd::testgen::layered(Version::Psb, ColorMode::Rgb, 8, Compression::Zip);
     file.header.channels = 3 + u16::from(file.merged_has_alpha());
@@ -51,6 +57,7 @@ fn cancelled_and_truncated_imports_publish_no_document() {
 
 #[test]
 fn seekable_export_preserves_merged_layers_masks_and_unknown_metadata() {
+    let _test = WORKING_MEMORY_TESTS.lock().unwrap();
     let path = std::env::temp_dir().join(format!("photocraft-export-parity-{}.psb", std::process::id()));
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
         for depth in [8, 16, 32] {
@@ -74,6 +81,7 @@ fn seekable_export_preserves_merged_layers_masks_and_unknown_metadata() {
 
 #[test]
 fn cancelled_stream_save_keeps_destination_and_removes_temporary_output() {
+    let _test = WORKING_MEMORY_TESTS.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("photocraft-export-cancel-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("kept.psb");
@@ -94,6 +102,7 @@ fn cancelled_stream_save_keeps_destination_and_removes_temporary_output() {
 #[cfg(feature = "corpus")]
 #[test]
 fn native_path_import_matches_byte_import_across_real_psd_corpus() {
+    let _test = WORKING_MEMORY_TESTS.lock().unwrap();
     fn collect(p: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(p).unwrap().flatten() {
             let p = e.path();
