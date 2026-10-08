@@ -161,9 +161,11 @@ fn display_scale(pref: prefs::UiScale, native: Option<f32>, monitor_px: Option<e
     let native = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
     match pref {
         prefs::UiScale::Auto => {
-            // A 4K display needs at least 200%; preserve larger system scales.
+            // A system scale above 100% is the user's choice (Windows Display settings, macOS,
+            // GNOME): follow it exactly, even 125% on a 4K monitor (#1187). Only an unscaled 4K
+            // display (often X11 or a fresh install) gets 200% so controls stay readable (#225).
             let is_4k = monitor_px.is_some_and(|s| s.x.is_finite() && s.y.is_finite() && s.x.min(s.y) >= 2160.0 && s.x.max(s.y) >= 3840.0);
-            if is_4k { native.max(2.0) } else { native }
+            if is_4k && native <= 1.0 { 2.0 } else { native }
         }
         fixed => fixed.name().parse::<f32>().map_or(1.0, |pct| pct / 100.0),
     }
@@ -1597,12 +1599,13 @@ mod tests {
     }
 
     #[test]
-    fn auto_scale_detects_4k_and_preserves_larger_system_dpi() {
+    fn auto_scale_detects_unscaled_4k_and_otherwise_follows_system_dpi() {
         use prefs::UiScale::Auto;
         for size in [vec2(3840.0, 2160.0), vec2(4096.0, 2160.0), vec2(2160.0, 3840.0)] {
             assert_eq!(display_scale(Auto, Some(1.0), Some(size)), 2.0);
-            for dpi in [1.25, 1.5, 2.0] {
-                assert_eq!(display_scale(Auto, Some(dpi), Some(size)), 2.0);
+            // A system scale the user picked wins, even below 200% (#1187: 125% on 4K).
+            for dpi in [1.25, 1.5, 1.75, 2.0, 2.5] {
+                assert_eq!(display_scale(Auto, Some(dpi), Some(size)), dpi);
             }
         }
         assert_eq!(display_scale(Auto, Some(3.0), Some(vec2(3840.0, 2160.0))), 3.0);
@@ -1636,7 +1639,8 @@ mod tests {
                 step(vec2(3840.0, 2160.0), 1.0, 2.0);
             }
             step(vec2(1920.0, 1080.0), 1.0, 1.0);
-            step(vec2(3840.0, 2160.0), 1.5, 2.0);
+            step(vec2(3840.0, 2160.0), 1.5, 1.5);
+            step(vec2(3840.0, 2160.0), 1.25, 1.25);
         }
         for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("auto", 1.5)] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();

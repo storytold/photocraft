@@ -76,8 +76,9 @@ draft open for correction. Settings marked for the next launch still require a r
 ## High DPI and 4K displays
 
 Edit → Preferences → Interface → UI Scale applies immediately. Auto follows the operating
-system's display scale (including fractional scales). For a 4K or larger monitor,
-Auto uses at least 200% so text and controls remain readable. Detection uses the current monitor,
+system's display scale (including fractional scales such as 125%). Only when the system
+reports no scaling (100%) on a 4K or larger monitor does Auto use 200% so text and controls
+remain readable. Detection uses the current monitor,
 including portrait displays, and updates when the window moves between monitors. If monitor
 size is unavailable, Auto follows system DPI. The fixed choices (75% to 300%) set an absolute UI
 scale, allowing large 4K displays to use smaller controls when desired. Canvas zoom shortcuts
