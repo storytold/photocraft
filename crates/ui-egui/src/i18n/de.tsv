@@ -33,6 +33,9 @@
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
 	Close	Schließen
+	Minimize	Minimieren
+	Maximize	Maximieren
+	Restore	Wiederherstellen
 	Close All	Alle schließen
 	Close Others	Andere schließen
 	Save	Speichern
@@ -311,6 +314,7 @@
 	Smart Object	Smart-Objekt
 	Convert to Smart Object	In Smart-Objekt konvertieren
 	Convert to Embedded	In eingebettetes Smart-Objekt konvertieren
+	Convert to Layers	In Ebenen konvertieren
 	Convert to Linked…	In verknüpftes Smart-Objekt konvertieren…
 	Edit Contents	Inhalt bearbeiten
 	Replace Contents…	Inhalt ersetzen…
@@ -964,6 +968,7 @@
 	Drag a rectangle around the object	Ziehe ein Rechteck um das Objekt
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Ziehe auf dem Bild, um eine Zwangsbedingung hinzuzufügen; Shift für horizontal/vertikal; Rechtsklick löscht.
 	Drag to move the active shape's path or the Work Path	Ziehen, um den Pfad der aktiven Form oder den Arbeitspfad zu verschieben
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klick: Ankerpunkt auswählen · Ziehen: Ankerpunkt, Griff oder Segment verschieben · {shift}-Klick: hinzufügen · {alt}-Klick: ganzer Teilpfad
 	Draw with the Pen tool (P) or make a work path from a selection.	Zeichne mit dem Stift-Werkzeug (P) oder erzeuge einen Arbeitspfad aus einer Auswahl.
 	Drop an image or PSD anywhere to open it.	Ziehe ein Bild oder PSD an eine beliebige Stelle, um es zu öffnen.
 	Native file drag-and-drop is unavailable	Natives Ziehen und Ablegen von Dateien ist nicht verfügbar
@@ -1590,6 +1595,7 @@
 	Paint Bucket Tool	Fülleimer-Werkzeug
 	Paints from the document's opening state	Malt aus dem Zustand beim Öffnen des Dokuments
 	Path Selection Tool	Pfadauswahl-Werkzeug
+	Direct Selection Tool	Direktauswahl-Werkzeug
 	Pattern Overlay	Musterüberlagerung
 	Pen Pressure	Stiftdruck
 	Pen Tilt	Stiftneigung

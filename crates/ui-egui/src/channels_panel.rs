@@ -228,43 +228,45 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
             resp.context_menu(|ui| {
-                ui.set_min_width(210.0);
-                let a = &mut actions;
-                match row {
-                    Row::Alpha(i) => {
-                        let ch = &doc.channels[i];
-                        item(ui, a, "Duplicate Channel", "channel.duplicate", json!({ "channel": i }));
-                        item(ui, a, "Delete Channel", "channel.delete", json!({ "channel": i }));
-                        item(ui, a, "Rename Channel…", "ui.renameChannel", json!(i));
-                        ui.separator();
-                        if ch.spot.is_some() {
-                            item(ui, a, "Merge Spot Channel", "channel.mergeSpot", json!({ "channel": i }));
-                            item(ui, a, "Convert to Alpha Channel", "channel.options", json!({ "channel": i, "indicates": "masked" }));
-                        } else {
-                            indicates_items(ui, a, json!(i), ch.indicates);
-                            overlay_colors(ui, a, json!(i));
+                crate::widgets::menu_scroll(ui, |ui| {
+                    ui.set_min_width(210.0);
+                    let a = &mut actions;
+                    match row {
+                        Row::Alpha(i) => {
+                            let ch = &doc.channels[i];
+                            item(ui, a, "Duplicate Channel", "channel.duplicate", json!({ "channel": i }));
+                            item(ui, a, "Delete Channel", "channel.delete", json!({ "channel": i }));
+                            item(ui, a, "Rename Channel…", "ui.renameChannel", json!(i));
+                            ui.separator();
+                            if ch.spot.is_some() {
+                                item(ui, a, "Merge Spot Channel", "channel.mergeSpot", json!({ "channel": i }));
+                                item(ui, a, "Convert to Alpha Channel", "channel.options", json!({ "channel": i, "indicates": "masked" }));
+                            } else {
+                                indicates_items(ui, a, json!(i), ch.indicates);
+                                overlay_colors(ui, a, json!(i));
+                            }
+                        }
+                        Row::QuickMask => {
+                            item(ui, a, "Exit Quick Mask", "select.editInQuickMaskMode", json!({ "on": false }));
+                            indicates_items(ui, a, json!("quickMask"), doc.quick_mask.as_ref().map(|q| q.indicates).unwrap_or_default());
+                            overlay_colors(ui, a, json!("quickMask"));
+                        }
+                        Row::Composite | Row::Color(_) => {
+                            item(ui, a, "Duplicate Channel", "channel.duplicate", json!({ "channel": row.reference() }));
+                        }
+                        Row::LayerMask => {
+                            let enabled = masked.as_ref().and_then(|l| l.mask.as_ref()).is_none_or(|m| m.enabled);
+                            item(ui, a, if enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }, "layer.layerMask.enabled", json!({}));
+                            item(ui, a, "Delete Layer Mask", "layer.layerMask.delete", json!({}));
                         }
                     }
-                    Row::QuickMask => {
-                        item(ui, a, "Exit Quick Mask", "select.editInQuickMaskMode", json!({ "on": false }));
-                        indicates_items(ui, a, json!("quickMask"), doc.quick_mask.as_ref().map(|q| q.indicates).unwrap_or_default());
-                        overlay_colors(ui, a, json!("quickMask"));
-                    }
-                    Row::Composite | Row::Color(_) => {
-                        item(ui, a, "Duplicate Channel", "channel.duplicate", json!({ "channel": row.reference() }));
-                    }
-                    Row::LayerMask => {
-                        let enabled = masked.as_ref().and_then(|l| l.mask.as_ref()).is_none_or(|m| m.enabled);
-                        item(ui, a, if enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }, "layer.layerMask.enabled", json!({}));
-                        item(ui, a, "Delete Layer Mask", "layer.layerMask.delete", json!({}));
-                    }
-                }
-                ui.separator();
-                item(ui, a, "New Channel…", "channel.new", json!({}));
-                item(ui, a, "New Spot Channel…", "channel.newSpot", json!({}));
-                ui.separator();
-                item(ui, a, "Split Channels", "channel.split", json!({}));
-                item(ui, a, "Merge Channels…", "channel.merge", json!({}));
+                    ui.separator();
+                    item(ui, a, "New Channel…", "channel.new", json!({}));
+                    item(ui, a, "New Spot Channel…", "channel.newSpot", json!({}));
+                    ui.separator();
+                    item(ui, a, "Split Channels", "channel.split", json!({}));
+                    item(ui, a, "Merge Channels…", "channel.merge", json!({}));
+                });
             });
         }
     });

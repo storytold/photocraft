@@ -29,6 +29,9 @@
 	Open Recent	Archivos recientes
 	Clear Recent Files	Vaciar archivos recientes
 	Close	Cerrar
+	Minimize	Minimizar
+	Maximize	Maximizar
+	Restore	Restaurar
 	Close All	Cerrar todo
 	Close Others	Cerrar otros
 	Save	Guardar
@@ -307,6 +310,7 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Convertir en objeto inteligente
 	Convert to Embedded	Convertir en incrustado
+	Convert to Layers	Convertir en capas
 	Convert to Linked…	Convertir en vinculado…
 	Edit Contents	Editar contenido
 	Replace Contents…	Reemplazar contenido…
@@ -966,6 +970,7 @@
 	Drag a rectangle around the object	Arrastre un rectángulo alrededor del objeto
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Arrastre sobre la imagen para añadir una restricción; Mayús para horizontal/vertical; clic derecho para eliminar.
 	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el Trazado de trabajo
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic: seleccionar punto · Arrastrar: mover punto, manejador o segmento · {shift}-clic: añadir · {alt}-clic: subtrazado completo
 	Draw with the Pen tool (P) or make a work path from a selection.	Dibuja con la herramienta Pluma (P) o crea un trazado de trabajo a partir de una selección.
 	Drop an image or PSD anywhere to open it.	Suelte una imagen o un PSD en cualquier lugar para abrirlo.
 	Native file drag-and-drop is unavailable	El arrastrar y soltar archivos de forma nativa no está disponible en Wayland
@@ -1595,6 +1600,7 @@
 	Paint Bucket Tool	Herramienta Bote de pintura
 	Paints from the document's opening state	Pinta a partir del estado en que se abrió el documento.
 	Path Selection Tool	Herramienta Selección de trazado
+	Direct Selection Tool	Herramienta Selección directa
 	Pattern Overlay	Superposición de patrón
 	Pen Pressure	Presión del lápiz
 	Pen Tilt	Inclinación del lápiz
