@@ -49,6 +49,14 @@ The desktop cache is `Models/` under the existing per-user configuration directo
 preferences. Each immutable model revision gets its own directory with `LICENSE.txt` and
 `SOURCE.txt`; inference verifies the hashes again, including SAM's external weights.
 
+Linux uses the existing XDG configuration path, so an AppImage stores models outside its
+read-only mounted image and a Flatpak uses its sandbox's XDG configuration directory. The current
+Flatpak manifests omit network permission and do not enable `local-ml`. A distributor opting in
+must also choose how explicit downloads receive network access (or prepopulate a verified cache);
+this backend does not alter sandbox permissions. Windows uses `%APPDATA%\\Photocraft\\Models`
+outside portable/override mode. Installer packaging and sandbox download checks remain separate
+from the native CPU build matrix.
+
 ## Commands and CLI
 
 | Command | Parameters |

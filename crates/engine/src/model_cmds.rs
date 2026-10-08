@@ -84,9 +84,7 @@ impl Sampler for ModelSampler<'_> {
             for (dst, v) in p.iter_mut().take(3).zip(rgb) {
                 *dst = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
             }
-            if !p[3].is_finite() {
-                p[3] = 0.0;
-            }
+            p[3] = if p[3].is_finite() { p[3].clamp(0.0, 1.0) } else { 0.0 };
         }
         px
     }
@@ -396,6 +394,33 @@ mod tests {
     }
 
     #[test]
+    fn managing_models_does_not_drop_a_floating_selection_or_edit_the_document() {
+        let (mut s, _) = session("rgb", 8);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("paint", |doc, layer| {
+            let bounds = doc.bounds();
+            doc.layer_mut(layer.unwrap()).unwrap().surface_mut().unwrap().fill_rect(bounds, &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":2})).unwrap();
+        s.execute("select.float", json!({"dx":2,"dy":1})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        let journal = s.journal.len();
+        for (command, params) in
+            [("models.list", json!({})), ("models.download", json!({"id":"birefnet-hr-matting"})), ("models.remove", json!({"id":"birefnet-hr-matting"}))]
+        {
+            s.execute(command, params).unwrap();
+            let state = s.active().unwrap();
+            assert!(Arc::ptr_eq(&state.doc, &doc));
+            assert_eq!(state.history.past_len(), history);
+            assert_eq!(state.floating.as_ref().unwrap().offset, (2, 1));
+            assert_eq!(s.journal.len(), journal);
+        }
+    }
+
+    #[test]
     fn preferences_select_a_model_and_explicit_classical_overrides_it() {
         let (mut s, fake) = session("rgb", 32);
         s.execute("prefs.set", json!({"path":"integrations.subjectModel","value":"birefnet-hr-matting"})).unwrap();
@@ -476,6 +501,25 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.layers[0].mask.as_ref().unwrap().value(7, 2), 1.0);
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.active().unwrap().doc.layers[0].mask.as_ref().unwrap().value(7, 2), 0.0);
+    }
+
+    #[test]
+    fn out_of_range_and_non_finite_alpha_only_affect_the_model_input() {
+        // The existing segmentation sampler composites transparent pixels over neutral gray.
+        for (alpha, expected) in [(2.0, 0.25), (f32::NAN, 0.5)] {
+            let (mut s, fake) = session("rgb", 32);
+            s.edit("HDR alpha", |doc, _| {
+                doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+                let bounds = doc.bounds();
+                doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &[0.25, 0.25, 0.25, alpha]);
+                Ok(())
+            })
+            .unwrap();
+            let before: Vec<u32> = pixels(&s).iter().map(|v| v.to_bits()).collect();
+            s.execute("select.subject", json!({"model":"birefnet-hr-matting","sampleAllLayers":false})).unwrap();
+            assert_eq!(pixels(&s).iter().map(|v| v.to_bits()).collect::<Vec<_>>(), before);
+            assert!(fake.calls.lock().unwrap()[0].1.px.iter().flatten().all(|v| v.is_finite() && (*v - expected).abs() < 0.005));
+        }
     }
 
     #[test]

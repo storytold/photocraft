@@ -62,7 +62,9 @@ cargo run --release -p photocraft-engine --features local-ml --example local_mod
   tests cover scoped removal, busy state and dependency panic recovery.
 - Engine tests cover RGB/Gray/CMYK/Lab at 8/16/32-bit, ICC input conversion, fractional alpha,
   layer-mask replacement, selection modes and rectangle mapping, one-step Undo/Redo, cancellation,
-  missing-model errors, recorded method choices and batch/droplet capability inheritance.
+  missing-model errors, recorded method choices, batch/droplet capability inheritance and model
+  management while a selection floats. Non-finite/out-of-range alpha is sanitized for model input
+  while original 32-bit pixel values are preserved.
 - Full engine, CLI and UI test suites pass locally. UI preference/localization coverage includes
   every supported complete-menu language. Default and `local-ml` build paths retain classical
   operation without installing models.
@@ -76,10 +78,12 @@ cargo run --release -p photocraft-engine --features local-ml --example local_mod
 - `xtask perf --quick --bench perf_scenarios` passes for the existing selection/retouch scenarios;
   it does not establish a sub-100 ms budget for the optional models.
 
-The dedicated `local-models.yml` workflow adds Linux, Windows and macOS CPU runtime tests and
-native build checks. Windows/Linux results must be verified in CI before removing the draft
-status; they have not been run on this Mac. Quantitative accuracy evaluation, packaged installer
-enablement, web inference, point prompts and GPU acceleration remain separate work.
+The dedicated `local-models.yml` workflow runs Linux, Windows and macOS CPU runtime tests and
+native build checks. The [initial cross-platform run](https://github.com/mighty-programmer/photocraft/actions/runs/37780207526)
+passes on all three platforms. Final document-state regression tests are being rerun in the
+same matrix before this contribution leaves draft. Upstream PR CI needs maintainer approval for
+this first contribution. Quantitative accuracy evaluation, packaged installer / sandbox download
+checks, web inference, point prompts and GPU acceleration remain separate work.
 
 Image sources and licences: [SOURCES.md](images/SOURCES.md),
 [LICENSE-local-models.txt](images/LICENSE-local-models.txt).
