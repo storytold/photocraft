@@ -102,6 +102,7 @@ pub enum Tool {
     ObjectSelection,
     Pen,
     PathSelection,
+    DirectSelection,
     Rectangle,
     EllipseShape,
     Triangle,
@@ -113,7 +114,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 48] = [
+    pub const ALL: [Tool; 49] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
@@ -154,6 +155,7 @@ impl Tool {
         Tool::ObjectSelection,
         Tool::Pen,
         Tool::PathSelection,
+        Tool::DirectSelection,
         Tool::Rectangle,
         Tool::EllipseShape,
         Tool::Triangle,
@@ -208,6 +210,7 @@ impl Tool {
             Tool::ObjectSelection => "Object Selection Tool",
             Tool::Pen => "Pen Tool",
             Tool::PathSelection => "Path Selection Tool",
+            Tool::DirectSelection => "Direct Selection Tool",
             Tool::Rectangle => "Rectangle Tool",
             Tool::EllipseShape => "Ellipse Tool",
             Tool::Triangle => "Triangle Tool",
@@ -263,7 +266,7 @@ impl Tool {
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen => 'P',
-            Tool::PathSelection => 'A',
+            Tool::PathSelection | Tool::DirectSelection => 'A',
             Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
         }
     }
@@ -739,6 +742,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// Direct Selection tool: selected anchors and the drag in progress (#790).
+    #[serde(default)]
+    pub direct_selection: crate::direct_select::DirectSelection,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -863,6 +869,7 @@ impl Default for UiState {
             shell: Default::default(),
             layer_filter: Vec::new(),
             pen: None,
+            direct_selection: Default::default(),
             selected_path: None,
             panels: Panels::default(),
             views: Vec::new(),

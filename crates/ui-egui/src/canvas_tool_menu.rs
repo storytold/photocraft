@@ -318,16 +318,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             v.widgets.hovered.corner_radius = egui::CornerRadius::same(3);
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_width(200.0);
-            for row in rows(&menu) {
-                let Some((label, command)) = *row else {
-                    ui.separator();
-                    continue;
-                };
-                let item = egui::Button::selectable(mode_checked(app, &menu, command), tl!(label)).min_size(egui::vec2(200.0, 20.0));
-                if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
-                    selected = Some(command);
+            crate::widgets::menu_scroll(ui, |ui| {
+                for row in rows(&menu) {
+                    let Some((label, command)) = *row else {
+                        ui.separator();
+                        continue;
+                    };
+                    let item = egui::Button::selectable(mode_checked(app, &menu, command), tl!(label)).min_size(egui::vec2(200.0, 20.0));
+                    if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
+                        selected = Some(command);
+                    }
                 }
-            }
+            });
         });
     });
     if let Some(command) = selected {

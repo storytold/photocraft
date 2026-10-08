@@ -35,6 +35,9 @@
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
 	Close	Fermer
+	Minimize	Réduire
+	Maximize	Agrandir
+	Restore	Restaurer
 	Close All	Tout fermer
 	Close Others	Fermer les autres
 	Save	Enregistrer
@@ -305,6 +308,7 @@
 	Smart Object	Objet intelligent
 	Convert to Smart Object	Convertir en objet intelligent
 	Convert to Embedded	Convertir en objet incorporé
+	Convert to Layers	Convertir en calques
 	Convert to Linked…	Convertir en objet lié…
 	Edit Contents	Modifier le contenu
 	Replace Contents…	Remplacer le contenu…
@@ -956,6 +960,7 @@
 	Drag a rectangle around the object	Tracez un rectangle autour de l'objet
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Faites glisser sur l'image pour ajouter une contrainte ; Maj pour horizontal/vertical ; clic droit pour supprimer.
 	Drag to move the active shape's path or the Work Path	Faites glisser pour déplacer le tracé de la forme active ou le tracé de travail
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic : sélectionner le point · Glisser : déplacer point, poignée ou segment · {shift}-clic : ajouter · {alt}-clic : sous-tracé entier
 	Draw with the Pen tool (P) or make a work path from a selection.	Dessinez avec l'outil Plume (P) ou créez un tracé de travail à partir d'une sélection.
 	Drop an image or PSD anywhere to open it.	Déposez une image ou un PSD n'importe où pour l'ouvrir.
 	Duplicate Layers…	Dupliquer les calques…
@@ -1579,6 +1584,7 @@
 	Paint Bucket Tool	Outil Pot de peinture
 	Paints from the document's opening state	Peint à partir de l'état d'ouverture du document
 	Path Selection Tool	Outil Sélection de tracé
+	Direct Selection Tool	Outil Sélection directe
 	Pattern Overlay	Superposition de motif
 	Pen Pressure	Pression du stylet
 	Pen Tilt	Inclinaison du stylet
