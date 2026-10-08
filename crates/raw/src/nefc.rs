@@ -549,6 +549,18 @@ mod tests {
     }
 
     #[test]
+    fn nikon_without_black_level_tag_is_black_subtracted() {
+        use crate::testgen::{Val, nef_compressed};
+        let (w, h) = (32usize, 8usize);
+        let img = image(w, h, 16383, 4);
+        let src = encode(&img, w, &LOSSLESS_14, [[2048; 2]; 2]);
+        let b = nef_compressed(w, h, 14, src, [0, 1, 1, 2], true, vec![(0x0096, Val::Undefined(lossless_table(2048, false)))]);
+        let s = crate::decode(&b, &crate::Limits::default()).unwrap();
+        assert_eq!(s.black.values, vec![0.0]);
+        assert!(!s.warnings.iter().any(|w| w.contains("black level")), "{:?}", s.warnings);
+    }
+
+    #[test]
     fn truncated_container_never_panics() {
         use crate::testgen::{Val, nef_compressed};
         let (w, h) = (32usize, 8usize);

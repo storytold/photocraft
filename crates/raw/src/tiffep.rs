@@ -136,6 +136,10 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         BlackLevels::uniform(*b as f32)
     } else if let Some(v) = rggb_by_position(&cfa, &vendor_black) {
         BlackLevels { rows: 2, cols: 2, values: v.to_vec(), delta_h: Vec::new(), delta_v: Vec::new() }
+    } else if nikon.is_some() {
+        // Nikon bodies that write no BlackLevel tag subtract the black level in camera: a D3200
+        // NEF's darkest samples are 0–4 (noise around zero), median 81 of 4095.
+        BlackLevels::uniform(0.0)
     } else {
         warnings.push(format!("{}: black level not recorded in a documented tag; assumed 0", format.name()));
         BlackLevels::uniform(0.0)
