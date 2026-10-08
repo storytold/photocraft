@@ -21,6 +21,7 @@ pub mod adjust_preview;
 pub mod adjust_ui;
 pub mod analysis_ui;
 pub mod artboard_ui;
+mod brand;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preview;
@@ -120,6 +121,7 @@ mod tab_strip;
 pub mod theme;
 pub mod tiff_options_ui;
 mod timeline_ui;
+mod titlebar;
 pub mod tone;
 pub mod tool_feedback;
 pub mod transform_tex;
@@ -341,6 +343,9 @@ pub struct PhotocraftApp {
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
     pub integrated_titlebar: bool,
+    /// Windows and Linux: the window has no OS decorations and the app's top bar is the title bar
+    /// (caption buttons, window dragging and edge resizing, `titlebar`).
+    pub custom_titlebar: bool,
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
@@ -477,6 +482,7 @@ impl PhotocraftApp {
             frame: 0,
             styled: false,
             integrated_titlebar: false,
+            custom_titlebar: false,
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             drop_canvas_rect: None,
@@ -1077,6 +1083,9 @@ impl eframe::App for PhotocraftApp {
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
+        if self.custom_titlebar {
+            titlebar::resize_zones(ui);
+        }
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);
         self.automation_input = false;

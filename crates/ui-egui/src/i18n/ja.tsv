@@ -33,6 +33,9 @@
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
 	Close	閉じる
+	Minimize	最小化
+	Maximize	最大化
+	Restore	元に戻す（縮小）
 	Close All	すべて閉じる
 	Close Others	ほかを閉じる
 	Save	保存
