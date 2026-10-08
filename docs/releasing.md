@@ -33,7 +33,8 @@ and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.stor
    budget or got slower, corpus floors raised, and the change in settings that do nothing.
    Quote numbers with the baseline's machine and load average.
 6. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
-   pre-release suffix (`-rc.1`) are marked as pre-releases.
+   pre-release suffix (`-rc.1`) are marked as pre-releases. Publishing a stable version also
+   updates the Homebrew tap (see [Homebrew](#homebrew-macos)).
 
 Pushing to `release` again before you publish rebuilds the same draft and replaces its assets.
 After the draft is published, the workflow refuses to touch that version again, so bump it first.
@@ -261,6 +262,50 @@ and the script fails if any `.wasm` exceeds 24 MiB, below Cloudflare's 25 MiB pe
 [`packaging/web/README.md`](../packaging/web/README.md) covers MIME types, compression,
 caching, the iframe snippet and the `?webgl` / `?cpu` flags.
 
+### Homebrew (macOS)
+
+macOS users install with `brew install --cask storytold/tap/photocraft`. The cask is
+[`packaging/homebrew/photocraft.rb`](../packaging/homebrew/photocraft.rb): the universal DMG
+(one `url`/`sha256` for Apple silicon and Intel), `depends_on macos: ">= :big_sur"` to match
+`LSMinimumSystemVersion`, `livecheck` on the latest GitHub release, and a `zap` that removes
+`~/Library/Application Support/Photocraft` (`apps/photocraft/src/app_dirs.rs`) plus the
+preferences plist and saved window state macOS keeps for `ai.storyteller.photocraft`. It lives in
+the tap repository [storytold/homebrew-tap](https://github.com/storytold/homebrew-tap) as
+`Casks/photocraft.rb`; Homebrew maps `storytold/tap` to that repository, and the other Crafting
+apps can share it.
+
+`release.yml` doesn't touch it: the cask points at a published release, so the separate
+`homebrew.yml` workflow runs when a release is **published** (pre-releases are skipped):
+
+1. `check` (on `macos-15`) runs `packaging/homebrew/update.sh <version>`, which sets `version`
+   and `sha256` from the release's `SHA256SUMS.txt`, then puts the cask in a throwaway local tap
+   and runs `brew style`, `brew audit --strict --online` and `brew livecheck` on it, installs it,
+   checks the app's signature, runs `PhotoCraft --version`, and uninstalls it with `--zap`.
+2. `publish` commits the checked cask to the tap as `photocraft <version>`, retrying on top of
+   other apps' pushes.
+
+*Actions → Homebrew → Run workflow* does the same for a given version, with a `dry_run` option
+that skips the push. Pull requests that change `packaging/homebrew/` run `check` against the
+version the cask names, and fail if its `sha256` doesn't match that release. The cask committed
+here isn't bumped by the workflow; run `packaging/homebrew/update.sh <version>` and commit when
+you change the cask itself.
+
+One-time setup, by the repository owner:
+
+1. Create the public repository **`storytold/homebrew-tap`** with a README, so it has a default
+   branch. The name must start with `homebrew-`.
+2. Create a fine-grained personal access token (or a GitHub App token) with **Contents: read and
+   write** on that repository only.
+3. Create the **`homebrew`** environment (*Settings → Environments*), with deployment branches and
+   tags set to `main` and `v*`, and add the token as its `HOMEBREW_TAP_TOKEN` secret. An optional
+   `HOMEBREW_TAP` variable points the workflow at another tap repository (`owner/homebrew-name`).
+4. The `release` event runs the workflow from the tagged commit, so automatic updates start with
+   the first release that contains it. To publish a release that predates it, run the workflow
+   by hand on `main` with that version.
+
+Without the secret, or if the token can't read the tap, `publish` ends with a `::warning::` and
+changes nothing.
+
 ## Secrets
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →
@@ -283,6 +328,10 @@ the run shows a `::warning::`.
 | `AZURE_SIGNING_ENDPOINT` | e.g. `https://eus.codesigning.azure.net` |
 | `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Trusted Signing account and certificate profile names |
 
+`HOMEBREW_TAP_TOKEN` is the exception: it lives in the separate **`homebrew`** environment,
+because `homebrew.yml` runs on the release tag rather than the `release` branch (see
+[Homebrew](#homebrew-macos)).
+
 `GITHUB_TOKEN` creates the release. Only the final job gets `contents: write`.
 
 On macOS, `packaging/macos/import-cert.sh` decodes the `.p12` into a temporary keychain
@@ -301,6 +350,6 @@ The outputs are committed, so packaging never needs those tools.
 ## Checks
 
 `.github/workflows/packaging-lint.yml` runs in seconds on any change to `packaging/`, the
-workflows or the icons. It runs actionlint, shellcheck, a PowerShell parse, xmllint,
+workflows or the icons. It runs actionlint, shellcheck, a PowerShell parse, `ruby -c` on the Homebrew cask, xmllint,
 `desktop-file-validate`, `appstreamcli validate`, and a YAML check that the two Flatpak
 manifests agree on the runtime and permissions.

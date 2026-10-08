@@ -1,0 +1,131 @@
+# Update the Homebrew cask in the storytold/homebrew-tap tap when a release is published, so
+# `brew install --cask storytold/tap/photocraft` and `brew upgrade` get it. Pre-releases are
+# skipped. See packaging/homebrew/ and docs/releasing.md › Homebrew.
+#
+# `check` points packaging/homebrew/photocraft.rb at the release (update.sh), then runs brew's
+# style check, audit and livecheck on it and installs, runs and zaps the app on a real Mac.
+# `publish` commits the checked cask to the tap with the `homebrew` environment's
+# HOMEBREW_TAP_TOKEN secret. Without the secret, or when the tap can't be reached, it logs a
+# warning and changes nothing. Pull requests that touch the cask run `check` only.
+name: Homebrew
+
+on:
+  release:
+    types: [published]
+  pull_request:
+    paths: ["packaging/homebrew/**", ".github/workflows/homebrew.yml"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published release to put in the tap, e.g. 0.3.0"
+        type: string
+        required: true
+      dry_run:
+        description: "Check the cask but don't push it to the tap"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: macos-15
+    outputs:
+      version: ${{ steps.cask.outputs.version }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+      CI_TAP: storytold/ci
+    steps:
+      - uses: actions/checkout@v4
+      - id: cask
+        name: Point the cask at the release
+        env:
+          # The published tag or the dispatch input; on a pull request, the cask's own version.
+          RELEASE: ${{ inputs.version || github.event.release.tag_name }}
+        run: |
+          v="${RELEASE:-$(sed -n 's/^  version "\(.*\)"$/\1/p' packaging/homebrew/photocraft.rb)}"
+          v="${v#v}"
+          packaging/homebrew/update.sh "$v"
+          echo "version=$v" >>"$GITHUB_OUTPUT"
+          # On a pull request the committed cask must already match the release it names.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then git diff --exit-code packaging/homebrew/photocraft.rb; fi
+      # brew only audits and installs casks from a tap, so put it in a throwaway local one.
+      - name: Style, audit, livecheck
+        run: |
+          brew tap-new --no-git "$CI_TAP"
+          casks="$(brew --repository "$CI_TAP")/Casks"
+          mkdir -p "$casks"
+          cp packaging/homebrew/photocraft.rb "$casks/"
+          brew style --cask "$CI_TAP/photocraft"
+          brew audit --cask --strict --online "$CI_TAP/photocraft"
+          brew livecheck --cask "$CI_TAP/photocraft"
+      - name: Install, run, zap
+        env:
+          VERSION: ${{ steps.cask.outputs.version }}
+        run: |
+          brew install --cask "$CI_TAP/photocraft"
+          app=/Applications/PhotoCraft.app
+          codesign --verify --strict --verbose=2 "$app"
+          "$app/Contents/MacOS/PhotoCraft" --version | tee /dev/stderr | grep -F "photocraft $VERSION"
+          brew uninstall --cask --zap "$CI_TAP/photocraft"
+          test ! -e "$app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-cask
+          path: packaging/homebrew/photocraft.rb
+          if-no-files-found: error
+
+  publish:
+    needs: check
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    environment: homebrew
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      TAP: ${{ vars.HOMEBREW_TAP || 'storytold/homebrew-tap' }}
+      # A fine-grained token with Contents: read and write on the tap repository only.
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: homebrew-cask
+          path: cask
+      - name: Push the cask to the tap
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; not updating $TAP"; exit 0
+          fi
+          if ! gh repo view "$TAP" --json name >/dev/null; then
+            echo "::warning::$TAP doesn't exist or HOMEBREW_TAP_TOKEN can't read it; not updating it"; exit 0
+          fi
+          tap="$RUNNER_TEMP/tap"
+          gh auth setup-git
+          git clone --depth 1 "https://github.com/$TAP.git" "$tap"
+          git -C "$tap" config user.name "github-actions[bot]"
+          git -C "$tap" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p "$tap/Casks"
+          cp cask/photocraft.rb "$tap/Casks/photocraft.rb"
+          git -C "$tap" add Casks/photocraft.rb
+          if git -C "$tap" diff --cached --quiet; then
+            echo "$TAP already has photocraft $VERSION"; exit 0
+          fi
+          git -C "$tap" commit -m "photocraft $VERSION"
+          # Other apps' release workflows push to the same tap: rebase onto theirs and retry.
+          for attempt in 1 2 3; do
+            if git -C "$tap" push origin HEAD; then
+              echo "Updated $TAP: photocraft $VERSION" >>"$GITHUB_STEP_SUMMARY"; exit 0
+            fi
+            echo "push $attempt failed; rebasing"
+            git -C "$tap" pull --rebase origin HEAD
+          done
+          echo "::error::couldn't push photocraft $VERSION to $TAP"
+          exit 1

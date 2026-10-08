@@ -1,5 +1,6 @@
 # Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax,
-# packaging shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata.
+# packaging shell/PowerShell scripts, the Homebrew cask's Ruby syntax, and the Linux
+# desktop/AppStream/Flatpak metadata.
 name: Packaging lint
 
 on:
@@ -27,7 +28,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck desktop-file-utils appstream libxml2-utils python3-yaml
+          sudo apt-get install -y --no-install-recommends shellcheck desktop-file-utils appstream libxml2-utils python3-yaml ruby
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" actionlint
       - name: actionlint
@@ -35,6 +36,9 @@ jobs:
           "$RUNNER_TEMP/actionlint" -color
       - name: shellcheck
         run: shellcheck packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
+      # Ruby syntax only; the homebrew workflow runs brew style, audit and a real install on a Mac.
+      - name: Homebrew cask
+        run: ruby -c packaging/homebrew/photocraft.rb
       - name: AppImage AppRun desktop integration
         run: bash packaging/linux/apprun-test.sh
       - name: PowerShell

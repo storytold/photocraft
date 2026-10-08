@@ -277,7 +277,13 @@ flatpak run ai.storyteller.photocraft
 
 The AppImage needs no install: the first run registers its launcher icon and menu entry in `~/.local/share` so the dock shows PhotoCraft's icon on Wayland. Set `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` to skip that, and see [`docs/releasing.md`](docs/releasing.md) › Linux to undo it.
 
-On macOS, the command-line tool comes as `photocraft-cli-<version>-macos-universal.zip`. The binary is signed with the same Developer ID as the app and notarized by Apple. A bare binary can't carry a stapled notarization ticket the way the DMG does, so the first time you run it macOS checks the notarization online. You can confirm it yourself:
+On macOS (11 Big Sur or later), [Homebrew](https://brew.sh) installs the app and `brew upgrade` keeps it current:
+
+```sh
+brew install --cask storytold/tap/photocraft
+```
+
+The macOS command-line tool comes as `photocraft-cli-<version>-macos-universal.zip`. The binary is signed with the same Developer ID as the app and notarized by Apple. A bare binary can't carry a stapled notarization ticket the way the DMG does, so the first time you run it macOS checks the notarization online. You can confirm it yourself:
 
 ```sh
 ditto -x -k photocraft-cli-<version>-macos-universal.zip .
