@@ -165,9 +165,7 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     let right = d.doc.artboards().iter().map(|b| b.2.rect.x1).max();
     let top = d.doc.artboards().iter().map(|b| b.2.rect.y0).min().unwrap_or(0);
     let base = match right {
-        // The rightmost edge may already sit at i32::MAX (a saturated far edge), so the gap
-        // must not overflow (#981); `from_xywh` saturates the rest.
-        Some(x) => Rect::from_xywh(x.saturating_add(GAP), top, pw, ph),
+        Some(x) => Rect::from_xywh(x + GAP, top, pw, ph),
         None => Rect::from_xywh(0, 0, pw, ph),
     };
     // A preset decides the size (dialogs send the canvas size alongside it).

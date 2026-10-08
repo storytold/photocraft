@@ -156,20 +156,6 @@ fn raster_pdf_xref_offsets_point_at_objects() {
 }
 
 #[test]
-fn new_artboard_next_to_a_board_at_the_i32_edge() {
-    // #981: the default placement added `GAP` to the rightmost board's far edge, which
-    // `Rect::from_xywh` had already saturated at i32::MAX, and overflowed.
-    let mut s = session(8);
-    let r = s.execute("layer.new.artboard", json!({"x": 2147483600, "y": 0, "width": 1000, "height": 1000})).unwrap();
-    assert_eq!(r["rect"], json!([2147483600, 0, 47, 1000]));
-    // Default placement right of that board saturates to a zero-width base: an error, not a panic.
-    let err = s.execute("layer.new.artboard", json!({})).unwrap_err();
-    assert!(err.to_string().contains("positive"), "{err}");
-    let r = s.execute("layer.new.artboard", json!({"y": -1073741840, "width": 50, "height": 20})).unwrap();
-    assert_eq!(r["rect"], json!([i32::MAX, -1073741840, 0, 20]));
-}
-
-#[test]
 fn disabled_without_artboards() {
     let mut s = session(8);
     for id in

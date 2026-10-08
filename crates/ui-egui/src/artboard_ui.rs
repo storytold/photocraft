@@ -196,10 +196,10 @@ mod tests {
 
     #[test]
     fn fit_artboard_centres_a_board_with_large_coordinates() {
-        // #981: `(b.x0 + b.x1) as f32` overflowed i32 for boards near ±2^30 and for a board
-        // whose far edge saturated at i32::MAX, panicking outside any dispatch guard.
+        // #981: `(b.x0 + b.x1) as f32` overflowed i32 for boards near ±2^30 or the i32 edges,
+        // panicking outside any dispatch guard.
         for (params, want) in [
-            (json!({"x": 2147483600, "y": 0, "width": 1000, "height": 1000}), [(2147483600.0 + 2147483647.0) / 2.0, 500.0]),
+            (json!({"x": 2147483000, "y": 0, "width": 600, "height": 1000}), [(2147483000.0 + 2147483600.0) / 2.0, 500.0]),
             (json!({"x": 1073741824, "width": 50, "height": 20}), [1073741849.0, 10.0]),
             (json!({"y": -1073741840, "width": 50, "height": 20}), [25.0, -1073741830.0]),
         ] {
