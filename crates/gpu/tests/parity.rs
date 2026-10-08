@@ -1930,6 +1930,9 @@ fn rgba16f_fallback_path_renders() {
     d.layers.push(Layer::new("adj", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false })));
     let cpu = photocraft_compose::flatten(&d);
     let out = render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("16f render");
+    let (cached, stats) = photocraft_gpu::render_to_vec_stats(&mut comp, &device, &queue, &d, d.bounds()).expect("16f cached render");
+    assert!(stats.prefix_hits > 0, "half-float checkpoints are reused: {stats:?}");
+    assert_eq!(cached, out, "restoring a half-float checkpoint preserves the uncached pixels");
     let mut worst = 0.0f32;
     for (c, o) in cpu.px.iter().zip(&out) {
         for k in 0..4 {
