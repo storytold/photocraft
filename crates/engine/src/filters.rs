@@ -217,6 +217,8 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
         &label,
         move |doc, _, ctx| {
             let filter = |surf: &photocraft_raster::Surface, fp: &FilterParams, area, bounds, sel: Option<&photocraft_raster::Surface>, extent| {
+                let _working = photocraft_raster::memory::try_reserve_operation(algo::working_bytes(fp, area, bounds, surf.format().channels()))
+                    .map_err(EngineError::Other)?;
                 ctx.stage(0.0, 1.0, &msg, |ctl| algo::apply_in_with(surf, fp, area, bounds, sel, extent, ctl)).ok_or(EngineError::Cancelled)
             };
             let selection = doc.selection.clone();
@@ -415,6 +417,33 @@ mod tests {
         "filter.other.maximum",
         "filter.other.offset",
     ];
+
+    #[test]
+    fn enormous_global_filter_is_refused_before_allocating_and_preserves_document() {
+        let mut s = Session::new();
+        // A sparse document exercises admission without allocating a giant background first.
+        s.add_document(
+            photocraft_doc::Document::new(
+                "large",
+                photocraft_doc::Size::new(300000, 300000),
+                photocraft_color::ColorMode::Rgb,
+                photocraft_color::SampleType::U8,
+            ),
+            None,
+        );
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("one pixel", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let err = s.execute("filter.distort.twirl", json!({})).unwrap_err().to_string();
+        assert!(err.contains("working memory"), "{err}");
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().doc, before);
+    }
 
     #[test]
     fn every_filter_command_runs_changes_pixels_and_undoes() {
