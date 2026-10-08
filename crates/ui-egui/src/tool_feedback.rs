@@ -33,7 +33,17 @@ impl Badge {
 
 /// Tools whose cursor carries the selection-mode badge.
 pub fn is_selection_tool(tool: Tool) -> bool {
-    matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand | Tool::QuickSelection | Tool::ObjectSelection)
+    matches!(
+        tool,
+        Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::Lasso
+            | Tool::PolygonLasso
+            | Tool::MagneticLasso
+            | Tool::MagicWand
+            | Tool::QuickSelection
+            | Tool::ObjectSelection
+    )
 }
 
 /// The effective selection mode of `tool` for the options-bar mode `bar` (0 New, 1 Add,

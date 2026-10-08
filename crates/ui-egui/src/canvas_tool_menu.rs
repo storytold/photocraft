@@ -67,7 +67,10 @@ pub const PEN_MENU: &[Option<(&str, &str)>] = &[
 
 /// Tools whose plain canvas right-click offers selection actions.
 pub fn applies(tool: Tool) -> bool {
-    matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand | Tool::ObjectSelection | Tool::Pen)
+    matches!(
+        tool,
+        Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso | Tool::MagicWand | Tool::ObjectSelection | Tool::Pen
+    )
 }
 
 /// Command ids are shared with the Select menu. Disabled actions remain visible.

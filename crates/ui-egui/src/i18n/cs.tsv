@@ -914,8 +914,6 @@
 	Create new pattern from the selection	Vytvořit nový vzorek z výběru
 	Create new shape from the current path	Vytvořit nový tvar z aktuální cesty
 	Create new snapshot	Vytvořit nový snímek
-	Create new style (from the selected type)	Vytvořit nový styl (z vybraného textu)
-	Create new style from the selected layer	Vytvořit nový styl z vybrané vrstvy
 	Create new tool preset	Vytvořit nové přednastavení nástroje
 	Crop Factor	Crop faktor
 	Ctrl	Ctrl
@@ -2065,13 +2063,32 @@ cameraRaw	Color	Barvy
 	Patch:	Záplata:
 	Lasso around an area, then drag the selection	Obtáhněte oblast lasem a pak přetáhněte výběr
 	Edit Type	Upravit text
+
+
+	New Style…	Nový styl…
+	Style {name} saved	Styl {name} uložen
+
+	Create new style (from the selected type)	Vytvořit nový styl (z vybraného textu)
+	Create new style from the selected layer	Vytvořit nový styl z vybrané vrstvy
+
+	Make Default	Nastavit jako výchozí
+	Reset to Default	Obnovit výchozí
+	Full-resolution preview unavailable	Náhled v plném rozlišení není dostupný
 	No patterns	Žádné vzorky
 	Enable {name}	Povolit {name}
 	Hold Alt while drawing for straight segments	Podržením Alt při kreslení vytvoříte rovné úseky
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Táhněte nebo klikejte body mnohoúhelníku · podržením Alt během lasa kreslíte rovné úseky · {add} přidat · {sub} před kreslením odečte
+	Move	Přesunout
+	Extend	Rozšířit
+	Structure:	Struktura:
+	Content-Aware Move Tool	Nástroj přesun s ohledem na obsah
 	TIFF Options	Možnosti TIFF
 	Including layers will increase file size.	Zahrnutí vrstev zvětší velikost souboru.
 	Discard Layers and Save a Copy	Zahodit vrstvy a uložit kopii
 	Don't show again	Příště nezobrazovat
 	Save failed: {error}	Uložení se nezdařilo: {error}
 	Save cancelled	Ukládání zrušeno
+	Couldn't place {name}: {error}	Nelze umístit {name}: {error}
+	Magnetic Lasso Tool	Nástroj magnetické laso
+	Frequency	Frekvence
+	Use tablet pressure to change pen width	Měnit šířku pera přítlakem tabletu

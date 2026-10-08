@@ -424,6 +424,47 @@ fn integer_params_accept_json_floats() {
 }
 
 #[test]
+fn move_to_refuses_to_nest_past_the_group_depth_cap() {
+    let mut s = session_with_doc();
+    let deep = s.execute("layer.new.layer", json!({"name": "Deep"})).unwrap()["layer"].as_u64().unwrap();
+    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH - 1 {
+        s.execute("layer.groupLayers", json!({"layer": deep})).unwrap();
+    }
+    // `Deep` sits inside MAX - 1 groups. Moving a two-level group (G2 > G1 > Leaf) beside it
+    // would put `Leaf` at MAX + 1.
+    let path = s.active().unwrap().doc.path_of(photocraft_doc::LayerId(deep)).unwrap();
+    assert_eq!(path.len() - 1, photocraft_doc::MAX_GROUP_DEPTH - 1);
+    let leaf = s.execute("layer.new.layer", json!({"name": "Leaf"})).unwrap()["layer"].as_u64().unwrap();
+    let g1 = s.execute("layer.groupLayers", json!({"layer": leaf})).unwrap()["layer"].as_u64().unwrap();
+    let g = s.execute("layer.groupLayers", json!({"layer": g1})).unwrap()["layer"].as_u64().unwrap();
+    let past = s.active().unwrap().history.past_len();
+    let err = s.execute("layer.moveTo", json!({"layer": g, "target": deep, "position": "above"})).unwrap_err();
+    assert!(err.to_string().contains("deeper than"), "{err}");
+    assert!(s.active().unwrap().doc.max_group_depth() <= photocraft_doc::MAX_GROUP_DEPTH);
+    assert_eq!(s.active().unwrap().history.past_len(), past, "no history step recorded");
+    // A plain layer beside the deepest one still fits.
+    s.execute("layer.moveTo", json!({"layer": leaf, "target": deep, "position": "above"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH - 1);
+}
+
+#[test]
+fn artboard_from_layers_refuses_to_nest_past_the_group_depth_cap() {
+    let mut s = session_with_doc();
+    let leaf = s.execute("layer.new.layer", json!({"name": "Leaf"})).unwrap()["layer"].as_u64().unwrap();
+    let mut top = leaf;
+    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH {
+        top = s.execute("layer.groupLayers", json!({"layer": top})).unwrap()["layer"].as_u64().unwrap();
+    }
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+    s.execute("layer.select", json!({"layer": top})).unwrap();
+    let past = s.active().unwrap().history.past_len();
+    let err = s.execute("layer.new.artboardFromLayers", json!({})).unwrap_err();
+    assert!(err.to_string().contains("deeper than"), "{err}");
+    assert_eq!(s.active().unwrap().doc.max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+    assert_eq!(s.active().unwrap().history.past_len(), past, "no history step recorded");
+}
+
+#[test]
 fn move_to_reorders_and_nests() {
     let mut s = session_with_doc();
     let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap();
@@ -625,4 +666,36 @@ fn advanced_blending_channels() {
     assert_eq!(ins["channels"], json!([true, true, false, true]));
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layer(LayerId(id)).unwrap().excluded_channels, 0);
+}
+
+#[test]
+fn move_document_reorders_tabs_and_keeps_the_active_one() {
+    let mut s = Session::new();
+    for name in ["a", "b", "c"] {
+        s.execute("file.new", json!({"width": 4, "height": 4, "name": name})).unwrap();
+    }
+    let names = |s: &Session| s.documents().iter().map(|d| d.doc.name.clone()).collect::<Vec<_>>();
+    let first = names(&s);
+    s.set_active(0);
+    assert_eq!(s.move_document(2, 0), Some(0));
+    assert_eq!(names(&s), [first[2].clone(), first[0].clone(), first[1].clone()]);
+    assert_eq!(s.active_index(), Some(1), "the active document follows its tab");
+    // `to` past the end moves to the last tab; `from` out of range does nothing.
+    assert_eq!(s.move_document(0, 99), Some(2));
+    assert_eq!(names(&s), first);
+    assert_eq!(s.move_document(3, 0), None);
+    let mut v = vec![1, 2];
+    assert_eq!(move_item(&mut v, 2, 0), None, "out of range: no panic, nothing moves");
+    assert_eq!(v, [1, 2]);
+    assert_eq!(names(&s), first);
+    assert_eq!(s.active_index(), Some(0));
+    // The command (for the UI, agents and scripts) moves the active document by default.
+    assert_eq!(s.execute("document.move", json!({"to": 2})).unwrap(), json!({"document": 2}));
+    assert_eq!(names(&s), [first[1].clone(), first[2].clone(), first[0].clone()]);
+    assert_eq!(s.execute("document.move", json!({"document": 2, "to": 0})).unwrap(), json!({"document": 0}));
+    assert_eq!(names(&s), first);
+    for bad in [json!({}), json!({"to": -1}), json!({"to": "1"}), json!({"document": 3, "to": 0}), json!({"document": 1.5, "to": 0})] {
+        assert!(s.execute("document.move", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(names(&s), first);
 }

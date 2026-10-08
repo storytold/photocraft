@@ -2514,9 +2514,22 @@ cameraRaw	Whites	Brancos
 	Enable {name}	Ativar {name}
 	Hold Alt while drawing for straight segments	Segure Alt ao desenhar para segmentos retos
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Arraste ou clique nos pontos do polígono · segure Alt durante o laço para segmentos retos · {add} adicionar · {sub} antes de desenhar subtrai
+	Extend	Estender
+	Structure:	Estrutura:
+	Content-Aware Move Tool	Ferramenta Mover com reconhecimento de conteúdo
 	TIFF Options	Opções de TIFF
 	Including layers will increase file size.	Incluir as camadas aumentará o tamanho do arquivo.
 	Discard Layers and Save a Copy	Descartar camadas e salvar uma cópia
 	Don't show again	Não mostrar novamente
 	Save failed: {error}	Falha ao salvar: {error}
 	Save cancelled	Salvamento cancelado
+
+# Layer Style dialog: style presets and per-effect defaults
+	Style {name} saved	Estilo {name} salvo
+	Make Default	Definir como padrão
+	Reset to Default	Restaurar padrão
+	Couldn't place {name}: {error}	Não foi possível inserir {name}: {error}
+	Full-resolution preview unavailable	Pré-visualização em resolução total indisponível
+	Magnetic Lasso Tool	Ferramenta Laço magnético
+	Frequency	Frequência
+	Use tablet pressure to change pen width	Usar a pressão da mesa digitalizadora para alterar a largura da caneta

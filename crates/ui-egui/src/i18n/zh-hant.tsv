@@ -905,8 +905,6 @@
 	Create new pattern from the selection	從選取範圍建立新圖樣
 	Create new shape from the current path	從目前路徑建立新形狀
 	Create new snapshot	建立新快照
-	Create new style (from the selected type)	建立新樣式 (依所選文字)
-	Create new style from the selected layer	從所選圖層建立新樣式
 	Create new tool preset	建立新工具預設集
 	Crop Factor	裁切係數
 	Ctrl	Ctrl
@@ -1497,6 +1495,7 @@
 	Comic Book	漫畫書
 	Conform	符合
 	Content-Aware Fill needs a selection on a pixel layer	內容感知填滿需要在像素圖層上建立選取範圍
+	Couldn't place {name}: {error}	無法置入 {name}：{error}
 	Could not transform: the layer is empty	無法變形：圖層是空的
 	Could not use Perspective Warp: the layer is empty	無法使用透視彎曲：圖層是空的
 	Could not use Puppet Warp: no opaque pixels	無法使用操控彎曲：沒有不透明像素
@@ -2043,13 +2042,31 @@ cameraRaw	Blending	混合
 	Patch:	修補：
 	Lasso around an area, then drag the selection	用套索圈出區域，然後拖曳選取範圍
 	Edit Type	編輯文字
+
+
+	New Style…	新增樣式…
+	Style {name} saved	已儲存樣式 {name}
+
+	Create new style (from the selected type)	新增樣式（基於所選文字）
+	Create new style from the selected layer	從所選圖層新增樣式
+
+	Make Default	設為預設
+	Reset to Default	重設為預設
+	Full-resolution preview unavailable	無法使用完整解析度預覽
 	No patterns	無圖樣
 	Enable {name}	啟用{name}
 	Hold Alt while drawing for straight segments	繪製中按住 Alt 可逐點連接直線
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	拖曳圈選或逐點繪製 · 圈選中按住 Alt 畫直線 · {add} 增加 · 起筆前按 {sub} 減去
+	Move	移動
+	Extend	延伸
+	Structure:	結構：
+	Content-Aware Move Tool	內容感知移動工具
 	TIFF Options	TIFF 選項
 	Including layers will increase file size.	包含圖層會增加檔案大小。
 	Discard Layers and Save a Copy	放棄圖層並儲存拷貝
 	Don't show again	不再顯示
 	Save failed: {error}	儲存失敗：{error}
 	Save cancelled	已取消儲存
+	Magnetic Lasso Tool	磁性套索工具
+	Frequency	頻率
+	Use tablet pressure to change pen width	使用繪圖板壓力以變更鋼筆寬度

@@ -291,6 +291,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    // Magnetic Lasso: ↩ closes, Esc cancels, ⌫ removes a fastening point (not Edit › Clear),
+    // [ ] change the detection width (not the brush size).
+    if crate::magnetic_lasso_ui::keys(app, ctx) {
+        return;
+    }
     // Inline type editing eats text and navigation keys; ⌘-shortcuts still reach the menus.
     let editing = crate::type_tool::handle_keys(app, ctx);
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).

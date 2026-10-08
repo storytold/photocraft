@@ -883,8 +883,6 @@
 	Create new pattern from the selection	Buat pola baru dari seleksi
 	Create new shape from the current path	Buat bentuk baru dari path saat ini
 	Create new snapshot	Buat snapshot baru
-	Create new style (from the selected type)	Buat gaya baru (dari teks terpilih)
-	Create new style from the selected layer	Buat gaya baru dari layer terpilih
 	Create new tool preset	Buat preset alat baru
 	Crop Factor	Faktor Crop
 	Ctrl	Ctrl
@@ -2334,7 +2332,6 @@
 	Auto Erase	Hapus Otomatis
 	Color Adaptation	Adaptasi Warna
 	Preserve Transparency	Pertahankan Transparansi
-	New Style…	Gaya Baru…
 	shortcut	pintasan
 	Go to Layer	Ke Layer
 	Saved	Tersimpan
@@ -2487,13 +2484,31 @@ cameraRaw	Blending	Pembauran
 	5 x 5	5 × 5
 	Grid:	Kisi-kisi:
 	Edit Type	Edit Teks
+
+
+	New Style…	Gaya Baru…
+	Style {name} saved	Gaya {name} disimpan
+
+	Create new style (from the selected type)	Buat gaya baru (dari teks terpilih)
+	Create new style from the selected layer	Buat gaya baru dari lapisan terpilih
+
+	Make Default	Jadikan Default
+	Reset to Default	Atur Ulang ke Default
+	Full-resolution preview unavailable	Pratinjau resolusi penuh tidak tersedia
 	No patterns	Tidak ada pola
 	Enable {name}	Aktifkan {name}
 	Hold Alt while drawing for straight segments	Tahan Alt saat menggambar untuk segmen lurus
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Seret atau klik titik poligon · tahan Alt saat lasso untuk segmen lurus · {add} tambah · {sub} sebelum menggambar mengurangi
+	Extend	Perluas
+	Structure:	Struktur:
+	Content-Aware Move Tool	Alat Content-Aware Move
 	TIFF Options	Opsi TIFF
 	Including layers will increase file size.	Menyertakan layer akan memperbesar ukuran file.
 	Discard Layers and Save a Copy	Buang Layer dan Simpan Salinan
 	Don't show again	Jangan tampilkan lagi
 	Save failed: {error}	Gagal menyimpan: {error}
 	Save cancelled	Penyimpanan dibatalkan
+	Couldn't place {name}: {error}	Tidak dapat menempatkan {name}: {error}
+	Magnetic Lasso Tool	Alat Magnetic Lasso
+	Frequency	Frekuensi
+	Use tablet pressure to change pen width	Gunakan tekanan tablet untuk mengubah lebar pena

@@ -2115,9 +2115,22 @@
 	Enable {name}	{name} aktivieren
 	Hold Alt while drawing for straight segments	Beim Zeichnen Alt gedrückt halten für gerade Segmente
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Ziehen oder Polygonpunkte klicken · Alt während des Lassos halten für gerade Segmente · {add} hinzufügen · {sub} vor dem Zeichnen zieht ab
+	Extend	Erweitern
+	Structure:	Struktur:
+	Content-Aware Move Tool	Inhaltsbasiert-verschieben-Werkzeug
 	TIFF Options	TIFF-Optionen
 	Including layers will increase file size.	Das Einbeziehen von Ebenen vergrößert die Datei.
 	Discard Layers and Save a Copy	Ebenen verwerfen und Kopie speichern
 	Don't show again	Nicht mehr anzeigen
 	Save failed: {error}	Speichern fehlgeschlagen: {error}
 	Save cancelled	Speichern abgebrochen
+
+# Layer Style dialog: style presets and per-effect defaults
+	Style {name} saved	Stil {name} gespeichert
+	Make Default	Als Standard festlegen
+	Reset to Default	Auf Standard zurücksetzen
+	Couldn't place {name}: {error}	{name} konnte nicht platziert werden: {error}
+	Full-resolution preview unavailable	Vorschau in voller Auflösung nicht verfügbar
+	Magnetic Lasso Tool	Magnetisches-Lasso-Werkzeug
+	Frequency	Frequenz
+	Use tablet pressure to change pen width	Tablettdruck zum Ändern der Stiftbreite verwenden

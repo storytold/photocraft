@@ -5,16 +5,15 @@
 # uploaded and no secrets are used.
 name: FreeBSD
 
+# The VM build takes one to several hours, so it runs nightly on main rather than on every push
+# or dependency change: a drifted dependency still shows up within a day. PRs that change the
+# FreeBSD packaging itself still run it.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
   pull_request:
     paths:
-      - Cargo.toml
-      - Cargo.lock
-      - "**/Cargo.toml"
       - .github/workflows/freebsd.yml
-      - .github/workflows/release.yml
       - packaging/freebsd/**
       - packaging/env.sh
   workflow_dispatch:

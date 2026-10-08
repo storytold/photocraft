@@ -904,8 +904,6 @@
 	Create new pattern from the selection	選択範囲から新規パターンを作成
 	Create new shape from the current path	現在のパスから新規シェイプを作成
 	Create new snapshot	新規スナップショットを作成
-	Create new style (from the selected type)	新規スタイルを作成(選択した文字から)
-	Create new style from the selected layer	選択したレイヤーから新規スタイルを作成
 	Create new tool preset	新規ツールプリセットを作成
 	Crop Factor	切り抜き係数
 	Ctrl	Ctrl
@@ -1498,6 +1496,7 @@
 	Comic Book	コミック
 	Conform	適合
 	Content-Aware Fill needs a selection on a pixel layer	コンテンツに応じた塗りつぶしには、ピクセルレイヤー上の選択範囲が必要です
+	Couldn't place {name}: {error}	{name} を配置できませんでした: {error}
 	Could not transform: the layer is empty	変形できません: レイヤーが空です
 	Could not use Perspective Warp: the layer is empty	遠近法ワープを使えません: レイヤーが空です
 	Could not use Puppet Warp: no opaque pixels	パペットワープを使えません: 不透明なピクセルがありません
@@ -2048,13 +2047,32 @@ cameraRaw	Color	カラー
 	Patch:	パッチ:
 	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
 	Edit Type	文字を編集
+
+
+	New Style…	新規スタイル…
+	Style {name} saved	スタイル {name} を保存しました
+
+	Create new style (from the selected type)	新規スタイルを作成（選択したテキストから）
+	Create new style from the selected layer	選択したレイヤーから新規スタイルを作成
+
+	Make Default	既定に設定
+	Reset to Default	既定値に戻す
+	Vertical Type Tool	縦書き文字ツール
+	Full-resolution preview unavailable	フル解像度のプレビューを利用できません
 	No patterns	パターンなし
 	Enable {name}	{name}を有効にする
 	Hold Alt while drawing for straight segments	描画中に Alt を押すと直線セグメントになります
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	ドラッグまたは多角形の点をクリック · なげなわ中に Alt で直線セグメント · {add} 追加 · 描画前の {sub} で削除
+	Move	移動
+	Extend	拡張
+	Structure:	構造:
+	Content-Aware Move Tool	コンテンツに応じた移動ツール
 	TIFF Options	TIFF オプション
 	Including layers will increase file size.	レイヤーを含めるとファイルサイズが大きくなります。
 	Discard Layers and Save a Copy	レイヤーを破棄してコピーを保存
 	Don't show again	次回から表示しない
 	Save failed: {error}	保存に失敗しました: {error}
 	Save cancelled	保存をキャンセルしました
+	Magnetic Lasso Tool	マグネット選択ツール
+	Frequency	頻度
+	Use tablet pressure to change pen width	タブレットの筆圧を使用してペンの幅を変更
