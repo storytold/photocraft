@@ -827,7 +827,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.enableFloatingDocumentWindowDocking",
     "workspace.largeTabs",
     "workspace.enableNarrowOptionsBar",
-    "tools.zoomClickedPointToCenter",
     "tools.enableFlickPanning",
     "tools.varyRoundBrushHardnessOnHud",
     "tools.showTransformationValues",
