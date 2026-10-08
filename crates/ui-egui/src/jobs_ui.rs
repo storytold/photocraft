@@ -147,6 +147,10 @@ fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
             true
         }
     });
+    // Camera Raw's open-time re-develop and its final step.
+    if crate::camera_raw_ui::on_redevelop_event(app, &e) {
+        return;
+    }
     if e.command == OPEN_JOB {
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);

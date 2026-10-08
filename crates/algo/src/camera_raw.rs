@@ -525,6 +525,17 @@ fn is_linear(c: &[[f32; 2]]) -> bool {
     c.len() < 2 || c.iter().all(|p| (p[0] - p[1]).abs() < 1e-3)
 }
 
+/// Camera Raw's white-balance channel gains for Temperature / Tint (−100…100), relative to the
+/// as-shot balance: warmer raises red and lowers blue (±35 % at the ends); a negative tint
+/// raises green, a positive one lowers it toward magenta (±25 %). An observed approximation of
+/// Adobe Camera Raw's sliders, not a colour-temperature model; shared by the filter (in linear
+/// RGB) and the raw open (on the camera's white-balance multipliers) so both agree.
+pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
+    let t = temperature / 100.0;
+    let tn = tint / 100.0;
+    [1.0 + 0.35 * t, 1.0 - 0.25 * tn, 1.0 - 0.35 * t]
+}
+
 /// Runs the Camera Raw pipeline on straight RGBA pixels (`w × h`, display-encoded RGB).
 /// `float` keeps values above 1 (32-bit documents).
 pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
@@ -535,9 +546,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
     let long = w.max(h) as f32;
     // 1. White balance + exposure in linear light.
     if !p.wb_neutral() {
-        let t = p.temperature / 100.0;
-        let tn = p.tint / 100.0;
-        let mut g = [1.0 + 0.35 * t, 1.0 - 0.25 * tn, 1.0 - 0.35 * t];
+        let mut g = white_balance_gains(p.temperature, p.tint);
         let norm = luma(g);
         g = g.map(|v| v / norm * 2f32.powf(p.exposure));
         par_rows(px, w, 1, |_, row| {

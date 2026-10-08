@@ -2059,6 +2059,7 @@ cameraRaw	Blending	混合
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
 	Cancel opening	取消打开
 	Cancelled opening {name}	已取消打开 {name}
+	Developing {name}	正在处理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opening {name}	正在打开 {name}

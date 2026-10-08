@@ -89,12 +89,10 @@ fn camera_name(make: Option<&str>, model: Option<&str>) -> String {
     }
 }
 
-/// Camera Raw's white-balance gains for Temperature / Tint (−100…100): warmer raises red and
-/// lowers blue; a negative tint raises green, a positive one lowers it (magenta).
+/// Camera Raw's white-balance gains for Temperature / Tint (−100…100), the same the Camera
+/// Raw filter applies ([`photocraft_algo::camera_raw::white_balance_gains`]).
 fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
-    let t = f64::from(temperature.clamp(-100.0, 100.0)) / 100.0;
-    let tn = f64::from(tint.clamp(-100.0, 100.0)) / 100.0;
-    [1.0 + 0.35 * t, 1.0 - 0.25 * tn, 1.0 - 0.35 * t]
+    photocraft_algo::camera_raw::white_balance_gains(temperature.clamp(-100.0, 100.0), tint.clamp(-100.0, 100.0)).map(f64::from)
 }
 
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.

@@ -234,53 +234,184 @@ fn non_defaults(p: &CameraRaw) -> Value {
     Value::Object(out)
 }
 
+/// The job id of an open-time re-develop (not an engine command: the shell starts it).
+pub const REDEVELOP_JOB: &str = "cameraRaw.redevelop";
+
+/// An open-time re-develop running in the background: what to finish with when it lands.
+#[derive(Clone, Debug)]
+pub struct Redevelop {
+    pub job: photocraft_engine::jobs::JobId,
+    params: CameraRaw,
+    raw: RawOpen,
+    /// The job is the final Camera Raw step (`filter.cameraRaw`), not the re-develop: when it
+    /// lands the document is marked unmodified.
+    filter_step: bool,
+}
+
 /// Open: re-develop for raw-stage settings, apply the rest, keep the document unmodified.
+///
+/// Re-developing reads and decodes the whole raw again, so in the desktop app (background jobs
+/// on) it runs as a job like the open itself: the reply is `{"job", "pending": true}`, the
+/// document is locked meanwhile, and [`on_redevelop_event`] finishes when it lands. Elsewhere
+/// (tests, the web) it runs inline.
 fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -> Result<Value, String> {
-    let mut index = document_index(app, raw.document).ok_or("the raw document was closed")?;
-    let mut rest = params.clone();
+    let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     let tuning = photocraft_io::raw::RawTuning { temperature: params.temperature, tint: params.tint, exposure: params.exposure };
-    let mut redeveloped = false;
-    if tuning != photocraft_io::raw::RawTuning::default() {
-        let bytes = match (&raw.bytes, &raw.path) {
-            (Some(b), _) => Some(b.as_ref().clone()),
+    // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
+    let source = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => Some(photocraft_engine::jobs::OpenSource::Bytes(b.clone())),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => Some(photocraft_engine::jobs::OpenSource::Path(p.clone())),
+        _ => None,
+    };
+    let Some(source) = source.filter(|_| tuning != photocraft_io::raw::RawTuning::default()) else {
+        return finish_open_raw(app, index, params.clone(), None, Some(raw));
+    };
+    app.session.set_active(index);
+    let (name, doc_id) = (raw.name.clone(), raw.document);
+    let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
+        ctx.progress(0.0, "Reading");
+        let bytes = match source {
+            photocraft_engine::jobs::OpenSource::Bytes(b) => b,
             #[cfg(not(target_arch = "wasm32"))]
-            (None, Some(p)) => std::fs::read(p).ok(),
-            _ => None,
+            photocraft_engine::jobs::OpenSource::Path(p) => {
+                std::sync::Arc::new(std::fs::read(&p).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?)
+            }
+            #[cfg(target_arch = "wasm32")]
+            photocraft_engine::jobs::OpenSource::Path(p) => return Err(photocraft_engine::EngineError::Other(format!("{p}: cannot read files here"))),
         };
-        // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
-        if let Some(bytes) = bytes {
-            let (r, wb) = photocraft_io::raw::import_raw_tuned(&raw.name, &bytes, &tuning).map_err(|e| e.to_string())?;
-            rest.exposure = 0.0;
-            if wb {
-                rest.temperature = 0.0;
-                rest.tint = 0.0;
-            }
-            let path = app.session.documents().get(index).and_then(|st| st.path.clone());
-            app.session.close(index);
-            let (opened, _) = app.session.open_document(r.document, path);
-            if let Ok(moved) = app.run("document.move", json!({"document": opened, "to": index})) {
-                index = moved.get("document").and_then(Value::as_u64).map_or(opened, |i| i as usize);
-            } else {
-                index = opened;
-            }
-            app.session.set_active(index);
-            crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &r.warnings);
-            redeveloped = true;
+        ctx.check()?;
+        ctx.progress(0.05, "Developing");
+        photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+    };
+    let apply = move |s: &mut photocraft_engine::Session, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
+    let label = crate::i18n::fmt(tl!("Developing {name}"), &[("name", &raw.name)]);
+    let started = if app.background_jobs {
+        app.session.start_job(REDEVELOP_JOB, json!({"name": raw.name}), &label, true, work, apply).map_err(|e| e.to_string())?
+    } else {
+        let v = work(&photocraft_engine::jobs::JobCtx::new()).and_then(|t| apply(&mut app.session, t)).map_err(|e| e.to_string())?;
+        photocraft_engine::jobs::Started::Done(v)
+    };
+    match started {
+        photocraft_engine::jobs::Started::Done(v) => finish_redevelop(app, params, raw, &v),
+        photocraft_engine::jobs::Started::Job(job) => {
+            app.raw_redevelop = Some(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false });
+            app.ui.status = label;
+            app.ui.status_error = false;
+            Ok(json!({"job": job.0, "pending": true}))
         }
     }
-    let mut result = json!({"document": index, "redeveloped": redeveloped});
+}
+
+/// Swap the default-developed document `doc_id` for the re-developed one, at the same tab
+/// position and with the same path. Returns `{document, previous, warnings, wb}`.
+fn replace_raw_document(
+    s: &mut photocraft_engine::Session,
+    doc_id: photocraft_doc::DocId,
+    r: photocraft_io::ImportResult,
+    wb: bool,
+) -> photocraft_engine::Result<Value> {
+    let index =
+        s.documents().iter().position(|st| st.doc.id == doc_id).ok_or_else(|| photocraft_engine::EngineError::Other("the raw document was closed".into()))?;
+    let path = s.documents().get(index).and_then(|st| st.path.clone());
+    s.close(index);
+    let (opened, _) = s.open_document(r.document, path);
+    let index = match s.execute("document.move", json!({"document": opened, "to": index})) {
+        Ok(moved) => moved.get("document").and_then(Value::as_u64).map_or(opened, |i| i as usize),
+        Err(_) => opened,
+    };
+    s.set_active(index);
+    Ok(json!({"document": index, "previous": doc_id.0, "warnings": r.warnings, "wb": wb}))
+}
+
+/// After the re-develop: keep the old document's view (zoom, scroll) on the new one, report
+/// the import's notes, then apply the remaining settings.
+fn finish_redevelop(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, v: &Value) -> Result<Value, String> {
+    let index = v.get("document").and_then(Value::as_u64).ok_or("the re-develop returned no document")? as usize;
+    if let Some(new_id) = app.session.documents().get(index).map(|st| st.doc.id) {
+        for id in app.view_docs.iter_mut().filter(|id| **id == raw.document) {
+            *id = new_id;
+        }
+    }
+    let warnings: Vec<String> =
+        v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &without_develop_note(&warnings));
+    let mut rest = params.clone();
+    rest.exposure = 0.0;
+    if v.get("wb").and_then(Value::as_bool) == Some(true) {
+        rest.temperature = 0.0;
+        rest.tint = 0.0;
+    }
+    finish_open_raw(app, index, rest, Some(true), Some(raw))
+}
+
+/// The other settings as one Camera Raw step on document `index`, then the document is marked
+/// unmodified (developing is part of opening). The step runs like any filter (in the
+/// background in the desktop app); the document is marked unmodified when it lands.
+fn finish_open_raw(app: &mut PhotocraftApp, index: usize, rest: CameraRaw, redeveloped: Option<bool>, raw: Option<&RawOpen>) -> Result<Value, String> {
+    app.session.set_active(index);
+    app.sync_views();
+    let mut result = json!({"document": index, "redeveloped": redeveloped.unwrap_or(false)});
     if !rest.is_identity() {
         let layer = app.session.active().and_then(|st| st.active_layer).ok_or("no layer to develop")?;
         let mut p = non_defaults(&rest);
         p["layer"] = json!(layer.0);
-        result["filter"] = app.run("filter.cameraRaw", p)?;
+        let r = app.run("filter.cameraRaw", p)?;
+        if r.get("pending").and_then(Value::as_bool) == Some(true)
+            && let (Some(job), Some(raw)) = (r.get("job").and_then(Value::as_u64), raw)
+        {
+            app.raw_redevelop = Some(Redevelop { job: photocraft_engine::jobs::JobId(job), params: rest.clone(), raw: raw.clone(), filter_step: true });
+        }
+        result["filter"] = r;
     }
-    // Developing in Camera Raw is part of opening: the document starts unmodified.
+    mark_unmodified(app, index);
+    Ok(result)
+}
+
+fn mark_unmodified(app: &mut PhotocraftApp, index: usize) {
+    let active = app.session.active_index();
+    app.session.set_active(index);
     if let Some(st) = app.session.active_mut() {
         st.saved_revision = st.revision;
     }
+    if let Some(i) = active {
+        app.session.set_active(i);
+    }
     app.sync_views();
-    Ok(result)
+}
+
+/// A finished background re-develop ([`REDEVELOP_JOB`]) or open-time Camera Raw step. `true`
+/// when the event was one of those (handled here).
+pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
+    let Some(pending) = app.raw_redevelop.take_if(|r| r.job == e.id) else { return false };
+    if pending.filter_step {
+        if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_))
+            && let Some(index) = e.document.and_then(|id| document_index(app, id))
+        {
+            mark_unmodified(app, index);
+        }
+        // The usual filter reporting still applies.
+        return false;
+    }
+    match &e.outcome {
+        photocraft_engine::jobs::JobOutcome::Done(v) => match finish_redevelop(app, &pending.params, &pending.raw, v) {
+            Ok(_) => {
+                app.ui.status = format!("Opened {}", pending.raw.name);
+                app.ui.status_error = false;
+            }
+            Err(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
+        },
+        photocraft_engine::jobs::JobOutcome::Failed(err) => {
+            // The document stays open, developed with the defaults.
+            app.sync_views();
+            crate::notices::error(app, format!("{}: {err}", e.label));
+        }
+        photocraft_engine::jobs::JobOutcome::Cancelled => {
+            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status_error = false;
+        }
+    }
+    true
 }
 
 /// Cancel: closes the dialog; for the open-time dialog also the document it was opening.
@@ -1101,6 +1232,45 @@ mod tests {
         let st = app.session.active().unwrap();
         assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
         assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
+        assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
+    }
+
+    #[test]
+    fn background_redevelop_keeps_the_tab_position_and_view() {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+        app.open_bytes("mid.dng", &dng).unwrap();
+        app.run("file.new", json!({"width": 12, "height": 12})).unwrap();
+        app.sync_views();
+        let raw = app.pending_raw_open.take().unwrap();
+        let old_id = raw.document;
+        assert_eq!(document_index(&app, old_id), Some(1));
+        app.ui.views[1].zoom = 3.0;
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let before = mean_red(&app);
+        // The re-develop and the Camera Raw step run as jobs; the UI thread only polls.
+        app.background_jobs = true;
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "contrast": 20}}})).unwrap().unwrap();
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+        assert_eq!(r["pending"], true, "{r}");
+        assert!(app.camera_raw.is_none());
+        for _ in 0..3000 {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            if app.raw_redevelop.is_none() && !app.session.has_jobs() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.raw_redevelop.is_none() && !app.session.has_jobs(), "the jobs never finished");
+        let docs = app.session.documents();
+        assert_eq!(docs.len(), 3);
+        assert_eq!((docs[0].doc.size.width, docs[2].doc.size.width), (10, 12), "the other tabs keep their places");
+        assert_ne!(docs[1].doc.id, old_id, "re-developed");
+        assert_eq!(docs[1].doc.depth, photocraft_color::SampleType::U16);
+        assert_eq!(docs[1].saved_revision, docs[1].revision, "Open leaves the document unmodified");
+        assert_eq!(app.session.active_index(), Some(1));
+        assert_eq!(app.ui.views[1].zoom, 3.0, "the view carries over to the re-developed document");
         assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
     }
 
