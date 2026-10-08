@@ -1049,7 +1049,7 @@ fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Bottom-left with a margin; the text sits under (or over) the bar.
     let margin = (w.min(h) * 0.03).round().max(2.0);
-    let bar_h = (font_size / 4.0).round().clamp(2.0, h / 4.0);
+    let bar_h = (font_size / 4.0).round().clamp(2.0, (h / 4.0).max(2.0));
     let text_h = if show_text { font_size * 1.25 } else { 0.0 };
     let bar_y = if text_top { h - margin - bar_h } else { h - margin - bar_h - text_h };
     let bar = Rect::new(margin as i32, bar_y.round() as i32, (margin + px).round() as i32, (bar_y + bar_h).round() as i32);

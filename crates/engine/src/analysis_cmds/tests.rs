@@ -277,6 +277,15 @@ fn place_scale_marker_builds_one_group_in_one_step() {
 }
 
 #[test]
+fn place_scale_marker_on_a_short_image_does_not_panic() {
+    for h in 1..8 {
+        let mut s = session(40, h, 8);
+        let r = s.execute("image.analysis.placeScaleMarker", json!({}));
+        assert!(r.is_ok(), "{h} px tall: {r:?}");
+    }
+}
+
+#[test]
 fn analysis_info_and_cmyk_document() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 30, "height": 20, "mode": "cmyk", "background": "white"})).unwrap();
