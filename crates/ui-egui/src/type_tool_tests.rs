@@ -1067,3 +1067,84 @@ fn temporary_type_transform_large_document_preview() {
     );
     crate::type_transform::cancel_drag(&mut app);
 }
+
+/// #1369: the font dropdown focuses its search field whenever it opens — even when a query from last
+/// time is still there — clicking the search field never closes it, and clearing the query restores
+/// the height the list had before it was filtered.
+#[test]
+fn font_dropdown_focuses_search_and_restores_its_height() {
+    use egui::accesskit::Role;
+    use egui::{Event, Key};
+
+    assert!(super::families().len() >= 2, "need a few families to filter: {:?}", super::families());
+    let mut h = Harness::builder().with_size(vec2(700.0, 760.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            let mut fam = app.ui.tool_options.type_font.clone();
+            if super::font_picker(ui, "test-font", &mut fam, 200.0, 460.0) {
+                app.ui.tool_options.type_font = fam;
+            }
+        },
+        new_app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+
+    let popup = |h: &Harness<'static, PhotocraftApp>| {
+        h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
+    };
+    let click = |h: &mut Harness<'static, PhotocraftApp>, pos: Pos2| {
+        h.hover_at(pos);
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    };
+    let backspace = |h: &mut Harness<'static, PhotocraftApp>| {
+        h.event(Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    };
+
+    // Open it: the search field takes focus right away and the list is as tall as all the families.
+    let button = h.get_by_role(Role::ComboBox).rect().center();
+    h.hover_at(button);
+    h.run_steps(1);
+    click(&mut h, button);
+    h.run_steps(2);
+    let full = popup(&h).expect("the dropdown opened").height();
+    assert!(h.get_by_role(Role::TextInput).is_focused(), "search focused on open");
+    assert!(full > 24.0, "the list has room: {full}");
+
+    // Clicking the search field keeps the popup open (a `ComboBox` used to close on any click).
+    let ti = h.get_by_role(Role::TextInput);
+    ti.click();
+    h.run_steps(2);
+    assert!(popup(&h).is_some(), "clicking the search field keeps it open");
+
+    // A query that matches nothing shrinks the popup; clearing it grows the popup back (#1369).
+    h.get_by_role(Role::TextInput).type_text("zzzzzz");
+    h.run_steps(2);
+    let filtered = popup(&h).expect("still open").height();
+    assert!(filtered < full, "filtered {filtered} < full {full}");
+    for _ in 0..6 {
+        backspace(&mut h);
+    }
+    h.run_steps(2);
+    let restored = popup(&h).expect("still open").height();
+    assert!((restored - full).abs() < 1.0, "clearing the query restored the height: {restored} vs {full}");
+
+    // Reopening with a query already typed focuses the search field again, and the query survives.
+    h.get_by_role(Role::TextInput).type_text("ar");
+    h.run_steps(2);
+    let typed = h.get_by_role(Role::TextInput).value();
+    h.event(Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(popup(&h).is_none(), "Escape closed it");
+    click(&mut h, button);
+    h.run_steps(3);
+    let search = h.get_by_role(Role::TextInput);
+    assert!(search.is_focused(), "reopening focuses the search field with a query still there");
+    assert_eq!(search.value(), typed, "the query survives closing and reopening");
+}

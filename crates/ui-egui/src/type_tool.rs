@@ -724,26 +724,84 @@ pub fn style_label(style: &str) -> String {
     style.split(' ').map(|w| crate::i18n::tr_ctx(crate::i18n::current(), "fontWeight", w)).collect::<Vec<_>>().join(" ")
 }
 
-/// Searchable font-family combo box.
-fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
+/// Searchable font-family dropdown. A combo-style button opens a popup with a search field and the
+/// matching families. The popup is exactly as tall as its matches (up to `max_height`), the search
+/// field is focused whenever the popup opens — even when a query from last time is still there — and
+/// clicking inside the popup (the search field, the list) never closes it (#1369). Returns true when
+/// a family was picked.
+pub fn font_picker(ui: &mut egui::Ui, salt: &str, current: &mut String, width: f32, max_height: f32) -> bool {
+    let shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
+    let id = ui.make_persistent_id(salt);
+    let search_id = id.with("search");
+    let was_open_id = id.with("was-open");
+
+    // Combo-style button: the family on the left, the chevron on the right.
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y), egui::Sense::click());
+    let popup = egui::Popup::from_toggle_button_response(&resp)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .style(egui::containers::menu::menu_style);
+    let popup_id = popup.get_id();
+    let open = popup.is_open();
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        let mut info = egui::WidgetInfo::new(egui::WidgetType::ComboBox);
+        info.enabled = enabled;
+        info.current_text_value = Some(shown.clone());
+        info
+    });
+    {
+        let visuals = if open { ui.visuals().widgets.open } else { *ui.style().interact(&resp) };
+        let p = ui.painter();
+        p.rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        p.rect_stroke(rect, visuals.corner_radius, visuals.bg_stroke, egui::StrokeKind::Inside);
+        let pad = ui.spacing().button_padding;
+        let icon = ui.spacing().icon_width;
+        let text_rect = egui::Rect::from_min_max(rect.min + egui::vec2(pad.x, 0.0), egui::pos2(rect.right() - pad.x - icon - 2.0, rect.bottom()));
+        let galley = egui::WidgetText::from(shown.clone()).into_galley(ui, Some(egui::TextWrapMode::Truncate), text_rect.width().max(8.0), egui::TextStyle::Button);
+        p.galley(egui::Align2::LEFT_CENTER.align_size_within_rect(galley.size(), text_rect).min, galley, visuals.text_color());
+        crate::widgets::chevron_icon(ui, egui::Rect::from_center_size(egui::pos2(rect.right() - pad.x - icon * 0.5, rect.center().y), egui::Vec2::splat(icon)), &visuals, open);
+    }
+
+    // Focus the search field on the frame the popup opens (its sizing pass included), even when it
+    // already holds a query.
+    let was_open = ui.data(|d| d.get_temp::<bool>(was_open_id)).unwrap_or(false);
+    let first = (resp.clicked() && !open) || (open && !was_open);
+
     let mut changed = false;
-    let search_id = ui.id().with("font-search");
-    egui::ComboBox::from_id_salt("type-font").selected_text(current.as_str()).width(width).height(460.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
+    popup.show(|ui| {
+        ui.set_min_width(rect.width());
         let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(200.0));
-        if !r.has_focus() && q.is_empty() {
-            r.request_focus();
+        let search = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(ui.available_width()));
+        if first && !search.has_focus() {
+            search.request_focus();
         }
         ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
         let ql = q.to_lowercase();
-        for f in families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
-            if ui.selectable_label(f == current, f).clicked() {
-                *current = f.clone();
-                changed = true;
-                ui.data_mut(|d| d.remove::<String>(search_id));
+        let matches: Vec<&String> = families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)).collect();
+        // Pin the popup's minimum height to its matches. An egui popup keeps the size it last laid
+        // out and never grows back after it shrank, so a cleared search would stay short until the
+        // popup was reopened. `set_min_height` forces the popup to be as tall as the rows need, so
+        // clearing the query restores the height. Do *not* also call `set_max_height`: it does
+        // `max_rect |= min_rect`, which pulls the cursor back up to the top of the popup and makes
+        // the list overlap the search field (the first row then swallows a click on the field).
+        let row = ui.spacing().interact_size.y;
+        let list_h = (matches.len() as f32 * row).min(max_height).max(row);
+        ui.set_min_height(list_h);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for f in &matches {
+                if ui.add_sized(egui::vec2(ui.available_width(), row), egui::Button::selectable(*f == &shown, f.as_str())).clicked() {
+                    *current = (*f).clone();
+                    changed = true;
+                    ui.data_mut(|d| d.remove::<String>(search_id));
+                    ui.close();
+                }
             }
-        }
+        });
     });
+    let now_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    ui.data_mut(|d| d.insert_temp(was_open_id, now_open));
     changed
 }
 
@@ -826,7 +884,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
-    if font_picker(ui, &mut fam, 170.0) {
+    if font_picker(ui, "type-font", &mut fam, 170.0, 460.0) {
         app.ui.tool_options.type_font = fam.clone();
         let st = styles(&fam);
         style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
@@ -1130,7 +1188,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let w = field_width(full, 2, LABEL_W);
         let mut fam = c.font_family.clone();
         row(ui, &mut |ui| {
-            if font_picker(ui, &mut fam, full) {
+            if font_picker(ui, "type-font", &mut fam, full, 460.0) {
                 app.ui.tool_options.type_font = fam.clone();
                 let st = styles(&fam);
                 let style = if st.contains(&c.font_style) { c.font_style.clone() } else { st.first().cloned().unwrap_or_else(|| tl!("Regular").into()) };
