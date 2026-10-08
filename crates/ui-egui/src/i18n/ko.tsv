@@ -2036,6 +2036,13 @@ cameraRaw	Color	색상
 	300%	300%
 	Full-resolution preview unavailable	전체 해상도 미리보기를 사용할 수 없습니다
 
+
+	New Style…	새 스타일…
+	Style {name} saved	{name} 스타일을 저장했습니다
+
+	Make Default	기본값으로 만들기
+	Reset to Default	기본값으로 되돌리기
+
 # Additional generated filter labels and Photoshop-aligned UI terminology.
 @id	select.all	모두 선택
 	No patterns	패턴 없음
@@ -2667,3 +2674,7 @@ cameraRaw	Color	색상
 	Don't show again	다시 표시 안 함
 	Save failed: {error}	저장 실패: {error}
 	Save cancelled	저장이 취소되었습니다
+	Couldn't place {name}: {error}	{name}을(를) 가져올 수 없습니다: {error}
+	Magnetic Lasso Tool	자석 올가미 도구
+	Frequency	빈도
+	Use tablet pressure to change pen width	태블릿 압력을 사용하여 펜 폭 변경

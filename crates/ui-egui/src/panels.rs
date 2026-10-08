@@ -18,7 +18,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
     &[&[Tool::Move]],
     &[
         &[Tool::RectMarquee, Tool::EllipseMarquee],
-        &[Tool::Lasso, Tool::PolygonLasso],
+        &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
         &[Tool::Crop, Tool::Slice, Tool::SliceSelect],
         &[Tool::Eyedropper, Tool::Ruler, Tool::Note, Tool::Count],
@@ -598,13 +598,29 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let _ = crate::menus::invoke(app, ui.ctx(), "select.selectAndMask", json!({}));
                         }
                     }
-                    Tool::Lasso | Tool::PolygonLasso if t.pro => {
+                    Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso if t.pro => {
                         selection_mode_buttons(app, ui);
                         widgets::vline(ui, 22.0);
                         opt_label(ui, tl!("Feather"));
                         widgets::value_field(ui, &mut app.ui.tool_options.feather, 0.0..=1000.0, "px", 62.0);
                         widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
                         widgets::vline(ui, 22.0);
+                        if app.ui.tool == Tool::MagneticLasso {
+                            let o = &mut app.ui.tool_options;
+                            opt_label(ui, tl!("Width"));
+                            widgets::value_field(ui, &mut o.magnetic_width, 1.0..=256.0, "px", 58.0)
+                                .on_hover_text(tl!("Follows only edges this close to the pointer ([ and ] change it)"));
+                            opt_label(ui, tl!("Contrast"));
+                            widgets::value_field(ui, &mut o.magnetic_contrast, 1.0..=100.0, "%", 58.0)
+                                .on_hover_text(tl!("Higher values follow only edges that contrast sharply with their surroundings"));
+                            opt_label(ui, tl!("Frequency"));
+                            widgets::value_field(ui, &mut o.magnetic_frequency, 0.0..=100.0, "", 50.0)
+                                .on_hover_text(tl!("How often fastening points are placed by themselves"));
+                            if icons::button(ui, "circle-dot", 24.0, o.magnetic_pressure, tl!("Use tablet pressure to change pen width")).clicked() {
+                                o.magnetic_pressure = !o.magnetic_pressure;
+                            }
+                            widgets::vline(ui, 22.0);
+                        }
                         if widgets::secondary_button(ui, tl!("Select and Mask…"), 0.0).clicked() {
                             let _ = crate::menus::invoke(app, ui.ctx(), "select.selectAndMask", json!({}));
                         }
@@ -618,6 +634,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             );
                         } else if app.ui.tool == Tool::Lasso {
                             hint(ui, tl!("Hold Alt while drawing for straight segments"));
+                        }
+                        if app.ui.tool == Tool::MagneticLasso && app.ui.magnetic.active() {
+                            hint(
+                                ui,
+                                &crate::i18n::fmt(
+                                    tl!("Click the first point or press {key} to close · {del} removes a point · Esc cancels"),
+                                    &[("key", &crate::shortcuts::pretty("Enter")), ("del", &crate::shortcuts::pretty("Backspace"))],
+                                ),
+                            );
                         }
                     }
                     Tool::MagicWand => {
@@ -812,6 +837,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         &crate::i18n::fmt(
                             tl!("Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts"),
                             &[("add", &crate::shortcuts::pretty("Shift")), ("sub", &crate::shortcuts::pretty("Alt"))],
+                        ),
+                    ),
+                    Tool::MagneticLasso => hint(
+                        ui,
+                        &crate::i18n::fmt(
+                            tl!("Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close"),
+                            &[("alt", &crate::shortcuts::pretty("Alt"))],
                         ),
                     ),
                     Tool::Crop => hint(

@@ -2124,4 +2124,13 @@
 	Don't show again	Nicht mehr anzeigen
 	Save failed: {error}	Speichern fehlgeschlagen: {error}
 	Save cancelled	Speichern abgebrochen
+
+# Layer Style dialog: style presets and per-effect defaults
+	Style {name} saved	Stil {name} gespeichert
+	Make Default	Als Standard festlegen
+	Reset to Default	Auf Standard zurücksetzen
+	Couldn't place {name}: {error}	{name} konnte nicht platziert werden: {error}
 	Full-resolution preview unavailable	Vorschau in voller Auflösung nicht verfügbar
+	Magnetic Lasso Tool	Magnetisches-Lasso-Werkzeug
+	Frequency	Frequenz
+	Use tablet pressure to change pen width	Tablettdruck zum Ändern der Stiftbreite verwenden
