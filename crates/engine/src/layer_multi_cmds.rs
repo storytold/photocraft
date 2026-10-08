@@ -781,6 +781,8 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     if !matches!(pos, "above" | "below" | "into") {
         return Err(bad(CMD, "position must be above, below, or into"));
     }
+    // ⌥-drag in the Layers panel: duplicates land at the target and the layers stay put.
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
 
     let batch = p.get("layers");
     if batch.is_some() && p.get("layer").is_some() {
@@ -809,14 +811,16 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let moved_ids = top_level(doc, &requested);
-    if moved_ids.len() == 1 && moved_ids[0] == target && batch.is_none() {
+    if moved_ids.len() == 1 && moved_ids[0] == target && batch.is_none() && !copy {
         // Preserve single-layer drag-to-self semantics.
         return Ok(Value::Null);
     }
     // Also rejects dragging a selected group onto any of its descendants.
     for id in &moved_ids {
         let path = doc.path_of(*id).ok_or(EngineError::NoLayer(*id))?;
-        if target_path.starts_with(&path) {
+        // A copy may land beside its own source (not inside it).
+        let beside_itself = copy && *id == target && pos != "into";
+        if target_path.starts_with(&path) && !beside_itself {
             return Err(bad(CMD, "target cannot be one of the moved layers or its descendant"));
         }
     }
@@ -825,11 +829,12 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let original_active = st.active_layer;
-    let count = s.edit("Reorder Layers", |doc, active| {
+    let (count, copies) = s.edit(if copy { "Duplicate Layer" } else { "Reorder Layers" }, |doc, active| {
         let mut moved = Vec::with_capacity(moved_ids.len());
         for &id in &moved_ids {
-            moved.push(doc.remove(id).ok_or(EngineError::NoLayer(id))?);
+            moved.push(if copy { crate::commands::layer_copy(doc, id)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
         }
+        let copies: Vec<LayerId> = if copy { moved.iter().map(|l| l.id).collect() } else { Vec::new() };
         // Look up the destination AFTER removing every source: its indices may have shifted.
         let path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
         if pos == "into" {
@@ -846,13 +851,24 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
             siblings.splice(at..at, moved);
         }
         check_group_depth(doc, "Reorder Layer")?;
-        *active = if batch.is_some() {
+        *active = if copy {
+            copies.last().copied()
+        } else if batch.is_some() {
             original_active.filter(|id| requested.contains(id)).or_else(|| requested.last().copied())
         } else {
             moved_ids.first().copied()
         };
-        Ok(moved_ids.len())
+        Ok((moved_ids.len(), copies))
     })?;
+    if copy {
+        let ids: Vec<u64> = copies.iter().map(|id| id.0).collect();
+        if batch.is_some() {
+            let active = copies.last().copied();
+            reselect(s, copies, active);
+            return Ok(json!({"moved": count, "layers": ids}));
+        }
+        return Ok(json!({"layer": ids.first()}));
+    }
     if batch.is_some() {
         let active = original_active.filter(|id| requested.contains(id)).or_else(|| requested.last().copied());
         reselect(s, requested, active);

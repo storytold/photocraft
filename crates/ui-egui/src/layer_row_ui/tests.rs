@@ -264,3 +264,50 @@ fn dropping_a_row_on_the_footer_buttons_duplicates_groups_and_deletes() {
     assert!(!names(&h).iter().any(|n| n == "L2"));
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), n - 1);
 }
+
+/// Photoshop: ⌥ held when a dragged row is dropped copies the layer there (one "Duplicate Layer"
+/// step) and leaves the original in place; without ⌥ the same drag moves it.
+#[test]
+fn alt_dragging_a_row_drops_a_copy_and_a_plain_drag_moves() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    for i in 0..3 {
+        s.execute("layer.new.layer", json!({"name": format!("L{i}")})).unwrap();
+    }
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    // Drag row `from` to the upper quarter of row `to` (= above it), with `release` held on drop.
+    let drag = |h: &mut Harness<'static, PhotocraftApp>, from: usize, to: usize, release: Modifiers| {
+        let rows = recorded(&h.ctx);
+        let a = rows[from].row.center();
+        let b = pos2(rows[to].row.center().x, rows[to].row.top() + rows[to].row.height() * 0.25);
+        h.event(egui::Event::PointerMoved(a));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        // ⌥ only needs to be down when the row is dropped.
+        h.event(egui::Event::ModifiersChanged(release));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers: release });
+        h.run_steps(1);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+    };
+    // Rows top to bottom: L2, L1, L0, Background. ⌥-drag L0 above L2.
+    let before = steps(&h);
+    drag(&mut h, 2, 0, Modifiers::ALT);
+    assert_eq!(names(&h), ["Background", "L0", "L1", "L2", "L0 copy"]);
+    assert_eq!(steps(&h), before + 1, "one undo step");
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Duplicate Layer"));
+    let active = h.state().session.active().unwrap().active_layer;
+    assert_eq!(active, h.state().session.active().unwrap().doc.layers.last().map(|l| l.id), "the copy is active");
+    // Rows: L0 copy, L2, L1, L0, Background. A plain drag of L1 above L0 copy moves it.
+    drag(&mut h, 2, 0, Modifiers::NONE);
+    assert_eq!(names(&h), ["Background", "L0", "L2", "L0 copy", "L1"]);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Reorder Layers"));
+}

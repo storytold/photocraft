@@ -636,6 +636,73 @@ fn move_to_reorders_and_nests() {
     assert_eq!(names(&s), ["Background", "B", "A", "G"]);
 }
 
+/// ⌥-dragging a Layers panel row: `copy` leaves the layer where it is and drops a duplicate at the
+/// target, as one "Duplicate Layer" step, with the copy active.
+#[test]
+fn move_to_copy_places_a_duplicate_in_one_step() {
+    let mut s = session_with_doc();
+    let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+    let b = s.execute("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap();
+    let g = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    let names = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let steps = |s: &Session| s.active().unwrap().history.past_len();
+    let before = steps(&s);
+    // bottom->top: Background, A, B, G ; copy A above B
+    let r = s.execute("layer.moveTo", json!({"layer": a, "target": b, "position": "above", "copy": true})).unwrap();
+    let copy = r["layer"].as_u64().expect("the copy's id");
+    assert_ne!(copy, a);
+    assert_eq!(names(&s), ["Background", "A", "B", "A copy", "G"]);
+    assert_eq!(steps(&s), before + 1, "one history step");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Duplicate Layer"));
+    assert_eq!(s.active().unwrap().active_layer, Some(photocraft_doc::LayerId(copy)), "the copy is active");
+    let doc = &s.active().unwrap().doc;
+    let (orig, dup) = (doc.layer(photocraft_doc::LayerId(a)).unwrap(), doc.layer(photocraft_doc::LayerId(copy)).unwrap());
+    assert_eq!(orig.content, dup.content, "the pixels are copied");
+    // Below and into a group.
+    s.execute("layer.moveTo", json!({"layer": b, "target": a, "position": "below", "copy": true})).unwrap();
+    assert_eq!(names(&s), ["Background", "B copy", "A", "B", "A copy", "G"]);
+    s.execute("layer.moveTo", json!({"layer": a, "target": g, "position": "into", "copy": true})).unwrap();
+    // `document.inspect` lists the top of the stack first.
+    assert_eq!(s.execute("document.inspect", json!({})).unwrap()["layers"][0]["children"][0]["name"], "A copy");
+    // A group can be copied beside itself, but not into itself.
+    s.execute("layer.moveTo", json!({"layer": g, "target": g, "position": "above", "copy": true})).unwrap();
+    assert_eq!(names(&s).last().map(String::as_str), Some("G copy"));
+    let past = steps(&s);
+    assert!(s.execute("layer.moveTo", json!({"layer": g, "target": g, "position": "into", "copy": true})).is_err());
+    assert_eq!(steps(&s), past, "a refused copy records nothing");
+    // A copy of the Background is an ordinary, unlocked layer.
+    let bg = s.active().unwrap().doc.layers[0].id.0;
+    s.execute("layer.moveTo", json!({"layer": bg, "target": b, "position": "above", "copy": true})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let bg_copy = doc.layers.iter().find(|l| l.name == "Background copy").expect("a Background copy");
+    assert!(!bg_copy.locks.transparency);
+    assert!(doc.layers[0].locks.transparency, "the Background keeps its lock");
+    // Undo removes each copy and nothing else.
+    for _ in 0..5 {
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+    assert_eq!(names(&s), ["Background", "A", "B", "G"]);
+}
+
+#[test]
+fn move_to_copy_rejects_bad_params() {
+    let mut s = session_with_doc();
+    let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap();
+    let past = s.active().unwrap().history.past_len();
+    for p in [
+        json!({"layer": a, "copy": true}),
+        json!({"layer": a, "target": "x", "copy": true}),
+        json!({"layer": a, "target": 9_999_999, "copy": true}),
+        json!({"layer": 9_999_999, "target": a, "copy": true}),
+        json!({"layer": a, "target": a, "position": "into", "copy": true}),
+    ] {
+        assert!(s.execute("layer.moveTo", p.clone()).is_err(), "{p}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), past, "no history step recorded");
+    assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+}
+
 #[test]
 fn move_selected_layers_into_existing_group_preserves_order_selection_and_one_undo() {
     let mut s = session_with_doc();

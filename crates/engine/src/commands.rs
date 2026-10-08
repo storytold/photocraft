@@ -471,14 +471,7 @@ fn build() -> Vec<CommandSpec> {
             }
             let id = layer_param(s, p)?;
             let nid = s.edit("Duplicate Layer", |doc, active| {
-                let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-                // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
-                let from_background = src.name == "Background" && src.locks.transparency && doc.layers.first().is_some_and(|b| b.id == id);
-                let mut dup = src.duplicate();
-                dup.name = doc.copy_name(&dup.name);
-                if from_background {
-                    dup.locks = Default::default();
-                }
+                let dup = layer_copy(doc, id)?;
                 let nid = doc.insert_above(Some(id), dup);
                 *active = Some(nid);
                 Ok(nid)
@@ -724,7 +717,7 @@ fn build() -> Vec<CommandSpec> {
             "Reorder Layer",
             [],
             None,
-            r##"{"layer":id?| "layers":[id,…]?, "target":id,"position":"above|below|into"="above"} (layers: one undoable move, document order preserved)"##,
+            r##"{"layer":id?| "layers":[id,…]?, "target":id,"position":"above|below|into"="above","copy":bool=false} (layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row)"##,
             has_layer,
             crate::layer_multi_cmds::move_to
         ),
@@ -1177,4 +1170,19 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
         LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
         _ => {}
     }
+}
+
+/// A copy of layer `id` as Layer › Duplicate Layer makes it, not yet in the document: a fresh id,
+/// "… copy" appended to the name, and a copy of the Background layer is an ordinary, unlocked
+/// layer (Photoshop).
+pub(crate) fn layer_copy(doc: &Document, id: LayerId) -> Result<Layer> {
+    let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
+    let from_background = src.name == "Background" && src.locks.transparency && doc.layers.first().is_some_and(|b| b.id == id);
+    let mut dup = src.duplicate();
+    dup.name = doc.copy_name(&dup.name);
+    if from_background {
+        dup.locks = Default::default();
+    }
+    Ok(dup)
 }

@@ -2686,7 +2686,8 @@ fn layer_drop_payload(dragged: u64, target: LayerId, position: &str, selected: &
     }
 }
 
-/// Drag a layer row to reorder: drop above, below, or inside an existing group.
+/// Drag a layer row to reorder: drop above, below, or inside an existing group. With ⌥ held on
+/// release the layers stay put and copies land there instead (Photoshop).
 /// Multi-layer moves are atomic (one undo step), using the engine's stable document order.
 fn layer_drag_and_drop(
     app: &PhotocraftApp,
@@ -2705,10 +2706,14 @@ fn layer_drag_and_drop(
     let Some(dragged) = ctx.data(|d| d.get_temp::<u64>(key)) else { return };
     let pointer = ctx.input(|i| i.pointer.interact_pos());
     let released = ctx.input(|i| i.pointer.any_released());
+    let copy = ctx.input(|i| i.modifiers.alt);
     if dragged == l.id.0 {
-        // Ghost label following the pointer.
+        // Ghost label following the pointer, and the copy cursor while ⌥ is held.
         if let Some(p) = pointer {
             crate::layer_transfer::ghost(ctx, p, &l.name);
+        }
+        if copy {
+            ctx.set_cursor_icon(egui::CursorIcon::Copy);
         }
         return;
     }
@@ -2738,7 +2743,11 @@ fn layer_drag_and_drop(
     }
     if released {
         let selected = app.session.active().map(|st| st.selected_layers()).unwrap_or_default();
-        actions.push(("layer.moveTo".into(), layer_drop_payload(dragged, l.id, position, &selected)));
+        let mut payload = layer_drop_payload(dragged, l.id, position, &selected);
+        if copy && let Some(o) = payload.as_object_mut() {
+            o.insert("copy".into(), json!(true));
+        }
+        actions.push(("layer.moveTo".into(), payload));
     }
 }
 
