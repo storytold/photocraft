@@ -108,7 +108,8 @@ pub(crate) fn open_authorized(app: &mut PhotocraftApp, path: String, import: cra
             },
             move |session, (mut doc, warnings)| {
                 doc.name = apply_name.clone();
-                let (index, color) = session.open_document(doc, Some(apply_path.clone()));
+                let document_path = (!photocraft_engine::file_cmds::is_template(&apply_path)).then(|| apply_path.clone());
+                let (index, color) = session.open_document(doc, document_path);
                 Ok(json!({"document": index, "name": apply_name, "warnings": warnings, "color": color, "path": apply_path, "automation": true}))
             },
         )
@@ -203,6 +204,31 @@ fn finish_save(app: &mut PhotocraftApp, v: &Value) {
 #[cfg(test)]
 mod save_tests {
     use super::*;
+    #[test]
+    fn authorized_streamed_template_opens_untitled_without_save_path() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let import: crate::AutomationImportPathFn = Arc::new(|_, _| {
+            Ok((
+                photocraft_doc::Document::new(
+                    "template",
+                    photocraft_doc::Size::new(16, 16),
+                    photocraft_color::ColorMode::Rgb,
+                    photocraft_color::SampleType::U8,
+                ),
+                Vec::new(),
+            ))
+        });
+        open_authorized(&mut app, "template.psdt".into(), import).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.session.has_jobs() && std::time::Instant::now() < until {
+            tick(&mut app, &egui::Context::default());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.session.has_jobs());
+        let state = app.session.active().unwrap();
+        assert!(state.path.is_none());
+        assert!(state.doc.name.starts_with("Untitled-"));
+    }
     #[test]
     fn background_save_preference_can_request_inline_publication() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
