@@ -356,3 +356,32 @@ fn postscript_font_names_resolve_to_the_installed_family_on_import() {
     assert_eq!(bt.runs[0].style.postscript_name.as_deref(), Some("JetBrainsMono-Regular"));
     assert!(bt.cache.as_ref().is_some_and(|s| !s.content_bounds().is_empty()));
 }
+
+#[test]
+fn hostile_type_sizes_without_pixels_import_without_a_huge_render() {
+    // The import renders type layers that come without pixels; the model is untrusted, so an
+    // absurd size or scale must not make opening the file allocate gigabytes (or fail).
+    let scaled = |s: f64| Affine { m: [s, 0.0, 0.0, s, 10.0, 10.0] };
+    for (size, transform, big) in [(12.0, scaled(1100.0), true), (1.0e30, scaled(1.0), false), (12.0, scaled(1.0e12), false), (f64::MAX, scaled(f64::MAX), false)] {
+        let runs = vec![Run { len: 1, size, leading: None }];
+        let data = tysh("M", &runs, None, transform, [10.0, 10.0, 20.0, 20.0]);
+        let mut t = photocraft_text::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+        if big {
+            // Precondition: the renderer's own guard (256 Mpx) would have drawn this one.
+            let mut engine = photocraft_text::TextEngine::new();
+            let layout = engine.layout(&t, 72.0);
+            let ink = photocraft_text::render::ink_rect(&layout, &t.transform);
+            let px = u64::from(ink.width()) * u64::from(ink.height());
+            assert!(px > 64 * 1024 * 1024 && px <= 256 * 1024 * 1024, "{ink:?}");
+        }
+        t.cache = None;
+        t.psd_raw = Some(std::sync::Arc::new(data));
+        let mut doc = Document::new("t", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("hostile", LayerContent::Text(t)));
+        let bytes = photocraft_io::export(&doc, "t.psd", &Default::default()).unwrap().bytes;
+        let back = photocraft_io::import("t.psd", &bytes).unwrap().document;
+        let LayerContent::Text(bt) = &back.layers[0].content else { panic!("not a type layer") };
+        let cache = bt.cache.as_ref().expect("a cache, even if empty");
+        assert!(cache.content_bounds().is_empty(), "size {size}: drew {:?}", cache.content_bounds());
+    }
+}
