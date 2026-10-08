@@ -315,15 +315,9 @@ sha256-verified. Fetch them with `cargo xtask corpus --all` and run the tests wi
 
 ## Downloads
 
-Every [release](https://github.com/storytold/photocraft/releases/latest) ships these builds. `<ver>` is the
-version number; `SHA256SUMS.txt` lists a checksum for every file.
+**New to PhotoCraft?** Download it from the [PhotoCraft page on getartcraft.com](https://getartcraft.com/apps/photocraft). That's the easiest way to install it.
 
-### macOS
-
-| Build | File | Notes |
-|---|---|---|
-| App, universal (Apple silicon + Intel) | `photocraft-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `photocraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
+**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/photocraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/photocraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
 ### Windows
 
@@ -334,6 +328,13 @@ version number; `SHA256SUMS.txt` lists a checksum for every file.
 | x86 (32-bit) | `photocraft-<ver>-windows-x86.msi` | `photocraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+### macOS
+
+| Build | File | Notes |
+|---|---|---|
+| App, universal (Apple silicon + Intel) | `photocraft-<ver>-macos-universal.dmg` | Signed and notarized |
+| Command-line tool, universal | `photocraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
 
 ### Linux
 
