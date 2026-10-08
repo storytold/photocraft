@@ -18,18 +18,51 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# A newer push to a PR branch cancels its older run. Runs on main are never cancelled: a merge
+# that lands while main's run is in progress waits for it, so every main state that gets a run is
+# checked to the end. (Cancelling here left main unverified whenever merges came close together.)
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Which OSes the test job runs on. main, manual runs and PRs labelled `full-ci` get all three.
+  # Other PRs get Linux, plus macOS and Windows when they touch code whose behaviour differs by
+  # platform: the app shell, UI, text and fonts, GPU, pen input, build scripts or the lockfile.
+  platforms:
+    name: select platforms
+    runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.pick.outputs.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          all='["ubuntu-latest","macos-latest","windows-latest"]'
+          if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
+            echo "os=$all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
+            echo "os=$all" >> "$GITHUB_OUTPUT"
+          else
+            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: test (${{ matrix.os }})
+    needs: platforms
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.platforms.outputs.os) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,8 +94,9 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked
 
-      # The same tests built with the optional craft-fonts input (crates/text/build.rs), so the
-      # Japanese font tests that skip without it run here. Linux only.
+      # The crates that use the optional craft-fonts input (crates/text/build.rs, and the UI's CJK
+      # font fallback), tested again with it, so the Japanese font tests that skip without it run
+      # here. Linux only.
       - name: Check out craft-fonts
         if: runner.os == 'Linux'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -76,7 +110,7 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: cargo test --workspace --locked --features heif
+        run: cargo test -p photocraft-text -p photocraft-ui-egui --locked
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
@@ -138,6 +172,7 @@ jobs:
         target:
           - { crate: psd, name: parse }
           - { crate: psd, name: descriptor }
+          - { crate: psd, name: image_source_data }
           - { crate: codecs, name: decode_any }
           - { crate: codecs, name: decode_png }
           - { crate: codecs, name: decode_jpeg }

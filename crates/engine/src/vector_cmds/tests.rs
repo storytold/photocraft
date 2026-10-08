@@ -347,6 +347,28 @@ fn copy_and_paste_shape_fill_and_stroke() {
 }
 
 #[test]
+fn path_fill_handles_extreme_coordinates_and_feather() {
+    let mut s = session(48, 32, 8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute(
+        "path.set",
+        json!({
+            "name": "P",
+            "path": {"subpaths": [{
+                "closed": true,
+                "knots": [[0.0, 0.0], [3.0e9, 0.0], [3.0e9, 1.0e9]]
+            }]}
+        }),
+    )
+    .unwrap();
+    s.execute("path.fill", json!({"name": "P", "color": "#ff0000"})).unwrap();
+    s.execute("path.fill", json!({"name": "P", "color": "#ff0000", "feather": 1_073_741_824.0})).unwrap();
+
+    let layer = doc(&s).layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+    assert_eq!(layer.surface().unwrap().tile_count(), 1);
+}
+
+#[test]
 fn vector_mask_commands_and_compositing() {
     let mut s = session(100, 100, 8);
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -439,4 +461,12 @@ fn all_vector_commands_are_registered() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), n, "duplicate command ids");
+}
+
+#[test]
+fn path_stroke_rejects_oversized_brush_before_rendering() {
+    let mut s = session(32, 32, 8);
+    s.execute("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[2, 2], [20, 20]]}]}})).unwrap();
+    let result = s.execute("path.stroke", json!({"size": 1e30}));
+    assert!(result.is_err(), "path strokes share the bounded paint renderer");
 }

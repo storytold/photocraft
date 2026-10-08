@@ -9,8 +9,14 @@ use photocraft_format::PcraftWriter;
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
-use crate::workspace::authorize_engine_command;
+use crate::workspace::{authorize_engine_command, authorize_engine_step};
 use crate::{AuthorizedWorkspace, AutomationError, files};
+
+fn untrusted(filesystem: Filesystem) -> Headless {
+    let mut session = Session::new();
+    session.authorize = Some(authorize_engine_step);
+    Headless { session, writers: HashMap::new(), filesystem }
+}
 
 enum Filesystem {
     Denied,
@@ -28,7 +34,7 @@ pub struct Headless {
 
 impl Default for Headless {
     fn default() -> Self {
-        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::Denied }
+        untrusted(Filesystem::Denied)
     }
 }
 
@@ -39,14 +45,16 @@ impl Headless {
     }
 
     /// Create a session for an explicit local CLI invocation. The CLI caller,
-    /// not a remote automation client, supplies these host paths.
+    /// not a remote automation client, supplies these host paths. Nested
+    /// `actions.play` steps are not re-checked: this caller is already trusted.
     pub fn trusted_local() -> Self {
         Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal }
     }
 
     /// Create an automation session with capability-scoped file access.
+    /// Each step of `actions.play` is checked with [`authorize_engine_step`].
     pub fn with_workspace(workspace: AuthorizedWorkspace) -> Self {
-        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::Workspace(workspace) }
+        untrusted(Filesystem::Workspace(workspace))
     }
 
     /// Apply background jobs that finished since the last request, so every request (save,
@@ -67,7 +75,7 @@ impl Headless {
     /// Open a file and make it the active document.
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
-        let o = match &self.filesystem {
+        let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
             Filesystem::TrustedLocal => files::open(path)?,
             Filesystem::Workspace(workspace) => {
@@ -76,7 +84,14 @@ impl Headless {
                 files::open_bytes(name, &bytes)?
             }
         };
-        let index = self.session.add_document(o.document, Some(requested.to_string()));
+        let path = match file_cmds::template_name(&self.session, requested) {
+            Some(untitled) => {
+                o.document.name = untitled;
+                None
+            }
+            None => Some(requested.to_string()),
+        };
+        let index = self.session.add_document(o.document, path);
         let d = &self.session.documents()[index];
         Ok(json!({
             "index": index,

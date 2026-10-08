@@ -17,7 +17,7 @@ id = "FILE-215-2"
 target = "Smart Filters survive PSD save and re-open (filterFX descriptor read and written)"
 status = "partial"
 issue = 215
-note = "smart_map.rs: 14 filters mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) are left out of filterFX with a warning"
+note = "smart_map.rs: 14 filters plus a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
 
 [[item]]
 id = "FILE-215-3"
@@ -50,9 +50,9 @@ note = "doc lib.rs:312 SmartObject.transform is an Affine"
 [[item]]
 id = "FILE-215-7"
 target = "Layered TIFF read and write (tag 37724), honouring the ask-before-saving pref"
-status = "missing"
+status = "done"
 issue = 215
-note = "No 37724 / ImageSourceData in crates"
+note = "psd tiff.rs (ImageSourceData, both byte orders), io tiff_layers.rs, ui tiff_options_ui.rs (Discard Layers and Save a Copy); extra alpha channels are not written (one transparency sample)"
 
 [[item]]
 id = "FILE-215-8"
@@ -87,7 +87,7 @@ id = "FILE-215-12"
 target = "Camera Raw dialog shows a histogram; settings persist as a PSD Smart Filter"
 status = "partial"
 issue = 215
-note = "Interactive RGB/Lab scopes, clipping, tone zones, nine probes, vectorscope and floating panel; HDR deferred without test hardware. In-app Smart Filter persists, PSD drops it"
+note = "Interactive RGB/Lab scopes. PSD WB/Light/Presence, curves, HSL, grading, sharpening/noise detail, grain and numeric vignette controls mapped with descriptor preservation. Active manual Optics and unverified vignette style keep the updated ACR 18.4 fixture opaque; PSD/.pcraft saves preserve it. HDR, remaining settings and Photoshop acceptance still open"
 
 [[item]]
 id = "FILE-215-13"
@@ -162,9 +162,9 @@ note = "No corpus step in ci.yml; in progress in #190"
 [[item]]
 id = "FILE-216-2"
 target = "Large-file fixtures: 20 MP, 150-layer, generated 2 GB PSD and 4-5 GB PSB stress tests"
-status = "missing"
+status = "partial"
 issue = 216
-note = "Only banded.rs covers a >8 MP synthetic export"
+note = "4-5 GB PSB fixtures: psd example big_psb writes them (raw and RLE, planes past 2 GiB), io example big_psb_check opens and checks them; opt-in io tests/large_psb.rs (2.5 GB merged image). No 2 GB PSD, 150-layer or 20 MP fixture, nothing in CI"
 
 [[item]]
 id = "FILE-216-3"

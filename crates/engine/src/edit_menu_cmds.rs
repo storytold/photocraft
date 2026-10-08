@@ -114,15 +114,17 @@ fn pixel_layer(s: &Session) -> std::result::Result<LayerId, String> {
     if !matches!(l.content, LayerContent::Raster(_)) {
         return Err(format!("active layer is a {} layer, not a pixel layer", l.content.kind_name()));
     }
-    if l.locks.all || l.locks.pixels {
+    let locks = d.doc.effective_locks(id);
+    if locks.all || locks.pixels {
         return Err(format!("the layer \"{}\" is locked", l.name));
     }
     Ok(id)
 }
 
 fn writable_surface(doc: &mut Document, id: LayerId) -> Result<&mut Surface> {
+    let locks = doc.effective_locks(id);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-    if l.locks.all || l.locks.pixels {
+    if locks.all || locks.pixels {
         return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
     }
     l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))
@@ -303,10 +305,20 @@ fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
     }
 }
 
-fn rect_param(p: &Value, key: &str) -> Option<Rect> {
-    let a = p.get(key)?.as_array()?;
-    let n = |i: usize| a.get(i).and_then(Value::as_f64).map(|v| v.round() as i32);
-    Some(Rect::new(n(0)?, n(1)?, n(0)? + n(2)?.max(0), n(1)? + n(3)?.max(0)))
+/// `key` as an `[x, y, w, h]` rectangle. The saturating float→int casts bound each component;
+/// the additions saturate too — `area: [1e30, 0, 1e30, 10]` is a whole-canvas window, not an
+/// overflow (it panicked in debug builds before the `saturating_add`).
+fn rect_param(p: &Value, key: &str, cmd: &str) -> Result<Rect> {
+    let a = p.get(key).and_then(Value::as_array).ok_or_else(|| bad(cmd, format!("`{key}` must be [x, y, w, h]")))?;
+    let n = |i: usize| {
+        a.get(i)
+            .and_then(Value::as_f64)
+            .filter(|f| f.is_finite())
+            .map(|v| v.round() as i32)
+            .ok_or_else(|| bad(cmd, format!("`{key}` must be four finite numbers")))
+    };
+    let (x, y, w, h) = (n(0)?, n(1)?, n(2)?, n(3)?);
+    Ok(Rect::new(x, y, x.saturating_add(w.max(0)), y.saturating_add(h.max(0))))
 }
 
 fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
@@ -323,7 +335,7 @@ fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let ext = hb.width().max(hb.height()) as i32;
     let sampling = str_or(p, "sampling", "auto").to_string();
     let custom_mask: Option<Surface> = p.get("channel").and_then(|v| channel_mask(&doc, v)).cloned();
-    let custom_rect = rect_param(p, "area");
+    let custom_rect = if p.get("area").is_some() { Some(rect_param(p, "area", cmd)?) } else { None };
     let window = match sampling.as_str() {
         "auto" => hb.inflate((ext * 3 / 4).max(32)),
         "rectangular" => hb.inflate(int(p, "margin").map_or(ext.max(16), |m| m.clamp(0, 100_000) as i32)),
@@ -647,7 +659,7 @@ pub fn find_matches(text: &str, find: &str, case: bool, whole: bool) -> Vec<(usi
 fn type_layers(doc: &Document, forward: bool) -> Vec<LayerId> {
     // Layers panel order: top first.
     let mut ids: Vec<LayerId> =
-        doc.walk().into_iter().rev().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_)) && !l.locks.all).map(|(_, _, l)| l.id).collect();
+        doc.walk().into_iter().rev().filter(|(p, _, l)| matches!(l.content, LayerContent::Text(_)) && !doc.locks_at(p).all).map(|(_, _, l)| l.id).collect();
     if !forward {
         ids.reverse();
     }
@@ -779,13 +791,6 @@ fn preset_names(s: &Session, kind: &str) -> Option<Vec<String>> {
     })
 }
 
-/// Move item `i` of `v` to position `to`.
-fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) {
-    let x = v.remove(i);
-    let to = to.min(v.len());
-    v.insert(to, x);
-}
-
 fn preset_index(s: &Session, kind: &str, p: &Value) -> Result<usize> {
     let names = preset_names(s, kind).ok_or_else(|| bad("edit.presets.presetManager", format!("unknown preset kind `{kind}` ({})", PRESET_KINDS.join("|"))))?;
     if let Some(i) = p.get("index").and_then(Value::as_u64) {
@@ -834,10 +839,10 @@ fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
         "move" => {
             let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "missing `to`"))? as usize;
             match kind.as_str() {
-                "brushes" => move_item(&mut s.tools.presets, i, to),
-                "patterns" => move_item(&mut s.patterns.items, i, to),
-                _ => move_item(&mut s.edit_state.custom_shapes, i, to),
-            }
+                "brushes" => crate::move_item(&mut s.tools.presets, i, to),
+                "patterns" => crate::move_item(&mut s.patterns.items, i, to),
+                _ => crate::move_item(&mut s.edit_state.custom_shapes, i, to),
+            };
         }
         other => return Err(bad(cmd, format!("unknown action `{other}` (list|rename|delete|move)"))),
     }

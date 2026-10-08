@@ -306,13 +306,23 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 3 {
         return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "needs at least 3 points".into() });
     }
-    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
-    let mut mask = sel::polygon(&pts, area, b(p, "antiAlias", true));
+    polygon_selection(s, "select.lasso", "Lasso", &pts, p)
+}
+
+/// Selects the polygon `pts` with the lasso tools' `mode`, `antiAlias` and `feather` params, as
+/// one history step called `label`.
+pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[(f32, f32)], p: &Value) -> Result<Value> {
     let feather = f(p, "feather", 0.0);
+    // Select › Modify › Feather's range.
+    if !(0.0..=1000.0).contains(&feather) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "feather must be a number in 0..1000".into() });
+    }
+    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+    let mut mask = sel::polygon(pts, area, b(p, "antiAlias", true));
     if feather > 0.0 {
         mask = sel::feather(&mask, area.width() as usize, area.height() as usize, feather);
     }
-    set_selection(s, "Lasso", area, mask, mode(p))
+    set_selection(s, label, area, mask, mode(p))
 }
 
 macro_rules! spec {
@@ -529,6 +539,22 @@ mod tests {
             }
         }
         assert!(s.active().unwrap().doc.selection.is_some());
+    }
+
+    #[test]
+    fn geometry_params_that_would_wrap_are_rejected() {
+        let mut s = session();
+        // 2^32 + 50 wrapped to `x = 50` and 3e9 to a negative coordinate through `as i32`;
+        // both are bad-params errors now, whatever the front door (UI, CLI, control, MCP).
+        for x in [4_294_967_346_i64, 3_000_000_000_i64] {
+            let err = s.execute("select.rect", json!({"x": x, "y": 0, "width": 10, "height": 10})).unwrap_err();
+            assert!(err.to_string().contains("32-bit"), "{err}");
+        }
+        let err = s.execute("document.pixel", json!({"x": 4_294_967_346_i64, "y": 0})).unwrap_err();
+        assert!(err.to_string().contains("32 bits"), "{err}");
+        // In-range coordinates, including negative and past-canvas ones, are unaffected.
+        s.execute("select.rect", json!({"x": -100, "y": -100, "width": 500, "height": 500})).unwrap();
+        s.execute("document.pixel", json!({"x": 0, "y": 0})).unwrap();
     }
 
     #[test]

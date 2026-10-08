@@ -39,11 +39,13 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.menu.invoke {id, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
 - `ui.dialog.open {kind, fields?}` (kinds `newDocument`, `about`, `layerStyle {effect?}`, `colorPicker {target: foreground|background}`, `command {command}`) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`. Like `ui.menu.invoke`, `ui.dialog.confirm` waits for a background job its command starts (a filter dialog's OK) and replies with the result; `"wait": false` replies `{job, pending: true}` at once
+  - Layer Style (`layerStyle {effect?}` opens on that effect kind): the fields hold the dialog's whole state, so agents read and drive it like a user. `effects` lists every effect instance in the layer's order as `{id, kind, on, params, fx}` (`fx` is the effect snapshot the dialog loaded; OK edits that snapshot with `params`, so anything the dialog doesn't model survives). `selected` picks the page (`blendingOptions` or an instance id), `preview` (default on) gates the live canvas preview, `p:blendingOptions` edits blend mode/opacity/fill opacity, and `patternList` names the usable patterns. OK replaces the layer's effects in one step (`layer.layerStyle.replace`); Cancel discards. "New Style…" saves the pending state via `style.presets.new {effects}`, a swatch click applies a style preset, and Make/Reset Default use `layer.layerStyle.makeDefault` / `layer.layerStyle.defaultFor`
   - Preferences (`ui.menu.invoke {id: "edit.preferences.interface"}`) edits the sections in its `values` field. `ui.dialog.apply {dialog}` saves those values through `prefs.set` and keeps the same dialog and section open. `ui.dialog.confirm` saves and closes; `ui.dialog.cancel` discards only edits made since the last successful Apply. Invalid values return an error without closing the Apply dialog or changing the saved preferences. Settings marked for the next launch still require a restart.
   - Edit › Fill… (`ui.menu.invoke {id: "edit.fill"}`, Shift+F5, Shift+Backspace) opens the Fill dialog; its fields are `edit.fill`'s params (`contents`, `color`, `pattern`, `colorAdaptation`, `mode`, `opacity`, `preserveTransparency`), and OK remembers them in the preferences (`dialogs["edit.fill"]`).
   - A pixel tool pressed on a type, shape, Smart Object or fill layer (e.g. through `ui.pointer`) opens the "Rasterize?" prompt instead of painting: a dialog with `__rasterize` (`type|shape|smartObject|fill`), `message`, `layer`, `tool` and `at`. `ui.dialog.confirm` runs the `layer.rasterize.*` command and then paints at `at` (two history states, `{"rasterized", "painted"}`); `ui.dialog.cancel` does nothing.
 - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
 - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], modifiers?, button?}`: drive the active tool in document coordinates (pressure 0..1, tilt in degrees -90..90, barrel rotation 0..360: a simulated pen). Modifier flags (`shift`, `alt`, `command`, `ctrl`, `space`) go either at the top level or grouped under `modifiers`; when `modifiers` is present, top-level flags are ignored. `space: true` holds Space (the Crop frame, marquee, lasso or shape being drawn then moves instead of growing). `button: "right"` (or `"secondary"`) is the right button: with the Move tool (or `command: true` with any tool) it opens the canvas layer menu (`layerMenu` in `ui.inspect` lists the layers there, topmost first; select one with `layer.select`); with Marquee, Lasso, Magic Wand, Object Selection, or Pen it opens a tool context menu (`canvasToolMenu` in `ui.inspect`, with ordered command ids, separators, and enabled states); with a painting tool it opens the Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase. The menus open at the screen position of the pressed document point. Use `ui.context.choose {id}` for enabled tool-context actions. The Pen menu is documented in `docs/context-menu-parity.md`. With a Color Picker as the top dialog, `down` and `move` sample the image into its new colour instead (its eyedropper, like a click on the canvas) and the tool is not driven.
+  - Magnetic Lasso (`tool: "magneticLasso"`): a `down`/`up` pair is a click. The first sets the first fastening point (its modifiers set the selection mode); later clicks fasten a point, or close the border on the first point. `move` events trace the border with or without a button held, fastening points by themselves; with `alt: true` a click draws a straight segment and a drag a freehand one. `ui.inspect` shows the border in progress under `magnetic` (`path`, `anchors`, `live`, `mode`). `ui.key` Enter closes it along the edges, Backspace removes the last fastening point, Escape cancels. To select along edges in one call instead, use the `select.magneticLasso` command with rough points around the shape.
 - `ui.key {key, command?, shift?, alt?, ctrl?}` (flags may also be grouped under `modifiers`): press and release a key, e.g. `{"key": "ArrowLeft", "shift": true}`
 - `ui.type {text}`: type text (goes to the focused widget, or to the canvas while the Type tool is editing)
 - `ui.resize {width, height}`: resize the main window
@@ -77,10 +79,19 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `select.rect` | `{"x":0,"y":0,"width":100,"height":50,"mode":"add","ellipse":false}` |
 | `document.inspect` | `{}`: layer tree, history, selection bounds |
 | `document.pixel` | `{"x":10,"y":10}`: composite RGBA |
+| `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","line","inside"}` |
+| `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
+| `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
+| `actions.list` | `{}` → `{actions:[{name, steps}], recording}` (the name being recorded, or null) |
+| `actions.get` | `{"action": name or index}` → `{name, steps:[[id, params], …]}`, the shape `file.automate.batch` and droplets take |
+| `actions.record` | `{"name":"Red"}` starts a new action (default name `Action N`). `{"action": name or index}` appends to one that exists |
+| `actions.stop` | `{}` → `{action, steps}`. Copies replayable journal entries since `actions.record` (queries and `actions.*` omitted) |
+| `actions.play` | `{"action": name or index, "from": step?}`. `from` and `failed.step` are 0-based. Returns `{action, ran, failed?:{step, id, error}}` and still returns ok when a step fails, so a partial run is reported. Leaves one history step per step that ran. Refuses to play while a play is already running. On an untrusted session each step is authorized the same way as a top-level command |
+| `actions.delete` | `{"action": name or index}` → `{deleted}`. Refused while recording |
 
 UI-level commands (`view.zoomIn`, `window.theme.pro`, `edit.search`, …) are also accepted by `engine.execute` and `ui.menu.invoke`.
 
-Commands that read or write files by path, instead of through the automation roots, are refused with "automation command `…` uses ambient filesystem paths and is disabled; use capability-scoped document methods". That covers every `file.*` command except `file.new`, the `file.close*` commands and a few path-free ones such as `file.fileInfo`, so `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` always fail here: open and save with `app.open` / `app.save`. Path parameters of other commands (`layer.exportAs {path}`, `filter.distort.displace {mapPath}`, …) are refused the same way, and the desktop app also refuses `image.mode.*`, which can load the colour profiles set in its preferences. The rules are in `crates/automation/src/workspace.rs`.
+Commands that read or write files by path, instead of through the automation roots, are refused with "automation command `…` uses ambient filesystem paths and is disabled; use capability-scoped document methods". That covers every `file.*` command except `file.new`, the `file.close*` commands and a few path-free ones such as `file.fileInfo`, so `file.open`, `file.save`, `file.saveAs` and `file.saveACopy` always fail here: open and save with `app.open` / `app.save`. Path parameters of other commands (`layer.exportAs {path}`, `filter.distort.displace {mapPath}`, preset imports, and plug-in install/reload) are refused the same way. `prefs.set` rejects whole-preference updates and file-backed sections (`colorSettings`, `scriptEvents`, `historyLog`, `plugIns` and `scratchDisks`) so automation cannot configure ambient file access indirectly. The desktop app also refuses `image.mode.*`, which can load the colour profiles set in its preferences. The rules are in `crates/automation/src/workspace.rs`.
 
 `type.editText` starts inline editing of the active type layer and selects all its text, like
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
@@ -135,8 +146,10 @@ User and imported (`.abr`) brush presets live in the config directory's `Presets
 `.pcbrushes` JSON file per preset group, content-addressed tip bitmaps under `tips/`, and an
 `index.json` with the group order and deleted built-ins (see `photocraft_engine::preset_store`).
 The store loads in the background at launch and syncs after every brush preset change; built-ins
-are never written. Headless CLI/MCP sessions and the web build keep brush presets for the session
-only. Gradient presets (including imported `.grd` groups) persist with the preferences.
+are never written. The Actions list is `actions.json` in that same folder and survives a restart.
+Headless CLI/MCP sessions and the web build keep brush presets and the action list for the session
+only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
+the preferences.
 
 ## Snapping
 
@@ -295,7 +308,7 @@ a driver process crash is detected by the startup marker on the next launch.
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
-then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `commit` and
+then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `commit` and
 `cancel`. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
@@ -303,6 +316,12 @@ opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / 
 `pointCurveGreen`, `pointCurveBlue`) are empty or 2–16 finite points in 0–255 with inputs at
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
+
+Imported PSD Camera Raw filters whose processing settings are all mapped or neutral use this
+same editor. `params.__cameraRawPsd` is reserved import/export metadata: preserve it when editing
+stored parameters. Other processing fields or versions remain opaque Photoshop filters. See
+[PSD Smart Filters](camera-raw-histogram.md#psd-smart-filters) for the supported settings and export
+limits.
 
 The response and `ui.inspect.cameraRaw` contain:
 
@@ -322,6 +341,38 @@ The response and `ui.inspect.cameraRaw` contain:
 - `hoverSample`: `position`, `rgb` (histogram domain) and `hueSaturation` (turns, 0–1; only
   while the vectorscope is shown), or null.
 - `hoveredZone`, `previewRect`, `scopeRect`, `vectorscopeRect`.
+- `view` (`zoom: null` for fit, or a numeric factor where 1 = 100%, `center: [u,v]`,
+  `hand`), `zoom` (effective factor, null before layout), `sourceSize`, `viewportRect`.
+  At 100%, one source pixel maps to one physical display pixel, including on HiDPI displays.
+- `previewApproximate`, `detailPending`, `detailError`: whether the visible image still uses
+  the proxy, whether full-resolution refinement is running, and any refinement error.
+
+`params.ui.view` changes navigation only: `zoom: "fit" | 0.0001..=16`, `center: [u,v]`
+(finite coordinates in 0..=1, clamped to keep the image within view), `hand: bool`. Fit recentres
+and follows window resizing; navigation resets when opening a different Camera Raw dialog.
+Invalid mixed requests are atomic, just like scope and filter settings. View requests do not
+re-develop the proxy or change filter parameters/history.
+
+With the Zoom tool (Z), click toggles Fit / 100%; click-drag right/left scrubs in/out.
+Ctrl-drag (Command on macOS) fits a rectangular region. H selects Hand; Space temporarily pans,
+including while placing colour samplers. Alt/Option + wheel zooms at the pointer; an unmodified
+wheel pans. Pinch zooms. Ctrl/Command +/- zoom, 0 fits, and Alt/Option + Ctrl/Command + 0 shows
+100%; Ctrl/Command+Shift-click also selects 100%. Right-click opens Fit / 100% / preset
+percentages. Tool double-clicks fit the image.
+Text fields retain their keys and wheel gestures over the settings panel still scroll it.
+
+The proxy remains the fast path while changing settings. Where more source pixels are needed,
+Camera Raw lazily refines with the **same engine Camera Raw pipeline** at pixelScale=1 and the
+same selection/filter-mask coverage. Native refinement runs off the UI thread (one revision at
+a time); stale results are discarded. Only a bounded visible crop is uploaded to the GPU, and
+pan/zoom reuse developed pixels. Before and neutral settings read the original pixels directly.
+Absurd proxy domains (over 512 MP, including distant sparse off-canvas pixels) are rejected
+before reading pixels. Full-resolution refinement is capped at 64 MP to bound the existing full-image engine pipeline;
+above that it explicitly reports unavailability and keeps the proxy. Oversized viewport crops
+also retain the proxy. Without a browser worker, wasm explicitly retains the filtered proxy
+rather than block its UI; Before and neutral settings still crop the original source pixels.
+The histogram and vectorscope continue to analyse the bounded proxy; readouts and clipping
+warnings use the full-resolution pixels once refinement is visible.
 
 `params.ui.scope` changes presentation only: `shadows` / `highlights` (clipping warnings, U / O),
 `lab`, `samplerTool` (S), `vectorscope`, `selectedRegion` (requires a document selection),

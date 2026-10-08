@@ -86,6 +86,18 @@ pub struct Locks {
     pub all: bool,
 }
 
+impl Locks {
+    pub fn union(self, o: Locks) -> Locks {
+        Locks {
+            transparency: self.transparency || o.transparency,
+            pixels: self.pixels || o.pixels,
+            position: self.position || o.position,
+            artboard: self.artboard || o.artboard,
+            all: self.all || o.all,
+        }
+    }
+}
+
 /// Photoshop layer colour labels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LabelColor {
@@ -162,6 +174,14 @@ pub struct Effects {
     /// top-left.
     pub reference: Option<(f64, f64)>,
 }
+
+/// Deepest group nesting a document may hold: a layer inside this many nested groups is the
+/// deepest legal one. Everything that walks the layer tree (engine lookups, the layers panel,
+/// PSD export, `.pcraft` save and load) recurses once per level, so deeper trees risk
+/// overflowing the 1 MiB main-thread stacks of Windows and wasm. PSD import and the engine
+/// commands that nest layers (`layer.groupLayers`, `layer.moveTo`, Artboard from Layers) enforce
+/// this up front; `photocraft-format` refuses to save deeper trees.
+pub const MAX_GROUP_DEPTH: usize = 100;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
@@ -743,6 +763,27 @@ impl Document {
         Rect::from_size(self.size)
     }
 
+    /// Nesting depth of the deepest layer: 0 for a root-level layer, 1 inside one group, and so
+    /// on. Computed over an explicit stack, so it cannot overflow on any tree it measures.
+    pub fn max_group_depth(&self) -> usize {
+        let mut max = 0;
+        let mut stack: Vec<(&[Layer], usize)> = vec![(&self.layers, 0)];
+        while let Some((layers, depth)) = stack.pop() {
+            if layers.is_empty() {
+                continue;
+            }
+            max = max.max(depth);
+            for l in layers {
+                if let Some(ch) = l.children()
+                    && !ch.is_empty()
+                {
+                    stack.push((ch, depth + 1));
+                }
+            }
+        }
+        max
+    }
+
     /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top.
     pub fn walk(&self) -> Vec<(LayerPath, usize, &Layer)> {
         fn rec<'a>(layers: &'a [Layer], prefix: &mut LayerPath, out: &mut Vec<(LayerPath, usize, &'a Layer)>) {
@@ -766,6 +807,17 @@ impl Document {
 
     pub fn path_of(&self, id: LayerId) -> Option<LayerPath> {
         self.walk().into_iter().find(|(_, _, l)| l.id == id).map(|(p, _, _)| p)
+    }
+
+    /// The locks in force on the layer at `path`: its own and those of every group around it,
+    /// since locking a group locks its contents.
+    pub fn locks_at(&self, path: &[usize]) -> Locks {
+        (1..=path.len()).filter_map(|n| self.layer_at(path.get(..n)?)).fold(Locks::default(), |a, l| a.union(l.locks))
+    }
+
+    /// [`Self::locks_at`] for the layer `id`.
+    pub fn effective_locks(&self, id: LayerId) -> Locks {
+        self.path_of(id).map_or_else(Locks::default, |p| self.locks_at(&p))
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
@@ -870,6 +922,21 @@ mod tests {
     }
 
     #[test]
+    fn max_group_depth_counts_nesting_without_recursing() {
+        let mut d = doc();
+        let bg = d.layers[0].id;
+        let mut chain = Layer::raster("L", d.pixel_format());
+        for _ in 0..3 {
+            chain = Layer::group("G", vec![chain]);
+        }
+        d.insert_above(Some(bg), chain);
+        assert_eq!(d.max_group_depth(), 3);
+        // An unfilled group does not add a level (nothing lives inside it).
+        d.insert_above(Some(bg), Layer::group("empty", vec![]));
+        assert_eq!(d.max_group_depth(), 3);
+    }
+
+    #[test]
     fn pixel_format_follows_mode_and_depth() {
         let d = Document::new("c", Size::new(1, 1), ColorMode::Cmyk, SampleType::U16);
         assert_eq!(d.pixel_format(), PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true));
@@ -936,6 +1003,21 @@ mod tests {
         let n = d.insert_above(Some(inner_id), Layer::raster("n", d.pixel_format()));
         assert_eq!(d.path_of(n), Some(vec![1, 1]));
         assert_eq!(d.layer_count(), 4);
+    }
+
+    #[test]
+    fn a_locked_group_locks_its_contents() {
+        let mut d = doc();
+        let inner = Layer::raster("inner", d.pixel_format());
+        let inner_id = inner.id;
+        let mut g = Layer::group("G", vec![Layer::group("H", vec![inner])]);
+        g.locks.position = true;
+        let gid = d.insert_above(None, g);
+        d.layer_mut(inner_id).unwrap().locks.pixels = true;
+        let k = d.effective_locks(inner_id);
+        assert!(k.position && k.pixels && !k.all);
+        assert!(!d.effective_locks(gid).pixels, "a child's lock doesn't lock its group");
+        assert_eq!(d.effective_locks(LayerId(u64::MAX)), Locks::default());
     }
 
     #[test]

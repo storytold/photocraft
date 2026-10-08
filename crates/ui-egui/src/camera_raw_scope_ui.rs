@@ -100,6 +100,7 @@ pub(crate) struct ScopeView {
     pub(crate) ms: f64,
     pub(crate) revision: u64,
     pub(crate) overlay_tex: Option<TextureHandle>,
+    pub(crate) overlay_detail: bool,
     pub(crate) overlay_key: Option<(u64, bool, ClippingMode, crate::theme::ThemeKind)>,
     pub(crate) floating_dragged: bool,
     pub(crate) geometry_requested: bool,
@@ -141,7 +142,10 @@ impl CameraRawDialog {
         }
         let x = ((p[0] * self.pw as f32) as usize).min(self.pw - 1);
         let y = ((p[1] * self.ph as f32) as usize).min(self.ph - 1);
-        let q = *self.pixels().get(y.checked_mul(self.pw)?.checked_add(x)?)?;
+        let q = self
+            .detail
+            .sample(p, self.preview_revision, self.show_before, &self.params)
+            .or_else(|| self.pixels().get(y.checked_mul(self.pw)?.checked_add(x)?).copied())?;
         (q[3] > 0.0 && q.iter().all(|v| v.is_finite())).then_some(q)
     }
     pub(crate) fn readout(&self, p: [f32; 2], lab: bool) -> Option<Value> {
@@ -559,17 +563,16 @@ pub(crate) fn floating(ctx: &egui::Context, d: &mut CameraRawDialog, view: &mut 
     }
 }
 
-pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, rect: Rect) {
+pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, rect: Rect, resp: &egui::Response, panning: bool) {
     let t = Tokens::get(ui.ctx());
-    let resp = ui.interact(rect, ui.id().with("cr-sample-preview"), Sense::click_and_drag());
-    if let Some(p) = resp.hover_pos() {
+    if let Some(p) = resp.hover_pos().filter(|p| rect.contains(*p)) {
         d.scope.pointer_sample =
             Some([((p.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0), ((p.y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0)]);
     } else {
         d.scope.pointer_sample = None;
     }
     let to_screen = |p: [f32; 2]| pos2(rect.left() + p[0] * rect.width(), rect.top() + p[1] * rect.height());
-    if view.sampler_tool {
+    if view.sampler_tool && !panning {
         resp.clone().on_hover_cursor(egui::CursorIcon::Crosshair);
         if resp.clicked()
             && let Some(p) = d.scope.pointer_sample
@@ -597,6 +600,9 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
             d.scope.sampler_drag = None;
         }
     }
+    if panning {
+        d.scope.sampler_drag = None;
+    }
     let alt_zone = d.scope.tone_drag.map(|d| d.0).or(d.scope.alt_tone);
     let mode = if ui.input(|i| i.modifiers.alt && i.pointer.primary_down()) && alt_zone.is_some() {
         if matches!(alt_zone, Some(ToneZone::Blacks | ToneZone::Shadows)) { ClippingMode::ShadowChannels } else { ClippingMode::HighlightChannels }
@@ -606,8 +612,12 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
         ClippingMode::None
     };
     let key = (d.preview_revision, d.show_before, mode, t.kind);
-    if mode != ClippingMode::None {
-        if d.scope.overlay_key != Some(key) {
+    if mode != ClippingMode::None && d.detail.overlay(ui, rect, d.preview_revision, mode) {
+        d.scope.overlay_key = Some(key);
+        d.scope.overlay_detail = true;
+    } else if mode != ClippingMode::None {
+        if d.scope.overlay_key != Some(key) || d.scope.overlay_detail {
+            d.scope.overlay_detail = false;
             let colors = d
                 .pixels()
                 .iter()
@@ -649,9 +659,10 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
             ui.painter().image(tex.id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         }
     }
+    let visible = rect.intersect(ui.clip_rect());
     if !view.samplers.is_empty() {
         ui.painter().rect_filled(
-            Rect::from_min_size(rect.min, vec2(rect.width().min(330.0), view.samplers.len().min(MAX_SAMPLERS) as f32 * 16.0 + 12.0)),
+            Rect::from_min_size(visible.min, vec2(visible.width().min(330.0), view.samplers.len().min(MAX_SAMPLERS) as f32 * 16.0 + 12.0)),
             t.radius_sm,
             t.dock.gamma_multiply(0.92),
         );
@@ -662,7 +673,7 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
         ui.painter().line_segment([q - vec2(8.0, 0.0), q + vec2(8.0, 0.0)], Stroke::new(1.0, t.text));
         ui.painter().line_segment([q - vec2(0.0, 8.0), q + vec2(0.0, 8.0)], Stroke::new(1.0, t.text));
         let text = format!("{}  {}", i + 1, readout_text(d.readout(*p, view.lab)));
-        ui.painter().text(pos2(rect.left() + 6.0, rect.top() + 6.0 + i as f32 * 16.0), Align2::LEFT_TOP, text, crate::theme::mono(11.0), t.text);
+        ui.painter().text(pos2(visible.left() + 6.0, visible.top() + 6.0 + i as f32 * 16.0), Align2::LEFT_TOP, text, crate::theme::mono(11.0), t.text);
         ui.painter().text(q + vec2(7.0, 7.0), Align2::LEFT_TOP, format!("{}", i + 1), crate::theme::mono(11.0), t.text);
     }
 }

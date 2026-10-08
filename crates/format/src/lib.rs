@@ -12,8 +12,10 @@
 //!
 //! A bundle is either a ZIP archive (STORE entries) or a directory with the
 //! same layout. Saving is incremental: [`PcraftWriter`] remembers what it
-//! already compressed/wrote, so only new tiles are encoded, and directory
-//! saves write only missing files and garbage-collect unreferenced ones.
+//! already compressed/wrote, so only new tiles are encoded. Directory saves
+//! verify existing content-addressed objects once per writer and folder,
+//! rechecking files whose size or modification time changes; they replace
+//! damaged or missing objects and garbage-collect unreferenced ones.
 //!
 //! This crate sits at L3 next to the compositor, so it does not render.
 //! Callers pass previews in [`SaveOptions`]; `photocraft-io` does that.
@@ -41,7 +43,7 @@ pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, re
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::read_file;
-pub use store::{PcraftWriter, SaveStats};
+pub use store::{DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats};
 
 /// File extension of the native format.
 pub const EXTENSION: &str = "pcraft";

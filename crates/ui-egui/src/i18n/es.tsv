@@ -899,8 +899,6 @@
 	Create new pattern from the selection	Crear un patrón nuevo a partir de la selección
 	Create new shape from the current path	Crear una forma nueva a partir del trazado actual
 	Create new snapshot	Crear una instantánea nueva
-	Create new style (from the selected type)	Crear un estilo nuevo (del texto seleccionado)
-	Create new style from the selected layer	Crear un estilo nuevo a partir de la capa seleccionada
 	Create new tool preset	Crear un preajuste de herramienta nuevo
 	Crop Factor	Factor de recorte
 	Ctrl	Ctrl
@@ -961,6 +959,8 @@
 	Divide…	Dividir…
 	Document	Documento
 	Don't Save	No guardar
+	No	No
+	Yes	Sí
 	Done	Hecho
 	Dots	Puntos
 	Drag a rectangle around the object	Arrastre un rectángulo alrededor del objeto
@@ -1491,6 +1491,7 @@
 	Comic Book	Cómic
 	Conform	Conformar
 	Content-Aware Fill needs a selection on a pixel layer	El relleno de contenido necesita una selección en una capa de píxeles
+	Couldn't place {name}: {error}	No se pudo colocar {name}: {error}
 	Could not transform: the layer is empty	No se pudo transformar: la capa está vacía
 	Could not use Perspective Warp: the layer is empty	No se pudo usar la deformación en perspectiva: la capa está vacía
 	Could not use Puppet Warp: no opaque pixels	No se pudo usar la deformación de clavos: no hay píxeles opacos
@@ -2006,7 +2007,6 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Rejilla:
-
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
 # Spanish follows the tool wording used above (Herramienta X).
 	Color Range	Gama de colores
@@ -2071,7 +2071,6 @@
 	Auto Erase	Borrado automático
 	Color Adaptation	Adaptación de color
 	Preserve Transparency	Conservar transparencia
-	New Style…	Nuevo estilo…
 	shortcut	atajo
 	Saved	Guardado
 	Arc	Arco
@@ -2092,7 +2091,6 @@
 	New Channel	Nuevo canal
 	Save Selection	Guardar selección
 	Load Selection	Cargar selección
-
 # Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
 @id	edit.purge.undo	Historial de deshacer
 # Rendering mode and recovery
@@ -2109,11 +2107,8 @@
 	Advanced	Avanzado
 	GPU Backend	Motor GPU
 	Details	Detalles
-
 	Rendering mode	Modo de renderizado
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lazo de congelación: arrastre para congelar un área; Alt+arrastrar para descongelarla (L)
-
-
 	Shadow Clipping Warning (U)	Aviso de recorte de sombras (U)
 	Highlight Clipping Warning (O)	Aviso de recorte de luces (O)
 	Show Lab Color Readouts	Mostrar valores de color Lab
@@ -2122,9 +2117,7 @@
 	Show Skin Tone Indicator	Mostrar indicador de tono de piel
 	Tone Histogram	Histograma tonal
 	Show Selected Region	Mostrar región seleccionada
-
 cameraRaw	Light	Luz
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
 cameraRaw	Lights	Tonos claros
@@ -2145,5 +2138,30 @@ cameraRaw	Amount	Cantidad
 	Patch:	Parche:
 	Lasso around an area, then drag the selection	Rodee un área con el lazo y arrastre la selección
 	Edit Type	Editar texto
+
+
+	New Style…	Nuevo estilo…
+	Style {name} saved	Estilo {name} guardado
+
+	Create new style (from the selected type)	Crear estilo nuevo (del texto seleccionado)
+	Create new style from the selected layer	Crear estilo nuevo de la capa seleccionada
+
+	Make Default	Predeterminar
+	Reset to Default	Restablecer predeterminado
+	Full-resolution preview unavailable	Vista previa a resolución completa no disponible
 	No patterns	Sin motivos
 	Enable {name}	Activar {name}
+	Hold Alt while drawing for straight segments	Mantenga Alt al dibujar para segmentos rectos
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Arrastre o haga clic en los puntos del polígono · mantenga Alt durante el lazo para segmentos rectos · {add} añadir · {sub} antes de dibujar resta
+	Extend	Extender
+	Structure:	Estructura:
+	Content-Aware Move Tool	Herramienta Mover según el contenido
+	TIFF Options	Opciones de TIFF
+	Including layers will increase file size.	Incluir las capas aumentará el tamaño del archivo.
+	Discard Layers and Save a Copy	Descartar capas y guardar una copia
+	Don't show again	No volver a mostrar
+	Save failed: {error}	Error al guardar: {error}
+	Save cancelled	Guardado cancelado
+	Magnetic Lasso Tool	Herramienta Lazo magnético
+	Frequency	Frecuencia
+	Use tablet pressure to change pen width	Usar la presión de la tableta para cambiar la anchura del lápiz

@@ -18,13 +18,13 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
     &[&[Tool::Move]],
     &[
         &[Tool::RectMarquee, Tool::EllipseMarquee],
-        &[Tool::Lasso, Tool::PolygonLasso],
+        &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
         &[Tool::Crop, Tool::Slice, Tool::SliceSelect],
         &[Tool::Eyedropper, Tool::Ruler, Tool::Note, Tool::Count],
     ],
     &[
-        &[Tool::SpotHealing, Tool::Healing, Tool::Patch],
+        &[Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove],
         &[Tool::Brush, Tool::Pencil, Tool::MixerBrush],
         &[Tool::CloneStamp],
         &[Tool::HistoryBrush],
@@ -35,7 +35,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
     ],
     &[
         &[Tool::Pen],
-        &[Tool::Type],
+        &[Tool::Type, Tool::VerticalType],
         &[Tool::PathSelection],
         &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape],
     ],
@@ -86,6 +86,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
             let flyout_id = egui::Id::new("tool-flyout");
+            let held_id = flyout_id.with("held");
+            if ui.input(|i| i.pointer.any_pressed()) {
+                ui.data_mut(|d| d.remove::<egui::Id>(held_id));
+            }
             let mut slot_index = 0usize;
             for (si, section) in TOOL_SECTIONS.iter().enumerate() {
                 // Photoshop 2026 draws one uninterrupted column (no group dividers).
@@ -110,14 +114,25 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
                                 ui.painter().add(egui::Shape::convex_polygon(tri, t.text_faint, Stroke::NONE));
                             }
-                            if resp.clicked() {
+                            if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
                                 app.ui.tool = tool;
                             }
                             // Right-click or long-press opens the flyout (Photoshop).
-                            let long_press =
-                                resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.press_start_time().is_some_and(|t0| i.time - t0 > 0.35));
+                            let held_for = resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
+                            if slot.len() > 1
+                                && let Some(seconds) = held_for
+                                && seconds < 0.35
+                            {
+                                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
+                            }
+                            let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
                             if slot.len() > 1 && (resp.secondary_clicked() || long_press) {
-                                ui.data_mut(|d| d.insert_temp(flyout_id, (key, resp.rect)));
+                                ui.data_mut(|d| {
+                                    d.insert_temp(flyout_id, (key, resp.rect));
+                                    if long_press {
+                                        d.insert_temp(held_id, key);
+                                    }
+                                });
                             }
                             if slot.len() > 1 && long_press {
                                 ui.ctx().request_repaint();
@@ -179,7 +194,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                             }
                                         });
                                     });
-                                let clicked_outside = ui.input(|i| i.pointer.any_click()) && !area.response.hovered() && !resp.hovered();
+                                let held_release = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
+                                let clicked_outside = ui.input(|i| i.pointer.any_click()) && !held_release && !area.response.hovered() && !resp.hovered();
                                 if clicked_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                     ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                 }
@@ -485,7 +501,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::vline(ui, 22.0);
                         if !t.pro {
                             opt_label(ui, tl!("Size"));
-                            widgets::value_field(ui, &mut b.size, 1.0..=5000.0, "px", 76.0);
+                            widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
                             widgets::vline(ui, 22.0);
                         }
                         opt_label(ui, tl!("Mode"));
@@ -582,22 +598,49 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let _ = crate::menus::invoke(app, ui.ctx(), "select.selectAndMask", json!({}));
                         }
                     }
-                    Tool::Lasso | Tool::PolygonLasso if t.pro => {
+                    Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso if t.pro => {
                         selection_mode_buttons(app, ui);
                         widgets::vline(ui, 22.0);
                         opt_label(ui, tl!("Feather"));
                         widgets::value_field(ui, &mut app.ui.tool_options.feather, 0.0..=1000.0, "px", 62.0);
                         widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
                         widgets::vline(ui, 22.0);
+                        if app.ui.tool == Tool::MagneticLasso {
+                            let o = &mut app.ui.tool_options;
+                            opt_label(ui, tl!("Width"));
+                            widgets::value_field(ui, &mut o.magnetic_width, 1.0..=256.0, "px", 58.0)
+                                .on_hover_text(tl!("Follows only edges this close to the pointer ([ and ] change it)"));
+                            opt_label(ui, tl!("Contrast"));
+                            widgets::value_field(ui, &mut o.magnetic_contrast, 1.0..=100.0, "%", 58.0)
+                                .on_hover_text(tl!("Higher values follow only edges that contrast sharply with their surroundings"));
+                            opt_label(ui, tl!("Frequency"));
+                            widgets::value_field(ui, &mut o.magnetic_frequency, 0.0..=100.0, "", 50.0)
+                                .on_hover_text(tl!("How often fastening points are placed by themselves"));
+                            if icons::button(ui, "circle-dot", 24.0, o.magnetic_pressure, tl!("Use tablet pressure to change pen width")).clicked() {
+                                o.magnetic_pressure = !o.magnetic_pressure;
+                            }
+                            widgets::vline(ui, 22.0);
+                        }
                         if widgets::secondary_button(ui, tl!("Select and Mask…"), 0.0).clicked() {
                             let _ = crate::menus::invoke(app, ui.ctx(), "select.selectAndMask", json!({}));
                         }
-                        if app.ui.tool == Tool::PolygonLasso && !app.ui.polygon.is_empty() {
+                        if crate::lasso_ui::active(app) || (app.ui.tool == Tool::PolygonLasso && !app.ui.polygon.is_empty()) {
                             hint(
                                 ui,
                                 &crate::i18n::fmt(
                                     tl!("Click the first point or press {key} to close · Esc cancels"),
                                     &[("key", &crate::shortcuts::pretty("Enter"))],
+                                ),
+                            );
+                        } else if app.ui.tool == Tool::Lasso {
+                            hint(ui, tl!("Hold Alt while drawing for straight segments"));
+                        }
+                        if app.ui.tool == Tool::MagneticLasso && app.ui.magnetic.active() {
+                            hint(
+                                ui,
+                                &crate::i18n::fmt(
+                                    tl!("Click the first point or press {key} to close · {del} removes a point · Esc cancels"),
+                                    &[("key", &crate::shortcuts::pretty("Enter")), ("del", &crate::shortcuts::pretty("Backspace"))],
                                 ),
                             );
                         }
@@ -708,7 +751,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             }
                         });
                     }
-                    Tool::Type if t.pro => crate::type_tool::options_bar(app, ui),
+                    Tool::Type | Tool::VerticalType if t.pro => crate::type_tool::options_bar(app, ui),
                     Tool::Move if t.pro => {
                         let o = &mut app.ui.tool_options;
                         widgets::checkbox(ui, &mut o.move_auto_select, tl!("Auto-Select:"));
@@ -792,8 +835,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     Tool::Lasso | Tool::PolygonLasso => hint(
                         ui,
                         &crate::i18n::fmt(
-                            tl!("Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract"),
+                            tl!("Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts"),
                             &[("add", &crate::shortcuts::pretty("Shift")), ("sub", &crate::shortcuts::pretty("Alt"))],
+                        ),
+                    ),
+                    Tool::MagneticLasso => hint(
+                        ui,
+                        &crate::i18n::fmt(
+                            tl!("Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close"),
+                            &[("alt", &crate::shortcuts::pretty("Alt"))],
                         ),
                     ),
                     Tool::Crop => hint(
@@ -809,7 +859,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ),
                     Tool::Gradient => hint(ui, tl!("Drag to draw a gradient")),
                     Tool::PaintBucket => hint(ui, tl!("Click to fill similar colours")),
-                    Tool::Type => hint(ui, tl!("Click to add text")),
+                    Tool::Type | Tool::VerticalType => hint(ui, tl!("Click to add text")),
                     // Retouching and smart-selection tools draw their bar in `retouch_ui::options_bar`.
                     _ => {}
                 }
@@ -1570,6 +1620,46 @@ fn select_mode(m: egui::Modifiers) -> &'static str {
     }
 }
 
+/// A drag down the Layers panel's eye column (Photoshop): the first eye toggles and every row
+/// swept over gets the same visibility, once per row, all in one history step.
+#[derive(Clone)]
+struct EyeSweep {
+    visible: bool,
+    /// The `coalesce` key shared by the drag's `layer.setProps` calls.
+    key: u64,
+    swept: Vec<u64>,
+}
+
+/// Starts an eye-column sweep from `eye`, or applies a running one to the row `row` of `l`.
+fn eye_sweep(ctx: &egui::Context, l: &Layer, row: Rect, eye: &egui::Response, actions: &mut Vec<(String, Value)>) {
+    let id = egui::Id::new("layer-eye-sweep");
+    let set =
+        |visible: bool, key: u64| ("layer.setProps".to_string(), json!({"layer": l.id.0, "visible": visible, "coalesce": format!("layer-eye-sweep:{key}")}));
+    if eye.drag_started() {
+        let sweep = EyeSweep { visible: !l.visible, key: ctx.cumulative_pass_nr(), swept: vec![l.id.0] };
+        actions.push(set(sweep.visible, sweep.key));
+        ctx.data_mut(|d| d.insert_temp(id, sweep));
+        return;
+    }
+    let Some(mut sweep) = ctx.data(|d| d.get_temp::<EyeSweep>(id)) else { return };
+    let (down, pos, delta) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.interact_pos(), i.pointer.delta()));
+    if !down {
+        ctx.data_mut(|d| d.remove::<EyeSweep>(id));
+        return;
+    }
+    // Everything the pointer passed since the last frame, so a fast drag skips no row.
+    let Some(p) = pos else { return };
+    let (y0, y1) = ((p.y - delta.y).min(p.y), (p.y - delta.y).max(p.y));
+    if y1 < row.top() || y0 >= row.bottom() || sweep.swept.contains(&l.id.0) {
+        return;
+    }
+    if l.visible != sweep.visible {
+        actions.push(set(sweep.visible, sweep.key));
+    }
+    sweep.swept.push(l.id.0);
+    ctx.data_mut(|d| d.insert_temp(id, sweep));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn layer_row(
     app: &mut PhotocraftApp,
@@ -1620,26 +1710,7 @@ fn layer_row(
     if l.visible {
         icons::paint(ui, eye, "eye", 15.0, t.icon);
     }
-    let sweep_id = egui::Id::new("layer-eye-sweep");
-    if eye_resp.drag_started() {
-        let visible = !l.visible;
-        ctx.data_mut(|d| d.insert_temp(sweep_id, (visible, vec![l.id.0])));
-        actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "visible": visible})));
-    } else if let Some((visible, mut swept)) = ctx.data(|d| d.get_temp::<(bool, Vec<u64>)>(sweep_id)) {
-        if !ctx.input(|i| i.pointer.primary_down()) {
-            ctx.data_mut(|d| d.remove::<(bool, Vec<u64>)>(sweep_id));
-        } else if let Some(p) = ctx.input(|i| i.pointer.interact_pos())
-            && p.y >= rect.top()
-            && p.y < rect.bottom()
-            && !swept.contains(&l.id.0)
-        {
-            if l.visible != visible {
-                actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "visible": visible})));
-            }
-            swept.push(l.id.0);
-            ctx.data_mut(|d| d.insert_temp(sweep_id, (visible, swept)));
-        }
-    }
+    eye_sweep(ctx, l, rect, &eye_resp, actions);
     if eye_resp.clicked() {
         // ⌥-click shows only this layer; ⌥-click it again to restore the others.
         if ui.input(|i| i.modifiers.alt) {
@@ -1751,17 +1822,17 @@ fn layer_row(
             actions.push(("ui.maskTarget".into(), json!(false)));
         }
     }
-    // Double-click: the name renames in place; the Background, which can't be renamed while
-    // it's locked, becomes a normal layer; an adjustment or fill thumbnail opens its settings and
-    // a Smart Object thumbnail its contents, and a type thumbnail edits its text; anywhere else
-    // on the row opens Layer Style (#350, #537).
+    // Double-click: the name renames in place (over the row's full height, not just the glyphs:
+    // #651); the Background, which can't be renamed while it's locked, becomes a normal layer; an
+    // adjustment or fill thumbnail opens its settings and a Smart Object thumbnail its contents,
+    // and a type thumbnail edits its text; anywhere else on the row opens Layer Style (#350, #537).
     // The first click already made this the active layer.
     if resp.double_clicked() {
         let pos = resp.interact_pointer_pos();
         let on = |r: Rect| pos.is_some_and(|p| r.expand(2.0).contains(p));
         if crate::doc_props_ui::is_background(doc, l) {
             actions.push(("layer.new.layerFromBackground".into(), json!({})));
-        } else if name_rect.is_some_and(on) {
+        } else if name_rect.is_some_and(|n| on(Rect::from_x_y_ranges(n.x_range(), rect.y_range()))) {
             if let Some(done) = crate::layer_row_ui::start_rename(ctx, l.id.0, &l.name) {
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
@@ -2404,7 +2475,9 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
             ui.painter().line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
         }
         let eye = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 9.0), vec2(18.0, 18.0));
-        icons::paint(ui, eye, if on { "eye" } else { "eye-off" }, 12.0, if on { t.icon } else { t.text_faint });
+        if on {
+            icons::paint(ui, eye, "eye", 12.0, t.icon);
+        }
         let x = rect.left() + indent + if i == 0 { 0.0 } else { 16.0 };
         if i == 0 {
             icons::paint(ui, Rect::from_center_size(pos2(x - 12.0, rect.center().y), vec2(14.0, 14.0)), "sparkles", 11.0, t.text_dim);
@@ -2735,6 +2808,56 @@ mod swatch_type_tests {
         let st = h.state().session.active().unwrap();
         let Some(photocraft_doc::LayerContent::Text(t)) = st.doc.layer(photocraft_doc::LayerId(id)).map(|l| &l.content) else { panic!("type layer") };
         assert_eq!(t.char_runs().len(), 1, "still one white run");
+    }
+}
+
+#[cfg(test)]
+mod type_flyout_tests {
+    use super::*;
+
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
+        let mut out = ctx.run_ui(
+            egui::RawInput { time: Some(time), events, screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1800.0))), ..Default::default() },
+            |ui| toolbar(app, ui),
+        );
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn long_press_type_button_selects_vertical_without_selecting_on_release() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let initial = app.ui.tool;
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        frame(&mut app, &ctx, 0.0, vec![]);
+        frame(&mut app, &ctx, 0.1, vec![]);
+        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Type)).unwrap();
+        let bx = if Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
+        let mut buttons: Vec<Rect> = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.rect.size() == Vec2::splat(bx) && w.sense.senses_click())
+                .map(|w| w.rect)
+                .collect()
+        });
+        buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        let at = buttons[index].center();
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        frame(&mut app, &ctx, 1.36, vec![]);
+        assert_eq!(ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::new("tool-flyout"))).map(|(id, _)| id), Some(egui::Id::new(("tool-slot", index))));
+        frame(&mut app, &ctx, 1.4, vec![pointer(at, false)]);
+        frame(&mut app, &ctx, 1.45, vec![]);
+        assert_eq!(app.ui.tool, initial);
+        let key = egui::Id::new(("tool-slot", index));
+        let menu = ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+        let row = egui::pos2(menu.left() + 65.0, menu.top() + 39.0 + 8.0);
+        frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
+        frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
+        assert_eq!(app.ui.tool, Tool::VerticalType);
+        assert!(ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::new("tool-flyout"))).is_none());
     }
 }
 

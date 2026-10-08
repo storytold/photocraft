@@ -948,7 +948,8 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Fill Path", |doc, _| {
         let area = doc.bounds();
         let r = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE);
-        let area = r.pixel_bounds().map_or(area, |b| b.inflate(feather.ceil() as i32 * 2).intersect(&area));
+        let feather_pad = (feather.ceil() as i32).saturating_mul(2);
+        let area = r.pixel_bounds().map_or(area, |b| b.inflate(feather_pad).intersect(&area));
         if area.is_empty() {
             return Ok(());
         }
@@ -959,8 +960,8 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
         if feather > 0.0 {
             cov = sel::feather(&cov, area.width() as usize, area.height() as usize, feather);
         }
+        let lock = doc.effective_locks(id).transparency;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let lock = l.locks.transparency;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Fill Path needs a pixel layer".into()))?;
         paint_coverage(surf, area, &cov, src, opacity, mode, lock);
         Ok(())
@@ -1011,13 +1012,14 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         "brush" | "eraser" => {}
         o => return Err(bad("path.stroke", format!("unknown tool `{o}` (brush|pencil|eraser)"))),
     }
+    crate::brush_cmds::validate_brush_size(&brush, "path.stroke")?;
     let lines = vector::flatten_path(&path, 0.1);
     let id = layer_id(s, p)?;
     let bg = s.tools.background;
     let dmg = s.edit("Stroke Path", |doc, _| {
         let sel = doc.selection.clone();
+        let lock = doc.effective_locks(id).transparency;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let lock = l.locks.transparency;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Stroke Path needs a pixel layer".into()))?;
         let mut brush = brush.clone();
         if brush.erase && lock {
@@ -1079,11 +1081,12 @@ fn vector_mask_add(s: &mut Session, p: &Value, from_path: bool) -> Result<Value>
         path.inverted = !path.inverted;
     }
     s.edit("Add Vector Mask", |doc, _| {
+        let locked = doc.effective_locks(id).all;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if matches!(l.content, LayerContent::Shape(_)) {
             return Err(EngineError::Other("a shape layer's path is already its vector mask".into()));
         }
-        if l.locks.all {
+        if locked {
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         l.vector_mask = Some(VectorMask::new(path));
@@ -1368,7 +1371,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.stroke",
             "Stroke Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser"="brush","size":px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise)"##,
+            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser"="brush","size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise)"##,
             has_layer,
             path_stroke
         ),

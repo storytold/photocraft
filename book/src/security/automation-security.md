@@ -34,11 +34,17 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - Engine commands that still use ambient paths fail closed at the automation boundary. Synthetic
   UI input reaches the same command policy, and automation-triggered file hooks do not run
   user-configured script-event paths.
+- `prefs.set` applies the engine's dotted-path normalization before checking for filesystem-bearing
+  preference sections, including paths with leading or repeated dots. It refuses whole-preferences
+  updates and those sections; individual safe preference keys remain available.
+- Applying the Preferences dialog with `ui.dialog.apply` is deliberately refused over automation.
 
 ## Known limitations
 
 - no per-client or per-tool capabilities;
 - no general per-client or per-tool capability model beyond filesystem read/write authority;
+- no automated bulk apply of the Preferences dialog; agents can change individual safe keys with
+  `prefs.set`;
 - no explicit JSON-depth policy, aggregate document/session-memory accounting, compositor
   scratch-space accounting, or command-duration/cancellation budget;
 - one thread per accepted TCP connection;

@@ -135,6 +135,16 @@ fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
 }
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    let saved = app.session.authorize;
+    if let Some(gate) = app.services.automation_authorize {
+        app.session.authorize = Some(gate);
+    }
+    let outcome = dispatch(app, ctx, req);
+    app.session.authorize = saved;
+    outcome
+}
+
+fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
@@ -566,13 +576,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
                     None => Err("automation read authority is not configured".into()),
                 };
                 wrap(opened.and_then(|(name, bytes)| {
+                    let name = app.open_name(&name);
                     let warnings = app.open_automation_bytes(&name, &bytes)?;
                     // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
                     if !crate::preset_files_ui::is_preset_file(&name) {
-                        if let Some(state) = app.session.active_mut() {
-                            state.path = Some(path.to_string());
-                        }
-                        app.push_recent(path);
+                        app.opened_from(path);
                     }
                     Ok(json!({"path": path, "name": name, "warnings": warnings}))
                 }))
@@ -598,6 +606,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
+        "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "layerMenu": app.ui.layer_menu,
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
@@ -632,7 +641,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
-        "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope)),
+        "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
     })
 }
 
@@ -942,5 +951,59 @@ mod tests {
         let r = call(&mut app, &ctx, "app.save", json!({}));
         assert_eq!(r["result"]["path"], "in/layered.psd", "{r}");
         assert_eq!(written.borrow().last().map(String::as_str), Some("in/layered.psd"));
+        // A template opens untitled, so a save without `path` never writes over it.
+        let r = call(&mut app, &ctx, "app.open", json!({"path": "in/card.psdt"}));
+        assert_eq!(r["result"]["name"], "Untitled-1", "{r}");
+        assert_eq!(app.session.active().unwrap().path, None);
+        let r = call(&mut app, &ctx, "app.save", json!({}));
+        assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
+    }
+
+    fn deny_ambient_file(id: &str, _: &serde_json::Value) -> photocraft_engine::Result<()> {
+        if id.starts_with("file.") && id != "file.new" {
+            Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn actions_play_checks_each_step_over_control() {
+        let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+            name: "Open".into(),
+            steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
+        });
+        let ctx = egui::Context::default();
+        let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Open"}}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["result"]["ran"], 0, "{r}");
+        assert_eq!(r["result"]["failed"]["id"], "file.open", "{r}");
+        assert!(r["result"]["failed"]["error"].as_str().unwrap_or("").contains("disabled"), "{r}");
+        assert!(app.session.documents().is_empty());
+        assert!(app.session.authorize.is_none(), "the per-step gate is only installed for the request");
+    }
+
+    #[test]
+    fn actions_play_checks_each_step_for_synthetic_input() {
+        let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+            name: "Open".into(),
+            steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
+        });
+        app.automation_input = true;
+        let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
+        assert_eq!(r["ran"], 0, "{r}");
+        assert_eq!(r["failed"]["id"], "file.open", "{r}");
+        assert!(app.session.authorize.is_none(), "the per-step gate is only installed for the command");
+
+        // A local play (no automation input) still runs recorded steps.
+        app.automation_input = false;
+        app.session.actions.list[0].steps.remove(0);
+        app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
+        assert_eq!(r["ran"], 1, "{r}");
     }
 }

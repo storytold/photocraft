@@ -10,7 +10,7 @@ use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, int};
+use crate::commands::{CommandSpec, int_i32};
 use crate::{DocState, EngineError, Result, Session};
 
 // ---------- selection state ----------
@@ -225,8 +225,9 @@ pub(crate) fn move_layers(doc: &mut Document, moves: &[(LayerId, i32, i32)]) -> 
         if dx == 0 && dy == 0 {
             continue;
         }
+        let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if l.locks.position || l.locks.all {
+        if locks.position || locks.all {
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
         crate::commands::translate_layer(&snapshot, l, dx, dy);
@@ -237,8 +238,8 @@ pub(crate) fn move_layers(doc: &mut Document, moves: &[(LayerId, i32, i32)]) -> 
 
 /// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
 pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
-    let dx = int(p, "dx").unwrap_or(0) as i32;
-    let dy = int(p, "dy").unwrap_or(0) as i32;
+    let dx = int_i32("layer.translate", p, "dx")?.unwrap_or(0);
+    let dy = int_i32("layer.translate", p, "dy")?.unwrap_or(0);
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
@@ -276,8 +277,9 @@ pub fn move_targets(doc: &Document, roots: &[LayerId]) -> Vec<LayerId> {
 pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Document> {
     let mut out = doc.clone();
     for &id in ids {
+        let locks = doc.effective_locks(id);
         let l = out.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if l.locks.position || l.locks.all {
+        if locks.position || locks.all {
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
         shift_shown(doc, l, dx, dy);
@@ -612,6 +614,16 @@ fn reverse(s: &mut Session) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Refuses an edit that left `doc` nested deeper than [`photocraft_doc::MAX_GROUP_DEPTH`]
+/// groups. Called at the end of a `Session::edit` closure, so an `Err` leaves the document and
+/// history untouched.
+pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
+    if doc.max_group_depth() > photocraft_doc::MAX_GROUP_DEPTH {
+        return Err(EngineError::Other(format!("{what} would nest layers deeper than {} groups", photocraft_doc::MAX_GROUP_DEPTH)));
+    }
+    Ok(())
+}
+
 /// Group Layers (⌘G) / Group from Layers: the explicit layer, or every selected layer, moves
 /// into a new group placed where the top-most of them was. Bottom-to-top order is preserved.
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
@@ -633,6 +645,7 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
         }
         *doc.layer_mut(gid).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(gid))? = children;
+        check_group_depth(doc, "Group Layers")?;
         *active = Some(gid);
         Ok(gid)
     })?;
@@ -1109,6 +1122,46 @@ mod tests {
     }
 
     #[test]
+    fn a_locked_group_locks_its_contents() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        let g = s.execute("layer.new.groupFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setProps", json!({"layer": g, "locked": true})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        for (cmd, p) in [
+            ("layer.translate", json!({"dx": 1})),
+            ("paint.stroke", json!({"points": [[2, 2], [4, 4]]})),
+            ("edit.fill", json!({"color": "#00ff00"})),
+            ("edit.transform.flipHorizontal", json!({})),
+        ] {
+            assert!(s.execute(cmd, p).is_err(), "{cmd} edited a layer in a locked group");
+        }
+        // Unlocking the group releases its contents.
+        s.execute("layer.setProps", json!({"layer": g, "locked": false})).unwrap();
+        s.execute("layer.translate", json!({"dx": 1})).unwrap();
+        assert_eq!(bounds(&s, a), Rect::new(1, 0, 6, 5));
+    }
+
+    #[test]
+    fn a_locked_group_keeps_a_grouped_background_locked() {
+        let mut s = session(8);
+        let bg = doc(&s).layers[0].id;
+        s.execute("layer.select", json!({"layer": bg.0})).unwrap();
+        let g = s.execute("layer.new.groupFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setProps", json!({"layer": g, "locked": true})).unwrap();
+        s.execute("layer.select", json!({"layer": bg.0})).unwrap();
+        for (cmd, p) in [
+            ("edit.transform.flipHorizontal", json!({})),
+            ("edit.transform.warp", json!({"style": "flag", "bend": 50})),
+            ("edit.puppetWarp", json!({"pins": [{"src": [30, 25], "dst": [36, 29]}]})),
+        ] {
+            let e = s.execute(cmd, p).unwrap_err().to_string();
+            assert!(e.contains("locked"), "{cmd}: {e}");
+            assert_eq!(doc(&s).layer(bg).unwrap().name, "Background", "{cmd}");
+        }
+    }
+
+    #[test]
     fn group_from_layers_preserves_order() {
         let mut s = session(8);
         let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
@@ -1130,6 +1183,24 @@ mod tests {
         select_all(&mut s, &[b, d]);
         s.execute("layer.groupLayers", json!({})).unwrap();
         assert_eq!(doc(&s).layers.len(), 4);
+    }
+
+    #[test]
+    fn grouping_is_capped_at_the_document_nesting_limit() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        select_all(&mut s, &[a]);
+        for _ in 0..photocraft_doc::MAX_GROUP_DEPTH {
+            s.execute("layer.groupLayers", json!({})).unwrap();
+        }
+        assert_eq!(doc(&s).max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+        // One more wrapping group would pass the cap: rejected, document untouched.
+        let err = s.execute("layer.groupLayers", json!({})).unwrap_err();
+        assert!(err.to_string().contains("deeper than 100"), "{err}");
+        assert_eq!(doc(&s).max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH);
+        // The rejected call recorded no history step: undo still lands one grouping earlier.
+        s.undo();
+        assert_eq!(doc(&s).max_group_depth(), photocraft_doc::MAX_GROUP_DEPTH - 1);
     }
 
     #[test]
@@ -1202,6 +1273,21 @@ mod tests {
         assert!(!s.is_enabled("layer.selectLinkedLayers"));
         assert!(s.execute("layer.selectLinkedLayers", json!({})).is_err());
         assert_eq!(sel(&s), before);
+    }
+
+    #[test]
+    fn translate_rejects_offsets_that_would_wrap() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        select_all(&mut s, &[a]);
+        // 2^32 + 50 wrapped to `dx = 50` and 3e9 to a negative offset through `as i32`.
+        for dx in [4_294_967_346_i64, 3_000_000_000_i64] {
+            let err = s.execute("layer.translate", json!({"dx": dx, "dy": 0})).unwrap_err();
+            assert!(err.to_string().contains("32-bit"), "{err}");
+        }
+        assert_eq!(bounds(&s, a), Rect::new(0, 0, 5, 5), "the layer never moved");
+        // Large in-range offsets still work.
+        s.execute("layer.translate", json!({"dx": -200_000, "dy": 200_000})).unwrap();
     }
 
     #[test]

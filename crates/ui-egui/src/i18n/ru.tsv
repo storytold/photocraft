@@ -1444,8 +1444,6 @@
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Перетащите по изображению, чтобы добавить ограничение; Shift — горизонталь/вертикаль; правый клик — удалить.
 	Drag the arrow to set the angle, the dots to set the roundness	Перетащите стрелку, чтобы задать угол, и точки — круглость
 	Create new pattern from the selection	Создать новый паттерн из выделения
-	Create new style (from the selected type)	Создать новый стиль (из выбранного типа)
-	Create new style from the selected layer	Создать новый стиль из выбранного слоя
 	Create new gradient	Создать новый градиент
 	Create new count group	Создать новую группу счёта
 	Search commands, tools and panels…	Поиск команд, инструментов и панелей…
@@ -1537,7 +1535,6 @@
 	Redefine style by current selection	Переопределить стиль по текущему выделению
 	Duplicate style	Дублировать стиль
 	Delete style	Удалить стиль
-	New Style…	Новый стиль…
 	Style Options	Параметры стиля
 	Style Options…	Параметры стиля…
 	Close Style Options	Закрыть параметры стиля
@@ -1548,6 +1545,8 @@
 	Answer the unsaved-changes prompt first	Сначала ответьте на запрос о несохранённых изменениях
 	Unsaved changes	Несохранённые изменения
 	Don't Save	Не сохранять
+	No	Нет
+	Yes	Да
 	These settings aren't available in PhotoCraft yet.	Эти параметры пока недоступны в PhotoCraft.
 	Shortcut removed.	Комбинация клавиш удалена.
 	All shortcuts reset to Photoshop defaults.	Все комбинации клавиш сброшены к стандартным Photoshop.
@@ -2289,7 +2288,6 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Сетка:
-
 # Rendering mode and recovery
 	Rendering Mode	Режим отрисовки
 	Automatic (recommended)	Автоматически (рекомендуется)
@@ -2304,10 +2302,8 @@
 	GPU Backend	Бэкенд GPU
 	Details	Подробности
 	GPU	GPU
-
 	Rendering mode	Режим отрисовки
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Лассо заморозки: перетащите, чтобы заморозить область; Alt+перетаскивание размораживает (L)
-
 	Shadow Clipping Warning (U)	Предупреждение о клиппинге теней (U)
 	Highlight Clipping Warning (O)	Предупреждение о клиппинге светов (O)
 	Show Lab Color Readouts	Показывать значения Lab
@@ -2316,9 +2312,7 @@
 	Show Skin Tone Indicator	Показывать ориентир тона кожи
 	Tone Histogram	Тональная гистограмма
 	Show Selected Region	Показать выделенную область
-
 cameraRaw	Light	Свет
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Фильтр Camera Raw ({layer})
 	Aqua	Голубой
@@ -2346,5 +2340,31 @@ cameraRaw	Roughness	Неровность
 	Patch:	Заплатка:
 	Lasso around an area, then drag the selection	Обведите область лассо, затем перетащите выделение
 	Edit Type	Редактировать текст
+
+
+	New Style…	Новый стиль…
+	Style {name} saved	Стиль {name} сохранён
+
+	Create new style (from the selected type)	Создать стиль (из выделенного текста)
+	Create new style from the selected layer	Создать стиль из выделенного слоя
+
+	Make Default	Сделать по умолчанию
+	Reset to Default	Сбросить к значению по умолчанию
+	Full-resolution preview unavailable	Полноразмерный предпросмотр недоступен
 	No patterns	Нет узоров
 	Enable {name}	Включить {name}
+	Hold Alt while drawing for straight segments	Удерживайте Alt при рисовании для прямых отрезков
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Перетащите или щёлкайте точки многоугольника · удерживайте Alt во время лассо для прямых отрезков · {add} добавить · {sub} перед рисованием вычитает
+	Extend	Расширение
+	Structure:	Структура:
+	Content-Aware Move Tool	Перемещение с учётом содержимого
+	TIFF Options	Параметры TIFF
+	Including layers will increase file size.	Включение слоёв увеличит размер файла.
+	Discard Layers and Save a Copy	Удалить слои и сохранить копию
+	Don't show again	Больше не показывать
+	Save failed: {error}	Не удалось сохранить: {error}
+	Save cancelled	Сохранение отменено
+	Couldn't place {name}: {error}	Не удалось поместить {name}: {error}
+	Magnetic Lasso Tool	Магнитное лассо
+	Frequency	Частота
+	Use tablet pressure to change pen width	Использовать нажим планшета для изменения ширины пера

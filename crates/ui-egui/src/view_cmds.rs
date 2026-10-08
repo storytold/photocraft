@@ -825,9 +825,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
                 Err(e) => return Some(Err(e)),
             };
             let linked = (id == "file.placeLinked").then(|| name.clone());
-            let r = photocraft_engine::file_cmds::place_bytes(&mut app.session, &name, bytes, linked, &json!({})).map_err(|e| e.to_string());
-            app.sync_views();
-            Some(r)
+            Some(app.place_bytes(&name, bytes, linked))
         }
         "file.fileInfo" => {
             let info = app.session.execute("file.fileInfo", json!({})).ok()?;
@@ -918,12 +916,10 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             json!({"format": ["jpg", "png", "psd", "tiff"]}),
         ),
         "file.automate.batch" => {
-            let a = &app.ui.actions;
-            let action = a.selected.and_then(|i| a.list.get(i)).or(a.list.first());
-            let Some(action) = action else {
+            let Some(action) = crate::actions::selected_action(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
             };
-            let steps: Vec<Value> = action.steps.iter().map(|(id, p)| json!([id, p])).collect();
+            let steps = crate::actions::action_steps(action);
             let name = action.name.clone();
             dialog(
                 app,

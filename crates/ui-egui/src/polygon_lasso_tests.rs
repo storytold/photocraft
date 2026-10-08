@@ -206,3 +206,37 @@ fn a_new_polygon_without_a_selection_adds_one_step() {
     triangle(&mut h, 20.0, 20.0, Modifiers::NONE);
     assert_eq!(steps(&h), before + 1);
 }
+
+/// The options bar's Feather softens the Lasso and Polygonal Lasso; the Patch Tool, which has no
+/// Feather, keeps a hard edge.
+#[test]
+fn lasso_tools_apply_the_options_bar_feather() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+    app.sync_views();
+    app.ui.tool_options.feather = 4.0;
+    let corners = [(40.0, 30.0), (160.0, 30.0), (160.0, 120.0), (40.0, 120.0)];
+    let coverage = |app: &PhotocraftApp, x: i32| app.session.active().unwrap().doc.selection.as_ref().map_or(0.0, |m| m.sample_channel(x, 75, 0));
+    let drag = |app: &mut PhotocraftApp, tool: Tool| {
+        app.run("select.deselect", json!({})).ok();
+        app.ui.tool = tool;
+        tool_event(app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, Modifiers::NONE);
+        for (x, y) in corners.iter().skip(1) {
+            tool_event(app, ToolEvent::Move { x: *x, y: *y, pressure: 1.0 }, Modifiers::NONE);
+        }
+        tool_event(app, ToolEvent::Up { x: 40.0, y: 120.0 }, Modifiers::NONE);
+    };
+    let soft = |app: &PhotocraftApp| coverage(app, 37) > 0.05 && coverage(app, 41) < 0.95;
+    drag(&mut app, Tool::Lasso);
+    assert!(soft(&app), "lasso: {} {}", coverage(&app, 37), coverage(&app, 41));
+    app.ui.tool = Tool::PolygonLasso;
+    for (x, y) in corners {
+        tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x, y }, Modifiers::NONE);
+    }
+    crate::canvas::commit_polygon(&mut app);
+    assert!(soft(&app), "polygonal: {} {}", coverage(&app, 37), coverage(&app, 41));
+    drag(&mut app, Tool::Patch);
+    assert_eq!((coverage(&app, 37), coverage(&app, 41)), (0.0, 1.0), "patch: a hard edge");
+}

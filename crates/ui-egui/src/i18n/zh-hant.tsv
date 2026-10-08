@@ -905,8 +905,6 @@
 	Create new pattern from the selection	從選取範圍建立新圖樣
 	Create new shape from the current path	從目前路徑建立新形狀
 	Create new snapshot	建立新快照
-	Create new style (from the selected type)	建立新樣式 (依所選文字)
-	Create new style from the selected layer	從所選圖層建立新樣式
 	Create new tool preset	建立新工具預設集
 	Crop Factor	裁切係數
 	Ctrl	Ctrl
@@ -967,6 +965,8 @@
 	Divide…	分割…
 	Document	文件
 	Don't Save	不儲存
+	No	否
+	Yes	是
 	Done	完成
 	Dots	點
 	Drag a rectangle around the object	在物件周圍拖曳出矩形
@@ -1495,6 +1495,7 @@
 	Comic Book	漫畫書
 	Conform	符合
 	Content-Aware Fill needs a selection on a pixel layer	內容感知填滿需要在像素圖層上建立選取範圍
+	Couldn't place {name}: {error}	無法置入 {name}：{error}
 	Could not transform: the layer is empty	無法變形：圖層是空的
 	Could not use Perspective Warp: the layer is empty	無法使用透視彎曲：圖層是空的
 	Could not use Puppet Warp: no opaque pixels	無法使用操控彎曲：沒有不透明像素
@@ -2002,7 +2003,6 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	格點：
-
 # Rendering mode and recovery
 	Rendering Mode	渲染模式
 	Automatic (recommended)	自動（建議）
@@ -2017,10 +2017,8 @@
 	Advanced	進階
 	GPU Backend	GPU 後端
 	Details	詳細資訊
-
 	Rendering mode	渲染模式
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	凍結套索：拖曳以凍結區域，按住 Alt 拖曳以解凍 (L)
-
 	Shadow Clipping Warning (U)	陰影剪裁警告 (U)
 	Highlight Clipping Warning (O)	亮部剪裁警告 (O)
 	Show Lab Color Readouts	顯示 Lab 色彩讀值
@@ -2029,9 +2027,7 @@
 	Show Skin Tone Indicator	顯示膚色指示線
 	Tone Histogram	色調直方圖
 	Show Selected Region	顯示選取區域
-
 cameraRaw	Light	光線
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 濾鏡（{layer}）
 cameraRaw	Lights	亮調
@@ -2046,5 +2042,31 @@ cameraRaw	Blending	混合
 	Patch:	修補：
 	Lasso around an area, then drag the selection	用套索圈出區域，然後拖曳選取範圍
 	Edit Type	編輯文字
+
+
+	New Style…	新增樣式…
+	Style {name} saved	已儲存樣式 {name}
+
+	Create new style (from the selected type)	新增樣式（基於所選文字）
+	Create new style from the selected layer	從所選圖層新增樣式
+
+	Make Default	設為預設
+	Reset to Default	重設為預設
+	Full-resolution preview unavailable	無法使用完整解析度預覽
 	No patterns	無圖樣
 	Enable {name}	啟用{name}
+	Hold Alt while drawing for straight segments	繪製中按住 Alt 可逐點連接直線
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	拖曳圈選或逐點繪製 · 圈選中按住 Alt 畫直線 · {add} 增加 · 起筆前按 {sub} 減去
+	Move	移動
+	Extend	延伸
+	Structure:	結構：
+	Content-Aware Move Tool	內容感知移動工具
+	TIFF Options	TIFF 選項
+	Including layers will increase file size.	包含圖層會增加檔案大小。
+	Discard Layers and Save a Copy	放棄圖層並儲存拷貝
+	Don't show again	不再顯示
+	Save failed: {error}	儲存失敗：{error}
+	Save cancelled	已取消儲存
+	Magnetic Lasso Tool	磁性套索工具
+	Frequency	頻率
+	Use tablet pressure to change pen width	使用繪圖板壓力以變更鋼筆寬度
