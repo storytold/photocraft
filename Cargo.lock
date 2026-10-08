@@ -4223,6 +4223,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-adobe-assets"
+version = "0.5.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "photocraft-algo"
 version = "0.6.0"
 dependencies = [

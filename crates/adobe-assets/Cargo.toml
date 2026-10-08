@@ -1,0 +1,17 @@
+[package]
+name = "photocraft-adobe-assets"
+description = "Readers and writers for Adobe preset and asset files (Photoshop actions, .atn)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "photocraft_adobe_assets"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
