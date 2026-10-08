@@ -533,9 +533,12 @@ fn log_error(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These tests exercise the same process-wide eviction barrier and integrity counters.
+    static EVICTION_TESTS: Mutex<()> = Mutex::new(());
 
     #[test]
     fn resident_scope_prevents_eviction_and_check_never_reloads() {
+        let _test = EVICTION_TESTS.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("pc-resident-scope-{}", std::process::id()));
         let file = Arc::new(ScratchFile::create(&dir).unwrap());
         let cell = Cell::new(vec![23; 1024]);
@@ -554,6 +557,7 @@ mod tests {
 
     #[test]
     fn failed_read_retains_backing_and_blocks_commit_until_repaired() {
+        let _test = EVICTION_TESTS.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("photocraft-read-failure-{}", std::process::id()));
         let file = Arc::new(ScratchFile::create(&dir).unwrap());
         let mut tile = crate::Tile { cell: Cell::new(vec![73; 1024]) };
