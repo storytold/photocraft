@@ -268,19 +268,83 @@ fn average_samples(src: &Image, out: Rect, ctx: &Ctx, mut offsets: impl FnMut(f3
     res
 }
 
-pub(crate) fn motion(src: &Image, out: Rect, ctx: &Ctx, angle: f32, distance: f32) -> Vec<f32> {
+/// Sample offsets of a motion blur of `distance` at `angle`, relative to the pixel centre.
+fn motion_offsets(angle: f32, distance: f32) -> Vec<(f32, f32)> {
     let d = distance.abs();
-    if d < 0.5 {
-        return src.crop(out);
-    }
     let (s, c) = angle.to_radians().sin_cos();
     let steps = d.ceil() as i32;
-    average_samples(src, out, ctx, |x, y, pts| {
-        for i in 0..=steps {
+    (0..=steps)
+        .map(|i| {
             let t = i as f32 / steps as f32 - 0.5;
-            pts.push((x + c * d * t, y - s * d * t));
+            (c * d * t, -s * d * t)
+        })
+        .collect()
+}
+
+/// Motion blur: the mean of bilinear samples along a line centred on the pixel. The offsets are the
+/// same for every pixel, so their bilinear taps are merged once into a fixed kernel, which is
+/// applied tap by tap to whole rows of a premultiplied window (the same premultiplied mean the
+/// per-sample loop takes, summed in another order).
+pub(crate) fn motion(src: &Image, out: Rect, ctx: &Ctx, angle: f32, distance: f32) -> Vec<f32> {
+    if distance.abs() < 0.5 {
+        return src.crop(out);
+    }
+    let offs = motion_offsets(angle, distance);
+    let k = 1.0 / offs.len() as f32;
+    // Merged taps (dx, dy, weight), in the order first seen.
+    let mut taps: Vec<(i32, i32, f32)> = Vec::new();
+    let mut slot = std::collections::HashMap::new();
+    for &(ox, oy) in &offs {
+        let (x0, y0) = (ox.floor(), oy.floor());
+        let (ax, ay) = (ox - x0, oy - y0);
+        let (x0, y0) = (x0 as i32, y0 as i32);
+        for (dx, dy, w) in [(0, 0, (1.0 - ax) * (1.0 - ay)), (1, 0, ax * (1.0 - ay)), (0, 1, (1.0 - ax) * ay), (1, 1, ax * ay)] {
+            if w <= 0.0 {
+                continue;
+            }
+            let i = *slot.entry((x0 + dx, y0 + dy)).or_insert_with(|| {
+                taps.push((x0 + dx, y0 + dy, 0.0));
+                taps.len() - 1
+            });
+            taps[i].2 += w * k;
         }
-    })
+    }
+    let reach = taps.iter().map(|t| t.0.abs().max(t.1.abs())).max().unwrap_or(0);
+    let n = src.ch;
+    let win = out.inflate(reach);
+    let ww = win.width() as usize;
+    // Premultiplied window; outside the source reads as transparent, as the sampler does.
+    let mut pw = vec![0.0f32; ww * win.height() as usize * n];
+    for y in win.y0..win.y1 {
+        for x in win.x0..win.x1 {
+            let i = ((y - win.y0) as usize * ww + (x - win.x0) as usize) * n;
+            let a = if ctx.alpha { src.get(x, y, n - 1) } else { 1.0 };
+            for c in 0..n {
+                let v = src.get(x, y, c);
+                pw[i + c] = if ctx.alpha && c < n - 1 { v * a } else { v };
+            }
+        }
+    }
+    let (ow, oh) = (out.width() as usize, out.height() as usize);
+    let mut res = vec![0.0f32; ow * oh * n];
+    let r = reach as usize;
+    for (oy, row) in res.chunks_exact_mut(ow * n).enumerate() {
+        for &(dx, dy, w) in &taps {
+            let start = ((oy + r).wrapping_add_signed(dy as isize) * ww + r.wrapping_add_signed(dx as isize)) * n;
+            for (o, v) in row.iter_mut().zip(&pw[start..start + ow * n]) {
+                *o += w * v;
+            }
+        }
+        if ctx.alpha {
+            for px in row.chunks_exact_mut(n) {
+                let a = px[n - 1];
+                for v in px.iter_mut().take(n - 1) {
+                    *v = if a > 1e-7 { *v / a } else { 0.0 };
+                }
+            }
+        }
+    }
+    res
 }
 
 pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: RadialMethod, center: (f32, f32)) -> Vec<f32> {
@@ -519,5 +583,35 @@ mod tests {
         let i = (14 * src_rect.width() as usize + 14) * 4;
         img.data[i] = 0.5 / 255.0;
         assert!(surface_8bit(&img, out, &ctx, 4, 0.1, 26).is_none());
+    }
+
+    #[test]
+    fn motion_kernel_matches_the_per_pixel_samples() {
+        // Noisy RGBA with some transparent pixels; the output reaches the source edge.
+        let src_rect = Rect::new(-30, -30, 50, 40);
+        let mut img = Image::new(src_rect, 4);
+        let mut s = 0x1b87_3593u32;
+        for px in img.data.as_chunks_mut::<4>().0 {
+            for v in px.iter_mut() {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                *v = (s % 1000) as f32 / 999.0;
+            }
+            if s.is_multiple_of(5) {
+                px[3] = 0.0;
+            }
+        }
+        let out = Rect::new(-12, -6, 30, 22);
+        for alpha in [true, false] {
+            let ctx = Ctx { bounds: src_rect, mode: crate::ColorMode::Rgb, alpha };
+            for (angle, distance) in [(0.0, 1.0), (0.0, 9.0), (30.0, 7.0), (90.0, 12.0), (-45.0, 20.0), (137.0, 33.5), (200.0, 40.0)] {
+                let fast = motion(&img, out, &ctx, angle, distance);
+                let offs = motion_offsets(angle, distance);
+                let slow = average_samples(&img, out, &ctx, |x, y, pts| pts.extend(offs.iter().map(|&(dx, dy)| (x + dx, y + dy))));
+                let err = slow.iter().zip(&fast).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(err < 1e-5, "alpha {alpha} angle {angle} distance {distance}: max error {err}");
+            }
+        }
     }
 }
