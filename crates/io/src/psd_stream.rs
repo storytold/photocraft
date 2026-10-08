@@ -44,14 +44,14 @@ fn tile_footprint(r: photocraft_psd::Rect, bytes_per_pixel: usize) -> u64 {
     columns.saturating_mul(rows).saturating_mul(side as u64 * side as u64).saturating_mul(bytes_per_pixel as u64)
 }
 
-fn ram_tile_capacity(scratch: bool, resident: u64, budget: u64, growth: u64) -> Result<(), IoError> {
+pub(super) fn ram_tile_capacity(scratch: bool, resident: u64, budget: u64, growth: u64) -> Result<(), IoError> {
     if !scratch && resident.checked_add(growth).is_none_or(|required| required > budget) {
-        return Err(IoError::Unsupported("decoded PSB tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
+        return Err(IoError::Unsupported("decoded image tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
     }
     Ok(())
 }
 
-fn require_scratch(expected: bool) -> Result<(), IoError> {
+pub(super) fn require_scratch(expected: bool) -> Result<(), IoError> {
     if expected && !photocraft_raster::spill::enabled() {
         return Err(IoError::Unsupported(
             photocraft_raster::spill::last_error().unwrap_or_else(|| "scratch storage was disabled while loading; retry the import".into()),

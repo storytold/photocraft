@@ -30,6 +30,8 @@ pub mod blocks;
 mod channel_map;
 pub mod comps_map;
 pub mod effects_map;
+#[cfg(not(target_arch = "wasm32"))]
+mod exr_native;
 mod flat;
 mod gradient_bake;
 pub mod linked;
@@ -147,7 +149,7 @@ pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_with(name, bytes, &photocraft_raster::Interrupt::NONE)
 }
 
-/// Native seekable import. Large layered PSD/PSBs decode bounded row bands directly into tiles;
+/// Native seekable import. Layered PSD/PSB and flat scanline EXR decode bounded bands directly into tiles;
 /// the bytes API remains available for web and for formats without a seekable decoder.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import_path_with(name: &str, path: &std::path::Path, ctl: &photocraft_raster::Interrupt<'_>) -> Result<ImportResult, IoError> {
@@ -180,6 +182,19 @@ pub fn import_path_with(name: &str, path: &std::path::Path, ctl: &photocraft_ras
             ctl.check().map_err(|_| IoError::Cancelled)?;
             return Ok(result);
         }
+    }
+    if n == 4
+        && photocraft_codecs::detect(&magic) == Some(photocraft_codecs::Format::OpenExr)
+        && let Some(mut result) = exr_native::import(&mut source, ctl)?
+    {
+        let current = std::fs::metadata(path).map_err(|e| IoError::Unsupported(e.to_string()))?;
+        if current.len() != original.len() || current.modified().ok() != original.modified().ok() {
+            return Err(IoError::Unsupported("the source file changed while it was being opened; open it again".into()));
+        }
+        result.document.name = name.into();
+        photocraft_raster::spill::check_since(before).map_err(IoError::Unsupported)?;
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        return Ok(result);
     }
     drop(source);
     let _bytes = photocraft_raster::memory::try_reserve(size)
@@ -221,6 +236,15 @@ pub fn import_seekable_with<R: std::io::Read + std::io::Seek>(
             ctl.check().map_err(|_| IoError::Cancelled)?;
             return Ok(result);
         }
+    }
+    if n == 4
+        && photocraft_codecs::detect(&magic) == Some(photocraft_codecs::Format::OpenExr)
+        && let Some(mut result) = exr_native::import(&mut source, ctl)?
+    {
+        result.document.name = name.into();
+        photocraft_raster::spill::check_since(before).map_err(IoError::Unsupported)?;
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        return Ok(result);
     }
     source.seek(SeekFrom::Start(0)).map_err(|e| IoError::Unsupported(e.to_string()))?;
     let _working = photocraft_raster::memory::try_reserve_operation(size).map_err(IoError::Unsupported)?;
