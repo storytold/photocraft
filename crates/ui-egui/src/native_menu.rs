@@ -3,12 +3,13 @@
 //!
 //! Pure and platform-free, so it is tested everywhere and builds for the web; only the backend
 //! touches AppKit. What the layout does ([`mac_layout`]):
-//! - an **app menu** named PhotoCraft: About (from Help), Settings (Edit › Preferences),
-//!   Services, Hide, Hide Others, Show All and Quit (File › Exit, still the app's own `file.exit`
-//!   so the unsaved-changes prompt runs);
+//! - an **app menu** named PhotoCraft: About (from Help), Settings (Edit › Preferences), Language,
+//!   Appearance (Window › Theme), Services, Hide, Hide Others, Show All and Quit (File › Exit,
+//!   still the app's own `file.exit` so the unsaved-changes prompt runs). The other Craft apps
+//!   use the same app menu;
 //! - **Window** gets Minimize, Zoom and Bring All to Front, and **Help** the system search field;
 //! - **clashes** with the system's keys (⌘H, ⌘M, ⌘W, ⌘,) are resolved in PhotoCraft's favour, and
-//!   reported.
+//!   reported; Hide and Minimize move to ⌃⌘H and ⌃⌘M, as Photoshop does.
 //!
 //! **Keys stay with egui.** AppKit runs a menu's key equivalents before the window sees the key,
 //! which would skip PhotoCraft's key rules (text fields keep ⌘C/⌘V/⌘Z, dialogs and Camera Raw are
@@ -54,7 +55,11 @@ pub enum MenuRole {
 pub enum Node {
     Item(Item),
     Separator,
-    Submenu { label: String, children: Vec<Node>, role: Option<ItemRole> },
+    Submenu {
+        label: String,
+        children: Vec<Node>,
+        role: Option<ItemRole>,
+    },
     /// An item AppKit provides and runs itself (Services, Zoom, …).
     Standard(Standard),
 }
@@ -80,6 +85,10 @@ pub enum ItemRole {
     Quit,
     Hide,
     Minimize,
+    /// Window › Theme and Next Theme, which become the app menu's Appearance submenu.
+    Appearance,
+    /// The app menu's Language submenu (its labels are final, never translated by id).
+    Language,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -351,8 +360,7 @@ pub struct Layout {
 pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
     let mut bar = bar.clone();
     let mut clashes = Vec::new();
-    let bound: HashMap<String, String> =
-        bar.items().iter().filter_map(|it| Some((Chord::parse(it.shortcut.as_deref()?)?.portable(), it.id.clone()))).collect();
+    let bound: HashMap<String, String> = bar.items().iter().filter_map(|it| Some((Chord::parse(it.shortcut.as_deref()?)?.portable(), it.id.clone()))).collect();
     let taken = |sc: &str, own: Option<&str>| bound.get(sc).filter(|cmd| Some(cmd.as_str()) != own).cloned();
     let named = |s: &str| crate::i18n::fmt(tr(lang, s), &[("app", APP_NAME)]);
 
@@ -363,6 +371,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
         _ => false,
     });
     let quit = take(&mut bar, |n| matches!(n, Node::Item(it) if it.role == Some(ItemRole::Quit)));
+    let appearance = appearance_node(&mut bar, lang);
 
     let mut menu = Vec::new();
     if let Some(Node::Item(mut it)) = about {
@@ -373,13 +382,23 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
         let own = node_ids(&s);
         let comma = bound.get("Cmd+,").filter(|cmd| !own.contains(*cmd)).cloned();
         menu.push(settings_node(s, comma, lang, &mut clashes));
+    }
+    menu.extend(appearance);
+    if !menu.is_empty() && menu.last() != Some(&Node::Separator) {
         menu.push(Node::Separator);
     }
     menu.extend([Node::Standard(Standard::Services), Node::Separator]);
     let mut hide = Item::new(HIDE, &named("Hide {app}"));
     hide.role = Some(ItemRole::Hide);
     match taken("Cmd+H", None) {
-        Some(command) => clashes.push(Clash { shortcut: "Cmd+H", system: "Hide", command, resolution: "Hide has no shortcut; PhotoCraft keeps ⌘H" }),
+        Some(command) => {
+            let free = taken("Ctrl+Cmd+H", None).is_none();
+            if free {
+                hide.shortcut = Some("Ctrl+Cmd+H".into());
+            }
+            let resolution = if free { "Hide moves to ⌃⌘H, as in Photoshop" } else { "Hide has no shortcut" };
+            clashes.push(Clash { shortcut: "Cmd+H", system: "Hide", command, resolution });
+        }
         None => hide.shortcut = Some("Cmd+H".into()),
     }
     menu.push(Node::Item(hide));
@@ -469,6 +488,40 @@ fn settings_node(node: Node, comma_taken: Option<String>, lang: Lang, clashes: &
     }
 }
 
+/// Appearance in the app menu: the themes (Window › Theme, tagged [`ItemRole::Appearance`]), then
+/// Next Theme, both leaving the Window menu. None when there are no themes.
+fn appearance_node(bar: &mut MenuBar, lang: Lang) -> Option<Node> {
+    let Some(Node::Submenu { mut children, .. }) = take(bar, |n| matches!(n, Node::Submenu { role, .. } if *role == Some(ItemRole::Appearance))) else {
+        return None;
+    };
+    if let Some(Node::Item(mut next)) = take(bar, |n| matches!(n, Node::Item(it) if it.role == Some(ItemRole::Appearance))) {
+        // Placed now: translated by id like the themes above it.
+        next.role = None;
+        children.extend([Node::Separator, Node::Item(next)]);
+    }
+    Some(Node::Submenu { label: tr(lang, "Appearance").into(), children, role: Some(ItemRole::Appearance) })
+}
+
+/// Command ids of the app menu's Language items: `app.language.<code>`, where `auto` follows the
+/// system (the `interface.language` preference values).
+pub const LANGUAGE_PREFIX: &str = "app.language.";
+
+/// Language in the app menu, after Settings: Auto, then every UI language in its own name, with
+/// the current preference checked.
+fn language_node(pref: &str, lang: Lang) -> Node {
+    let item = |code: &str, label: &str| Item {
+        id: format!("{LANGUAGE_PREFIX}{code}"),
+        label: label.into(),
+        shortcut: None,
+        enabled: true,
+        checked: Some(pref == code),
+        role: Some(ItemRole::Language),
+    };
+    let mut children = vec![Node::Item(item("auto", tr(lang, "Auto"))), Node::Separator];
+    children.extend(Lang::all().map(|l| Node::Item(item(l.code(), l.name()))));
+    Node::Submenu { label: tr(lang, "Language").into(), children, role: Some(ItemRole::Language) }
+}
+
 fn node_ids(node: &Node) -> Vec<String> {
     match node {
         Node::Item(it) => vec![it.id.clone()],
@@ -515,15 +568,28 @@ fn translate(bar: &mut MenuBar, lang: Lang) {
     }
 }
 
-/// PhotoCraft's menus as a Mac menu bar, in the UI language.
-pub fn photocraft_layout(items: &[MenuItem], lang: Lang) -> Layout {
+/// PhotoCraft's menus as a Mac menu bar, in the UI language; `language` is the
+/// `interface.language` preference (`auto` or a code), checked in the app menu's Language.
+pub fn photocraft_layout(items: &[MenuItem], lang: Lang, language: &str) -> Layout {
     let mut bar = from_items(&crate::menus::TOP_MENUS, items);
     bar.tag_item("help.about", ItemRole::About);
     bar.tag_item("file.exit", ItemRole::Quit);
     bar.tag_submenu("Edit", "Preferences", ItemRole::Settings);
+    bar.tag_submenu("Window", "Theme", ItemRole::Appearance);
+    bar.tag_item("window.theme.toggle", ItemRole::Appearance);
     bar.tag_menu("Window", MenuRole::Window);
     bar.tag_menu("Help", MenuRole::Help);
     let mut layout = mac_layout(&bar, lang);
+    // Language goes right after Settings (before Appearance), as in the other Craft apps.
+    if let Some(app_menu) = layout.bar.menus.iter_mut().find(|m| m.role == MenuRole::App) {
+        let settings = |n: &Node| match n {
+            Node::Item(it) => it.role == Some(ItemRole::Settings),
+            Node::Submenu { role, .. } => *role == Some(ItemRole::Settings),
+            _ => false,
+        };
+        let at = app_menu.children.iter().position(settings).map_or(0, |i| i + 1);
+        app_menu.children.insert(at, language_node(language, lang));
+    }
     translate(&mut layout.bar, lang);
     layout
 }
@@ -602,15 +668,13 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// every command's enabled state, so it doesn't run on frames that only animate or scroll.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_ref() else { return };
-    let input = ctx.input(|i| {
-        i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. }))
-    });
+    let input = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })));
     let state = state_hash(app, input.then_some(app.frame));
     if menu.state == Some(state) && !menu.dirty {
         return;
     }
     let lang = crate::i18n::current();
-    let layout = photocraft_layout(&crate::menus::menu_items(app), lang);
+    let layout = photocraft_layout(&crate::menus::menu_items(app), lang, &app.session.prefs().interface.language);
     let Some(menu) = app.services.native_menu.as_mut() else { return };
     if !menu.logged {
         for c in &layout.clashes {
@@ -658,7 +722,7 @@ mod tests {
     }
 
     fn layout(doc: bool) -> Layout {
-        photocraft_layout(&crate::menus::menu_items(&app(doc)), Lang::EN)
+        photocraft_layout(&crate::menus::menu_items(&app(doc)), Lang::EN, "auto")
     }
 
     fn ids(nodes: &[Node]) -> Vec<String> {
@@ -680,7 +744,21 @@ mod tests {
         assert_eq!((app.title.as_str(), app.role), ("PhotoCraft", MenuRole::App));
         assert_eq!(
             ids(&app.children),
-            ["help.about", "---", "[Settings]", "---", "<Services>", "---", HIDE, "<HideOthers>", "<ShowAll>", "---", "file.exit"]
+            [
+                "help.about",
+                "---",
+                "[Settings]",
+                "[Language]",
+                "[Appearance]",
+                "---",
+                "<Services>",
+                "---",
+                HIDE,
+                "<HideOthers>",
+                "<ShowAll>",
+                "---",
+                "file.exit"
+            ]
         );
         let quit = l.bar.find("file.exit").unwrap();
         assert_eq!((quit.label.as_str(), quit.shortcut.as_deref()), ("Quit PhotoCraft", Some("Cmd+Q")));
@@ -707,13 +785,57 @@ mod tests {
         assert_eq!(clash("Cmd+M"), Some("image.adjustments.curves"));
         assert_eq!(clash("Cmd+W"), Some("file.close"));
         assert_eq!(clash("Cmd+,"), Some("layer.hideLayers"));
-        assert_eq!(l.bar.find(HIDE).unwrap().shortcut, None);
+        assert_eq!(l.bar.find(HIDE).unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+H"), "as in Photoshop");
         assert_eq!(l.bar.find(MINIMIZE).unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+M"));
         let window = l.bar.menu(MenuRole::Window).unwrap();
         assert_eq!(ids(&window.children)[..3], [MINIMIZE.to_string(), "<Zoom>".into(), "---".into()]);
         assert_eq!(ids(&window.children).last().unwrap(), "<BringAllToFront>");
         let file = l.bar.menus.iter().find(|m| m.title == "File").unwrap();
         assert!(!file.children.contains(&Node::Standard(Standard::CloseWindow)), "⌘W stays File › Close");
+    }
+
+    /// Themes and Next Theme move from Window to the app menu's Appearance, checked by the theme.
+    #[test]
+    fn themes_move_to_the_app_menus_appearance() {
+        let mut a = app(false);
+        a.ui.theme = crate::theme::ThemeKind::Classic;
+        let l = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+        let app_menu = l.bar.menu(MenuRole::App).unwrap();
+        let Some(Node::Submenu { children, .. }) = app_menu.children.iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == "Appearance")) else {
+            panic!("an Appearance submenu");
+        };
+        let themes = ids(children);
+        assert_eq!(themes.last().map(String::as_str), Some("window.theme.toggle"));
+        assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.classic".to_string()));
+        assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
+        assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
+        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Theme");
+        let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
+        assert!(!window.iter().any(|id| id.starts_with("window.theme.") || id == "[Theme]"), "{window:?}");
+    }
+
+    /// Language follows Settings in the app menu: Auto and every UI language in its own name,
+    /// the preference checked; choosing one sets `interface.language`.
+    #[test]
+    fn the_app_menu_switches_the_ui_language() {
+        let l = photocraft_layout(&crate::menus::menu_items(&app(false)), Lang::EN, "ja");
+        let app_menu = l.bar.menu(MenuRole::App).unwrap();
+        let Some(Node::Submenu { children, .. }) = app_menu.children.iter().find(|n| matches!(n, Node::Submenu { label, .. } if label == "Language")) else {
+            panic!("a Language submenu");
+        };
+        assert_eq!(children.iter().filter(|n| matches!(n, Node::Item(_))).count(), Lang::all().count() + 1);
+        assert_eq!(l.bar.find("app.language.ja").map(|it| (it.label.as_str(), it.checked)), Some(("日本語", Some(true))));
+        assert_eq!(l.bar.find("app.language.auto").and_then(|it| it.checked), Some(false));
+        // Native names stay native in another UI language.
+        let de = photocraft_layout(&crate::menus::menu_items(&app(false)), Lang::from_pref("de"), "de");
+        assert_eq!(de.bar.find("app.language.ja").map(|it| it.label.as_str()), Some("日本語"));
+        let mut a = app(false);
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut a, &ctx, "app.language.fr", json!({})).unwrap();
+        assert_eq!(a.session.prefs().interface.language, "fr");
+        crate::menus::invoke(&mut a, &ctx, "app.language.auto", json!({})).unwrap();
+        assert_eq!(a.session.prefs().interface.language, "auto");
+        assert!(crate::menus::invoke(&mut a, &ctx, "app.language.xx-nope", json!({})).is_err(), "an unknown code is an error");
     }
 
     /// The menus show the shortcut that runs each command (Undo ⌘Z, Copy ⌘C were blank).
@@ -821,8 +943,7 @@ mod tests {
         let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let mut app = app(true);
         let ctx = egui::Context::default();
-        app.services.native_menu =
-            Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("window.panel.layers".into())] })));
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("window.panel.layers".into())] })));
         let before = app.ui.panels.layers;
         let mut raw = egui::RawInput::default();
         if let Some(m) = app.services.native_menu.as_mut() {

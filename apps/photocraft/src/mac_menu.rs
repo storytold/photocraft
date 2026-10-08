@@ -202,11 +202,8 @@ impl Backend for MacMenu {
             // menu (no ⌘ or ⌃, and the item's shortcut needs one). The key is the item's (AppKit
             // matched on it); the modifiers are the ones held.
             let [cmd, ctrl, alt, shift] = chosen.mods;
-            let key = e
-                .chord
-                .as_ref()
-                .filter(|c| chosen.key && (cmd || ctrl || !(c.cmd || c.ctrl)))
-                .map(|c| Chord { cmd, ctrl, alt, shift, key: c.key.clone() });
+            let key =
+                e.chord.as_ref().filter(|c| chosen.key && (cmd || ctrl || !(c.cmd || c.ctrl))).map(|c| Chord { cmd, ctrl, alt, shift, key: c.key.clone() });
             out.push(match key {
                 Some(chord) if e.command != native_menu::MINIMIZE => Event::Key(chord),
                 _ => Event::Click(e.command.clone()),
@@ -218,8 +215,9 @@ impl Backend for MacMenu {
 
 /// Install the menu bar now (in eframe's creator closure, so winit's default menu doesn't stay).
 pub fn install(ctx: &egui::Context, app: &photocraft_ui_egui::PhotocraftApp) -> Option<native_menu::NativeMenu> {
-    let lang = photocraft_ui_egui::i18n::Lang::from_pref(&app.session.prefs().interface.language);
-    let bar = native_menu::photocraft_layout(&photocraft_ui_egui::menus::menu_items(app), lang).bar;
+    let language = &app.session.prefs().interface.language;
+    let lang = photocraft_ui_egui::i18n::Lang::from_pref(language);
+    let bar = native_menu::photocraft_layout(&photocraft_ui_egui::menus::menu_items(app), lang, language).bar;
     // Never crash for a menu: if AppKit refuses, keep the in-window menus.
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut menu = MacMenu::new(ctx);
@@ -340,7 +338,7 @@ mod tests {
     #[test]
     fn every_menu_shortcut_maps_to_a_key_equivalent() {
         let app = photocraft_ui_egui::PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
-        let bar = native_menu::photocraft_layout(&photocraft_ui_egui::menus::menu_items(&app), photocraft_ui_egui::i18n::Lang::EN).bar;
+        let bar = native_menu::photocraft_layout(&photocraft_ui_egui::menus::menu_items(&app), photocraft_ui_egui::i18n::Lang::EN, "auto").bar;
         let mut native = 0;
         for it in bar.items() {
             let Some(c) = it.shortcut.as_deref().and_then(Chord::parse) else { continue };

@@ -286,6 +286,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.set_theme(ctx, k);
             Ok(Value::Null)
         }
+        // The macOS app menu's Language (`native_menu::language_node`).
+        i if i.starts_with(crate::native_menu::LANGUAGE_PREFIX) => {
+            let code = &i[crate::native_menu::LANGUAGE_PREFIX.len()..];
+            if code != "auto" && !crate::i18n::Lang::all().any(|l| l.code() == code) {
+                return Err(format!("unknown UI language `{code}`"));
+            }
+            app.run("prefs.set", json!({"values": {"interface.language": code}}))
+        }
         "edit.search" => {
             app.ui.palette_open = !app.ui.palette_open;
             Ok(Value::Null)
@@ -529,6 +537,9 @@ const MODE_CHECKS: [&str; 11] = ["rgb", "grayscale", "cmyk", "lab", "multichanne
 /// Is a UI-level panel toggle currently on (for checkmarks)?
 fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     use photocraft_doc::{ColorMode, SampleType};
+    if let Some(name) = id.strip_prefix("window.theme.").filter(|n| *n != "toggle") {
+        return Some(crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme));
+    }
     if let Some(c) = crate::view_cmds::checked(app, id) {
         return Some(c);
     }

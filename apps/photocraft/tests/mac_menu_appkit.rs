@@ -100,7 +100,7 @@ fn main() {
     assert_eq!(tops, ["PhotoCraft", "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"]);
     let app_menu = submenu(&bar, "PhotoCraft");
     let names = titles(&app_menu);
-    for want in ["About PhotoCraft", "Settings", "Hide PhotoCraft", "Quit PhotoCraft"] {
+    for want in ["About PhotoCraft", "Settings", "Language", "Appearance", "Hide PhotoCraft", "Quit PhotoCraft"] {
         assert!(names.iter().any(|n| n == want), "{want} missing from the app menu: {names:?}");
     }
     let quit = app_menu.itemAtIndex(index(&app_menu, "Quit PhotoCraft")).expect("Quit");
@@ -129,7 +129,11 @@ fn main() {
     if let Some(m) = app.services.native_menu.as_mut() {
         m.raw_input(&mut raw);
     }
-    let keys: Vec<_> = raw.events.iter().filter_map(|e| if let egui::Event::Key { key, pressed, modifiers, .. } = e { Some((*key, *pressed, modifiers.command)) } else { None }).collect();
+    let keys: Vec<_> = raw
+        .events
+        .iter()
+        .filter_map(|e| if let egui::Event::Key { key, pressed, modifiers, .. } = e { Some((*key, *pressed, modifiers.command)) } else { None })
+        .collect();
     assert_eq!(keys, [(egui::Key::R, true, true), (egui::Key::R, false, true)], "the key press, then its release");
     frame(&mut app, raw);
     let ran: Vec<String> = photocraft_ui_egui::shortcut_dispatch::take_log(&ctx).into_iter().map(|(id, _)| id).collect();
