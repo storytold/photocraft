@@ -1781,6 +1781,7 @@ mod tests {
             let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
             let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
             assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
+        }
     }
 
     #[test]
