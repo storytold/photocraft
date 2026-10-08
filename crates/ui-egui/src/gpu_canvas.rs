@@ -44,7 +44,7 @@ const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const F16_BUDGET_PX: u64 = 100_000_000;
 const VIEW_UNIFORM_SIZE: u64 = 112;
 const VIEW_FLOATS: usize = 28;
-const TILE_UNIFORM_SIZE: u64 = 16;
+const TILE_UNIFORM_SIZE: u64 = 32;
 
 /// Parameters for drawing one document view. Positions are in egui points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -187,7 +187,9 @@ impl GpuCanvas {
         let bytes = d
             .tiles
             .iter()
-            .map(|t| (0..t.levels.len() as u32).map(|l| ((t.rect[2] >> l).max(1) as u64) * ((t.rect[3] >> l).max(1) as u64) * bpp).sum::<u64>())
+            .map(|t| {
+                (0..t.levels.len() as u32).map(|l| ((t.texture.width() >> l).max(1) as u64) * ((t.texture.height() >> l).max(1) as u64) * bpp).sum::<u64>()
+            })
             .sum();
         Some((d.format, bytes))
     }
@@ -372,8 +374,12 @@ impl GpuCanvas {
         }
         comp.set_focus(res.compositor_focus);
         let key = doc.id.0;
-        let format = self.format_for(doc.depth, size);
+        let format = res.docs.get(&key).filter(|d| d.streamed).map_or_else(|| self.format_for(doc.depth, size), |d| d.format);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
+        if fresh && doc.size.area() > 16 << 20 {
+            res.compositor = Some(comp);
+            return Err(photocraft_gpu::Unsupported("large canvas requires visible stream pages".into()));
+        }
         let region = if fresh { doc.bounds() } else { region.intersect(&doc.bounds()) };
         // Checked before allocating a new canvas texture only: `render` plans (and refuses) itself.
         if fresh && let Err(e) = comp.supports(doc) {
@@ -383,7 +389,7 @@ impl GpuCanvas {
         // A full refresh whose layer pages don't fit the memory budget would re-upload the
         // evicted ones every time (no faster than the CPU, and more memory): the banded CPU
         // compositor does it, and edits in the view (damage rects) stay on the GPU.
-        if region == doc.bounds() && !comp.fits_budget(doc, region) {
+        if !comp.fits_budget(doc, region) {
             res.compositor = Some(comp);
             return Err(photocraft_gpu::Unsupported("layers exceed the GPU memory budget; full refresh on the CPU".into()));
         }
@@ -403,6 +409,11 @@ impl GpuCanvas {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             comp.render(device, queue, doc, region, |enc, out| {
                 for t in &d.tiles {
+                    // Independently reduced pages use document-coordinate rectangles larger
+                    // than their textures. Native-resolution passes only target native pages.
+                    if t.rect[2] != t.texture.width() || t.rect[3] != t.texture.height() {
+                        continue;
+                    }
                     let [tx, ty, tw, th] = t.rect.map(|v| v as i32);
                     let r = out.rect.intersect(&photocraft_geom::Rect::from_xywh(tx, ty, tw as u32, th as u32));
                     if r.is_empty() {
@@ -474,6 +485,9 @@ impl GpuCanvas {
         damage: Option<photocraft_geom::Rect>,
         display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     ) -> Refresh {
+        if doc.size.area() > 16 << 20 {
+            return Refresh { kind: "viewport", fallback: Some("large canvas requires visible stream pages".into()), ..Default::default() };
+        }
         if let Some(f) = self.fault() {
             // Nothing reaches the GPU any more; the app switches to the CPU canvas.
             return Refresh { kind: "lost", fallback: Some(f.to_string()), ..Default::default() };
@@ -528,6 +542,10 @@ impl GpuCanvas {
     /// band (each band converted and uploaded before the next is rendered), so a huge document
     /// never needs a full-size float composite or texture-format copy in memory.
     pub fn upload_composite(&self, key: u64, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
+        if doc.size.area() > 16 << 20 {
+            log::warn!("large canvas requires visible stream pages");
+            return;
+        }
         let size = [doc.size.width, doc.size.height];
         if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
             return;
@@ -644,6 +662,9 @@ impl GpuCanvas {
         let renderer = self.rs.renderer.read();
         let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
         let bpp = texel_bytes(d.format);
+        if d.streamed {
+            return None;
+        } // Never allocate full-document readback for a sparse canvas.
         let (w, h) = (d.size[0] as usize, d.size[1] as usize);
         let mut out = vec![[0.0f32; 4]; w.checked_mul(h)?];
         for t in &d.tiles {
@@ -682,6 +703,177 @@ impl GpuCanvas {
         Some((d.format, d.size, out))
     }
 
+    /// Read only one resident page, never a full-document allocation (diagnostics/tests).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_page(&self, key: u64, page: u64) -> Option<(wgpu::TextureFormat, [u32; 2], Vec<[f32; 4]>)> {
+        if !self.health.is_ok() {
+            return None;
+        }
+        let r = self.rs.renderer.read();
+        let d = r.callback_resources.get::<Resources>()?.docs.get(&key)?;
+        let t = d.tiles.iter().find(|t| t.stream_key == page)?;
+        let (w, h, bpp) = (t.texture.width(), t.texture.height(), texel_bytes(d.format));
+        if w > 1024 || h > 1024 {
+            return None;
+        }
+        let row = (u64::from(w) * bpp).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64);
+        let device = &self.rs.device;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pc_page_readback"),
+            size: row * u64::from(h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            t.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row as u32), rows_per_image: Some(h) },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.rs.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        if !self.health.wait(device, None) {
+            return None;
+        }
+        let data = buffer.slice(..).get_mapped_range().ok()?;
+        let mut out = Vec::with_capacity(w as usize * h as usize);
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let offset = y * row as usize + x * bpp as usize;
+                out.push(texel_to_f32(d.format, data.get(offset..offset + bpp as usize)?));
+            }
+        }
+        Some((d.format, [w, h], out))
+    }
+
+    /// Store one independently reduced page at its original document coordinates. No other
+    /// document pages or mip levels are allocated. The caller evicts cold pages before admission.
+    pub fn upload_page(&self, request: PageUpload, buf: &photocraft_compose::Buffer) -> bool {
+        let PageUpload { key, page, size, factor, depth, limit, core } = request;
+        let (w, h) = (buf.rect.width(), buf.rect.height());
+        if !self.health.is_ok()
+            || factor == 0
+            || w == 0
+            || h == 0
+            || w > 1024
+            || h > 1024
+            || buf.rect.x0 < 0
+            || buf.rect.y0 < 0
+            || buf.px.len() as u64 != u64::from(w) * u64::from(h)
+        {
+            return false;
+        }
+        let Some(x) = (buf.rect.x0 as u32).checked_mul(factor) else { return false };
+        let Some(y) = (buf.rect.y0 as u32).checked_mul(factor) else { return false };
+        let Some(dw) = w.checked_mul(factor) else { return false };
+        let Some(dh) = h.checked_mul(factor) else { return false };
+        let format = self.format_for(depth, [w, h]);
+        let bytes = u64::from(w) * u64::from(h) * texel_bytes(format);
+        let (device, queue) = (&self.rs.device, &self.rs.queue);
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        if res.docs.get(&key).is_none_or(|d| !d.streamed || d.size != size || d.format != format) {
+            res.docs.insert(key, DocTextures { size, format, tiles: Vec::new(), streamed: true });
+        }
+        if let Some(d) = res.docs.get_mut(&key) {
+            d.tiles.retain(|t| t.stream_key != page);
+        }
+        let mut live: u64 = res
+            .docs
+            .values()
+            .filter(|d| d.streamed)
+            .flat_map(|d| d.tiles.iter().map(move |t| u64::from(t.texture.width()) * u64::from(t.texture.height()) * texel_bytes(d.format)))
+            .sum();
+        if bytes > limit {
+            return false;
+        }
+        while live.saturating_add(bytes) > limit {
+            let cold = res
+                .docs
+                .iter()
+                .filter(|(_, d)| d.streamed)
+                .flat_map(|(id, d)| d.tiles.iter().enumerate().map(move |(i, t)| (*id, i, t.stamp)))
+                .min_by_key(|(_, _, stamp)| *stamp);
+            let Some((id, index, _)) = cold else { return false };
+            if let Some(d) = res.docs.get_mut(&id) {
+                if index >= d.tiles.len() {
+                    return false;
+                }
+                let t = d.tiles.remove(index);
+                live = live.saturating_sub(u64::from(t.texture.width()) * u64::from(t.texture.height()) * texel_bytes(d.format));
+            }
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pc_stream_page"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let rect = [x, y, dw, dh];
+        let mut uniforms = rect.map(|v| v as f32).to_vec();
+        uniforms.extend([core.x0 as f32, core.y0 as f32, core.x1 as f32, core.y1 as f32]);
+        let uniform = init_buffer(device, "pc_stream_page", &f32_bytes(&uniforms), wgpu::BufferUsages::UNIFORM);
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pc_stream_page"),
+            layout: &res.tile_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: uniform.as_entire_binding() },
+            ],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            &texels(format, &buf.px),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes(format) as u32), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        if let Some(d) = res.docs.get_mut(&key) {
+            d.tiles.push(Tile { stream_key: page, stamp: stream_stamp(), rect, texture, levels: vec![view], bind_group, _uniform: uniform });
+        }
+        true
+    }
+
+    pub fn retain_pages(&self, key: u64, live: &[u64]) {
+        let mut renderer = self.rs.renderer.write();
+        if let Some(d) = renderer.callback_resources.get_mut::<Resources>().and_then(|r| r.docs.get_mut(&key))
+            && d.streamed
+        {
+            d.tiles.retain(|t| live.contains(&t.stream_key));
+        }
+    }
+
+    pub fn has_page(&self, key: u64, page: u64) -> bool {
+        self.rs
+            .renderer
+            .read()
+            .callback_resources
+            .get::<Resources>()
+            .and_then(|r| r.docs.get(&key))
+            .is_some_and(|d| d.tiles.iter().any(|t| t.stream_key == page))
+    }
+    pub fn touch_pages(&self, key: u64, pages: &[u64]) {
+        let mut r = self.rs.renderer.write();
+        if let Some(d) = r.callback_resources.get_mut::<Resources>().and_then(|r| r.docs.get_mut(&key)) {
+            let stamp = stream_stamp();
+            for t in &mut d.tiles {
+                if pages.contains(&t.stream_key) {
+                    t.stamp = stamp;
+                }
+            }
+        }
+    }
+
     /// Add the paint callback drawing `params` into `rect` (clipped by the painter's clip rect).
     pub fn paint(painter: &egui::Painter, rect: egui::Rect, params: ViewParams) {
         painter.add(egui_wgpu::Callback::new_paint_callback(rect, CanvasCallback { rect, params }));
@@ -697,6 +889,21 @@ fn texture_buffer<'a>(
         Some(d) => d.texture_buffer(buf),
         None => std::borrow::Cow::Borrowed(buf),
     }
+}
+
+fn stream_stamp() -> u64 {
+    static STAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    STAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub struct PageUpload {
+    pub key: u64,
+    pub page: u64,
+    pub size: [u32; 2],
+    pub factor: u32,
+    pub depth: photocraft_doc::SampleType,
+    pub limit: u64,
+    pub core: photocraft_geom::Rect,
 }
 
 /// What a [`GpuCanvas::refresh`] did.
@@ -734,6 +941,7 @@ pub fn use_adapter_limits(setup: &mut egui_wgpu::WgpuSetup) {
 /// is requested (the desktop app records it in its crash-safe startup marker).
 pub fn use_adapter_limits_with(setup: &mut egui_wgpu::WgpuSetup, on_adapter: impl Fn(&wgpu::Adapter) + Send + Sync + 'static) {
     if let egui_wgpu::WgpuSetup::CreateNew(create) = setup {
+        create.instance_descriptor.memory_budget_thresholds.for_resource_creation = Some(90);
         create.device_descriptor = std::sync::Arc::new(move |adapter| {
             on_adapter(adapter);
             wgpu::DeviceDescriptor { label: Some("photocraft wgpu device"), required_limits: device_limits(adapter), ..Default::default() }
@@ -1184,9 +1392,12 @@ struct DocTextures {
     size: [u32; 2],
     format: wgpu::TextureFormat,
     tiles: Vec<Tile>,
+    streamed: bool,
 }
 
 struct Tile {
+    stream_key: u64,
+    stamp: u64,
     /// Document-pixel rect: x, y, w, h.
     rect: [u32; 4],
     texture: wgpu::Texture,
@@ -1432,7 +1643,12 @@ impl DocTextures {
                     .map(|l| texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() }))
                     .collect();
                 let full = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let uniform = init_buffer(device, "pc_canvas_tile", &f32_bytes(&[tx as f32, ty as f32, w as f32, h as f32]), wgpu::BufferUsages::UNIFORM);
+                let uniform = init_buffer(
+                    device,
+                    "pc_canvas_tile",
+                    &f32_bytes(&[tx as f32, ty as f32, w as f32, h as f32, tx as f32, ty as f32, (tx + w) as f32, (ty + h) as f32]),
+                    wgpu::BufferUsages::UNIFORM,
+                );
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("pc_canvas_tile"),
                     layout: &res.tile_bgl,
@@ -1441,10 +1657,10 @@ impl DocTextures {
                         wgpu::BindGroupEntry { binding: 1, resource: uniform.as_entire_binding() },
                     ],
                 });
-                tiles.push(Tile { rect: [tx, ty, w, h], texture, levels, bind_group, _uniform: uniform });
+                tiles.push(Tile { stream_key: 0, stamp: 0, rect: [tx, ty, w, h], texture, levels, bind_group, _uniform: uniform });
             }
         }
-        Self { size, format, tiles }
+        Self { size, format, tiles, streamed: false }
     }
 
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride
@@ -1685,7 +1901,7 @@ struct View {
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
 };
-struct Tile { r: vec4<f32> }; // x, y, w, h in doc px
+struct Tile { r: vec4<f32>, core: vec4<f32> }; // padded rect and exclusive core bounds
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var samp: sampler;
@@ -1780,13 +1996,16 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
     let scale = view.a.z;
     let d = (p - view.b.xy) / scale;       // document pixel coordinates
+    if (any(d < vec2(0.0)) || any(d >= view.b.zw)) { discard; }
+    if (any(d < tile.core.xy) || any(d >= tile.core.zw)) { discard; }
     let size = tile.r.zw;
     let t = d - tile.r.xy;                 // texel coordinates within this tile
     let mode = view.c.x;
     var col: vec4<f32>;
     if (mode < 0.5) {
         // Zoomed out: trilinear through the mip chain.
-        col = textureSampleLevel(tex, samp, t / size, view.c.y);
+        let density = f32(textureDimensions(tex).x) / size.x;
+        col = textureSampleLevel(tex, samp, t / size, max(0.0, view.c.y + log2(density)));
     } else if (mode < 1.5) {
         col = textureSampleLevel(tex, samp, t / size, 0.0);
     } else {

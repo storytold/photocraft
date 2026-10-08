@@ -606,6 +606,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "scratch": photocraft_raster::spill::stats(),
         "memory": photocraft_raster::memory::stats(),
+        "streaming": app.streams.iter().map(|((doc,view),s)| json!({"doc":doc.0,"view":view,"stats":s.stats})).collect::<Vec<_>>(),
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
         "magnetic": app.ui.magnetic,

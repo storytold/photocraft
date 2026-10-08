@@ -67,6 +67,11 @@ static CURRENT: Mutex<(Snapshot, Budgets)> = Mutex::new((
     Budgets { process_ceiling_bytes: 8 << 30, effective_process_bytes: 8 << 30, tile_bytes: 7 << 30, transient_bytes: 1 << 30 },
 ));
 static RESERVED: AtomicU64 = AtomicU64::new(0);
+static CONFIGURATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn configuration_generation() -> u64 {
+    CONFIGURATION.load(Ordering::Relaxed)
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn measure() -> Snapshot {
@@ -102,6 +107,7 @@ pub fn refresh() -> Budgets {
 
 pub fn configure(policy: Policy) -> Budgets {
     *POLICY.lock().unwrap_or_else(PoisonError::into_inner) = policy;
+    CONFIGURATION.fetch_add(1, Ordering::Relaxed);
     let b = refresh();
     #[cfg(not(target_arch = "wasm32"))]
     {

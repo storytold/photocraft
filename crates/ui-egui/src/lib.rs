@@ -32,6 +32,7 @@ mod camera_raw_preview_ui;
 mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod canvas;
+pub mod canvas_stream;
 pub mod canvas_tool_menu;
 pub mod channel_view;
 pub mod channels_panel;
@@ -294,6 +295,7 @@ pub struct PhotocraftApp {
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
+    streams: HashMap<(DocId, u64), canvas_stream::Stream>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
@@ -453,6 +455,7 @@ impl PhotocraftApp {
             ui: UiState::default(),
             services,
             canvases: HashMap::new(),
+            streams: HashMap::new(),
             monitors: Default::default(),
             checker: None,
             drag: None,

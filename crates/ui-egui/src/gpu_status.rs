@@ -46,6 +46,9 @@ pub fn fall_back(app: &mut PhotocraftApp, fault: &photocraft_gpu::Fault) {
     gpu.release();
     // Canvas caches pointed at GPU textures: rebuild them as egui textures.
     app.canvases.clear();
+    for s in app.streams.values_mut() {
+        s.reset_gpu();
+    }
     app.proxy_uploaded = None;
     app.prefs_rt.gpu_style = None;
     app.perf.gpu = false;

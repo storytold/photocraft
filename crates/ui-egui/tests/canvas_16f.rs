@@ -21,6 +21,59 @@ use serde_json::json;
 /// see #194), so every test here holds this lock for its whole run, devices included.
 static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn huge_document_stream_pages_have_bounded_residency_and_exact_texels() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let r = Rect::new(64000, 22000, 64512, 22512);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let d = Document::new("Earth dimensions", Size::new(86400, 43200), ColorMode::Rgb, depth);
+        let b = photocraft_compose::Buffer { rect: r, px: vec![[0.25, 0.5, 0.75, 0.5]; 512 * 512] };
+        let cap = 512 * 512 * 8;
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page: 1, size: [86400, 43200], factor: 1, depth, limit: cap, core: r }, &b));
+        let (f, size, px) = g.read_page(d.id.0, 1).expect("page readback");
+        assert_eq!(size, [512, 512]);
+        assert_eq!(f, if depth == SampleType::U8 { TextureFormat::Rgba8Unorm } else { TextureFormat::Rgba16Float });
+        for (a, b) in px[0].iter().zip([0.125, 0.25, 0.375, 0.5]) {
+            assert!((*a - b).abs() < 1.0 / 255.0);
+        }
+        assert!(g.texture_info(d.id.0).unwrap().1 <= cap);
+        assert!(g.read_texels(d.id.0).is_none());
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page: 2, size: [86400, 43200], factor: 1, depth, limit: cap, core: r }, &b));
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page: 3, size: [86400, 43200], factor: 1, depth, limit: cap, core: r }, &b));
+        assert!(!g.has_page(d.id.0, 1));
+        assert!(g.texture_info(d.id.0).unwrap().1 <= cap);
+        g.retain(&[]);
+    }
+}
+
+#[test]
+fn native_gpu_composite_does_not_write_into_reduced_stream_pages() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let mut d = Document::new("large", Size::new(86400, 43200), ColorMode::Rgb, SampleType::U16);
+    let r = Rect::new(64000, 22000, 64512, 22512);
+    let mut s = Surface::new(d.pixel_format());
+    s.fill_rect(r, &[0.25, 0.5, 0.75, 0.5]);
+    d.layers.push(Layer::new("region", LayerContent::Raster(s)));
+    let small = photocraft_compose::Buffer { rect: Rect::new(32000, 11000, 32256, 11256), px: vec![[0.0; 4]; 256 * 256] };
+    let native = photocraft_compose::Buffer::transparent(r);
+    for (page, factor, b) in [(1, 2, &small), (2, 1, &native)] {
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page, size: [86400, 43200], factor, depth: d.depth, limit: 8 << 20, core: r }, b));
+    }
+    g.composite(&d, r, false).expect("regional GPU composition");
+    let (_, _, px) = g.read_page(d.id.0, 2).expect("native page");
+    let reference = photocraft_compose::render(&d, r);
+    for (p, q) in px.iter().zip(reference.px.iter()) {
+        for c in 0..4 {
+            let want = if c < 3 { q[c] * q[3] } else { q[c] };
+            assert!((p[c] - want).abs() < 0.002);
+        }
+    }
+    assert!(g.read_page(d.id.0, 1).expect("reduced page").2.iter().all(|p| *p == [0.0; 4]));
+    assert!(g.fault().is_none());
+}
+
 fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
     GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -37,6 +90,7 @@ fn canvas() -> Option<(GpuCanvas, RenderState)> {
         eprintln!("skipping: adapter can't render/filter Rgba16Float");
         return None;
     }
+    eprintln!("adapter: {:?}", rs.adapter.get_info());
     Some((GpuCanvas::new(&rs), rs))
 }
 

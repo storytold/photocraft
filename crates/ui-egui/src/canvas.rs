@@ -537,6 +537,26 @@ const NAVIGATOR_SETTLE_MS: f64 = 200.0;
 /// itself; with the GPU canvas a thumbnail cached per revision, so an edit to a huge document
 /// doesn't also pay a full-resolution CPU composite for the navigator.
 pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
+    if app.session.documents().get(idx)?.doc.size.area() > 16 << 20 {
+        let revision = app.session.documents().get(idx)?.revision;
+        let (doc, preview) = display_doc(app, idx);
+        let (display, display_key) = canvas_display(app, &doc, None);
+        let k = doc.size.width.max(doc.size.height).div_ceil(512).next_power_of_two();
+        let key = crate::canvas_stream::PageKey {
+            doc: doc.id.0,
+            snapshot: std::sync::Arc::as_ptr(&doc) as usize as u64,
+            revision,
+            preview,
+            display: display_key,
+            factor: k,
+            x: 0,
+            y: 0,
+        };
+        let s = app.streams.entry((doc.id, egui::Id::new("stream-navigator").value())).or_default();
+        s.update(ctx, doc.clone(), &[key], display, crate::canvas_stream::StreamOptions { limit: 32 << 20, gpu: None, refine: false });
+        s.upload(ctx, &doc, &[key], None, 8 << 20, false);
+        return s.texture(&key);
+    }
     if app.gpu.is_none() {
         return ensure_texture(app, ctx, idx, app.session.color.main_display).map(|(t, _)| t);
     }
@@ -803,7 +823,10 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
     }
     let _ = idx;
     // Graphics resources have their own cap. Reserve space for visible output pages and staging.
-    let budget = allowance.saturating_sub((allowance / 4).min(128 << 20)).max(8 << 20);
+    let output = (allowance / 8).clamp(8 << 20, 256 << 20);
+    let staging = (allowance / 16).max(4 << 20);
+    let budget = allowance.saturating_sub(output).saturating_sub(staging).saturating_mul(4) / 5;
+    let budget = budget.max(8 << 20);
     gpu.set_memory_budget(budget);
     app.perf.gpu_budget_mb = budget >> 20;
     app.perf.gpu_budget_allowance = allowance;
@@ -927,10 +950,15 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         let mut live: Vec<u64> = app.session.documents().iter().flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62)]).collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
         gpu.retain(&live);
+        for st in app.session.documents() {
+            let keys: Vec<u64> = app.streams.iter().filter(|((id, _), _)| *id == st.doc.id).flat_map(|(_, s)| s.gpu_keys()).collect();
+            gpu.retain_pages(st.doc.id.0, &keys);
+        }
     }
     // Upload markers must not outlive the resources they describe: native reopen can reuse
     // both the document ID and revision before the next frame while a preview dialog stays open.
     let documents = app.session.documents();
+    app.streams.retain(|(id, _), _| documents.iter().any(|d| d.doc.id == *id));
     if app.filter_preview.as_ref().is_some_and(|preview| !documents.iter().any(|st| st.doc.id == preview.doc)) {
         app.filter_preview = None;
     }
@@ -1492,7 +1520,61 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs).
     let mut on_gpu = false;
     // A flipped view draws through the CPU path (the GPU canvas shader has no mirroring).
-    if app.gpu.is_some()
+    if doc.size.area() > 16 << 20 {
+        let revision = app.session.documents().get(idx).map_or(0, |s| s.revision);
+        let (render_doc, preview) = display_doc(app, idx);
+        let (display, display_key) = canvas_display(app, &render_doc, output);
+        let wanted = crate::canvas_stream::pages(&render_doc, visible_doc_rect(&xf), view.zoom * ctx.pixels_per_point(), revision, preview, display_key);
+        let gpu = app.gpu.clone().filter(|_| !flip);
+        let allowance = u64::from(app.session.prefs().performance.gpu_memory_mb) << 20;
+        let output_limit = (allowance / 8).clamp(8 << 20, 256 << 20);
+        if let Some(g) = &gpu {
+            gpu_budget(app, g, idx, true, visible_doc_rect(&xf));
+        }
+        let count = (app.streams.len() + 1).max(1) as u64;
+        let s = app.streams.entry((doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id(), idx)).value())).or_default();
+        let encode_srgb = display.as_ref().is_some_and(|d| d.encode_srgb);
+        s.update(
+            &ctx,
+            render_doc.clone(),
+            &wanted,
+            display,
+            crate::canvas_stream::StreamOptions { limit: (256 << 20) / count, gpu: gpu.as_ref(), refine: true },
+        );
+        s.upload(&ctx, &render_doc, &wanted, gpu.as_ref(), output_limit, encode_srgb);
+        if let Some(g) = &gpu {
+            on_gpu = true;
+            app.perf.gpu = true;
+            let params = crate::gpu_canvas::ViewParams {
+                doc: doc.id.0,
+                doc_size: size,
+                zoom: view.zoom,
+                center: view.center,
+                shadow: drop_shadow,
+                pixel_grid,
+                view_key: egui::Id::new(("pc-stream-canvas", ctx.viewport_id(), idx)).value(),
+                display: sync_display_lut(app, &doc, doc.id.0, output),
+                output: output.unwrap_or(0),
+                hdr: hdr_preview(app, &doc),
+            };
+            let _ = g;
+            crate::gpu_canvas::GpuCanvas::paint(&painter, rect, params);
+        } else {
+            if drop_shadow {
+                painter.add(egui::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(150) }.as_shape(img_rect, 0));
+            }
+            if let Some(square) = app.session.prefs().transparency_and_gamut.square() {
+                let id = checker(app, &ctx);
+                let tiles = img_rect.size() / (2.0 * square);
+                painter.image(id, img_rect, Rect::from_min_max(Pos2::ZERO, pos2(tiles.x, tiles.y)), Color32::WHITE);
+            } else {
+                painter.rect_filled(img_rect, 0.0, Color32::WHITE);
+            }
+            if let Some(s) = app.streams.get(&(doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id(), idx)).value())) {
+                s.paint_cpu(&painter, &xf, &doc, &wanted);
+            }
+        }
+    } else if app.gpu.is_some()
         && !flip
         && let Some((k, key)) = ensure_adjust_proxy(app, idx, view.zoom * ctx.pixels_per_point())
             .or_else(|| ensure_filter_preview(app, idx))
