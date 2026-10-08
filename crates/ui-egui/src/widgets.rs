@@ -154,7 +154,7 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
     let (lo, hi) = (*range.start(), *range.end());
-    let step = arrow_step(ui, slot.id, if fine { 0.01 } else { 1.0 });
+    let (step, grid) = arrow_step(ui, slot.id, if fine { 0.01 } else { 1.0 });
     // new_child (not scope_builder): a scope would move the parent cursor back to the child rect.
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
     let mut resp = {
@@ -178,8 +178,10 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
         ui.painter().text(pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, suffix, theme::mono(11.0), t.text_faint);
     }
     if step != 0.0 {
+        // Round to the step before adding it, so whole-number fields drop decimals (55.4 + 1 = 56).
+        let v = (*value / grid).round() * grid + step;
         // Round to 4 decimal places, so repeated 0.1 steps don't leave float errors.
-        *value = (((*value + step) * 1e4).round() / 1e4).clamp(lo, hi);
+        *value = ((v * 1e4).round() / 1e4).clamp(lo, hi);
         ui.memory_mut(|m| m.request_focus(resp.id));
         resp.mark_changed();
     }
@@ -217,25 +219,30 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
 }
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
-fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> f32 {
+/// Returns the amount to add, and what to round the value to first.
+fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
     use egui::{Key, Modifiers};
     // The field's id is only known once it's drawn, so `value_field` saves it under `slot` for the next frame.
     let Some(id) = ui.data(|d| d.get_temp::<egui::Id>(slot)).filter(|id| ui.memory(|m| m.has_focus(*id))) else {
-        return 0.0;
+        return (0.0, step);
     };
-    let n = ui.input_mut(|i| {
-        let mut n = 0.0;
+    let (n, grid) = ui.input_mut(|i| {
+        let (mut n, mut grid) = (0.0, step);
         // egui ignores an extra shift when matching, so shift is checked before the plain arrows to get its larger step.
         for (mods, k) in [(Modifiers::COMMAND, (step / 10.0).max(0.01)), (Modifiers::SHIFT, 10.0 * step), (Modifiers::NONE, step)] {
-            n += k * (i.count_and_consume_key(mods, Key::ArrowUp) as f32 - i.count_and_consume_key(mods, Key::ArrowDown) as f32);
+            let presses = i.count_and_consume_key(mods, Key::ArrowUp) as f32 - i.count_and_consume_key(mods, Key::ArrowDown) as f32;
+            if presses != 0.0 && mods == Modifiers::COMMAND {
+                grid = k;
+            }
+            n += k * presses;
         }
-        n
+        (n, grid)
     });
     // If a sum like 5+5 has been typed, unfocus the field so it calculates it (as Enter would) before we step.
     if n != 0.0 && ui.data(|d| d.get_temp(id.with("arithmetic"))).unwrap_or(false) {
         ui.memory_mut(|m| m.surrender_focus(id));
     }
-    n
+    (n, grid)
 }
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
@@ -771,9 +778,18 @@ mod tests {
     }
 
     #[test]
-    fn arrow_keys_keep_decimals_step_fine_fields_and_clamp() {
-        let mut h = focused(12.46, 0.0..=1000.0);
-        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 13.46);
+    fn arrow_keys_round_decimals_step_fine_fields_and_clamp() {
+        for (start, mods, key, want) in [
+            (55.4, Modifiers::NONE, Key::ArrowUp, 56.0),
+            (55.6, Modifiers::NONE, Key::ArrowUp, 57.0),
+            (55.4, Modifiers::NONE, Key::ArrowDown, 54.0),
+            (55.5, Modifiers::NONE, Key::ArrowUp, 57.0),
+            (55.5, Modifiers::NONE, Key::ArrowDown, 55.0),
+            (55.4, Modifiers::SHIFT, Key::ArrowUp, 65.0),
+            (55.47, Modifiers::COMMAND, Key::ArrowUp, 55.6),
+        ] {
+            assert_eq!(press(&mut focused(start, 0.0..=1000.0), mods, key), want, "{start} {mods:?} {key:?}");
+        }
         let mut h = focused(0.5, 0.0..=1.0);
         assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 0.51);
         assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 0.61);
