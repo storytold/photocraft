@@ -307,6 +307,8 @@ a driver process crash is detected by the startup marker on the next launch.
 
 ### Camera Raw dialog
 
+On the desktop the dialog is a window of its own (title bar, moved and resized like any window), as Adobe Camera Raw is; the main window is dimmed and takes no input while it is open, and closing the window is Cancel. Where the platform has no extra windows (the web build) it is drawn over the main window.
+
 `ui.menu.invoke {"id":"filter.cameraRaw","params":{}}` opens Camera Raw on the active
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the

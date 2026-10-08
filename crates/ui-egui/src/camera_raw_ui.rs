@@ -835,9 +835,48 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    if app.camera_raw.is_none() {
+    let Some(d) = app.camera_raw.as_ref() else { return };
+    // Where the platform has no extra windows (the web build), draw over the main window.
+    if ctx.embed_viewports() {
+        draw(app, ctx, false);
         return;
     }
+    let window_title = d.window_title();
+    // Camera Raw is modal, as in Photoshop: the main window is dimmed and takes no input while it
+    // is open (in a separate window, or drawn over it where there are no extra windows).
+    let main = ctx.content_rect();
+    egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
+        let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
+        ui.painter().rect_filled(r, 0.0, Color32::from_black_alpha(110));
+    });
+    // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
+    let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    let mut close = false;
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
+        if ui.ctx().input(|i| i.viewport().close_requested()) {
+            close = true;
+        }
+        draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
+    });
+    if close && app.camera_raw.is_some() {
+        cancel(app);
+    }
+}
+
+impl CameraRawDialog {
+    /// "Camera Raw (name)" for the open-time dialog, "Camera Raw Filter (layer)" otherwise.
+    fn window_title(&self) -> String {
+        if self.target == Target::OpenRaw {
+            crate::i18n::fmt(tl!("Camera Raw ({name})"), &[("name", &self.layer_name)])
+        } else {
+            crate::i18n::fmt(tl!("Camera Raw Filter ({layer})"), &[("layer", &self.layer_name)])
+        }
+    }
+}
+
+/// The dialog's contents over the whole of `ctx`'s window. `own_window`: the OS window already
+/// shows the title, so none is painted.
+fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let mut action: Option<&str> = None;
@@ -851,16 +890,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, t.chrome);
-        let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
-        painter.rect_filled(title, 0.0, t.dock);
-        painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
-        let window_title = if d.target == Target::OpenRaw {
-            crate::i18n::fmt(tl!("Camera Raw ({name})"), &[("name", &d.layer_name)])
-        } else {
-            crate::i18n::fmt(tl!("Camera Raw Filter ({layer})"), &[("layer", &d.layer_name)])
-        };
+        let title = ERect::from_min_size(full.min, vec2(full.width(), if own_window { 0.0 } else { 30.0 }));
+        if !own_window {
+            painter.rect_filled(title, 0.0, t.dock);
+            painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
+            painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
+        }
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
-        painter.text(title.center(), Align2::CENTER_CENTER, window_title, FontId::proportional(13.0), t.text);
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
         let scope = &mut app.ui.camera_raw_scope;
