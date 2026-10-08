@@ -807,7 +807,7 @@ mod tests {
             .unwrap();
         // Whole-canvas translation moves the data's origin, like every other content.
         s.edit("move", |doc, _| {
-            translate_doc(doc, 5, 7);
+            translate_doc(doc, "move", 5, 7)?;
             Ok(())
         })
         .unwrap();
@@ -932,7 +932,7 @@ mod tests {
         let surf = st.doc.layers[0].surface().unwrap();
         for (x, y) in [(0, 0), (1, 1), (2, 3)] {
             let v = surf.rgba(x, y)[0];
-            assert!(v < 0.01 || v > 0.99, "nearest produced an averaged value {v} at ({x},{y})");
+            assert!(!(0.01..=0.99).contains(&v), "nearest produced an averaged value {v} at ({x},{y})");
         }
     }
 

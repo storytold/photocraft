@@ -537,7 +537,7 @@ fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load()
     doc.insert_above(None, Layer::new("adj", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 })));
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back, doc);
-    }
+}
 
 #[test]
 fn deep_layer_round_trips_with_its_samples() {
