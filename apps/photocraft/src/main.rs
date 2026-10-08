@@ -135,31 +135,40 @@ fn main() -> eframe::Result {
     let mut automation_read_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_READ_ROOT").map(std::path::PathBuf::from);
     let mut automation_write_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_WRITE_ROOT").map(std::path::PathBuf::from);
     let mut files = Vec::new();
+    // Arguments that are not valid Unicode (issue #1108): a file manager can hand over a Latin-1
+    // file name on Linux, and `std::env::args()` would panic before any window opened. Paths are
+    // reported in a notice once the app is up; a control token is a usage error like a bad port.
+    let mut unreadable_paths: Vec<String> = Vec::new();
     let mut safe_gpu = false;
     let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
-        match a.as_str() {
-            "--control" => match args.next() {
-                Some(value) => match parse_control_port(&value, "--control") {
+        match a.to_str() {
+            Some("--control") => match args.next() {
+                Some(value) => match parse_control_port(&value.to_string_lossy(), "--control") {
                     Ok(port) => control_port = Some(port),
                     Err(error) => control_arg_errors.push(error),
                 },
                 None => control_arg_errors.push("--control: missing port value (expected `--control <port>`)".to_string()),
             },
-            "--control-token" => control_token = args.next(),
-            "--control-token-file" => control_token_file = args.next().map(std::path::PathBuf::from),
-            "--automation-read-root" => automation_read_root = args.next().map(std::path::PathBuf::from),
-            "--automation-write-root" => automation_write_root = args.next().map(std::path::PathBuf::from),
-            "--safe-gpu" => safe_gpu = true,
-            "--in-window-menus" => in_window_menus = true,
-            "--version" => {
+            Some("--control-token") => match args.next().map(std::ffi::OsString::into_string) {
+                Some(Ok(token)) => control_token = Some(token),
+                Some(Err(raw)) => control_arg_errors.push(format!("--control-token: value is not valid Unicode (`{}`)", raw.to_string_lossy())),
+                None => control_token = None,
+            },
+            Some("--control-token-file") => control_token_file = args.next().map(std::path::PathBuf::from),
+            Some("--automation-read-root") => automation_read_root = args.next().map(std::path::PathBuf::from),
+            Some("--automation-write-root") => automation_write_root = args.next().map(std::path::PathBuf::from),
+            Some("--safe-gpu") => safe_gpu = true,
+            Some("--in-window-menus") => in_window_menus = true,
+            Some("--version") => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
             }
             // Old macOS passes a process serial number when launched from Finder.
-            _ if a.starts_with("-psn_") => {}
-            _ => files.push(a),
+            Some(s) if s.starts_with("-psn_") => {}
+            Some(s) => files.push(s.to_owned()),
+            None => unreadable_paths.push(a.to_string_lossy().into_owned()),
         }
     }
 
@@ -383,6 +392,10 @@ fn main() -> eframe::Result {
             tablet::spawn_x11(&app.stylus.feed, display);
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
+            if !unreadable_paths.is_empty() {
+                let lines = unreadable_paths.iter().map(|p| format!("{p}: the path is not valid Unicode; rename the file and open it again.")).collect();
+                photocraft_ui_egui::notices::post(&mut app, "Could not open", lines, true, None);
+            }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], false, None);
