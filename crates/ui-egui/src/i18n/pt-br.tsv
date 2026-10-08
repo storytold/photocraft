@@ -32,6 +32,9 @@
 	Open Recent	Abrir recentes
 	Clear Recent Files	Limpar arquivos recentes
 	Close	Fechar
+	Minimize	Minimizar
+	Maximize	Maximizar
+	Restore	Restaurar
 	Close All	Fechar tudo
 	Close Others	Fechar outros
 	Save	Salvar
@@ -302,6 +305,7 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Converter em objeto inteligente
 	Convert to Embedded	Converter em incorporado
+	Convert to Layers	Converter em camadas
 	Convert to Linked…	Converter em vinculado…
 	Edit Contents	Editar conteúdo
 	Replace Contents…	Substituir conteúdo…
@@ -955,6 +959,7 @@
 	Drag a rectangle around the object	Arraste um retângulo ao redor do objeto
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Arraste sobre a imagem para adicionar uma restrição; Shift para horizontal/vertical; clique direito para excluir.
 	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clique: selecionar ponto · Arrastar: mover ponto, alça ou segmento · {shift}-clique: adicionar · {alt}-clique: subdemarcador inteiro
 	Draw with the Pen tool (P) or make a work path from a selection.	Desenhe com a ferramenta Caneta (P) ou crie um demarcador de trabalho a partir de uma seleção.
 	Drop an image or PSD anywhere to open it.	Solte uma imagem ou um PSD em qualquer lugar para abri-lo.
 	Duplicate Layers…	Duplicar camadas…
@@ -1578,6 +1583,7 @@
 	Paint Bucket Tool	Ferramenta Lata de tinta
 	Paints from the document's opening state	Pinta a partir do estado de abertura do documento
 	Path Selection Tool	Ferramenta Seleção de demarcador
+	Direct Selection Tool	Ferramenta Seleção direta
 	Pattern Overlay	Sobreposição de padrão
 	Pen Pressure	Pressão da caneta
 	Pen Tilt	Inclinação da caneta
