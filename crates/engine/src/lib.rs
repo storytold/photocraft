@@ -68,6 +68,7 @@ pub mod print_cmds;
 pub mod proof_sim;
 pub mod render_cmds;
 pub mod retouch_cmds;
+mod scratch;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;
@@ -415,14 +416,22 @@ impl Session {
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        photocraft_raster::spill::check_integrity().map_err(EngineError::Other)?;
+        let scratch_generation = photocraft_raster::spill::read_error_generation();
         let restrict = self.color_restrict;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
+        let previous_active_layer = st.active_layer;
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
         if let (Some(k), Some(id)) = (restrict, active) {
             channel_cmds::restrict_to_color(&before, &mut doc, id, k);
+        }
+        if let Err(error) = photocraft_raster::spill::check_since(scratch_generation) {
+            st.active_layer = previous_active_layer;
+            return Err(EngineError::Other(error));
         }
         st.doc = Arc::new(doc);
         st.active_layer = active;

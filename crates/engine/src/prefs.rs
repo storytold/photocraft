@@ -410,9 +410,25 @@ impl Performance {
     }
 
     /// Pixel memory a document and its History may hold (Memory Usage), in bytes: beyond it
-    /// the oldest history states are dropped.
+    /// the oldest history states are dropped. 0 (no byte limit, only History States) while the
+    /// scratch disk is on: tiles only History holds go to disk instead.
     pub fn history_budget_bytes(&self) -> usize {
+        if photocraft_raster::spill::enabled() {
+            return 0;
+        }
         (self.memory_usage_mb as usize).saturating_mul(1 << 20)
+    }
+
+    /// Pixel bytes kept in memory before tiles move to the scratch disk: half of Memory Usage
+    /// (the rest is for the GPU canvas, caches and the app). `PHOTOCRAFT_TILE_BUDGET_MB`
+    /// overrides it (tests, stress runs).
+    pub fn tile_budget_bytes(&self) -> usize {
+        let bytes = std::env::var("PHOTOCRAFT_TILE_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|mb| mb.saturating_mul(1 << 20))
+            .unwrap_or_else(|| u64::from(self.memory_usage_mb).saturating_mul(1 << 20) / 2);
+        usize::try_from(bytes).unwrap_or(usize::MAX)
     }
 }
 
@@ -825,7 +841,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
-    "scratchDisks.disks",
     "cursors.brushPreviewColor",
     "unitsAndRulers.typeUnits",
     "unitsAndRulers.columnWidth",
@@ -1230,6 +1245,7 @@ impl Session {
     /// Push engine-relevant preferences into live state: every document's history limit and
     /// the layer-effect cache budget.
     pub fn apply_prefs(&mut self) {
+        crate::scratch::configure(self.prefs());
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
         let budget = self.prefs().performance.effect_cache_mb as usize;

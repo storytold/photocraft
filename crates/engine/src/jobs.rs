@@ -282,6 +282,14 @@ pub fn run<T: Send + 'static>(
     work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
+    let work = move |ctx: &JobCtx| {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        photocraft_raster::spill::check_integrity().map_err(EngineError::Other)?;
+        let generation = photocraft_raster::spill::read_error_generation();
+        let value = work(ctx)?;
+        photocraft_raster::spill::check_since(generation).map_err(EngineError::Other)?;
+        Ok(value)
+    };
     if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
         let t = work(&JobCtx::new())?;
         return apply(s, t);

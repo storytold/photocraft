@@ -148,10 +148,14 @@ pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 /// [`import`] for a background open: checks `ctl` between stages (and per layer for PSD/PSB) and
 /// reports progress. A cancelled import fails with [`IoError::Cancelled`].
 pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    photocraft_compose::discard_unreadable_pixel_caches();
+    photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+    let scratch_generation = photocraft_raster::spill::read_error_generation();
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let r = import_stages(name, bytes, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
+    photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
     Ok(r)
 }
 
@@ -190,6 +194,15 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// Exports `doc` to the format named by `name_or_ext` (a file name, path or
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    photocraft_compose::discard_unreadable_pixel_caches();
+    photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+    let scratch_generation = photocraft_raster::spill::read_error_generation();
+    let result = export_inner(doc, name_or_ext, opts)?;
+    photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
+    Ok(result)
+}
+
+fn export_inner(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
     if ext == photocraft_format::EXTENSION {
         let previews = photocraft_format::SaveOptions {

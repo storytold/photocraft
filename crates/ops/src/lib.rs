@@ -201,7 +201,7 @@ impl History {
 
 /// Bytes of the pixel tiles of `doc` (layers, masks, alpha channels) not already in `seen`.
 fn tile_bytes(doc: &Document, seen: &mut HashSet<usize>) -> usize {
-    let mut add = |s: &photocraft_doc::Surface| s.tiles().filter(|(_, t)| seen.insert(Arc::as_ptr(t) as usize)).map(|(_, t)| t.bytes().len()).sum::<usize>();
+    let mut add = |s: &photocraft_doc::Surface| s.tiles().filter(|(_, t)| seen.insert(Arc::as_ptr(t) as usize)).map(|(_, t)| t.len()).sum::<usize>();
     let mut n = 0;
     for (_, _, l) in doc.walk() {
         if let Some(s) = l.surface() {

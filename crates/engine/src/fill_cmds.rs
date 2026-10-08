@@ -244,7 +244,8 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
         .into_par_iter()
         .map(|(tc, tile)| {
             let tr = tc.rect().intersect(&area);
-            let mask = sel.map(|m| Mask { bytes: m.tile(tc).map_or(m.default_bytes(), |t| t.bytes()), fmt: m.format(), origin: tc.rect() });
+            let mask_guard = sel.and_then(|m| m.tile(tc)).map(|t| t.bytes());
+            let mask = sel.map(|m| Mask { bytes: mask_guard.as_deref().unwrap_or_else(|| m.default_bytes()), fmt: m.format(), origin: tc.rect() });
             if let Some(s) = &solid
                 && tr == tc.rect()
                 && mask.as_ref().is_none_or(|m| m.full(tr))
@@ -252,7 +253,7 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
                 return (tc, s.clone());
             }
             let mut tile = std::sync::Arc::unwrap_or_clone(tile);
-            blend_tile(tile.bytes_mut(), &fmt, tc.rect(), tr, source, mask.as_ref(), b);
+            blend_tile(&mut tile.bytes_mut(), &fmt, tc.rect(), tr, source, mask.as_ref(), b);
             (tc, std::sync::Arc::new(tile))
         })
         .collect();

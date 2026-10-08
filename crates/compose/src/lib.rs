@@ -1303,6 +1303,17 @@ pub fn purge_effect_cache() -> usize {
     freed
 }
 
+/// Discard derived pixels and their source pins after a scratch read failure. This also lets
+/// closing the affected document release its failed tiles instead of keeping them in a cache.
+pub fn discard_unreadable_pixel_caches() {
+    if photocraft_raster::spill::check_integrity().is_err() {
+        purge_effect_cache();
+        bounds::purge();
+        masks::purge();
+        shape_split::purge();
+    }
+}
+
 fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
     static C: std::sync::OnceLock<std::sync::Mutex<FxCache>> = std::sync::OnceLock::new();
     C.get_or_init(|| std::sync::Mutex::new(FxCache { map: Default::default(), order: Default::default(), bytes: 0 }))
@@ -1339,6 +1350,7 @@ fn effect_maps(layer: &Layer, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
 /// Instead a miss builds the maps here and the first finished build is kept. Renders build every
 /// layer's maps before their parallel tiles (`prepare_effects`), so tiles rarely miss.
 fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
+    let generation = photocraft_raster::spill::read_error_generation();
     let slot = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = c.map.get(&key) {
@@ -1357,6 +1369,9 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
             let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
             let bytes = maps.bytes();
             let maps = std::sync::Arc::new(maps);
+            if photocraft_raster::spill::check_since(generation).is_err() {
+                return maps;
+            }
             if slot.set(FxEntry { maps: maps.clone(), _pin: layer.clone(), bytes }).is_ok() {
                 // Counted exactly once, by the build that filled the slot, and only while the
                 // slot is still cached (eviction may have dropped it meanwhile).

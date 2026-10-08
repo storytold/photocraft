@@ -25,6 +25,10 @@ fn cache() -> &'static Mutex<Cache> {
     C.get_or_init(|| Mutex::new(Cache { map: HashMap::new(), tick: 0 }))
 }
 
+pub(crate) fn purge() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).map.clear();
+}
+
 /// Entries kept (least recently used dropped first).
 const CAPACITY: usize = 64;
 
@@ -97,6 +101,7 @@ fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
 /// `None` when the layer has no enabled vector mask and no feathered pixel mask (use the pixel
 /// mask directly). Values outside the computed area are the surface's default.
 pub fn combined_mask(layer: &Layer, canvas: Rect) -> Option<Surface> {
+    let generation = photocraft_raster::spill::read_error_generation();
     let vm = layer.vector_mask.as_ref().filter(|v| v.enabled);
     let pixel = layer.mask.as_ref().filter(|m| m.enabled);
     let (sv, sp) = (vm.map_or(0.0, |v| feather_sigma(v.feather)), pixel.map_or(0.0, |m| feather_sigma(m.feather)));
@@ -161,6 +166,9 @@ pub fn combined_mask(layer: &Layer, canvas: Rect) -> Option<Surface> {
             }
         }
         s.write_region(area, &v);
+    }
+    if photocraft_raster::spill::check_since(generation).is_err() {
+        return Some(s);
     }
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if c.map.len() >= CAPACITY

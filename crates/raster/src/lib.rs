@@ -11,15 +11,22 @@ mod interrupt;
 pub use interrupt::{Cancelled, Interrupt};
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, write_sample};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 
+mod scratch_file;
+pub mod spill;
+
 /// Pixel storage for one tile: `TILE_SIZE² × bytes_per_pixel`, row-major, interleaved channels.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The bytes may live on the scratch disk ([`spill`]); [`Tile::bytes`] and [`Tile::bytes_mut`]
+/// bring them back and keep them in memory while the returned guard lives. Take one guard per
+/// tile, not per pixel, in hot loops.
 pub struct Tile {
-    data: Box<[u8]>,
+    cell: Arc<spill::Cell>,
 }
 
 impl Tile {
@@ -31,13 +38,86 @@ impl Tile {
                 px.copy_from_slice(pixel);
             }
         }
-        Tile { data: data.into_boxed_slice() }
+        Tile::from_vec(data)
     }
-    pub fn bytes(&self) -> &[u8] {
-        &self.data
+    fn from_vec(data: Vec<u8>) -> Self {
+        Tile { cell: spill::Cell::new(data) }
     }
-    pub fn bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.data
+    /// The tile's bytes (read back from the scratch disk if needed).
+    pub fn bytes(&self) -> TileBytes<'_> {
+        let guard = self.cell.read();
+        let placeholder = if guard.is_none() { vec![0; self.len()] } else { Vec::new() };
+        TileBytes(guard, placeholder)
+    }
+    pub fn bytes_mut(&mut self) -> TileBytesMut<'_> {
+        let guard = self.cell.write();
+        let placeholder = if guard.is_none() { vec![0; self.len()] } else { Vec::new() };
+        TileBytesMut(guard, placeholder)
+    }
+    /// Fallible pixel access for callers that can propagate a scratch read failure.
+    pub fn try_bytes(&self) -> Result<TileBytes<'_>, String> {
+        let bytes = self.bytes();
+        match self.cell.read_error() {
+            Some(error) => Err(error),
+            None => Ok(bytes),
+        }
+    }
+    /// Byte length, without touching the pixels (they may be on disk).
+    pub fn len(&self) -> usize {
+        self.cell.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.cell.len() == 0
+    }
+}
+
+impl Clone for Tile {
+    fn clone(&self) -> Self {
+        match self.try_bytes() {
+            Ok(bytes) => Tile::from_vec(bytes.to_vec()),
+            // Preserve the original backing; the transaction will reject this poisoned tile.
+            Err(_) => Tile { cell: self.cell.clone() },
+        }
+    }
+}
+
+impl PartialEq for Tile {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cell, &other.cell) || (self.len() == other.len() && *self.bytes() == *other.bytes())
+    }
+}
+
+impl Eq for Tile {}
+
+impl std::fmt::Debug for Tile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tile").field("len", &self.len()).finish_non_exhaustive()
+    }
+}
+
+/// Read guard over a tile's bytes; derefs to `[u8]`.
+pub struct TileBytes<'a>(RwLockReadGuard<'a, Option<Vec<u8>>>, Vec<u8>);
+
+impl Deref for TileBytes<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.0.as_deref().unwrap_or(&self.1)
+    }
+}
+
+/// Write guard over a tile's bytes; derefs to `[u8]`.
+pub struct TileBytesMut<'a>(RwLockWriteGuard<'a, Option<Vec<u8>>>, Vec<u8>);
+
+impl Deref for TileBytesMut<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.0.as_deref().unwrap_or(&self.1)
+    }
+}
+
+impl DerefMut for TileBytesMut<'_> {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.0.as_deref_mut().unwrap_or(&mut self.1)
     }
 }
 
@@ -94,6 +174,28 @@ impl Surface {
         Arc::make_mut(arc)
     }
 
+    /// Tile rects that differ between `self` and `other`: tiles present in only one, or holding
+    /// a different (copied-on-write) tile. Compares pointers, never pixels, so it is cheap and
+    /// never reads spilled tiles back. `None` when the format or default pixel differ (every
+    /// pixel may read differently).
+    pub fn changed_rect(&self, other: &Surface) -> Option<Rect> {
+        if self.format != other.format || self.default_pixel != other.default_pixel {
+            return None;
+        }
+        let mut r = Rect::EMPTY;
+        for (c, t) in &self.tiles {
+            if other.tiles.get(c).is_none_or(|o| !Arc::ptr_eq(t, o)) {
+                r = r.union(&c.rect());
+            }
+        }
+        for c in other.tiles.keys() {
+            if !self.tiles.contains_key(c) {
+                r = r.union(&c.rect());
+            }
+        }
+        Some(r)
+    }
+
     /// Coarse bounds: union of allocated tile rects.
     pub fn tile_bounds(&self) -> Rect {
         self.tiles.keys().fold(Rect::EMPTY, |r, c| r.union(&c.rect()))
@@ -123,7 +225,8 @@ impl Surface {
                 continue;
             }
             let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
-            for (y, row) in t.data.chunks_exact(ts * bpp).enumerate() {
+            let data = t.bytes();
+            for (y, row) in data.chunks_exact(ts * bpp).enumerate() {
                 let Some(first) = row.chunks_exact(bpp).position(|px| px != dp) else { continue };
                 let last = ts - 1 - row.chunks_exact(bpp).rev().position(|px| px != dp).unwrap_or(0);
                 x0 = x0.min(first);
@@ -142,7 +245,7 @@ impl Surface {
     pub fn prune(&mut self) {
         let dp = self.default_pixel.clone();
         let bpp = dp.len();
-        self.tiles.retain(|_, t| t.data.chunks_exact(bpp).any(|px| px != &*dp));
+        self.tiles.retain(|_, t| t.bytes().chunks_exact(bpp).any(|px| px != &*dp));
     }
 
     #[inline]
@@ -165,8 +268,9 @@ impl Surface {
         let n = self.channels();
         match self.tiles.get(&c) {
             Some(t) => {
+                let data = t.bytes();
                 for (i, o) in out.iter_mut().enumerate().take(n) {
-                    *o = read_sample(&t.data, self.format.sample, base + i);
+                    *o = read_sample(&data, self.format.sample, base + i);
                 }
             }
             None => {
@@ -181,9 +285,9 @@ impl Surface {
         let (c, base) = self.locate(x, y);
         let n = self.channels();
         let sample = self.format.sample;
-        let t = self.tile_mut(c);
+        let mut t = self.tile_mut(c).bytes_mut();
         for (i, v) in px.iter().enumerate().take(n) {
-            write_sample(&mut t.data, sample, base + i, *v);
+            write_sample(&mut t, sample, base + i, *v);
         }
     }
 
@@ -192,7 +296,7 @@ impl Surface {
     pub fn sample_channel(&self, x: i32, y: i32, c: usize) -> f32 {
         let (tc, base) = self.locate(x, y);
         match self.tiles.get(&tc) {
-            Some(t) => read_sample(&t.data, self.format.sample, base + c),
+            Some(t) => read_sample(&t.bytes(), self.format.sample, base + c),
             None => read_sample(&self.default_pixel, self.format.sample, c),
         }
     }
@@ -216,9 +320,10 @@ impl Surface {
             match self.tiles.get(&TileCoord { tx, ty }) {
                 None => out[i..end].fill(dp),
                 Some(t) => {
+                    let data = t.bytes();
                     for (k, o) in out[i..end].iter_mut().enumerate() {
                         let lx = (x + k as i32 * step - tx * TILE_SIZE) as usize;
-                        *o = read_sample(&t.data, self.format.sample, (ly * TILE_SIZE as usize + lx) * n + c);
+                        *o = read_sample(&data, self.format.sample, (ly * TILE_SIZE as usize + lx) * n + c);
                     }
                 }
             }
@@ -235,7 +340,8 @@ impl Surface {
         let dp = self.default_pixel();
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let tile = self.tiles.get(&tc);
+            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let tile = guard.as_deref();
             for y in tr.y0..tr.y1 {
                 let o = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * n;
                 let span = tr.width() as usize * n;
@@ -244,7 +350,7 @@ impl Surface {
                     Some(t) => {
                         let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
                         for (i, d) in dst.iter_mut().enumerate() {
-                            *d = read_sample(&t.data, self.format.sample, base + i);
+                            *d = read_sample(t, self.format.sample, base + i);
                         }
                     }
                     None => {
@@ -269,7 +375,8 @@ impl Surface {
         let dp = to_rgba(&fmt, &self.default_pixel());
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let tile = self.tiles.get(&tc);
+            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let tile = guard.as_deref();
             for y in tr.y0..tr.y1 {
                 let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
                 let dst = &mut out[o..o + tr.width() as usize];
@@ -280,13 +387,13 @@ impl Surface {
                 let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
                 match (fmt.mode, fmt.sample, fmt.alpha) {
                     (ColorMode::Rgb, SampleType::U8, true) => {
-                        let src = &t.data[base..base + dst.len() * 4];
+                        let src = &t[base..base + dst.len() * 4];
                         for (d, s) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
                             *d = [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0];
                         }
                     }
                     (ColorMode::Grayscale, SampleType::U8, true) => {
-                        let src = &t.data[base..base + dst.len() * 2];
+                        let src = &t[base..base + dst.len() * 2];
                         for (d, s) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
                             let g = s[0] as f32 / 255.0;
                             *d = [g, g, g, s[1] as f32 / 255.0];
@@ -296,7 +403,7 @@ impl Surface {
                         let mut px = [0.0f32; 8];
                         for (i, d) in dst.iter_mut().enumerate() {
                             for (c, v) in px.iter_mut().enumerate().take(n) {
-                                *v = read_sample(&t.data, fmt.sample, base + i * n + c);
+                                *v = read_sample(t, fmt.sample, base + i * n + c);
                             }
                             *d = to_rgba(&fmt, &px[..n]);
                         }
@@ -307,7 +414,7 @@ impl Surface {
     }
 
     /// Reads `r` as straight 8-bit RGBA into `out` (`w*h` entries). RGBA8 surfaces copy tile bytes
-    /// directly; other formats convert through [`Surface::read_rgba_into`] one tile row at a time.
+    /// directly; other formats convert while holding the same tile read guard.
     pub fn read_rgba8_into(&self, r: Rect, out: &mut [[u8; 4]]) {
         let w = r.width() as usize;
         debug_assert_eq!(out.len(), w * r.height() as usize);
@@ -316,10 +423,11 @@ impl Surface {
         let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         let dp = to_rgba(&fmt, &self.default_pixel());
         let dp8 = [q(dp[0]), q(dp[1]), q(dp[2]), q(dp[3])];
-        let mut row = Vec::new();
+        let mut px = [0.0f32; 8];
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let tile = self.tiles.get(&tc);
+            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let tile = guard.as_deref();
             for y in tr.y0..tr.y1 {
                 let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
                 let dst = &mut out[o..o + tr.width() as usize];
@@ -328,14 +436,19 @@ impl Surface {
                     Some(t) if rgba8 => {
                         let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * 4;
                         let len = dst.len();
-                        for (d, s) in dst.iter_mut().zip(t.data[base..base + len * 4].as_chunks::<4>().0) {
+                        for (d, s) in dst.iter_mut().zip(t[base..base + len * 4].as_chunks::<4>().0) {
                             *d = [s[0], s[1], s[2], s[3]];
                         }
                     }
-                    Some(_) => {
-                        row.resize(dst.len(), [0.0f32; 4]);
-                        self.read_rgba_into(Rect::new(tr.x0, y, tr.x1, y + 1), &mut row);
-                        for (d, p) in dst.iter_mut().zip(&row) {
+                    Some(t) => {
+                        // A second read lock could deadlock behind an eviction writer.
+                        let n = fmt.channels();
+                        let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
+                        for (i, d) in dst.iter_mut().enumerate() {
+                            for (c, v) in px.iter_mut().enumerate().take(n) {
+                                *v = read_sample(t, fmt.sample, base + i * n + c);
+                            }
+                            let p = to_rgba(&fmt, &px[..n]);
                             *d = [q(p[0]), q(p[1]), q(p[2]), q(p[3])];
                         }
                     }
@@ -358,7 +471,8 @@ impl Surface {
         let dp = self.default_pixel();
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let tile = self.tiles.get(&tc);
+            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let tile = guard.as_deref();
             for y in tr.y0..tr.y1 {
                 for x in tr.x0..tr.x1 {
                     let o = (((y - r.y0) as usize) * w + (x - r.x0) as usize) * n;
@@ -366,7 +480,7 @@ impl Surface {
                         Some(t) => {
                             let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize) * n;
                             for i in 0..n {
-                                out[o + i] = read_sample(&t.data, self.format.sample, base + i);
+                                out[o + i] = read_sample(t, self.format.sample, base + i);
                             }
                         }
                         None => out[o..o + n].copy_from_slice(&dp),
@@ -385,13 +499,13 @@ impl Surface {
         let sample = self.format.sample;
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let t = self.tile_mut(tc);
+            let mut t = self.tile_mut(tc).bytes_mut();
             for y in tr.y0..tr.y1 {
                 for x in tr.x0..tr.x1 {
                     let o = (((y - r.y0) as usize) * w + (x - r.x0) as usize) * n;
                     let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize) * n;
                     for i in 0..n {
-                        write_sample(&mut t.data, sample, base + i, data[o + i]);
+                        write_sample(&mut t, sample, base + i, data[o + i]);
                     }
                 }
             }
@@ -440,12 +554,12 @@ impl Surface {
         let bpp = enc.len();
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let t = self.tile_mut(tc);
+            let mut t = self.tile_mut(tc).bytes_mut();
             for y in tr.y0..tr.y1 {
                 let ly = (y - tc.ty * TILE_SIZE) as usize;
                 let lx0 = (tr.x0 - tc.tx * TILE_SIZE) as usize;
                 let lx1 = (tr.x1 - tc.tx * TILE_SIZE) as usize;
-                let row = &mut t.data[(ly * TILE_SIZE as usize + lx0) * bpp..(ly * TILE_SIZE as usize + lx1) * bpp];
+                let row = &mut t[(ly * TILE_SIZE as usize + lx0) * bpp..(ly * TILE_SIZE as usize + lx1) * bpp];
                 for p in row.chunks_exact_mut(bpp) {
                     p.copy_from_slice(&enc);
                 }
@@ -467,12 +581,12 @@ impl Surface {
         assert_eq!(bytes.len(), w * r.height() as usize * bpp, "interleaved length mismatch");
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let t = self.tile_mut(tc);
+            let mut t = self.tile_mut(tc).bytes_mut();
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let src = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
                 let dst = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
-                t.data[dst..dst + span].copy_from_slice(&bytes[src..src + span]);
+                t[dst..dst + span].copy_from_slice(&bytes[src..src + span]);
             }
         }
     }
@@ -487,10 +601,10 @@ impl Surface {
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let dst = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
-                match self.tiles.get(&tc) {
+                match self.tiles.get(&tc).map(|t| t.bytes()) {
                     Some(t) => {
                         let src = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
-                        out[dst..dst + span].copy_from_slice(&t.data[src..src + span]);
+                        out[dst..dst + span].copy_from_slice(&t[src..src + span]);
                     }
                     None => {
                         for p in out[dst..dst + span].chunks_exact_mut(bpp) {
@@ -509,15 +623,16 @@ impl Surface {
         let from_n = self.channels();
         let mut src = vec![0.0f32; from_n];
         for (c, t) in &self.tiles {
-            let dst = out.tile_mut(*c);
+            let t = t.bytes();
+            let mut dst = out.tile_mut(*c).bytes_mut();
             let px_count = (TILE_SIZE * TILE_SIZE) as usize;
             for i in 0..px_count {
                 for (k, v) in src.iter_mut().enumerate() {
-                    *v = read_sample(&t.data, self.format.sample, i * from_n + k);
+                    *v = read_sample(&t, self.format.sample, i * from_n + k);
                 }
                 let px = convert_pixel(&self.format, &to, &src);
                 for (k, v) in px.iter().enumerate() {
-                    write_sample(&mut dst.data, to.sample, i * to.channels() + k, *v);
+                    write_sample(&mut dst, to.sample, i * to.channels() + k, *v);
                 }
             }
         }

@@ -11,6 +11,8 @@ workspace = true
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 serde = { workspace = true }
+crc32fast = "1"
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

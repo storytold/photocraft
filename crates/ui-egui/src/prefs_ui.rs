@@ -100,10 +100,14 @@ pub fn load(app: &mut PhotocraftApp) {
         return;
     }
     app.prefs_rt.loaded = true;
-    if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f())
-        && let Err(e) = app.session.load_prefs_json(&text)
-    {
-        app.ui.status = format!("Preferences were reset: {e}");
+    match app.services.load_prefs.as_mut().and_then(|f| f()) {
+        Some(text) => {
+            if let Err(e) = app.session.load_prefs_json(&text) {
+                app.ui.status = format!("Preferences were reset: {e}");
+                app.session.apply_prefs();
+            }
+        }
+        None => app.session.apply_prefs(),
     }
     crate::dock::restore(app);
     app.sync_recent();
@@ -1683,8 +1687,10 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
+        assert!(has_visible_fields(&values, "scratchDisks"));
+        assert!(!prefs::is_hidden("scratchDisks.disks"));
         // Every setting of these sections is still unimplemented.
-        for section in ["type", "enhancedControls", "rawDefaults", "integrations", "scratchDisks"] {
+        for section in ["type", "enhancedControls", "rawDefaults", "integrations"] {
             assert!(!has_visible_fields(&values, section), "{section}");
         }
         assert!(prefs::is_hidden("rawDefaults.applyAutoTone"));

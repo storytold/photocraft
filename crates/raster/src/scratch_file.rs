@@ -1,0 +1,307 @@
+//! The scratch file: where cold tiles go when pixel memory is over budget.
+//!
+//! - One file per configured directory, deleted when it drops. On Windows it is opened with
+//!   `FILE_FLAG_DELETE_ON_CLOSE`, so even a crash does not leak it.
+//! - Space is handed out in 4 KiB-aligned extents from a free list (best fit, coalescing), else
+//!   appended at the end.
+//! - All I/O is positioned: no shared cursor, no lock held during I/O. The allocator lock only
+//!   guards the free list.
+//! - Reads go through one handle per thread (the file opened again by path): Windows serialises
+//!   I/O on one synchronous handle, so parallel readers sharing it would run one at a time.
+//!
+//! Ported from Fotox's `fx-tiles` scratch file (same author), minus its `unsafe` `ReOpenFile`.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock, PoisonError};
+
+const ALIGN: u64 = 4096;
+
+/// A region of the scratch file holding one compressed tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Extent {
+    pub offset: u64,
+    /// Exact length of the data.
+    pub len: u32,
+    /// Allocated length (multiple of 4 KiB, ≥ `len`).
+    pub alloc: u64,
+    /// CRC-32 of the stored bytes, checked on every read.
+    pub crc32: u32,
+}
+
+/// Free-list allocator. Pure bookkeeping, no I/O.
+#[derive(Debug, Default)]
+pub(crate) struct Allocator {
+    by_offset: BTreeMap<u64, u64>,
+    by_size: BTreeSet<(u64, u64)>,
+    end: u64,
+}
+
+impl Allocator {
+    /// Bytes currently allocated (end of file minus free space).
+    pub fn used(&self) -> u64 {
+        self.end - self.by_offset.values().sum::<u64>()
+    }
+
+    pub fn alloc(&mut self, len: u32) -> Extent {
+        let size = u64::from(len).div_ceil(ALIGN).max(1) * ALIGN;
+        if let Some(&(free_size, offset)) = self.by_size.range((size, 0)..).next() {
+            self.remove_free(offset, free_size);
+            if free_size > size {
+                self.insert_free(offset + size, free_size - size);
+            }
+            return Extent { offset, len, alloc: size, crc32: 0 };
+        }
+        let offset = self.end;
+        self.end += size;
+        Extent { offset, len, alloc: size, crc32: 0 }
+    }
+
+    pub fn free(&mut self, extent: Extent) {
+        let mut offset = extent.offset;
+        let mut size = extent.alloc;
+        if let Some((&prev_off, &prev_size)) = self.by_offset.range(..offset).next_back()
+            && prev_off + prev_size == offset
+        {
+            self.remove_free(prev_off, prev_size);
+            offset = prev_off;
+            size += prev_size;
+        }
+        if let Some(&next_size) = self.by_offset.get(&(offset + size)) {
+            self.remove_free(offset + size, next_size);
+            size += next_size;
+        }
+        if offset + size == self.end {
+            // Free space at the end of the file just shrinks the used range.
+            self.end = offset;
+        } else {
+            self.insert_free(offset, size);
+        }
+    }
+
+    fn insert_free(&mut self, offset: u64, size: u64) {
+        self.by_offset.insert(offset, size);
+        self.by_size.insert((size, offset));
+    }
+
+    fn remove_free(&mut self, offset: u64, size: u64) {
+        self.by_offset.remove(&offset);
+        self.by_size.remove(&(size, offset));
+    }
+}
+
+pub(crate) struct ScratchFile {
+    main: File,
+    readers: OnceLock<Vec<File>>,
+    path: PathBuf,
+    allocator: Mutex<Allocator>,
+}
+
+impl std::fmt::Debug for ScratchFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScratchFile").field("path", &self.path).finish()
+    }
+}
+
+impl ScratchFile {
+    pub fn create(dir: &Path) -> std::io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("photocraft-{}-{n}.scratch", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+            options.custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+        }
+        let main = options.open(&path)?;
+        Ok(Self { main, readers: OnceLock::new(), path, allocator: Mutex::new(Allocator::default()) })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Reserve space and write `data` there.
+    pub fn write(&self, data: &[u8]) -> std::io::Result<Extent> {
+        let len = u32::try_from(data.len()).map_err(|_| std::io::Error::other("block larger than 4 GiB"))?;
+        let mut extent = self.lock().alloc(len);
+        if let Err(e) = write_all_at(&self.main, data, extent.offset) {
+            self.free(extent);
+            return Err(e);
+        }
+        extent.crc32 = crc32fast::hash(data);
+        Ok(extent)
+    }
+
+    /// Read an extent into `buf` (resized to it) and check its CRC.
+    pub fn read_into(&self, extent: Extent, buf: &mut Vec<u8>) -> std::io::Result<()> {
+        buf.resize(extent.len as usize, 0);
+        read_exact_at(self.reader(), buf, extent.offset)?;
+        if crc32fast::hash(buf) != extent.crc32 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("scratch CRC mismatch at offset {}", extent.offset)));
+        }
+        Ok(())
+    }
+
+    pub fn free(&self, extent: Extent) {
+        let mut allocator = self.lock();
+        allocator.free(extent);
+        if allocator.end == 0 {
+            // Release the physical disk space after the last document/history tile closes.
+            // Keep the allocator locked so a new writer cannot reserve an extent before
+            // this truncation; failures retain excess space, never live tile bytes.
+            let _ = self.main.set_len(0);
+        }
+    }
+
+    pub fn used(&self) -> u64 {
+        self.lock().used()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Allocator> {
+        self.allocator.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A handle for reading on the calling thread.
+    fn reader(&self) -> &File {
+        let extra = self.readers.get_or_init(|| {
+            // The same file opened again by path: std shares read, write and delete, so this
+            // works while `main` (opened delete-on-close) is alive. A failure leaves fewer
+            // handles, never an error.
+            let count = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16) - 1;
+            (0..count).map_while(|_| std::fs::OpenOptions::new().read(true).open(&self.path).ok()).collect()
+        });
+        match thread_slot() % (extra.len() + 1) {
+            0 => &self.main,
+            i => extra.get(i - 1).unwrap_or(&self.main),
+        }
+    }
+}
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        // On Windows the file is already gone (delete-on-close); elsewhere remove it.
+        if !cfg!(windows) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// A stable small number per thread, handed out in turn, so the worker threads of a pool land
+/// on different handles.
+fn thread_slot() -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    thread_local! {
+        static SLOT: usize = NEXT.fetch_add(1, Ordering::Relaxed);
+    }
+    SLOT.with(|slot| *slot)
+}
+
+#[cfg(unix)]
+fn write_all_at(file: &File, data: &[u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, data, offset)
+}
+
+#[cfg(unix)]
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(file, buf, offset)
+}
+
+#[cfg(windows)]
+fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !data.is_empty() {
+        let n = file.seek_write(data, offset)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        data = data.get(n..).unwrap_or_default();
+        offset += n as u64;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn read_exact_at(file: &File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        let n = file.seek_read(buf, offset)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        buf = buf.get_mut(n..).unwrap_or_default();
+        offset += n as u64;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn write_all_at(_file: &File, _data: &[u8], _offset: u64) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_exact_at(_file: &File, _buf: &mut [u8], _offset: u64) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alloc_reuses_and_coalesces() {
+        let mut a = Allocator::default();
+        let x = a.alloc(100);
+        let y = a.alloc(5000);
+        let z = a.alloc(4096);
+        assert_eq!((x.offset, y.offset, z.offset), (0, 4096, 12288));
+        assert_eq!(a.used(), 16384);
+        a.free(x);
+        a.free(y); // coalesces with x: one free extent of 12 KiB at 0
+        let w = a.alloc(12000);
+        assert_eq!(w.offset, 0, "coalesced hole is reused");
+        a.free(z); // tail extent: the file end shrinks
+        assert_eq!(a.used(), 12288);
+        a.free(w);
+        assert_eq!(a.used(), 0);
+        assert_eq!(a.end, 0, "everything freed collapses the file");
+    }
+
+    #[test]
+    fn best_fit_splits_larger_holes() {
+        let mut a = Allocator::default();
+        let big = a.alloc(40000);
+        let _tail = a.alloc(1);
+        a.free(big);
+        assert_eq!(a.alloc(10).offset, 0);
+        assert_eq!(a.alloc(10).offset, 4096, "remainder of the split hole is used next");
+    }
+
+    #[test]
+    fn file_roundtrip_and_crc() {
+        let dir = std::env::temp_dir().join("photocraft-scratch-test");
+        let scratch = ScratchFile::create(&dir).unwrap();
+        let a = scratch.write(b"hello tiles").unwrap();
+        let b = scratch.write(&[7u8; 9000]).unwrap();
+        let mut buf = Vec::new();
+        scratch.read_into(a, &mut buf).unwrap();
+        assert_eq!(buf, b"hello tiles");
+        scratch.read_into(b, &mut buf).unwrap();
+        assert_eq!(buf, vec![7u8; 9000]);
+        let bad = Extent { crc32: a.crc32 ^ 1, ..a };
+        assert!(scratch.read_into(bad, &mut buf).is_err(), "a CRC mismatch is an error, not garbage");
+        scratch.free(a);
+        scratch.free(b);
+        assert_eq!(scratch.main.metadata().unwrap().len(), 0, "closing the last tile releases physical disk space");
+        let path = scratch.path().to_path_buf();
+        drop(scratch);
+        assert!(!path.exists(), "scratch file is removed on drop");
+    }
+}

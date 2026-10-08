@@ -538,20 +538,25 @@ pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transf
     let mut dpo = vec![0.0f32; ds];
     t.convert_f32(&dp, ss, &mut dpo, ds, true);
     let mut out = Surface::with_default(to, &dpo);
-    // Convert all tiles in one parallel pass into a staging buffer, then store them.
+    // Bound staging and pinned source tiles so conversion can use the scratch disk.
     let tiles: Vec<_> = s.tiles().map(|(c, t)| (*c, t.clone())).collect();
     let tile_px = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize;
     let dst_len = tile_px * to.bytes_per_pixel();
-    let mut staging = vec![0u8; dst_len * tiles.len()];
-    let jobs: Vec<(&[u8], &mut [u8])> = tiles.iter().map(|(_, t)| t.bytes()).zip(staging.chunks_mut(dst_len.max(1))).collect();
     let kind = match sf.sample {
         SampleType::U8 => SampleKind::U8,
         SampleType::U16 => SampleKind::U16,
         SampleType::F32 => SampleKind::F32,
     };
-    t.convert_bytes_many(kind, jobs, ss, ds, true);
-    for ((c, _), bytes) in tiles.iter().zip(staging.chunks(dst_len.max(1))) {
-        out.tile_mut(*c).bytes_mut().copy_from_slice(bytes);
+    for batch in tiles.chunks(32) {
+        let mut staging = vec![0u8; dst_len * batch.len()];
+        {
+            let sources: Vec<_> = batch.iter().map(|(_, t)| t.bytes()).collect();
+            let jobs: Vec<(&[u8], &mut [u8])> = sources.iter().map(|b| &**b).zip(staging.chunks_mut(dst_len.max(1))).collect();
+            t.convert_bytes_many(kind, jobs, ss, ds, true);
+        }
+        for ((c, _), bytes) in batch.iter().zip(staging.chunks(dst_len.max(1))) {
+            out.tile_mut(*c).bytes_mut().copy_from_slice(bytes);
+        }
     }
     out
 }

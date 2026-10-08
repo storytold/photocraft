@@ -20,6 +20,10 @@ fn cache() -> &'static Mutex<HashMap<usize, Entry>> {
     C.get_or_init(Default::default)
 }
 
+pub(crate) fn purge() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
 /// Pixels of `t` that differ from `dp` (tile-local half-open bounds).
 fn scan(t: &Tile, dp: &[u8]) -> Option<(u16, u16, u16, u16)> {
     let bpp = dp.len();
@@ -55,8 +59,11 @@ pub fn content_bounds(s: &Surface) -> Rect {
         let b = match hit {
             Some(b) => b,
             None => {
+                let generation = photocraft_raster::spill::read_error_generation();
                 let b = scan(t, &dp);
-                c.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                if photocraft_raster::spill::check_since(generation).is_ok() {
+                    c.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                }
                 b
             }
         };
