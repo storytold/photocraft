@@ -396,6 +396,13 @@ fn worker_loop() {
 /// Turn the scratch disk on (`dir` and a non-zero `budget_bytes`) or off. Tiles already on disk
 /// stay readable either way. Changing the directory starts a new scratch file there; the old one
 /// is deleted once its last tile is freed or changed.
+pub fn set_budget(budget_bytes: usize) {
+    if enabled() {
+        M.budget.store(budget_bytes.max(1), Ordering::Relaxed);
+        maybe_evict();
+    }
+}
+
 pub fn configure(dir: Option<&Path>, budget_bytes: usize) -> Result<(), String> {
     let mut c = M.config();
     let dir = dir.filter(|_| budget_bytes > 0).map(Path::to_path_buf);

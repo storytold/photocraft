@@ -17,6 +17,7 @@ use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, write_sample};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 
+pub mod memory;
 mod scratch_file;
 pub mod spill;
 

@@ -797,13 +797,13 @@ fn ensure_gpu(app: &mut PhotocraftApp, idx: usize, visible: DRect) -> bool {
 /// counted once per structural change, not per brush dab) and whenever the preference changes.
 fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: usize, partial: bool, visible: DRect) {
     gpu.set_focus(Some(visible));
-    let allowance = u64::from(app.session.prefs().performance.memory_usage_mb).saturating_mul(1 << 20);
+    let allowance = u64::from(app.session.prefs().performance.gpu_memory_mb).saturating_mul(1 << 20);
     if partial && app.perf.gpu_budget_allowance == allowance && gpu.memory_budget().is_some() {
         return;
     }
-    let Some(st) = app.session.documents().get(idx) else { return };
-    let pixels = st.history.pixel_bytes(&st.doc) as u64;
-    let budget = crate::gpu_canvas::memory_budget(allowance, pixels, crate::gpu_canvas::physical_memory());
+    let _ = idx;
+    // Graphics resources have their own cap. Reserve space for visible output pages and staging.
+    let budget = allowance.saturating_sub((allowance / 4).min(128 << 20)).max(8 << 20);
     gpu.set_memory_budget(budget);
     app.perf.gpu_budget_mb = budget >> 20;
     app.perf.gpu_budget_allowance = allowance;

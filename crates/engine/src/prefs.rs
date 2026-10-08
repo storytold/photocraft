@@ -386,6 +386,11 @@ pub struct Performance {
     /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
     /// oldest states are dropped beyond it).
     pub memory_usage_mb: u32,
+    /// Percent of physical RAM for the complete process; None preserves the legacy MB limit.
+    #[serde(default)]
+    pub memory_usage_percent: Option<u8>,
+    /// Independent graphics budget, including canvas pages and compositor working sets.
+    pub gpu_memory_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
     /// Display cache levels (mip levels kept for zoomed-out views).
@@ -436,6 +441,8 @@ impl Default for Performance {
     fn default() -> Self {
         Self {
             memory_usage_mb: 8192,
+            memory_usage_percent: Some(90),
+            gpu_memory_mb: 1024,
             history_states: 50,
             cache_levels: 4,
             cache_tile_size: 8192,
@@ -922,6 +929,8 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "fileHandling.recentFileCount" => (0.0, 100.0),
         "export.jpegQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
+        "performance.memoryUsagePercent" => (1.0, 95.0),
+        "performance.gpuMemoryMb" => (64.0, 65536.0),
         "performance.historyStates" => (1.0, 1000.0),
         "performance.cacheLevels" => (1.0, 8.0),
         "performance.cacheTileSize" => (256.0, 16384.0),
@@ -1015,7 +1024,7 @@ fn set_path(root: &mut Value, path: &str, value: Value) -> std::result::Result<(
 
 /// Validate one value for `path` before it is stored (choices, ranges, colours).
 fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
-    if path == "performance.renderingMode" && v.is_null() {
+    if matches!(path, "performance.renderingMode" | "performance.memoryUsagePercent") && v.is_null() {
         return Ok(()); // Legacy policy, resolved from useGpu and gpuBackend.
     }
     if let Some(c) = choices(path) {
