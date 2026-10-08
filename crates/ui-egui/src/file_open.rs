@@ -92,8 +92,8 @@ impl PhotocraftApp {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))?;
             return Ok(Vec::new());
         }
-        let large_psd = matches!(ext.as_str(), "psd" | "psb" | "psdt") && std::fs::metadata(path).is_ok_and(|m| m.len() >= 64 << 20);
-        if !large_psd {
+        let seekable = ext == "exr" || matches!(ext.as_str(), "psd" | "psb" | "psdt") && std::fs::metadata(path).is_ok_and(|m| m.len() >= 64 << 20);
+        if !seekable {
             let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
             return self.open_file(path, &bytes);
         }

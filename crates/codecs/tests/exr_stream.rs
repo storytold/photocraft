@@ -124,8 +124,7 @@ fn mixed_samples_and_offset_data_window_keep_coordinates_and_values() {
         .into_iter()
         .collect(),
     );
-    let mut attributes = LayerAttributes::default();
-    attributes.layer_position = exr::math::Vec2(-15, 40);
+    let attributes = LayerAttributes { layer_position: exr::math::Vec2(-15, 40), ..Default::default() };
     let layer =
         Layer::new((31, 35), attributes, Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Decreasing }, channels);
     let mut bytes = Cursor::new(Vec::new());
