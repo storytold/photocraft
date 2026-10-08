@@ -1113,9 +1113,12 @@ fn font_dropdown_focuses_search_and_restores_its_height() {
     h.run_steps(1);
     click(&mut h, button);
     h.run_steps(2);
-    let full = popup(&h).expect("the dropdown opened").height();
+    let full_rect = popup(&h).expect("the dropdown opened");
+    let full = full_rect.height();
     assert!(h.get_by_role(Role::TextInput).is_focused(), "search focused on open");
     assert!(full > 24.0, "the list has room: {full}");
+    // The popup fits the font names, not the whole window (it used to stretch across it).
+    assert!(full_rect.width() < 600.0, "the popup fits its names: {}", full_rect.width());
 
     // Clicking the search field keeps the popup open (a `ComboBox` used to close on any click).
     let ti = h.get_by_role(Role::TextInput);
@@ -1126,8 +1129,10 @@ fn font_dropdown_focuses_search_and_restores_its_height() {
     // A query that matches nothing shrinks the popup; clearing it grows the popup back (#1369).
     h.get_by_role(Role::TextInput).type_text("zzzzzz");
     h.run_steps(2);
-    let filtered = popup(&h).expect("still open").height();
+    let filtered_rect = popup(&h).expect("still open");
+    let filtered = filtered_rect.height();
     assert!(filtered < full, "filtered {filtered} < full {full}");
+    assert!(filtered_rect.width() < 260.0, "a no-match list narrows to the button: {}", filtered_rect.width());
     for _ in 0..6 {
         backspace(&mut h);
     }

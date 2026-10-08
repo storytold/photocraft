@@ -769,15 +769,26 @@ pub fn font_picker(ui: &mut egui::Ui, salt: &str, current: &mut String, width: f
 
     let mut changed = false;
     popup.show(|ui| {
-        ui.set_min_width(rect.width());
         let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
+        let ql = q.to_lowercase();
+        let matches: Vec<&String> = families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)).collect();
+        // Fit the popup to the widest matching family: at least the button, and never wider than the
+        // screen (the old code used `available_width`, which in an unconstrained popup is the whole
+        // window, so the list stretched across it).
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let names_w = matches.iter().fold(0.0_f32, |w, f| {
+            w.max(ui.painter().layout_no_wrap((*f).clone(), font_id.clone(), egui::Color32::PLACEHOLDER).size().x)
+        });
+        let pad = ui.spacing().button_padding.x * 2.0;
+        let scroll = ui.spacing().scroll.bar_width + 8.0;
+        let screen = ui.ctx().content_rect().width() - 16.0;
+        let content_w = (names_w + pad + scroll).max(rect.width()).min(screen.max(rect.width()));
+        ui.set_width(content_w);
         let search = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(ui.available_width()));
         if first && !search.has_focus() {
             search.request_focus();
         }
         ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
-        let ql = q.to_lowercase();
-        let matches: Vec<&String> = families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)).collect();
         // Pin the popup's minimum height to its matches. An egui popup keeps the size it last laid
         // out and never grows back after it shrank, so a cleared search would stay short until the
         // popup was reopened. `set_min_height` forces the popup to be as tall as the rows need, so
