@@ -54,9 +54,10 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
-    // Photoshop switches to a double-column toolbar only when one column doesn't fit.
+    // Photoshop switches to a double-column toolbar only when one column doesn't fit,
+    // or when the user toggles the chevron button (#1197).
     let slots: usize = TOOL_SECTIONS.iter().map(|g| g.len()).sum();
-    let double = toolbar_needs_double(slots, TOOL_SECTIONS.len(), bx, t.pro, ui.available_rect_before_wrap().height());
+    let double = app.ui.panels.toolbar_double || toolbar_needs_double(slots, TOOL_SECTIONS.len(), bx, t.pro, ui.available_rect_before_wrap().height());
     let w = if double { w1 + bx + 2.0 } else { w1 };
     egui::Panel::left("toolbar").resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
         ui,
@@ -65,8 +66,18 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let r = ui.max_rect();
                 ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
                 // collapse chevrons like Photoshop's toolbar header
-                let (cr, _) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::hover());
-                icons::paint(ui, cr, "chevrons-right", 11.0, t.text_faint);
+                let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(cr, t.radius_sm, t.hover);
+                }
+                let tip = if double { tl!("Collapse") } else { tl!("Expand") };
+                let resp = resp.on_hover_text(tip);
+                if resp.clicked() {
+                    app.ui.panels.toolbar_double = !app.ui.panels.toolbar_double;
+                }
+                let chevron_icon = if double { "chevrons-left" } else { "chevrons-right" };
+                let tint = if resp.hovered() { t.text } else { t.text_faint };
+                icons::paint(ui, cr, chevron_icon, 11.0, tint);
                 ui.add_space(4.0);
             }
             // Subtle violet wash at the bottom of the toolbar.
@@ -2976,5 +2987,62 @@ mod properties_card_tests {
         h.run_steps(3);
         let doc = &h.state().session.active().unwrap().doc;
         assert_eq!(ids.iter().map(|&id| doc.layer(id).unwrap().opacity).collect::<Vec<_>>(), [0.25, 0.25]);
+    }
+}
+
+#[cfg(test)]
+mod toolbar_chevron_tests {
+    use super::*;
+
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> f32 {
+        let mut width = 0.0;
+        let mut out =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1800.0))), events, ..Default::default() }, |ui| {
+                let before = ui.available_rect_before_wrap().left();
+                toolbar(app, ui);
+                let after = ui.available_rect_before_wrap().left();
+                width = after - before;
+            });
+        out.textures_delta.clear();
+        width
+    }
+
+    #[test]
+    fn chevron_toggles_toolbar_between_one_and_two_columns() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+
+        // Initially single column when window is tall
+        let w_single = frame(&mut app, &ctx, vec![]);
+        frame(&mut app, &ctx, vec![]);
+        assert!(!app.ui.panels.toolbar_double);
+        assert_eq!(w_single, 40.0);
+
+        let bx = 30.0;
+        let chevron_rect = ctx
+            .viewport(|v| {
+                v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).find(|w| w.rect.size() == vec2(bx, 14.0) && w.sense.senses_click()).map(|w| w.rect)
+            })
+            .expect("chevron button widget");
+
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+
+        // Click chevron to expand toolbar to two columns
+        let at = chevron_rect.center();
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        frame(&mut app, &ctx, vec![pointer(at, false)]);
+        let w_double = frame(&mut app, &ctx, vec![]);
+
+        assert!(app.ui.panels.toolbar_double);
+        assert_eq!(w_double, 72.0);
+
+        // Click again to collapse toolbar back to one column
+        frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        frame(&mut app, &ctx, vec![pointer(at, false)]);
+        let w_collapsed = frame(&mut app, &ctx, vec![]);
+
+        assert!(!app.ui.panels.toolbar_double);
+        assert_eq!(w_collapsed, 40.0);
     }
 }
