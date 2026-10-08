@@ -376,8 +376,16 @@ pub fn apply_stop(f: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fil
         "opacity" => true,
         o => return Err(bad(CMD, format!("unknown kind `{o}` (color|opacity)"))),
     };
-    let index = || -> Result<usize> {
-        p.get("index").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad(CMD, "missing `index` (a stop number from 0)"))
+    // The `index` param, checked against the `len` entries it can address (`what`, e.g.
+    // "colour stop" or "segment") before any arithmetic on it: an index is untrusted and can be as
+    // large as the integer type, so `i + 1` on it would overflow (#958).
+    let index = |len: usize, what: &str| -> Result<usize> {
+        let i =
+            p.get("index").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad(CMD, "missing `index` (a stop number from 0)"))?;
+        if i >= len {
+            return Err(bad(CMD, format!("no {what} {i} (there are {len})")));
+        }
+        Ok(i)
     };
     let location = || num(p, "location").map(|v| v.clamp(0.0, 1.0)).ok_or_else(|| bad(CMD, "missing `location` (0..1)"));
     let ramp = gf::Ramp::new(f).ok_or_else(|| bad(CMD, "not a gradient fill"))?;
@@ -396,22 +404,19 @@ pub fn apply_stop(f: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fil
                 os.push((t, a.clamp(0.0, 1.0)));
             }
             "move" => {
-                let i = index()?;
+                let i = index(os.len(), "opacity stop")?;
                 let t = location()?;
                 os.get_mut(i).ok_or_else(|| bad(CMD, format!("no opacity stop {i}")))?.0 = t;
             }
             "delete" => {
-                let i = index()?;
-                if i >= os.len() {
-                    return Err(bad(CMD, format!("no opacity stop {i}")));
-                }
+                let i = index(os.len(), "opacity stop")?;
                 if os.len() <= 2 {
                     return Err(bad(CMD, "a gradient keeps at least 2 opacity stops"));
                 }
                 os.remove(i);
             }
             "opacity" => {
-                let i = index()?;
+                let i = index(os.len(), "opacity stop")?;
                 let a = opacity()?;
                 os.get_mut(i).ok_or_else(|| bad(CMD, format!("no opacity stop {i}")))?.1 = a;
             }
@@ -446,34 +451,27 @@ pub fn apply_stop(f: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fil
             }
         }
         "move" => {
-            let i = index()?;
+            let i = index(v.len(), "colour stop")?;
             let t = location()?;
             v.get_mut(i).ok_or_else(|| bad(CMD, format!("no colour stop {i}")))?.0 = t;
         }
         "delete" => {
-            let i = index()?;
-            if i >= v.len() {
-                return Err(bad(CMD, format!("no colour stop {i}")));
-            }
+            let i = index(v.len(), "colour stop")?;
             if v.len() <= 2 {
                 return Err(bad(CMD, "a gradient keeps at least 2 colour stops"));
             }
             v.remove(i);
         }
         "color" => {
-            let i = index()?;
+            let i = index(v.len(), "colour stop")?;
             let c = p.get("color").and_then(|c| parse_color(c, fg, bg)).ok_or_else(|| bad(CMD, "missing or bad `color`"))?;
             v.get_mut(i).ok_or_else(|| bad(CMD, format!("no colour stop {i}")))?.1 = c;
         }
         "midpoint" => {
-            let i = index()?;
+            // Segment `i` runs from stop `i` to stop `i + 1`, so there is one fewer than stops.
+            let i = index(v.len().saturating_sub(1), "segment")?;
             let m = num(p, "location").ok_or_else(|| bad(CMD, "missing `location` (0..1 of the segment)"))?.clamp(0.05, 0.95);
-            if i + 1 >= v.len() {
-                return Err(bad(CMD, format!("no segment {i} (there are {})", v.len().saturating_sub(1))));
-            }
-            if let Some(s) = v.get_mut(i) {
-                s.2 = m;
-            }
+            v.get_mut(i).ok_or_else(|| bad(CMD, format!("no segment {i}")))?.2 = m;
         }
         o => return Err(bad(CMD, format!("unknown action `{o}` (add|move|delete|color|midpoint)"))),
     }

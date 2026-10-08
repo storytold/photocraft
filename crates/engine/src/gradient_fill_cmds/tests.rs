@@ -323,3 +323,38 @@ fn a_clamped_handle_drag_leaves_the_other_handle_alone() {
         }
     }
 }
+
+/// Issue #958: a stop or segment index far past the end (up to the largest integer) is a
+/// `BadParams` error for every action and kind, never an overflow panic, and leaves the gradient
+/// and the history as they were.
+#[test]
+fn stop_rejects_huge_indices_without_panicking() {
+    let mut s = session(8, "white");
+    s.execute(CREATE, json!({"from": [0, 0], "to": [8, 8], "stops": [[0, "#000000"], [1, "#ffffff"]]})).unwrap();
+    let before = active_fill(&s);
+    let h = s.active().unwrap().history.past_len();
+    for index in [u64::MAX, usize::MAX as u64, u64::MAX - 1, 1 << 32, 2] {
+        for p in [
+            json!({"action": "midpoint", "index": index, "location": 0.5}),
+            json!({"action": "move", "index": index, "location": 0.5}),
+            json!({"action": "delete", "index": index}),
+            json!({"action": "color", "index": index, "color": "#ff0000"}),
+            json!({"action": "move", "kind": "opacity", "index": index, "location": 0.5}),
+            json!({"action": "delete", "kind": "opacity", "index": index}),
+            json!({"action": "opacity", "kind": "opacity", "index": index, "opacity": 50}),
+        ] {
+            let r = s.execute(STOP, p.clone());
+            assert!(matches!(r, Err(EngineError::BadParams { .. })), "{p}: {r:?}");
+            assert_eq!(active_fill(&s), before, "{p} changed the gradient");
+            assert_eq!(s.active().unwrap().history.past_len(), h, "{p} added a history step");
+        }
+    }
+    // The last segment of a two-stop gradient is 0; segment 1 does not exist.
+    let r = s.execute(STOP, json!({"action": "midpoint", "index": 1, "location": 0.5}));
+    assert!(matches!(&r, Err(EngineError::BadParams { msg, .. }) if msg.contains("no segment 1 (there are 1)")), "{r:?}");
+    // Control: a valid midpoint edit still applies as one undo step.
+    s.execute(STOP, json!({"action": "midpoint", "index": 0, "location": 0.25})).unwrap();
+    let Fill::Gradient { midpoints, .. } = active_fill(&s) else { panic!("not a gradient fill") };
+    assert_eq!(midpoints, vec![0.25]);
+    assert_eq!(s.active().unwrap().history.past_len(), h + 1);
+}
