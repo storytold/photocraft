@@ -153,7 +153,8 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w, 2.0));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
-    let stepped = arrow_step(ui, slot.id, value, &range, if fine { 0.01 } else { 1.0 });
+    let (lo, hi) = (*range.start(), *range.end());
+    let step = arrow_step(ui, slot.id, if fine { 0.01 } else { 1.0 });
     // new_child (not scope_builder): a scope would move the parent cursor back to the child rect.
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
     let mut resp = {
@@ -176,7 +177,10 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     if !suffix.is_empty() {
         ui.painter().text(pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, suffix, theme::mono(11.0), t.text_faint);
     }
-    if stepped {
+    if step != 0.0 {
+        // Round to 4 decimal places, so repeated 0.1 steps don't leave float errors.
+        *value = (((*value + step) * 1e4).round() / 1e4).clamp(lo, hi);
+        ui.memory_mut(|m| m.request_focus(resp.id));
         resp.mark_changed();
     }
     resp
@@ -213,12 +217,12 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
 }
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
-fn arrow_step(ui: &mut Ui, slot: egui::Id, value: &mut f32, range: &std::ops::RangeInclusive<f32>, step: f32) -> bool {
+fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> f32 {
     use egui::{Key, Modifiers};
     // The field's id is only known once it's drawn, so `value_field` saves it under `slot` for the next frame.
-    if !ui.data(|d| d.get_temp(slot)).is_some_and(|id| ui.memory(|m| m.has_focus(id))) {
-        return false;
-    }
+    let Some(id) = ui.data(|d| d.get_temp::<egui::Id>(slot)).filter(|id| ui.memory(|m| m.has_focus(*id))) else {
+        return 0.0;
+    };
     let n = ui.input_mut(|i| {
         let mut n = 0.0;
         // egui ignores an extra shift when matching, so shift is checked before the plain arrows to get its larger step.
@@ -227,12 +231,11 @@ fn arrow_step(ui: &mut Ui, slot: egui::Id, value: &mut f32, range: &std::ops::Ra
         }
         n
     });
-    if n == 0.0 {
-        return false;
+    // If a sum like 5+5 has been typed, unfocus the field so it calculates it (as Enter would) before we step.
+    if n != 0.0 && ui.data(|d| d.get_temp(id.with("arithmetic"))).unwrap_or(false) {
+        ui.memory_mut(|m| m.surrender_focus(id));
     }
-    // Round to 4 decimal places, so repeated 0.1 steps don't leave float errors.
-    *value = (((*value + n) * 1e4).round() / 1e4).clamp(*range.start(), *range.end());
-    true
+    n
 }
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
@@ -777,6 +780,16 @@ mod tests {
         assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowUp), 0.62);
         let mut h = focused(995.0, 0.0..=1000.0);
         assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 1000.0);
+    }
+
+    #[test]
+    fn arrow_keys_work_out_a_typed_sum_then_step_it() {
+        let mut h = focused(100.0, 0.0..=1000.0);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.event(egui::Event::Text("5+5".into()));
+        h.run();
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 11.0);
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowDown), 10.0, "the field keeps focus");
     }
 
     #[test]
