@@ -30,6 +30,7 @@ mod mac_window;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(any(target_os = "linux", test))]
 mod linux_libs;
+mod logging;
 mod monitor_profile;
 mod services;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
@@ -116,6 +117,8 @@ mod control_port_tests {
 }
 
 fn main() -> eframe::Result {
+    // First, so the panic hook and every start-up warning are recorded (`logging`).
+    let logger = logging::install();
     crash_guard::install_hook();
     let mut control_port: Option<u16> = None;
     let mut control_arg_errors: Vec<String> = Vec::new();
@@ -164,6 +167,15 @@ fn main() -> eframe::Result {
             eprintln!("photocraft: {error}");
         }
         std::process::exit(code);
+    }
+
+    // The log file lives under the settings directory; opened after the arguments, so `--version`
+    // and usage errors leave no file behind. Records logged until now are written to it first.
+    if let (Some(logger), Some(dir)) = (logger, services::config_dir()) {
+        match logger.attach_dir(&dir.join("logs")) {
+            Ok(path) => log::info!("PhotoCraft {}, log file {}", photocraft_engine::build_info::long_version(), path.display()),
+            Err(e) => eprintln!("photocraft: no log file: {e}"),
+        }
     }
 
     // winit and wgpu dlopen the windowing and GPU libraries, and some of those crates panic when
