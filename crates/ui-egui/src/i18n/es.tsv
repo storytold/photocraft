@@ -1,3 +1,5 @@
+
+
 # Spanish (es) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
 #
 #   context  empty                a plain UI string; `source` is the English text in the code

@@ -73,7 +73,7 @@ pub(crate) fn with_doc_sampler<R>(doc: &Document, layer: Option<LayerId>, all_la
 /// caller gets `changed: false`, whatever the mode. (Select Subject and Object Selection run
 /// heuristics that often find nothing on busy photos; clearing the selection then looks like
 /// a dead button.)
-fn apply(s: &mut Session, label: &str, region: Option<Region>, m: SelectionMode) -> Result<Value> {
+pub(crate) fn apply(s: &mut Session, label: &str, region: Option<Region>, m: SelectionMode) -> Result<Value> {
     if region.is_none() {
         // Nothing found: leave the selection (and history) alone.
         let selected = s.active().ok_or(EngineError::NoDocument)?.doc.selection.is_some();
@@ -120,25 +120,71 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn rect_param(p: &Value) -> Option<Rect> {
     let a = p.get("rect")?.as_array()?;
-    let v: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
-    if v.len() < 4 {
+    let v: Vec<f64> = a.iter().map(Value::as_f64).collect::<Option<_>>()?;
+    if v.len() != 4 || v.iter().any(|v| !v.is_finite()) {
         return None;
     }
     // Negative sizes (dragging up/left) are normalised.
     let (x0, x1) = (v[0].min(v[0] + v[2]), v[0].max(v[0] + v[2]));
     let (y0, y1) = (v[1].min(v[1] + v[3]), v[1].max(v[1] + v[3]));
+    if [x0, y0, x1, y1].iter().any(|v| !v.is_finite() || *v < i32::MIN as f64 || *v > i32::MAX as f64) {
+        return None;
+    }
     Some(Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32))
 }
 
 fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let rect = rect_param(p).ok_or_else(|| bad("select.object", "needs \"rect\": [x, y, w, h]"))?;
+    if let Some(id) = crate::model_cmds::object_model(s, p)? {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let canvas = d.doc.bounds();
+        let rect = rect.intersect(&canvas);
+        if rect.is_empty() {
+            return Err(bad("select.object", "box must overlap the canvas"));
+        }
+        let prompt = photocraft_ml::Prompt::Box([
+            (rect.x0 - canvas.x0) as f32 / canvas.width() as f32,
+            (rect.y0 - canvas.y0) as f32 / canvas.height() as f32,
+            (rect.x1 - canvas.x0) as f32 / canvas.width() as f32,
+            (rect.y1 - canvas.y0) as f32 / canvas.height() as f32,
+        ]);
+        return model_selection(s, p, id, prompt, "Object Selection", false);
+    }
     let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
     apply(s, "Object Selection", region, mode(p, "replace"))
 }
 
 fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(id) = crate::model_cmds::subject_model(s, p)? {
+        return model_selection(s, p, id, photocraft_ml::Prompt::Subject, "Select Subject", true);
+    }
     let region = with_sampler(s, b(p, "sampleAllLayers", true), |smp, doc| subject::select_subject(smp, doc.bounds()))?;
     apply(s, "Select Subject", region, mode(p, "replace"))
+}
+
+fn model_selection(
+    s: &mut Session,
+    p: &Value,
+    id: photocraft_ml::ModelId,
+    prompt: photocraft_ml::Prompt,
+    label: &'static str,
+    all_default: bool,
+) -> Result<Value> {
+    let backend = crate::model_cmds::backend(s)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let (doc, layer) = (d.doc.clone(), d.active_layer);
+    let (all, m) = (b(p, "sampleAllLayers", all_default), mode(p, "replace"));
+    crate::jobs::run(
+        s,
+        label,
+        true,
+        move |ctx| with_doc_sampler(&doc, layer, all, |smp, d| crate::model_cmds::infer_region(backend.as_ref(), id, smp, d, prompt, ctx)),
+        move |s, region| {
+            let mut result = apply(s, label, region, m)?;
+            result["model"] = json!(id);
+            Ok(result)
+        },
+    )
 }
 
 fn focus_area(s: &mut Session, p: &Value) -> Result<Value> {
@@ -256,7 +302,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false}"##,
+            r##"{"rect":[x,y,w,h],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"model":"classical|sam2.1-large"? (defaults to Preferences)}"##,
             has_doc,
             object_selection
         ),
@@ -264,7 +310,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.subject",
             "Subject",
             ["Select"],
-            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace","model":"classical|birefnet-hr-matting"? (defaults to Preferences)}"##,
             has_doc,
             select_subject
         ),

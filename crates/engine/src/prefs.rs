@@ -108,6 +108,8 @@ choice!(FontPreview { Off = "off", Small = "small", Medium = "medium", Large = "
 choice!(RawColorSpace { Srgb = "srgb", AdobeRgb = "adobeRgb", ProPhoto = "proPhoto", DisplayP3 = "displayP3" } default AdobeRgb);
 choice!(RawDepth { Eight = "8", Sixteen = "16" } default Sixteen);
 choice!(RawSharpen { None = "none", Screen = "screen", Glossy = "glossy", Matte = "matte" } default None);
+choice!(SubjectModel { Classical = "classical", BiRefNet = "birefnet-hr-matting" } default Classical);
+choice!(ObjectModel { Classical = "classical", Sam2 = "sam2.1-large" } default Classical);
 
 impl Unit {
     /// Document pixels → this unit. `dpi` is the document resolution, `extent` the 100% length
@@ -867,11 +869,14 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// Optional, downloaded local model; classical selection remains the default.
+    pub subject_model: SubjectModel,
+    pub object_model: ObjectModel,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self { allow_agent_control: true, control_port: 0, subject_model: SubjectModel::Classical, object_model: ObjectModel::Classical }
     }
 }
 
@@ -1065,6 +1070,8 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "performance.gpuBackend" => GpuBackend::NAMES,
         "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,
+        "integrations.subjectModel" => SubjectModel::NAMES,
+        "integrations.objectModel" => ObjectModel::NAMES,
         _ => return None,
     })
 }

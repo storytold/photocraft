@@ -65,13 +65,24 @@ fn main() {
     let custom_titlebar = args.iter().any(|a| a == "--custom-titlebar");
     // `--settle-ms N`: keep rendering frames for N ms before the capture (e.g. mid-job).
     let settle_ms: u64 = arg(&args, "--settle-ms").and_then(|s| s.parse().ok()).unwrap_or(0);
+    #[cfg(feature = "local-ml")]
+    let models_dir = arg(&args, "--models-dir");
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(scale).with_max_steps(64).wgpu().build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut services = services;
             services.is_wayland = wayland_notice;
             services.xwayland_command = wayland_notice.then(|| "WAYLAND_DISPLAY= photocraft".into());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            let session = photocraft_engine::Session::new();
+            #[cfg(feature = "local-ml")]
+            let session = {
+                let mut session = session;
+                if let Some(dir) = models_dir {
+                    session.configure_local_models(dir.into());
+                }
+                session
+            };
+            let mut app = PhotocraftApp::new(session, services);
             app.background_jobs = background_jobs;
             app.custom_titlebar = custom_titlebar;
             // `--safe-gpu`: the CPU canvas, as the desktop app's `--safe-gpu` launch.

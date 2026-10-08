@@ -31,6 +31,7 @@ photocraft-vector = { path = "crates/vector" }
 photocraft-format = { path = "crates/format" }
 photocraft-automation = { path = "crates/automation" }
 photocraft-plugins = { path = "crates/plugins" }
+photocraft-ml = { path = "crates/ml" }
 photocraft-engine = { path = "crates/engine" }
 photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }

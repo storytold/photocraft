@@ -1,0 +1,72 @@
+name: Optional local models
+
+on:
+  # Let contributors verify native platforms in their fork before maintainer approval of PR CI.
+  push:
+    paths:
+      - "crates/ml/**"
+      - "crates/engine/**"
+      - "crates/ui-egui/**"
+      - "apps/photocraft/**"
+      - "apps/photocraft-cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/local-models.yml"
+  pull_request:
+    paths:
+      - "crates/ml/**"
+      - "crates/engine/**"
+      - "crates/ui-egui/**"
+      - "apps/photocraft/**"
+      - "apps/photocraft-cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/local-models.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-models-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu:
+    if: ${{ github.event_name != 'push' || github.event.repository.fork }}
+    name: CPU (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: optional-local-ml
+      - name: Install Linux UI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libgtk-3-dev
+      # Synthetic ONNX graphs exercise the actual runtime and both adapters. No model weights
+      # are fetched in CI; only ort's pinned build-time runtime redistribution is downloaded.
+      - name: Test native runtime and download verification
+        run: cargo test -p photocraft-ml --features onnx --locked
+      - name: Test commands and CLI with the optional backend
+        run: cargo test -p photocraft-engine -p photocraft-cli --features local-ml --locked
+      - name: Check native app and UI with the optional backend
+        run: cargo check -p photocraft -p photocraft-ui-egui --features local-ml --locked
+      - name: Clippy optional backend
+        run: cargo clippy -p photocraft-ml -p photocraft-engine -p photocraft-cli --features photocraft-ml/onnx,local-ml --all-targets --locked -- -D warnings

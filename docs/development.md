@@ -46,6 +46,10 @@ cargo xtask parity                                         # Photoshop menu cove
 
 Image code is slow at `opt-level 0`, so the workspace profile builds dependencies at `opt-level 2`. Use `--release` for anything interactive.
 
+Optional CPU models for Object Selection, Select Subject and Remove Background are enabled with
+`--features local-ml`. Weights remain separate, explicit downloads. See [local models](local-models.md)
+for Preferences, CLI, provenance and native runtime packaging details.
+
 The dev profile builds with `debug = "line-tables-only"`: panic backtraces keep file and line, and test binaries link about twice as fast. To inspect local variables in a debugger, build with `CARGO_PROFILE_DEV_DEBUG=true`.
 
 ### Faster test loops

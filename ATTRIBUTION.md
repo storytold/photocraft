@@ -54,10 +54,25 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 (`crates/cms/src/builtin.rs`, `crates/cms/src/lutfile.rs`) and dedicated to the public domain
 (CC0-1.0); they are not separate files.
 
+## Optional local models and runtime
+
+Model weights are explicit downloads, not files committed or bundled in the default app.
+Immutable revisions, artifact sizes and hashes are recorded in `crates/ml/src/catalog.rs`.
+The download cache includes the original model licence and a source/revision notice.
+
+| Path / optional artifact | Title | Author | Source | License |
+|---|---|---|---|---|
+| Downloaded `birefnet-hr-matting-*/model.onnx` | BiRefNet HR Matting, FP32 ONNX export | Peng Zheng and BiRefNet contributors; export by PinkPixel | [Original checkpoint](https://huggingface.co/ZhengPeng7/BiRefNet_HR-matting), [pinned export](https://huggingface.co/PinkPixel/birefnet-hr-matting-onnx/tree/792518b9d4dfe9793891712677de25e554f948c6) | MIT, [`BiRefNet-MIT.txt`](crates/ml/licenses/BiRefNet-MIT.txt) |
+| Downloaded `sam2.1-large-*/{vision_encoder,prompt_encoder_mask_decoder}.onnx{,_data}` | SAM 2.1 Hiera Large, FP32 ONNX export | Meta / SAM 2 contributors; export by ONNX Community | [Original checkpoint](https://huggingface.co/facebook/sam2.1-hiera-large), [pinned export](https://huggingface.co/onnx-community/sam2.1-hiera-large-ONNX/tree/3c23431f721e69cae82dbfd0c28fd692cc714021) | Apache-2.0, [`SAM2-Apache-2.0.txt`](crates/ml/licenses/SAM2-Apache-2.0.txt) |
+| Build-time ONNX Runtime redistribution (`local-ml` only) | ONNX Runtime 1.28 CPU runtime | Microsoft and contributors; redistribution by pyke / ort | [ONNX Runtime](https://github.com/microsoft/onnxruntime), [ort 2.0.0-rc.13](https://github.com/pykeio/ort) | MIT, [`ONNXRuntime-MIT.txt`](crates/ml/licenses/ONNXRuntime-MIT.txt), [`third-party notices`](crates/ml/licenses/ONNXRuntime-ThirdPartyNotices.txt) |
+| `crates/ml/src/test_models.rs` | Original tiny ONNX contract fixtures (Rust byte constants, no learned weights) | PhotoCraft contributors | Original synthetic graphs: mean/sigmoid, constant embeddings and scored masks | MIT OR Apache-2.0 |
+
 ## Documentation and README
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `docs/images/local-models-before.png`, `docs/images/local-models-preferences.png` | PhotoCraft Preferences before / after optional models | PhotoCraft contributors | Original offscreen screenshots | MIT OR Apache-2.0, [`licence`](docs/images/LICENSE-local-models.txt) |
+| `docs/images/local-models-comparison.png` | Classical / BiRefNet / SAM actual command outputs using *Girl with a Pearl Earring* | Artwork: Johannes Vermeer, c. 1665; presentation: PhotoCraft contributors | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:1665_Girl_with_a_Pearl_Earring.jpg), exported masks | Artwork: public domain (PD-Art); presentation: MIT OR Apache-2.0, [`licence`](docs/images/LICENSE-local-models.txt) |
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |

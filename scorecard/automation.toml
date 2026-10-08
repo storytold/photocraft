@@ -56,9 +56,9 @@ note = "runtime.rs:15 ABI_VERSION = 1; manifest.rs:18 Kind::Filter only"
 [[item]]
 id = "AUTO-219-7"
 target = "Local ONNX models behind a flag, managed in Preferences; subject select, background removal"
-status = "missing"
+status = "partial"
 issue = 219
-note = "No ONNX runtime dependency"
+note = "local-ml: CPU BiRefNet alpha / SAM 2.1 box selection, pinned verified explicit downloads in Preferences; labelled accuracy benchmarks and web inference remain open"
 
 [[item]]
 id = "AUTO-219-8"

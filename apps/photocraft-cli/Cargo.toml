@@ -10,6 +10,7 @@ build = "build.rs"
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
+local-ml = ["photocraft-engine/local-ml"]
 
 [lints]
 workspace = true
@@ -34,4 +35,3 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 [build-dependencies]
 # Icon + VERSIONINFO for photocraft-cli.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
-

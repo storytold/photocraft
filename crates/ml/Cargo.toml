@@ -1,0 +1,27 @@
+[package]
+name = "photocraft-ml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Native C++ runtime at the I/O edge; never enabled by default or linked into wasm.
+onnx = ["dep:ort", "dep:ureq", "dep:sha2", "dep:tempfile"]
+
+[dependencies]
+photocraft-algo = { workspace = true }
+photocraft-raster = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Pin prereleases: the API and matching native runtime must be reviewed together.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-27", "download-binaries", "tls-rustls"], optional = true }
+# Pinned because the idle-timeout transport adapter uses ureq's unversioned seam.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
+sha2 = { version = "0.10", optional = true }
+tempfile = { version = "3", optional = true }

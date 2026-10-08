@@ -1,3 +1,5 @@
+
+
 # Korean (ko) catalog. UTF-8: context<TAB>English source<TAB>translation.
 # Empty context: plain UI text; @id: command ID; @plural: one|other source
 # with one Korean form. Other contexts disambiguate English meanings.

@@ -770,7 +770,7 @@ impl OutputClaims {
     }
 }
 
-fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
+fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
@@ -781,6 +781,11 @@ fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
     let output = str_param(p, "output", cmd)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
     let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
+        // Reuse a host-granted backend (and its resident model) across inputs. A default or
+        // untrusted session still has no model-cache capability; nested steps retain its gate.
+        scratch.model_backend = s.model_backend.clone();
+        scratch.authorize = s.authorize;
+        scratch.edit_prefs(|p| p.integrations = s.prefs().integrations.clone());
         for (id, params) in &steps {
             scratch.execute(id, params.clone())?;
         }

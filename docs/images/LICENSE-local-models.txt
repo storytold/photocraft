@@ -1,0 +1,10 @@
+local-models-before.png and local-models-preferences.png are original PhotoCraft UI screenshots
+and are licensed under this repository's MIT OR Apache-2.0 terms (LICENSE-MIT / LICENSE-APACHE).
+
+local-models-comparison.png uses Johannes Vermeer's Girl with a Pearl Earring, c. 1665.
+The original artwork and its faithful photographic reproduction are public domain (PD-Art).
+Source: https://commons.wikimedia.org/wiki/File:1665_Girl_with_a_Pearl_Earring.jpg
+The comparison layout and command output presentation are original PhotoCraft contributions,
+licensed under this repository's MIT OR Apache-2.0 terms.
+
+No learned model weights or personal photographs are included in these documentation assets.
