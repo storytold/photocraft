@@ -663,8 +663,8 @@ fn move_to_copy_places_a_duplicate_in_one_step() {
     s.execute("layer.moveTo", json!({"layer": b, "target": a, "position": "below", "copy": true})).unwrap();
     assert_eq!(names(&s), ["Background", "B copy", "A", "B", "A copy", "G"]);
     s.execute("layer.moveTo", json!({"layer": a, "target": g, "position": "into", "copy": true})).unwrap();
-    // `document.inspect` lists the top of the stack first.
-    assert_eq!(s.execute("document.inspect", json!({})).unwrap()["layers"][0]["children"][0]["name"], "A copy");
+    // `document.inspect` lists the top of the stack first; "A copy" is taken, so this is "A copy 2".
+    assert_eq!(s.execute("document.inspect", json!({})).unwrap()["layers"][0]["children"][0]["name"], "A copy 2");
     // A group can be copied beside itself, but not into itself.
     s.execute("layer.moveTo", json!({"layer": g, "target": g, "position": "above", "copy": true})).unwrap();
     assert_eq!(names(&s).last().map(String::as_str), Some("G copy"));
