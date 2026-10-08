@@ -4,9 +4,10 @@
 //! TIFF/EP (ISO 12234-2), the Adobe DNG Specification 1.7, ITU-T T.81
 //! (lossless JPEG, process 14), the published structure of Canon's CR2
 //! container, published descriptions of Sony's cRAW code, public maker-note
-//! tag tables, observation of sample files, and the demosaicing papers cited
-//! in [`Demosaic`]. No code from
-//! dcraw, LibRaw, rawspeed, rawler, rawloader or darktable was used.
+//! tag tables, Nikon Huffman tables recovered by black-box analysis of CC0
+//! samples (see `nefc.rs`), observation of sample files, and the demosaicing
+//! papers cited in [`Demosaic`]. No code from dcraw, LibRaw, rawspeed,
+//! rawler, rawloader or darktable was used.
 //!
 //! * [`identify`] / [`is_raw`] recognise raw files from their bytes.
 //! * [`decode`] reads the undeveloped [`Sensor`] data and metadata.
@@ -20,8 +21,8 @@
 //! Decoded today: DNG (uncompressed and lossless-JPEG, strips and tiles, CFA
 //! and LinearRaw), CR2 (lossless JPEG with Canon slices), uncompressed or
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
-//! Sony compressed ARW (cRAW), Panasonic RW2 (RawFormat 5) and uncompressed
-//! Olympus ORF. Everything else reports [`RawError::Unsupported`].
+//! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
+//! Panasonic RW2 (RawFormat 5) and uncompressed Olympus ORF. Everything else reports [`RawError::Unsupported`].
 //!
 //! The crate is standalone (no workspace dependencies), does no I/O, builds for
 //! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
@@ -37,6 +38,7 @@ mod develop;
 mod dng;
 mod error;
 mod ljpeg;
+mod nefc;
 mod opcodes;
 mod orf;
 mod par;

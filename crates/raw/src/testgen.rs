@@ -770,6 +770,39 @@ pub fn tiff_ep(make: &str, width: usize, height: usize, data: &[u16], cfa: [u8; 
     t.build()
 }
 
+/// A synthetic Nikon NEF with a Huffman-compressed (34713) strip: IFD0 with
+/// Make and an EXIF IFD whose maker note (`Nikon\0`, version 2.10, then an
+/// embedded TIFF in the given byte order) holds `note_tags` (for example
+/// `0x0096`, the decode table, and `0x003d`, BlackLevel).
+pub fn nef_compressed(width: usize, height: usize, bits: u16, strip: Vec<u8>, cfa: [u8; 4], note_big_endian: bool, note_tags: Vec<(u16, Val)>) -> Vec<u8> {
+    let mut note = TiffBuilder { big_endian: note_big_endian, ..Default::default() };
+    let n = note.ifd(note_tags);
+    note.chain = vec![n];
+    let mut maker = b"Nikon\0\x02\x10\0\0".to_vec();
+    maker.extend(note.build());
+    let mut t = TiffBuilder::default();
+    let len = strip.len();
+    let strip = t.blob(strip);
+    let raw_ifd = t.ifd(vec![
+        (254, Val::Long(vec![0])),
+        (256, Val::Long(vec![width as u32])),
+        (257, Val::Long(vec![height as u32])),
+        (258, Val::Short(vec![bits])),
+        (259, Val::Short(vec![34713])),
+        (262, Val::Short(vec![32803])),
+        (273, Val::Blobs(vec![strip])),
+        (277, Val::Short(vec![1])),
+        (278, Val::Long(vec![height as u32])),
+        (279, Val::Long(vec![len as u32])),
+        (33421, Val::Short(vec![2, 2])),
+        (33422, Val::Byte(cfa.to_vec())),
+    ]);
+    let exif = t.ifd(vec![(37500, Val::Undefined(maker))]);
+    let ifd0 = t.ifd(vec![(271, Val::Ascii("NIKON CORPORATION".into())), (330, Val::Ifds(vec![raw_ifd])), (34665, Val::Ifds(vec![exif]))]);
+    t.chain = vec![ifd0];
+    t.build()
+}
+
 // ---------------------------------------------------------------- Sony cRAW
 
 /// Encodes 16 same-colour 11-bit codes as one cRAW block (see the decoder in

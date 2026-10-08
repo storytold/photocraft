@@ -1,8 +1,9 @@
 //! TIFF/EP-structured raws (NEF, ARW, PEF and others) whose sensor data is
 //! stored uncompressed or as lossless JPEG in a standard CFA IFD (TIFF/EP,
 //! ISO 12234-2: PhotometricInterpretation 32803, CFARepeatPatternDim and
-//! CFAPattern), plus Sony's compressed ARW (see [`crate::sony`]). Other
-//! vendor-specific compressions are reported as unsupported.
+//! CFAPattern), plus Sony's compressed ARW (see [`crate::sony`]) and Nikon's
+//! Huffman-compressed NEF (see [`crate::nefc`]). Other vendor-specific
+//! compressions are reported as unsupported.
 //!
 //! Black and white levels use DNG-style tags when the camera writes them,
 //! then the vendor's publicly documented tags (Nikon maker note BlackLevel,
@@ -13,6 +14,7 @@
 
 use crate::cr2::clip_level;
 use crate::error::{RawError, Result};
+use crate::nefc;
 use crate::sensor::{BlackLevels, Cfa, JpegLayout, Rect, Sensor, read_plane};
 use crate::sony::{self, SONY_RAW_FILE_TYPE};
 use crate::tiff::{Ifd, Tiff, tag};
@@ -101,8 +103,14 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         }
         return Err(RawError::unsupported(format!("{}: no CFA image found", format.name())));
     };
-    let plane =
-        if format == RawFormat::Arw && sony::is_craw(t, &raw) { sony::read_craw(t, &raw, limits)? } else { read_plane(t, &raw, limits, JpegLayout::Quads)? };
+    let nikon = if format == RawFormat::Nef { nikon_maker_note(t, &ifds) } else { None };
+    let plane = if format == RawFormat::Arw && sony::is_craw(t, &raw) {
+        sony::read_craw(t, &raw, limits)?
+    } else if format == RawFormat::Nef && t.tag_uint(&raw, tag::COMPRESSION) == Some(nefc::NIKON_COMPRESSION) {
+        nefc::read_compressed(t, &raw, nikon.as_ref(), limits)?
+    } else {
+        read_plane(t, &raw, limits, JpegLayout::Quads)?
+    };
     if plane.samples != 1 {
         return Err(RawError::unsupported(format!("CFA data with {} samples per pixel", plane.samples)));
     }
@@ -115,10 +123,13 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
     let make = ifds.iter().find_map(|i| t.tag_ascii(i, tag::MAKE));
     let model = ifds.iter().find_map(|i| t.tag_ascii(i, tag::MODEL));
 
-    let nikon = if format == RawFormat::Nef { nikon_maker_note(t, &ifds) } else { None };
     let bl = t.tag_floats(&raw, tag::BLACK_LEVEL);
     let vendor_black = match &nikon {
-        Some((n, m)) => n.tag_floats(m, NIKON_BLACK_LEVEL),
+        // Nikon's BlackLevel is in 14-bit units whatever the sample depth:
+        // 12-bit D750 / D850 / Z 50 files store 600 / 400 / 1008 while their
+        // darkest samples are about a quarter of that (measured on CC0
+        // raw.pixls.us samples, documented in LightCraft's NEF decoder).
+        Some((n, m)) => n.tag_floats(m, NIKON_BLACK_LEVEL).into_iter().map(|v| if plane.bits == 12 { v / 4.0 } else { v }).collect(),
         None => t.tag_floats(&raw, SONY_BLACK_LEVEL),
     };
     let black = if let Some(b) = bl.first() {

@@ -28,6 +28,12 @@ Implemented only from public specifications, papers and observation of files:
   BlackLevel (0x7310), WB_RGGBLevels (0x7313), SonyRawFileType (0x7000) and SonyToneCurve
   (0x7010), the PanasonicRaw IFD0 tags, Olympus ImageProcessing (0x2040) and CameraSettings
   (0x2020) preview tags.
+* Nikon compressed NEF: Laurent Clévy's NEF structure notes and Bill Claff's "NEF Compression"
+  (prose: the `0x0096` table layout, a lossy curve followed by a fixed-table Huffman stage),
+  ExifTool's Nikon tag-name documentation and ITU-T T.81 Annex F / H. The Huffman tables are not
+  stored in the files; they were recovered by black-box analysis of CC0 raw.pixls.us samples (the
+  same scenes shot compressed and uncompressed) for LightCraft (storytold/lightcraft#86) and
+  verified there on ~45 files from ~35 bodies.
 * Sony cRAW (ARW 2): H. Dietz, "Sony ARW2 Compression: Artifacts And Credible Repair"
   (Electronic Imaging 2016) and the RawDigger / diglloyd write-ups of the 11 + 7-bit scheme;
   the exact bit layout and tone-curve scale were established by observation of sample files.
@@ -49,10 +55,11 @@ camera colour tables were copied.
 | CR2 | Lossless JPEG with slices, borders and as-shot white balance from the maker note, black measured on the masked border. CR2 has no CFA tag and the row phase varies by model, so it is measured from the data (the green diagonal), with a Canon model-ID table as the fallback (see `src/cr2.rs`) |
 | CR2 sRAW / mRAW | Unsupported |
 | NEF / NRW, ARW, PEF and other TIFF/EP raws | Uncompressed and lossless-JPEG (incl. Sony lossless ARW) CFA data |
+| Nikon compressed NEF (compression 34713): lossless and lossy type 1 / 2, 12 and 14 bit | Decoded: fixed Huffman tables + maker-note `0x0096` seeds and curve (see `src/nefc.rs`). BlackLevel `0x003d` is read in 14-bit units. "Lossy after split" files are unsupported (preview fallback) |
 | Sony compressed ARW ("cRAW", SonyRawFileType 2) | Decoded: 11-bit min/max + 7-bit delta blocks, SonyToneCurve to 14 bits |
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
-| Nikon compressed NEF (lossless and lossy), Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 4 and older, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
+| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 4 and older, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | CR3, RAF | Recognised, unsupported (preview fallback where a preview is found) |
 | X-Trans and other non-Bayer CFAs | Unsupported |
 
