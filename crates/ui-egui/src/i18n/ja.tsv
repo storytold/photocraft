@@ -1346,6 +1346,7 @@
 	Set background color	背景色を設定
 	Set foreground color	描画色を設定
 	Set painting symmetry options	対称描画のオプションを設定
+	Symmetry Off	対称オフ
 	Set shape fill type	シェイプの塗りの種類を設定
 	Set shape stroke type	シェイプの線の種類を設定
 	Set the text color	文字色を設定

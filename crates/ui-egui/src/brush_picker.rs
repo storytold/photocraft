@@ -81,7 +81,7 @@ pub fn settings_toggle(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// An icon button's accessible name (icon buttons have only a tooltip).
-fn named(resp: egui::Response, label: &str) -> egui::Response {
+pub(crate) fn named(resp: egui::Response, label: &str) -> egui::Response {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     resp
 }

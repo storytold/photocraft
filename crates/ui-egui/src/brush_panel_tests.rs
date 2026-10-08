@@ -287,6 +287,56 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
 }
 
 #[test]
+fn airbrush_smoothing_options_and_symmetry_buttons_work() {
+    // #1177: in the default (Photoshop) theme these options-bar buttons did nothing.
+    use egui_kittest::kittest::Queryable;
+    let mut h = app_harness();
+    let brush = |h: &Harness<'static, PhotocraftApp>| h.state().session.tools.brush.clone();
+
+    // The airbrush toggles Build-up, one setBrush each click.
+    let was = brush(&h).build_up;
+    h.get_by_label("Enable airbrush-style build-up effects").click();
+    h.run_steps(3);
+    assert_eq!(brush(&h).build_up, !was);
+    let (id, p) = last_journal(h.state()).unwrap();
+    assert_eq!((id.as_str(), &p["brush"]), ("tools.setBrush", &json!({"buildUp": !was})));
+
+    // The gear opens Photoshop's four smoothing options, each editing the brush.
+    assert!(h.query_by_label("Pulled String Mode").is_none());
+    h.get_by_label("Set additional smoothing options").click();
+    h.run_steps(3);
+    let before = brush(&h).smoothing;
+    for label in ["Pulled String Mode", "Stroke Catch-up", "Catch-up on Stroke End", "Adjust for Zoom"] {
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    }
+    let after = brush(&h).smoothing;
+    assert_eq!(
+        (after.pulled_string, after.catch_up, after.catch_up_on_end, after.adjust_for_zoom),
+        (!before.pulled_string, !before.catch_up, !before.catch_up_on_end, !before.adjust_for_zoom)
+    );
+    assert_eq!(after.amount, before.amount);
+
+    // Symmetry: the menu lists the document's paths and turns symmetry on and off.
+    h.state_mut().run("file.new", json!({"width": 80, "height": 60})).unwrap();
+    h.state_mut().run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[40, 0], [40, 60]]}]}})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Set painting symmetry options").click();
+    h.run_steps(3);
+    h.get_by_label("Work Path").click();
+    h.run_steps(3);
+    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry_path.as_ref().map(|a| a.source.clone());
+    assert_eq!(source(&h).as_deref(), Some("work"));
+    assert_eq!(last_journal(h.state()).unwrap(), ("paint.symmetryFromPath".to_string(), json!({"name": "work"})));
+    h.get_by_label("Set painting symmetry options").click();
+    h.run_steps(3);
+    h.get_by_label("Symmetry Off").click();
+    h.run_steps(3);
+    assert_eq!(source(&h), None);
+    assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
+}
+
+#[test]
 fn mixer_brush_options_update_the_persisted_mixer_settings() {
     use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::MixerBrush);
