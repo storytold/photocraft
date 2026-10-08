@@ -142,6 +142,9 @@ const MAX_RESAMPLE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 }
 /// Image → Image Size.
 fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    if photocraft_compose::deep::any_deep(&d.doc.layers) {
+        return Err(EngineError::Other("deep layers cannot be resampled yet; their samples keep their depth".into()));
+    }
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let resample = parse_resample(p.get("resample").and_then(Value::as_str).unwrap_or("bicubic"));
     let pw = p.get("width").and_then(Value::as_f64);
@@ -239,6 +242,13 @@ fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> 
         return Err(bad(cmd, format!("moving the document by ({dx}, {dy}) would push its pixels outside the 32-bit coordinate range")));
     }
     for_each_surface(&mut doc.layers, true, &mut |surf, _| *surf = translate_surface(surf, dx, dy));
+    // Deep data has no surface; its canvas origin moves instead.
+    for_each_layer(&mut doc.layers, &mut |l| {
+        if let LayerContent::Deep(d) = &mut l.content {
+            d.x += dx;
+            d.y += dy;
+        }
+    });
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
         ch.surface = translate_surface(&ch.surface, dx, dy);
     }
@@ -774,6 +784,37 @@ mod tests {
 
     fn doc(s: &Session) -> &Document {
         &s.active().unwrap().doc
+    }
+
+    #[test]
+    fn deep_layers_move_with_the_canvas_and_refuse_resampling() {
+        let mut s = session();
+        // A 1-pixel deep layer with one opaque sample.
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        let id = s
+            .edit("deep", |doc, _| {
+                doc.layers.push(Layer::new("deep", deep));
+                let id = doc.layers.last().unwrap().id;
+                Ok(id)
+            })
+            .unwrap();
+        // Whole-canvas translation moves the data's origin, like every other content.
+        s.edit("move", |doc, _| {
+            translate_doc(doc, 5, 7);
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(&doc(&s).layer(id).unwrap().content, LayerContent::Deep(d) if d.x == 5 && d.y == 7));
+        // Resampling deep samples is refused instead of silently desyncing them.
+        let err = s.execute("image.imageSize", json!({"width": 20, "height": 10})).unwrap_err();
+        assert!(err.to_string().contains("deep layers"), "{err}");
     }
 
     #[test]

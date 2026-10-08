@@ -776,6 +776,8 @@ impl<'a> Planner<'a> {
             }
             // Adjustments are handled by the caller and never get here.
             LayerContent::Adjustment(_) => Err(Unsupported("adjustment layer reached the content planner".into())),
+            // Deep layers depth-composite on the CPU; declining makes the canvas fall back.
+            LayerContent::Deep(_) => Err(Unsupported("deep layers composite on the CPU".into())),
             LayerContent::Fill(f @ Fill::Pattern { name, scale, id, angle, link, phase }) if layer.fill_cache.as_ref().is_none_or(|c| c.fill != *f) => {
                 // compose::render_fill: the pattern tiled from the layer's frame (transparent
                 // when missing), then the layer's masks.

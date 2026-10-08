@@ -32,7 +32,7 @@ pub fn downsample(s: &Surface, k: u32) -> Surface {
     out
 }
 
-fn shrink_layer(l: &mut Layer, k: u32) {
+fn shrink_layer(l: &mut Layer, k: u32, fmt: photocraft_color::PixelFormat) {
     if let Some(m) = &mut l.mask {
         m.surface = downsample(&m.surface, k);
     }
@@ -52,12 +52,17 @@ fn shrink_layer(l: &mut Layer, k: u32) {
                 ab.rect = Rect::new(edge(ab.rect.x0), edge(ab.rect.y0), edge(ab.rect.x1), edge(ab.rect.y1));
             }
             for c in &mut g.children {
-                shrink_layer(c, k);
+                shrink_layer(c, k, fmt);
             }
         }
         LayerContent::Text(t) => t.cache = t.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Shape(sh) => sh.cache = sh.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Smart(so) => so.cache = so.cache.as_ref().map(|s| downsample(s, k)),
+        // Deep data does not scale: the proxy flattens it once and downsamples that.
+        LayerContent::Deep(d) => {
+            let flat = crate::deep::flat_surface(d, fmt);
+            l.content = LayerContent::Raster(downsample(&flat, k));
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
 }
@@ -71,8 +76,9 @@ pub fn proxy_document(doc: &Document, k: u32) -> Document {
         return p;
     }
     p.size = Size::new(doc.size.width.div_ceil(k), doc.size.height.div_ceil(k));
+    let fmt = p.pixel_format();
     for l in &mut p.layers {
-        shrink_layer(l, k);
+        shrink_layer(l, k, fmt);
     }
     // Spot channels are printed under Multichannel composites.
     for c in &mut p.channels {

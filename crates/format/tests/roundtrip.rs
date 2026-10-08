@@ -537,4 +537,34 @@ fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load()
     doc.insert_above(None, Layer::new("adj", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 })));
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back, doc);
+    }
+
+#[test]
+fn deep_layer_round_trips_with_its_samples() {
+    use photocraft_doc::{DeepChannel, DeepData};
+    let mut doc = Document::new("deep", photocraft_doc::Size::new(2, 2), ColorMode::Rgb, SampleType::F32);
+    doc.layers.clear();
+    // One pixel with two unsorted samples (red z=1 over blue z=9), one with none.
+    let channels = |names: &[&str], a: f32, z0: f32, z1: f32| -> Vec<DeepChannel> {
+        names
+            .iter()
+            .map(|n| DeepChannel {
+                name: (*n).to_string(),
+                samples: match *n {
+                    "R" => vec![0.5 * a, 0.0],
+                    "G" => vec![0.0, 0.0],
+                    "B" => vec![0.0, a],
+                    "A" => vec![a, a],
+                    _ => vec![z0, z1],
+                },
+            })
+            .collect()
+    };
+    let d = DeepData { x: 3, y: -2, width: 2, height: 1, channels: channels(&["A", "B", "G", "R", "Z"], 0.5, 1.0, 9.0), counts: vec![0, 2, 2] };
+    doc.layers.push(Layer::new("deep", LayerContent::Deep(d)));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let back = load_from_bytes(&bytes).unwrap();
+    assert_eq!(back, doc);
+    // A saved bundle cannot lie about its sample counts: every channel must hold exactly
+    // `counts.last()` samples (checked on load, pinned here with the good case above).
 }

@@ -359,6 +359,10 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
             }
         }
         LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
+        LayerContent::Deep(d) => {
+            d.x += dx;
+            d.y += dy;
+        }
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);

@@ -59,7 +59,7 @@ pub mod tiff_layers;
 pub mod vector_map;
 
 use photocraft_codecs::{CodecError, EncodeOptions};
-use photocraft_doc::Document;
+use photocraft_doc::{ColorMode, Document, Layer};
 use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
@@ -179,6 +179,31 @@ pub fn is_psd(bytes: &[u8]) -> bool {
 /// else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_with_svg_group_depth(name, bytes, photocraft_doc::MAX_GROUP_DEPTH)
+}
+
+/// Imports a deep OpenEXR file (`deepscanline`/`deeptile`) **with its depth data**: the
+/// document holds one [`photocraft_doc::LayerContent::Deep`] layer that depth-composites
+/// (samples sorted by Z, front-to-back) wherever it is rendered. `import` opens the same
+/// files flattened; this is the entry point for keeping deep data around (stacking deep
+/// layers, editing with depth).
+pub fn import_deep_exr(name: &str, bytes: &[u8], limits: &photocraft_codecs::Limits) -> Result<ImportResult, IoError> {
+    let img = photocraft_codecs::decode_deep_exr(bytes, limits)?;
+    let stem = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = stem.strip_suffix(".exr").unwrap_or(stem);
+    let mut doc = Document::new(stem, photocraft_doc::Size::new(img.width, img.height), ColorMode::Rgb, photocraft_color::SampleType::F32);
+    doc.layers.clear();
+    doc.layers.push(Layer::new(
+        stem,
+        photocraft_doc::LayerContent::Deep(photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: img.width,
+            height: img.height,
+            channels: img.channels.into_iter().map(|c| photocraft_doc::DeepChannel { name: c.name, samples: c.samples }).collect(),
+            counts: img.counts,
+        }),
+    ));
+    Ok(ImportResult { document: doc, warnings: Vec::new() })
 }
 
 /// [`import`] for a background open: checks `ctl` between stages (and per layer for PSD/PSB) and

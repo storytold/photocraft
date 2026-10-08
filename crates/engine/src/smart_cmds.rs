@@ -631,6 +631,10 @@ fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
     }
     match &mut l.content {
         LayerContent::Raster(s) => *s = mv(s),
+        LayerContent::Deep(d) => {
+            d.x += dx;
+            d.y += dy;
+        }
         LayerContent::Text(t) => {
             t.transform = a.mul(&t.transform);
             if let Some(c) = &mut t.cache {

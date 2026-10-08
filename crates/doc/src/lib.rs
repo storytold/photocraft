@@ -553,6 +553,57 @@ pub enum LayerContent {
     Text(TextLayer),
     Shape(ShapeLayer),
     Smart(SmartObject),
+    /// Deep samples (OpenEXR deepscanline/deeptile): a variable-length list of samples per
+    /// pixel, each with its own colour, alpha and depth. Renders by depth-compositing the
+    /// samples front-to-back; stacking deep layers merges their sample lists (Phase 2). The
+    /// data's own extent is `width × height` at the canvas origin.
+    Deep(DeepData),
+}
+
+/// One channel of [`DeepData`]: every sample's value, in pixel order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeepChannel {
+    /// The channel name as in the file (e.g. `R`, `G`, `B`, `A`, `Z`).
+    pub name: String,
+    /// Every sample of the channel, in pixel order; the samples of pixel `i` are
+    /// `counts[i]..counts[i+1]` (see [`DeepData::counts`]). All channels share the layout.
+    pub samples: Vec<f32>,
+}
+
+/// Deep image data ([`LayerContent::Deep`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeepData {
+    /// Where the data sits on the canvas (its top-left); moving the layer moves this.
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    /// The sample channels in file order; at least one.
+    pub channels: Vec<DeepChannel>,
+    /// Cumulative sample counts, `len == width as usize * height as usize + 1`: pixel `i`
+    /// holds the samples `counts[i]..counts[i+1]` of every channel. Monotonically
+    /// non-decreasing, starting and ending at the total sample count.
+    pub counts: Vec<u64>,
+}
+
+impl DeepData {
+    /// A channel by its exact name.
+    pub fn channel(&self, name: &str) -> Option<&DeepChannel> {
+        self.channels.iter().find(|c| c.name == name)
+    }
+
+    /// The samples of one pixel, as indices into every channel's `samples`.
+    pub fn sample_range(&self, pixel: usize) -> std::ops::Range<u64> {
+        let end = self.counts.get(pixel + 1).copied().unwrap_or(0);
+        self.counts.get(pixel).copied().unwrap_or(end)..end
+    }
+
+    /// The total number of samples over all pixels.
+    pub fn total_samples(&self) -> u64 {
+        self.counts.last().copied().unwrap_or(0)
+    }
 }
 
 impl LayerContent {
@@ -565,6 +616,7 @@ impl LayerContent {
             LayerContent::Text(_) => "Type",
             LayerContent::Shape(_) => "Shape",
             LayerContent::Smart(_) => "Smart Object",
+            LayerContent::Deep(_) => "Deep",
         }
     }
 
