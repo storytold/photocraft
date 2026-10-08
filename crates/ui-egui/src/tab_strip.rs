@@ -94,7 +94,31 @@ pub struct StripOut {
 }
 
 /// Width of the » overflow button.
-const CHEVRON_W: f32 = 18.0;
+pub const CHEVRON_W: f32 = 18.0;
+
+/// Draw the » overflow button at `r`: hover tip `tip`, listing the tabs named by `labels` at the
+/// indices in `overflow`. A picked index is left in `picked`.
+pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[&str], overflow: &[usize], picked: &mut Option<usize>) {
+    let t = Tokens::get(ui.ctx());
+    let resp = ui.interact(r, id, Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r.shrink2(vec2(1.0, 3.0)), t.radius_sm, t.hover.gamma_multiply(0.6));
+    }
+    crate::icons::paint(ui, r, "chevrons-right", 12.0, if resp.hovered() { t.text } else { t.text_dim });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+    let resp = resp.on_hover_text(tip);
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(140.0);
+        for &i in overflow {
+            if let Some(name) = labels.get(i)
+                && ui.button(*name).clicked()
+            {
+                *picked = Some(i);
+                ui.close();
+            }
+        }
+    });
+}
 
 /// Draw the tabs of a strip in `area` (the strip minus the menu button). `paint_tab` draws one
 /// tab: (ui, rect, index, label galley, response, active).
@@ -137,24 +161,11 @@ fn tabs_in(
     }
     if !f.overflow.is_empty() {
         let r = Rect::from_min_size(pos2(x, area.top()), vec2(CHEVRON_W, area.height()));
-        let resp = ui.interact(r, id.with("tab-overflow"), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(r.shrink2(vec2(1.0, 3.0)), t.radius_sm, t.hover.gamma_multiply(0.6));
+        let mut picked = None;
+        overflow_button(ui, id.with("tab-overflow"), r, tl!("More panels"), tabs, &f.overflow, &mut picked);
+        if let Some(i) = picked {
+            *selected = i;
         }
-        crate::icons::paint(ui, r, "chevrons-right", 12.0, if resp.hovered() { t.text } else { t.text_dim });
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("More panels")));
-        let resp = resp.on_hover_text(tl!("More panels"));
-        egui::Popup::menu(&resp).show(|ui| {
-            ui.set_min_width(140.0);
-            for &i in &f.overflow {
-                if let Some(name) = tabs.get(i)
-                    && ui.button(*name).clicked()
-                {
-                    *selected = i;
-                    ui.close();
-                }
-            }
-        });
         out.chevron = Some(r);
     }
     out

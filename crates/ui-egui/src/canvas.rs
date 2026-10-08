@@ -1035,88 +1035,140 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         return pro_tabs(app, ui);
     }
     let active = app.session.active_index();
+    let tab_count = app.session.documents().len();
+    let mut doc_tabs = Vec::with_capacity(tab_count);
     let mut activate = None;
     let mut close = None;
     let mut tab_action = None;
-    let tab_count = app.session.documents().len();
     let (mut focus_open, mut cancel_open) = (None, None);
     let focused_open = app.jobs.focus.is_some();
     // Layers dragged over a tab show its document (`layer_transfer`).
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
-    let mut doc_tabs = Vec::with_capacity(tab_count);
+    let font = crate::theme::medium(12.5);
+    let meta_font = egui::FontId::proportional(10.5);
+    // Files opening in the background (#210) are tabs too; they share the fit's index space,
+    // after the documents.
+    let opening = crate::jobs_ui::open_tabs(app);
+    // Every tab's natural width, whether or not it stays on the strip.
+    let natural: Vec<f32> = app
+        .session
+        .documents()
+        .iter()
+        .map(|st| {
+            let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
+            ui.painter().layout_no_wrap(name, font.clone(), t.text).size().x
+                + ui.painter().layout_no_wrap(format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits()), meta_font.clone(), t.text_faint).size().x
+                + STUDIO_TAB_PAD
+        })
+        .chain(opening.iter().map(|(_, name, frac)| {
+            ui.painter().layout_no_wrap(name.clone(), font.clone(), t.text).size().x
+                + ui.painter().layout_no_wrap(format!("{:.0}%", frac * 100.0), meta_font.clone(), t.text_faint).size().x
+                + STUDIO_TAB_PAD
+        }))
+        .collect();
+    let selected = app
+        .jobs
+        .focus
+        .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
+        .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
     let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for (i, st) in app.session.documents().iter().enumerate() {
-                let sel = Some(i) == active && !focused_open;
-                let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
-                let meta = format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits());
-                let name_g = ui.painter().layout_no_wrap(name, crate::theme::medium(12.5), t.text);
-                let meta_g = ui.painter().layout_no_wrap(meta, egui::FontId::proportional(10.5), t.text_faint);
-                let w = name_g.size().x + meta_g.size().x + 44.0;
-                let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &st.doc.name));
-                doc_tabs.push(r);
-                if sel {
-                    ui.painter().rect_filled(r, t.radius_sm, t.card);
-                    ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r, t.radius_sm, t.hover.gamma_multiply(0.5));
-                }
-                if dragging.is_some_and(|p| r.contains(p)) {
-                    drag_over = Some(i);
-                    ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-                }
-                let color = if sel { t.text } else { t.text_dim };
-                let ny = r.center().y - name_g.size().y / 2.0;
-                ui.painter().galley_with_override_text_color(egui::pos2(r.left() + 10.0, ny), name_g.clone(), color);
-                ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
-                let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
-                let xresp = ui.interact(xr, ui.id().with(("tabx", i)), Sense::click());
-                if xresp.hovered() {
-                    ui.painter().rect_filled(xr, 4.0, t.hover);
-                }
-                crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
-                if xresp.clicked() {
-                    close = Some(i);
-                } else if resp.clicked() {
-                    activate = Some(i);
-                }
-                resp.context_menu(|ui| {
-                    tab_action = tab_context_menu(ui, i, tab_count);
-                });
+        let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
+        let f = crate::tab_strip::fit(&natural, selected, row.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
+        let mut x = row.left();
+        let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
+        for &(i, w) in &f.shown {
+            // The old horizontal layout put 4 pt between tabs; `w` carries it, the tab doesn't.
+            let r = Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2((w - STUDIO_TAB_GAP).max(8.0), row.height()));
+            placed.push((i, r));
+            x = r.right() + STUDIO_TAB_GAP;
+        }
+        for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
+            let Some(st) = app.session.documents().get(i) else { continue };
+            let sel = Some(i) == active && !focused_open;
+            let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
+            let meta = format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits());
+            let natural_w = natural.get(i).copied().unwrap_or(0.0);
+            let meta_g = ui.painter().layout_no_wrap(meta, meta_font.clone(), t.text_faint);
+            let name_max = (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0);
+            let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
+            // The title was cut: the tooltip has the rest of it.
+            let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
+            let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &st.doc.name));
+            doc_tabs.push(r);
+            if sel {
+                ui.painter().rect_filled(r, t.radius_sm, t.card);
+                ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(r, t.radius_sm, t.hover.gamma_multiply(0.5));
             }
-            // Files opening in the background: a tab with a progress underline; × cancels.
-            for (job, name, frac) in crate::jobs_ui::open_tabs(app) {
-                let sel = app.jobs.focus == Some(job);
-                let name_g = ui.painter().layout_no_wrap(name, crate::theme::medium(12.5), t.text);
-                let meta_g = ui.painter().layout_no_wrap(format!("{:.0}%", frac * 100.0), egui::FontId::proportional(10.5), t.text_faint);
-                let w = name_g.size().x + meta_g.size().x + 44.0;
-                let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), Sense::click());
-                if sel {
-                    ui.painter().rect_filled(r, t.radius_sm, t.card);
-                    ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r, t.radius_sm, t.hover.gamma_multiply(0.5));
-                }
-                let ny = r.center().y - name_g.size().y / 2.0;
-                ui.painter().galley_with_override_text_color(egui::pos2(r.left() + 10.0, ny), name_g.clone(), if sel { t.text } else { t.text_dim });
-                ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
-                crate::jobs_ui::tab_underline(ui, r, frac, &t);
-                let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
-                let xresp = ui.interact(xr, ui.id().with(("tabjobx", job.0)), Sense::click());
-                if xresp.hovered() {
-                    ui.painter().rect_filled(xr, 4.0, t.hover);
-                }
-                crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
-                if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
-                    cancel_open = Some(job);
-                } else if resp.clicked() {
-                    focus_open = Some(job);
-                }
+            if dragging.is_some_and(|p| r.contains(p)) {
+                drag_over = Some(i);
+                ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
             }
-        });
+            let color = if sel { t.text } else { t.text_dim };
+            let ny = r.center().y - name_g.size().y / 2.0;
+            ui.painter().galley_with_override_text_color(egui::pos2(r.left() + 10.0, ny), name_g.clone(), color);
+            ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
+            let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
+            let xresp = ui.interact(xr, ui.id().with(("dtabx", i)), Sense::click());
+            if xresp.hovered() {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+            }
+            crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
+            let resp = if cut { resp.on_hover_text(name) } else { resp };
+            if xresp.clicked() {
+                close = Some(i);
+            } else if resp.clicked() {
+                activate = Some(i);
+            }
+            resp.context_menu(|ui| {
+                tab_action = tab_context_menu(ui, i, tab_count);
+            });
+        }
+        // Files opening in the background: a tab with a progress underline; × cancels.
+        for &(i, r) in placed.iter().filter(|(i, _)| *i >= tab_count) {
+            let Some((job, name, frac)) = opening.get(i - tab_count) else { continue };
+            let sel = app.jobs.focus == Some(*job);
+            let meta_g = ui.painter().layout_no_wrap(format!("{:.0}%", frac * 100.0), meta_font.clone(), t.text_faint);
+            let name_g = crate::tab_strip::elided(ui, name, font.clone(), t.text, (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0));
+            let resp = ui.interact(r, ui.id().with(("dtabjob", job.0)), Sense::click());
+            if sel {
+                ui.painter().rect_filled(r, t.radius_sm, t.card);
+                ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(r, t.radius_sm, t.hover.gamma_multiply(0.5));
+            }
+            let ny = r.center().y - name_g.size().y / 2.0;
+            ui.painter().galley_with_override_text_color(egui::pos2(r.left() + 10.0, ny), name_g.clone(), if sel { t.text } else { t.text_dim });
+            ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
+            crate::jobs_ui::tab_underline(ui, r, *frac, &t);
+            let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
+            let xresp = ui.interact(xr, ui.id().with(("dtabjobx", job.0)), Sense::click());
+            if xresp.hovered() {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+            }
+            crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
+            if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
+                cancel_open = Some(*job);
+            } else if resp.clicked() {
+                focus_open = Some(*job);
+            }
+        }
+        if !f.overflow.is_empty() {
+            let left = x.min((row.right() - crate::tab_strip::CHEVRON_W).max(row.left()));
+            let r = Rect::from_min_size(egui::pos2(left, row.top()), egui::vec2(crate::tab_strip::CHEVRON_W, row.height()));
+            let labels: Vec<&str> =
+                app.session.documents().iter().map(|st| st.doc.name.as_str()).chain(opening.iter().map(|(_, name, _)| name.as_str())).collect();
+            let mut picked = None;
+            crate::tab_strip::overflow_button(ui, ui.id().with("dtab-overflow"), r, tl!("More documents"), &labels, &f.overflow, &mut picked);
+            match picked {
+                Some(i) if i < tab_count => activate = Some(i),
+                Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
+                None => {}
+            }
+        }
     });
     open_tab_clicks(app, activate, focus_open, cancel_open);
     if let Some(i) = drag_over {
@@ -1177,7 +1229,30 @@ fn open_tab_clicks(
     }
 }
 
+/// Document tabs: the chrome around a title (the × and its gaps), and the width a tab shrinks to
+/// before it moves into the » overflow menu.
+const DOC_TAB_PAD: f32 = 42.0;
+const DOC_TAB_MIN_W: f32 = 72.0;
+/// The Studio strip's tabs carried 4 pt of spacing between them and 44 pt of chrome; `fit` sees
+/// one number per tab, so the gap rides in the natural width and comes back out when painted.
+const STUDIO_TAB_PAD: f32 = 48.0;
+const STUDIO_TAB_GAP: f32 = 4.0;
+
+/// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
+/// is targeted; the Background layer's name is omitted.
+fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
+    let Some(st) = app.session.documents().get(i) else { return String::new() };
+    let zoom = app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0);
+    let active_layer = st.active_layer.and_then(|id| st.doc.layer(id)).filter(|l| !(l.name == "Background" && l.locks.transparency));
+    let mask = app.session.active_index() == Some(i) && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
+    let model = if mask { tl!("Layer Mask").to_string() } else { mode_label(&st.doc).to_string() };
+    let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
+    format!("{} @ {}% ({layer}{model}/{}){}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
+}
+
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
+/// Tabs that don't fit shrink and elide, and the ones that still don't fit move into a » menu at
+/// the end of the strip; the active document's tab always stays on the strip (#1276).
 fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
     let active = app.session.active_index().filter(|_| app.jobs.focus.is_none());
@@ -1187,23 +1262,34 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let font = egui::FontId::proportional(11.5);
     let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
+    // Files opening in the background (#210) are tabs too ("name (Opening… 45%)" with a progress
+    // underline); they share the fit's index space, after the documents.
+    let opening = crate::jobs_ui::open_tabs(app);
+    let mut titles: Vec<String> = (0..tab_count).map(|i| pro_tab_title(app, i)).collect();
+    titles.extend(opening.iter().map(|(_, name, frac)| format!("{name} ({} {:.0}%)", tl!("Opening…"), frac * 100.0)));
+    // Every tab's natural width, whether or not it stays on the strip.
+    let natural: Vec<f32> = titles.iter().map(|title| ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text).size().x + DOC_TAB_PAD).collect();
+    let selected = app
+        .jobs
+        .focus
+        .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
+        .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
+    let f = crate::tab_strip::fit(&natural, selected, strip.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
     let mut x = strip.left();
+    let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
+    for &(i, w) in &f.shown {
+        let r = Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(w, strip.height()));
+        placed.push((i, r));
+        x = r.right();
+    }
     let mut doc_tabs = Vec::with_capacity(tab_count);
-    for (i, st) in app.session.documents().iter().enumerate() {
-        let zoom = app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0);
-        // Photoshop: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask is targeted;
-        // the Background layer's name is omitted.
-        let active_layer = st.active_layer.and_then(|id| st.doc.layer(id)).filter(|l| !(l.name == "Background" && l.locks.transparency));
-        let is_active_doc = app.session.active_index() == Some(i);
-        let mask = is_active_doc && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
-        let model = if mask { tl!("Layer Mask").to_string() } else { mode_label(&st.doc).to_string() };
-        let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
-        let title = format!("{} @ {}% ({layer}{model}/{}){}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" });
-        let g = ui.painter().layout_no_wrap(title, egui::FontId::proportional(11.5), t.text);
-        let r = Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(g.size().x + 42.0, strip.height()));
-        doc_tabs.push(r);
+    let (mut focus_open, mut cancel_open) = (None, None);
+    for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
+        let Some(title) = titles.get(i) else { continue };
+        let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
         let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click());
         let sel = Some(i) == active;
         if sel {
@@ -1223,6 +1309,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
+        let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
+        let resp = if cut { resp.on_hover_text(title.as_str()) } else { resp };
         if xresp.clicked() {
             close = Some(i);
         } else if resp.clicked() {
@@ -1231,33 +1319,43 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         resp.context_menu(|ui| {
             tab_action = tab_context_menu(ui, i, tab_count);
         });
-        x = r.right();
+        doc_tabs.push(r);
     }
-    // Files opening in the background (#210): "name (Opening… 45%)" with a progress underline.
-    let (mut focus_open, mut cancel_open) = (None, None);
-    for (job, name, frac) in crate::jobs_ui::open_tabs(app) {
-        let title = format!("{name} ({} {:.0}%)", tl!("Opening…"), frac * 100.0);
-        let g = ui.painter().layout_no_wrap(title, egui::FontId::proportional(11.5), t.text);
-        let r = Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(g.size().x + 42.0, strip.height()));
+    for &(i, r) in placed.iter().filter(|(i, _)| *i >= tab_count) {
+        let Some((job, _, frac)) = opening.get(i - tab_count) else { continue };
+        let Some(title) = titles.get(i) else { continue };
+        let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
         let resp = ui.interact(r, ui.id().with(("ptabjob", job.0)), Sense::click());
-        let sel = app.jobs.focus == Some(job);
+        let sel = app.jobs.focus == Some(*job);
         if sel {
             ui.painter().rect_filled(r, 0.0, t.chrome);
         } else if resp.hovered() {
             ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.35));
         }
         ui.painter().line_segment([r.right_top(), r.right_bottom()], Stroke::new(1.0, t.separator));
-        crate::jobs_ui::tab_underline(ui, r, frac, &t);
+        crate::jobs_ui::tab_underline(ui, r, *frac, &t);
         let (xr, at) = pro_tab_layout(r, g.size().y, mac);
         let xresp = ui.interact(xr, ui.id().with(("ptabjobx", job.0)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
         if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
-            cancel_open = Some(job);
+            cancel_open = Some(*job);
         } else if resp.clicked() {
-            focus_open = Some(job);
+            focus_open = Some(*job);
         }
-        x = r.right();
+    }
+    if !f.overflow.is_empty() {
+        let left = x.min((strip.right() - crate::tab_strip::CHEVRON_W).max(strip.left()));
+        let r = Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(crate::tab_strip::CHEVRON_W, strip.height()));
+        let labels: Vec<&str> = titles.iter().map(String::as_str).collect();
+        let mut picked = None;
+        crate::tab_strip::overflow_button(ui, ui.id().with("ptab-overflow"), r, tl!("More documents"), &labels, &f.overflow, &mut picked);
+        match picked {
+            Some(i) if i < tab_count => activate = Some(i),
+            Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
+            None => {}
+        }
     }
     open_tab_clicks(app, activate, focus_open, cancel_open);
     if let Some(i) = drag_over {
@@ -2907,6 +3005,9 @@ fn hex(c: [f32; 4]) -> String {
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
 }
+
+#[cfg(test)]
+mod tabs_tests;
 
 #[cfg(test)]
 mod tests {
