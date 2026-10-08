@@ -493,10 +493,7 @@ impl Loader<'_> {
             }
             ContentM::Deep { x, y, width, height, channels, counts } => {
                 let counts_bytes = self.fetch.blob(counts)?;
-                let mut counts_v = Vec::with_capacity(counts_bytes.len() / 8);
-                for c in counts_bytes.chunks_exact(8) {
-                    counts_v.push(u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]));
-                }
+                let counts_v: Vec<u64> = counts_bytes.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)).collect();
                 let npx = usize::try_from(*width).unwrap_or(usize::MAX / 2).saturating_mul(usize::try_from(*height).unwrap_or(0));
                 if counts_v.len() != npx + 1 {
                     return Err(crate::FormatError::LimitExceeded(format!(
@@ -519,7 +516,7 @@ impl Loader<'_> {
                     }
                     channels_v.push(photocraft_doc::DeepChannel {
                         name: c.name.clone(),
-                        samples: bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect(),
+                        samples: bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect(),
                     });
                 }
                 LayerContent::Deep(photocraft_doc::DeepData { x: *x, y: *y, width: *width, height: *height, channels: channels_v, counts: counts_v })
