@@ -104,6 +104,16 @@ pub fn engine_data(text: &Descriptor) -> Option<E> {
     }
 }
 
+/// Whether the text engine of a `TySh` block has nothing to draw: its EngineData text
+/// (`EngineDict/Editor/Text`, what Photoshop lays out) is present and only whitespace. Some
+/// Photoshop layers carry their characters only in the descriptor's `Txt ` and render nothing.
+pub fn engine_text_is_blank(tysh: &[u8]) -> bool {
+    parse_tysh(tysh)
+        .and_then(|t| engine_data(&t.text))
+        .and_then(|e| e.path(&["EngineDict", "Editor", "Text"]).and_then(E::as_str).map(|s| s.trim().is_empty()))
+        .unwrap_or(false)
+}
+
 /// Parses the document's `Txt2` block (Photoshop's text engine data for all type layers).
 pub fn parse_txt2(data: &[u8]) -> Option<E> {
     // Txt2 is a bare sequence of `/key value` pairs (no enclosing `<< >>`).

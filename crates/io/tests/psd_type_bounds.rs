@@ -387,3 +387,12 @@ fn hostile_type_sizes_without_pixels_import_without_a_huge_render() {
         assert!(cache.content_bounds().is_empty(), "size {size}: drew {:?}", cache.content_bounds());
     }
 }
+
+#[test]
+fn blank_engine_text_is_not_rendered_on_import() {
+    // Photoshop draws nothing when the engine text is blank, whatever the descriptor says.
+    let data = tysh("", &[Run { len: 0, size: 24.0, leading: None }], None, Affine::translate(10.0, 40.0), [10.0, 10.0, 20.0, 20.0]);
+    assert!(photocraft_text::psd::engine_text_is_blank(&data));
+    assert!(!photocraft_text::psd::engine_text_is_blank(&tysh("M", &[Run { len: 1, size: 24.0, leading: None }], None, Affine::IDENTITY, [0.0; 4])));
+    assert!(!photocraft_text::psd::engine_text_is_blank(b"not a TySh"));
+}
