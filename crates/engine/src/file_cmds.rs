@@ -213,7 +213,11 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     let save = save.into();
     let mut opts = photocraft_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
     if let Some(q) = save.quality {
-        opts.encode.jpeg_quality = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
+        let q = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
+        opts.encode.jpeg_quality = q;
+        // A quality on a WebP save asks for the lossy encoder; the default WebP stays lossless.
+        opts.encode.webp_quality = q;
+        opts.encode.webp_lossless = false;
     }
     photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }

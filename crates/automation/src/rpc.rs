@@ -101,6 +101,8 @@ impl Headless {
                     photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
                 if let Some(q) = p.get("quality").and_then(Value::as_u64) {
                     opts.encode.jpeg_quality = q.clamp(1, 100) as u8;
+                    opts.encode.webp_quality = q.clamp(1, 100) as u8;
+                    opts.encode.webp_lossless = false;
                 }
                 let path = str_of(&p, "path").map(PathBuf::from);
                 self.save(index_of(&p), path.as_deref(), str_of(&p, "format"), &opts)

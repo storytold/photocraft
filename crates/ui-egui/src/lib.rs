@@ -153,6 +153,10 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8]) -> Result<(Document, Vec<String>), S
 pub struct ExportSettings {
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
+    /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
+    pub webp_lossless: bool,
+    /// Lossy WebP quality 1–100 (None = codec default).
+    pub webp_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
@@ -163,7 +167,7 @@ pub struct ExportSettings {
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        ExportSettings { jpeg_quality: None, tiff_layers: true, xmp_all: true }
+        ExportSettings { jpeg_quality: None, webp_lossless: true, webp_quality: None, tiff_layers: true, xmp_all: true }
     }
 }
 

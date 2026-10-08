@@ -545,3 +545,39 @@ fn press_drag_release_runs_a_menu_item() {
     h.run_steps(4);
     assert!(Nav::current(&h.ctx).rows.first().is_some_and(|r| !r.is_empty()), "a click leaves it open");
 }
+
+/// Windows and Linux menus too (#775): one press-drag-release gesture can move across titles and
+/// into a submenu. Press File, drag over to View, down to Proof Setup, right into its submenu and
+/// release on Working CMYK.
+#[test]
+fn press_drag_release_reaches_other_menus_and_submenus() {
+    use egui::{Modifiers, PointerButton};
+    let mut h = harness((1280.0, 720.0, 1.0));
+    let mut at = h.get_by_label("File").rect().center();
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let mut drag_to = |h: &mut Harness<'static, PhotocraftApp>, to: egui::Pos2| {
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(at + (to - at) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+        at = to;
+    };
+    let view = h.get_by_label("View").rect().center();
+    drag_to(&mut h, view);
+    assert!(h.query_by_label_contains("Proof Setup").is_some(), "dragging over View switched to its menu");
+    let proof = h.get_by_label_contains("Proof Setup").rect();
+    drag_to(&mut h, egui::pos2(proof.left() + 30.0, proof.center().y));
+    drag_to(&mut h, egui::pos2(proof.right() - 6.0, proof.center().y));
+    let item = h.get_by_label_contains("Working CMYK").rect();
+    drag_to(&mut h, egui::pos2(item.left() + 30.0, proof.center().y));
+    drag_to(&mut h, item.center());
+    h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    let proofing = crate::menus::menu_items(h.state()).into_iter().find(|i| i.id == "view.proofColors").and_then(|i| i.checked);
+    assert_eq!(proofing, Some(true), "releasing on Working CMYK ran it");
+    assert!(Nav::current(&h.ctx).rows.first().is_none_or(|r| r.is_empty()), "and closed the menus");
+}

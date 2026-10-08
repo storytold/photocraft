@@ -11,7 +11,7 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 5] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP (lossless)"), ("tif", "TIFF"), ("tga", "TGA")];
+const FORMATS: [(&str, &str); 5] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA")];
 
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -20,6 +20,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("__label".into(), json!("Export As"));
     f.insert("format".into(), json!("png"));
     f.insert("quality".into(), json!(85));
+    f.insert("lossless".into(), json!(false));
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
     f.insert("metadata".into(), json!("none"));
@@ -96,9 +97,17 @@ fn s_fmt(f: &Map<String, Value>) -> String {
     if v.is_empty() { "png".into() } else { v }
 }
 
+fn lossless(f: &Map<String, Value>) -> bool {
+    f.get("lossless").and_then(Value::as_bool).unwrap_or(false)
+}
+
 fn settings(f: &Map<String, Value>) -> ExportSettings {
+    let fmt = s_fmt(f);
+    let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
     ExportSettings {
-        jpeg_quality: (s_fmt(f) == "jpg").then(|| n(f, "quality", 85.0).clamp(1.0, 100.0) as u8),
+        jpeg_quality: (fmt == "jpg").then_some(quality),
+        webp_lossless: fmt != "webp" || lossless(f),
+        webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: s(f, "metadata") == "all",
         ..Default::default()
     }
@@ -132,11 +141,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 }
             });
             let fmt = s_fmt(f);
-            if fmt == "jpg" {
+            if fmt == "webp" {
+                let mut ll = lossless(f);
+                crate::widgets::checkbox(ui, &mut ll, tl!("Lossless"));
+                f.insert("lossless".into(), json!(ll));
+            }
+            if fmt == "jpg" || (fmt == "webp" && !lossless(f)) {
                 let mut q = n(f, "quality", 85.0) as f32;
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
                 f.insert("quality".into(), json!(q.round()));
-            } else {
+            }
+            if fmt != "jpg" {
                 let mut tr = f.get("transparency").and_then(Value::as_bool).unwrap_or(true);
                 crate::widgets::checkbox(ui, &mut tr, tl!("Transparency"));
                 f.insert("transparency".into(), json!(tr));
@@ -167,9 +182,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
-                "{}{}{}{}{}",
+                "{}{}{}{}{}{}",
                 s_fmt(f),
                 n(f, "quality", 85.0),
+                lossless(f),
                 f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
                 n(f, "scale", 100.0),
                 s(f, "metadata")
@@ -269,5 +285,22 @@ mod tests {
         let proxy = export_document(&doc, &f, Some(40)).unwrap();
         assert_eq!(proxy.size.width, 40);
         assert_eq!(settings(&f).jpeg_quality, Some(85));
+    }
+
+    #[test]
+    fn webp_settings_follow_the_lossless_switch() {
+        let mut f = Map::new();
+        f.insert("format".into(), json!("webp"));
+        f.insert("quality".into(), json!(70));
+        let s = settings(&f);
+        assert!(!s.webp_lossless, "Export As writes lossy WebP unless asked");
+        assert_eq!(s.webp_quality, Some(70));
+        assert_eq!(s.jpeg_quality, None);
+        f.insert("lossless".into(), json!(true));
+        let s = settings(&f);
+        assert!(s.webp_lossless);
+        assert_eq!(s.webp_quality, None);
+        f.insert("format".into(), json!("png"));
+        assert!(settings(&f).webp_lossless, "other formats leave the WebP default alone");
     }
 }

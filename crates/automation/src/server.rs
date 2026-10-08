@@ -80,7 +80,7 @@ pub struct SaveParams {
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
     #[serde(default)]
     pub format: Option<String>,
-    /// JPEG quality 1..100 for lossy exports.
+    /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
     #[serde(default)]
     pub quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
@@ -663,6 +663,8 @@ impl PhotocraftMcp {
                 let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, ..Default::default() };
                 if let Some(q) = p.quality {
                     opts.encode.jpeg_quality = q.clamp(1, 100);
+                    opts.encode.webp_quality = q.clamp(1, 100);
+                    opts.encode.webp_lossless = false;
                 }
                 let path = p.path.map(PathBuf::from);
                 h.save(p.index, path.as_deref(), p.format.as_deref(), &opts)

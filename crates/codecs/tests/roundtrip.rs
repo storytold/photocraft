@@ -226,10 +226,15 @@ fn jpeg_444_beats_420_on_chroma_detail() {
 }
 
 #[test]
-fn webp_lossy_request_is_honest_error() {
+fn webp_lossy_request_is_a_lossy_file() {
     let img = test_image(ChannelLayout::Rgb, SampleType::U8);
-    let e = encode(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).unwrap_err();
-    assert!(matches!(e, CodecError::Unsupported { format: Format::WebP, .. }));
+    let bytes = encode(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).unwrap();
+    assert_eq!(&bytes[12..16], b"VP8 ", "a bare lossy frame");
+    let back = decode(&bytes).unwrap();
+    assert_eq!(back.dimensions(), img.dimensions());
+    assert!(
+        fidelity_warnings_with(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).contains(&FidelityWarning::LossyCompression)
+    );
 }
 
 #[test]

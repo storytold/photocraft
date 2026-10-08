@@ -44,6 +44,10 @@ fn main() {
             if let Some(q) = settings.jpeg_quality {
                 opts.encode.jpeg_quality = q;
             }
+            opts.encode.webp_lossless = settings.webp_lossless;
+            if let Some(q) = settings.webp_quality {
+                opts.encode.webp_quality = q;
+            }
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),

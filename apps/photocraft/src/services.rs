@@ -155,6 +155,10 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             if let Some(q) = settings.jpeg_quality {
                 opts.encode.jpeg_quality = q;
             }
+            opts.encode.webp_lossless = settings.webp_lossless;
+            if let Some(q) = settings.webp_quality {
+                opts.encode.webp_quality = q;
+            }
             opts.tiff_layers = settings.tiff_layers;
             opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))

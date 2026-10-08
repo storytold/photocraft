@@ -17,6 +17,7 @@ USAGE:
   photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers]
       Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
       TIFF output is flat unless --tiff-layers keeps the layers (Photoshop layer data).
+      --quality sets the JPEG or WebP quality; a WebP written with a quality is lossy, without one lossless.
   photocraft-cli info <file> [--compact]
       Print the document as JSON (size, mode, depth, layer tree).
   photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers]
@@ -170,8 +171,11 @@ fn export_opts(a: &Args) -> Result<ExportOptions, String> {
     // TIFF output is flat unless asked: scripted conversions keep predictable sizes.
     let mut o = ExportOptions { tiff_layers: a.has("--tiff-layers"), ..Default::default() };
     if let Some(q) = a.get("--quality") {
-        o.encode.jpeg_quality =
-            q.parse().ok().filter(|q| (1..=100).contains(q)).ok_or_else(|| format!("bad --quality `{q}`: expected a whole number from 1 to 100"))?;
+        let q = q.parse().ok().filter(|q| (1..=100).contains(q)).ok_or_else(|| format!("bad --quality `{q}`: expected a whole number from 1 to 100"))?;
+        o.encode.jpeg_quality = q;
+        // Asking for a quality asks for a lossy WebP; the default WebP stays lossless.
+        o.encode.webp_quality = q;
+        o.encode.webp_lossless = false;
     }
     Ok(o)
 }

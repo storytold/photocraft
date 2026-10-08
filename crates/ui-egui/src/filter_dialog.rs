@@ -550,4 +550,25 @@ mod tests {
         assert!(p[0] > 0.2 && p[0] < 0.8, "edge blurred: {p:?}");
         assert_eq!(label("wavelengthMin"), "Wavelength Min");
     }
+
+    #[test]
+    fn preview_stays_inside_the_selection_at_every_proxy_factor() {
+        use photocraft_doc::SampleType;
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc =
+                Document::with_background("p", photocraft_doc::Size::new(64, 64), photocraft_doc::ColorMode::Rgb, depth, photocraft_doc::Color::gray(0.5));
+            let bg = doc.layers[0].id;
+            let mut sel = photocraft_raster::Surface::new(photocraft_doc::PixelFormat::GRAY8);
+            sel.fill_rect(photocraft_geom::Rect::new(0, 0, 32, 64), &[1.0]);
+            doc.selection = Some(sel);
+            for k in [1, 2, 4] {
+                let out = preview_document(&doc, Some(bg), "filter.noise.addNoise", &json!({"amount": 100.0}), k).unwrap();
+                let s = out.layers[0].surface().unwrap();
+                let half = 32 / k as i32;
+                let changed = |x0: i32, x1: i32| (0..64 / k as i32).any(|y| (x0..x1).any(|x| s.pixel(x, y) != doc.layers[0].surface().unwrap().pixel(0, 0)));
+                assert!(changed(0, half), "{depth:?} k={k}: noise inside the selection");
+                assert!(!changed(half, 64 / k as i32), "{depth:?} k={k}: nothing outside the selection");
+            }
+        }
+    }
 }

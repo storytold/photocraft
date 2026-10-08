@@ -1233,6 +1233,7 @@
 	Urgency	Срочность
 	High	Высокая
 	Normal	Обычная
+	Lossless	Без потерь
 	Low	Низкая
 	Category	Категория
 	Supplemental Categories	Дополнительные категории
