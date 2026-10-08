@@ -59,6 +59,9 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 
 ## Engine commands
 
+`ui.inspect` includes a `scratch` object with the resident tile budget, RAM/disk byte counters,
+evictions, reloads, active directory and last storage error. See [Scratch disks](scratch-disks.md).
+
 Change the UI language without restarting with `prefs.set`:
 `{"path":"interface.language","value":"fr"}`. Supported codes and preview/apply behaviour
 are documented in [UI localisation](localization.md). `prefs.get` and the existing preference

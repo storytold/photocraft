@@ -47,6 +47,12 @@ almost entirely missing or partial.
 of display and canvas zoom (#532). The current preference audit drops from 59 to 58 unread
 settings out of 135; see the regenerated scorecard.
 
+2026-10-08 (local adaptation): native scratch disks now spill current and undo tiles to
+LZ4-compressed, CRC-checked temporary storage. The preference audit drops from 57 to 56 unread
+settings out of 135. Read failures retain the original backing and refuse edit/save commits.
+This does not yet bound GPU canvas residency or stream PSD/PSB input; see
+[scratch disks](scratch-disks.md).
+
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
 workflow depth and the plug-in ecosystem. Most fixes since 0.2.0 have passed our tests but have
