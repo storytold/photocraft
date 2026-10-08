@@ -1,6 +1,20 @@
 use super::*;
 use crate::menus::{invoke as menu, is_live, menu_items};
 
+#[test]
+fn variation_source_choices_use_display_translations() {
+    let previous = crate::i18n::current();
+    for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
+        crate::i18n::set_current(lang);
+        for (key, english) in [("source", "Source"), ("composite", "Composite"), ("layer", "Layer"), ("prompt", "Prompt")] {
+            assert_eq!(label_of(key), crate::i18n::tr(lang, english), "{}: {key}", lang.code());
+        }
+        assert_ne!(label_of("composite"), "Composite", "{}", lang.code());
+        assert_ne!(label_of("prompt"), "Prompt", "{}", lang.code());
+    }
+    crate::i18n::set_current(previous);
+}
+
 fn app_with(n: usize) -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     for i in 0..n {

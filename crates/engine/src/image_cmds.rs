@@ -156,7 +156,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Moves every surface, channel, selection and guide by `(dx, dy)`.
-fn translate_doc(doc: &mut Document, dx: i32, dy: i32) {
+pub(crate) fn translate_doc(doc: &mut Document, dx: i32, dy: i32) {
     if dx == 0 && dy == 0 {
         return;
     }

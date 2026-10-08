@@ -2096,6 +2096,13 @@ cameraRaw	Color	Barvy
 	Don't show again	Příště nezobrazovat
 	Save failed: {error}	Uložení se nezdařilo: {error}
 	Save cancelled	Ukládání zrušeno
+
+	Generate Image…	Vygenerovat obrázek…
+	Generative Fill…	Generativní výplň…
+	Expand Canvas…	Rozšířit plátno…
+	Variations…	Varianty…
+	Composite	Viditelný obraz
+	Prompt	Zadání
 	Couldn't place {name}: {error}	Nelze umístit {name}: {error}
 	Magnetic Lasso Tool	Nástroj magnetické laso
 	Frequency	Frekvence

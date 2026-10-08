@@ -2371,6 +2371,13 @@ cameraRaw	Roughness	Неровность
 	Don't show again	Больше не показывать
 	Save failed: {error}	Не удалось сохранить: {error}
 	Save cancelled	Сохранение отменено
+
+	Generate Image…	Создать изображение…
+	Generative Fill…	Генеративная заливка…
+	Expand Canvas…	Расширить холст…
+	Variations…	Вариации…
+	Composite	Составное изображение
+	Prompt	Запрос
 	Couldn't place {name}: {error}	Не удалось поместить {name}: {error}
 	Magnetic Lasso Tool	Магнитное лассо
 	Frequency	Частота

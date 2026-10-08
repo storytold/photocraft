@@ -2074,6 +2074,13 @@ cameraRaw	Blending	混合
 	Don't show again	不再顯示
 	Save failed: {error}	儲存失敗：{error}
 	Save cancelled	已取消儲存
+
+	Generate Image…	產生影像…
+	Generative Fill…	生成式填色…
+	Expand Canvas…	擴展畫布…
+	Variations…	變化版本…
+	Composite	合成影像
+	Prompt	提示詞
 	Magnetic Lasso Tool	磁性套索工具
 	Frequency	頻率
 	Use tablet pressure to change pen width	使用繪圖板壓力以變更鋼筆寬度

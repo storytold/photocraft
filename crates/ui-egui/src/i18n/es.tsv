@@ -2169,6 +2169,13 @@ cameraRaw	Amount	Cantidad
 	Don't show again	No volver a mostrar
 	Save failed: {error}	Error al guardar: {error}
 	Save cancelled	Guardado cancelado
+
+	Generate Image…	Generar imagen…
+	Generative Fill…	Relleno generativo…
+	Expand Canvas…	Expandir lienzo…
+	Variations…	Variaciones…
+	Composite	Imagen compuesta
+	Prompt	Instrucción
 	Magnetic Lasso Tool	Herramienta Lazo magnético
 	Frequency	Frecuencia
 	Use tablet pressure to change pen width	Usar la presión de la tableta para cambiar la anchura del lápiz
