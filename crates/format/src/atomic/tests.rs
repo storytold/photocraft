@@ -31,6 +31,35 @@ fn assert_no_temp(dir: &Path) {
 
 const ORIGINAL: &[u8] = b"the user's precious original document";
 
+#[test]
+fn seekable_encoder_failure_keeps_original_and_cleans_temp() {
+    use std::io::{Seek, SeekFrom};
+    let dir = TempDir::new("stream");
+    let path = dir.0.join("document.psb");
+    std::fs::write(&path, ORIGINAL).unwrap();
+    for kind in [io::ErrorKind::StorageFull, io::ErrorKind::Interrupted] {
+        assert!(
+            atomic_write_stream(&path, |file| {
+                file.write_all(b"partial")?;
+                file.seek(SeekFrom::Start(0))?;
+                file.write_all(b"PATCH")?;
+                Err(io::Error::new(kind, "injected encoder failure"))
+            })
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), ORIGINAL);
+        assert_no_temp(&dir.0);
+    }
+    atomic_write_stream(&path, |file| {
+        file.write_all(b"0000payload")?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(b"0007")
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"0007payload");
+    assert_no_temp(&dir.0);
+}
+
 /// Real file system with failures injected at chosen steps.
 #[derive(Default)]
 struct Faulty {
@@ -209,4 +238,20 @@ fn directory_target_or_bare_root_is_an_error_not_a_panic() {
     assert!(atomic_write(&d.0, b"x").is_err());
     assert!(atomic_write(Path::new("/"), b"x").is_err());
     assert!(atomic_write(Path::new(""), b"x").is_err());
+}
+
+#[test]
+fn streaming_encoder_unwind_closes_and_removes_temporary_file() {
+    let d = TempDir::new("stream-unwind");
+    let p = d.0.join("doc.psb");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    let result = std::panic::catch_unwind(|| {
+        let _ = atomic_write_stream(&p, |file| {
+            file.write_all(b"partial output")?;
+            panic!("injected encoder unwind");
+        });
+    });
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&p).unwrap(), ORIGINAL);
+    assert_no_temp(&d.0);
 }

@@ -38,6 +38,8 @@ pub mod pattern_map;
 mod pixels;
 mod psd_export;
 mod psd_import;
+#[cfg(not(target_arch = "wasm32"))]
+mod psd_stream;
 pub mod raw;
 pub mod slices_map;
 pub mod smart_map;
@@ -145,6 +147,87 @@ pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_with(name, bytes, &photocraft_raster::Interrupt::NONE)
 }
 
+/// Native seekable import. Large layered PSD/PSBs decode bounded row bands directly into tiles;
+/// the bytes API remains available for web and for formats without a seekable decoder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn import_path_with(name: &str, path: &std::path::Path, ctl: &photocraft_raster::Interrupt<'_>) -> Result<ImportResult, IoError> {
+    use std::io::Read;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    photocraft_compose::discard_unreadable_pixel_caches();
+    photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+    let before = photocraft_raster::spill::read_error_generation();
+    let mut source = std::fs::File::open(path).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let original = source.metadata().map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let size = original.len();
+    let mut magic = [0; 4];
+    let n = source.read(&mut magic).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    if n == 4 && is_psd(&magic) {
+        let budget = (photocraft_raster::memory::stats().1.transient_bytes / 8).min(128 << 20);
+        let _metadata = photocraft_raster::memory::try_reserve(budget.saturating_mul(3)).map_err(IoError::Unsupported)?;
+        let index = photocraft_psd::stream::Index::read(&mut source, budget, &|| ctl.cancelled())
+            .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { e.into() })?;
+        if psd_stream::eligible(&index) {
+            if psd_import::group_depth(&index.metadata) > photocraft_doc::MAX_GROUP_DEPTH {
+                return Err(IoError::Unsupported("PSD layer nesting exceeds the document limit".into()));
+            }
+            let mut result = psd_stream::import(&|| std::fs::File::open(path), &index, *ctl)?;
+            let current = std::fs::metadata(path).map_err(|e| IoError::Unsupported(e.to_string()))?;
+            if current.len() != original.len() || current.modified().ok() != original.modified().ok() {
+                return Err(IoError::Unsupported("the source file changed while it was being opened; open it again".into()));
+            }
+            result.document.name = name.into();
+            photocraft_raster::spill::check_since(before).map_err(IoError::Unsupported)?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            return Ok(result);
+        }
+    }
+    drop(source);
+    let _bytes = photocraft_raster::memory::try_reserve(size)
+        .map_err(|_| IoError::Unsupported("this format requires a whole-file decoder and exceeds the working-memory budget".into()))?;
+    let bytes = photocraft_format::read_file(path).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    import_with(name, &bytes, ctl)
+}
+
+/// Read from handles already authorized by the caller. Independent opens prevent channel
+/// readers sharing a seek cursor, and no ambient filesystem access occurs in this function.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn import_seekable_with<R: std::io::Read + std::io::Seek>(
+    name: &str,
+    open: &dyn Fn() -> std::io::Result<R>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<ImportResult, IoError> {
+    use std::io::SeekFrom;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    photocraft_compose::discard_unreadable_pixel_caches();
+    photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+    let before = photocraft_raster::spill::read_error_generation();
+    let mut source = open().map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let size = source.seek(SeekFrom::End(0)).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    source.seek(SeekFrom::Start(0)).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let mut magic = [0; 4];
+    let n = source.read(&mut magic).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    if n == 4 && is_psd(&magic) {
+        let budget = (photocraft_raster::memory::stats().1.transient_bytes / 8).min(128 << 20);
+        let _metadata = photocraft_raster::memory::try_reserve(budget.saturating_mul(3)).map_err(IoError::Unsupported)?;
+        let index = photocraft_psd::stream::Index::read(&mut source, budget, &|| ctl.cancelled())
+            .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { e.into() })?;
+        if psd_stream::eligible(&index) {
+            if psd_import::group_depth(&index.metadata) > photocraft_doc::MAX_GROUP_DEPTH {
+                return Err(IoError::Unsupported("PSD layer nesting exceeds the document limit".into()));
+            }
+            let mut result = psd_stream::import(open, &index, *ctl)?;
+            result.document.name = name.into();
+            photocraft_raster::spill::check_since(before).map_err(IoError::Unsupported)?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            return Ok(result);
+        }
+    }
+    source.seek(SeekFrom::Start(0)).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let _working = photocraft_raster::memory::try_reserve_operation(size).map_err(IoError::Unsupported)?;
+    let bytes = photocraft_format::read::read_all(&mut source, size).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    import_with(name, &bytes, ctl)
+}
+
 /// [`import`] for a background open: checks `ctl` between stages (and per layer for PSD/PSB) and
 /// reports progress. A cancelled import fails with [`IoError::Cancelled`].
 pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
@@ -194,12 +277,55 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// Exports `doc` to the format named by `name_or_ext` (a file name, path or
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    // The byte API has to retain its complete output. Native large saves use the seekable
+    // path below; reject an inadmissible legacy working set before building channel arrays.
+    let tiles: u64 = doc
+        .walk()
+        .iter()
+        .filter_map(|(_, _, l)| l.surface())
+        .map(|s| (s.tile_count() as u64).saturating_mul(256 * 256).saturating_mul(s.format().bytes_per_pixel() as u64))
+        .sum();
+    let estimate = doc.size.area().saturating_mul(32).saturating_add(tiles.saturating_mul(3));
+    let _working = photocraft_raster::memory::try_reserve_operation(estimate)
+        .map_err(|_| IoError::Unsupported("export exceeds the working-memory budget; use native PSB streaming or export a smaller region".into()))?;
     photocraft_compose::discard_unreadable_pixel_caches();
     photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
     let scratch_generation = photocraft_raster::spill::read_error_generation();
     let result = export_inner(doc, name_or_ext, opts)?;
     photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
     Ok(result)
+}
+
+/// Native atomic save. PSB writes metadata and bounded original-pixel bands directly to disk;
+/// formats with only a bytes encoder use the checked working-set admission in [`export`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_path_with(doc: &Document, path: &std::path::Path, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<String>, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext == "psb" || ext == "psd" && (opts.force_psb || doc.size.width > 30_000 || doc.size.height > 30_000) {
+        photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+        let mut warnings = Vec::new();
+        let result = photocraft_format::atomic::atomic_write_stream(path, |out| {
+            warnings = psd_stream::export_into(doc, out, *ctl).map_err(|e| std::io::Error::other(e.to_string()))?;
+            Ok(())
+        });
+        if ctl.cancelled() {
+            return Err(IoError::Cancelled);
+        }
+        result.map_err(|e| IoError::Unsupported(e.to_string()))?;
+        return Ok(warnings);
+    }
+    let result = export(doc, &path.to_string_lossy(), opts)?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    photocraft_format::atomic_write(path, &result.bytes).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    Ok(result.warnings)
+}
+
+/// Write a native PSB to an already authorized seekable output. The caller owns atomic
+/// publication and cleanup; this never opens an ambient path.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_psb_into<W: std::io::Write + std::io::Seek>(doc: &Document, out: &mut W, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<String>, IoError> {
+    psd_stream::export_into(doc, out, *ctl)
 }
 
 fn export_inner(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {

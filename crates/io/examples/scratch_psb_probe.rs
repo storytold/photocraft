@@ -8,9 +8,7 @@ fn main() -> Result<(), String> {
     let dir = args.next().ok_or("missing scratch directory")?;
     spill::configure(Some(std::path::Path::new(&dir)), 1 << 30)?;
     let start = Instant::now();
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let result = photocraft_io::import(&path, &bytes).map_err(|e| e.to_string())?;
-    drop(bytes);
+    let result = photocraft_io::import_path_with(&path, std::path::Path::new(&path), &photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())?;
     spill::settle();
     let d = &result.document;
     println!(

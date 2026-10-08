@@ -140,6 +140,19 @@ pub fn try_reserve(bytes: u64) -> Result<Reservation, String> {
     Ok(Reservation(bytes))
 }
 
+/// Admit a legacy operation that needs a whole buffer, including concurrent working sets and
+/// the current process RSS. Streaming workers keep the smaller [`try_reserve`] allowance.
+/// This deliberately refuses work before an allocation rather than relying on OS paging.
+pub fn try_reserve_operation(bytes: u64) -> Result<Reservation, String> {
+    let b = refresh();
+    let (sample, _, _) = stats();
+    let available = if sample.total_bytes == 0 { b.transient_bytes } else { b.effective_process_bytes.saturating_sub(sample.process_resident_bytes) };
+    RESERVED
+        .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |n| n.checked_add(bytes).filter(|next| *next <= available))
+        .map_err(|_| "not enough working memory for this operation; reduce its region or use a streaming format".to_string())?;
+    Ok(Reservation(bytes))
+}
+
 impl Drop for Reservation {
     fn drop(&mut self) {
         RESERVED.fetch_sub(self.0, Ordering::AcqRel);
