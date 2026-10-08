@@ -219,6 +219,16 @@ translations do not affect the denominator. Unregistered locale TSV files are ig
 - On the CPU path `compose::effect_maps` caches shadow, glow, bevel and satin maps per layer state (LRU, 768 MB budget).
 - Live adjustment previews on large documents use a downsampled proxy (`ui-egui/src/proxy.rs`).
 - `ui.inspect` returns `perf` timings (UI ms per frame, composite ms, upload ms).
+- Desktop brush hover uses a cached native cursor bitmap (`ui-egui/src/brush_cursor.rs`), so its
+  position does not wait for a canvas frame. Alt sampling, the Eyedropper and Color Picker use a
+  cached pipette with the sampling hotspot at its tip (Other Cursors > Precise still uses a crosshair).
+  Painting Cursors > Precise and crosshair-only while painting retain the existing canvas crosshair.
+  Bitmaps are capped at 128 pixels (physical pixels except for macOS, where winit uses logical points); oversized
+  tips keep their full-size overlay with a native crosshair hotspot. Pencil pixel-grid outlines and Quick
+  Selection badges still use overlays; the web keeps its overlay fallback. Desktop presentation
+  requests a single queued frame. These changes do not bypass brush smoothing or speed up stroke
+  compositing. Set `PHOTOCRAFT_CURSOR_EVIDENCE` to a directory when running the brush cursor tests
+  to save the exact native bitmap on dark and light backgrounds (window screenshots omit OS cursors).
 - Never scan full surfaces per frame. Cache per document revision (`PhotocraftApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
 
 ## Scorecard and performance budgets

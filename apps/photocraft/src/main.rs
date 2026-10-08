@@ -63,6 +63,8 @@ fn native_options() -> eframe::NativeOptions {
         // eframe saves native window geometry and egui panel/window sizes on exit.
         // Keep that state beside preferences, including config overrides and portable mode.
         persistence_path: services::config_dir().map(|dir| dir.join("ui.ron")),
+        // Pointer feedback should not wait behind a second queued canvas frame.
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration::default().with_surface_config(eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY),
         ..Default::default()
     }
 }
@@ -447,5 +449,12 @@ mod tests {
         assert_eq!(o.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)));
         // eframe shrinks the start size to the monitor, so the centred position is on-screen.
         assert_ne!(o.viewport.clamp_size_to_monitor_size, Some(false));
+    }
+
+    #[test]
+    fn presentation_prioritizes_pointer_latency() {
+        let surface = super::native_options().wgpu_options.surface;
+        assert_eq!(surface.desired_maximum_frame_latency, Some(1));
+        assert_eq!(surface.present_mode, eframe::wgpu::PresentMode::AutoVsync);
     }
 }

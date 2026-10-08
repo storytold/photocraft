@@ -47,6 +47,134 @@ fn free_canvas(h: &Harness<'static, PhotocraftApp>) -> Pos2 {
 }
 
 #[test]
+fn brush_hover_uses_a_cached_native_cursor_and_clears_it_on_exit() {
+    use crate::state::Tool;
+    let mut h = harness();
+    h.state_mut().ui.tool = Tool::Brush;
+    h.state_mut().session.tools.brush.size = 20.0;
+    let p = free_canvas(&h);
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(2);
+    let first = h.output().platform_output.cursor_image.clone().expect("native brush tip");
+    h.event(egui::Event::PointerMoved(p + vec2(20.0, -20.0)));
+    h.step();
+    let next = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first.rgba, &next.rgba), "moving the mouse does not rebuild the cursor");
+    h.state_mut().session.tools.brush.size = 30.0;
+    h.step();
+    let resized = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first.rgba, &resized.rgba));
+    h.state_mut().ui.tool = Tool::Move;
+    h.step();
+    assert!(h.output().platform_output.cursor_image.is_none(), "V must restore its own cursor");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move);
+    h.state_mut().ui.tool = Tool::Brush;
+    h.step();
+    assert!(h.output().platform_output.cursor_image.is_some());
+    h.event(egui::Event::PointerGone);
+    h.step();
+    assert!(h.output().platform_output.cursor_image.is_none(), "bitmap output must not stick outside the canvas");
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(2);
+    assert!(h.output().platform_output.cursor_image.is_some());
+    h.state_mut().run("file.close", json!({"discard": true})).unwrap();
+    h.step();
+    assert!(h.output().platform_output.cursor_image.is_none(), "closing the last document clears the bitmap");
+}
+
+#[test]
+fn brush_cursor_preserves_preferences_and_large_tip_has_a_native_hotspot() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.state_mut().session.tools.brush.size = 20.0;
+    h.event(egui::Event::PointerMoved(free_canvas(&h)));
+    h.run_steps(2);
+    for (pref, icon) in [("precise", egui::CursorIcon::None), ("standard", egui::CursorIcon::Default)] {
+        h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": pref})).unwrap();
+        h.step();
+        assert!(h.output().platform_output.cursor_image.is_none());
+        assert_eq!(h.output().platform_output.cursor_icon, icon);
+    }
+    h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": "normalTip"})).unwrap();
+    h.state_mut().session.tools.brush.size = 2000.0;
+    h.step();
+    assert!(h.output().platform_output.cursor_image.is_none());
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair);
+}
+
+#[test]
+fn crosshair_only_while_painting_restores_the_native_tip_after_mouse_up() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.state_mut().session.tools.brush.size = 20.0;
+    h.state_mut().run("prefs.set", json!({"path": "cursors.showOnlyCrosshairWhilePainting", "value": true})).unwrap();
+    let start = h.state().last_canvas_rect.center();
+    h.hover_at(start);
+    h.run_steps(2);
+    let tip = h.output().platform_output.cursor_image.clone().unwrap();
+    h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    let end = start + vec2(20.0, 0.0);
+    h.hover_at(end);
+    h.step();
+    assert!(h.state().drag.is_some());
+    assert!(h.output().platform_output.cursor_image.is_none(), "the native tip must not cover the painting crosshair");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "keep the existing canvas crosshair");
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().drag.is_none());
+    assert!(std::sync::Arc::ptr_eq(&tip.rgba, &h.output().platform_output.cursor_image.as_ref().unwrap().rgba));
+}
+
+#[test]
+fn alt_brush_shows_pipette_samples_and_restores_the_brush_on_release() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.state_mut().session.tools.brush.size = 20.0;
+    let p = h.state().last_canvas_rect.center();
+    h.hover_at(p);
+    h.run_steps(2);
+    let brush = h.output().platform_output.cursor_image.clone().unwrap();
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.step();
+    let pipette = h.output().platform_output.cursor_image.clone().unwrap();
+    assert_ne!(pipette.hotspot[0], pipette.hotspot[1], "the sampling hotspot is the tip, not the centre");
+    assert!(!std::sync::Arc::ptr_eq(&brush.rgba, &pipette.rgba));
+    let revision = h.state().session.active().unwrap().revision;
+    let before = h.state().session.tools.foreground;
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.step();
+    // egui recognizes a held gesture after the pointer crosses its click-distance threshold.
+    let sampled = p + vec2(12.0, 0.0);
+    h.hover_at(sampled);
+    h.step();
+    assert!(h.state().alt_sampling);
+    assert_ne!(h.state().session.tools.foreground, before);
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "sampling does not paint");
+    // Releasing Alt during a held sampling gesture keeps the pipette until mouse-up.
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+    assert!(std::sync::Arc::ptr_eq(&pipette.rgba, &h.output().platform_output.cursor_image.as_ref().unwrap().rgba));
+    h.event(egui::Event::PointerButton { pos: sampled, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+    assert!(!h.state().alt_sampling);
+    assert!(std::sync::Arc::ptr_eq(&brush.rgba, &h.output().platform_output.cursor_image.as_ref().unwrap().rgba));
+    // The actual Eyedropper uses the same graphic. Precise cursor preference remains explicit.
+    h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
+    h.step();
+    assert!(std::sync::Arc::ptr_eq(&pipette.rgba, &h.output().platform_output.cursor_image.as_ref().unwrap().rgba));
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT | Modifiers::CTRL));
+    h.step();
+    assert!(!std::sync::Arc::ptr_eq(&pipette.rgba, &h.output().platform_output.cursor_image.as_ref().unwrap().rgba), "Ctrl+Alt is brush resizing");
+    h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": "precise"})).unwrap();
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.step();
+    assert!(h.output().platform_output.cursor_image.is_none());
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair);
+}
+
+#[test]
 fn ctrl_plus_zooms_the_canvas_not_the_interface() {
     let mut h = harness();
     let z0 = zoom(&h);
@@ -162,10 +290,10 @@ fn color_picker_samples_the_image_under_its_pipette() {
 
     h.hover_at(red);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pipette replaces the pointer");
+    assert!(h.output().platform_output.cursor_image.is_some(), "the native pipette replaces the pointer");
     h.hover_at(r.center());
     h.run_steps(1);
-    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "over the dialog it is the normal pointer");
+    assert!(h.output().platform_output.cursor_image.is_none(), "over the dialog it is the normal pointer");
 
     // A click samples; the press and release may land in one frame (`ui.click`).
     h.hover_at(red);

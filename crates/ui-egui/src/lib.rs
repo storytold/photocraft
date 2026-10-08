@@ -21,6 +21,7 @@ pub mod adjust_preview;
 pub mod adjust_ui;
 pub mod analysis_ui;
 pub mod artboard_ui;
+mod brush_cursor;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preview;
@@ -1026,6 +1027,8 @@ impl eframe::App for PhotocraftApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Bitmap cursor output is sticky in egui; clear it when no canvas claims the pointer.
+        ctx.set_cursor_image(None);
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {

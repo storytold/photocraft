@@ -942,6 +942,7 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
 
 /// Tabs + canvas for the active document, or the start screen.
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    ui.ctx().set_cursor_image(None);
     app.drop_canvas_rect = None;
     app.tab_strip = None;
     retain_gpu_documents(app);
@@ -1734,9 +1735,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
                 ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             } else {
-                // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
-                crate::icons::cursor(&ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-                ctx.set_cursor_icon(egui::CursorIcon::None);
+                ctx.set_cursor_icon(crate::brush_cursor::eyedropper(&ctx, p));
             }
             if let Some(p) = crate::dialogs::free_press(&ctx, rect) {
                 let d = xf.to_doc(p);
@@ -1948,7 +1947,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
                 // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`).
                 t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
-                    egui::CursorIcon::Crosshair
+                    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                        egui::CursorIcon::Crosshair
+                    } else {
+                        crate::brush_cursor::eyedropper(&ctx, p)
+                    }
                 }
                 t if t.is_brushlike() || t == Tool::QuickSelection => {
                     // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
@@ -1989,12 +1992,22 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             egui::CursorIcon::None
                         }
                         _ => {
-                            painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-                            painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
-                            if brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r) {
-                                crosshair(3.0);
+                            let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r);
+                            // Quick Selection has a painted +/- badge; keep it with its outline.
+                            if tool != Tool::QuickSelection && crate::brush_cursor::show(&ctx, r, centre) {
+                                // Also a visible fallback for integrations without bitmap support.
+                                egui::CursorIcon::Crosshair
+                            } else {
+                                painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+                                painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+                                let native_hotspot = !cfg!(target_arch = "wasm32") && tool != Tool::QuickSelection;
+                                if centre && !native_hotspot {
+                                    crosshair(3.0);
+                                }
+                                // Large tips retain their full-size overlay, but their hotspot
+                                // still follows the mouse independently of canvas frame time.
+                                if native_hotspot { egui::CursorIcon::Crosshair } else { egui::CursorIcon::None }
                             }
-                            egui::CursorIcon::None
                         }
                     }
                 }
@@ -2021,6 +2034,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, view.zoom),
+                Tool::Eyedropper => crate::brush_cursor::eyedropper(&ctx, p),
                 _ => egui::CursorIcon::Crosshair,
             };
             ui.ctx().set_cursor_icon(icon);
