@@ -177,13 +177,8 @@
 	Lab Color	Lab カラー
 	Multichannel	マルチチャンネル
 	8 Bits/Channel	8 ビット/チャンネル
-	8 bit	8 ビット
-	Integer	整数
 	16 Bits/Channel	16 ビット/チャンネル
-	16 bit	16 ビット
 	32 Bits/Channel	32 ビット/チャンネル
-	32 bit (float)	32 ビット（float）
-	Floating point	浮動小数点
 	Color Table…	カラーテーブル…
 	Bitmap…	ビットマップ…
 	Duotone…	ダブルトーン…
@@ -574,12 +569,6 @@
 	Fit Artboard on Screen	アートボードを画面サイズに合わせる
 	100%	100%
 	200%	200%
-	75%	75%
-	125%	125%
-	150%	150%
-	175%	175%
-	250%	250%
-	300%	300%
 	Print Size	印刷サイズ
 	Pixel Aspect Ratio	ピクセル縦横比
 	Pixel Aspect Ratio Correction	ピクセル縦横比を補正
@@ -972,12 +961,9 @@
 	Drag to move the active shape's path or the Work Path	ドラッグして、アクティブなシェイプのパスまたは作業用パスを移動
 	Draw with the Pen tool (P) or make a work path from a selection.	ペンツール(P)で描くか、選択範囲から作業用パスを作成します。
 	Drop an image or PSD anywhere to open it.	画像や PSD をここにドロップすると開きます。
-	Native file drag-and-drop is unavailable	Wayland ではネイティブのファイルドラッグ＆ドロップを利用できません
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland ではネイティブのファイルドラッグ＆ドロップはまだ利用できません。[ファイル › 開く] を使うか、`WAYLAND_DISPLAY= photocraft` を指定して PhotoCraft を XWayland 上で起動してください。
 	Duplicate Layers…	レイヤーを複製…
 	Duplicate style	スタイルを複製
 	Edit Toolbar…	ツールバーを編集…
-	Use File › Open to open an image.	画像を開くには [ファイル › 開く] を使ってください。
 	Edit in Quick Mask Mode  (Q)	クイックマスクモードで編集(Q)
 	Edit in Standard Mode  (Q)	標準モードで編集(Q)
 	Effects	効果
@@ -1686,8 +1672,6 @@
 	Doc: {flat}/{layered}	ドキュメント: {flat}/{layered}
 	Scratch: {size}	スクラッチ: {size}
 	Untagged {mode}	タグなし {mode}
-	Invalid {mode} profile	無効な {mode} プロファイル
-	Unnamed {mode} profile	名前のない {mode} プロファイル
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	解像度: {dpi} ピクセル/インチ
 	Doc: {w} × {h} px	ドキュメント: {w} × {h} px
@@ -1838,7 +1822,6 @@
 	Show only crosshair while painting	描画中は十字線のみ表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
-	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
 	Show transformation values	変形値を表示
 	Slice color	スライスの色
 	Smart guide color	スマートガイドの色
@@ -1959,7 +1942,6 @@
 	Brush Projection	ブラシの投影
 	Apply the pen's tilt and rotation to the tip shape	ペンの傾きと回転を先端のシェイプに適用します
 	Mixer Brush	混合ブラシ
-	Mixer Brush Tool	混合ブラシツール
 	Wet	ウェット
 	Mix	混合
 	Wetness Jitter	ウェットのジッター
@@ -2005,10 +1987,6 @@
 	Opening…	開いています…
 	Reading…	読み込み中…
 	Working…	処理中…
-	3 x 3	3 × 3
-	4 x 4	4 × 4
-	5 x 5	5 × 5
-	Grid:	グリッド:
 
 # Rendering mode and recovery
 	Rendering Mode	レンダリングモード
@@ -2027,26 +2005,3 @@
 
 	Rendering mode	レンダリングモード
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	フリーズなげなわ：ドラッグで範囲をフリーズ、Alt+ドラッグで解凍 (L)
-
-	Shadow Clipping Warning (U)	シャドウのクリッピング警告 (U)
-	Highlight Clipping Warning (O)	ハイライトのクリッピング警告 (O)
-	Show Lab Color Readouts	Lab カラー値を表示
-	Show Vectorscope	ベクトルスコープを表示
-	Show Red at 3 o'clock	赤を3時の位置に表示
-	Show Skin Tone Indicator	スキントーン指標を表示
-	Tone Histogram	階調ヒストグラム
-	Show Selected Region	選択範囲を表示
-
-cameraRaw	Light	ライト
-
-# Camera Raw: contextual controls and window title
-	Camera Raw Filter ({layer})	Camera Raw フィルター ({layer})
-cameraRaw	Lights	明部
-cameraRaw	Blending	ブレンド
-cameraRaw	Blacks	黒レベル
-cameraRaw	Amount	適用量
-cameraRaw	Color	カラー
-	Patch Tool	パッチツール
-	Patch:	パッチ:
-	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
-	Edit Type	文字を編集

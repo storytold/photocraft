@@ -173,13 +173,8 @@
 	Lab Color	Color Lab
 	Multichannel	Multicanal
 	8 Bits/Channel	8 bits/canal
-	8 bit	8 bits
-	Integer	Entero
 	16 Bits/Channel	16 bits/canal
-	16 bit	16 bits
 	32 Bits/Channel	32 bits/canal
-	32 bit (float)	32 bits (float)
-	Floating point	Punto flotante
 	Color Table…	Tabla de colores…
 	Bitmap…	Mapa de bits…
 	Duotone…	Duotono…
@@ -570,12 +565,6 @@
 	Fit Artboard on Screen	Encajar lienzo en pantalla
 	100%	100%
 	200%	200%
-	75%	75%
-	125%	125%
-	150%	150%
-	175%	175%
-	250%	250%
-	300%	300%
 	Print Size	Tamaño de impresión
 	Pixel Aspect Ratio	Relación de aspecto de píxel
 	Pixel Aspect Ratio Correction	Corrección de la relación de aspecto de píxel
@@ -967,12 +956,9 @@
 	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el Trazado de trabajo
 	Draw with the Pen tool (P) or make a work path from a selection.	Dibuja con la herramienta Pluma (P) o crea un trazado de trabajo a partir de una selección.
 	Drop an image or PSD anywhere to open it.	Suelte una imagen o un PSD en cualquier lugar para abrirlo.
-	Native file drag-and-drop is unavailable	El arrastrar y soltar archivos de forma nativa no está disponible en Wayland
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	El arrastrar y soltar archivos de forma nativa aún no está disponible en Wayland. Usa Archivo › Abrir o ejecuta PhotoCraft bajo XWayland con `WAYLAND_DISPLAY= photocraft`.
 	Duplicate Layers…	Duplicar capas…
 	Duplicate style	Duplicar estilo
 	Edit Toolbar…	Editar barra de herramientas…
-	Use File › Open to open an image.	Usa Archivo › Abrir para abrir una imagen.
 	Edit in Quick Mask Mode  (Q)	Editar en modo de máscara rápida  (Q)
 	Edit in Standard Mode  (Q)	Editar en modo estándar  (Q)
 	Effects	Efectos
@@ -1681,8 +1667,6 @@
 	Doc: {flat}/{layered}	Doc: {flat}/{layered}
 	Scratch: {size}	Temporal: {size}
 	Untagged {mode}	Sin etiquetar {mode}
-	Invalid {mode} profile	Perfil {mode} no válido
-	Unnamed {mode} profile	Perfil {mode} sin nombre
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Resolución: {dpi} píxeles/pulgada
 	Doc: {w} × {h} px	Doc: {w} × {h} px
@@ -1833,7 +1817,6 @@
 	Show only crosshair while painting	Mostrar solo la retícula al pintar
 	Show slice numbers	Mostrar los números de sección
 	Show tooltips	Mostrar las descripciones emergentes
-	Show bounding box when dragging layer	Mostrar el cuadro delimitador al arrastrar la capa
 	Show transformation values	Mostrar los valores de transformación
 	Slice color	Color de las secciones
 	Smart guide color	Color de las guías inteligentes
@@ -1954,7 +1937,6 @@
 	Brush Projection	Proyección del pincel
 	Apply the pen's tilt and rotation to the tip shape	Aplicar la inclinación y la rotación del lápiz a la forma de la punta
 	Mixer Brush	Pincel mezclador
-	Mixer Brush Tool	Herramienta Pincel mezclador
 	Wet	Húmedo
 	Mix	Mezcla
 	Wetness Jitter	Variación de humedad
@@ -2001,10 +1983,6 @@
 	Opening…	Abriendo…
 	Reading…	Leyendo…
 	Working…	Procesando…
-	3 x 3	3 × 3
-	4 x 4	4 × 4
-	5 x 5	5 × 5
-	Grid:	Rejilla:
 
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
 # Spanish follows the tool wording used above (Herramienta X).
@@ -2111,36 +2089,3 @@
 
 	Rendering mode	Modo de renderizado
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lazo de congelación: arrastre para congelar un área; Alt+arrastrar para descongelarla (L)
-
-
-	Shadow Clipping Warning (U)	Aviso de recorte de sombras (U)
-	Highlight Clipping Warning (O)	Aviso de recorte de luces (O)
-	Show Lab Color Readouts	Mostrar valores de color Lab
-	Show Vectorscope	Mostrar vectorscopio
-	Show Red at 3 o'clock	Mostrar rojo a las 3 en punto
-	Show Skin Tone Indicator	Mostrar indicador de tono de piel
-	Tone Histogram	Histograma tonal
-	Show Selected Region	Mostrar región seleccionada
-
-cameraRaw	Light	Luz
-
-# Camera Raw: contextual controls and window title
-	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
-cameraRaw	Lights	Tonos claros
-cameraRaw	Darks	Tonos oscuros
-cameraRaw	Red	Rojos
-cameraRaw	Orange	Naranjas
-cameraRaw	Yellow	Amarillos
-cameraRaw	Green	Verdes
-cameraRaw	Aqua	Aguamarinas
-cameraRaw	Blue	Azules
-cameraRaw	Purple	Morados
-cameraRaw	Magenta	Magentas
-cameraRaw	Blending	Mezcla
-cameraRaw	Tint	Matiz
-cameraRaw	Temperature	Temperatura de color
-cameraRaw	Amount	Cantidad
-	Patch Tool	Herramienta Parche
-	Patch:	Parche:
-	Lasso around an area, then drag the selection	Rodee un área con el lazo y arrastre la selección
-	Edit Type	Editar texto
