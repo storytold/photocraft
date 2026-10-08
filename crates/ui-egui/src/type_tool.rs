@@ -737,9 +737,7 @@ pub fn font_picker(ui: &mut egui::Ui, salt: &str, current: &mut String, width: f
 
     // Combo-style button: the family on the left, the chevron on the right.
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y), egui::Sense::click());
-    let popup = egui::Popup::from_toggle_button_response(&resp)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .style(egui::containers::menu::menu_style);
+    let popup = egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
     let popup_id = popup.get_id();
     let open = popup.is_open();
     let enabled = ui.is_enabled();
