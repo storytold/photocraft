@@ -594,6 +594,11 @@ impl DeepData {
         self.channels.iter().find(|c| c.name == name)
     }
 
+    /// A channel by its exact name, mutably.
+    pub fn channel_mut(&mut self, name: &str) -> Option<&mut DeepChannel> {
+        self.channels.iter_mut().find(|c| c.name == name)
+    }
+
     /// The samples of one pixel, as indices into every channel's `samples`.
     pub fn sample_range(&self, pixel: usize) -> std::ops::Range<u64> {
         let end = self.counts.get(pixel + 1).copied().unwrap_or(0);
@@ -603,6 +608,64 @@ impl DeepData {
     /// The total number of samples over all pixels.
     pub fn total_samples(&self) -> u64 {
         self.counts.last().copied().unwrap_or(0)
+    }
+
+    /// Merges two deep layers' samples (Nuke's DeepMerge): the union grid over both extents,
+    /// every pixel holding the concatenation of both sides' samples; the renderer's Z sort then
+    /// composites the whole stack per pixel. Channels are united by name; a channel missing on
+    /// one side contributes zero samples there. The result sits at the union's origin.
+    pub fn merge(&self, other: &DeepData) -> DeepData {
+        use std::collections::BTreeMap;
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let x1 = (self.x + self.width as i32).max(other.x + other.width as i32);
+        let y1 = (self.y + self.height as i32).max(other.y + other.height as i32);
+        let (w, h) = ((x1 - x).max(0) as u32, (y1 - y).max(0) as u32);
+        let mut names: Vec<String> = self.channels.iter().map(|c| c.name.clone()).collect();
+        for c in &other.channels {
+            if !names.iter().any(|n| n == &c.name) {
+                names.push(c.name.clone());
+            }
+        }
+        fn chans(d: &DeepData) -> BTreeMap<&str, &[f32]> {
+            d.channels.iter().map(|c| (c.name.as_str(), c.samples.as_slice())).collect()
+        }
+        let (ca, cb) = (chans(self), chans(other));
+        let mut out: Vec<Vec<f32>> = names.iter().map(|_| Vec::new()).collect();
+        let mut counts = Vec::with_capacity(w as usize * h as usize + 1);
+        counts.push(0u64);
+        for py in 0..h as i32 {
+            for px in 0..w as i32 {
+                let (cx, cy) = (x + px, y + py);
+                let mut n = 0u64;
+                for (d, cm) in [(self, &ca), (other, &cb)] {
+                    let inside = cx >= d.x && cy >= d.y && cx < d.x + d.width as i32 && cy < d.y + d.height as i32;
+                    if !inside {
+                        continue;
+                    }
+                    let pixel = ((cy - d.y) as usize) * d.width as usize + (cx - d.x) as usize;
+                    let range = d.sample_range(pixel);
+                    n += range.end.saturating_sub(range.start);
+                    let n_here = (range.end.saturating_sub(range.start)) as usize;
+                    for (k, name) in names.iter().enumerate() {
+                        // A channel the side lacks (or that is short) contributes zeros, so
+                        // every channel stays aligned with the merged counts.
+                        let got = match cm.get(name.as_str()) {
+                            None => 0,
+                            Some(samples) => {
+                                let from = (range.start as usize).min(samples.len());
+                                let to = (range.end as usize).min(samples.len());
+                                out[k].extend_from_slice(samples.get(from..to).unwrap_or(&[]));
+                                to - from
+                            }
+                        };
+                        out[k].extend(std::iter::repeat_n(0.0, n_here - got));
+                    }
+                }
+                counts.push(counts.last().copied().unwrap_or(0).saturating_add(n));
+            }
+        }
+        DeepData { x, y, width: w, height: h, channels: names.into_iter().zip(out).map(|(name, samples)| DeepChannel { name, samples }).collect(), counts }
     }
 }
 
@@ -1228,6 +1291,33 @@ mod tests {
         assert_eq!(paragraphs.len(), 2);
         assert_eq!(paragraphs[1].len, 1);
         assert_eq!(paragraphs[1].style.align, text::TextAlign::Center);
+    }
+
+    #[test]
+    fn deep_merge_unions_grids_channels_and_samples() {
+        let ch = |name: &str, v: Vec<f32>| DeepChannel { name: name.to_string(), samples: v };
+        // A: 1×1 at (2,0) with one red sample; B: 1×1 at (0,0) with one blue sample *and* a
+        // channel A does not have (ZBack), over a different Z.
+        let a = DeepData { x: 2, y: 0, width: 1, height: 1, channels: vec![ch("A", vec![1.0]), ch("R", vec![1.0]), ch("Z", vec![1.0])], counts: vec![0, 1] };
+        let b = DeepData {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            channels: vec![ch("A", vec![1.0]), ch("B", vec![1.0]), ch("Z", vec![9.0]), ch("ZBack", vec![11.0])],
+            counts: vec![0, 1],
+        };
+        let m = a.merge(&b);
+        assert_eq!((m.x, m.y, m.width, m.height), (0, 0, 3, 1), "the union grid");
+        assert_eq!(m.counts, vec![0, 1, 1, 2], "samples only where the inputs sit");
+        assert_eq!(m.total_samples(), 2);
+        // Channel union by name; the side without a channel contributes zeros for its samples.
+        assert_eq!(m.channel("R").unwrap().samples, vec![0.0, 1.0]);
+        assert_eq!(m.channel("B").unwrap().samples, vec![1.0, 0.0]);
+        assert_eq!(m.channel("ZBack").unwrap().samples, vec![11.0, 0.0]);
+        assert_eq!(m.channel("Z").unwrap().samples, vec![9.0, 1.0]);
+        // Pixels no input covers stay sample-less.
+        assert!(m.sample_range(1).is_empty());
     }
 
     #[test]

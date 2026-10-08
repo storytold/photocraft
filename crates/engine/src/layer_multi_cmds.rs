@@ -1130,7 +1130,39 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let fmt = doc.pixel_format();
+        if solo.layers.iter().all(|l| matches!(l.content, LayerContent::Deep(_))) {
+            // A deep selection merges its samples and stays deep (Nuke's DeepMerge).
+            let mut data: Option<photocraft_doc::DeepData> = None;
+            for l in &solo.layers {
+                if let LayerContent::Deep(d) = &l.content
+                    && let Some(acc) = data.as_mut()
+                {
+                    *acc = acc.merge(d);
+                } else if let LayerContent::Deep(d) = &l.content {
+                    data = Some(d.clone());
+                }
+            }
+            let mut merged = Layer::new(
+                top.name.clone(),
+                LayerContent::Deep(data.unwrap_or_else(|| photocraft_doc::DeepData {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    channels: Vec::new(),
+                    counts: vec![0, 0],
+                })),
+            );
+            merged.locks = top.locks;
+            let mid = merged.id;
+            for id in &ids[..ids.len() - 1] {
+                doc.remove(*id);
+            }
+            *doc.layer_mut(top_id).ok_or(EngineError::NoLayer(top_id))? = merged;
+            *active = Some(mid);
+            return Ok(mid);
+        }
+        let buf = photocraft_compose::flatten(&solo);        let fmt = doc.pixel_format();
         let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
         let mut merged = Layer::raster(top.name.clone(), fmt);
         merged.locks = top.locks;
@@ -2047,6 +2079,80 @@ mod tests {
         s.execute("layer.setProps", json!({"channels": [true, false, true]})).unwrap();
         s.undo();
         assert_eq!(damage(&s), None, "an excluded-channel change recomposites everything");
+    }
+
+    #[test]
+    fn merging_deep_layers_merges_samples_and_renders_the_stack() {
+        let mut s = session(8);
+        // Two 1×1 deep layers, offset by a pixel: a blue sample far away (z=9) and a red
+        // sample in front (z=1). Merged, the shared pixel holds both samples and renders the
+        // front red over the far blue - the deep composite of the stack, not a per-layer flatten.
+        let ch = |name: &str, v: f32| photocraft_doc::DeepChannel { name: name.to_string(), samples: vec![v] };
+        let ch0 = |name: &str| photocraft_doc::DeepChannel { name: name.to_string(), samples: vec![0.0] };
+        let blue = photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+            channels: vec![ch("A", 1.0), ch("B", 1.0), ch0("G"), ch("Z", 9.0)],
+            counts: vec![0, 0, 1],
+        };
+        let red = photocraft_doc::DeepData {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 1,
+            channels: vec![ch("A", 1.0), ch0("G"), ch("R", 1.0), ch("Z", 1.0)],
+            counts: vec![0, 1],
+        };
+        let (bid, rid) = s
+            .edit("deep", |doc, _| {
+                doc.layers.clear();
+                doc.layers.push(Layer::new("blue", LayerContent::Deep(blue.clone())));
+                doc.layers.push(Layer::new("red", LayerContent::Deep(red.clone())));
+                let bid = doc.layers[0].id;
+                let rid = doc.layers[1].id;
+                Ok((bid, rid))
+            })
+            .unwrap();
+        s.execute("layer.select", json!({"layer": rid.0})).unwrap();
+        s.execute("layer.mergeDown", json!({})).unwrap();
+        let merged_id = s.active().unwrap().active_layer.unwrap_or(bid);
+        let merged = doc(&s).layer(merged_id).cloned().unwrap();
+        let LayerContent::Deep(d) = &merged.content else { panic!("the merge stays deep") };
+        assert_eq!((d.x, d.width), (0, 2));
+        assert_eq!(d.sample_range(1), 0..2, "the shared pixel holds both inputs' samples");
+        // The rendered composite: pixel 1 shows the front red over the far blue; pixel 0,
+        // which only the blue grid covers but has no samples in, stays transparent.
+        let buf = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        let px = |x: i32| buf.px[(x) as usize];
+        assert_eq!(px(0), [0.0; 4], "{:?}", px(0));
+        // Red is in front (z 1 over 9): the stack renders red, blue hidden behind it.
+        assert!((px(1)[0] - 1.0).abs() < 1e-6 && (px(1)[1] - 0.0).abs() < 1e-6 && (px(1)[2] - 0.0).abs() < 1e-6, "{:?}", px(1));
+        assert_eq!(px(1)[3], 1.0);
+        // With the depths swapped the same merge renders blue: the composite follows Z, not
+        // layer order (the point of deep merging).
+        let (bid, rid) = s
+            .edit("deep", |doc, _| {
+                doc.layers.clear();
+                let mut far = red.clone();
+                if let Some(z) = far.channel_mut("Z") {
+                    z.samples[0] = 9.0;
+                }
+                let mut near = blue.clone();
+                if let Some(z) = near.channel_mut("Z") {
+                    z.samples[0] = 1.0;
+                }
+                doc.layers.push(Layer::new("far-red", LayerContent::Deep(far)));
+                doc.layers.push(Layer::new("near-blue", LayerContent::Deep(near)));
+                Ok((doc.layers[0].id, doc.layers[1].id))
+            })
+            .unwrap();
+        let _ = bid;
+        s.execute("layer.select", json!({"layer": rid.0})).unwrap();
+        s.execute("layer.mergeDown", json!({})).unwrap();
+        let buf = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        assert!((buf.px[1][2] - 1.0).abs() < 1e-6 && (buf.px[1][0] - 0.0).abs() < 1e-6, "{:?}", buf.px[1]);
     }
 
     #[test]

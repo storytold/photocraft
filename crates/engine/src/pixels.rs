@@ -216,6 +216,15 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
 
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
 pub fn merge_down(doc_bounds: Rect, lower: &Layer, upper: &Layer, format: photocraft_color::PixelFormat) -> Layer {
+    // Two deep layers merge their samples and stay deep (Nuke's DeepMerge): the Z sort then
+    // composites both inputs' samples together instead of pre-flattening each.
+    if let (LayerContent::Deep(a), LayerContent::Deep(b)) = (&lower.content, &upper.content) {
+        let mut merged = Layer::new(lower.name.clone(), LayerContent::Deep(a.merge(b)));
+        merged.id = lower.id;
+        merged.blend = lower.blend;
+        merged.opacity = 1.0;
+        return merged;
+    }
     let stack = vec![lower.clone(), upper.clone()];
     let mut tmp = Document::new("merge", doc_bounds.size(), format.mode, format.sample);
     tmp.layers = stack;
