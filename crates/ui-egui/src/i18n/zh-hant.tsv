@@ -37,6 +37,9 @@
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
 	Close	關閉
+	Minimize	最小化
+	Maximize	最大化
+	Restore	向下還原
 	Close All	全部關閉
 	Close Others	關閉其他
 	Save	儲存
@@ -315,6 +318,7 @@
 	Smart Object	智慧型物件
 	Convert to Smart Object	轉換為智慧型物件
 	Convert to Embedded	轉換為嵌入
+	Convert to Layers	轉換為圖層
 	Convert to Linked…	轉換為連結…
 	Edit Contents	編輯內容
 	Replace Contents…	取代內容…
@@ -972,6 +976,7 @@
 	Drag a rectangle around the object	在物件周圍拖曳出矩形
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	在影像上拖曳以新增限制線；按住 Shift 可限制水平/垂直；按右鍵可刪除。
 	Drag to move the active shape's path or the Work Path	拖曳以移動作用中形狀的路徑或工作路徑
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	按一下：選取錨點 · 拖曳：移動錨點、把手或線段 · {shift}-按一下：增加 · {alt}-按一下：整個子路徑
 	Draw with the Pen tool (P) or make a work path from a selection.	使用筆型工具 (P) 繪製，或從選取範圍建立工作路徑。
 	Drop an image or PSD anywhere to open it.	將影像或 PSD 拖放到任何位置即可開啟。
 	Native file drag-and-drop is unavailable	Wayland 不支援原生檔案拖放
@@ -1599,6 +1604,7 @@
 	Paint Bucket Tool	油漆桶工具
 	Paints from the document's opening state	從文件開啟時的狀態繪製
 	Path Selection Tool	路徑選取工具
+	Direct Selection Tool	直接選取工具
 	Pattern Overlay	圖樣覆蓋
 	Pen Pressure	筆壓
 	Pen Tilt	筆傾斜

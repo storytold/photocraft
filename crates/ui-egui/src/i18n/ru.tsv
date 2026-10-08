@@ -39,6 +39,9 @@
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
 	Close	Закрыть
+	Minimize	Свернуть
+	Maximize	Развернуть
+	Restore	Свернуть в окно
 	Close All	Закрыть все
 	Close Others	Закрыть остальные
 	Save	Сохранить
@@ -1083,6 +1086,7 @@
 	Vector Mask from Current Path	Векторная маска из текущего контура
 	Create new shape from the current path	Создать новую фигуру из текущего контура
 	Drag to move the active shape's path or the Work Path	Перетащите, чтобы переместить контур активной фигуры или рабочий контур
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Щелчок: выбрать узел · Перетаскивание: переместить узел, маркер или сегмент · {shift}-щелчок: добавить · {alt}-щелчок: весь подконтур
 	Draw with the Pen tool (P) or make a work path from a selection.	Нарисуйте пером (P) или создайте рабочий контур из выделения.
 
 # Clone Source panel
@@ -1495,6 +1499,7 @@
 	Object Selection Tool	Выделение объектов
 	Pen Tool	Перо
 	Path Selection Tool	Выделение контура
+	Direct Selection Tool	Выделение узла
 	Rectangle Tool	Прямоугольник
 	Ellipse Tool	Овал
 	Triangle Tool	Треугольник
@@ -1721,6 +1726,7 @@
 	Combine Shapes	Комбинировать фигуры
 	Contract…	Сжать…
 	Convert to Embedded	Преобразовать во встроенный
+	Convert to Layers	Преобразовать в слои
 	Convert to Linked…	Преобразовать в связанный…
 	Count	Счёт
 	Create Layer	Создать слой

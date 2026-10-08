@@ -523,6 +523,24 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, op
     changed
 }
 
+/// The body of a right-click menu: as tall as its items up to the part of the window that can be
+/// seen (clear of a taskbar a too-tall window runs under, #315), scrolling past that, so long
+/// context menus (a layer's, the canvas tools') stay reachable on small windows instead of running
+/// off the bottom. egui moves a popup up to keep it in the window, so a menu opened low on the
+/// screen first shifts up and only scrolls when it is taller than the window.
+pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    // The popup frame's margin and stroke, and a small gap to the window's edges.
+    let frame = ui.spacing().menu_margin.sum().y + 2.0 + 2.0 * MENU_EDGE;
+    let room = (crate::work_area::visible_rect(ui.ctx()).height() - frame).max(MENU_MIN_HEIGHT);
+    // A popup's Ui is only as tall as the popup was last frame (400 pt on the first), so ask for
+    // the whole room: the area still shrinks to its rows when they need less.
+    egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).show(ui, add_contents).inner
+}
+
+/// Gap kept between a context menu and the window's edges, and the shortest it gets.
+const MENU_EDGE: f32 = 4.0;
+const MENU_MIN_HEIGHT: f32 = 120.0;
+
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
 /// closes it. While open, its left edge stays where it first showed (at the swatch, or further
 /// left when the window edge needs it), below the swatch or above it as room allows. The picker's
