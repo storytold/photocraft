@@ -19,7 +19,7 @@ The “PhotoCraft at branch point” column records behavior before this PR. Pic
 | Tool(s) in PhotoCraft | Photoshop / desired contextual action | PhotoCraft at branch point | Priority, evidence |
 |---|---|---|---|
 | Move | Choose a layer at the point; an auto-select choice also exists in the options bar | Layers | P0; [Adobe layer movement](https://helpx.adobe.com/photoshop/using/moving-stacking-locking-layers.html); exact pop-up layout requires capture |
-| Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: Deselect, Inverse Selection, Feather, Transform Selection, Select and Mask, Fill/Stroke where applicable **(inferred context placement)** | Quick Selection: Picker; others: no tool menu. **This PR adds an initial selection menu for the other six tools; Quick Selection keeps its picker.** The Select menu exposes these same selection commands (Feather under Select > Modify, as in the reference menus). | P1; capture each selection state |
+| Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: the 2026 selection menu (see *Selection canvas reference* below); no selection: making a selection | Quick Selection: Picker (a brush tool, as in Photoshop); the other six: the selection menu below (#614, #738) | P1; no-selection variant still needs a dated capture |
 | Crop | During crop: ratio/preset, overlay, clear/reset, commit/cancel **(inferred context placement)** | No tool menu | P1; pending crop target |
 | Eyedropper | Sample-size/source choices **(inferred)** | No tool menu | P2; [Adobe illustration uses Eyedropper](https://helpx.adobe.com/photoshop/using/panels-menus.html), but does not publish item text |
 | Ruler, Note, Count | Unit / measurement, note edit/delete, count-group operations **(inferred)** | No tool menu | P2 |
@@ -53,6 +53,22 @@ The user supplied a Photoshop screenshot of a closed path in Path mode. The tabl
 | Symmetry | Make Symmetry Path; Disable Symmetry Path | `paint.symmetryFromPath` on a path; `paint.symmetryDisable` when symmetry is active |
 
 The reference does not establish Photoshop's behavior for right-clicks on a single anchor, a segment, or empty canvas; these still need separate captures. PhotoCraft's disabled rows do not call a command.
+
+## Selection canvas reference (2026-10-08)
+
+Right-click with a Marquee, Lasso, Polygonal Lasso, Magic Wand or Object Selection tool. Rows keep the command id, dialog and enablement of their menu-bar twins (`canvas_tool_menu::SELECTION_MENU`); a greyed row never runs.
+
+| Group | Rows with an active selection (Photoshop 2026 order) | PhotoCraft command |
+|---|---|---|
+| Selection | Deselect; Select Inverse; Feather…; Select and Mask… | `select.deselect`, `select.inverse`, `select.modify.feather`, `select.selectAndMask` |
+| Store | Save Selection…; Make Work Path… | `select.saveSelection`; `select.toWorkPath` after a Tolerance dialog |
+| Layer | Layer via Copy; Layer via Cut; New Layer… | `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.new.layer` |
+| Transform | Free Transform; Transform Selection; Distort; Perspective | `edit.freeTransform`, `select.transformSelection`, `edit.transform.distort`, `edit.transform.perspective` |
+| Fill | Fill…; Stroke…; Content-Aware Fill… | `edit.fill`, `edit.stroke`, `edit.contentAwareFill` |
+| Filter | Last Filter | `filter.lastFilter` |
+| Fade | Fade… | `edit.fade` |
+
+Photoshop's Generative Fill and Delete and Fill Selection rows are left out: PhotoCraft has no such commands. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
 
 ## Panel and workspace matrix
 
