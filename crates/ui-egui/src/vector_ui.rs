@@ -939,6 +939,30 @@ mod tests {
     }
 
     #[test]
+    fn shift_pressed_during_a_shape_drag_constrains_it() {
+        // #668: ⇧ only counted when held at the press; Photoshop constrains when it is pressed
+        // mid-drag (and stops when it is released).
+        use crate::canvas::{ToolEvent, tool_event};
+        for (tool, sides) in [(Tool::Polygon, 6), (Tool::Rectangle, 4), (Tool::EllipseShape, 0)] {
+            let mut app = app();
+            app.ui.tool = tool;
+            app.ui.tool_options.polygon_sides = 6;
+            let none = egui::Modifiers::NONE;
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, none);
+            tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+            tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::SHIFT);
+            tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 40.0 }, egui::Modifiers::SHIFT);
+            let st = app.session.active().unwrap();
+            let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            assert!(matches!(l.content, LayerContent::Shape(_)), "{tool:?} ({sides} sides): a shape layer");
+            let b = l.surface().unwrap().content_bounds();
+            // The drag is 60 × 30; constrained, the shape's box is 60 × 60 (a hexagon is narrower
+            // than its box, so the height tells).
+            assert!(b.height().abs_diff(60) <= 1 && b.width() <= 61, "{tool:?}: ⇧ mid-drag keeps proportions: {b:?}");
+        }
+    }
+
+    #[test]
     fn shape_preview_is_the_committed_path() {
         let mut app = app();
         app.ui.tool_options.corner_radius = 8.0;

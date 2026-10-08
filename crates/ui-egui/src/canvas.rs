@@ -213,6 +213,23 @@ pub(crate) fn stroke_command(tool: Tool) -> &'static str {
     if tool == Tool::Pencil { "paint.pencil" } else { "paint.stroke" }
 }
 
+/// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
+/// photos) it vanishes (#737). There the canvas draws a black-and-white crosshair itself, like
+/// Photoshop's, and hides the system one.
+fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter, p: Pos2, draw: bool) -> egui::CursorIcon {
+    if !draw || icon != egui::CursorIcon::Crosshair {
+        return icon;
+    }
+    let p = pos2(p.x.round() + 0.5, p.y.round() + 0.5);
+    let (gap, len) = (2.0, 8.0);
+    for (w, c) in [(3.0, Color32::from_black_alpha(160)), (1.0, Color32::from_white_alpha(235))] {
+        for d in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
+            painter.line_segment([p + d * gap, p + d * len], Stroke::new(w, c));
+        }
+    }
+    egui::CursorIcon::None
+}
+
 /// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
 /// (`paint::grid_square`), in screen points with its edges on physical pixels (`ppp` = pixels
 /// per point), so it lines up with the pixel grid at any zoom.
@@ -1735,6 +1752,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // drawn; otherwise Space is the Hand and ⌘Space / ⌘⌥Space the Zoom tool while held.
     let reposition = crate::hold_keys::reposition_held(app, &ctx);
     crate::crop_ui::set_space(app, reposition);
+    crate::crop_ui::ensure_frame(app);
     let mut drawing = crate::crop_ui::active(app);
     if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
         d.reposition = reposition;
@@ -2059,6 +2077,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, view.zoom),
                 _ => egui::CursorIcon::Crosshair,
             };
+            let icon = visible_crosshair(icon, &painter, p, cfg!(target_os = "windows"));
             ui.ctx().set_cursor_icon(icon);
             // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the
             // mode it started with (⇧ then constrains the marquee instead of adding).
@@ -2292,7 +2311,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             trail.feed(&d.points, app.session.tools.brush.size);
             trail.draw(painter, doc_rect, xf.flip, col);
         }
-        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.modifiers),
+        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
         Tool::RectMarquee | Tool::EllipseMarquee | Tool::ObjectSelection => {
             // Marching ants, visible on any pixels (#172).
             let (a, b) = marquee.unwrap_or((d.start, last));
@@ -2713,7 +2732,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     }
     match d.tool {
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
-        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.modifiers),
+        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => {
@@ -2853,6 +2872,10 @@ pub fn commit_polygon(app: &mut PhotocraftApp) {
 /// Apply the crop tool's rectangle.
 pub fn commit_crop(app: &mut PhotocraftApp) {
     let Some(r) = app.ui.crop_rect.take() else { return };
+    // The untouched default frame crops nothing (Photoshop's ↵ on it does nothing).
+    if std::mem::take(&mut app.crop.default_frame) {
+        return;
+    }
     let (x, y) = (r[0].round(), r[1].round());
     let (w, h) = ((r[2] - r[0]).round().max(1.0), (r[3] - r[1]).round().max(1.0));
     let delete = app.ui.tool_options.crop_delete;
@@ -2887,6 +2910,17 @@ fn hex(c: [f32; 4]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_draws_its_own_crosshair() {
+        // #737: Windows' inverting crosshair vanishes over mid-grey; the canvas draws one instead.
+        let ctx = egui::Context::default();
+        let painter = egui::Painter::new(ctx, egui::LayerId::background(), egui::Rect::EVERYTHING);
+        let p = egui::pos2(10.0, 10.0);
+        assert_eq!(super::visible_crosshair(egui::CursorIcon::Crosshair, &painter, p, true), egui::CursorIcon::None);
+        assert_eq!(super::visible_crosshair(egui::CursorIcon::Crosshair, &painter, p, false), egui::CursorIcon::Crosshair);
+        assert_eq!(super::visible_crosshair(egui::CursorIcon::Move, &painter, p, true), egui::CursorIcon::Move);
+    }
+
     use super::*;
 
     /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an

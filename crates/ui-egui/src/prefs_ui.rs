@@ -788,6 +788,25 @@ fn choice_label(v: &str) -> String {
     }
 }
 
+/// An editable `#rrggbb` field beside a colour swatch (#668): typing a valid value sets the
+/// colour; while it's being typed a partial value is kept, and it shows the colour otherwise.
+fn hex_field(ui: &mut egui::Ui, key: &str, rgb: &mut [u8; 3]) {
+    let id = egui::Id::new(("pref-hex", key));
+    let shown = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+    let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
+    let r = ui.add(egui::TextEdit::singleline(&mut text).font(crate::theme::mono(11.5)).desired_width(72.0).char_limit(7));
+    if r.changed()
+        && let Some(c) = prefs::parse_hex(&text)
+    {
+        *rgb = c;
+    }
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+}
+
 fn color_of(s: &str) -> Color32 {
     prefs::parse_hex(s).map_or(Color32::GRAY, |c| Color32::from_rgb(c[0], c[1], c[2]))
 }
@@ -971,7 +990,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                     let mut rgb = c;
                     ui.horizontal(|ui| {
                         ui.color_edit_button_srgb(&mut rgb);
-                        ui.label(RichText::new(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])).font(crate::theme::mono(11.5)).color(t.text_dim));
+                        hex_field(ui, &path, &mut rgb);
                     });
                     obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
                     let _ = color_of(s);
@@ -1386,6 +1405,31 @@ mod shortcut_capture_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn colour_preferences_take_a_typed_hex_value() {
+        // #668: the canvas colour (and every colour preference) showed its hex but couldn't take one.
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::new_ui_state(|ui, rgb: &mut [u8; 3]| super::hex_field(ui, "interface.canvasCustomColor", rgb), [0x28, 0x28, 0x28]);
+        h.run();
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("#282828"));
+        h.get_by_role(Role::TextInput).click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        for ch in "#80".chars() {
+            h.event(egui::Event::Text(ch.to_string()));
+            h.run_steps(1);
+        }
+        // A partial value stays as typed and leaves the colour alone.
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("#80"));
+        assert_eq!(*h.state(), [0x28, 0x28, 0x28]);
+        for ch in "8080".chars() {
+            h.event(egui::Event::Text(ch.to_string()));
+            h.run_steps(1);
+        }
+        assert_eq!(*h.state(), [0x80, 0x80, 0x80]);
+    }
 
     #[test]
     fn rendering_mode_display_respects_explicit_mode_and_legacy_disable() {

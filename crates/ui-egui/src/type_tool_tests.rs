@@ -434,3 +434,21 @@ fn vertical_type_tool_creates_point_and_paragraph_text_with_one_undo() {
         assert!(app.session.active().unwrap().doc.layer(id).is_none());
     }
 }
+
+/// #668: ⌘/Ctrl+T while typing shows or hides the Character panel, as in Photoshop, instead of
+/// starting Free Transform on the layer being typed into.
+#[test]
+fn command_t_while_typing_toggles_the_character_panel() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHO", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = harness(1.0, app);
+    let p = glyph(&mut h, id, 1, 0.5);
+    click(&mut h, p);
+    assert!(h.state().ui.text_edit.is_some(), "editing");
+    let before = crate::view_cmds::checked(h.state(), "window.panel.character");
+    h.event(egui::Event::Key { key: egui::Key::T, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    assert!(h.state().ui.transform.is_none(), "no Free Transform while typing");
+    assert!(h.state().ui.text_edit.is_some(), "still editing");
+    assert_ne!(crate::view_cmds::checked(h.state(), "window.panel.character"), before, "the Character panel toggled");
+}

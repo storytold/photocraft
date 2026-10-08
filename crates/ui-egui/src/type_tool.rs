@@ -518,6 +518,11 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                             e.caret = n;
                         }
                     }
+                    // Photoshop: while editing type, ⌘/Ctrl+T shows or hides the Character panel
+                    // (Free Transform of the layer being typed into is not what it means here).
+                    Key::T if m.command && !m.shift && !m.alt => {
+                        let _ = crate::menus::invoke(app, ctx, "window.panel.character", json!({}));
+                    }
                     // Other command shortcuts (⌘Z, ⌘S, …) pass through to the menus.
                     _ if m.command => handled[k] = false,
                     _ => {}

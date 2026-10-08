@@ -33,7 +33,9 @@ Automation is a privilege boundary because requests can cause filesystem access,
   are rejected before file effects.
 - Engine commands that still use ambient paths fail closed at the automation boundary. Synthetic
   UI input reaches the same command policy, and automation-triggered file hooks do not run
-  user-configured script-event paths.
+  user-configured script-event paths. The policy also covers every command a command runs on its
+  own behalf (an action's steps, `file.automate.conditionalModeChange` running `image.mode.*`), so
+  an allowed command can't reach a denied one.
 - `prefs.set` applies the engine's dotted-path normalization before checking for filesystem-bearing
   preference sections, including paths with leading or repeated dots. It refuses whole-preferences
   updates and those sections; individual safe preference keys remain available.

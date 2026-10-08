@@ -27,6 +27,11 @@ pub struct CropState {
     pub drag: Option<CropDrag>,
     /// Space is held: drawing a new frame moves it instead of sizing it.
     pub space: bool,
+    /// `UiState::crop_rect` is the untouched default frame ([`ensure_frame`]): a drag inside it
+    /// draws a new frame (as in Photoshop) instead of moving it, and committing it does nothing.
+    pub default_frame: bool,
+    /// The document (index and size) the default frame was made for.
+    frame_for: Option<(usize, u32, u32)>,
 }
 
 /// A crop gesture in progress. Rects are `[x0, y0, x1, y1]` in document coordinates.
@@ -149,6 +154,37 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) {
     app.crop.space = down;
 }
 
+/// As in Photoshop, the Crop tool always shows a frame: on picking the tool, and after a crop is
+/// cancelled or committed, it frames the selection's bounds, or the whole canvas.
+pub fn ensure_frame(app: &mut PhotocraftApp) {
+    if app.ui.tool != Tool::Crop {
+        // Leaving the tool drops an untouched default frame (a drawn one stays pending).
+        if app.crop.default_frame {
+            app.ui.crop_rect = None;
+            app.crop.default_frame = false;
+        }
+        return;
+    }
+    let key = app.session.active_index().zip(app.session.active()).map(|(i, st)| (i, st.doc.size.width, st.doc.size.height));
+    // Another document (or a resized one) gets its own default frame.
+    if app.crop.default_frame && app.crop.frame_for != key && app.crop.drag.is_none() {
+        app.ui.crop_rect = None;
+    }
+    if app.ui.crop_rect.is_some() || app.crop.drag.is_some() {
+        return;
+    }
+    let Some(st) = app.session.active() else { return };
+    let canvas = st.doc.bounds();
+    // Computed once per new frame, not per frame drawn.
+    let r = st.doc.selection.as_ref().map(|s| s.content_bounds().intersect(&canvas)).filter(|b| !b.is_empty()).unwrap_or(canvas);
+    if r.is_empty() {
+        return;
+    }
+    app.ui.crop_rect = Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)]);
+    app.crop.default_frame = true;
+    app.crop.frame_for = key;
+}
+
 /// A crop gesture is in progress: Space repositions the frame rather than panning.
 pub fn active(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && app.crop.drag.is_some()
@@ -175,7 +211,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             let frame = app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite()));
             app.crop.drag = Some(match frame.map(|r| (r, hit(r, p, tolerance(app)))) {
                 Some((rect, Hit::Handle(hx, hy))) => CropDrag::Resize { hx, hy, start: p, rect },
-                Some((rect, Hit::Inside)) => CropDrag::Move { start: p, rect },
+                Some((rect, Hit::Inside)) if !app.crop.default_frame => CropDrag::Move { start: p, rect },
                 _ => CropDrag::Draw { anchor: p, cur: p, last: p, prev: app.ui.crop_rect },
             });
         }
@@ -184,6 +220,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             update(app, p, mods);
             let Some(drag) = app.crop.drag.take() else { return true };
             let ok = app.ui.crop_rect.is_some_and(size_ok);
+            if ok {
+                app.crop.default_frame = false;
+            }
             match drag {
                 CropDrag::Draw { prev, .. } if !ok => app.ui.crop_rect = prev,
                 CropDrag::Move { rect, .. } | CropDrag::Resize { rect, .. } if !ok => app.ui.crop_rect = Some(rect),
@@ -280,6 +319,35 @@ mod tests {
             tool_event(app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, mods);
         }
         tool_event(app, ToolEvent::Up { x: last[0], y: last[1] }, mods);
+    }
+
+    #[test]
+    fn picking_the_tool_frames_the_canvas_or_the_selection() {
+        // #668: the Crop tool started with no frame.
+        let mut app = app(SampleType::U8);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
+        // Committing the untouched frame crops nothing.
+        let steps = app.session.active().unwrap().history.past_len();
+        crate::canvas::commit_crop(&mut app);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+        // A drag inside the untouched frame draws a new one instead of moving it.
+        ensure_frame(&mut app);
+        drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+        assert_eq!(app.ui.crop_rect, Some([50.0, 20.0, 120.0, 70.0]));
+        // Now it's a real frame: a drag inside moves it.
+        drag(&mut app, &[[60.0, 30.0], [70.0, 30.0]], NONE);
+        assert_eq!(app.ui.crop_rect, Some([60.0, 20.0, 130.0, 70.0]));
+        // Cancelling frames the selection's bounds when there is one.
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 20})).unwrap();
+        app.ui.crop_rect = None;
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([10.0, 10.0, 40.0, 30.0]));
+        // Leaving the tool drops the untouched frame.
+        app.ui.tool = Tool::Brush;
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
     }
 
     #[test]

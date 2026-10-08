@@ -169,20 +169,23 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
     app.ui.status_error = false;
 }
 
-/// Crosshair where the clone source is sampled from for the current pointer position.
-pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+/// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
+/// is painted, as in Photoshop: setting the source (⌥-click) leaves nothing on the canvas (#668).
+pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
-        return;
+        return None;
     }
-    let at =
-        app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]])).or(app.hover_doc);
-    let src = match (crate::preset_panels::clone_sample_point(app, at), app.ui.clone_offset, at, app.ui.clone_source) {
+    let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
+    match (crate::preset_panels::clone_sample_point(app, Some(at)), app.ui.clone_offset, app.ui.clone_source) {
         (Some(p), ..) => Some(p),
-        (None, Some(off), Some(h), _) => Some([h[0] + off[0], h[1] + off[1]]),
-        (None, None, _, Some(s)) => Some(s),
-        _ => None,
-    };
-    let Some(s) = src else { return };
+        (None, Some(off), _) => Some([at[0] + off[0], at[1] + off[1]]),
+        (None, None, s) => s,
+    }
+}
+
+/// Crosshair at [`source_marker_point`].
+pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    let Some(s) = source_marker_point(app) else { return };
     let c = xf.to_screen(s[0] as f32, s[1] as f32);
     for (w, col) in [(3.0, Color32::from_black_alpha(160)), (1.0, Color32::WHITE)] {
         painter.line_segment([c - vec2(7.0, 0.0), c + vec2(7.0, 0.0)], Stroke::new(w, col));

@@ -222,3 +222,45 @@ fn dragging_down_the_eyes_sweeps_visibility_without_reordering() {
         assert!(visible(&h, rows[1].layer));
     }
 }
+
+/// #736: a layer row dropped on the footer's New Layer button is duplicated, on New Group it is
+/// grouped, on Delete it is deleted; a row outside the selection goes alone.
+#[test]
+fn dropping_a_row_on_the_footer_buttons_duplicates_groups_and_deletes() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    for i in 0..3 {
+        s.execute("layer.new.layer", json!({"name": format!("L{i}")})).unwrap();
+    }
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let drag_to = |h: &mut Harness<'static, PhotocraftApp>, row: usize, label: &str| {
+        let from = recorded(&h.ctx)[row].row.center();
+        let to = h.get_by_label(label).rect().center();
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    };
+    // Rows top to bottom: L2 (selected), L1, L0, Background. L1 isn't selected: it goes alone.
+    drag_to(&mut h, 1, "Create a new layer");
+    assert_eq!(names(&h), ["Background", "L0", "L1", "L1 copy", "L2"]);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    // Rows: L2, L1 copy (now selected), L1, L0, Background.
+    drag_to(&mut h, 3, "Create a new group");
+    let doc = &h.state().session.active().unwrap().doc;
+    let group = doc.layers.iter().find(|l| l.is_group()).expect("a group");
+    let LayerContent::Group(g) = &group.content else { panic!("not a group") };
+    assert_eq!(g.children.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["L0"]);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    let n = h.state().session.active().unwrap().doc.layers.len();
+    drag_to(&mut h, 0, "Delete layer");
+    assert!(!names(&h).iter().any(|n| n == "L2"));
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), n - 1);
+}

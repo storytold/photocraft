@@ -68,13 +68,26 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Clip {
     if area.is_empty() {
         return Clip { surface: out, bounds: Rect::EMPTY };
     }
-    let conv = src.convert(with_alpha);
-    let mut px = conv.read_region(area);
+    // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
+    // alpha) cost about a second per Layer via Copy (#668).
     let n = with_alpha.channels();
+    let mut px = if fmt.alpha {
+        src.read_region(area)
+    } else {
+        let opaque = src.read_region(area);
+        let k = fmt.channels();
+        let mut v = Vec::with_capacity(opaque.len() / k.max(1) * n);
+        for p in opaque.chunks_exact(k.max(1)) {
+            v.extend_from_slice(p);
+            v.push(1.0);
+        }
+        v
+    };
     if let Some(m) = sel {
-        let w = area.width() as usize;
-        for (i, p) in px.chunks_exact_mut(n).enumerate() {
-            p[n - 1] *= m.sample_channel(area.x0 + (i % w) as i32, area.y0 + (i / w) as i32, 0);
+        let mask = m.read_region(area);
+        let mk = m.format().channels().max(1);
+        for (p, a) in px.chunks_exact_mut(n).zip(mask.chunks_exact(mk)) {
+            p[n - 1] *= a[0];
         }
     }
     out.write_region(area, &px);
@@ -693,6 +706,35 @@ mod tests {
         s.execute("layer.new.layerFromBackground", json!({})).unwrap();
         s.execute("edit.clear", json!({})).unwrap();
         assert_eq!(px(&s, 0, 8, 8)[3], 0.0);
+    }
+
+    #[test]
+    fn layer_via_copy_of_a_background_keeps_colour_and_partial_selection() {
+        // #668: lift reads only the selected area now; the result must be what converting the
+        // whole layer gave: the colour, with the selection's coverage as alpha.
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": "#336699"})).unwrap();
+            s.edit("partial selection", |doc, _| {
+                let mut m = photocraft_raster::Surface::new(PixelFormat::GRAY8);
+                m.fill_rect(Rect::new(5, 5, 15, 15), &[1.0]);
+                m.fill_rect(Rect::new(15, 5, 20, 15), &[0.5]);
+                doc.selection = Some(m);
+                Ok(())
+            })
+            .unwrap();
+            let id = s.execute("layer.new.layerViaCopy", json!({})).unwrap()["layer"].as_u64().unwrap();
+            let d = s.active().unwrap();
+            let surf = d.doc.layer(LayerId(id)).unwrap().surface().unwrap();
+            assert!(surf.format().alpha, "@{depth}");
+            let full = surf.read_region(Rect::new(6, 6, 7, 7));
+            let half = surf.read_region(Rect::new(16, 6, 17, 7));
+            for (got, want) in full.iter().zip([0.2, 0.4, 0.6, 1.0]) {
+                assert!((got - want).abs() < 0.01, "@{depth}: {full:?}");
+            }
+            assert!((half[3] - 0.5).abs() < 0.01 && (half[0] - 0.2).abs() < 0.01, "@{depth}: {half:?}");
+            assert_eq!(surf.content_bounds(), Rect::new(5, 5, 20, 15), "@{depth}");
+        }
     }
 
     #[test]

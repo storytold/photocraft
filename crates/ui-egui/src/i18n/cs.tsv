@@ -1714,6 +1714,7 @@
 	Constraints ({n})	Omezení ({n})
 	Align {what}	Zarovnat: {what}
 @plural	{n} Layer|{n} Layers	{n} vrstva|{n} vrstvy|{n} vrstev
+@plural	{n} layer|{n} layers	{n} vrstva|{n} vrstvy|{n} vrstev
 @plural	Group · {n} layer|Group · {n} layers	Skupina · {n} vrstva|Skupina · {n} vrstvy|Skupina · {n} vrstev
 
 # Preferences (labels are generated from the setting names)
