@@ -985,11 +985,13 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
     if !opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen) {
+        app.sampled_color_preview.clear();
         start_screen(app, ui);
         return;
     }
     if n == 0 && !opening {
         // Auto show the Home Screen is off: an empty workspace, like Photoshop.
+        app.sampled_color_preview.clear();
         paint_dots(ui, ui.available_rect_before_wrap());
         return;
     }
@@ -998,10 +1000,14 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         drop_slot_line(app, ui);
     }
     if let Some(job) = app.jobs.focus.or_else(|| (n == 0).then(|| app.jobs.opens.last().map(|o| o.job)).flatten()) {
+        app.sampled_color_preview.clear();
         crate::jobs_ui::open_card(app, ui, job);
         return;
     }
-    let Some(idx) = app.session.active_index() else { return };
+    let Some(idx) = app.session.active_index() else {
+        app.sampled_color_preview.clear();
+        return;
+    };
     let rect = ui.available_rect_before_wrap();
     app.last_canvas_rect = rect;
     app.drop_canvas_rect = Some(rect);
@@ -2101,6 +2107,28 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if primary {
         app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
+        let hover = if !crate::sampled_color_preview::blocks_canvas_hover(app)
+            && !egui::Popup::is_any_open(&ctx)
+            && !ctx.input(|i| i.pointer.primary_down())
+            && tool == Tool::Eyedropper
+            && app.drag.is_none()
+        {
+            response.hover_pos().filter(|p| rect.contains(*p) && img_rect.contains(*p))
+        } else {
+            None
+        };
+        if let Some(p) = hover {
+            let revision = app.session.documents().get(idx).map_or(0, |st| st.revision);
+            let point = xf.to_doc(p);
+            if let Some(rgb) = crate::sampled_color_preview::sample(&mut *app, &doc, revision, size, point) {
+                let x = point[0].floor() as f32;
+                let y = point[1].floor() as f32;
+                let pixel = Rect::from_two_pos(xf.to_screen(x, y), xf.to_screen(x + 1.0, y + 1.0));
+                crate::sampled_color_preview::draw(&ctx, pixel, rect, rgb);
+            }
+        } else {
+            app.sampled_color_preview.clear();
+        }
     }
     if primary && app.ui.extras.rulers {
         crate::rulers::draw_rulers(app, ui, full, &xf);

@@ -109,6 +109,7 @@ pub mod rasterize_prompt;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rulers;
+mod sampled_color_preview;
 pub mod scrollbars;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
@@ -415,6 +416,8 @@ pub struct PhotocraftApp {
     pub(crate) clip_read_for_paste: bool,
     /// Pointer position over the canvas (document px), for the Info panel and status bar.
     pub(crate) hover_doc: Option<[f64; 2]>,
+    /// Cached, uncommitted Eyedropper hover sample (never tool or document state).
+    pub(crate) sampled_color_preview: sampled_color_preview::Preview,
     /// Info panel sample cache: ((x, y, revision), composite RGBA).
     info_sample: Option<((i32, i32, u64), [f32; 4])>,
     /// Guide being dragged (from a ruler or with the Move tool).
@@ -518,6 +521,7 @@ impl PhotocraftApp {
             clip_external: false,
             clip_read_for_paste: false,
             transform_preview: None,
+            sampled_color_preview: Default::default(),
             move_mods: Default::default(),
             style_preview: None,
             distort: Default::default(),
