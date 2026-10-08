@@ -272,7 +272,7 @@ pub enum LayerContent {
 - **Pixels.** `raster::TiledSurface<F>` is a sparse map from `TileCoord` to `Arc<Tile<F>>`, with 256×256 tiles. Missing tiles are transparent, or take a fill value. Mutation calls `Arc::make_mut`, so it is copy-on-write.
 - **Tile generation counters** feed the GPU residency cache and the thumbnail cache.
 - **Mip pyramids** are derived lazily per layer, for zoomed-out views.
-- **Big documents.** The tile store is behind a `TileStore` trait: in-memory now, disk-spilling ("scratch disk") later, with LRU eviction under a global memory budget.
+- **Big documents.** Copy-on-write tile cells spill cold pixels to native LZ4/CRC scratch under a pressure-aware RAM budget shared with history. Native layered PSD/PSB channels decode by rows into tiles; PSB saves stream through a seekable atomic temporary. Large canvas views use bounded visible pages and asynchronous CPU preparation, with a separate GPU budget. See [Scratch disks and streaming](scratch-disks.md) for guarantees and remaining whole-buffer paths.
 - **The first milestone supports RGB and Gray, at 8/16/32f.** CMYK and Lab are modelled in the types from day one (so PSD round-trips don't lose them) but are rendered by converting to RGB until later phases.
 
 ---
