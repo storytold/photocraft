@@ -112,6 +112,9 @@ pub struct Tokens {
     pub histogram_bg: Color32,
     /// Channel intensity of scope outlines and hue markers.
     pub histogram_level: u8,
+    /// The custom title bar's Close button while hovered (Windows' red), and its glyph.
+    pub caption_close: Color32,
+    pub caption_close_text: Color32,
 }
 
 impl Tokens {
@@ -173,6 +176,8 @@ impl Tokens {
                 row_selected: Color32::from_rgb(82, 82, 82),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
                 histogram_level: 225,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
             },
             ThemeKind::Studio => Tokens {
                 kind,
@@ -209,6 +214,8 @@ impl Tokens {
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
                 histogram_level: 225,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
             },
             ThemeKind::StudioLight => Tokens {
                 kind,
@@ -245,6 +252,8 @@ impl Tokens {
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
                 histogram_level: 240,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
             },
             ThemeKind::Classic => Tokens {
                 kind,
@@ -281,6 +290,8 @@ impl Tokens {
                 row_selected: Color32::from_rgb(10, 36, 106),
                 histogram_bg: Color32::from_gray(40),
                 histogram_level: 240,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
             },
         }
     }
@@ -661,6 +672,8 @@ pub mod live {
                 };
             }
             c!(
+                caption_close,
+                caption_close_text,
                 chrome,
                 canvas,
                 canvas_dot,
