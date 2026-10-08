@@ -95,6 +95,26 @@ pub(crate) fn rggb_by_position(cfa: &Cfa, v: &[f64]) -> Option<[f32; 4]> {
     Some(out)
 }
 
+/// Width without the trailing padding columns some Nikon bodies append (at most 128), kept even
+/// for the CFA phase. A padding column holds the last column's value in at least 90% of its rows
+/// (the rest differ by a few codes: lossy-coding noise), and that value is dark (below a quarter
+/// of `2^bits`), so an image edge clipped to white is never mistaken for padding.
+pub(crate) fn padded_width(data: &[u16], w: usize, h: usize, bits: u32) -> usize {
+    if w < 256 || h < 2 || data.len() < w.saturating_mul(h) {
+        return w;
+    }
+    let Some(&fill) = data.get((h / 2) * w + w - 1) else { return w };
+    if u32::from(fill) >= (1u32 << bits.min(16)) / 4 {
+        return w;
+    }
+    let padding = |x: usize| (0..h).filter(|&y| data.get(y * w + x) == Some(&fill)).count() * 10 >= h * 9;
+    let mut aw = w;
+    while aw > w - 128 && padding(aw - 1) {
+        aw -= 1;
+    }
+    aw & !1
+}
+
 pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sensor> {
     let ifds = t.all_ifds();
     let Some(raw) = raw_ifd(t, &ifds) else {
@@ -119,7 +139,10 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         return Err(RawError::unsupported(format!("{}x{} non-Bayer CFA", cfa.height, cfa.width)));
     }
     let mut warnings = Vec::new();
-    let full = Rect::new(0, 0, plane.width, plane.height);
+    // Nikon pads some sensor rows on the right (a D3200 NEF: 46 columns of 256, in 97.5% of the
+    // rows exactly, after 6034 image columns); they are not image data.
+    let width = if format == RawFormat::Nef { padded_width(&plane.data, plane.width, plane.height, plane.bits) } else { plane.width };
+    let full = Rect::new(0, 0, width, plane.height);
     let make = ifds.iter().find_map(|i| t.tag_ascii(i, tag::MAKE));
     let model = ifds.iter().find_map(|i| t.tag_ascii(i, tag::MODEL));
 
@@ -191,4 +214,41 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         gain_maps: Vec::new(),
         warnings,
     })
+}
+
+#[cfg(test)]
+mod padding_tests {
+    use super::padded_width;
+
+    /// `w × h` image data whose last `pad` columns hold `fill` (one row in 20 off by 2).
+    fn padded(w: usize, h: usize, pad: usize, fill: u16) -> Vec<u16> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                if x >= w - pad { if y % 20 == 7 { fill + 2 } else { fill } } else { ((x * 37 + y * 101) % 3000) as u16 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn trailing_padding_is_trimmed() {
+        let (w, h) = (300, 40);
+        assert_eq!(padded_width(&padded(w, h, 46, 256), w, h, 12), 254);
+        // odd padding keeps the CFA phase
+        assert_eq!(padded_width(&padded(w, h, 45, 256), w, h, 12), 254);
+        assert_eq!(padded_width(&padded(w, h, 0, 256), w, h, 12), 300);
+    }
+
+    #[test]
+    fn bright_or_varied_edges_and_bad_input_are_kept() {
+        let (w, h) = (300, 40);
+        // an edge clipped to white is image, not padding
+        assert_eq!(padded_width(&padded(w, h, 46, 4095), w, h, 12), 300);
+        // at most 128 columns are trimmed
+        assert_eq!(padded_width(&padded(w, h, 200, 256), w, h, 12), 172);
+        // short data, tiny images: unchanged, no panic
+        assert_eq!(padded_width(&[0; 10], w, h, 12), 300);
+        assert_eq!(padded_width(&padded(100, 4, 20, 256), 100, 4, 12), 100);
+        assert_eq!(padded_width(&[], 0, 0, 12), 0);
+    }
 }
