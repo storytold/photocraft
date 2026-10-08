@@ -1070,6 +1070,18 @@ impl Preferences {
             *self = Preferences::default();
             return Ok(());
         };
+        // These maps have no stored defaults; removing an override restores the fallback.
+        match keyed(path) {
+            Some(("shortcuts", id)) => {
+                self.shortcuts.remove(id);
+                return Ok(());
+            }
+            Some(("menus.colors", id)) => {
+                self.menus.colors.remove(id);
+                return Ok(());
+            }
+            _ => {}
+        }
         let def = Preferences::default().get(path).ok_or_else(|| format!("unknown preference `{path}`"))?;
         if path == "shortcuts" {
             self.shortcuts.clear();
@@ -1394,7 +1406,12 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.prefs.edit(|_| ());
     s.apply_prefs();
-    prefs_get(s, &json!({"path": path.unwrap_or("")}))
+    if path.is_some_and(|path| keyed(path).is_some()) {
+        // The removed override is absent, so reading its old path would report an error.
+        Ok(Value::Null)
+    } else {
+        prefs_get(s, &json!({"path": path.unwrap_or("")}))
+    }
 }
 
 /// `edit.preferences.<section>`: the section's values (the GUI opens the dialog on it instead).

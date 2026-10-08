@@ -58,6 +58,84 @@ fn reset_one_colour_setting() {
 }
 
 #[test]
+fn reset_one_keyed_override() {
+    let mut s = session();
+    s.execute(
+        "prefs.set",
+        json!({"values": {
+            "shortcuts.edit.undo": "Ctrl+Alt+Z", "shortcuts.edit.redo": "Ctrl+Alt+Y",
+            "menus.colors.edit.fill": "red", "menus.colors.filter.blur.gaussianBlur": "blue",
+            "interface.theme": "studioLight"
+        }}),
+    )
+    .unwrap();
+    let undo = crate::commands::find("edit.undo").unwrap().shortcut;
+    assert_eq!(s.prefs().shortcut("edit.undo", undo), Some("Ctrl+Alt+Z"));
+    for path in ["shortcuts.edit.undo", "menus.colors.filter.blur.gaussianBlur"] {
+        let revision = s.prefs.rev();
+        assert_eq!(s.execute("prefs.reset", json!({"path": path})).unwrap(), Value::Null);
+        assert!(s.prefs.rev() > revision);
+        assert!(s.execute("prefs.get", json!({"path": path})).is_err(), "removed override: {path}");
+        let mut restored = Session::new();
+        restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+        assert_eq!(restored.prefs(), s.prefs(), "removal survives saving: {path}");
+    }
+    assert_eq!(s.execute("prefs.get", json!({"path": "shortcuts"})).unwrap(), json!({"edit.redo": "Ctrl+Alt+Y"}));
+    assert_eq!(s.execute("prefs.get", json!({"path": "menus.colors"})).unwrap(), json!({"edit.fill": "red"}));
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("studioLight"));
+    assert_eq!(s.prefs().shortcut("edit.undo", undo), undo);
+}
+
+#[test]
+fn reset_keyed_overrides_is_idempotent_and_restores_disabled_shortcuts() {
+    let mut s = session();
+    s.execute("prefs.set", json!({"path": "shortcuts.edit.undo", "value": ""})).unwrap();
+    let undo = crate::commands::find("edit.undo").unwrap().shortcut;
+    assert_eq!(s.prefs().shortcut("edit.undo", undo), None);
+    for path in ["shortcuts.edit.undo", "menus.colors.edit.fill"] {
+        for _ in 0..2 {
+            assert_eq!(s.execute("prefs.reset", json!({"section": path})).unwrap(), Value::Null);
+        }
+    }
+    assert_eq!(s.prefs().shortcut("edit.undo", undo), undo);
+    assert_eq!(s.prefs(), &Preferences::default());
+}
+
+#[test]
+fn preferences_reset_removes_keyed_overrides() {
+    let mut p = Preferences::default();
+    for (path, value) in [("shortcuts.edit.undo", json!("Ctrl+Z")), ("menus.colors.edit.fill", json!("red"))] {
+        p.set(path, value).unwrap();
+        assert!(p.get(path).is_some());
+        p.reset(Some(path)).unwrap();
+        assert!(p.get(path).is_none());
+        p.reset(Some(path)).unwrap();
+    }
+    assert_eq!(p, Preferences::default());
+}
+
+#[test]
+fn keyed_reset_keeps_section_resets_and_unknown_path_errors() {
+    let mut s = session();
+    s.execute("prefs.set", json!({"values": {"shortcuts.edit.undo": "Ctrl+Z", "menus.colors.edit.fill": "red"}})).unwrap();
+    let saved = s.prefs_value();
+    let revision = s.prefs.rev();
+    for path in ["shortcut.edit.undo", "menus.color.edit.fill", "menus.notAField", "general.notAField"] {
+        assert!(matches!(s.execute("prefs.reset", json!({"path": path})), Err(EngineError::BadParams { .. })));
+        assert_eq!(s.prefs_value(), saved, "rejected reset changes nothing: {path}");
+        assert_eq!(s.prefs.rev(), revision);
+    }
+    assert_eq!(s.execute("prefs.reset", json!({"path": "shortcuts"})).unwrap(), json!({}));
+    assert_eq!(s.execute("prefs.get", json!({"path": "menus.colors"})).unwrap(), json!({"edit.fill": "red"}));
+    assert_eq!(s.execute("prefs.reset", json!({"path": "menus.colors"})).unwrap(), json!({}));
+    s.execute("prefs.set", json!({"path": "shortcuts.edit.undo", "value": "Ctrl+Z"})).unwrap();
+    let all = s.execute("prefs.reset", json!({})).unwrap();
+    assert_eq!(all["shortcuts"], json!({}));
+    assert_eq!(all["menus"]["colors"], json!({}));
+    assert_eq!(s.prefs(), &Preferences::default());
+}
+
+#[test]
 fn set_validates_and_is_all_or_nothing() {
     let mut s = session();
     for (path, value) in [
