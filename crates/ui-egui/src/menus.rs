@@ -523,6 +523,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     }
 }
 
+/// Image › Mode items that carry a checkmark.
+const MODE_CHECKS: [&str; 11] = ["rgb", "grayscale", "cmyk", "lab", "multichannel", "indexedColor", "bitmap", "duotone", "bits8", "bits16", "bits32"];
+
 /// Is a UI-level panel toggle currently on (for checkmarks)?
 fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     use photocraft_doc::{ColorMode, SampleType};
@@ -544,11 +547,13 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if let Some(alias) = panel_alias(id) {
         return checked(app, alias);
     }
+    // Check items stay check items with no document open (`Some(false)`, not `None`): a native
+    // menu can't change an item's kind in place, so a change would rebuild the whole menu.
     if id == "select.isolateLayers" {
-        return Some(!app.session.active()?.isolated_layers.is_empty());
+        return Some(app.session.active().is_some_and(|d| !d.isolated_layers.is_empty()));
     }
     if id == "view.proofColors" || id == "view.gamutWarning" {
-        let d = app.session.active()?;
+        let Some(d) = app.session.active() else { return Some(false) };
         let pv = app.session.color.proof(d.doc.id);
         return Some(if id == "view.proofColors" { pv.enabled } else { pv.gamut_warning });
     }
@@ -557,7 +562,9 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(app.ui.workspace == if want.is_empty() { "Essentials" } else { want });
     }
     if let Some(m) = id.strip_prefix("image.mode.") {
-        let d = &app.session.active()?.doc;
+        let Some(d) = app.session.active().map(|s| &s.doc) else {
+            return MODE_CHECKS.contains(&m).then_some(false);
+        };
         return match m {
             "rgb" => Some(d.mode == ColorMode::Rgb),
             "grayscale" => Some(d.mode == ColorMode::Grayscale),
@@ -639,7 +646,9 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             id: id.to_string(),
             label: label.to_string(),
             path: path.iter().map(|s| s.to_string()).collect(),
-            shortcut: sc.map(Into::into),
+            // A live item shows the shortcut that runs it ([`crate::shortcut_dispatch::bindings`]
+            // prefers the command's own over the catalogue's): Undo ⌘Z, Copy ⌘C, Hide Layers ⌘,.
+            shortcut: if known(id) { crate::shortcuts::default_shortcut(id) } else { sc.map(Into::into) },
             enabled: known(id) && is_enabled(app, id),
             checked: checked(app, id),
             color: None,

@@ -83,6 +83,7 @@ pub mod menu_catalog;
 pub mod menu_nav;
 pub mod menus;
 pub mod monitor_status;
+pub mod native_menu;
 pub mod move_mods;
 pub mod move_ui;
 pub mod new_doc_ui;
@@ -289,6 +290,8 @@ pub struct Services {
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
     pub read_displays: Option<monitor_status::ReadDisplaysFn>,
+    /// The macOS menu bar, when the desktop app installed one; the in-window menus are hidden then.
+    pub native_menu: Option<native_menu::NativeMenu>,
 }
 
 pub struct PhotocraftApp {
@@ -980,6 +983,7 @@ impl eframe::App for PhotocraftApp {
             self.checker = None;
         }
         self.drain_control(ctx);
+        native_menu::run(self, ctx);
         if self.ui.text_edit.is_some() && !self.ui.tool.is_type() {
             type_tool::commit(self);
         }
@@ -1029,6 +1033,10 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Native menu key equivalents become the key presses they were (see `native_menu`).
+        if let Some(menu) = self.services.native_menu.as_mut() {
+            menu.raw_input(raw_input);
+        }
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         raw_input.events.extend(self.take_synthetic_step());
     }
@@ -1092,6 +1100,7 @@ impl eframe::App for PhotocraftApp {
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);
         self.automation_input = false;
+        native_menu::sync(self, &ctx);
         self.perf.frame(gpu_canvas::now_ms() - t0);
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.

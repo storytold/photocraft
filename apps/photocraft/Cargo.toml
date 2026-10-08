@@ -52,6 +52,9 @@ fmv-macos-events = "=0.1.0"
 objc2 = "=0.6.4"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
+# The macOS menu bar (mac_menu.rs): Tauri's menu crate, AppKit menus behind a safe API (no GTK
+# with default features off). Pinned exactly: review the diff before bumping.
+muda = { version = "=0.21.1", default-features = false }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]

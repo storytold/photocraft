@@ -82,8 +82,9 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "image.analysis.countTool" => Some(app.ui.tool == Tool::Count),
         _ => {
             // View › Proof Setup simulations: checked while that proof is shown.
+            // A check item with no document too: an item's kind never changes (native menus).
             let kind = id.strip_prefix("view.proofSetup.").and_then(photocraft_engine::proof_sim::ProofKind::from_id)?;
-            let d = app.session.active()?;
+            let Some(d) = app.session.active() else { return Some(false) };
             let pv = app.session.color.proof(d.doc.id);
             Some(pv.enabled && pv.setup.kind == kind)
         }

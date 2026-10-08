@@ -2,11 +2,14 @@
 //!
 //! Usage: `photocraft [--control <port>] [--control-token <64-hex> |
 //! --control-token-file <path>] [--automation-read-root <dir>]
-//! [--automation-write-root <dir>] [--safe-gpu] [files…]`
+//! [--automation-write-root <dir>] [--safe-gpu] [--in-window-menus] [files…]`
 //!
 //! `--safe-gpu` starts with the CPU renderer (no GPU canvas; a software adapter for the window
 //! where the platform has one) for this launch, e.g. after a graphics driver crash. A start that
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
+//!
+//! `--in-window-menus` (or `PHOTOCRAFT_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
+//! macOS instead of the macOS menu bar (`mac_menu`).
 //!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
@@ -25,6 +28,8 @@ mod control_server;
 mod crash_guard;
 mod cursor;
 mod gpu_startup;
+#[cfg(target_os = "macos")]
+mod mac_menu;
 #[cfg(target_os = "macos")]
 mod mac_window;
 // Pure logic is tested on every platform; only Linux runs the check.
@@ -131,6 +136,7 @@ fn main() -> eframe::Result {
     let mut automation_write_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_WRITE_ROOT").map(std::path::PathBuf::from);
     let mut files = Vec::new();
     let mut safe_gpu = false;
+    let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -146,6 +152,7 @@ fn main() -> eframe::Result {
             "--automation-read-root" => automation_read_root = args.next().map(std::path::PathBuf::from),
             "--automation-write-root" => automation_write_root = args.next().map(std::path::PathBuf::from),
             "--safe-gpu" => safe_gpu = true,
+            "--in-window-menus" => in_window_menus = true,
             "--version" => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
@@ -360,7 +367,13 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                // The macOS menu bar, installed now so winit's default menu doesn't stay up.
+                if !in_window_menus {
+                    app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
+                }
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor installed above
