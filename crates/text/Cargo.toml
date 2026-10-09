@@ -19,6 +19,11 @@ photocraft-psd = { workspace = true }
 # directories ourselves (native) and always register the bundled fonts (native + web).
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.44"
+# Grapheme boundaries (caret stops) and Script_Extensions / General_Category (cursive words).
+# No new crates or features (parley already depends on both with exactly these features); this
+# links the General_Category and Script_Extensions tables (tens of KB).
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 flate2 = { workspace = true }
 
 # ICU dictionary data for Japanese word boundaries and complex-script (Thai, Lao, Khmer, Burmese)

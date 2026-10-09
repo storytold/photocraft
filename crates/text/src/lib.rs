@@ -26,6 +26,7 @@ pub mod psd;
 pub mod psd_styles;
 pub mod raster;
 pub mod render;
+mod segment;
 pub mod served;
 pub mod spell;
 pub mod warp;
