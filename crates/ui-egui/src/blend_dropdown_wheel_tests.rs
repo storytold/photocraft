@@ -131,3 +131,83 @@ fn the_wheel_leaves_the_greyed_background_blend_mode_alone() {
     wheel(&mut h, at, -1.0);
     assert_eq!((blend(&h), steps(&h)), (BlendMode::Normal, undo));
 }
+
+fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+}
+
+/// Where the entry `label` of the open list is (also when it is scrolled out of sight).
+fn entry(h: &Harness<'_, PhotocraftApp>, label: &str) -> Rect {
+    h.get_by_label(label).rect()
+}
+
+#[test]
+fn the_wheel_over_the_open_list_steps_modes_instead_of_scrolling_it() {
+    let mut h = harness(pixel_layer);
+    let undo = steps(&h);
+    let at = dropdown(&h).center();
+    click(&mut h, at);
+    let (last, darken) = (entry(&h, "Luminosity"), entry(&h, "Darken").center());
+    wheel(&mut h, darken, -1.0);
+    h.run_steps(10);
+    assert_eq!((blend(&h), steps(&h)), (BlendMode::Dissolve, undo + 1), "one mode, one step");
+    assert_eq!(entry(&h, "Luminosity"), last, "the list stays open and doesn't scroll");
+}
+
+#[test]
+fn wheel_steps_in_the_open_list_keep_the_chosen_mode_in_view() {
+    let mut h = harness(pixel_layer);
+    let at = dropdown(&h).center();
+    click(&mut h, at);
+    // Unscrolled, the list shows its first entry at the top and is at most 420 pt tall.
+    let (top, darken) = (entry(&h, "Normal").top(), entry(&h, "Darken").center());
+    for _ in 0..22 {
+        wheel(&mut h, darken, -1.0);
+    }
+    h.run_steps(30);
+    assert_eq!(blend(&h), BlendMode::Divide);
+    let in_view = |r: Rect| r.top() >= top - 0.5 && r.bottom() <= top + 420.0 + 0.5;
+    let chosen = entry(&h, "Divide");
+    assert!(in_view(chosen), "{chosen:?} in view below {top}");
+    // The wheel over the button scrolls the open list along too.
+    for _ in 0..21 {
+        wheel(&mut h, at, 1.0);
+    }
+    h.run_steps(30);
+    assert_eq!(blend(&h), BlendMode::Dissolve);
+    let chosen = entry(&h, "Dissolve");
+    assert!(in_view(chosen), "{chosen:?} in view below {top}");
+}
+
+/// The mode the canvas previews on the active layer, if any (#970).
+fn previewed(h: &mut Harness<'_, PhotocraftApp>) -> Option<BlendMode> {
+    let st = h.state().session.active().unwrap();
+    let id = st.active_layer.unwrap();
+    crate::blend_preview::display_doc(h.state_mut(), 0).map(|(d, _)| d.layer(id).unwrap().blend)
+}
+
+#[test]
+fn a_wheel_step_ends_the_hover_preview_until_the_pointer_moves() {
+    let mut h = harness(pixel_layer);
+    let at = dropdown(&h).center();
+    click(&mut h, at);
+    let screen = entry(&h, "Screen").center();
+    h.hover_at(screen);
+    h.run_steps(3);
+    assert_eq!(previewed(&mut h), Some(BlendMode::Screen));
+    wheel(&mut h, screen, -1.0);
+    assert_eq!(blend(&h), BlendMode::Dissolve);
+    assert_eq!(previewed(&mut h), None, "the chosen mode shows, not the one under the pointer");
+    h.run_steps(10);
+    assert_eq!(previewed(&mut h), None, "still, while the pointer rests");
+    let multiply = entry(&h, "Multiply").center();
+    h.hover_at(multiply);
+    h.run_steps(3);
+    assert_eq!(previewed(&mut h), Some(BlendMode::Multiply), "a moved pointer previews again");
+}

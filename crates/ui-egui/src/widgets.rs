@@ -831,11 +831,12 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &m
     (!chosen.is_empty(), hovered)
 }
 
-/// [`dropdown_hovered`] whose value also steps with the wheel over its button: down picks the next
-/// option, up the previous one, one per notch (Shift too), stopping at the ends (Photoshop's
-/// Layers panel blend modes, #1747). The wheel then doesn't scroll what the dropdown is in.
-/// Returns every option chosen this frame in order (one per notch; the last is `current`) and the
-/// option under the pointer in the open list.
+/// [`dropdown_hovered`] whose value also steps with the wheel over its button or open list: down
+/// picks the next option, up the previous one, one per notch (Shift too), stopping at the ends
+/// (Photoshop's Layers panel blend modes, #1747). The wheel then scrolls neither the list, which
+/// follows the value instead, nor what the dropdown is in. Returns every option chosen this frame
+/// in order (one per notch; the last is `current`) and the option under the pointer in the open
+/// list, none while the pointer rests where the wheel last stepped.
 pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (Vec<T>, Option<T>) {
     dropdown_with(ui, id, current, options, width, true)
 }
@@ -843,9 +844,28 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
 fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32, wheel: bool) -> (Vec<T>, Option<T>) {
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| tl!(l)).unwrap_or("—");
     let (mut chosen, mut hovered) = (Vec::new(), None);
+    // The wheel's notches add up over the button and the open list alike.
+    let wheel_id = ui.make_persistent_id(id).with("wheel");
+    let wheel = wheel && ui.is_enabled();
+    let (mut over_list, mut wheeled) = (false, false);
+    // A wheel step scrolls the open list to the new value: at once over the list, the next frame
+    // after a step over the button.
+    let reveal_id = wheel_id.with("reveal");
+    let mut reveal = wheel && ui.data_mut(|d| d.remove_temp::<bool>(reveal_id)).unwrap_or(false);
     let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+        // Over the open list the wheel steps the value too, instead of scrolling the list.
+        over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
+        if over_list {
+            let stepped = wheel_steps(ui, wheel_id, true, current, options);
+            wheeled = !stepped.is_empty();
+            reveal |= wheeled;
+            chosen.extend(stepped);
+        }
         for (v, l) in options {
             let item = ui.selectable_label(v == current, tl!(l));
+            if reveal && v == current {
+                item.scroll_to_me(None);
+            }
             if item.hovered() {
                 hovered = Some(v.clone());
             }
@@ -858,21 +878,43 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
     if combo_box_arrow_keys(ui, &response.response, current, options) {
         chosen.push(current.clone());
     }
-    if wheel {
-        chosen.extend(wheel_steps(ui, &response.response, current, options));
+    if wheel && !over_list {
+        let stepped = wheel_steps(ui, wheel_id, response.response.hovered(), current, options);
+        wheeled = !stepped.is_empty();
+        if wheeled && egui::ComboBox::is_open(ui.ctx(), response.response.id) {
+            ui.data_mut(|d| d.insert_temp(reveal_id, true));
+        }
+        chosen.extend(stepped);
+    }
+    if wheel && wheel_rests(ui, wheel_id, wheeled) {
+        hovered = None;
     }
     (chosen, hovered)
 }
 
-/// The options the wheel over `button` steps `current` through this frame, one per notch, in
-/// order; the last is the new `current`. While the pointer is over it the wheel scrolls nothing
-/// else.
-fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, button: &Response, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
-    let hovered = button.hovered();
+/// Whether the pointer still rests where the wheel last stepped dropdown `id` (`wheeled`: it did
+/// this frame). The option under it then isn't the one to preview: the value moved on without it.
+fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
+    let key = id.with("at");
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    if wheeled && let Some(p) = pointer {
+        ui.data_mut(|d| d.insert_temp(key, p));
+    }
+    let rests = pointer.is_some() && ui.data(|d| d.get_temp::<Pos2>(key)) == pointer;
+    if !rests {
+        ui.data_mut(|d| d.remove::<Pos2>(key));
+    }
+    rests
+}
+
+/// The options the wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
+/// one per notch, in order; the last is the new `current`. While the pointer is over it the wheel
+/// scrolls nothing else.
+fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
     if hovered {
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
-    let notches = wheel_notches_of(ui, button.id, hovered, 1.0);
+    let notches = wheel_notches_of(ui, id, hovered, 1.0);
     let Some(mut index) = options.iter().position(|(v, _)| v == current) else { return Vec::new() };
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.
