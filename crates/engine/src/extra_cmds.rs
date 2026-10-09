@@ -61,20 +61,27 @@ fn step_key(s: &Session, what: &str) -> String {
 
 /// Rewrite the active pixel layer's RGBA over the selection bounds (or the canvas). `f` gets the
 /// area, the pixels, and the selection coverage per pixel; results are blended back by coverage,
-/// and transparency stays locked when the layer locks it.
-fn map_pixels(s: &mut Session, label: &str, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+/// and transparency stays locked when the layer locks it. When `p` targets an alpha channel, the
+/// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
+/// grayscale surface is rewritten instead, as the core filters do (#935).
+fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, &Value::Null)?;
+    let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
         let area = selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
-        let locks = doc.effective_locks(id);
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if locks.pixels || locks.all {
-            return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
-        }
-        let lock_alpha = locks.transparency;
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?;
+        let (surf, lock_alpha) = if channel {
+            let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
+            (surf, false)
+        } else {
+            let locks = doc.effective_locks(id);
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            if locks.pixels || locks.all {
+                return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+            }
+            (l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?, locks.transparency)
+        };
         if area.is_empty() {
             return Ok(());
         }
@@ -154,8 +161,8 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
 /// the selected pixels, applied to every channel.
-fn equalize(s: &mut Session) -> Result<Value> {
-    map_pixels(s, "Equalize", |_, px, cover| {
+fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
+    map_pixels(s, "Equalize", p, |_, px, cover| {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -186,8 +193,8 @@ fn equalize(s: &mut Session) -> Result<Value> {
 }
 
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
-fn average(s: &mut Session) -> Result<Value> {
-    map_pixels(s, "Average", |_, px, cover| {
+fn average(s: &mut Session, p: &Value) -> Result<Value> {
+    map_pixels(s, "Average", p, |_, px, cover| {
         let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
         for (p, &k) in px.iter().zip(cover) {
             let w = (p[3] * k) as f64;
@@ -240,7 +247,7 @@ fn clouds(s: &mut Session, p: &Value, difference: bool) -> Result<Value> {
     let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(0) as u32;
     let size = s.active().map_or(256.0, |d| d.doc.size.width.max(d.doc.size.height) as f32);
     let base = (size / 4.0).clamp(16.0, 512.0);
-    map_pixels(s, if difference { "Difference Clouds" } else { "Clouds" }, |area, px, _| {
+    map_pixels(s, if difference { "Difference Clouds" } else { "Clouds" }, p, |area, px, _| {
         let w = area.width() as usize;
         for (i, p) in px.iter_mut().enumerate() {
             let (x, y) = ((area.x0 + (i % w) as i32) as f32, (area.y0 + (i / w) as i32) as f32);
@@ -655,7 +662,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, |s, _| equalize(s)),
+        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);
@@ -760,7 +767,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, |s, _| average(s)),
+        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
         spec!("filter.render.clouds", "Clouds", &["Filter", "Render"], None, r##"{"seed":u32=0}"##, has_pixels, |s, p| clouds(s, p, false)),
         spec!("filter.render.differenceClouds", "Difference Clouds", &["Filter", "Render"], None, r##"{"seed":u32=0}"##, has_pixels, |s, p| clouds(s, p, true)),
     ]
@@ -779,6 +786,68 @@ mod tests {
 
     fn doc(s: &Session) -> &Document {
         &s.active().unwrap().doc
+    }
+
+    #[test]
+    fn equalize_average_and_clouds_edit_the_targeted_channel() {
+        // #935: these four ran through `map_pixels`, which always rewrote the active layer, so
+        // with an alpha channel or the Quick Mask targeted they changed the layer and left the
+        // channel alone.
+        let cmds = ["image.adjustments.equalize", "filter.blur.average", "filter.render.clouds", "filter.render.differenceClouds"];
+        for depth in [8, 16, 32] {
+            for target in ["quickMask", "alpha", "mask"] {
+                for cmd in cmds {
+                    let mut s = session(depth);
+                    s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+                    s.tools.background = [1.0, 1.0, 1.0, 1.0];
+                    s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+                    let p = match target {
+                        "quickMask" => {
+                            s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+                            json!({"seed": 1})
+                        }
+                        "alpha" => {
+                            s.execute("channel.new", json!({"fill": "white"})).unwrap();
+                            s.execute("channel.target", json!({"channel": 0})).unwrap();
+                            json!({"seed": 1})
+                        }
+                        _ => {
+                            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                            json!({"seed": 1, "target": "mask"})
+                        }
+                    };
+                    // Two levels in the target, so Equalize and Average have something to change.
+                    let edit_target = json!({ "target": if target == "alpha" { json!({"channel": 0}) } else { json!(target) } });
+                    s.edit("levels", |doc, active| {
+                        let (surf, _) = crate::channel_cmds::target_surface(doc, *active, &edit_target).unwrap();
+                        surf.fill_rect(Rect::new(0, 0, 20, 30), &[0.4]);
+                        surf.fill_rect(Rect::new(20, 0, 40, 30), &[0.5]);
+                        Ok(())
+                    })
+                    .unwrap();
+                    let full = Rect::new(0, 0, 40, 30);
+                    let read = |s: &Session| {
+                        let d = doc(s);
+                        let layer = d.layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+                        let t = match target {
+                            "quickMask" => d.quick_mask.as_ref().unwrap().surface.read_region(full),
+                            "alpha" => d.channels[0].surface.read_region(full),
+                            _ => layer.mask.as_ref().unwrap().surface.read_region(full),
+                        };
+                        (layer.surface().unwrap().read_region(full), t)
+                    };
+                    let ((layer0, target0), past) = (read(&s), s.active().unwrap().history.past_len());
+                    s.execute(cmd, p).unwrap();
+                    let (layer1, target1) = read(&s);
+                    let case = format!("{cmd} on {target} at {depth}");
+                    assert_eq!(layer1, layer0, "{case}: the layer is untouched");
+                    assert_ne!(target1, target0, "{case}: the target changed");
+                    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{case}");
+                    s.undo();
+                    assert_eq!(read(&s).1, target0, "{case}: undo restores the target");
+                }
+            }
+        }
     }
 
     fn active(s: &Session) -> &Layer {

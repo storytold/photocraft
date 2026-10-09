@@ -500,3 +500,21 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
     h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
     assert_eq!(precise(&mut h), (egui::CursorIcon::Crosshair, windows));
 }
+
+/// Esc while drawing with the Pen ends the path where it is, left open, and keeps it as the work
+/// path, as ↩ does; it used to throw the path away (#1769).
+#[test]
+fn esc_ends_a_pen_path_and_keeps_it() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Pen;
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], ..Default::default() });
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.pen.is_none(), "the Pen leaves drawing state");
+    let doc = &h.state().session.active().unwrap().doc;
+    let path = doc.work_path.as_ref().expect("the path is kept as the work path");
+    assert_eq!(path.subpaths.len(), 1);
+    assert!(!path.subpaths[0].closed, "left open");
+    assert_eq!(path.subpaths[0].knots.len(), 3);
+    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+}
