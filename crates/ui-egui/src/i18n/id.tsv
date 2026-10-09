@@ -2639,3 +2639,9 @@ fontWeight	Italic	Miring
 # Pattern Stamp tool
 	Pattern Stamp Tool	Alat Stempel Pola
 	Impressionist	Impresionis
+
+	Speed	Kecepatan
+	Automatic	Otomatis
+	10 bit	10 bit
+	Alpha quality	Kualitas alfa
+	Lossy RGB 4:4:4; ICC profile retained.	RGB 4:4:4 dengan kehilangan kualitas; profil ICC dipertahankan.

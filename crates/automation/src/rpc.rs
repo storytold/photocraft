@@ -103,7 +103,9 @@ impl Headless {
                     opts.encode.jpeg_quality = q.clamp(1, 100) as u8;
                     opts.encode.webp_quality = q.clamp(1, 100) as u8;
                     opts.encode.webp_lossless = false;
+                    opts.encode.avif_quality = u8::try_from(q).map_err(|_| bad("quality must be 1–100"))?;
                 }
+                photocraft_engine::file_cmds::apply_avif_params(&p, &mut opts.encode)?;
                 let path = str_of(&p, "path").map(PathBuf::from);
                 self.save(index_of(&p), path.as_deref(), str_of(&p, "format"), &opts)
             }
@@ -301,6 +303,32 @@ pub fn serve_tcp(addr: &str, h: Arc<Mutex<Headless>>, token: String, ready: impl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn avif_save_open_and_invalid_options_through_rpc() {
+        if !photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("pc-rpc-avif-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap();
+        let mut h = Headless::with_workspace(workspace);
+        h.handle("doc.new", json!({"width": 16, "height": 8})).unwrap();
+        h.handle("engine.execute", json!({"command": "edit.fill", "params": {"color": "#804020"}})).unwrap();
+        h.handle("doc.save", json!({"path": "rpc.avif", "quality": 100, "avifDepth": 10, "avifSpeed": 8})).unwrap();
+        let decoded = photocraft_codecs::decode(&std::fs::read(root.join("rpc.avif")).unwrap()).unwrap();
+        assert_eq!(decoded.dimensions(), (16, 8));
+        assert_eq!(decoded.sample_type(), photocraft_codecs::SampleType::U16);
+        h.handle("doc.open", json!({"path": "rpc.avif"})).unwrap();
+        for params in [json!({"avifSpeed": 0}), json!({"avifDepth": 12}), json!({"avifQuality": "90"}), json!({"quality": 101})] {
+            let mut params = params;
+            params["path"] = json!("rejected.avif");
+            assert!(h.handle("doc.save", params).is_err());
+            assert!(!root.join("rejected.avif").exists());
+        }
+        drop(h);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn session() -> Mutex<Headless> {
         Mutex::new(Headless::trusted_local())

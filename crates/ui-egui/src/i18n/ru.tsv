@@ -2500,3 +2500,9 @@ fontWeight	Italic	Курсив
 # Pattern Stamp tool
 	Pattern Stamp Tool	Инструмент узорный штамп
 	Impressionist	Импрессионист
+
+	Speed	Скорость
+	Automatic	Автоматически
+	10 bit	10 бит
+	Alpha quality	Качество альфа-канала
+	Lossy RGB 4:4:4; ICC profile retained.	RGB 4:4:4 с потерями; профиль ICC сохранён.

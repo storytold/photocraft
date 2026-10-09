@@ -2652,3 +2652,9 @@ fontWeight	Italic	Italique
 # Pattern Stamp tool
 	Pattern Stamp Tool	Outil Tampon de motif
 	Impressionist	Impressionniste
+
+	Speed	Vitesse
+	Automatic	Automatique
+	10 bit	10 bits
+	Alpha quality	Qualité alpha
+	Lossy RGB 4:4:4; ICC profile retained.	RVB 4:4:4 avec perte ; profil ICC conservé.

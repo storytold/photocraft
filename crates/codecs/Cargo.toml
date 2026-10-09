@@ -10,9 +10,9 @@ rust-version.workspace = true
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 default = []
-# AVIF *encode* via ravif (pure Rust). Decoding AVIF needs dav1d (C), so AVIF
-# stays read-unsupported and therefore asymmetric; it is off by default.
-avif = ["image/avif"]
+# Opt-in native Rust AVIF decode/encode. No system codec libraries or assembly toolchain.
+# Not available on wasm: upstream rav1d does not provide the fork's libc shim.
+avif = ["dep:ravif", "dep:rav1d", "dep:avif-parse"]
 # HEIC/HEIF decode via the optional photocraft-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time; official builds and CI enable it (`--features heif` on the
 # apps). Without it HEIF files are still recognised and opening one is a clear "unsupported" error.
@@ -35,6 +35,12 @@ photocraft-heif = { path = "../heif", optional = true }
 # Orientation is applied a band of rows per task on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon.workspace = true
+# The released rav1d 1.1.0 predates its safe Rust API. Pin the official upstream
+# revision providing that API instead of using a third-party republished fork.
+rav1d = { git = "https://github.com/memorysafety/rav1d", rev = "d3d1cd67059f47803919be8276650e5870c9fd02", default-features = false, features = ["bitdepth_8", "bitdepth_16"], optional = true }
+ravif = { version = "=0.13.0", default-features = false, optional = true }
+# MPL-2.0: opt-in only; acceptance remains a maintainer decision.
+avif-parse = { version = "=2.1.0", optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

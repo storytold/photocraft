@@ -1,3 +1,6 @@
+pub(crate) mod avif;
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+mod avif_container;
 pub(crate) mod deep_exr;
 pub(crate) mod exr;
 pub(crate) mod heif;

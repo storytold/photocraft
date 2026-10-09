@@ -117,7 +117,7 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 /// Extensions the batch commands pick up from a folder.
 const OPENABLE: &[&str] = &[
     "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic", "heif",
-    "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz",
+    "hif", "avif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz",
 ];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
@@ -189,18 +189,53 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
 }
 
 /// What a headless save writes beyond the format: JPEG quality and TIFF layers.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SaveOpts {
     /// Photoshop's 0–12 JPEG scale.
     pub quality: Option<f64>,
     /// TIFF: keep the layers. Off unless a command's params ask (`"tiffLayers": true`).
     pub tiff_layers: bool,
+    pub avif: [u8; 4],
+}
+
+impl Default for SaveOpts {
+    fn default() -> Self {
+        Self { quality: None, tiff_layers: false, avif: [90, 8, 0, 100] }
+    }
+}
+
+/// Validated AVIF parameters shared by engine commands and automation save endpoints.
+/// `avifQuality`/`avifAlphaQuality`: 1–100; `avifSpeed`: 1–10; `avifDepth`: 0, 8 or 10.
+pub fn apply_avif_params(p: &Value, opts: &mut photocraft_codecs::EncodeOptions) -> Result<()> {
+    for (key, field, min, max) in [
+        ("avifQuality", &mut opts.avif_quality, 1, 100),
+        ("avifSpeed", &mut opts.avif_speed, 1, 10),
+        ("avifDepth", &mut opts.avif_depth, 0, 10),
+        ("avifAlphaQuality", &mut opts.avif_alpha_quality, 1, 100),
+    ] {
+        if let Some(value) = p.get(key) {
+            let n = value.as_u64().filter(|n| (min..=max).contains(n) && (key != "avifDepth" || matches!(n, 0 | 8 | 10))).ok_or_else(|| {
+                EngineError::BadParams {
+                    cmd: "file.saveACopy".into(),
+                    msg: format!("invalid {key}: expected an integer {min}–{max}{}", if key == "avifDepth" { " (0, 8 or 10 only)" } else { "" }),
+                }
+            })?;
+            *field = n as u8;
+        }
+    }
+    Ok(())
 }
 
 impl SaveOpts {
     /// `quality` and `tiffLayers` from a command's params.
-    pub(crate) fn from_params(p: &Value) -> Self {
-        SaveOpts { quality: f64_param(p, "quality"), tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false) }
+    pub(crate) fn from_params(p: &Value) -> Result<Self> {
+        let mut opts = photocraft_codecs::EncodeOptions::default();
+        apply_avif_params(p, &mut opts)?;
+        Ok(SaveOpts {
+            quality: f64_param(p, "quality"),
+            tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
+            avif: [opts.avif_quality, opts.avif_speed, opts.avif_depth, opts.avif_alpha_quality],
+        })
     }
 
     pub(crate) fn or_quality(mut self, q: f64) -> Self {
@@ -219,6 +254,7 @@ impl From<Option<f64>> for SaveOpts {
 pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
     let save = save.into();
     let mut opts = photocraft_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
+    [opts.encode.avif_quality, opts.encode.avif_speed, opts.encode.avif_depth, opts.encode.avif_alpha_quality] = save.avif;
     if let Some(q) = save.quality {
         let q = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
         opts.encode.jpeg_quality = q;
@@ -325,7 +361,7 @@ fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
         let px = flattened(&doc, fmt);
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
     }
-    let warnings = save_doc(&doc, &path, SaveOpts::from_params(p))?;
+    let warnings = save_doc(&doc, &path, SaveOpts::from_params(p)?)?;
     Ok(json!({"path": path, "warnings": warnings}))
 }
 
@@ -742,7 +778,7 @@ fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
     let inputs = batch_inputs(p, cmd)?;
     let output = str_param(p, "output", cmd)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
-    let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
+    let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p)?, "", &|scratch| {
         for (id, params) in &steps {
             scratch.execute(id, params.clone())?;
         }
@@ -761,7 +797,7 @@ fn image_processor(_s: &mut Session, p: &Value) -> Result<Value> {
         (w, h) => Some(json!({"width": w.unwrap_or(1e9), "height": h.unwrap_or(1e9), "dontEnlarge": true})),
     };
     let to_srgb = p.get("convertToSrgb").and_then(Value::as_bool).unwrap_or(false);
-    let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p).or_quality(8.0), "", &|scratch| {
+    let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p)?.or_quality(8.0), "", &|scratch| {
         if to_srgb && scratch.active().is_some_and(|d| d.doc.mode != ColorMode::Rgb) {
             scratch.execute("image.mode.rgb", json!({}))?;
         }
@@ -918,7 +954,7 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         only.clipped = false;
         one.layers = vec![only];
         let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&l.name)));
-        save_doc(&one, &path, SaveOpts::from_params(p))?;
+        save_doc(&one, &path, SaveOpts::from_params(p)?)?;
         files.push(path);
     }
     Ok(json!({"files": files}))
@@ -1127,7 +1163,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save a Copy…",
             &["File"],
             Some("Cmd+Alt+S"),
-            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"layers":bool=true,"tiffLayers":bool=false (TIFF: keep the layers; flat by default)}"##,
+            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"layers":bool=true,"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"avifQuality":1..100=90,"avifSpeed":1..10=8,"avifDepth":0|8|10=0,"avifAlphaQuality":1..100=100}"##,
             native_doc,
             save_a_copy
         ),

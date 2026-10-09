@@ -16,7 +16,7 @@ type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 /// brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam",
-    "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
+    "pfm", "avif", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
 
@@ -167,6 +167,10 @@ fn services(inbox: Inbox) -> Services {
             if let Some(q) = settings.jpeg_quality {
                 opts.encode.jpeg_quality = q;
             }
+            opts.encode.avif_quality = settings.avif_quality;
+            opts.encode.avif_alpha_quality = settings.avif_alpha_quality;
+            opts.encode.avif_speed = settings.avif_speed;
+            opts.encode.avif_depth = settings.avif_depth;
             opts.encode.webp_lossless = settings.webp_lossless;
             if let Some(q) = settings.webp_quality {
                 opts.encode.webp_quality = q;

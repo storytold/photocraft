@@ -468,3 +468,19 @@ fn batch_reports_inputs_that_share_an_output_name() {
     let px = photocraft_compose::render(&kept, Rect::new(1, 1, 2, 2)).px[0];
     assert!(px[0] > 0.99 && px[1] < 0.01, "the first input's result is kept: {px:?}");
 }
+#[test]
+fn avif_save_options_are_validated_and_independent_of_jpeg() {
+    let opts = SaveOpts::from_params(&json!({"avifQuality": 76, "avifSpeed": 9, "avifDepth": 10, "avifAlphaQuality": 97})).unwrap();
+    assert_eq!(opts.avif, [76, 9, 10, 97]);
+    for p in [
+        json!({"avifQuality": 0}),
+        json!({"avifSpeed": 11}),
+        json!({"avifDepth": 12}),
+        json!({"avifDepth": 9}),
+        json!({"avifAlphaQuality": -1}),
+        json!({"avifQuality": "90"}),
+        json!({"avifSpeed": 1.5}),
+    ] {
+        assert!(SaveOpts::from_params(&p).is_err(), "{p}");
+    }
+}

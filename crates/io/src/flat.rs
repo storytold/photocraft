@@ -20,6 +20,14 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
         return import_tiff_page(name, bytes, None);
     }
     let img = codecs::decode(bytes)?;
+    if codecs::detect(bytes) == Some(Format::Avif)
+        && let Some(icc) = &img.icc
+    {
+        let p = photocraft_cms::Profile::parse(icc).map_err(|e| IoError::Unsupported(format!("AVIF ICC profile: {e}")))?;
+        if p.color_space != photocraft_cms::ColorSpace::Rgb {
+            return Err(IoError::Unsupported("AVIF ICC profile must describe RGB pixels".into()));
+        }
+    }
     let mut r = image_to_document(name, &img)?;
     // OpenEXR and Radiance HDR hold linear, scene-referred values (Rec. 709 primaries unless
     // stated otherwise): tag them linear sRGB so they display and convert correctly.
@@ -94,6 +102,19 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     }
     doc.layers.push(bg);
     doc.icc_profile = img.icc.clone().map(Arc::new);
+    if doc.icc_profile.is_none()
+        && let Some((primaries, transfer)) = img.meta.cicp
+    {
+        use photocraft_cms::Builtin;
+        let profile = match (primaries, transfer) {
+            (1 | 2, 13 | 2) => Builtin::Srgb,
+            (1, 8) => Builtin::LinearSrgb,
+            (12, 13) => Builtin::DisplayP3,
+            (9, 1 | 14 | 15) => Builtin::Rec2020,
+            _ => return Err(IoError::Unsupported(format!("unsupported AVIF CICP {primaries}/{transfer}"))),
+        };
+        doc.icc_profile = Some(profile.profile().to_bytes());
+    }
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = img.meta.xmp.clone();
     if let Some((x, _)) = img.meta.dpi {
@@ -282,6 +303,21 @@ fn opaque_surface(s: &Surface, r: Rect) -> bool {
 /// Flattens and encodes as `format`.
 pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     use photocraft_cms::{Builtin, Intent};
+    if format == Format::Avif
+        && let Some(icc) = &doc.icc_profile
+    {
+        use photocraft_cms::{ColorSpace, Profile};
+        let p = Profile::parse(icc).map_err(|e| IoError::Unsupported(format!("AVIF source ICC profile: {e}")))?;
+        let expected = match doc.mode {
+            ColorMode::Grayscale => ColorSpace::Gray,
+            ColorMode::Cmyk => ColorSpace::Cmyk,
+            ColorMode::Lab => ColorSpace::Lab,
+            _ => ColorSpace::Rgb,
+        };
+        if p.color_space != expected {
+            return Err(IoError::Unsupported("AVIF source profile does not match the document colour model".into()));
+        }
+    }
     if let Some(r) = export_mode_specific(doc, format, opts)? {
         return Ok(r);
     }
@@ -300,6 +336,45 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
     if img.layout().is_cmyk() && !format.caps().layouts.iter().any(|l| l.is_cmyk()) {
         img = cmyk_image_to_srgb(&img)?;
         warnings.push(format!("CMYK converted to sRGB for {format:?} through the document's colour profile"));
+    }
+    if format == Format::Avif {
+        use photocraft_cms::{ColorSpace, Profile, Transform};
+        // Reject invalid profile/model combinations instead of relabelling arbitrary numbers.
+        if let Some(icc) = &img.icc {
+            let p = Profile::parse(icc).map_err(|e| IoError::Unsupported(format!("AVIF source ICC profile: {e}")))?;
+            let expected = if img.layout().is_gray() { ColorSpace::Gray } else { ColorSpace::Rgb };
+            if p.color_space != expected {
+                return Err(IoError::Unsupported("AVIF source profile does not match the pixel colour model".into()));
+            }
+        }
+        if img.layout().is_gray() {
+            let src = img
+                .icc
+                .as_ref()
+                .map(|b| Profile::parse(b))
+                .transpose()
+                .map_err(|e| IoError::Unsupported(e.to_string()))?
+                .unwrap_or_else(|| Builtin::SGray.profile().clone());
+            let dst = Builtin::Srgb.profile();
+            let t = Transform::new(&src, dst, Intent::RelativeColorimetric, true).map_err(|e| IoError::Unsupported(e.to_string()))?;
+            let stride = img.layout().channels();
+            let alpha = img.layout().has_alpha();
+            let layout = if alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
+            img = map_bands(&img, layout, img.sample_type(), |vals| {
+                let mut out = vec![0.0; vals.len() / stride * layout.channels()];
+                t.convert_f32(&vals, stride, &mut out, layout.channels(), alpha);
+                out
+            })?
+            .with_icc(Some(dst.to_bytes().to_vec()));
+            warnings.push("grayscale converted to sRGB through its colour profile for AVIF".into());
+        }
+        if !opts.encode.embed_icc {
+            if let Some(srgb) = convert_rgb(&img, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true, img.sample_type())? {
+                img = srgb;
+            }
+            img.icc = None;
+            warnings.push("AVIF exported as sRGB without an embedded ICC profile".into());
+        }
     }
     if matches!(format, Format::OpenExr | Format::Hdr) {
         // OpenEXR and Radiance HDR store linear light (read back as linear sRGB, see [`import_flat`]).

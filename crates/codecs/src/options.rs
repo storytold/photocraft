@@ -109,8 +109,16 @@ pub enum ExrCompression {
 /// Options for [`crate::encode`].
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
-    /// JPEG quality 1..=100 (also AVIF quality when enabled).
+    /// JPEG quality 1..=100.
     pub jpeg_quality: u8,
+    /// AVIF colour quality 1..=100. Even 100 is lossy; RGB quantization remains.
+    pub avif_quality: u8,
+    /// AVIF effort: 1 (slowest) through 10 (fastest).
+    pub avif_speed: u8,
+    /// AVIF storage precision: 0 = automatic (8 for U8, otherwise 10), 8 or 10.
+    pub avif_depth: u8,
+    /// AVIF alpha quality 1..=100, independent of colour quality.
+    pub avif_alpha_quality: u8,
     /// JPEG 4:2:0 chroma subsampling (`false` = 4:4:4).
     pub jpeg_chroma_subsampling: bool,
     pub png_compression: PngCompression,
@@ -136,6 +144,10 @@ impl Default for EncodeOptions {
     fn default() -> Self {
         EncodeOptions {
             jpeg_quality: 90,
+            avif_quality: 90,
+            avif_speed: 8,
+            avif_depth: 0,
+            avif_alpha_quality: 100,
             jpeg_chroma_subsampling: true,
             png_compression: PngCompression::Default,
             png_interlaced: false,

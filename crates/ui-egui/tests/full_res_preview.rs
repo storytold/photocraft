@@ -18,6 +18,14 @@ type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 const W: i32 = 3000;
 const H: i32 = 2000;
 
+// These 6 MP harnesses share the runner's GPU. Keep their submissions from
+// competing with each other, especially on CI software adapters with short waits.
+static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+    GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
@@ -108,6 +116,7 @@ fn mean(r: &[i32]) -> f32 {
 
 #[test]
 fn adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off() {
+    let _gpu = gpu_lock();
     let Some(mut h) = harness() else { return };
     setup(&mut h, 1.0);
     if !on_gpu(&mut h) {
@@ -132,6 +141,7 @@ fn adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off() {
 
 #[test]
 fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() {
+    let _gpu = gpu_lock();
     let Some(mut h) = harness() else { return };
     setup(&mut h, 1.0);
     if !on_gpu(&mut h) {
@@ -148,6 +158,7 @@ fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() {
 
 #[test]
 fn adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off() {
+    let _gpu = gpu_lock();
     let Some(mut h) = harness() else { return };
     setup(&mut h, 0.5);
     if !on_gpu(&mut h) {

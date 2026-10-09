@@ -112,6 +112,9 @@ impl SampleType {
 /// Basic, format-independent metadata.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Metadata {
+    /// AVIF CICP primaries and transfer function, when no ICC profile is present.
+    /// The I/O layer assigns the corresponding CMS profile before display.
+    pub cicp: Option<(u16, u16)>,
     /// Raw EXIF payload in TIFF structure (starting with `II*\0`/`MM\0*`),
     /// **without** the JPEG `Exif\0\0` prefix.
     pub exif: Option<Vec<u8>>,

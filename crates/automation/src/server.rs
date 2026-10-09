@@ -80,9 +80,21 @@ pub struct SaveParams {
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
     #[serde(default)]
     pub format: Option<String>,
-    /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
+    /// JPEG, WebP or AVIF quality 1..100. AVIF remains lossy at 100.
     #[serde(default)]
     pub quality: Option<u8>,
+    /// AVIF colour quality 1–100 (default 90); overrides quality for AVIF.
+    #[serde(default, rename = "avifQuality")]
+    pub avif_quality: Option<u8>,
+    /// AVIF speed 1–10 (default 8).
+    #[serde(default, rename = "avifSpeed")]
+    pub avif_speed: Option<u8>,
+    /// AVIF bit depth: 0 = automatic, 8 or 10.
+    #[serde(default, rename = "avifDepth")]
+    pub avif_depth: Option<u8>,
+    /// AVIF alpha quality 1–100 (default 100).
+    #[serde(default, rename = "avifAlphaQuality")]
+    pub avif_alpha_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
     #[serde(default, rename = "tiffLayers")]
     pub tiff_layers: bool,
@@ -663,6 +675,10 @@ impl PhotocraftMcp {
             let unsupported: Vec<&str> = [
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
+                p.avif_quality.is_some().then_some("avifQuality"),
+                p.avif_speed.is_some().then_some("avifSpeed"),
+                p.avif_depth.is_some().then_some("avifDepth"),
+                p.avif_alpha_quality.is_some().then_some("avifAlphaQuality"),
                 p.tiff_layers.then_some("tiffLayers"),
                 p.index.is_some().then_some("index"),
             ]
@@ -681,7 +697,17 @@ impl PhotocraftMcp {
                     opts.encode.jpeg_quality = q.clamp(1, 100);
                     opts.encode.webp_quality = q.clamp(1, 100);
                     opts.encode.webp_lossless = false;
+                    opts.encode.avif_quality = q;
                 }
+                let mut avif = serde_json::Map::new();
+                for (key, value) in
+                    [("avifQuality", p.avif_quality), ("avifSpeed", p.avif_speed), ("avifDepth", p.avif_depth), ("avifAlphaQuality", p.avif_alpha_quality)]
+                {
+                    if let Some(v) = value {
+                        avif.insert(key.into(), json!(v));
+                    }
+                }
+                photocraft_engine::file_cmds::apply_avif_params(&Value::Object(avif), &mut opts.encode)?;
                 let path = p.path.map(PathBuf::from);
                 h.save(p.index, path.as_deref(), p.format.as_deref(), &opts)
             })
@@ -704,6 +730,29 @@ pub fn render_document_png(doc: &photocraft_doc::Document, max_side: u32) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn headless_mcp_saves_avif_and_rejects_invalid_options() {
+        if !photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("pc-mcp-avif-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap();
+        let mcp = PhotocraftMcp::headless_with_workspace(workspace);
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 16, "height": 8}))).await.unwrap().unwrap();
+        let p = SaveParams { path: Some("mcp.avif".into()), avif_depth: Some(10), quality: Some(100), ..Default::default() };
+        let result = mcp.doc_save(Parameters(p)).await.unwrap();
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let decoded = photocraft_codecs::decode(&std::fs::read(root.join("mcp.avif")).unwrap()).unwrap();
+        assert_eq!(decoded.dimensions(), (16, 8));
+        assert_eq!(decoded.sample_type(), photocraft_codecs::SampleType::U16);
+        let p = SaveParams { path: Some("rejected.avif".into()), avif_speed: Some(0), ..Default::default() };
+        assert_eq!(mcp.doc_save(Parameters(p)).await.unwrap().is_error, Some(true));
+        assert!(!root.join("rejected.avif").exists());
+        drop(mcp);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn mcp_text_checks_the_encoded_tool_envelope() {

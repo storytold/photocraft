@@ -2659,3 +2659,9 @@ fontWeight	Italic	Itálico
 # Pattern Stamp tool
 	Pattern Stamp Tool	Ferramenta Carimbo de padrão
 	Impressionist	Impressionista
+
+	Speed	Velocidade
+	Automatic	Automático
+	10 bit	10 bits
+	Alpha quality	Qualidade alfa
+	Lossy RGB 4:4:4; ICC profile retained.	RGB 4:4:4 com perdas; perfil ICC preservado.

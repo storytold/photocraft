@@ -65,10 +65,20 @@ fn default_build_formats_all_symmetric() {
 }
 
 #[test]
-fn avif_never_readable() {
-    assert!(!caps(Format::Avif).read);
-    assert_eq!(caps(Format::Avif).write, cfg!(feature = "avif"));
-    assert!(matches!(decode_as(Format::Avif, b"\0\0\0\x1cftypavif"), Err(CodecError::Unsupported { .. })));
+fn avif_is_symmetric_when_enabled() {
+    assert_eq!(caps(Format::Avif).read, cfg!(all(feature = "avif", not(target_arch = "wasm32"))));
+    assert_eq!(caps(Format::Avif).write, cfg!(all(feature = "avif", not(target_arch = "wasm32"))));
+    assert!(decode_as(Format::Avif, b"\0\0\0\x1cftypavif").is_err());
+}
+
+#[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
+#[test]
+fn disabled_avif_is_recognized_but_import_and_export_report_unsupported() {
+    let bytes = include_bytes!("fixtures/avif/gradient12.avif");
+    assert_eq!(detect(bytes), Some(Format::Avif));
+    assert!(matches!(decode(bytes), Err(CodecError::Unsupported { format: Format::Avif, .. })));
+    let image = test_image(ChannelLayout::Rgb, SampleType::U8);
+    assert!(matches!(encode(&image, Format::Avif, &EncodeOptions::default()), Err(CodecError::Unsupported { format: Format::Avif, .. })));
 }
 
 #[test]

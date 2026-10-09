@@ -3257,3 +3257,8 @@ cameraRaw	Roughness	Chropowatość
 # Pattern Stamp tool
 	Pattern Stamp Tool	Narzędzie Pieczątka wzoru
 	Impressionist	Impresjonistyczny
+
+	Automatic	Automatycznie
+	10 bit	10 bitów
+	Alpha quality	Jakość alfa
+	Lossy RGB 4:4:4; ICC profile retained.	RGB 4:4:4 ze stratami; profil ICC zachowany.

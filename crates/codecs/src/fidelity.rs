@@ -15,6 +15,10 @@ pub enum FidelityWarning {
     WriteUnsupported {
         format: Format,
     },
+    /// Raw pixels need a colour-managed RGB conversion before this encoder can write them.
+    NeedsColorConversion {
+        format: Format,
+    },
     /// Bit depth / precision reduced, e.g. 16-bit → 8-bit or f32 → f16.
     DepthReduced {
         from: SampleType,
@@ -36,6 +40,10 @@ pub enum FidelityWarning {
     PaletteQuantized,
     /// The format's encoder is lossy.
     LossyCompression,
+    /// AVIF integer storage precision (even quality 100 is not RGB lossless).
+    AvifPrecision {
+        bits: u8,
+    },
     IccDropped,
     ExifDropped,
     XmpDropped,
@@ -57,7 +65,7 @@ pub enum FidelityWarning {
 impl FidelityWarning {
     /// `true` for warnings that make encoding fail outright.
     pub fn is_fatal(&self) -> bool {
-        matches!(self, FidelityWarning::WriteUnsupported { .. } | FidelityWarning::DimensionsExceeded { .. })
+        matches!(self, FidelityWarning::WriteUnsupported { .. } | FidelityWarning::NeedsColorConversion { .. } | FidelityWarning::DimensionsExceeded { .. })
     }
 }
 
@@ -77,6 +85,9 @@ impl fmt::Display for FidelityWarning {
             WriteUnsupported { format } => {
                 write!(f, "{} cannot be written in this build", format.name())
             }
+            NeedsColorConversion { format } => {
+                write!(f, "{} needs a colour-managed RGB conversion or an RGB ICC profile; use the document I/O export path", format.name())
+            }
             DepthReduced { from, to } => write!(f, "{} will be reduced to {}", depth_name(*from), depth_name(*to)),
             RangeClipped => write!(f, "HDR values outside 0..1 will be clipped"),
             AlphaDiscarded => write!(f, "alpha will be discarded"),
@@ -87,6 +98,7 @@ impl fmt::Display for FidelityWarning {
             ColorToGray => write!(f, "colour will be converted to grayscale"),
             PaletteQuantized => write!(f, "colours will be quantized to a 256-colour palette"),
             LossyCompression => write!(f, "lossy compression"),
+            AvifPrecision { bits } => write!(f, "AVIF stores {bits}-bit integer samples; higher precision and HDR range are not preserved"),
             IccDropped => write!(f, "ICC profile not supported; it will be dropped"),
             ExifDropped => write!(f, "EXIF not supported; it will be dropped"),
             XmpDropped => write!(f, "XMP not supported; it will be dropped"),
@@ -145,10 +157,14 @@ fn pick_layout(src: ChannelLayout, layouts: &[ChannelLayout], alpha: bool) -> Ch
     layouts[0]
 }
 
-pub(crate) fn plan(image: &Image, format: Format, _opts: &EncodeOptions) -> Plan {
+pub(crate) fn plan(image: &Image, format: Format, opts: &EncodeOptions) -> Plan {
     let c = caps(format);
     let (layout, sample) = (image.layout(), image.sample_type());
     match format {
+        Format::Avif => Plan {
+            layout: pick_layout(layout, c.layouts, c.alpha),
+            sample: if opts.avif_depth == 8 || (opts.avif_depth == 0 && sample == SampleType::U8) { SampleType::U8 } else { SampleType::U16 },
+        },
         // PNM: integer data can use any layout (PAM); float goes to PFM
         // which only has gray and RGB.
         Format::Pnm if sample.is_float() => Plan { layout: pick_layout(layout, &[ChannelLayout::Gray, ChannelLayout::Rgb], false), sample: SampleType::F32 },
@@ -170,6 +186,14 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
         w.push(W::WriteUnsupported { format });
         return w;
     }
+    if format == Format::Avif
+        && (image.layout().is_cmyk()
+            || (image.layout().is_gray() && image.icc.is_some())
+            || (image.icc.is_none() && image.meta.cicp.is_some_and(|v| !matches!(v, (1 | 2, 13 | 2)))))
+    {
+        w.push(W::NeedsColorConversion { format });
+        return w;
+    }
     if let Some((mw, mh)) = format.max_dimensions()
         && (image.width() > mw || image.height() > mh)
     {
@@ -188,6 +212,9 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     };
     if lossy_depth {
         w.push(W::DepthReduced { from: ss, to: p.sample });
+    }
+    if format == Format::Avif && ss != SampleType::U8 {
+        w.push(W::AvifPrecision { bits: if opts.avif_depth == 8 { 8 } else { 10 } });
     }
     if ss.is_float() && !p.sample.is_float() && image.has_out_of_range() {
         w.push(W::RangeClipped);

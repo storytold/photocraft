@@ -33,7 +33,7 @@ pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, P
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use half::f16;
 
-use crate::codecs::{exr, heif, jpeg, png, pnm, tiff, via_image, webp};
+use crate::codecs::{avif, exr, heif, jpeg, png, pnm, tiff, via_image, webp};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -66,7 +66,8 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Pnm => pnm::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
+        Format::Avif => avif::decode(bytes, l),
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
     }?;
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
@@ -155,6 +156,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Pnm => pnm::encode(image, plan, opts),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
+        Format::Avif => avif::encode(image, opts),
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::encode(format, image, plan, opts),
     }
 }

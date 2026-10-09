@@ -10,6 +10,8 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+# Native AVIF still-image import/export (forwarded to photocraft-codecs); opt-in.
+avif = ["photocraft-codecs/avif"]
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 # HEIC/HEIF decode (forwarded to photocraft-codecs; see its `heif` feature).

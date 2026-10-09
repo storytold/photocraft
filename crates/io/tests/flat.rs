@@ -52,6 +52,63 @@ codec_rt!(tiff_cmyk8, "tiff", ColorMode::Cmyk, SampleType::U8, false, 0.0);
 codec_rt!(tiff_cmyka16, "tiff", ColorMode::Cmyk, SampleType::U16, true, 0.0);
 codec_rt!(tiff_gray8, "tiff", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 
+#[test]
+fn avif_depth_profile_and_colour_managed_conversion() {
+    if !photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+        return;
+    }
+    use photocraft_cms::Builtin;
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = single(ColorMode::Rgb, depth, true);
+        d.icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+        let mut options = ExportOptions::default();
+        options.encode.avif_quality = 100;
+        let r = export(&d, "image.avif", &options).unwrap();
+        let back = import("misnamed.bin", &r.bytes).unwrap().document;
+        assert_eq!(back.icc_profile, d.icc_profile);
+        assert_eq!(back.depth, if depth == SampleType::U8 { SampleType::U8 } else { SampleType::U16 });
+        pixels_eq(&d, &back, 0.012);
+    }
+    // Omitting a P3 profile must convert its values to sRGB rather than mislabel them.
+    let mut d = single(ColorMode::Rgb, SampleType::U16, true);
+    d.icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    let mut options = ExportOptions::default();
+    options.encode.embed_icc = false;
+    options.encode.avif_quality = 100;
+    let r = export(&d, "avif", &options).unwrap();
+    let image = photocraft_codecs::decode(&r.bytes).unwrap();
+    assert!(image.icc.is_none());
+    assert_eq!(image.meta.cicp, Some((1, 13)));
+    assert!(r.warnings.iter().any(|w| w.contains("sRGB without")));
+    let back = import("image.avif", &r.bytes).unwrap().document;
+    assert_eq!(back.icc_profile, Some(Builtin::Srgb.profile().to_bytes()));
+    let expected =
+        photocraft_cms::Transform::new(Builtin::DisplayP3.profile(), Builtin::Srgb.profile(), photocraft_cms::Intent::RelativeColorimetric, true).unwrap();
+    let mut values = d.layers[0].surface().unwrap().read_region(d.bounds());
+    expected.apply(&mut values, 4);
+    let actual = back.layers[0].surface().unwrap().read_region(back.bounds());
+    assert!(values.iter().zip(actual).all(|(a, b)| (a.clamp(0.0, 1.0) - b).abs() < 0.012));
+    for mode in [ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        let mut d = single(mode, SampleType::U16, true);
+        d.icc_profile = Some(
+            match mode {
+                ColorMode::Grayscale => Builtin::SGray,
+                ColorMode::Cmyk => Builtin::CoatedCmyk,
+                _ => Builtin::LabD50,
+            }
+            .profile()
+            .to_bytes(),
+        );
+        let r = export(&d, "avif", &ExportOptions::default()).unwrap();
+        let back = import("x.avif", &r.bytes).unwrap().document;
+        assert_eq!(back.mode, ColorMode::Rgb);
+        assert!(r.warnings.iter().any(|w| w.contains("converted") || w.contains("conversion")));
+    }
+    let mut d = single(ColorMode::Rgb, SampleType::U8, false);
+    d.icc_profile = Some(std::sync::Arc::new(b"invalid ICC".to_vec()));
+    assert!(export(&d, "avif", &ExportOptions::default()).is_err());
+}
+
 /// EXR stores linear light: a linear document round-trips exactly; an sRGB (untagged) one is
 /// linearised on export and comes back tagged linear sRGB with the same colours.
 #[test]

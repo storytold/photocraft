@@ -11,7 +11,7 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 5] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA")];
+const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("avif", "AVIF"), ("tif", "TIFF"), ("tga", "TGA")];
 
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -113,6 +113,12 @@ fn set_format_defaults(f: &mut Map<String, Value>, fmt: &str, prefs: &photocraft
             f.insert("quality".into(), json!(prefs.webp_quality));
             f.insert("lossless".into(), json!(prefs.webp_lossless));
         }
+        "avif" => {
+            f.insert("quality".into(), json!(90));
+            f.insert("avifSpeed".into(), json!(8));
+            f.insert("avifDepth".into(), json!(0));
+            f.insert("avifAlphaQuality".into(), json!(100));
+        }
         _ => {}
     }
 }
@@ -130,6 +136,10 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
     let fmt = s_fmt(f);
     let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
     ExportSettings {
+        avif_quality: if fmt == "avif" { n(f, "quality", 90.0) as u8 } else { 90 },
+        avif_speed: n(f, "avifSpeed", 8.0) as u8,
+        avif_depth: n(f, "avifDepth", 0.0) as u8,
+        avif_alpha_quality: n(f, "avifAlphaQuality", 100.0) as u8,
         jpeg_quality: (fmt == "jpg").then_some(quality),
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
@@ -140,6 +150,10 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
 
 /// Estimated size (bytes) from a ≤512 px proxy encode, scaled by pixel count.
 fn estimate(app: &PhotocraftApp, doc: &Document, f: &Map<String, Value>) -> Option<u64> {
+    // AV1 encoding is too expensive to run synchronously during dialog drawing.
+    if s_fmt(f) == "avif" {
+        return None;
+    }
     let export = app.services.export.as_ref()?;
     let proxy = export_document(doc, f, Some(512)).ok()?;
     let (bytes, _) = export(&proxy, &format!("estimate.{}", s_fmt(f)), &settings(f)).ok()?;
@@ -160,7 +174,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
                 let mut fmt = s_fmt(f);
-                let opts: Vec<(String, &str)> = FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+                let opts: Vec<(String, &str)> = FORMATS
+                    .iter()
+                    .filter(|(k, _)| *k != "avif" || photocraft_codecs::caps(photocraft_codecs::Format::Avif).write)
+                    .map(|(k, l)| (k.to_string(), *l))
+                    .collect();
                 if crate::widgets::dropdown(ui, "export-format", &mut fmt, &opts, 130.0) {
                     set_format_defaults(f, &fmt, &app.session.prefs().export);
                 }
@@ -171,10 +189,26 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::checkbox(ui, &mut ll, tl!("Lossless"));
                 f.insert("lossless".into(), json!(ll));
             }
-            if fmt == "jpg" || (fmt == "webp" && !lossless(f)) {
+            if fmt == "jpg" || fmt == "avif" || (fmt == "webp" && !lossless(f)) {
                 let mut q = n(f, "quality", 85.0) as f32;
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
-                f.insert("quality".into(), json!(q.round()));
+                f.insert("quality".into(), json!(q.round() as u8));
+            }
+            if fmt == "avif" {
+                let mut speed = n(f, "avifSpeed", 8.0) as f32;
+                crate::widgets::slider_row(ui, "Speed", &mut speed, 1.0..=10.0, "", None);
+                f.insert("avifSpeed".into(), json!(speed.round() as u8));
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Bit depth")).color(t.text_dim));
+                    let mut depth = n(f, "avifDepth", 0.0) as u8;
+                    if crate::widgets::dropdown(ui, "avif-depth", &mut depth, &[(0, "Automatic"), (8, "8 bit"), (10, "10 bit")], 130.0) {
+                        f.insert("avifDepth".into(), json!(depth));
+                    }
+                });
+                let mut aq = n(f, "avifAlphaQuality", 100.0) as f32;
+                crate::widgets::slider_row(ui, "Alpha quality", &mut aq, 1.0..=100.0, "%", None);
+                f.insert("avifAlphaQuality".into(), json!(aq.round() as u8));
+                ui.label(egui::RichText::new(tl!("Lossy RGB 4:4:4; ICC profile retained.")).color(t.text_dim).size(11.5));
             }
             if fmt != "jpg" {
                 let mut tr = f.get("transparency").and_then(Value::as_bool).unwrap_or(true);
@@ -244,6 +278,16 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 /// Export with the dialog's settings: choose a path, render, encode, write.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if s_fmt(f) == "avif" {
+        let mut params = f.clone();
+        if let Some(q) = f.get("quality") {
+            params.insert("avifQuality".into(), q.clone());
+        }
+        photocraft_engine::file_cmds::apply_avif_params(&Value::Object(params), &mut photocraft_codecs::EncodeOptions::default()).map_err(|e| e.to_string())?;
+        if !photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+            return Err("AVIF support isn't included in this build of PhotoCraft".into());
+        }
+    }
     let doc = source_document(app, f)?;
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     let ext = s_fmt(f);
@@ -343,6 +387,86 @@ mod tests {
             assert!(out.size.width.max(out.size.height) <= max_side, "proxy respects its longest-side limit");
             assert_eq!(doc, before, "preview leaves the source document unchanged");
         }
+    }
+
+    #[test]
+    fn avif_export_controls_defaults_and_confirmation_validation() {
+        let mut fields = Map::new();
+        set_format_defaults(&mut fields, "avif", &Default::default());
+        let s = settings(&fields);
+        assert_eq!((s.avif_quality, s.avif_speed, s.avif_depth, s.avif_alpha_quality), (90, 8, 0, 100));
+        fields.insert("avifSpeed".into(), json!(99));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(confirm(&mut app, &fields).unwrap_err().contains("avifSpeed"));
+    }
+
+    #[test]
+    fn unavailable_avif_export_does_not_open_a_save_dialog() {
+        if photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+            return;
+        }
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut fields = Map::new();
+        set_format_defaults(&mut fields, "avif", &Default::default());
+        assert!(confirm(&mut app, &fields).unwrap_err().contains("isn't included"));
+        assert!(!app.file_dialog_open());
+    }
+
+    #[test]
+    fn drawing_avif_controls_keeps_options_valid_for_confirmation() {
+        if !photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+            return;
+        }
+        use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
+        use std::{cell::RefCell, rc::Rc};
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let picker_calls = calls.clone();
+        let writer_calls = calls.clone();
+        let services = crate::Services {
+            file_dialog: Some(Box::new(move |request, _parent, reply| {
+                let FileDialogRequest::Save { suggested } = request else { panic!("expected a save dialog") };
+                picker_calls.borrow_mut().push(format!("pick {suggested}"));
+                reply.send(Some(FileDialogAnswer::SaveTo("chosen-destination.avif".into())));
+            })),
+            export: Some(Box::new(|doc, path, settings| {
+                let options = photocraft_io::ExportOptions {
+                    encode: photocraft_codecs::EncodeOptions {
+                        avif_quality: settings.avif_quality,
+                        avif_speed: settings.avif_speed,
+                        avif_depth: settings.avif_depth,
+                        avif_alpha_quality: settings.avif_alpha_quality,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                photocraft_io::export(doc, path, &options).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(move |path, bytes| {
+                assert_eq!(photocraft_codecs::decode(bytes).unwrap().dimensions(), (16, 8));
+                writer_calls.borrow_mut().push(format!("write {path}"));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.execute("file.new", json!({"width": 16, "height": 8})).unwrap();
+        let mut fields = Map::new();
+        set_format_defaults(&mut fields, "avif", &Default::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let mut output = ctx.run_ui(Default::default(), |ui| body(&mut app, ui, &mut fields));
+        output.textures_delta.clear();
+        for name in ["quality", "avifSpeed", "avifAlphaQuality"] {
+            assert!(fields[name].as_u64().is_some(), "{name} must be an integer after drawing");
+        }
+        let result = confirm(&mut app, &fields).unwrap();
+        assert_eq!(result, json!({"fileDialog": "save"}));
+        assert!(app.file_dialog_open());
+        assert!(calls.borrow().is_empty(), "confirmation queues the dialog before exporting");
+        app.poll_file_dialog(&ctx, None);
+        assert!(!app.file_dialog_open());
+        assert_eq!(&*calls.borrow(), &["pick Untitled.avif", "write chosen-destination.avif"]);
+        assert!(app.ui.status.starts_with("Exported chosen-destination.avif"));
     }
 
     #[test]

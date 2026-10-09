@@ -14,7 +14,10 @@ fn samples() -> Vec<(Format, Vec<u8>)> {
     for f in rw_formats() {
         for (l, s) in [(ChannelLayout::Rgba, SampleType::U8), (ChannelLayout::Gray, SampleType::U16), (ChannelLayout::Rgb, SampleType::F32)] {
             let mut img = synth(19, 13, l, s, 11, 0.3);
-            img.icc = Some(sample_icc(300));
+            // AVIF's raw encoder cannot convert profiled grayscale to RGB. Use
+            // unprofiled grayscale for this valid mutation seed; the RGB seeds
+            // still exercise ICC boxes. Document I/O tests cover CMS conversion.
+            img.icc = (f != Format::Avif || !l.is_gray()).then(|| sample_icc(300));
             img.meta.exif = Some(sample_exif());
             img.meta.xmp = Some(SAMPLE_XMP.into());
             v.push((f, encode(&img, f, &EncodeOptions::default()).unwrap()));

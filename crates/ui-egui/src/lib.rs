@@ -163,6 +163,11 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8]) -> Result<(Document, Vec<String>), S
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
+    /// AVIF colour/alpha quality (1–100), speed (1–10), depth (0 = auto, 8 or 10).
+    pub avif_quality: u8,
+    pub avif_alpha_quality: u8,
+    pub avif_speed: u8,
+    pub avif_depth: u8,
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
@@ -179,7 +184,17 @@ pub struct ExportSettings {
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        ExportSettings { jpeg_quality: None, webp_lossless: true, webp_quality: None, tiff_layers: true, xmp_all: true }
+        ExportSettings {
+            avif_quality: 90,
+            avif_alpha_quality: 100,
+            avif_speed: 8,
+            avif_depth: 0,
+            jpeg_quality: None,
+            webp_lossless: true,
+            webp_quality: None,
+            tiff_layers: true,
+            xmp_all: true,
+        }
     }
 }
 

@@ -399,7 +399,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     for one in chosen_documents(&doc, p)? {
         let name = if prefix.is_empty() { sanitize(&one.name) } else { format!("{}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, SaveOpts::from_params(p))?;
+        save_doc(&one, &path, SaveOpts::from_params(p)?)?;
         files.push(path);
     }
     if files.is_empty() {

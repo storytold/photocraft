@@ -6,6 +6,12 @@ title = "File compatibility"
 order = 2
 
 [[item]]
+id = "FILE-AVIF"
+target = "AVIF still-image import/export, high-depth pixels, alpha, profiles and agent controls"
+status = "partial"
+note = "Opt-in native support: 8/10/12-bit import, 8/10-bit lossy RGB 4:4:4 export, ICC/CICP, CMS conversion, UI/CLI/RPC/MCP; synthetic and independent libaom/libdav1d oracle tests. Sequences, derived grids, transforms, PQ/HLG without ICC and EXIF/XMP remain unsupported; browser AVIF is unavailable and the optional MPL-2.0 parser needs maintainer acceptance"
+
+[[item]]
 id = "FILE-215-1"
 target = "Smart Objects export as embedded Smart Objects (SoLd + lnk2), not flat pixels"
 status = "done"

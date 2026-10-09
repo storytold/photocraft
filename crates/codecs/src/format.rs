@@ -19,7 +19,7 @@ pub enum Format {
     OpenExr,
     /// Radiance RGBE.
     Hdr,
-    /// Encode-only behind the `avif` feature; see [`ASYMMETRIC_EXCEPTIONS`].
+    /// Rust still-image decode/encode behind the opt-in native `avif` feature.
     Avif,
     /// HEIF/HEIC (HEVC-coded): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Heif,
@@ -32,7 +32,8 @@ pub struct FormatCaps {
     pub read: bool,
     /// Encoding is available in this build.
     pub write: bool,
-    /// Sample types stored without conversion.
+    /// Native sample storage types. AVIF U16 uses 10-bit precision in a U16 buffer;
+    /// consult the fidelity warnings for precision lost within that storage type.
     pub depths: &'static [SampleType],
     /// Layouts stored *and read back* without conversion.
     pub layouts: &'static [ChannelLayout],
@@ -53,20 +54,13 @@ pub struct FormatCaps {
 
 /// Formats that are enabled but intentionally not symmetric, with the reason.
 /// The test-suite asserts that every other enabled format is read+write.
-pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
-    (
-        Format::Avif,
-        "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
-         until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
-    ),
-    (
-        Format::Heif,
-        "HEIC decode uses heic-rs (pure Rust, in the optional photocraft-heif crate behind the \
+pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[(
+    Format::Heif,
+    "HEIC decode uses heic-rs (pure Rust, in the optional photocraft-heif crate behind the \
          non-default `heif` feature, which official builds enable), so iPhone and Mac photos open; \
          writing needs an HEVC encoder, and the mature ones (x265, libheif) are C, so write stays \
          unsupported. Without the feature HEIF is detected but neither read nor written.",
-    ),
-];
+)];
 
 use ChannelLayout as L;
 use SampleType as S;
@@ -168,6 +162,7 @@ impl Format {
             Format::Jpeg | Format::Gif => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
+            Format::Avif => Some((65536, 65536)),
             _ => None,
         }
     }
@@ -204,7 +199,15 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Qoi => base,
         Format::OpenExr => FormatCaps { depths: &[S::F16, S::F32], layouts: RGB_GRAY, ..base },
         Format::Hdr => FormatCaps { depths: &[S::F32], layouts: &[L::Rgb], alpha: false, lossy: true, ..base },
-        Format::Avif => FormatCaps { read: false, write: cfg!(feature = "avif"), lossy: true, ..base },
+        // U16 input retains high precision through 10-bit storage (not all 16 bits).
+        Format::Avif => FormatCaps {
+            read: cfg!(all(feature = "avif", not(target_arch = "wasm32"))),
+            write: cfg!(all(feature = "avif", not(target_arch = "wasm32"))),
+            depths: &[S::U8, S::U16],
+            icc: true,
+            lossy: true,
+            ..base
+        },
         Format::Heif => {
             FormatCaps { read: cfg!(feature = "heif"), write: false, depths: &[S::U8, S::U16], icc: true, exif: true, xmp: true, lossy: true, ..base }
         }

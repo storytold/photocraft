@@ -23,6 +23,27 @@ fn write_png(path: &Path, w: u32, h: u32, seed: u8) {
     std::fs::write(path, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
 }
 
+#[test]
+fn avif_convert_options_and_detection_work_end_to_end() {
+    if !photocraft_codecs::caps(photocraft_codecs::Format::Avif).write {
+        return;
+    }
+    let dir = tmp("avif");
+    let source = dir.join("source.png");
+    let target = dir.join("image.avif");
+    let back = dir.join("back.png");
+    write_png(&source, 32, 18, 3);
+    ok(bin().arg("convert").arg(&source).arg(&target).args(["--quality", "100", "--avif-speed", "8", "--avif-depth", "10", "--avif-alpha-quality", "100"]));
+    let decoded = photocraft_codecs::decode(&std::fs::read(&target).unwrap()).unwrap();
+    assert_eq!(decoded.sample_type(), photocraft_codecs::SampleType::U16);
+    assert_eq!(decoded.layout(), photocraft_codecs::ChannelLayout::Rgba);
+    ok(bin().arg("convert").arg(&target).arg(&back));
+    assert_eq!(photocraft_codecs::decode(&std::fs::read(&back).unwrap()).unwrap().dimensions(), (32, 18));
+    for (flag, value) in [("--quality", "0"), ("--avif-depth", "12"), ("--avif-speed", "11"), ("--avif-alpha-quality", "101")] {
+        assert!(!bin().arg("convert").arg(&source).arg(&target).args([flag, value]).output().unwrap().status.success());
+    }
+}
+
 fn ok(cmd: &mut Command) -> (String, String) {
     let o = cmd.output().unwrap();
     let (out, err) = (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned());

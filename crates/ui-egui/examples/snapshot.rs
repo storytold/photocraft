@@ -45,6 +45,10 @@ fn main() {
             if let Some(q) = settings.jpeg_quality {
                 opts.encode.jpeg_quality = q;
             }
+            opts.encode.avif_quality = settings.avif_quality;
+            opts.encode.avif_alpha_quality = settings.avif_alpha_quality;
+            opts.encode.avif_speed = settings.avif_speed;
+            opts.encode.avif_depth = settings.avif_depth;
             opts.encode.webp_lossless = settings.webp_lossless;
             if let Some(q) = settings.webp_quality {
                 opts.encode.webp_quality = q;
