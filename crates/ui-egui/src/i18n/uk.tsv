@@ -1485,6 +1485,7 @@
 	Adjustment Layer	Коригувальний шар
 	{name} Properties	Властивості: {name}
 	Move Tool	Інструмент «Переміщення»
+	Could not use the move tool because the layer is locked.	Не вдалося використати інструмент «Переміщення», бо шар заблоковано.
 	Rectangular Marquee Tool	Інструмент «Прямокутне виділення»
 	Elliptical Marquee Tool	Інструмент «Еліптичне виділення»
 	Brush Tool	Інструмент «Пензель»

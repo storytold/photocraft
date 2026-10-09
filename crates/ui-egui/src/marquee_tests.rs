@@ -408,3 +408,89 @@ fn alt_with_nothing_selected_draws_a_new_selection() {
     let after = h.state().session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
     assert!(after.is_none_or(|r| r.is_empty() || r != before), "⌥ subtracted: {before:?} -> {after:?}");
 }
+
+fn error_dialogs(app: &PhotocraftApp) -> Vec<String> {
+    app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(String::from)).collect()
+}
+
+/// Photoshop's "Could not use the move tool because the layer is locked." when a Move-tool drag
+/// (the Move tool, or ⌘ with a marquee) starts on a layer it can't move: the Background with no
+/// selection, a position-locked layer; a plain click says nothing, and the drag never starts.
+#[test]
+fn move_on_the_background_without_a_selection_shows_photoshops_lock_message() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    let steps = app.session.active().unwrap().history.past_len();
+    use crate::canvas::{ToolEvent, tool_event};
+    // A click: no message.
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, Modifiers::NONE);
+    assert!(error_dialogs(&app).is_empty() && !app.move_blocked);
+    // A drag: the message once, nothing moved, no drag in progress.
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 20.0 }, Modifiers::NONE);
+    assert_eq!(error_dialogs(&app), [crate::move_lock::MESSAGE]);
+    assert!(app.drag.is_none(), "no drag started");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    app.ui.dialogs.clear();
+    // ⌘-drag with a marquee (the Move tool for the drag, #896): the same.
+    app.ui.tool = Tool::RectMarquee;
+    drag(&mut app, [20.0, 20.0], [40.0, 20.0], Modifiers::COMMAND);
+    assert_eq!(error_dialogs(&app), [crate::move_lock::MESSAGE]);
+    app.ui.dialogs.clear();
+    // A position-locked layer: the same; unlocked, it moves.
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("lock", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().locks.position = true;
+            Ok(())
+        })
+        .unwrap();
+    drag(&mut app, [20.0, 20.0], [40.0, 20.0], Modifiers::COMMAND);
+    assert_eq!(error_dialogs(&app).len(), 1);
+    app.ui.dialogs.clear();
+    app.session
+        .edit("unlock", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().locks.position = false;
+            Ok(())
+        })
+        .unwrap();
+    drag(&mut app, [20.0, 20.0], [40.0, 20.0], Modifiers::COMMAND);
+    assert!(error_dialogs(&app).is_empty());
+}
+
+/// With a selection the Background's pixels do move (its lock is partial: transparency and
+/// position), so no message; a layer locked all over gets it, with the marquee's ⌘-drag inside the
+/// selection as with the Move tool.
+#[test]
+fn selected_pixels_move_off_the_background_but_not_off_a_fully_locked_layer() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+    app.sync_views();
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    app.ui.tool = Tool::RectMarquee;
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    drag(&mut app, [20.0, 20.0], [50.0, 20.0], Modifiers::COMMAND);
+    assert!(error_dialogs(&app).is_empty());
+    assert_eq!(photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| f.offset), Some((30, 0)));
+    let (mut app, layer) = painted();
+    app.session
+        .edit("lock", |doc, _| {
+            doc.layer_mut(layer).unwrap().locks.all = true;
+            Ok(())
+        })
+        .unwrap();
+    for (tool, m) in [(Tool::RectMarquee, Modifiers::COMMAND), (Tool::Move, Modifiers::NONE)] {
+        app.ui.tool = tool;
+        drag(&mut app, [20.0, 20.0], [40.0, 20.0], m);
+        assert_eq!(error_dialogs(&app), [crate::move_lock::MESSAGE], "{tool:?}");
+        assert!(photocraft_engine::float_cmds::floating(app.session.active().unwrap()).is_none(), "{tool:?}");
+        app.ui.dialogs.clear();
+    }
+}

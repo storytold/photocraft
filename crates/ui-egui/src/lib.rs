@@ -96,6 +96,7 @@ pub mod menu_catalog;
 pub mod menu_nav;
 pub mod menus;
 pub mod monitor_status;
+pub mod move_lock;
 pub mod move_mods;
 pub mod move_ui;
 pub mod native_menu;
@@ -368,6 +369,9 @@ pub struct PhotocraftApp {
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
+    /// A Move-tool press landed on a locked layer: the first pointer move shows Photoshop's
+    /// message (`move_lock`), a plain click shows nothing.
+    pub(crate) move_blocked: bool,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
@@ -565,6 +569,7 @@ impl PhotocraftApp {
             monitors: Default::default(),
             checker: None,
             drag: None,
+            move_blocked: false,
             live_stroke: None,
             trail: None,
             move_preview: None,
