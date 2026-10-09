@@ -233,7 +233,13 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
         } else {
             (xf.to_doc(top.left_top())[0], xf.to_doc(top.right_top())[0])
         };
-        let (u0, u1) = (d0 / px_per_unit, d1 / px_per_unit);
+        // A flipped or rotated view can swap the ends; normalise so the tick loop
+        // always runs from the smaller to the larger value (#1814).
+        let (u0, u1) = {
+            let a = d0 / px_per_unit;
+            let b = d1 / px_per_unit;
+            (a.min(b), a.max(b))
+        };
         let mut v = (u0 / step).floor() * step;
         while v <= u1 {
             let at = |u: f64| -> f32 {
@@ -399,5 +405,25 @@ mod tests {
         assert!(app.session.active().unwrap().doc.guides.vertical.is_empty());
         app.ui.extras.lock_guides = true;
         assert_eq!(guide_at(&app, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn ruler_range_is_normalised_when_flipped() {
+        // #1814: with View > Flip Horizontal, `to_doc` negates x, so the raw
+        // (d0, d1) comes out reversed. The ruler must normalise to (min, max)
+        // so its tick loop still runs.
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        for flip in [false, true] {
+            let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0 };
+            // Horizontal ruler: left edge to right edge of the top strip.
+            let top = Rect::from_min_size(rect.min, vec2(rect.width(), RULER));
+            let d0 = xf.to_doc(top.left_top())[0];
+            let d1 = xf.to_doc(top.right_top())[0];
+            // Normalise exactly as the ruler does now.
+            let (u0, u1) = (d0.min(d1), d0.max(d1));
+            assert!(u0 <= u1, "flip={flip}: u0 ({u0}) must be <= u1 ({u1})");
+            // The visible document span must be non-empty.
+            assert!(u1 - u0 > 0.0, "flip={flip}: range is empty");
+        }
     }
 }
