@@ -26,7 +26,8 @@
 //! Vector masks (rasterised once per mask state into a combined mask texture), layers clipped to
 //! pass-through groups, stroked shapes with clipped layers (fill and stroke split once per shape
 //! state), pattern fills and artboards are planned like everything else. What remains
-//! (Multichannel documents, patterns larger than the texture limit) returns [`Unsupported`];
+//! (Multichannel documents, patterns larger than the texture limit, uncached gradients with
+//! coincident colour or opacity stops) returns [`Unsupported`];
 //! callers fall back to the CPU compositor.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]

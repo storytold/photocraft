@@ -788,20 +788,20 @@ impl<'a> Planner<'a> {
                 Ok(s)
             }
             _ => {
-                let p = self.content_pass(layer);
+                let p = self.content_pass(layer)?;
                 Ok(self.emit(p))
             }
         }
     }
 
     /// The Content pass of a raster / text / shape / smart / fill layer.
-    fn content_pass(&self, layer: &'a Layer) -> Pass<'a> {
+    fn content_pass(&self, layer: &'a Layer) -> Result<Pass<'a>, Unsupported> {
         let mut p = Pass::new(Kernel::Content, 0);
         p.mask = self.mask_use(layer);
         match &layer.content {
             LayerContent::Fill(f) => match &layer.fill_cache {
                 Some(c) if c.fill == *f => self.surface_tex(&mut p, layer.id, &c.surface),
-                _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas)),
+                _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas))?,
             },
             _ => {
                 if let Some(s) = layer.surface() {
@@ -809,7 +809,7 @@ impl<'a> Planner<'a> {
                 }
             }
         }
-        p
+        Ok(p)
     }
 
     fn surface_tex(&self, p: &mut Pass<'a>, id: LayerId, s: &'a Surface) {
@@ -820,13 +820,15 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) {
+    fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) -> Result<(), Unsupported> {
         match f {
             Fill::Solid(c) => {
                 let rgb = c.to_rgb();
                 p.color = [rgb[0], rgb[1], rgb[2], c.alpha];
             }
-            Fill::Gradient { angle, scale, style, reverse, offset, dither, .. } => {
+            Fill::Gradient { stops, opacity_stops, angle, scale, style, reverse, offset, dither, .. } => {
+                check_gradient_stops(stops)?;
+                check_gradient_stops(opacity_stops)?;
                 p.gradient = true;
                 // compose::render_fill: whole-pixel end points (fill_layout).
                 let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(*style, *angle, *scale, *offset, frame);
@@ -848,6 +850,7 @@ impl<'a> Planner<'a> {
             // Pattern fills fall back to the CPU compositor (see `check`).
             Fill::Pattern { .. } => {}
         }
+        Ok(())
     }
 
     /// composite_atop: `layer` onto `base`, restricted to the base's alpha, honouring the
@@ -896,6 +899,9 @@ impl<'a> Planner<'a> {
     fn adjust(&mut self, adj: &Adjustment, src: Slot) -> Result<Slot, Unsupported> {
         if !adjustment_on_gpu(adj) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));
+        }
+        if let Adjustment::GradientMap { stops, .. } = adj {
+            check_gradient_stops(stops)?;
         }
         let mut p = Pass::new(Kernel::Adjust, 0);
         p.a = Some(src);
@@ -975,6 +981,24 @@ impl<'a> Planner<'a> {
         }
 
         let items: Vec<&'a Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
+        for e in &items {
+            let gradient = match e {
+                Effect::GradientOverlay { gradient, .. } => Some(gradient),
+                Effect::Stroke(s) => match &s.paint {
+                    FxPaint::Gradient(g) => Some(g),
+                    _ => None,
+                },
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => match &g.paint {
+                    FxPaint::Gradient(g) => Some(g),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(g) = gradient {
+                check_gradient_stops(&g.stops)?;
+                check_gradient_stops(&g.opacity_stops)?;
+            }
+        }
         // Linked patterns tile from the effects reference point (else the layer's top-left).
         let anchor = layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0)));
         let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && !outline;
@@ -1593,6 +1617,19 @@ fn gradient_rows(g: &Gradient) -> Vec<[f32; 4096]> {
         }
     }
     rows
+}
+
+/// Linear interpolation between LUT entries cannot preserve a discontinuity. Let the canvas
+/// use the CPU oracle for coincident stops, including opacity stops and unsorted fill ramps
+/// (which `gradient_fill::Ramp` sorts). Check only ramps we will sample: cached fills and
+/// disabled effects can still use the GPU.
+fn check_gradient_stops<T>(stops: &[(f32, T)]) -> Result<(), Unsupported> {
+    let mut positions: Vec<f32> = stops.iter().map(|s| s.0).collect();
+    positions.sort_by(f32::total_cmp);
+    if positions.windows(2).any(|w| w[0] == w[1]) {
+        return Err(Unsupported("coincident gradient stops (composited on the CPU)".into()));
+    }
+    Ok(())
 }
 
 /// Mode index used by the shader (declaration order of [`BlendMode`]).
