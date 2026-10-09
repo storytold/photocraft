@@ -1,6 +1,6 @@
 //! Capability-based filesystem policy for untrusted automation paths.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,6 +12,9 @@ use serde_json::Value;
 use crate::AutomationError;
 
 const DENIED: &str = "automation filesystem access is not granted";
+/// Files opened through automation are currently materialized before parsing. Keep that
+/// allocation finite; trusted local CLI opens retain their separate large-file path.
+pub const MAX_AUTOMATION_FILE_BYTES: u64 = 1 << 30;
 
 #[derive(Clone)]
 struct RootCapability {
@@ -46,8 +49,7 @@ impl AuthorizedWorkspace {
         if !metadata.is_file() {
             return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
         }
-        // Bounded reads, and a clear error for a file larger than memory (#375).
-        photocraft_format::read::read_all(&mut file, metadata.len()).map_err(|e| file_error("read", path, e))
+        read_capped(&mut file, metadata.len(), MAX_AUTOMATION_FILE_BYTES)
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -85,6 +87,37 @@ impl AuthorizedWorkspace {
             }
         }
         Ok(())
+    }
+}
+
+fn read_capped(reader: &mut impl Read, size_hint: u64, maximum: u64) -> Result<Vec<u8>, AutomationError> {
+    if size_hint > maximum {
+        return Err(AutomationError::BadRequest(format!("automation file exceeds {maximum} bytes")));
+    }
+    // Do not reserve from a potentially stale or attacker-controlled metadata length. A file
+    // growing after metadata() must still be rejected before its extra bytes enter the Vec.
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 64 << 10];
+    loop {
+        let remaining = maximum.saturating_sub(bytes.len() as u64);
+        let ask = chunk.len().min(usize::try_from(remaining.saturating_add(1)).unwrap_or(chunk.len()));
+        let n = match reader.read(&mut chunk[..ask]) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(AutomationError::Io(format!("automation read failed: {e}"))),
+        };
+        if n == 0 {
+            return Ok(bytes);
+        }
+        if n as u64 > remaining {
+            return Err(AutomationError::BadRequest(format!("automation file exceeds {maximum} bytes")));
+        }
+        let needed = bytes.len().checked_add(n).ok_or_else(|| AutomationError::BadRequest(format!("automation file exceeds {maximum} bytes")))?;
+        if needed > bytes.capacity() {
+            let target = bytes.capacity().saturating_add(bytes.capacity() / 2).max(needed).min(usize::try_from(maximum).unwrap_or(usize::MAX));
+            bytes.try_reserve_exact(target - bytes.len()).map_err(|e| AutomationError::Io(format!("automation read allocation failed: {e}")))?;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
     }
 }
 
@@ -398,6 +431,26 @@ mod tests {
         assert_eq!(workspace.read("read.txt").unwrap(), b"canary");
         workspace.write("new-output.txt", b"created").unwrap();
         assert_eq!(std::fs::read(inside.join("new-output.txt")).unwrap(), b"created");
+    }
+
+    #[test]
+    fn oversized_sparse_file_is_rejected_before_allocation() {
+        let (inside, _, workspace) = roots("oversized-read");
+        let file = std::fs::File::create(inside.join("large.psb")).unwrap();
+        file.set_len(MAX_AUTOMATION_FILE_BYTES + 1).unwrap();
+        let error = workspace.read("large.psb").unwrap_err().to_string();
+        assert!(error.contains("exceeds"), "{error}");
+        drop(file);
+        std::fs::remove_file(inside.join("large.psb")).unwrap();
+    }
+
+    #[test]
+    fn read_growth_is_rejected_at_the_ceiling() {
+        let mut growing = std::io::repeat(b'x').take(66);
+        let error = read_capped(&mut growing, 4, 64).unwrap_err().to_string();
+        assert!(error.contains("exceeds 64 bytes"), "{error}");
+        let mut allowed = std::io::repeat(b'x').take(64);
+        assert_eq!(read_capped(&mut allowed, 64, 64).unwrap().len(), 64);
     }
 
     fn temp_files(dir: &Path) -> Vec<String> {
