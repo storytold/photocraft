@@ -742,6 +742,7 @@
 	Amount	Эффект
 	Radius	Радиус
 	Radius:	Радиус:
+	Tolerance	Допуск
 	Tolerance:	Допуск:
 	Density	Плотность
 	Density:	Плотность:
@@ -2631,3 +2632,16 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+
+# Art History Brush (#213).
+	Art History Brush Tool	Инструмент «Кисть истории искусств»
+	Tight Short	Плотный короткий
+	Tight Medium	Плотный средний
+	Tight Long	Плотный длинный
+	Loose Medium	Свободный средний
+	Loose Long	Свободный длинный
+	Dab	Мазок
+	Tight Curl	Плотный завиток
+	Loose Curl	Свободный завиток
+	Area	Область
+	Stylized dabs from a history state	Стилизованные мазки из состояния истории

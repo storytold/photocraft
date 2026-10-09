@@ -92,6 +92,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::CloneStamp => "stamp",
         Tool::PatternStamp => "grid-3x3",
         Tool::HistoryBrush => "clock",
+        Tool::ArtHistoryBrush => "sparkles",
         Tool::Blur => "droplet",
         Tool::Sharpen => "triangle",
         Tool::Smudge => "pointer",

@@ -2056,7 +2056,7 @@
 	Quick Selection	Quick Selection
 	Magnetic Lasso	Magnetic Lasso
 	History Brush	History Brush
-	Art History Brush	Art History Brush
+	Art History Brush	Kuas riwayat artistik
 	Pattern Stamp	Stempel Pola
 	Spot Healing	Spot Healing
 	Red Eye	Red Eye
@@ -2764,3 +2764,16 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+
+# Art History Brush (#213).
+	Art History Brush Tool	Alat Kuas riwayat artistik
+	Tight Short	Rapet pendek
+	Tight Medium	Rapet sedang
+	Tight Long	Rapet panjang
+	Loose Medium	Longgar sedang
+	Loose Long	Longgar panjang
+	Dab	Cap
+	Tight Curl	Ikal rapat
+	Loose Curl	Ikal longgar
+	Area	Area
+	Stylized dabs from a history state	Cap bergaya dari sebuah keadaan riwayat

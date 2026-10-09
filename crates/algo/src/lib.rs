@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod art_history;
 mod artistic;
 mod artistic_fx;
 mod blur;

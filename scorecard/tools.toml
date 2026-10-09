@@ -277,3 +277,10 @@ target = "Crop gear menu: Show Cropped Area (H), Enable Crop Shield with Match C
 status = "done"
 issue = 1919
 note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. No Classic Mode / Auto Center Preview (PhotoCraft is always Classic Mode)"
+
+[[item]]
+id = "TOOL-213-19"
+target = "Art History Brush: Y-group, styles, Area, Tolerance, paints from a history state"
+status = "done"
+issue = 213
+note = "paint.artHistoryBrush + Tool::ArtHistoryBrush in the Y flyout; Tight/Loose/Dab/Curl styles, Area, Tolerance"
