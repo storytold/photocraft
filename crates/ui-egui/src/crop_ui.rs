@@ -376,6 +376,29 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_the_selection_frame_crops_to_it_at_8_and_16_bit() {
+        // #1789: selection, C, ↵ did nothing, as the untouched frame was always treated as a no-op.
+        for depth in [SampleType::U8, SampleType::U16] {
+            let mut app = app(depth);
+            app.run("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 40})).unwrap();
+            ensure_frame(&mut app);
+            assert_eq!(app.ui.crop_rect, Some([10.0, 20.0, 40.0, 60.0]));
+            crate::canvas::commit_crop(&mut app);
+            let doc = &app.session.active().unwrap().doc;
+            assert_eq!(doc.size, Size::new(30, 40), "{depth:?}");
+            assert_eq!(doc.depth, depth);
+            assert!(doc.selection.is_none(), "cropping to the selection deselects, as in Photoshop");
+            // The new default frame is the whole (cropped) canvas: ↵ on it does nothing.
+            ensure_frame(&mut app);
+            assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 30.0, 40.0]));
+            let steps = app.session.active().unwrap().history.past_len();
+            crate::canvas::commit_crop(&mut app);
+            let st = app.session.active().unwrap();
+            assert_eq!((st.doc.size, st.history.past_len()), (Size::new(30, 40), steps), "{depth:?}");
+        }
+    }
+
+    #[test]
     fn the_frame_is_edited_from_a_press_until_commit_cancel_or_another_tool() {
         let mut app = app(SampleType::U8);
         ensure_frame(&mut app);

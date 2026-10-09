@@ -86,6 +86,8 @@ pub fn elided(ui: &Ui, text: &str, font: egui::FontId, color: egui::Color32, max
 
 /// What a strip reported this frame.
 pub struct StripOut {
+    /// A tab was activated, including a choice from the overflow menu.
+    pub clicked: bool,
     pub double_clicked: bool,
     /// Rects of the tabs on the strip, `(tab index, rect)`.
     pub tabs: Vec<(usize, Rect)>,
@@ -142,7 +144,7 @@ fn tabs_in(
     let natural: Vec<f32> = tabs.iter().map(|n| ui.painter().layout_no_wrap((*n).to_owned(), font.clone(), t.text).size().x + pad).collect();
     let f = fit(&natural, *selected, area.width(), min_w, CHEVRON_W);
     let mut x = area.left();
-    let mut out = StripOut { double_clicked: false, tabs: Vec::with_capacity(f.shown.len()), chevron: None };
+    let mut out = StripOut { clicked: false, double_clicked: false, tabs: Vec::with_capacity(f.shown.len()), chevron: None };
     for &(i, w) in &f.shown {
         let Some(name) = tabs.get(i) else { continue };
         let r = Rect::from_min_size(pos2(x, area.top()), vec2(w, area.height()));
@@ -154,6 +156,7 @@ fn tabs_in(
         let resp = if cut { resp.on_hover_text(*name) } else { resp };
         out.double_clicked |= resp.double_clicked();
         if resp.clicked() {
+            out.clicked = true;
             *selected = i;
         }
         out.tabs.push((i, r));
@@ -164,6 +167,7 @@ fn tabs_in(
         let mut picked = None;
         overflow_button(ui, id.with("tab-overflow"), r, tl!("More panels"), tabs, &f.overflow, &mut picked);
         if let Some(i) = picked {
+            out.clicked = true;
             *selected = i;
         }
         out.chevron = Some(r);

@@ -3857,9 +3857,13 @@ pub fn commit_polygon(app: &mut PhotocraftApp) {
 /// Apply the crop tool's rectangle.
 pub fn commit_crop(app: &mut PhotocraftApp) {
     let Some(r) = app.ui.crop_rect.take() else { return };
-    // The untouched default frame crops nothing (Photoshop's ↵ on it does nothing).
+    // The untouched default frame around the whole canvas crops nothing (Photoshop's ↵ on it does
+    // nothing); one framing the selection's bounds crops to them (#1789).
     if std::mem::take(&mut app.crop.default_frame) {
-        return;
+        let whole = app.session.active().map(|st| st.doc.bounds()).map(|b| [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)]);
+        if whole.is_none_or(|b| b == r) {
+            return;
+        }
     }
     let (x, y) = (r[0].round(), r[1].round());
     let (w, h) = ((r[2] - r[0]).round().max(1.0), (r[3] - r[1]).round().max(1.0));

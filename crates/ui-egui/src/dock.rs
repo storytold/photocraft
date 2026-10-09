@@ -392,7 +392,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if sel != before {
             *g.tab_mut(&mut app.ui.dock_tabs) = sel.min(tabs.len().saturating_sub(1));
         }
-        if resp.strip.double_clicked() || resp.tab_double_clicked {
+        if resp.strip.double_clicked() || resp.tab_double_clicked || (collapsed && resp.tab_clicked) {
             actions.push(Action::ToggleCollapse(g));
         }
         if !locked && resp.strip.dragged() {

@@ -169,6 +169,7 @@ pub fn has_dialog(command: &str) -> bool {
                 | "view.proofSetup"
                 | "layer.layerStyle.globalLight"
                 | "image.mode.colorTable"
+                | "edit.definePattern"
         ))
         && photocraft_engine::commands::find(command).is_some_and(|c| !parse_spec(c.params).is_empty())
 }
@@ -204,6 +205,10 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     }
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut fields);
+    }
+    // Photoshop's Pattern Name dialog starts from the name the pattern would get anyway.
+    if command == "edit.definePattern" {
+        fields.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
     }
     if parse_spec(spec.params).iter().any(|p| p.kind == Kind::Document) {
         // The document picker lists every open document (params refer to them by index).
@@ -677,6 +682,34 @@ mod tests {
                 assert!(changed(0, half), "{depth:?} k={k}: noise inside the selection");
                 assert!(!changed(half, 64 / k as i32), "{depth:?} k={k}: nothing outside the selection");
             }
+        }
+    }
+
+    #[test]
+    fn define_pattern_asks_for_a_name() {
+        // Edit › Define Pattern… named the pattern after the document without asking ("ask", then
+        // "ask 2"). Photoshop's Pattern Name dialog starts from that name and lets you change it.
+        let spec = photocraft_engine::commands::find("edit.definePattern").unwrap();
+        assert_eq!(parse_spec(spec.params), vec![Param { key: "name".into(), kind: Kind::Text }, Param { key: "rect".into(), kind: Kind::Json }]);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "ask.jpg"})).unwrap();
+        let ctx = egui::Context::default();
+        let define = |app: &mut PhotocraftApp, name: Option<&str>| {
+            crate::menus::invoke(app, &ctx, "edit.definePattern", Value::Null).unwrap();
+            let d = app.ui.dialogs.last().expect("Define Pattern opens a dialog").clone();
+            let shown = d.fields["name"].as_str().unwrap().to_string();
+            if let Some(n) = name {
+                app.ui.dialog_mut(d.id).unwrap().fields.insert("name".into(), json!(n));
+            }
+            crate::dialogs::confirm(app, d.id).unwrap();
+            shown
+        };
+        assert_eq!(define(&mut app, Some("Bricks")), "ask", "prefilled with the document's name");
+        assert_eq!(define(&mut app, None), "ask", "Bricks didn't take it");
+        assert_eq!(define(&mut app, None), "ask 2", "numbered past the library");
+        let names: Vec<&str> = app.session.patterns.items.iter().map(|p| p.name.as_str()).collect();
+        for n in ["Bricks", "ask", "ask 2"] {
+            assert!(names.contains(&n), "{n} in {names:?}");
         }
     }
 }

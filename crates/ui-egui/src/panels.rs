@@ -147,6 +147,12 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
                                 app.ui.tool = tool;
                             }
+                            // Double-clicking the Hand tool fits the image on screen (Photoshop).
+                            if resp.double_clicked() && tool == Tool::Hand {
+                                app.ui.tool = tool;
+                                // With no document open there is nothing to fit.
+                                let _ = app.run("view.fitOnScreen", json!({}));
+                            }
                             // Right-click or long-press opens the flyout (Photoshop).
                             let held_for = resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
                             if slot.len() > 1
@@ -2101,6 +2107,12 @@ fn layer_row(
     });
 }
 
+/// Screen rect and UVs for a layer thumbnail: the document-shaped part of the square cell and of
+/// the letterboxed square texture, so tall and wide documents don't show empty bars.
+fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
+    crate::channels_panel::fit_thumb(cell, w, h)
+}
+
 fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
@@ -2127,9 +2139,11 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         _ => {
             // Keep row layout and outside thumbnail decorations when the image is clipped.
             if ui.is_rect_visible(rect) {
-                widgets::checker(p, rect, 5.0);
+                // The texture is a letterboxed square: draw only the part the document fills.
+                let (fitted, uv) = layer_thumb_fit(rect, doc.size.width, doc.size.height);
+                widgets::checker(p, fitted, 5.0);
                 let tex = app.layer_thumb(ctx, doc, l);
-                p.image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                p.image(tex, fitted, uv, Color32::WHITE);
             }
         }
     }
@@ -3557,6 +3571,74 @@ mod toolbar_tests {
         assert!(!h.state().ui.panels.toolbar_double);
         assert_eq!(left(&h), single);
     }
+
+    fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {
+        h.hover_at(p);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+    }
+
+    /// The Hand tool's toolbar button: tool buttons have no label, so find it by slot order.
+    fn hand_button(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Pos2 {
+        let size = egui::Vec2::splat(if Tokens::get(&h.ctx).pro { 30.0 } else { 36.0 });
+        let buttons: Vec<Rect> = h.ctx.viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).map(|w| w.rect).collect()
+        });
+        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Hand)).unwrap();
+        buttons[index].center()
+    }
+
+    fn toolbar_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        // 60 fps steps, so two clicks a few frames apart are a double-click.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 1400.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    toolbar(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(2);
+        h
+    }
+
+    /// Double-clicking the Hand tool fits the image on screen (Photoshop); a single click only
+    /// picks the tool.
+    #[test]
+    fn double_clicking_the_hand_tool_fits_on_screen() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.views[0].fit_pending = false;
+        let mut h = toolbar_harness(app);
+        let p = hand_button(&h);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Hand);
+        assert!(!h.state().ui.views[0].fit_pending, "a single click doesn't fit");
+        // Past the double-click window, so the next two clicks are a fresh double-click.
+        h.run_steps(40);
+        click(&mut h, p);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Hand);
+        assert!(h.state().ui.views[0].fit_pending, "a double-click fits on screen");
+    }
+
+    /// With no document open the double-click still picks the tool and doesn't panic.
+    #[test]
+    fn double_clicking_the_hand_tool_without_a_document_is_harmless() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.tool = Tool::Move;
+        let mut h = toolbar_harness(app);
+        let p = hand_button(&h);
+        click(&mut h, p);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Hand);
+        assert!(h.state().session.active().is_none());
+    }
 }
 
 #[cfg(test)]
@@ -3696,5 +3778,14 @@ mod group_drag_selection_tests {
         assert_eq!(layer_drop_payload(9, group, "into", &[a, b]), json!({"layer": 9, "target": 20, "position": "into"}));
         assert_eq!(layer_drop_payload(a.0, group, "above", &[a]), json!({"layer": 10, "target": 20, "position": "above"}));
         assert_eq!(layer_drop_payload(a.0, group, "below", &[]), json!({"layer": 10, "target": 20, "position": "below"}));
+    }
+
+    #[test]
+    fn layer_thumb_of_a_tall_document_fills_the_height() {
+        let cell = Rect::from_min_size(pos2(10.0, 20.0), vec2(30.0, 30.0));
+        let (r, uv) = layer_thumb_fit(cell, 100, 400);
+        assert_eq!((r.top(), r.bottom()), (cell.top(), cell.bottom()));
+        assert!((r.width() - 7.5).abs() < 1e-3, "{r:?}");
+        assert!((uv.width() - 0.25).abs() < 1e-3 && (uv.height() - 1.0).abs() < 1e-3, "{uv:?}");
     }
 }

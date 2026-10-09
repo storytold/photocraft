@@ -89,6 +89,48 @@ fn the_app_keeps_running_while_a_dialog_is_open() {
 }
 
 #[test]
+fn save_and_export_dialogs_start_beside_the_document() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let dir = std::env::temp_dir().join("PhotoCraft projects").join("图像");
+    let source = dir.join("original.psd");
+    app.session.active_mut().unwrap().path = Some(source.to_string_lossy().into_owned());
+    for command in ["file.saveAs", "file.export.exportAs", "file.export.saveForWebLegacy"] {
+        let r = menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        if let Some(id) = r["dialog"].as_u64() {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+        }
+        app.poll_file_dialog(&ctx, None);
+        {
+            let held = open.borrow();
+            let (FileDialogRequest::Save { suggested }, _) = &held[0] else { panic!("save dialog expected") };
+            assert_eq!(std::path::Path::new(suggested).parent(), Some(dir.as_path()), "{command}");
+            if command == "file.saveAs" {
+                assert_eq!(std::path::Path::new(suggested), source);
+            }
+        }
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+    }
+}
+
+#[test]
+fn save_suggestions_preserve_explicit_directories_and_untitled_names() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    for (document_path, suggested) in
+        [(None, "Untitled.png"), (Some("project/source.psd"), "exports/result.png"), (Some("project/source.psd"), "/other/result.png")]
+    {
+        app.session.active_mut().unwrap().path = document_path.map(str::to_string);
+        app.pick_save(suggested, |_, _| Ok(Value::Null)).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested: actual } if actual == suggested));
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+    }
+}
+
+#[test]
 fn the_answer_goes_to_the_document_it_was_asked_for() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();

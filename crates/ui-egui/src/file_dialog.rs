@@ -106,7 +106,15 @@ impl PhotocraftApp {
 
     /// Ask where to save: `then` gets the chosen path.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string() }, move |app, answer| match answer {
+        let mut suggested = std::path::PathBuf::from(suggested);
+        // Export dialogs usually provide only a file name. Start beside the source document,
+        // while preserving a caller's explicit directory and the untitled-document fallback.
+        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
+            && let Some(dir) = self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent())
+        {
+            suggested = dir.join(suggested);
+        }
+        self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),
         })

@@ -160,3 +160,33 @@ fn menu_opens_the_dialog_and_params_skip_it() {
     assert!(crate::menus::invoke(&mut empty, &ctx, COMMAND, json!({})).is_err());
     assert!(empty.ui.dialogs.is_empty());
 }
+
+#[test]
+fn the_pattern_is_picked_from_its_swatches() {
+    // The Custom Pattern was a dropdown of names; Photoshop shows the pattern itself and opens a grid
+    // of swatches.
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    {
+        let app = h.state_mut();
+        app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+        app.run("edit.definePattern", json!({"name": "Brick", "rect": [0, 0, 8, 8]})).unwrap();
+        app.run("edit.fill", json!({"color": "#2266cc"})).unwrap();
+        app.run("edit.definePattern", json!({"name": "Sky", "rect": [0, 0, 8, 8]})).unwrap();
+    }
+    let ctx = h.ctx.clone();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("pattern"));
+    h.run_steps(3);
+    let pattern = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["pattern"].clone();
+    let ids: Vec<String> = h.state().session.patterns.items.iter().map(|p| p.id.clone()).collect();
+    let sky = ids[h.state().session.patterns.items.iter().position(|p| p.name == "Sky").unwrap()].clone();
+    assert_ne!(pattern(&h), json!(sky), "starts on another pattern");
+    assert!(h.query_by_label("Sky").is_none(), "the grid opens on a click");
+    h.get_by_label("Patterns").click();
+    h.run_steps(3);
+    h.get_by_label("Sky").click();
+    h.run_steps(3);
+    assert_eq!(pattern(&h), json!(sky));
+    assert!(h.query_by_label("Brick").is_none(), "the grid closes after a pick");
+}

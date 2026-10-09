@@ -154,12 +154,16 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         "pattern" => {
             ui.horizontal(|ui| {
                 label(ui, tl!("Custom Pattern:"));
-                let mut pat = get_str(f, "pattern", "");
-                let opts: Vec<(String, &str)> = app.session.patterns.items.iter().map(|p| (p.id.clone(), p.display_name())).collect();
-                if opts.is_empty() {
+                let pat = get_str(f, "pattern", "");
+                if app.session.patterns.items.is_empty() {
                     ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
-                } else if crate::widgets::dropdown(ui, "fill-pattern", &mut pat, &opts, 170.0) {
-                    f.insert("pattern".into(), json!(pat));
+                } else {
+                    // Photoshop shows the pattern itself and opens a grid of swatches.
+                    if let Some(id) = crate::preset_panels::pattern_picker(app, ui, &pat) {
+                        f.insert("pattern".into(), json!(id));
+                    }
+                    let name = app.session.patterns.items.iter().find(|p| p.id == get_str(f, "pattern", "")).map(|p| p.display_name().to_string());
+                    ui.label(egui::RichText::new(name.unwrap_or_default()).color(Tokens::get(ui.ctx()).text_dim));
                 }
             });
         }

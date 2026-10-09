@@ -96,6 +96,9 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             if let Some(name) = Path::new(&suggested).file_name() {
                 dialog = dialog.set_file_name(name.to_string_lossy());
             }
+            if let Some(dir) = Path::new(&suggested).parent().filter(|p| !p.as_os_str().is_empty()) {
+                dialog = dialog.set_directory(dir);
+            }
             let picked = dialog.save_file();
             Box::pin(async move { picked.await.map(|file| FileDialogAnswer::SaveTo(path_of(&file))) })
         }

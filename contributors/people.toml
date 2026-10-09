@@ -50,3 +50,6 @@ sync_github_name = false
 
 [people.Elvis33LE]
 sync_github_name = true
+
+[people.stevanmarjanovic]
+sync_github_name = true
