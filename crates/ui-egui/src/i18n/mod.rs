@@ -96,7 +96,7 @@ fn plural_polish(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 16] = [
+pub static LANGUAGES: [LangInfo; 17] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
@@ -129,6 +129,8 @@ pub static LANGUAGES: [LangInfo; 16] = [
         catalog: OnceLock::new(),
     },
     LangInfo { code: "el", name: "Ελληνικά", source: include_str!("el.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
+    LangInfo { code: "nl", name: "Nederlands", source: include_str!("nl.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
@@ -355,6 +357,8 @@ mod tests {
         assert_eq!(lang_from_tag("de-AT"), Lang::from_code("de"));
         assert_eq!(lang_from_tag("it_IT.UTF-8"), Lang::from_code("it"));
         assert_eq!(lang_from_tag("it-CH"), Lang::from_code("it"));
+        assert_eq!(lang_from_tag("nl_NL.UTF-8"), Lang::from_code("nl"));
+        assert_eq!(lang_from_tag("nl-BE"), Lang::from_code("nl"));
         // Traditional Chinese: by region, by script, and with a region after the script.
         assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
         assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));
