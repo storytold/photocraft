@@ -68,6 +68,9 @@ mod tests {
         let ctx = Context::default();
         crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // The system title bar hides the in-app mark (the OS draws its own icon), so paint the
+        // app-drawn bar here.
+        app.custom_titlebar = true;
         let mut frame = || {
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::panels::title_bar(&mut app, ui));
             let uploads = out.textures_delta.set.values().flat_map(|d| d.iter()).filter(|d| d.image.size() == [128, 128]).count();

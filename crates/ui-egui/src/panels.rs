@@ -398,10 +398,13 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The app's top bar: brand mark, menus, the document title and the workspace controls. With
 /// [`PhotocraftApp::custom_titlebar`] (Windows and Linux) it is also the window's title bar, as in
-/// Photoshop on Windows: the caption buttons take its right end (`titlebar`).
+/// Photoshop on Windows: the caption buttons take its right end (`titlebar`). With the system
+/// title bar (Windows and Linux, `system_title_bar`) the OS draws its own icon and title, so the
+/// in-app bar shows menus and workspace controls only: no brand mark, no centred title.
 pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let custom = app.custom_titlebar;
+    let system = system_title_bar(app);
     let left = if cfg!(target_os = "macos") && app.integrated_titlebar { 78 } else { 10 };
     let right = if custom { 0 } else { 10 };
     let bar = egui::Panel::top("title_bar")
@@ -428,10 +431,12 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // whatever room is left between them, shortened or dropped rather than drawn over them.
             let (mut menus_right, mut controls_left) = (full.left(), full.right());
             ui.horizontal_centered(|ui| {
-                let side = if t.pro { 18.0 } else { 20.0 };
-                let (mark, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-                crate::brand::paint_mark(ui, mark);
-                ui.add_space(6.0);
+                if !system {
+                    let side = if t.pro { 18.0 } else { 20.0 };
+                    let (mark, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+                    crate::brand::paint_mark(ui, mark);
+                    ui.add_space(6.0);
+                }
                 // With the macOS menu bar the menus are at the top of the screen instead.
                 menus_right = if app.services.native_menu.is_some() { ui.cursor().left() } else { crate::menus::menu_bar(app, ui) };
                 // The menu bar takes the whole row, so the right-hand group gets its own rect:
@@ -493,6 +498,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 };
             });
             ui.ctx().data_mut(|d| d.insert_temp(span_id, (menus_right, controls_left)));
+            if system {
+                return;
+            }
             let font = theme::medium(13.0);
             let galley = ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text_dim);
             if let Some(x) = title_x(full.center().x, menus_right, controls_left, galley.size().x) {
@@ -508,6 +516,33 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     if custom {
         crate::titlebar::caption_buttons(app, ui, bar.response.rect);
+    }
+}
+
+/// Whether the window shows the system's title bar instead of the app drawing its own: Windows
+/// and Linux with Preferences › Interface › System Title Bar. macOS always has system decorations,
+/// but keeps the in-app brand mark and centred title, so it never counts as system mode here.
+pub fn system_title_bar(app: &PhotocraftApp) -> bool {
+    !app.custom_titlebar && !cfg!(target_os = "macos")
+}
+
+/// The OS window title: the active document's name suffixed with the app name (a `*` prefix
+/// marks unsaved changes, like the `•` in the app-drawn title), or just the app name with no
+/// document open.
+pub fn window_title(app: &PhotocraftApp) -> String {
+    app.session
+        .active()
+        .map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, d.doc.name))
+        .unwrap_or_else(|| "PhotoCraft".into())
+}
+
+/// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends
+/// `ViewportCommand::Title` only when the title changed since the last frame.
+pub fn sync_window_title(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let want = window_title(app);
+    if app.last_window_title != want {
+        app.last_window_title = want.clone();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(want));
     }
 }
 
@@ -535,7 +570,7 @@ fn title_x(center: f32, menus_right: f32, controls_left: f32, width: f32) -> Opt
 
 #[cfg(test)]
 mod title_tests {
-    use super::title_x;
+    use super::{system_title_bar, title_x, window_title};
 
     #[test]
     fn title_never_overlaps_menus_or_controls() {
@@ -549,6 +584,92 @@ mod title_tests {
         assert_eq!(title_x(400.0, 420.0, 480.0, 60.0), None);
         assert_eq!(title_x(f32::NAN, 420.0, 1300.0, 60.0), Some(436.0));
         assert_eq!(title_x(400.0, f32::INFINITY, 1300.0, 60.0), None);
+    }
+
+    fn app(custom_titlebar: bool) -> crate::PhotocraftApp {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.custom_titlebar = custom_titlebar;
+        app
+    }
+
+    fn open_named(app: &mut crate::PhotocraftApp, name: &str) {
+        app.session.add_document(
+            photocraft_doc::Document::new(
+                name,
+                photocraft_doc::Size::new(4, 4),
+                photocraft_doc::ColorMode::Rgb,
+                photocraft_doc::SampleType::U8,
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn window_title_with_no_document_is_the_app_name() {
+        assert_eq!(window_title(&app(true)), "PhotoCraft");
+    }
+
+    #[test]
+    fn window_title_follows_the_active_file() {
+        let mut app = app(true);
+        open_named(&mut app, "foo.psd");
+        assert_eq!(window_title(&app), "foo.psd \u{2014} PhotoCraft");
+        // Unsaved changes gain a `*` prefix, like the `•` in the app-drawn title.
+        if let Some(st) = app.session.active_mut() {
+            st.revision += 1;
+        }
+        assert_eq!(window_title(&app), "*foo.psd \u{2014} PhotoCraft");
+    }
+
+    #[test]
+    fn system_mode_hides_the_mark_and_the_centred_title() {
+        for custom in [true, false] {
+            let mut app = app(custom);
+            open_named(&mut app, "foo.psd");
+            let ctx = egui::Context::default();
+            crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| super::title_bar(&mut app, ui));
+            let mut out = out;
+            out.textures_delta.clear();
+            let mut texts = Vec::new();
+            for shape in &out.shapes {
+                collect_text(&shape.shape, &mut texts);
+            }
+            let system = system_title_bar(&app);
+            assert_eq!(system, !custom && !cfg!(target_os = "macos"));
+            assert_eq!(crate::brand::mark_rect(&ctx).is_some(), !system, "mark in system mode (custom={custom})");
+            assert_eq!(texts.iter().any(|t| t.contains("foo.psd")), !system, "centred title in system mode (custom={custom}): {texts:?}");
+        }
+    }
+
+    fn collect_text(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect_text(s, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn sync_window_title_sends_only_on_change() {
+        let mut app = app(true);
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        super::sync_window_title(&mut app, &ctx);
+        assert_eq!(app.last_window_title, "PhotoCraft");
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+        let cmds = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t == "PhotoCraft")), "{cmds:?}");
+        // Same document state again: the cached title stops a repeat command.
+        super::sync_window_title(&mut app, &ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+        let cmds = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        assert!(!cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(_))), "repeat Title: {cmds:?}");
+        open_named(&mut app, "foo.psd");
+        super::sync_window_title(&mut app, &ctx);
+        assert_eq!(app.last_window_title, "foo.psd \u{2014} PhotoCraft");
     }
 }
 

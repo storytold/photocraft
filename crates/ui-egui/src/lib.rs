@@ -384,6 +384,9 @@ pub struct PhotocraftApp {
     /// Windows and Linux: the window has no OS decorations and the app's top bar is the title bar
     /// (caption buttons, window dragging and edge resizing, `titlebar`).
     pub custom_titlebar: bool,
+    /// Last window title sent to the OS (`ViewportCommand::Title`, see `panels::sync_window_title`):
+    /// sent again only when it changes, so idle frames don't spam the backend.
+    last_window_title: String,
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
@@ -537,6 +540,7 @@ impl PhotocraftApp {
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
+            last_window_title: String::new(),
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             drop_canvas_rect: None,
@@ -1172,6 +1176,9 @@ impl eframe::App for PhotocraftApp {
             ui.disable();
             ui.set_opacity(1.0);
         }
+        // The OS title bar (and the taskbar / Alt-Tab entry) follows the active file; with the
+        // system title bar this is where the document name lives, as the in-app title is hidden.
+        panels::sync_window_title(self, &ctx);
         let chrome = !self.ui.view.hides_chrome();
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
