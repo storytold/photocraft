@@ -64,8 +64,9 @@ are requested as `?v=<content hash>` and cached for a year; everything else reva
 The module ships as `photocraft_bg.wasm.gz` (about 10 MB instead of about 25 MB) and the page inflates
 it with `DecompressionStream` while it compiles, so no server-side compression or wasm MIME type is
 needed, and it stays far below the 25 MiB per-file cap of Cloudflare Workers/Pages (the raw module
-is already close to it; `build.sh` fails if any file passes 24 MiB). Serve the `.gz` file as is:
-a host that adds `Content-Encoding: gzip` to it would make the browser inflate it twice.
+is already close to it; `build.sh` fails if any file passes 24 MiB). The page checks the first bytes
+for the gzip header, so a host that serves the file with `Content-Encoding: gzip` (and so has the
+browser inflate it first) works too.
 
 The site works from any path (all URLs are relative). As with the single-threaded web build, everything runs
 on the visitor's device: Open uses the file picker, Save/Export download files, preferences use

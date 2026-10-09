@@ -33,6 +33,23 @@
     const version = '__PHOTOCRAFT_VERSION__';
     const loading = document.getElementById('photocraft_loading');
     const status = document.getElementById('photocraft_status');
+    // The module ships gzipped (build.sh) and is inflated on its way into streaming compilation.
+    // Sniff the bytes rather than trust the name: a host that serves the file with
+    // Content-Encoding: gzip has the browser inflate it already.
+    const wasmResponse = async (url) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const first = await reader.read();
+      const head = first.value ?? new Uint8Array();
+      const body = new ReadableStream({
+        start(c) { if (first.done) c.close(); else c.enqueue(head); },
+        async pull(c) { const { done, value } = await reader.read(); if (done) c.close(); else c.enqueue(value); },
+        cancel(reason) { return reader.cancel(reason); },
+      });
+      const gzipped = head[0] === 0x1f && head[1] === 0x8b;
+      return new Response(gzipped ? body.pipeThrough(new DecompressionStream('gzip')) : body, { headers: { 'Content-Type': 'application/wasm' } });
+    };
     const fail = (msg) => {
       loading.classList.add('error');
       status.textContent = msg;
@@ -45,11 +62,7 @@
           'Cross-Origin-Embedder-Policy: require-corp.');
       }
       const pc = await import(`./photocraft.js?v=${version}`);
-      // The module ships gzipped (build.sh); inflate it on its way into streaming compilation.
-      const gz = await fetch(`./photocraft_bg.wasm.gz?v=${version}`);
-      if (!gz.ok) throw new Error(`photocraft_bg.wasm.gz: HTTP ${gz.status}`);
-      const wasm = new Response(gz.body.pipeThrough(new DecompressionStream('gzip')), { headers: { 'Content-Type': 'application/wasm' } });
-      await pc.default({ module_or_path: wasm });
+      await pc.default({ module_or_path: await wasmResponse(`./photocraft_bg.wasm.gz?v=${version}`) });
       // One worker per core but one (the UI thread spins while it waits for them), at most 16.
       // ?threads=N overrides it (1 runs every parallel step on one worker; useful to compare).
       const asked = Number(new URLSearchParams(location.search).get('threads'));
