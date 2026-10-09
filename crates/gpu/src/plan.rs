@@ -824,7 +824,11 @@ impl<'a> Planner<'a> {
         match f {
             Fill::Solid(c) => {
                 let rgb = c.to_rgb();
-                p.color = [rgb[0], rgb[1], rgb[2], c.alpha];
+                // compose::render_fill: the colour lives in the document's model, so convert it
+                // like the CPU compositor does (a Grayscale document's luma, a CMYK one's inks).
+                let mut col = [[rgb[0], rgb[1], rgb[2], c.alpha]];
+                photocraft_compose::fill_pixels_to_document_model(&mut col, self.cx.mode, self.cx.depth);
+                p.color = col[0];
             }
             Fill::Gradient { angle, scale, style, reverse, offset, dither, .. } => {
                 p.gradient = true;
@@ -836,9 +840,12 @@ impl<'a> Planner<'a> {
                 // p2.xy: centre offset; p2.w: dither (the shared position hash, see the shader).
                 p.params[2] = [offset.0, offset.1, 0.0, if *dither { 1.0 } else { 0.0 }];
                 let ramp = photocraft_compose::gradient_fill::Ramp::new(f);
+                // The ramp colours go through the document's model too (as the CPU compositor
+                // converts each gradient pixel), so the LUT holds the document's colours.
+                let mut px: Vec<[f32; 4]> = (0..4096).map(|k| ramp.as_ref().map_or([0.0; 4], |r| r.sample(k as f32 / 4095.0))).collect();
+                photocraft_compose::fill_pixels_to_document_model(&mut px, self.cx.mode, self.cx.depth);
                 let mut rows = vec![[0.0f32; 4096]; 4];
-                for k in 0..4096 {
-                    let v = ramp.as_ref().map_or([0.0; 4], |r| r.sample(k as f32 / 4095.0));
+                for (k, v) in px.iter().enumerate() {
                     for (ch, row) in rows.iter_mut().enumerate() {
                         row[k] = v[ch];
                     }

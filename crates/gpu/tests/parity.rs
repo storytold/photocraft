@@ -430,9 +430,16 @@ fn formats_offsets_and_chunks() {
     // Grayscale and CMYK documents.
     let mut d = Document::new("g", Size::new(40, 30), ColorMode::Grayscale, SampleType::U8);
     d.layers.push(noise_layer("g", PixelFormat::GRAYA8, Rect::new(0, 0, 40, 30), 53, 0.5));
+    // A fill layer too: its colour must reach the document's model on both compositors (#1905).
+    let mut f = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgb(0.2, 0.5, 0.8))));
+    f.opacity = 0.7;
+    d.layers.push(f);
     check(&mut g, &d, "grayscale");
     let mut d = Document::new("c", Size::new(40, 30), ColorMode::Cmyk, SampleType::U8);
     d.layers.push(noise_layer("c", PixelFormat::CMYKA8, Rect::new(0, 0, 40, 30), 54, 1.0));
+    let mut f = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgb(0.2, 0.5, 0.8))));
+    f.opacity = 0.7;
+    d.layers.push(f);
     check(&mut g, &d, "cmyk");
 
     // Wider than one chunk.

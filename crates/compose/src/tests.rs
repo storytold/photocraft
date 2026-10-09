@@ -323,6 +323,29 @@ fn solid_and_gradient_fill_layers() {
     assert!(buf.px[0][0] < buf.px[9][0], "left dark, right light");
 }
 
+// A fill layer's colour is authored in RGB, so it has to reach the document's colour model the
+// same way a raster layer's pixels do: a solid blue fill is its luma in a Grayscale document, its
+// inks in a CMYK one. Regression for #1905: the live composite showed the raw RGB until a
+// flatten, export or save/reopen converted it, so what you saw was not what you got.
+#[test]
+fn fill_layer_colour_converts_to_the_document_mode() {
+    for mode in [ColorMode::Grayscale, ColorMode::Cmyk] {
+        let mut fill_doc = Document::new("f", Size::new(8, 8), mode, SampleType::U8);
+        fill_doc.layers.push(Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgb(0.0, 0.0, 1.0)))));
+
+        // The same colour stored the way a raster layer stores it (through the document format).
+        let fmt = fill_doc.pixel_format();
+        let mut stored = Layer::raster("stored", fmt);
+        stored.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
+        let mut raster_doc = Document::new("r", Size::new(8, 8), mode, SampleType::U8);
+        raster_doc.layers.push(stored);
+
+        let (got, want) = (px(&fill_doc, 4, 4), px(&raster_doc, 4, 4));
+        assert!(close4(got, want), "{mode:?}: fill {got:?} vs stored {want:?}");
+        assert!(!close4(got, [0.0, 0.0, 1.0, 1.0]), "{mode:?}: still raw RGB {got:?}");
+    }
+}
+
 #[test]
 fn dissolve_coverage_matches_opacity() {
     let mut d = Document::new("d", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);

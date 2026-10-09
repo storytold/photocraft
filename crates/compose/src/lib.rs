@@ -719,7 +719,11 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
         LayerContent::Fill(f) => match &layer.fill_cache {
             // Photoshop's own rendering, valid while the fill is unchanged.
             Some(c) if c.fill == *f => surface_to_buffer(&c.surface, rect),
-            _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns),
+            _ => {
+                let mut b = render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns);
+                fill_pixels_to_document_model(&mut b.px, cx.mode, cx.depth);
+                b
+            }
         },
         LayerContent::Adjustment(_) => return None,
         _ => match layer.surface() {
@@ -816,6 +820,46 @@ fn render_fill(f: &Fill, rect: Rect, canvas: Rect, patterns: &pattern::PreparedP
             None => Buffer::transparent(rect),
         },
     }
+}
+
+/// Bring a freshly rendered fill (RGB) into the document's colour model.
+///
+/// A fill layer's colour is authored in RGB, but a layer's pixels are stored in the document's
+/// model: a raster layer's [surface](Layer::surface) is `doc.pixel_format()`, and reading it back
+/// ([`surface_to_buffer`]) yields the model's representation (a grayscale document's luma, a
+/// CMYK document's inks, quantised to the document's depth). Our own fill rendering skipped that,
+/// so a solid blue fill layer in a Grayscale or CMYK document composited its raw RGB and only the
+/// canvas preview showed the wrong colour until the document was flattened, exported or saved and
+/// reopened: the PSD export converts it (`io::psd_export`'s `fill_pixels` writes through the same
+/// [`Surface`]). Photoshop stores the converted colour too, so convert here as well.
+///
+/// A cached [fill](Layer::fill_cache) is already in the document's format and needs no conversion.
+/// The GPU compositor converts its fill's uniform and gradient-ramp colours with this same
+/// function, so the two compositors agree.
+pub fn fill_pixels_to_document_model(px: &mut [[f32; 4]], mode: photocraft_color::ColorMode, depth: photocraft_color::SampleType) {
+    use photocraft_color::ColorMode as M;
+    // The document's storage model for fills (as [`Document::pixel_format`]): indexed and
+    // multichannel documents keep RGB pixels; bitmap and duotone keep a single gray channel.
+    let mode = match mode {
+        M::Indexed | M::Multichannel => M::Rgb,
+        M::Bitmap | M::Duotone => M::Grayscale,
+        m => m,
+    };
+    // RGB fills are already the model's own pixels; the rest (Grayscale, CMYK, Lab) convert and
+    // quantise to the document's depth exactly as reading a surface of that format would.
+    if mode == M::Rgb || px.is_empty() {
+        return;
+    }
+    let fmt = photocraft_color::PixelFormat::new(mode, depth, true);
+    let n = fmt.channels();
+    let rect = Rect::from_xywh(0, 0, px.len() as u32, 1);
+    let mut vals = Vec::with_capacity(px.len() * n);
+    for p in px.iter() {
+        vals.extend(photocraft_raster::from_rgba(&fmt, *p));
+    }
+    let mut s = Surface::new(fmt);
+    s.write_region(rect, &vals);
+    s.read_rgba_into(rect, px);
 }
 
 /// `true` when a pixel-backed layer has nothing to contribute in `rect`:
