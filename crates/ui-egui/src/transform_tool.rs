@@ -564,7 +564,6 @@ pub fn commit(app: &mut PhotocraftApp) {
 /// never stays on a layer that is no longer the active one (#1400). Checked every frame and before
 /// each pointer event, so a press with a tool chosen just before it (`ui.pointer`'s `tool`) goes to
 /// that tool.
-
 pub fn end_if_left(app: &mut PhotocraftApp) {
     let Some(t) = &app.ui.transform else { return };
     let Some(st) = app.session.active() else { return cancel(app) };
