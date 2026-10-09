@@ -1523,20 +1523,7 @@ impl PhotocraftApp {
                             let x = photocraft_raster::from_rgba(&fmt, rgba)[k];
                             let g = if cmyk { 1.0 - x } else { x };
                             let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                            if show_color {
-                                match (fmt.mode, k) {
-                                    (photocraft_doc::ColorMode::Rgb, 0) => egui::Color32::from_rgb(byte, 0, 0),
-                                    (photocraft_doc::ColorMode::Rgb, 1) => egui::Color32::from_rgb(0, byte, 0),
-                                    (photocraft_doc::ColorMode::Rgb, 2) => egui::Color32::from_rgb(0, 0, byte),
-                                    (photocraft_doc::ColorMode::Cmyk, 0) => egui::Color32::from_rgb(255 - byte, 255, 255),
-                                    (photocraft_doc::ColorMode::Cmyk, 1) => egui::Color32::from_rgb(255, 255 - byte, 255),
-                                    (photocraft_doc::ColorMode::Cmyk, 2) => egui::Color32::from_rgb(255, 255, 255 - byte),
-                                    (photocraft_doc::ColorMode::Cmyk, 3) => egui::Color32::from_gray(255 - byte),
-                                    _ => egui::Color32::from_gray(byte),
-                                }
-                            } else {
-                                egui::Color32::from_gray(byte)
-                            }
+                            channel_tint(fmt.mode, k, byte, show_color)
                         },
                         &format!("c{k}"),
                     ));
@@ -1593,6 +1580,46 @@ fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
         sig = sig.rotate_left(5) ^ *b as u64;
     }
     sig
+}
+
+/// A channel thumbnail pixel whose lightness is `byte` (255 = white: full light, no ink).
+/// Preferences ▸ Interface ▸ Show Channels in Color tints RGB channels from black to their
+/// primary and CMYK channels from white to their ink, as Photoshop does; otherwise grey.
+fn channel_tint(mode: photocraft_doc::ColorMode, k: usize, byte: u8, in_color: bool) -> egui::Color32 {
+    use photocraft_doc::ColorMode::{Cmyk, Rgb};
+    if !in_color {
+        return egui::Color32::from_gray(byte);
+    }
+    match (mode, k) {
+        (Rgb, 0) => egui::Color32::from_rgb(byte, 0, 0),
+        (Rgb, 1) => egui::Color32::from_rgb(0, byte, 0),
+        (Rgb, 2) => egui::Color32::from_rgb(0, 0, byte),
+        (Cmyk, 0) => egui::Color32::from_rgb(byte, 255, 255),
+        (Cmyk, 1) => egui::Color32::from_rgb(255, byte, 255),
+        (Cmyk, 2) => egui::Color32::from_rgb(255, 255, byte),
+        _ => egui::Color32::from_gray(byte),
+    }
+}
+
+#[cfg(test)]
+mod channel_tint_tests {
+    use super::channel_tint;
+    use egui::Color32;
+    use photocraft_doc::ColorMode::{Cmyk, Grayscale, Rgb};
+
+    #[test]
+    fn channels_in_color_tint_rgb_from_black_and_cmyk_inks_from_white() {
+        assert_eq!(channel_tint(Rgb, 0, 255, true), Color32::from_rgb(255, 0, 0));
+        assert_eq!(channel_tint(Rgb, 2, 0, true), Color32::BLACK);
+        // CMYK: no ink is white, full ink is the ink's colour.
+        assert_eq!(channel_tint(Cmyk, 0, 255, true), Color32::WHITE);
+        assert_eq!(channel_tint(Cmyk, 0, 0, true), Color32::from_rgb(0, 255, 255));
+        assert_eq!(channel_tint(Cmyk, 1, 0, true), Color32::from_rgb(255, 0, 255));
+        assert_eq!(channel_tint(Cmyk, 2, 0, true), Color32::from_rgb(255, 255, 0));
+        assert_eq!(channel_tint(Cmyk, 3, 0, true), Color32::BLACK);
+        assert_eq!(channel_tint(Grayscale, 0, 77, true), Color32::from_gray(77));
+        assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
+    }
 }
 
 impl PhotocraftApp {
