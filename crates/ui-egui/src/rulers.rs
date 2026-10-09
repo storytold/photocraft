@@ -202,6 +202,15 @@ pub fn finish_drag(app: &mut PhotocraftApp, d: GuideDrag) {
     }
 }
 
+/// Visible ruler range in ruler units, normalised to `(min, max)` so the tick loop runs for
+/// flipped or rotated views too (#1814). Shared by the renderer and its tests.
+fn ruler_range(xf: &ViewXform, a: Pos2, b: Pos2, axis: usize, px_per_unit: f64) -> (f64, f64) {
+    let d0 = xf.to_doc(a)[axis];
+    let d1 = xf.to_doc(b)[axis];
+    let (u0, u1) = (d0 / px_per_unit, d1 / px_per_unit);
+    (u0.min(u1), u0.max(u1))
+}
+
 /// Rulers along the top and left of `full` (the canvas rect before `content_rect`), with the
 /// pointer position marked; dragging out of a ruler creates a guide.
 pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &ViewXform) {
@@ -228,17 +237,10 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
     for (vertical, extent) in [(false, size[0]), (true, size[1])] {
         let px_per_unit = unit.to_px(1.0, dpi, extent, ppi).max(1e-9);
         let step = nice_step(60.0 / (xf.zoom as f64 * px_per_unit).max(1e-6), whole);
-        let (d0, d1) = if vertical {
-            (xf.to_doc(left.left_top())[1], xf.to_doc(left.left_bottom())[1])
+        let (u0, u1) = if vertical {
+            ruler_range(xf, left.left_top(), left.left_bottom(), 1, px_per_unit)
         } else {
-            (xf.to_doc(top.left_top())[0], xf.to_doc(top.right_top())[0])
-        };
-        // A flipped or rotated view can swap the ends; normalise so the tick loop
-        // always runs from the smaller to the larger value (#1814).
-        let (u0, u1) = {
-            let a = d0 / px_per_unit;
-            let b = d1 / px_per_unit;
-            (a.min(b), a.max(b))
+            ruler_range(xf, top.left_top(), top.right_top(), 0, px_per_unit)
         };
         let mut v = (u0 / step).floor() * step;
         while v <= u1 {
@@ -410,19 +412,14 @@ mod tests {
     #[test]
     fn ruler_range_is_normalised_when_flipped() {
         // #1814: with View > Flip Horizontal, `to_doc` negates x, so the raw
-        // (d0, d1) comes out reversed. The ruler must normalise to (min, max)
-        // so its tick loop still runs.
+        // (d0, d1) comes out reversed. ruler_range must normalise to (min, max)
+        // so the tick loop still runs. Exercises the production helper.
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let top = Rect::from_min_size(rect.min, vec2(rect.width(), RULER));
         for flip in [false, true] {
             let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0 };
-            // Horizontal ruler: left edge to right edge of the top strip.
-            let top = Rect::from_min_size(rect.min, vec2(rect.width(), RULER));
-            let d0 = xf.to_doc(top.left_top())[0];
-            let d1 = xf.to_doc(top.right_top())[0];
-            // Normalise exactly as the ruler does now.
-            let (u0, u1) = (d0.min(d1), d0.max(d1));
+            let (u0, u1) = ruler_range(&xf, top.left_top(), top.right_top(), 0, 1.0);
             assert!(u0 <= u1, "flip={flip}: u0 ({u0}) must be <= u1 ({u1})");
-            // The visible document span must be non-empty.
             assert!(u1 - u0 > 0.0, "flip={flip}: range is empty");
         }
     }
