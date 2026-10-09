@@ -374,6 +374,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::crop_overlay::keys(app, ctx) {
         return;
     }
+    // ... and H toggles Show Cropped Area.
+    if crate::crop_shield::keys(app, ctx) {
+        return;
+    }
     // Single-key tools (no modifiers). D and X (`tools.defaultColors` / `tools.swapColors`) and the
     // brush keys [ ] ⇧[ ⇧] (`tools.decreaseBrushSize`…) are commands, dispatched above with any
     // Keyboard Shortcuts override.

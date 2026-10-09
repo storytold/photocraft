@@ -706,67 +706,9 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
         .collect()
 }
 
-/// 1D squared distance transform (Felzenszwalb & Huttenlocher).
-fn dt1(f: &[f32], out: &mut [f32], v: &mut [usize], z: &mut [f32]) {
-    let n = f.len();
-    let mut k = 0usize;
-    v[0] = 0;
-    z[0] = f32::NEG_INFINITY;
-    z[1] = f32::INFINITY;
-    for q in 1..n {
-        loop {
-            let p = v[k];
-            let s = ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32));
-            if s <= z[k] && k > 0 {
-                k -= 1;
-                continue;
-            }
-            if s <= z[k] {
-                v[0] = q;
-                z[0] = f32::NEG_INFINITY;
-                z[1] = f32::INFINITY;
-                break;
-            }
-            k += 1;
-            v[k] = q;
-            z[k] = s;
-            z[k + 1] = f32::INFINITY;
-            break;
-        }
-    }
-    k = 0;
-    for (q, o) in out.iter_mut().enumerate() {
-        while z[k + 1] < q as f32 {
-            k += 1;
-        }
-        let d = q as f32 - v[k] as f32;
-        *o = d * d + f[v[k]];
-    }
-}
+mod distance;
 
-/// Euclidean distance to the nearest `true` pixel.
-pub fn edt(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
-    let mut g: Vec<f32> = inside.iter().map(|&b| if b { 0.0 } else { 1e20 }).collect();
-    let n = w.max(h).max(1);
-    let (mut f, mut o, mut v, mut z) = (vec![0.0; n], vec![0.0; n], vec![0usize; n], vec![0.0f32; n + 1]);
-    for x in 0..w {
-        for y in 0..h {
-            f[y] = g[y * w + x];
-        }
-        dt1(&f[..h], &mut o[..h], &mut v, &mut z);
-        for y in 0..h {
-            g[y * w + x] = o[y];
-        }
-    }
-    for y in 0..h {
-        f[..w].copy_from_slice(&g[y * w..(y + 1) * w]);
-        dt1(&f[..w], &mut o[..w], &mut v, &mut z);
-        for x in 0..w {
-            g[y * w + x] = o[x].sqrt();
-        }
-    }
-    g
-}
+pub use distance::edt;
 
 /// Grows the selection by `r` pixels.
 pub fn expand(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {

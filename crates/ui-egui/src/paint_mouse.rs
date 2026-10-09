@@ -273,9 +273,12 @@ mod tests {
         let strokes = strokes(&h);
         assert_eq!(strokes.len(), 2, "a Shift-click commits one connected stroke");
         let points = strokes[1]["points"].as_array().unwrap();
-        assert_eq!(points.len(), 2, "a click has the previous endpoint and clicked endpoint");
+        // The previous endpoint, then the clicked one. While the button is held, smoothing that is
+        // still catching up repeats the clicked point with later times.
         assert_eq!(points[0][0], previous[0]);
         assert_eq!(points[0][1], previous[1]);
+        let clicked = &points[1];
+        assert!(points[1..].iter().all(|p| p[0] == clicked[0] && p[1] == clicked[1]), "{points:?}");
         assert!(alpha_at(&h, end + vec2(60.0, 40.0)) > 0.9, "the segment between the strokes is painted");
     }
 

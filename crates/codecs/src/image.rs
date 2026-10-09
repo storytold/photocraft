@@ -148,6 +148,8 @@ pub enum DecodeWarning {
     MoreFrames { total: Option<u32> },
     /// Only the first page of a multi-page file was decoded; `total` counts every page when known.
     MorePages { total: Option<u32> },
+    /// Only one part of a multi-part file was decoded; `total` counts every part when known.
+    MoreParts { total: Option<u32> },
     /// The image data ends early (truncated or damaged file); the decoder filled in the rest
     /// (a baseline JPEG's missing rows come out grey).
     Truncated { format: Format },
@@ -163,6 +165,8 @@ impl fmt::Display for DecodeWarning {
             DecodeWarning::MoreFrames { total: None } => write!(f, "only the first frame of the animation was imported"),
             DecodeWarning::MorePages { total: Some(n) } => write!(f, "only the first of {n} pages was imported"),
             DecodeWarning::MorePages { total: None } => write!(f, "only the first page of the file was imported"),
+            DecodeWarning::MoreParts { total: Some(n) } => write!(f, "only one of {n} EXR parts was imported"),
+            DecodeWarning::MoreParts { total: None } => write!(f, "only one EXR part of the file was imported"),
             DecodeWarning::Truncated { format } => {
                 write!(f, "{} data ends early (the file is truncated or damaged); part of the image is missing", format.name())
             }
@@ -219,6 +223,58 @@ impl DeepImage {
     pub fn total_samples(&self) -> u64 {
         self.counts.last().copied().unwrap_or(0)
     }
+}
+
+/// One channel of an [`ExrPartInfo`]: the name as in the file (a Maya/Arnold AOV layer
+/// keeps its prefix, e.g. `diffuse.R`) and the sample type that part stores it with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExrChannelInfo {
+    pub name: String,
+    pub sample: SampleType,
+}
+
+/// One part of a multi-part OpenEXR file (what a Maya/Arnold render writes per AOV):
+/// header facts only, no pixel data. [`crate::exr_info`] lists them, and the index is
+/// what [`crate::decode_exr_part`] decodes; [`crate::decode_as_with`] opens the part
+/// the ranking in [`ExrPartInfo::color_rank`] prefers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExrPartInfo {
+    /// Index into the part list, in file order.
+    pub index: usize,
+    /// The part `name` attribute, when the file records one (Arnold names parts after AOVs).
+    pub name: Option<String>,
+    /// The part `view` attribute for stereo files (`left`/`right`).
+    pub view: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    /// True for `deepscanline`/`deeptile` parts; those are composited by the deep
+    /// decoder ([`crate::decode_deep_exr`]), not decoded part by part.
+    pub deep: bool,
+    /// True when the part is stored as tiles instead of scanlines.
+    pub tiled: bool,
+    /// The part's channels in file order.
+    pub channels: Vec<ExrChannelInfo>,
+}
+
+impl ExrPartInfo {
+    /// How much this part looks like a colour image the plain [`Image`] decode can show:
+    /// 4 RGBA, 3 RGB, 2 YA, 1 any-single-channel, 0 anything else (e.g. `Z` beside `A`).
+    /// The auto-pick takes the highest rank; ties go to the earlier part.
+    pub fn color_rank(&self) -> u8 {
+        let has = |n: &str| self.channels.iter().any(|c| base_channel_name(&c.name) == n);
+        if has("R") && has("G") && has("B") {
+            return if has("A") { 4 } else { 3 };
+        }
+        if has("Y") {
+            return if has("A") { 2 } else { 1 };
+        }
+        u8::from(self.channels.len() == 1)
+    }
+}
+
+/// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
+pub(crate) fn base_channel_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
 
 /// A single flat raster image.

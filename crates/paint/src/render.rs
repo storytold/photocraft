@@ -517,6 +517,11 @@ impl StrokeRenderer {
         self.dual_buf = duals;
     }
 
+    /// See [`DabGenerator::wants_time`].
+    pub fn wants_time(&self) -> bool {
+        self.generator.wants_time()
+    }
+
     /// Feed input points (any chunking gives the same result).
     pub fn push(&mut self, pts: &[StrokePoint]) {
         self.generator.push(pts, &mut self.dab_buf, &mut self.dual_buf);

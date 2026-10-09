@@ -2362,3 +2362,18 @@ fontWeight	Italic	Corsivo
 	Cycle Orientation	Cambia orientamento
 	Set the overlay options for the Crop tool	Imposta le opzioni di sovrapposizione dello strumento Taglierina
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-click è andato al desktop, che sposta le finestre con Alt-trascina. Imposta il suo tasto per spostare le finestre su Super, oppure blocca Alt in Finestra › Tasti modificatori.
+	Straighten the image by drawing a line on it	Raddrizza l’immagine tracciando una linea
+	Set additional Crop options	Imposta opzioni di ritaglio aggiuntive
+	Show Cropped Area	Mostra area ritagliata
+	Enable Crop Shield	Attiva schermo di ritaglio
+	Match Canvas	Come la tela
+	Auto Adjust Opacity	Regola automaticamente opacità
+	Crop Shield color	Colore dello schermo di ritaglio
+	Color Picker (Crop Shield Color)	Selettore colore (Colore dello schermo di ritaglio)
+	From Center	Dal centro
+	Link radii	Collega raggi
+	Star Ratio:	Rapporto stella:
+	Create Rectangle	Crea rettangolo
+	Create Ellipse	Crea ellisse
+	Create Triangle	Crea triangolo
+	Create Polygon	Crea poligono

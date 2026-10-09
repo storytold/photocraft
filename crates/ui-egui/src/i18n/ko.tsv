@@ -2871,3 +2871,18 @@ fontWeight	Italic	기울임
 	Cycle Orientation	방향 순환
 	Set the overlay options for the Crop tool	자르기 도구의 오버레이 옵션 설정
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 클릭이 데스크톱으로 전달되었습니다. 데스크톱이 Alt 드래그로 창을 이동합니다. 창 이동 키를 Super로 바꾸거나 창 › 보조 키에서 Alt를 고정하세요.
+	Straighten the image by drawing a line on it	이미지에 선을 그려 수평 맞추기
+	Set additional Crop options	추가 자르기 옵션 설정
+	Show Cropped Area	잘린 영역 표시
+	Enable Crop Shield	자르기 방패 사용
+	Match Canvas	캔버스와 일치
+	Auto Adjust Opacity	자동으로 불투명도 조정
+	Crop Shield color	자르기 방패 색상
+	Color Picker (Crop Shield Color)	색상 선택기 (자르기 방패 색상)
+	From Center	중앙에서
+	Link radii	반경 연결
+	Star Ratio:	별 비율:
+	Create Rectangle	사각형 만들기
+	Create Ellipse	타원 만들기
+	Create Triangle	삼각형 만들기
+	Create Polygon	다각형 만들기

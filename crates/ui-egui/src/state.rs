@@ -514,6 +514,9 @@ pub struct ToolOptions {
     pub crop_overlay_show: crate::crop_overlay::OverlayShow,
     #[serde(default)]
     pub crop_overlay_orientation: u8,
+    /// Crop gear menu (#1919): Show Cropped Area and the crop shield. See `crop_shield`.
+    #[serde(default)]
+    pub crop_shield: crate::crop_shield::CropShield,
     /// Magic Eraser opacity % (tolerance, anti-alias, contiguous and sample-all are shared with the
     /// Magic Wand and Paint Bucket).
     pub magic_eraser_opacity: f32,
@@ -644,6 +647,7 @@ impl Default for ToolOptions {
             crop_overlay: Default::default(),
             crop_overlay_show: Default::default(),
             crop_overlay_orientation: 0,
+            crop_shield: Default::default(),
             magic_eraser_opacity: 100.0,
             bg_sampling: "continuous".into(),
             bg_limits: "contiguous".into(),

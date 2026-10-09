@@ -47,6 +47,8 @@ pub mod comps_ui;
 pub mod control;
 pub mod credits;
 pub mod crop_overlay;
+pub mod crop_shield;
+pub mod crop_straighten;
 pub mod crop_ui;
 pub mod dialog_blend_ui;
 pub mod dialogs;
@@ -123,6 +125,7 @@ pub mod rulers;
 pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
+pub mod shape_dialog;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
@@ -248,6 +251,9 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 pub type QuitFn = Box<dyn FnMut()>;
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
+/// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
+/// report it (native Wayland): the cursor then follows the cursor preference (#1758).
+pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -304,6 +310,9 @@ pub struct Services {
     /// The pointer position read from the OS (desktop): winit 0.30's file drops carry none, and
     /// the window gets no pointer events during an OS drag (see `file_open::DropTarget`).
     pub cursor_pos: Option<CursorPosFn>,
+    /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
+    /// the canvas can show the precise crosshair for painting tools, whatever the preference.
+    pub caps_lock: Option<CapsLockFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only (web, tests).
@@ -372,6 +381,9 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
+    /// show the precise crosshair whatever the cursor preference (#1758).
+    pub caps_lock: bool,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
@@ -541,6 +553,7 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            caps_lock: false,
             opacity_keys: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
@@ -1070,6 +1083,9 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
+        // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
+        self.caps_lock = self.services.caps_lock.as_mut().is_some_and(|f| f());
         if !self.styled {
             Self::setup_context(ctx, self.ui.theme);
             self.styled = true;
@@ -1715,10 +1731,15 @@ mod blend_dropdown_wheel_tests;
 mod marquee_tests;
 
 #[cfg(test)]
+mod caps_lock_tests;
+
+#[cfg(test)]
 mod stamp_tests;
 
 #[cfg(test)]
 mod alt_click_tests;
+#[cfg(test)]
+mod stroke_timing_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;

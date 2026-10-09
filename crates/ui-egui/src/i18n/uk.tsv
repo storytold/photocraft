@@ -3402,3 +3402,18 @@ cameraRaw	Masking	Маскування
 	Cycle Orientation	Змінити орієнтацію
 	Set the overlay options for the Crop tool	Задати параметри накладання для інструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-клік перехопило робоче середовище, яке переміщує вікна через Alt-перетягування. Призначте для переміщення вікон клавішу Super або зафіксуйте Alt у меню Вікно › Клавіші-модифікатори.
+	Straighten the image by drawing a line on it	Вирівняти зображення, намалювавши на ньому лінію
+	Set additional Crop options	Задати додаткові параметри кадрування
+	Show Cropped Area	Показати відсічену область
+	Enable Crop Shield	Увімкнути екран кадрування
+	Match Canvas	Як у полотна
+	Auto Adjust Opacity	Автоматично налаштовувати непрозорість
+	Crop Shield color	Колір екрана кадрування
+	Color Picker (Crop Shield Color)	Вибір кольору (колір екрана кадрування)
+	From Center	Від центру
+	Link radii	Зв'язати радіуси
+	Star Ratio:	Пропорції зірки:
+	Create Rectangle	Створити прямокутник
+	Create Ellipse	Створити еліпс
+	Create Triangle	Створити трикутник
+	Create Polygon	Створити багатокутник

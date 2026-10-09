@@ -171,7 +171,7 @@ id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
 status = "partial"
 issue = 214
-note = "Ratio dropdown and fields only (panels.rs:551-579)"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); no W x H x Resolution with units or saved presets"
 
 [[item]]
 id = "TOOL-214-10"
@@ -263,3 +263,17 @@ target = "Crop: arrow keys nudge the crop box (Shift 10 px), X swaps portrait/la
 status = "done"
 issue = 1919
 note = "crop_ui.rs keys/nudge/swap_orientation (ahead of the selection nudge and tools.swapColors in shortcuts.rs; X also swaps the options-bar ratio) and sizing (canvas.rs draws it with the marquee readout); turned frames included"
+
+[[item]]
+id = "TOOL-214-21"
+target = "Crop: Straighten button in the options bar and Cmd/Ctrl-drag draw a line; the frame turns so the line ends up level (or plumb when nearer vertical), with an angle readout"
+status = "done"
+issue = 1919
+note = "crop_straighten.rs: one-shot options-bar button, Cmd/Ctrl held is a temporary Straighten (ui.pointer command flag); the Ruler's straighten_angle convention; the frame is fitted to the largest of its proportions inside the image (Classic Mode); a pending edit committed by Enter"
+
+[[item]]
+id = "TOOL-214-22"
+target = "Crop gear menu: Show Cropped Area (H), Enable Crop Shield with Match Canvas / custom colour, opacity and Auto Adjust Opacity"
+status = "done"
+issue = 1919
+note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. No Classic Mode / Auto Center Preview (PhotoCraft is always Classic Mode)"

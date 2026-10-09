@@ -3317,3 +3317,18 @@ fontWeight	Italic	斜体
 	Cycle Orientation	方向を切り替え
 	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+	Straighten the image by drawing a line on it	画像上に線を描いて角度を補正
+	Set additional Crop options	切り抜きの追加オプションを設定
+	Show Cropped Area	切り抜かれた領域を表示
+	Enable Crop Shield	切り抜きシールドを有効にする
+	Match Canvas	カンバスに合わせる
+	Auto Adjust Opacity	不透明度を自動調整
+	Crop Shield color	切り抜きシールドのカラー
+	Color Picker (Crop Shield Color)	カラーピッカー（切り抜きシールドのカラー）
+	From Center	中心から
+	Link radii	半径をリンク
+	Star Ratio:	星の比率:
+	Create Rectangle	長方形を作成
+	Create Ellipse	楕円を作成
+	Create Triangle	三角形を作成
+	Create Polygon	多角形を作成

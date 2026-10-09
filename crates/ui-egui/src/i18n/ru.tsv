@@ -2567,3 +2567,18 @@ fontWeight	Italic	Курсив
 	Cycle Orientation	Сменить ориентацию
 	Set the overlay options for the Crop tool	Задать параметры перекрытия для инструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+щелчок перехватило окружение рабочего стола: оно перемещает окна через Alt+перетаскивание. Назначьте для перемещения окон клавишу Super или зафиксируйте Alt в меню Окно › Клавиши-модификаторы.
+	Straighten the image by drawing a line on it	Выровнять изображение, нарисовав на нем линию
+	Set additional Crop options	Задать дополнительные параметры кадрирования
+	Show Cropped Area	Показать отсекаемую область
+	Enable Crop Shield	Включить экран кадрирования
+	Match Canvas	Как у холста
+	Auto Adjust Opacity	Автоматически настраивать непрозрачность
+	Crop Shield color	Цвет экрана кадрирования
+	Color Picker (Crop Shield Color)	Палитра цветов (Цвет экрана кадрирования)
+	From Center	От центра
+	Link radii	Связать радиусы
+	Star Ratio:	Коэффициент звезды:
+	Create Rectangle	Создать прямоугольник
+	Create Ellipse	Создать эллипс
+	Create Triangle	Создать треугольник
+	Create Polygon	Создать многоугольник

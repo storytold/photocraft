@@ -95,11 +95,27 @@ pub struct Stylus {
     lifted: bool,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
     pub(crate) stroke: Vec<[f32; 3]>,
+    /// Time in milliseconds of each point of the current drag (parallel to its points), from
+    /// [`Stylus::clock_ms`]. Speed spacing, airbrush build-up and smoothing catch-up use it.
+    pub(crate) times: Vec<f64>,
+    /// Time of the tool event being processed, in milliseconds. The canvas spreads a frame's
+    /// samples between the previous and the current frame time (egui's events carry none).
+    pub(crate) clock_ms: f64,
 }
 
 impl Default for Stylus {
     fn default() -> Self {
-        Self { feed: StylusFeed::default(), use_pressure: true, end: None, tool_before_eraser: None, touch: None, lifted: false, stroke: Vec::new() }
+        Self {
+            feed: StylusFeed::default(),
+            use_pressure: true,
+            end: None,
+            tool_before_eraser: None,
+            touch: None,
+            lifted: false,
+            stroke: Vec::new(),
+            times: Vec::new(),
+            clock_ms: 0.0,
+        }
     }
 }
 
@@ -173,27 +189,45 @@ impl Stylus {
     /// Start recording a drag's tilt/rotation.
     pub(crate) fn begin_stroke(&mut self) {
         self.stroke.clear();
+        self.times.clear();
         self.record_point();
     }
 
-    /// Record the tilt/rotation of a point just added to the drag.
+    /// Record the tilt/rotation and time of a point just added to the drag.
     pub(crate) fn record_point(&mut self) {
         let s = self.sample().unwrap_or_default();
         self.stroke.push([s.tilt_x, s.tilt_y, s.rotation]);
+        self.times.push(self.clock_ms);
+    }
+
+    /// Time of the drag's last recorded point.
+    pub(crate) fn last_point_ms(&self) -> Option<f64> {
+        self.times.last().copied()
+    }
+
+    /// Time of drag point `i` (the last known time past the end).
+    pub(crate) fn point_ms(&self, i: usize) -> f64 {
+        self.times.get(i).or(self.times.last()).copied().unwrap_or(0.0)
     }
 
     /// Stroke points for `paint.stroke`: `[x, y, pressure]`, extended with
-    /// `tiltX, tiltY, rotation` when the drag carried any tilt or rotation.
+    /// `tiltX, tiltY, rotation` when the drag carried any tilt or rotation, and with `timeMs`
+    /// (from the drag's first point) when its points carry times.
     pub fn stroke_points(&self, points: &[[f64; 3]]) -> Vec<Vec<f64>> {
         let has_pose = self.stroke.iter().any(|t| t.iter().any(|v| *v != 0.0));
+        let t0 = self.point_ms(0);
+        let has_time = self.times.iter().any(|t| *t != t0);
         points
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let mut v = vec![p[0], p[1], p[2]];
-                if has_pose {
+                if has_pose || has_time {
                     let t = self.stroke.get(i).or(self.stroke.last()).copied().unwrap_or_default();
                     v.extend(t.map(f64::from));
+                }
+                if has_time {
+                    v.push(self.point_ms(i) - t0);
                 }
                 v
             })

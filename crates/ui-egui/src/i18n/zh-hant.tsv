@@ -2270,3 +2270,18 @@ fontWeight	Italic	斜體
 	Cycle Orientation	循環切換方向
 	Set the overlay options for the Crop tool	設定裁切工具的覆蓋選項
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 按一下被桌面環境攔截了，它用 Alt 拖曳來移動視窗。請把桌面的視窗移動鍵改為 Super，或在 視窗 › 輔助鍵 中鎖定 Alt。
+	Straighten the image by drawing a line on it	在影像上繪製一條線以拉直影像
+	Set additional Crop options	設定其他裁切選項
+	Show Cropped Area	顯示裁切區域
+	Enable Crop Shield	啟用裁切遮蔽
+	Match Canvas	符合畫布
+	Auto Adjust Opacity	自動調整不透明度
+	Crop Shield color	裁切遮蔽顏色
+	Color Picker (Crop Shield Color)	檢色器（裁切遮蔽顏色）
+	From Center	從中心
+	Link radii	連結半徑
+	Star Ratio:	星形比例：
+	Create Rectangle	建立矩形
+	Create Ellipse	建立橢圓
+	Create Triangle	建立三角形
+	Create Polygon	建立多邊形
