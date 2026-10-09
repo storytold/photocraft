@@ -581,7 +581,7 @@
 	Additional plugins folder	Додаткова тека плагінів
 	Install Plug-in…	Установити плагін…
 	Export Presets	Експортувати набори
-	Import Photoshop brushes (.abr)	Імпортувати пензлі Photoshop (.abr)
+	Import brushes (.abr)	Імпортувати пензлі (.abr)
 	Migrate Presets	Перенести набори
 	Thumbnail size (smallest: list)	Розмір мініатюр (найменший: список)
 	Reset GPU Backend	Скинути графічний бекенд
@@ -1394,7 +1394,7 @@
 	Art & Illustration	Мистецтво та ілюстрація
 	Mobile	Мобільні пристрої
 	Film & Video	Фільм і відео
-	Default Photoshop Size	Типовий розмір Photoshop
+	Default PhotoCraft Size	Типовий розмір PhotoCraft
 	Clipboard	Буфер обміну
 	Photo (2 × 3 in)	Фото (2 × 3 дюйми)
 	Photo (4 × 6 in)	Фото (4 × 6 дюймів)
@@ -1561,7 +1561,7 @@
 	Yes	Так
 	These settings aren't available in PhotoCraft yet.	Ці параметри ще недоступні у PhotoCraft.
 	Shortcut removed.	Клавіатурне скорочення вилучено.
-	All shortcuts reset to Photoshop defaults.	Усі клавіатурні скорочення скинуто до типових значень Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Усі клавіатурні скорочення скинуто до типових значень PhotoCraft.
 	Delete Shortcut	Видалити клавіатурне скорочення
 	Press keys…	Натисніть клавіші…
 	shortcut	клавіатурне скорочення
@@ -2570,7 +2570,6 @@ fontWeight	Italic	Курсивний
 	Leading (set to the font size × auto-leading when Auto)	Інтерліньяж (в Авто: розмір шрифту × автоматичний інтерліньяж)
 	Linear Gradient	Лінійний градієнт
 	Link layers	Зв'язати шари
-	Load Photoshop brushes (.abr)	Завантажити пензлі Photoshop (.abr)
 	Lock	Заблокувати
 	Lock all	Заблокувати все
 	Lock image pixels	Заблокувати пікселі зображення

@@ -815,7 +815,7 @@ fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         let i = filter_index(CMD, p, sm)?;
         let f = &mut sm.smart_filters[i];
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
-            return Err(bad(CMD, "this Photoshop filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
+            return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
         match (&mut f.params, new) {
             (Value::Object(old), Value::Object(n)) => old.extend(n),

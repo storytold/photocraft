@@ -769,7 +769,7 @@
 	All Caps	Verzálky
 	All Slices	Všechny řezy
 	All User Slices	Všechny uživatelské řezy
-	All shortcuts reset to Photoshop defaults.	Všechny zkratky byly obnoveny na výchozí hodnoty Photoshopu.
+	All shortcuts reset to PhotoCraft defaults.	Všechny zkratky byly obnoveny na výchozí hodnoty PhotoCraftu.
 	Alt	Alt
 	Always use pressure for opacity	Vždy použít přítlak pro krytí
 	Always use pressure for size	Vždy použít přítlak pro velikost
@@ -1090,7 +1090,7 @@
 	Ignore All	Ignorovat vše
 	Image Size	Velikost obrazu
 	Import Brushes…	Importovat štětce…
-	Import Photoshop brushes (.abr)	Importovat štětce Photoshopu (.abr)
+	Import brushes (.abr)	Importovat štětce (.abr)
 	Import Presets	Importovat přednastavení
 	Imported	Importováno
 	Indent First	Odsazení prvního řádku
@@ -1140,7 +1140,6 @@
 	Liquify is not open	Zkapalnit není otevřeno
 	Load	Načíst
 	Load 3D LUT…	Načíst 3D LUT…
-	Load Photoshop brushes (.abr)	Načíst štětce Photoshopu (.abr)
 	Load channel as selection	Načíst kanál jako výběr
 	Load…	Načíst…
 	Localized Color Clusters	Lokalizované shluky barev
@@ -1537,7 +1536,7 @@
 	Current Tool	Aktuální nástroj
 	Custom Shape Tool	Nástroj vlastní tvar
 	Cyans	Azurové
-	Default Photoshop Size	Výchozí velikost
+	Default PhotoCraft Size	Výchozí velikost PhotoCraft
 	Delete Workspace	Odstranit pracovní prostor
 	Diamond	Kosočtverec
 	Dimensions:	Rozměry:

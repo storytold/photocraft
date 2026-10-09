@@ -757,7 +757,7 @@
 	All Caps	全部大写
 	All Slices	所有切片
 	All User Slices	所有用户切片
-	All shortcuts reset to Photoshop defaults.	所有快捷键已重置为 Photoshop 默认值。
+	All shortcuts reset to PhotoCraft defaults.	所有快捷键已重置为 PhotoCraft 默认值。
 	Alt	Alt
 	Alt-click to define a source point to clone from	按 Alt 单击以定义仿制源点
 	Always use pressure for opacity	始终用压感控制不透明度
@@ -1082,7 +1082,7 @@
 	Ignore All	全部忽略
 	Image Size	图像大小
 	Import Brushes…	导入画笔…
-	Import Photoshop brushes (.abr)	导入 Photoshop 画笔（.abr）
+	Import brushes (.abr)	导入画笔（.abr）
 	Import Presets	导入预设
 	Imported	已导入
 	Indent First	首行缩进
@@ -1132,7 +1132,6 @@
 	Liquify is not open	尚未打开液化
 	Load	载入
 	Load 3D LUT…	载入 3D LUT…
-	Load Photoshop brushes (.abr)	载入 Photoshop 画笔（.abr）
 	Load channel as selection	将通道载入为选区
 	Load…	载入…
 	Localized Color Clusters	局部颜色簇
@@ -1533,7 +1532,7 @@
 	Current Tool	当前工具
 	Custom Shape Tool	自定形状工具
 	Cyans	青色
-	Default Photoshop Size	默认 Photoshop 大小
+	Default PhotoCraft Size	默认 PhotoCraft 大小
 	Delete Workspace	删除工作区
 	Diamond	菱形
 	Dimensions:	尺寸：

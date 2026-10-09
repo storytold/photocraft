@@ -8,7 +8,7 @@
     <glob pattern="*.pcraft"/>
   </mime-type>
   <mime-type type="image/x-psb">
-    <comment>Photoshop large document</comment>
+    <comment>Large PSD document</comment>
     <sub-class-of type="image/vnd.adobe.photoshop"/>
     <generic-icon name="image-x-generic"/>
     <magic priority="60">

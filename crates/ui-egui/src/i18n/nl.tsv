@@ -743,7 +743,7 @@
 	All Caps	Alleen hoofdletters
 	All Slices	Alle segmenten
 	All User Slices	Alle gebruikerssegmenten
-	All shortcuts reset to Photoshop defaults.	Alle sneltoetsen zijn teruggezet naar de standaardwaarden van Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Alle sneltoetsen zijn teruggezet naar de standaardwaarden van PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Altijd druk gebruiken voor dekking
 	Always use pressure for size	Altijd druk gebruiken voor grootte
@@ -1067,7 +1067,7 @@
 	Ignore All	Alles negeren
 	Image Size	Afbeeldingsgrootte
 	Import Brushes…	Penselen importeren…
-	Import Photoshop brushes (.abr)	Photoshop-penselen (.abr) importeren
+	Import brushes (.abr)	Penselen (.abr) importeren
 	Import Presets	Voorinstellingen importeren
 	Imported	Geïmporteerd
 	Indent First	Eerste regel inspringen
@@ -1117,7 +1117,6 @@
 	Liquify is not open	Uitvloeien is niet geopend
 	Load	Laden
 	Load 3D LUT…	3D LUT laden…
-	Load Photoshop brushes (.abr)	Photoshop-penselen (.abr) laden
 	Load channel as selection	Kanaal laden als selectie
 	Load…	Laden…
 	Localized Color Clusters	Gelokaliseerde kleurclusters
@@ -1508,7 +1507,7 @@
 	Current Tool	Huidig gereedschap
 	Custom Shape Tool	Gereedschap Aangepaste vorm
 	Cyans	Cyaantinten
-	Default Photoshop Size	Standaardgrootte Photoshop
+	Default PhotoCraft Size	Standaardgrootte PhotoCraft
 	Delete Workspace	Werkruimte verwijderen
 	Diamond	Ruit
 	Dimensions:	Afmetingen:

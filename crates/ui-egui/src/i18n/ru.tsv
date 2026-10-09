@@ -590,7 +590,7 @@
 	Additional plugins folder	Дополнительная папка плагинов
 	Install Plug-in…	Установить плагин…
 	Export Presets	Экспортировать наборы
-	Import Photoshop brushes (.abr)	Импортировать кисти Photoshop (.abr)
+	Import brushes (.abr)	Импортировать кисти (.abr)
 	Migrate Presets	Перенести наборы
 	Thumbnail size (smallest: list)	Размер миниатюр (минимальный: список)
 	Reset GPU Backend	Сбросить GPU-бэкенд
@@ -1402,7 +1402,7 @@
 	Art & Illustration	Искусство и иллюстрация
 	Mobile	Мобильные
 	Film & Video	Кино и видео
-	Default Photoshop Size	Размер Photoshop по умолчанию
+	Default PhotoCraft Size	Размер PhotoCraft по умолчанию
 	Clipboard	Буфер обмена
 	Photo (2 × 3 in)	Фото (2 × 3 дюйма)
 	Photo (4 × 6 in)	Фото (4 × 6 дюйма)
@@ -1569,7 +1569,7 @@
 	Yes	Да
 	These settings aren't available in PhotoCraft yet.	Эти параметры пока недоступны в PhotoCraft.
 	Shortcut removed.	Комбинация клавиш удалена.
-	All shortcuts reset to Photoshop defaults.	Все комбинации клавиш сброшены к стандартным Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Все комбинации клавиш сброшены к стандартным PhotoCraft.
 	Delete Shortcut	Удалить комбинацию
 	Press keys…	Нажмите клавиши…
 	shortcut	комбинация

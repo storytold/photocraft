@@ -741,7 +741,7 @@
 	All Caps	Tudo em maiúsculas
 	All Slices	Todas as fatias
 	All User Slices	Todas as fatias do usuário
-	All shortcuts reset to Photoshop defaults.	Todos os atalhos foram redefinidos para os padrões do Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Todos os atalhos foram redefinidos para os padrões do PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Sempre usar a pressão para a opacidade
 	Always use pressure for size	Sempre usar a pressão para o tamanho
@@ -1058,7 +1058,7 @@
 	Ignore All	Ignorar tudo
 	Image Size	Tamanho da imagem
 	Import Brushes…	Importar pincéis…
-	Import Photoshop brushes (.abr)	Importar pincéis do Photoshop (.abr)
+	Import brushes (.abr)	Importar pincéis (.abr)
 	Import Presets	Importar predefinições
 	Imported	Importado
 	Indent First	Recuo da primeira linha
@@ -1108,7 +1108,6 @@
 	Liquify is not open	Liquefazer não está aberto
 	Load	Carregar
 	Load 3D LUT…	Carregar LUT 3D…
-	Load Photoshop brushes (.abr)	Carregar pincéis do Photoshop (.abr)
 	Load channel as selection	Carregar canal como seleção
 	Load…	Carregar…
 	Localized Color Clusters	Agrupamentos de cores localizados
@@ -1499,7 +1498,7 @@
 	Current Tool	Ferramenta atual
 	Custom Shape Tool	Ferramenta Forma personalizada
 	Cyans	Cianos
-	Default Photoshop Size	Padrão do Photoshop
+	Default PhotoCraft Size	Tamanho padrão do PhotoCraft
 	Delete Workspace	Excluir espaço de trabalho
 	Diamond	Diamante
 	Dimensions:	Dimensões:

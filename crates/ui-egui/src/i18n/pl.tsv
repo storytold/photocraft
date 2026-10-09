@@ -756,7 +756,7 @@
 	All Caps	Wszystkie wersaliki
 	All Slices	Wszystkie plasterki
 	All User Slices	Wszystkie plasterki użytkownika
-	All shortcuts reset to Photoshop defaults.	Wszystkie skróty przywrócono do ustawień domyślnych Photoshopa.
+	All shortcuts reset to PhotoCraft defaults.	Wszystkie skróty przywrócono do ustawień domyślnych PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Zawsze używaj nacisku do krycia
 	Always use pressure for size	Zawsze używaj nacisku do rozmiaru
@@ -1075,7 +1075,7 @@
 	Ignore All	Ignoruj wszystko
 	Image Size	Rozmiar obrazu
 	Import Brushes…	Importuj pędzle…
-	Import Photoshop brushes (.abr)	Importuj pędzle Photoshopa (.abr)
+	Import brushes (.abr)	Importuj pędzle (.abr)
 	Import Presets	Importuj ustawienia wstępne
 	Imported	Zaimportowano
 	Indent First	Wcięcie pierwszego wiersza
@@ -1125,7 +1125,6 @@
 	Liquify is not open	Skraplanie nie jest otwarte
 	Load	Wczytaj
 	Load 3D LUT…	Wczytaj 3D LUT…
-	Load Photoshop brushes (.abr)	Wczytaj pędzle Photoshopa (.abr)
 	Load channel as selection	Wczytaj kanał jako zaznaczenie
 	Load…	Wczytaj…
 	Localized Color Clusters	Zlokalizowane skupiska kolorów
@@ -1519,7 +1518,7 @@
 	Current Tool	Bieżące narzędzie
 	Custom Shape Tool	Narzędzie Kształt niestandardowy
 	Cyans	Cyjany
-	Default Photoshop Size	Domyślny rozmiar Photoshopa
+	Default PhotoCraft Size	Domyślny rozmiar PhotoCraft
 	Delete Workspace	Usuń obszar roboczy
 	Diamond	Romb
 	Dimensions:	Wymiary:

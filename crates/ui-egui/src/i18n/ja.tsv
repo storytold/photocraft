@@ -758,7 +758,7 @@
 	All Caps	すべて大文字
 	All Slices	すべてのスライス
 	All User Slices	すべてのユーザースライス
-	All shortcuts reset to Photoshop defaults.	すべてのショートカットを初期状態に戻しました。
+	All shortcuts reset to PhotoCraft defaults.	すべてのショートカットを初期状態に戻しました。
 	Alt	Alt
 	Alt-click to define a source point to clone from	Alt+クリックでコピー元を指定
 	Always use pressure for opacity	常に筆圧を不透明度に使う
@@ -1080,7 +1080,7 @@
 	Ignore All	すべて無視
 	Image Size	画像サイズ
 	Import Brushes…	ブラシを読み込み…
-	Import Photoshop brushes (.abr)	Photoshop ブラシ(.abr)を読み込み
+	Import brushes (.abr)	ブラシ(.abr)を読み込み
 	Import Presets	プリセットを読み込み
 	Imported	読み込み済み
 	Indent First	先頭行の字下げ
@@ -1130,7 +1130,6 @@
 	Liquify is not open	ゆがみは開いていません
 	Load	読み込み
 	Load 3D LUT…	3D LUT を読み込み…
-	Load Photoshop brushes (.abr)	Photoshop ブラシ(.abr)を読み込み
 	Load channel as selection	チャンネルを選択範囲として読み込み
 	Load…	読み込み…
 	Localized Color Clusters	近似色のクラスター化
@@ -1526,7 +1525,7 @@
 	Current Tool	現在のツール
 	Custom Shape Tool	カスタムシェイプツール
 	Cyans	シアン系
-	Default Photoshop Size	既定サイズ
+	Default PhotoCraft Size	PhotoCraft 既定サイズ
 	Delete Workspace	ワークスペースを削除
 	Diamond	ダイヤモンド形
 	Dimensions:	寸法:
