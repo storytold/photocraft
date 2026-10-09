@@ -204,8 +204,9 @@ impl Default for ExportSettings {
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// Encode a document and write it to a path, reporting the stage to the job; returns the export
-/// warnings. Runs on a worker thread (see [`Services::save_file`]).
-pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &photocraft_engine::jobs::JobCtx) -> Result<Vec<String>, String> + Send + Sync>;
+/// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
+/// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
+pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &jobs_ui::SaveCtl) -> Result<Vec<String>, String> + Send + Sync>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -970,7 +971,7 @@ impl PhotocraftApp {
         }
         match self.write_document(path.clone(), &ExportSettings::default(), false)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
-            None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true})),
+            None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
         }
     }
 

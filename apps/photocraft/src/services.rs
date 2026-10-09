@@ -181,13 +181,19 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
 }
 
 /// A save on a worker thread (`Services::save_file`, #2017): encode, then write atomically.
-/// Cancelling while encoding leaves the file on disk untouched.
-fn save_file(doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctx: &photocraft_engine::jobs::JobCtx) -> Result<Vec<String>, String> {
-    ctx.progress(0.0, "Encoding");
+/// Cancelling while encoding leaves the file on disk untouched; once writing starts the save
+/// can't be cancelled.
+fn save_file(
+    doc: &Document,
+    path: &str,
+    settings: &photocraft_ui_egui::ExportSettings,
+    ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+) -> Result<Vec<String>, String> {
+    ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let r = crate::crash_guard::guard("Save", || photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string()))?;
-    ctx.check().map_err(|e| e.to_string())?;
-    ctx.progress(0.0, "Writing");
+    ctl.commit()?;
+    ctl.progress(0.0, "Writing");
     write_atomic(Path::new(path), &r.bytes)?;
     Ok(r.warnings)
 }
