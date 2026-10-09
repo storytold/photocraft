@@ -178,12 +178,12 @@
 	Lab Color	Lab-kleur
 	Multichannel	Meerkanaals
 	8 Bits/Channel	8 bits/kanaal
-	8 bit	8 bit
+	8 bit	8-bits
 	Integer	Geheel getal
 	16 Bits/Channel	16 bits/kanaal
-	16 bit	16 bit
+	16 bit	16-bits
 	32 Bits/Channel	32 bits/kanaal
-	32 bit (float)	32 bit (drijvende komma)
+	32 bit (float)	32-bits (drijvende komma)
 	Floating point	Drijvende komma
 	Color Table…	Kleurentabel…
 	Bitmap…	Bitmap…
@@ -3444,3 +3444,16 @@ cameraRaw	Whites	Witten
 	Set Colors	Kleuren instellen
 	Switch Foreground and Background Colors	Voorgrond- en achtergrondkleur omwisselen
 	Target	Doel
+	3 by 3 Average	Gemiddelde van 3 bij 3
+	5 by 5 Average	Gemiddelde van 5 bij 5
+	11 by 11 Average	Gemiddelde van 11 bij 11
+	31 by 31 Average	Gemiddelde van 31 bij 31
+	51 by 51 Average	Gemiddelde van 51 bij 51
+	101 by 101 Average	Gemiddelde van 101 bij 101
+	All Layers No Adjustments	Alle lagen zonder aanpassingen
+	Color to Alpha…	Kleur naar alfa…
+	Current & Below No Adjustments	Huidige en onderliggende zonder aanpassingen
+	Now drag the selection onto another area	Sleep de selectie nu naar een ander gebied
+	Point Sample	Puntmonster
+	Sample Size:	Monstergrootte:
+	Show Sampling Ring	Monsterring tonen
