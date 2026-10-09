@@ -74,7 +74,12 @@ pub enum Hit {
 
 /// Hit-test a frame with `tol` document px of reach (shrunk for tiny frames so they stay movable).
 pub fn hit(r: [f64; 4], p: [f64; 2], tol: f64) -> Hit {
-    let axis = |lo: f64, hi: f64, v: f64, other_in: bool| -> i8 {
+    hit_axes(r, p, [tol; 2])
+}
+
+/// Per-axis reach in the frame's own coordinates; keep its middle movable even when tiny.
+fn hit_axes(r: [f64; 4], p: [f64; 2], tol: [f64; 2]) -> Hit {
+    let axis = |lo: f64, hi: f64, v: f64, other_in: bool, tol: f64| -> i8 {
         let t = tol.min((hi - lo) / 4.0).max(0.0);
         // Outside the frame the full reach applies; inside it, the shrunk one.
         let near = |e: f64, outward: f64| (v - e) * outward <= tol && (e - v) * outward <= t;
@@ -92,9 +97,9 @@ pub fn hit(r: [f64; 4], p: [f64; 2], tol: f64) -> Hit {
             _ => 0,
         }
     };
-    let in_x = p[0] >= r[0] - tol && p[0] <= r[2] + tol;
-    let in_y = p[1] >= r[1] - tol && p[1] <= r[3] + tol;
-    let (hx, hy) = (axis(r[0], r[2], p[0], in_y), axis(r[1], r[3], p[1], in_x));
+    let in_x = p[0] >= r[0] - tol[0] && p[0] <= r[2] + tol[0];
+    let in_y = p[1] >= r[1] - tol[1] && p[1] <= r[3] + tol[1];
+    let (hx, hy) = (axis(r[0], r[2], p[0], in_y, tol[0]), axis(r[1], r[3], p[1], in_x, tol[1]));
     if hx != 0 || hy != 0 {
         Hit::Handle(hx, hy)
     } else if p[0] > r[0] && p[0] < r[2] && p[1] > r[1] && p[1] < r[3] {
@@ -299,8 +304,47 @@ pub fn press(app: &mut PhotocraftApp) -> bool {
     new
 }
 
-fn tolerance(app: &PhotocraftApp) -> f64 {
-    HANDLE_PX / (app.current_zoom() as f64).max(0.01)
+pub(crate) fn hit_screen(app: &PhotocraftApp, r: [f64; 4], p: [f64; 2]) -> Hit {
+    let deg = angle(app);
+    let metric = crate::canvas::ScreenMetric::active(app);
+    let reach = metric.reach(HANDLE_PX);
+    let (s, c) = deg.to_radians().sin_cos();
+    // A local edge normal n maps to D^-T n on screen, where D is the aspect/zoom
+    // scale. Its norm converts screen perpendicular distance to local-axis reach.
+    // Camera rotation and flip preserve that norm; rotating the point recovers frame axes.
+    let tol = [(c * reach[0]).hypot(s * reach[1]), (s * reach[0]).hypot(c * reach[1])];
+    let local = turn(p, center(r), -deg);
+    let hit = hit_axes(r, local, tol);
+    let Hit::Handle(hx, hy) = hit else { return hit };
+    let quad = corners(r, deg);
+    // Intersecting infinite edge strips can reach far beyond an acute projected corner.
+    // Bound outside hits by the finite boundary; sqrt(2) retains the old 8-by-8 corner reach.
+    let corner_reach = HANDLE_PX * std::f64::consts::SQRT_2;
+    let outside = local[0] < r[0] || local[0] > r[2] || local[1] < r[1] || local[1] > r[3];
+    if outside && !metric.near_quad(quad, p, corner_reach) {
+        return Hit::Outside;
+    }
+    let [a, b, c, d] = quad;
+    let (corner, x_edge, y_edge) = match (hx, hy) {
+        (-1, -1) => (a, (a, d), (a, b)),
+        (1, -1) => (b, (b, c), (a, b)),
+        (1, 1) => (c, (b, c), (c, d)),
+        (-1, 1) => (d, (a, d), (c, d)),
+        _ => return hit,
+    };
+    if metric.distance(corner, p) <= corner_reach {
+        return hit;
+    }
+    // Inside an acute corner, both strips also overlap far from its vertex: grab the
+    // nearer finite edge there rather than resizing two axes from an invisible corner handle.
+    let distance = |(a, b)| {
+        let (a, b, p) = (metric.point(a), metric.point(b), metric.point(p));
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let len = d[0] * d[0] + d[1] * d[1];
+        let t = if len > 0.0 { ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len } else { 0.0 }.clamp(0.0, 1.0);
+        (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1])
+    };
+    if distance(x_edge) <= distance(y_edge) { Hit::Handle(hx, 0) } else { Hit::Handle(0, hy) }
 }
 
 /// The pending frame's angle (degrees), 0 when it isn't a finite number.
@@ -311,8 +355,7 @@ pub fn angle(app: &PhotocraftApp) -> f64 {
 /// A press at document point `p` would turn the frame (Crop tool, outside the frame and its
 /// handles) rather than draw, move or resize one.
 pub fn turns_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
-    app.ui.tool == Tool::Crop
-        && app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite())).is_some_and(|r| hit_turned(r, angle(app), p, tolerance(app)) == Hit::Outside)
+    app.ui.tool == Tool::Crop && app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite())).is_some_and(|r| hit_screen(app, r, p) == Hit::Outside)
 }
 
 /// A double-click at document point `p` commits the crop (Photoshop: double-click inside the box,
@@ -320,7 +363,7 @@ pub fn turns_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
 pub fn commits_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     app.ui.tool == Tool::Crop
         && app.crop.drag.is_none()
-        && app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite())).is_some_and(|r| hit_turned(r, angle(app), p, tolerance(app)) == Hit::Inside)
+        && app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite())).is_some_and(|r| hit_screen(app, r, p) == Hit::Inside)
 }
 
 /// The frame is being turned: its angle, for the readout beside the pointer.
@@ -345,7 +388,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             app.crop.editing = true;
             let frame = app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite()));
             let deg = angle(app);
-            app.crop.drag = Some(match frame.map(|r| (r, hit_turned(r, deg, p, tolerance(app)))) {
+            app.crop.drag = Some(match frame.map(|r| (r, hit_screen(app, r, p))) {
                 Some((rect, Hit::Handle(hx, hy))) => CropDrag::Resize { hx, hy, start: p, rect },
                 Some((rect, Hit::Inside)) if !app.crop.default_frame => CropDrag::Move { start: p, rect },
                 // Outside the frame a drag turns it, as in Photoshop (#1792).
@@ -433,10 +476,10 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
         Some(CropDrag::Resize { hx, hy, .. }) => Hit::Handle(hx, hy),
         Some(CropDrag::Draw { .. }) => return Some(CursorIcon::Crosshair),
         Some(CropDrag::Rotate { .. }) => Hit::Outside,
-        None => hit_turned(app.ui.crop_rect?, deg, p, tolerance(app)),
+        None => hit_screen(app, app.ui.crop_rect?, p),
     };
     Some(match h {
-        Hit::Handle(hx, hy) => resize_icon(hx, hy, deg),
+        Hit::Handle(hx, hy) => resize_icon(hx, hy, deg, crate::canvas::ViewXform::active(app)),
         Hit::Inside => CursorIcon::Move,
         // Photoshop's curved two-headed arrow (`draw_turn_cursor`, from `turn_cursor_dir`).
         Hit::Outside => CursorIcon::None,
@@ -455,7 +498,7 @@ pub fn turn_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
     let turning = match app.crop.drag {
         Some(CropDrag::Rotate { .. }) => true,
         Some(_) => false,
-        None => hit_turned(r, deg, p, tolerance(app)) == Hit::Outside,
+        None => hit_screen(app, r, p) == Hit::Outside,
     };
     if !turning || !(p[0].is_finite() && p[1].is_finite()) {
         return None;
@@ -500,8 +543,12 @@ pub fn draw_turn_cursor(ctx: &egui::Context, p: egui::Pos2, toward: egui::Vec2) 
 
 /// The resize arrow for handle (`hx`, `hy`) of a frame turned `deg` degrees: the handle's outward
 /// direction, turned with the frame, to the nearest of the four arrows.
-fn resize_icon(hx: i8, hy: i8, deg: f64) -> CursorIcon {
-    let d = turn([f64::from(hx), f64::from(hy)], [0.0, 0.0], deg);
+fn resize_icon(hx: i8, hy: i8, deg: f64, xf: Option<crate::canvas::ViewXform>) -> CursorIcon {
+    let mut d = turn([f64::from(hx), f64::from(hy)], [0.0, 0.0], deg);
+    if let Some(xf) = xf {
+        let screen = xf.map_vec(egui::vec2(d[0] as f32, d[1] as f32));
+        d = [f64::from(screen.x), f64::from(screen.y)];
+    }
     let a = d[1].atan2(d[0]).rem_euclid(std::f64::consts::PI);
     match ((a / std::f64::consts::FRAC_PI_4).round() as i64).rem_euclid(4) {
         0 => CursorIcon::ResizeHorizontal,
@@ -514,6 +561,308 @@ fn resize_icon(hx: i8, hy: i8, deg: f64) -> CursorIcon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn projected_app(aspect: f32, ppp: f32, crop_angle: f64, camera: f32, flip: bool) -> PhotocraftApp {
+        let mut a = app(SampleType::U8);
+        a.ui.crop_rect = Some([100.0, 100.0, 900.0, 700.0]);
+        a.ui.crop_angle = crop_angle;
+        a.ui.view.pixel_aspect = format!("custom:{aspect}");
+        a.ui.view.pixel_aspect_correction = true;
+        a.ui.view.flip_horizontal = flip;
+        a.ui.views = vec![crate::state::View::default()];
+        a.ui.views[0].zoom = ppp;
+        a.ui.views[0].zoom /= ppp;
+        a.ui.views[0].center = [500.0, 400.0];
+        a.ui.views[0].rotation = camera;
+        a.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+        a
+    }
+
+    /// Construct the pointer in the rendered edge's perpendicular direction, independently of
+    /// the native handle tolerance. Camera rotation, reflection and DPI affect the real input.
+    fn edge_pointer(a: &PhotocraftApp, hx: i8, hy: i8, distance: f32) -> [f64; 2] {
+        let r = a.ui.crop_rect.unwrap();
+        let c = center(r);
+        let deg = a.ui.crop_angle;
+        let at = turn([c[0] + f64::from(hx) * 400.0, c[1] + f64::from(hy) * 300.0], c, deg);
+        let tangent = turn(if hx == 0 { [1.0, 0.0] } else { [0.0, 1.0] }, [0.0; 2], deg);
+        let outward = turn([f64::from(hx), f64::from(hy)], [0.0; 2], deg);
+        let xf = crate::canvas::ViewXform::active(a).unwrap();
+        let t = xf.map_vec(egui::vec2(tangent[0] as f32, tangent[1] as f32));
+        let out = xf.map_vec(egui::vec2(outward[0] as f32, outward[1] as f32));
+        let mut normal = egui::vec2(-t.y, t.x).normalized();
+        if normal.dot(out) < 0.0 {
+            normal = -normal;
+        }
+        xf.to_doc(xf.to_screen(at[0] as f32, at[1] as f32) + normal * distance)
+    }
+
+    #[test]
+    fn rotated_aspect_corners_have_finite_screen_reach() {
+        let mut failures = Vec::new();
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for deg in [45.0, 90.0] {
+                    for (camera, flip) in [(0.0, false), (37.0, true)] {
+                        for (hx, hy) in [(-1, -1), (1, -1), (1, 1), (-1, 1)] {
+                            for distance in [2.0, 7.0, 20.0, 70.0] {
+                                let mut a = projected_app(aspect, ppp, deg, camera, flip);
+                                let r = a.ui.crop_rect.unwrap();
+                                let c = center(r);
+                                let corner = turn([c[0] + f64::from(hx) * 400.0, c[1] + f64::from(hy) * 300.0], c, deg);
+                                // Pan this corner to the canvas centre so its full outside reach is visible.
+                                a.ui.views[0].center = [corner[0] as f32, corner[1] as f32];
+                                let xf = crate::canvas::ViewXform::active(&a).unwrap();
+                                let out = turn([f64::from(hx), f64::from(hy)], [0.0; 2], deg);
+                                let out = xf.map_vec(egui::vec2(out[0] as f32, out[1] as f32)).normalized();
+                                let p = xf.to_doc(xf.to_screen(corner[0] as f32, corner[1] as f32) + out * distance);
+                                let expected = if distance <= 7.0 { Hit::Handle(hx, hy) } else { Hit::Outside };
+                                let got = hit_screen(&a, r, p);
+                                if got != expected {
+                                    failures.push(format!("PAR {aspect}, DPI {ppp}, crop {deg}, camera {camera}, flip {flip}, corner {hx}/{hy}, {distance}pt: {got:?} != {expected:?}"));
+                                }
+                                tool_event(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+                                assert!(
+                                    matches!((got, a.crop.drag), (Hit::Handle(x, y), Some(CropDrag::Resize { hx, hy, .. })) if x == hx && y == hy)
+                                        || matches!((got, a.crop.drag), (Hit::Outside, Some(CropDrag::Rotate { .. })))
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} wrong corner picks:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    fn rotated_aspect_acute_corner_extensions_do_not_grab_the_vertex() {
+        let a = projected_app(10.0, 1.0, 45.0, 0.0, false);
+        let r = a.ui.crop_rect.unwrap();
+        let p = turn([905.0, 95.0], center(r), 45.0);
+        assert_eq!(hit_screen(&a, r, p), Hit::Outside, "70.7 points beyond both finite edges");
+    }
+
+    #[test]
+    fn rotated_aspect_inside_acute_corner_selects_the_near_edge() {
+        let a = projected_app(10.0, 1.0, 45.0, 0.0, false);
+        let r = a.ui.crop_rect.unwrap();
+        let p = turn([895.0, 105.0], center(r), 45.0);
+        assert!(
+            matches!(hit_screen(&a, r, p), Hit::Handle(1, 0) | Hit::Handle(0, -1)),
+            "inside the acute cone near both edges, but 70.7 points from the corner"
+        );
+    }
+
+    #[test]
+    fn square_pixel_crop_keeps_the_full_outside_corner_reach() {
+        let a = projected_app(1.0, 1.0, 0.0, 0.0, false);
+        let r = a.ui.crop_rect.unwrap();
+        assert_eq!(hit_screen(&a, r, [908.0, 92.0]), Hit::Handle(1, -1));
+        assert_eq!(hit_screen(&a, r, [108.0, 108.0]), Hit::Handle(-1, -1));
+    }
+
+    #[test]
+    fn rotated_aspect_pointer_reach_tracks_visible_edges() {
+        let mut failures = Vec::new();
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for deg in [45.0, 90.0] {
+                    for camera in [0.0, 37.0] {
+                        for flip in [false, true] {
+                            for (hx, hy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                                for distance in [-20.0, -2.0, 2.0, 20.0] {
+                                    let mut a = projected_app(aspect, ppp, deg, camera, flip);
+                                    let p = edge_pointer(&a, hx, hy, distance);
+                                    let r = a.ui.crop_rect.unwrap();
+                                    let expected = if distance.abs() == 2.0 {
+                                        Hit::Handle(hx, hy)
+                                    } else if distance < 0.0 {
+                                        Hit::Inside
+                                    } else {
+                                        Hit::Outside
+                                    };
+                                    let got = hit_screen(&a, r, p);
+                                    if got != expected {
+                                        failures.push(format!("PAR {aspect}, DPI {ppp}, crop {deg}, camera {camera}, flip {flip}, edge {hx}/{hy}, {distance}pt: {got:?} != {expected:?}"));
+                                    }
+                                    assert_eq!(turns_at(&a, p), got == Hit::Outside);
+                                    assert_eq!(commits_at(&a, p), got == Hit::Inside);
+                                    let history = a.session.active().unwrap().history.past_len();
+                                    tool_event(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+                                    let selected = match a.crop.drag.unwrap() {
+                                        CropDrag::Resize { hx, hy, .. } => Hit::Handle(hx, hy),
+                                        CropDrag::Move { .. } => Hit::Inside,
+                                        CropDrag::Rotate { .. } => Hit::Outside,
+                                        other => panic!("unexpected gesture: {other:?}"),
+                                    };
+                                    assert_eq!(selected, got, "pointer dispatch uses the hover hit");
+                                    assert_eq!(a.session.active().unwrap().history.past_len(), history);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} wrong picks:\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
+    fn rotated_aspect_resize_cursor_follows_visible_direction() {
+        for (aspect, deg, camera, flip, expected) in [
+            (0.1, 45.0, 0.0, false, CursorIcon::ResizeVertical),
+            (10.0, 45.0, 0.0, false, CursorIcon::ResizeHorizontal),
+            (1.0, 45.0, 37.0, false, CursorIcon::ResizeVertical),
+            (1.0, 90.0, 37.0, false, CursorIcon::ResizeNeSw),
+            (1.0, 90.0, 37.0, true, CursorIcon::ResizeNwSe),
+        ] {
+            let mut a = projected_app(aspect, 2.0, deg, camera, flip);
+            // The cursor remains correct while resizing even when the pointer leaves the frame.
+            a.crop.drag = Some(CropDrag::Resize { hx: 1, hy: 0, start: [0.0; 2], rect: a.ui.crop_rect.unwrap() });
+            assert_eq!(cursor(&a, [0.0; 2]), Some(expected), "PAR {aspect}, crop {deg}, camera {camera}, flip {flip}");
+        }
+    }
+
+    #[test]
+    fn rotated_aspect_resize_keeps_native_geometry_and_history() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for deg in [45.0, 90.0] {
+                    for (camera, flip) in [(0.0, false), (37.0, true)] {
+                        let mut a = projected_app(aspect, ppp, deg, camera, flip);
+                        let old = a.ui.crop_rect.unwrap();
+                        let p = edge_pointer(&a, 1, 0, 2.0);
+                        let delta = turn([12.0, 0.0], [0.0; 2], deg);
+                        let end = [p[0] + delta[0], p[1] + delta[1]];
+                        let history = a.session.active().unwrap().history.past_len();
+                        drag(&mut a, &[p, end], NONE);
+                        let new = a.ui.crop_rect.unwrap();
+                        assert!(
+                            (new[2] - new[0] - 812.0).abs() < 1e-6 && (new[3] - new[1] - 600.0).abs() < 1e-6,
+                            "PAR {aspect}, DPI {ppp}, crop {deg}: {new:?}"
+                        );
+                        let (before, after) = (corners(old, deg), corners(new, deg));
+                        for i in [0, 3] {
+                            assert!(before[i].iter().zip(after[i]).all(|(a, b)| (a - b).abs() < 1e-6), "the opposite edge stays fixed");
+                        }
+                        assert_eq!(a.ui.crop_angle, deg);
+                        assert!(a.crop.drag.is_none());
+                        let st = a.session.active().unwrap();
+                        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), history), "the gesture edits only the pending frame");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rotated_aspect_canvas_button_grabs_the_visible_edge() {
+        use egui::{Event, PointerButton};
+        for ppp in [1.0, 2.0] {
+            let mut a = projected_app(0.1, ppp, 90.0, 37.0, true);
+            a.ui.extras.rulers = false;
+            a.ui.views[0].pixel_aspect = 0.1;
+            a.ui.views[0].fit_pending = false;
+            a.ui.views[0].doc_size = [200, 100];
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 1000.0)).with_pixels_per_point(ppp).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    app.last_canvas_rect = ui.max_rect();
+                    let v = app.ui.views[0].clone();
+                    app.ui.views[0] = crate::canvas::canvas_view(app, ui, 0, ui.max_rect(), v, true);
+                },
+                a,
+            );
+            h.run_steps(2);
+            let p = edge_pointer(h.state(), 0, -1, 2.0);
+            let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
+            let screen = xf.to_screen(p[0] as f32, p[1] as f32);
+            h.event(Event::PointerMoved(screen));
+            h.event(Event::PointerButton { pos: screen, button: PointerButton::Primary, pressed: true, modifiers: NONE });
+            h.step();
+            h.event(Event::PointerMoved(screen + egui::vec2(10.0, 0.0)));
+            h.step();
+            assert!(matches!(h.state().crop.drag, Some(CropDrag::Resize { hx: 0, hy: -1, .. })), "DPI {ppp}: {:?}", h.state().crop.drag);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a wgpu adapter; captures the rotated PAR crop frame"]
+    fn rotated_aspect_crop_visuals() {
+        let dir = std::env::var_os("PHOTOCRAFT_ASPECT_SNAPSHOTS").map(std::path::PathBuf::from).expect("snapshot directory");
+        std::fs::create_dir_all(&dir).unwrap();
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 900.0)).with_pixels_per_point(ppp).wgpu().build_eframe(move |cc| {
+                    PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                    let mut a = projected_app(aspect, ppp, 45.0, 37.0, true);
+                    a.ui.extras.rulers = false;
+                    a.ui.views[0].fit_pending = false;
+                    a.ui.views[0].doc_size = [200, 100];
+                    a.ui.views[0].zoom = ppp / aspect.max(1.0);
+                    a
+                });
+                h.run_steps(5);
+                h.render().unwrap().save(dir.join(format!("rotated-crop-par{aspect}-dpi{ppp}.png"))).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a wgpu adapter; captures pointer reach at an acute crop corner"]
+    fn rotated_aspect_crop_corner_visuals() {
+        let dir = std::env::var_os("PHOTOCRAFT_ASPECT_SNAPSHOTS").map(std::path::PathBuf::from).expect("snapshot directory");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 900.0)).wgpu().build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut a = projected_app(10.0, 1.0, 45.0, 0.0, false);
+            let corner = turn([900.0, 100.0], center(a.ui.crop_rect.unwrap()), 45.0);
+            a.ui.extras.rulers = false;
+            a.ui.views[0].fit_pending = false;
+            a.ui.views[0].doc_size = [200, 100];
+            a.ui.views[0].center = [corner[0] as f32, corner[1] as f32];
+            a
+        });
+        h.run_steps(5);
+        let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
+        let corner = turn([900.0, 100.0], center(h.state().ui.crop_rect.unwrap()), 45.0);
+        let corner = xf.to_screen(corner[0] as f32, corner[1] as f32);
+        for distance in [2.0, 7.0, 20.0, 70.0] {
+            let screen = corner + egui::vec2(distance, 0.0);
+            h.event(egui::Event::PointerMoved(screen));
+            h.run_steps(2);
+            let p = xf.to_doc(screen);
+            assert_eq!(turns_at(h.state(), p), distance > 7.0);
+            h.render().unwrap().save(dir.join(format!("acute-crop-corner-{distance}pt.png"))).unwrap();
+        }
+    }
+
+    #[test]
+    fn aspect_review_crop_gesture_picks_screen_handle() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for rotation in [0.0, 37.0] {
+                    let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    a.run("file.new", serde_json::json!({"width":1000,"height":500})).unwrap();
+                    a.ui.tool = crate::state::Tool::Crop;
+                    a.ui.crop_rect = Some([100.0, 100.0, 900.0, 400.0]);
+                    a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                    a.ui.view.pixel_aspect_correction = true;
+                    a.ui.views[0].zoom = ppp;
+                    a.ui.views[0].zoom /= ppp;
+                    a.ui.views[0].rotation = rotation;
+                    let xf = crate::canvas::ViewXform::active(&a).unwrap();
+                    let at = xf.to_screen(100.0, 100.0);
+                    let p = xf.to_doc(at + egui::vec2(-2.0, -2.0));
+                    pointer(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
+                    assert!(matches!(a.crop.drag, Some(CropDrag::Resize { hx: -1, hy: -1, .. })), "{aspect} {rotation}: {:?}", a.crop.drag);
+                    let p = xf.to_doc(at + egui::vec2(-30.0, -30.0));
+                    assert!(!matches!(hit_screen(&a, a.ui.crop_rect.unwrap(), p), Hit::Handle(-1, -1)));
+                }
+            }
+        }
+    }
+
     use crate::canvas::tool_event;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
     use serde_json::json;
@@ -701,10 +1050,10 @@ mod tests {
         let b = turned_bounds(r, 90.0);
         assert!((b[0] - 50.0).abs() < 1e-9 && (b[3] - 80.0).abs() < 1e-9, "{b:?}");
         // Handle arrows turn with the frame.
-        assert_eq!(resize_icon(1, 0, 0.0), CursorIcon::ResizeHorizontal);
-        assert_eq!(resize_icon(1, 0, 90.0), CursorIcon::ResizeVertical);
-        assert_eq!(resize_icon(1, 0, 45.0), CursorIcon::ResizeNwSe);
-        assert_eq!(resize_icon(-1, -1, 90.0), CursorIcon::ResizeNeSw);
+        assert_eq!(resize_icon(1, 0, 0.0, None), CursorIcon::ResizeHorizontal);
+        assert_eq!(resize_icon(1, 0, 90.0, None), CursorIcon::ResizeVertical);
+        assert_eq!(resize_icon(1, 0, 45.0, None), CursorIcon::ResizeNwSe);
+        assert_eq!(resize_icon(-1, -1, 90.0, None), CursorIcon::ResizeNeSw);
         assert_eq!(normalized_angle(540.0), 180.0);
         assert_eq!(normalized_angle(-190.0), 170.0);
         assert_eq!(normalized_angle(f64::NAN), 0.0);
@@ -839,7 +1188,16 @@ mod tests {
     fn space_on_the_canvas_moves_the_frame_not_the_view() {
         use egui::{Event, Key, PointerButton, pos2};
         let mut a = app(SampleType::U8);
-        let view = crate::state::View { zoom: 2.0, center: [100.0, 50.0], fit_pending: false, fill_pending: false, doc_size: [200, 100], rotation: 0.0 };
+        let view = crate::state::View {
+            zoom: 2.0,
+
+            pixel_aspect: 1.0,
+            center: [100.0, 50.0],
+            fit_pending: false,
+            fill_pending: false,
+            doc_size: [200, 100],
+            rotation: 0.0,
+        };
         a.ui.views = vec![view.clone()];
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {

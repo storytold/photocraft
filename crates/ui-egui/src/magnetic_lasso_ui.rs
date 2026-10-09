@@ -294,7 +294,8 @@ fn end_freehand(app: &mut PhotocraftApp) {
 fn near_start(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     let m = &app.ui.magnetic;
     let r = close_radius(app);
-    m.path.first().is_some_and(|&first| dist(first, p) <= r) && magnetic::length(&m.path) + magnetic::length(&m.live) > 2.0 * r
+    m.path.first().is_some_and(|&first| crate::canvas::ScreenMetric::active(app).distance(first, p) <= 8.0)
+        && magnetic::length(&m.path) + magnetic::length(&m.live) > 2.0 * r
 }
 
 /// Close the border and select it: the live segment fastens, then the last point joins the first
@@ -437,11 +438,9 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, hover:
 
 /// The cursor over the canvas: a crosshair; Preferences › Cursors › Other Cursors › Precise also
 /// shows the detection width around it.
-pub fn cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2, zoom: f32) -> egui::CursorIcon {
+pub fn cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2, xf: &crate::canvas::ViewXform) -> egui::CursorIcon {
     if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-        let r = (app.ui.tool_options.magnetic_width.clamp(1.0, 256.0) * zoom).max(2.0);
-        painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-        painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+        xf.circle_outline(painter, p, app.ui.tool_options.magnetic_width.clamp(1.0, 256.0));
     }
     egui::CursorIcon::Crosshair
 }

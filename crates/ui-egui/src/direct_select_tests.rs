@@ -160,3 +160,31 @@ fn shape_layer_paths_are_edited_too() {
     let b: [i64; 4] = serde_json::from_value(info["bounds"].clone()).unwrap();
     assert!(b[0] + b[2] >= 100 && b[1] + b[3] >= 90, "the shape re-rendered: {b:?}");
 }
+
+#[test]
+fn aspect_review_path_anchor_gestures_match_screen_size() {
+    for aspect in [0.1, 10.0] {
+        for ppp in [1.0, 2.0] {
+            for rotation in [0.0, 37.0] {
+                let mut a = app(Tool::DirectSelection);
+                with_path(&mut a);
+                a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                a.ui.view.pixel_aspect_correction = true;
+                a.ui.views[0].zoom = ppp;
+                a.ui.views[0].zoom /= ppp;
+                a.ui.views[0].rotation = rotation;
+                let xf = crate::canvas::ViewXform::active(&a).unwrap();
+                let at = xf.to_screen(40.0, 40.0);
+                for (delta, expected) in [(2.0, true), (25.0, false)] {
+                    let p = xf.to_doc(at - egui::vec2(delta, delta));
+                    tool_event(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, Modifiers::NONE);
+                    assert_eq!(
+                        matches!(&a.ui.direct_selection.drag,Some(Drag::Edit{edit:super::Edit::Anchors(v),..}) if v==&vec![[0,0]]),
+                        expected,
+                        "{aspect} {rotation}"
+                    );
+                }
+            }
+        }
+    }
+}

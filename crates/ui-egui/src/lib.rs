@@ -1081,6 +1081,10 @@ impl eframe::App for PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        // Menus/control input run before canvas layout and need current aspect geometry.
+        for view in &mut self.ui.views {
+            view.pixel_aspect = self.ui.view.effective_pixel_aspect();
+        }
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         if self.live_tokens.poll(ctx, self.ui.theme) {
@@ -1476,7 +1480,15 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
-    /// Zoom of the active document's main view (screen points per document pixel).
+    /// Keep runtime camera geometry current for menu and automation calls between frames.
+    pub(crate) fn sync_view_aspect(&mut self) {
+        let aspect = self.ui.view.effective_pixel_aspect();
+        for view in self.ui.views.iter_mut().chain(self.ui.windows.iter_mut().map(|w| &mut w.view)) {
+            view.pixel_aspect = aspect;
+        }
+    }
+
+    /// Isotropic zoom of the main view in logical points. Pixel aspect lives in ViewXform.
     pub fn current_zoom(&self) -> f32 {
         self.session.active_index().and_then(|i| self.ui.views.get(i)).map_or(1.0, |v| v.zoom)
     }

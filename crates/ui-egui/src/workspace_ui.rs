@@ -153,10 +153,18 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
                     if !o.contains_key(k) || !v.is_boolean() {
                         return Some(Err(format!("unknown Show item `{k}` ({})", o.keys().cloned().collect::<Vec<_>>().join("|"))));
                     }
+                    if let Some(reason) = unavailable_extra(k)
+                        && o.get(k) != Some(v)
+                    {
+                        return Some(Err(reason.into()));
+                    }
                     o.insert(k.clone(), v.clone());
                 }
             }
             app.ui.view.show = serde_json::from_value(show.clone()).map_err(|e| e.to_string()).ok()?;
+            if let Some(puppet) = &mut app.distort.puppet {
+                puppet.show_mesh = app.ui.view.show.mesh;
+            }
             Ok(show)
         }
         _ => return None,
@@ -272,7 +280,16 @@ fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         c
     };
     app.ui.view.pixel_aspect = format!("custom:{}:{}", c.ratio, c.name);
+    app.sync_view_aspect();
     Ok(json!({"pixelAspectRatio": c.ratio, "name": c.name}))
+}
+
+fn unavailable_extra(key: &str) -> Option<&'static str> {
+    crate::view_cmds::unavailable_reason(match key {
+        "brush_preview" => "view.show.brushPreview",
+        "artboard_guides" => "view.show.artboardGuides",
+        _ => return None,
+    })
 }
 
 /// The Show Extras Options… checkboxes as (field, label). The fields are the serialized
@@ -434,7 +451,11 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
                 _ => {
                     for (k, label) in extras_options() {
-                        check(ui, &mut f, k, label);
+                        if let Some(reason) = unavailable_extra(k) {
+                            ui.add_enabled_ui(false, |ui| check(ui, &mut f, k, label)).response.on_disabled_hover_text(reason);
+                        } else {
+                            check(ui, &mut f, k, label);
+                        }
                     }
                 }
             }
@@ -583,8 +604,11 @@ mod tests {
             assert!(before[k].is_boolean(), "{k} is not a Show field");
             assert_eq!(f.get(k).and_then(Value::as_bool), before[k].as_bool(), "{k}");
         }
-        // Ticking every box (one- and multi-word flags in one submission) applies them all on OK.
+        // Supported boxes apply on OK; absent features retain their saved values.
         for (k, _) in extras_options() {
+            if unavailable_extra(k).is_some() {
+                continue;
+            }
             let on = !f.get(k).and_then(Value::as_bool).unwrap();
             f.insert(k.into(), json!(on));
         }
@@ -592,7 +616,8 @@ mod tests {
         crate::menus::invoke(&mut app, &ctx, id, p).unwrap();
         let after = serde_json::to_value(app.ui.view.show).unwrap();
         for (k, _) in extras_options() {
-            assert_eq!(after[k].as_bool(), before[k].as_bool().map(|b| !b), "{k}");
+            let expected = if unavailable_extra(k).is_some() { before[k].as_bool() } else { before[k].as_bool().map(|b| !b) };
+            assert_eq!(after[k].as_bool(), expected, "{k}");
         }
     }
 

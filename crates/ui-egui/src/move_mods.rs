@@ -142,8 +142,8 @@ fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64;
         d = constrain(d, app.move_mods.last, if pixels { TRANSFORM_DIRECTIONS } else { MOVE_DIRECTIONS });
     }
     app.move_mods.last = Some(d);
-    let zoom = f64::from(app.current_zoom().max(0.01));
-    if app.move_mods.alt && !pixels && app.move_mods.dup_from.is_none() && d[0].hypot(d[1]) * zoom >= DUPLICATE_THRESHOLD {
+    let metric = crate::canvas::ScreenMetric::active(app);
+    if app.move_mods.alt && !pixels && app.move_mods.dup_from.is_none() && metric.distance(d, [0.0, 0.0]) >= DUPLICATE_THRESHOLD {
         app.move_mods.dup_from = duplicate(app);
         // Only once per drag, even if duplicating failed.
         app.move_mods.alt = false;

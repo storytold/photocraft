@@ -513,10 +513,7 @@ fn empty(ui: &mut egui::Ui, s: &str) {
 
 /// Document point under a screen position on the main canvas.
 fn doc_point(app: &PhotocraftApp, pos: Pos2) -> Option<[f64; 2]> {
-    let i = app.session.active_index()?;
-    let v = app.ui.views.get(i)?;
-    let xf = crate::canvas::ViewXform { rect: app.last_canvas_rect, zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal, rotation: v.rotation };
-    Some(xf.to_doc(pos))
+    Some(crate::canvas::ViewXform::active(app)?.to_doc(pos))
 }
 
 // ------------------------------------------------------------------ Gradients

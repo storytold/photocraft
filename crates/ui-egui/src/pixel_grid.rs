@@ -38,6 +38,11 @@ pub fn shows_at(zoom: f32) -> bool {
     zoom > MIN_ZOOM
 }
 
+/// Both physical cell axes must exceed five pixels; narrow PAR must not crowd grid lines.
+pub fn shows_for_view(physical_zoom: f32, aspect: f32) -> bool {
+    shows_at(physical_zoom * aspect.min(1.0))
+}
+
 /// One grid line piece in document pixels, axis-aligned, with its colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridSeg {

@@ -202,10 +202,6 @@ fn export_log(app: &mut PhotocraftApp, rows: Option<Vec<u64>>) -> Result<Value, 
 
 // ------------------------------------------------------------------ tools
 
-fn tolerance(app: &PhotocraftApp) -> f64 {
-    7.0 / f64::from(app.current_zoom().max(0.01))
-}
-
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
@@ -232,12 +228,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return false;
     }
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
-    let tol = tolerance(app);
+    let metric = crate::canvas::ScreenMetric::active(app);
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
             let cur = doc.measurement.ruler;
-            let near = |q: [f64; 2]| dist(p, q) <= tol;
+            let near = |q: [f64; 2]| metric.distance(p, q) <= 7.0;
             match cur {
                 // ⌥-drag from an end point starts the protractor arm at that vertex.
                 Some(mut r) if mods.alt && (near(r.start) || near(r.end)) => {
@@ -273,7 +269,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
         }
         (Tool::Count, ToolEvent::Down { x, y, .. }) => {
-            let hit = nearest_marker(&doc, [x, y], tol);
+            let hit = nearest_marker(&doc, [x, y], metric);
             match hit {
                 Some((g, i)) if mods.alt => {
                     let _ = app.run("count.remove", json!({"group": g, "index": i}));
@@ -293,9 +289,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
         }
         (Tool::Note, ToolEvent::Down { x, y, .. }) => {
-            let z = f64::from(app.current_zoom().max(0.01));
-            let hit =
-                doc.notes.iter().rposition(|n| x >= n.position[0] && x <= n.position[0] + 16.0 / z && y >= n.position[1] && y <= n.position[1] + 20.0 / z);
+            let hit = crate::canvas::ViewXform::active(app).and_then(|xf| {
+                let p = xf.to_screen(x as f32, y as f32);
+                doc.notes
+                    .iter()
+                    .rposition(|n| egui::Rect::from_min_size(xf.to_screen(n.position[0] as f32, n.position[1] as f32), egui::vec2(16.0, 20.0)).contains(p))
+            });
             match hit {
                 Some(i) => {
                     app.ui.analysis.note_selected = Some(i);
@@ -325,12 +324,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     true
 }
 
-fn nearest_marker(d: &Document, at: [f64; 2], tol: f64) -> Option<(usize, usize)> {
+fn nearest_marker(d: &Document, at: [f64; 2], metric: crate::canvas::ScreenMetric) -> Option<(usize, usize)> {
     let mut best: Option<(f64, usize, usize)> = None;
     for (gi, g) in d.measurement.count_groups.iter().enumerate().filter(|(_, g)| g.visible) {
         for (pi, q) in g.points.iter().enumerate() {
-            let dd = dist(*q, at);
-            if dd <= tol && best.is_none_or(|b| dd < b.0) {
+            let dd = metric.distance(*q, at);
+            if dd <= 7.0 && best.is_none_or(|b| dd < b.0) {
                 best = Some((dd, gi, pi));
             }
         }

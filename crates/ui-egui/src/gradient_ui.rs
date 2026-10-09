@@ -184,7 +184,19 @@ impl Widget {
         (b - a > 1e-4).then(|| a + (b - a) * self.mids.get(i).copied().unwrap_or(0.5))
     }
 
-    /// What `p` (document pixels) grabs, with `tol` the grab distance in document pixels.
+    fn in_metric(mut self, metric: crate::canvas::ScreenMetric) -> Self {
+        self.start = metric.point(self.start.map(f64::from)).map(|v| v as f32);
+        self.end = metric.point(self.end.map(f64::from)).map(|v| v as f32);
+        self
+    }
+
+    fn screen_projection(&self, p: [f32; 2], metric: crate::canvas::ScreenMetric) -> (f32, f32) {
+        let map = |p: [f32; 2]| metric.point(p.map(f64::from)).map(|v| v as f32);
+        project(map(self.start), map(self.end), map(p))
+    }
+
+    /// What `p` grabs, with `tol` in the same coordinate space as this widget.
+    /// Points may be native document pixels or the logical-screen metric.
     fn hit(&self, p: [f32; 2], tol: f32) -> Option<Grab> {
         if dist(p, self.end) <= tol {
             return Some(Grab::End);
@@ -210,12 +222,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         app.gradient.drag = None;
         return false;
     }
-    let zoom = app.current_zoom().max(0.01);
+    let metric = crate::canvas::ScreenMetric::active(app);
     match ev {
         ToolEvent::Down { x, y, .. } => {
             let p = [x as f32, y as f32];
             let active = active_gradient(app);
-            let grab = active.as_ref().and_then(|(l, frame, _)| Widget::new(fill_of(l)?, *frame)?.hit(p, GRAB / zoom));
+            let grab = active
+                .as_ref()
+                .and_then(|(l, frame, _)| Widget::new(fill_of(l)?, *frame)?.in_metric(metric).hit(metric.point(p.map(f64::from)).map(|v| v as f32), GRAB));
             app.gradient.drag = Some(match (grab, active) {
                 (Some(grab), Some((l, ..))) => Drag::Edit { layer: l.id, grab, down: p, moved: false, commit: None },
                 (_, active) => Drag::Draw { from: p, to: p, redraw: active.map(|a| a.0.id) },
@@ -231,7 +245,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 }
 
 fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
-    let zoom = app.current_zoom().max(0.01);
+    let metric = crate::canvas::ScreenMetric::active(app);
     let active = active_gradient(app);
     let Some(drag) = app.gradient.drag.as_mut() else { return };
     // ⇧: 45° gradient angles, the same snap as the classic drag (stroke_constraint.rs).
@@ -245,7 +259,7 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
     match drag {
         Drag::Draw { from, to, .. } => *to = snap(*from, p),
         Drag::Edit { layer, grab, down, moved, commit } => {
-            if dist(*down, p) * zoom >= 2.0 {
+            if metric.distance(down.map(f64::from), p.map(f64::from)) >= 2.0 {
                 *moved = true;
             }
             if !*moved {
@@ -261,15 +275,15 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
                     Some((cmds::SET, json!({"layer": id, "from": [w.start[0] + dx, w.start[1] + dy], "to": [w.end[0] + dx, w.end[1] + dy]})))
                 }
                 Grab::Stop(i) => {
-                    let (u, d) = project(w.start, w.end, p);
-                    if d * zoom > TEAR_OFF && w.stops.len() > 2 {
+                    let (u, d) = w.screen_projection(p, metric);
+                    if d > TEAR_OFF && w.stops.len() > 2 {
                         Some((cmds::STOP, json!({"layer": id, "action": "delete", "index": i})))
                     } else {
                         Some((cmds::STOP, json!({"layer": id, "action": "move", "index": i, "location": w.u_of(u)})))
                     }
                 }
                 Grab::Mid(i) => {
-                    let t = w.u_of(project(w.start, w.end, p).0);
+                    let t = w.u_of(w.screen_projection(p, metric).0);
                     match (w.stops.get(i), w.stops.get(i + 1)) {
                         (Some(a), Some(b)) if b.0 - a.0 > 1e-4 => {
                             Some((cmds::STOP, json!({"layer": id, "action": "midpoint", "index": i, "location": ((t - a.0) / (b.0 - a.0)).clamp(0.05, 0.95)})))
@@ -284,10 +298,10 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
 
 fn finish(app: &mut PhotocraftApp) {
     let Some(drag) = app.gradient.drag.take() else { return };
-    let zoom = app.current_zoom().max(0.01);
+    let metric = crate::canvas::ScreenMetric::active(app);
     match drag {
         Drag::Draw { from, to, redraw } => {
-            if dist(from, to) * zoom < 2.0 {
+            if metric.distance(from.map(f64::from), to.map(f64::from)) < 2.0 {
                 return;
             }
             let _ = match redraw {
@@ -456,14 +470,30 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let shadow = Stroke::new(3.0, Color32::from_black_alpha(90));
     let white = Stroke::new(1.5, Color32::WHITE);
     match w.style {
-        GradientStyle::Radial | GradientStyle::Angle => {
+        GradientStyle::Radial | GradientStyle::Angle if xf.aspect == 1.0 => {
             painter.circle_stroke(s, r, shadow);
             painter.circle_stroke(s, r, white);
         }
+        GradientStyle::Radial | GradientStyle::Angle => {
+            let radius = dist(w.start, w.end);
+            // Sample the native circle before the view transform. Use the larger physical
+            // radius for smooth curves at high DPI, with bounded work at extreme zoom.
+            let physical_radius = radius * xf.zoom * xf.aspect.max(1.0) * painter.ctx().pixels_per_point();
+            let count = ((physical_radius.sqrt() * 8.0) as usize).clamp(64, 512).div_ceil(4) * 4;
+            let points: Vec<_> = (0..count)
+                .map(|i| {
+                    let angle = i as f32 / count as f32 * std::f32::consts::TAU;
+                    sp([w.start[0] + radius * angle.cos(), w.start[1] + radius * angle.sin()])
+                })
+                .collect();
+            painter.add(egui::Shape::closed_line(points.clone(), shadow));
+            painter.add(egui::Shape::closed_line(points, white));
+        }
         GradientStyle::Diamond => {
-            let d = e - s;
+            let s = pos2(w.start[0], w.start[1]);
+            let d = vec2(w.end[0] - w.start[0], w.end[1] - w.start[1]);
             let n = vec2(-d.y, d.x);
-            let pts = vec![s + d, s + n, s - d, s - n, s + d];
+            let pts = [s + d, s + n, s - d, s - n, s + d].map(|p| sp([p.x, p.y])).to_vec();
             painter.add(egui::Shape::line(pts.clone(), shadow));
             painter.add(egui::Shape::line(pts, white));
         }
@@ -860,6 +890,147 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a wgpu adapter; captures native gradient boundary overlays"]
+    fn aspect_gradient_boundary_visuals() {
+        let dir = std::env::var_os("PHOTOCRAFT_ASPECT_SNAPSHOTS").map(std::path::PathBuf::from).expect("snapshot directory");
+        std::fs::create_dir_all(&dir).unwrap();
+        for style in ["radial", "diamond"] {
+            for ppp in [1.0, 2.0] {
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).with_pixels_per_point(ppp).wgpu().build_eframe(move |cc| {
+                    PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                    let mut a = app_with_gradient(style);
+                    a.run("tools.setColors", json!({"foreground":"#19345a","background":"#d2aa6d"})).unwrap();
+                    a.run(cmds::CREATE, json!({"style":style,"from":[100,60],"to":[150,60]})).unwrap();
+                    a.ui.extras.rulers = false;
+                    a.ui.views[0].fit_pending = false;
+                    a.ui.views[0].center = [100.0, 60.0];
+                    a.ui.views[0].zoom = 1.0;
+                    a.ui.views[0].rotation = 37.0;
+                    a.ui.view.pixel_aspect = "anamorphic2To1".into();
+                    a.ui.view.pixel_aspect_correction = true;
+                    a
+                });
+                h.run_steps(5);
+                h.render().unwrap().save(dir.join(format!("aspect-gradient-{style}-{ppp}-37.png"))).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn aspect_gradient_native_boundaries_and_fixed_handles_agree() {
+        for style in ["radial", "angle", "diamond"] {
+            for aspect in [1.0, 2.0, 0.91] {
+                for ppp in [1.0, 2.0] {
+                    for (rotation, flip) in [(0.0, false), (37.0, false), (90.0, true)] {
+                        let mut a = app_with_gradient(style);
+                        a.run(cmds::CREATE, json!({"style":style,"from":[100,60],"to":[150,60]})).unwrap();
+                        let xf = ViewXform {
+                            rect: Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0)),
+                            zoom: 1.0 / ppp,
+                            aspect,
+                            center: [100.0, 60.0],
+                            rotation,
+                            flip,
+                        };
+                        let ctx = egui::Context::default();
+                        PhotocraftApp::setup_context(&ctx, Default::default());
+                        let mut input = egui::RawInput::default();
+                        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(ppp);
+                        let mut out = ctx.run_ui(input, |ui| draw_overlay(&a, ui.painter(), &xf));
+                        out.textures_delta.clear();
+                        let boundary = out
+                            .shapes
+                            .iter()
+                            .find_map(|s| match &s.shape {
+                                egui::Shape::Circle(c) if (c.stroke.width - 1.5).abs() < 0.001 && c.radius > 20.0 => Some(s.shape.visual_bounding_rect()),
+                                egui::Shape::Path(p) if (p.stroke.width - 1.5).abs() < 0.001 && p.points.len() >= 5 => Some(s.shape.visual_bounding_rect()),
+                                _ => None,
+                            })
+                            .expect("native gradient boundary");
+                        let (sin, cos) = rotation.to_radians().sin_cos();
+                        let (x, y) = (50.0 * aspect / ppp, 50.0 / ppp);
+                        let half = if style == "diamond" {
+                            vec2((x * cos).abs().max((y * sin).abs()), (x * sin).abs().max((y * cos).abs()))
+                        } else {
+                            vec2((x * cos).hypot(y * sin), (x * sin).hypot(y * cos))
+                        };
+                        assert!(
+                            (boundary.size() - (2.0 * half + egui::Vec2::splat(1.5))).length() < 0.3,
+                            "{style} PAR{aspect} ppp{ppp} rotation{rotation} flip{flip}: {:?} expected {:?}",
+                            boundary.size(),
+                            2.0 * half + egui::Vec2::splat(1.5)
+                        );
+                        let rings: Vec<_> = out
+                            .shapes
+                            .iter()
+                            .filter_map(|s| match &s.shape {
+                                egui::Shape::Circle(c) if c.stroke.width == 2.0 => Some(c),
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(rings.len(), 2);
+                        for (ring, native) in rings.iter().zip([[100.0, 60.0], [150.0, 60.0]]) {
+                            assert_eq!(ring.radius, 8.0, "fixed logical handle size");
+                            assert!(ring.center.distance(xf.to_screen(native[0], native[1])) < 0.001);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aspect_review_gradient_interior_stop_keeps_native_edit_coordinates() {
+        for aspect in [0.1, 10.0] {
+            let mut a = app_with_gradient("linear");
+            a.run(cmds::CREATE, json!({"from":[20,20],"to":[20,100]})).unwrap();
+            a.run(cmds::STOP, json!({"action":"add","location":0.5})).unwrap();
+            a.ui.view.pixel_aspect = format!("custom:{aspect}");
+            a.ui.view.pixel_aspect_correction = true;
+            let (l, frame, _) = active_gradient(&a).unwrap();
+            let before = Widget::new(fill_of(&l).unwrap(), frame).unwrap();
+            let endpoints = (before.start, before.end);
+            let xf = ViewXform::active(&a).unwrap();
+            let at = xf.to_screen(20.0, 60.0);
+            let p = xf.to_doc(at + egui::vec2(2.0, 0.0));
+            pointer(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, mods());
+            assert!(matches!(a.gradient.drag, Some(Drag::Edit { grab: Grab::Stop(1), .. })));
+            pointer(&mut a, ToolEvent::Move { x: 20.0, y: 68.0, pressure: 1.0 }, mods());
+            pointer(&mut a, ToolEvent::Up { x: 20.0, y: 68.0 }, mods());
+            let (l, frame, _) = active_gradient(&a).unwrap();
+            let w = Widget::new(fill_of(&l).unwrap(), frame).unwrap();
+            assert!((w.stops[1].0 - 0.6).abs() < 0.0001);
+            assert_eq!((w.start, w.end), endpoints);
+        }
+    }
+
+    #[test]
+    fn aspect_review_gradient_endpoint_gesture_has_screen_sized_grab() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for rotation in [0.0, 37.0] {
+                    let mut app = app_with_gradient("linear");
+                    app.run(cmds::CREATE, json!({"from":[20,20],"to":[20,100]})).unwrap();
+                    app.ui.view.pixel_aspect = format!("custom:{aspect}");
+                    app.ui.view.pixel_aspect_correction = true;
+                    app.ui.views[0].zoom = ppp;
+                    app.ui.views[0].zoom /= ppp;
+                    app.ui.views[0].rotation = rotation;
+                    let xf = ViewXform::active(&app).unwrap();
+                    let (l, frame, _) = active_gradient(&app).unwrap();
+                    let w = Widget::new(fill_of(&l).unwrap(), frame).unwrap();
+                    let at = xf.to_screen(w.start[0], w.start[1]);
+                    for (delta, expected) in [(2.0, true), (25.0, false)] {
+                        let p = xf.to_doc(at + egui::vec2(delta, 0.0));
+                        pointer(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, mods());
+                        assert_eq!(matches!(app.gradient.drag, Some(Drag::Edit { grab: Grab::Start, .. })), expected, "PAR {aspect} ppp {ppp} rot {rotation}");
+                    }
+                }
+            }
+        }
+    }
 
     fn app_with_gradient(style: &str) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

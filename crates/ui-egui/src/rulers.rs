@@ -126,7 +126,7 @@ pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, d
         }
         let st = Stroke::new(1.0, base.gamma_multiply(alpha));
         let [step_x, step_y] = steps;
-        if step_x * (xf.zoom as f64) >= 6.0 {
+        if step_x * ((xf.zoom * xf.aspect) as f64) >= 6.0 {
             let mut x = step_x;
             while x < w {
                 styled_line(painter, xf.to_screen(x as f32, 0.0), xf.to_screen(x as f32, h as f32), st, g.grid_style);
@@ -180,14 +180,14 @@ pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
         return None;
     }
     let doc = &app.session.active()?.doc;
-    let tol = 4.0 / app.current_zoom().max(0.01) as f64;
+    let tol = crate::canvas::ScreenMetric::active(app).reach(4.0);
     for (i, g) in doc.guides.vertical.iter().enumerate() {
-        if (*g as f64 - x).abs() <= tol {
+        if (*g as f64 - x).abs() <= tol[0] {
             return Some((true, i));
         }
     }
     for (i, g) in doc.guides.horizontal.iter().enumerate() {
-        if (*g as f64 - y).abs() <= tol {
+        if (*g as f64 - y).abs() <= tol[1] {
             return Some((false, i));
         }
     }
@@ -246,7 +246,8 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
     let label = |v: f64, step: f64| -> String { if step >= 1.0 || whole { format!("{}", v.round() as i64) } else { crate::widgets::fmt_num2(v) } };
     for (vertical, extent) in [(false, size[0]), (true, size[1])] {
         let px_per_unit = unit.to_px(1.0, dpi, extent, ppi).max(1e-9);
-        let step = nice_step(60.0 / (xf.zoom as f64 * px_per_unit).max(1e-6), whole);
+        let axis_scale = xf.zoom * if vertical { 1.0 } else { xf.aspect };
+        let step = nice_step(60.0 / (axis_scale as f64 * px_per_unit).max(1e-6), whole);
         let (u0, u1) = if vertical {
             ruler_range(xf, left.left_top(), left.left_bottom(), 1, px_per_unit)
         } else {
@@ -437,7 +438,7 @@ mod tests {
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let top = Rect::from_min_size(rect.min, vec2(rect.width(), RULER));
         for flip in [false, true] {
-            let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0 };
+            let xf = ViewXform { aspect: 1.0, rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0 };
             let (u0, u1) = ruler_range(&xf, top.left_top(), top.right_top(), 0, 1.0);
             assert!(u0 <= u1, "flip={flip}: u0 ({u0}) must be <= u1 ({u1})");
             assert!(u1 - u0 > 0.0, "flip={flip}: range is empty");

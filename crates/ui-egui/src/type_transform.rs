@@ -128,18 +128,10 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
     })
 }
 
-fn near_border(t: &TransformSession, p: [f64; 2], tol: f64) -> bool {
-    t.quad.iter().zip(t.quad.iter().cycle().skip(1)).take(4).any(|(a, b)| {
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let len = dx * dx + dy * dy;
-        let f = if len > 0.0 { ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len } else { 0.0 }.clamp(0.0, 1.0);
-        (p[0] - a[0] - f * dx).hypot(p[1] - a[1] - f * dy) <= tol
-    })
-}
-
 fn hit(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2]) -> Option<Hit> {
-    let h = crate::transform_tool::hit(t, p, crate::transform_tool::handle_tolerance(app));
-    (h != Hit::Outside || near_border(t, p, ROTATE_PX / f64::from(app.current_zoom().max(0.01)))).then_some(h)
+    let metric = crate::canvas::ScreenMetric::active(app);
+    let h = crate::transform_tool::hit_screen(app, t, p);
+    (h != Hit::Outside || metric.near_quad(t.quad, p, ROTATE_PX)).then_some(h)
 }
 
 /// Type uses legacy scaling: Shift constrains; Ctrl/Cmd is the mode key, never corner Distort.

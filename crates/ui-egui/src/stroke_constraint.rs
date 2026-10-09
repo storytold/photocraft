@@ -95,7 +95,7 @@ pub fn line_preview_start(app: &crate::PhotocraftApp, tool: Tool, shift: bool) -
 /// Photoshop's rubber band: while ⇧ is held after a stroke, a thin line from where that stroke
 /// ended to the pointer shows the line a click will paint, with the brush footprint at the
 /// pointer (drawn here only when the painting cursor doesn't already show the tip). Two line
-/// segments and at most one circle: no measurable cost per frame. Returns the drawn segment.
+/// segments and one transformed footprint: no measurable cost per frame. Returns the drawn segment.
 pub fn draw_line_preview(
     app: &crate::PhotocraftApp,
     painter: &egui::Painter,
@@ -115,9 +115,7 @@ pub fn draw_line_preview(
     }
     use photocraft_engine::prefs::PaintingCursor;
     if matches!(app.session.prefs().cursors.painting, PaintingCursor::Standard | PaintingCursor::Precise) {
-        let r = (app.session.tools.brush.size / 2.0 * xf.zoom).max(1.0);
-        painter.circle_stroke(pointer, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-        painter.circle_stroke(pointer, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+        xf.circle_outline(painter, pointer, app.session.tools.brush.size / 2.0);
     }
     Some([a, pointer])
 }
@@ -125,6 +123,38 @@ pub fn draw_line_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn aspect_review_shift_footprint_matches_document_circle() {
+        for aspect in [2.0, 0.91] {
+            for rotation in [0.0, 90.0] {
+                for painting in [photocraft_engine::prefs::PaintingCursor::Standard, photocraft_engine::prefs::PaintingCursor::Precise] {
+                    let mut app = app();
+                    app.session.tools.brush.size = 20.0;
+                    app.run("prefs.set", json!({"path":"cursors.painting","value":painting})).unwrap();
+                    app.last_stroke_end = Some((app.session.active().unwrap().doc.id, [0.0, 0.0]));
+                    let xf = crate::canvas::ViewXform {
+                        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                        zoom: 1.0,
+                        aspect,
+                        center: [0.0, 0.0],
+                        flip: false,
+                        rotation,
+                    };
+                    let ctx = egui::Context::default();
+                    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        draw_line_preview(&app, ui.painter(), &xf, egui::pos2(100.0, 100.0), Tool::Brush, true);
+                    });
+                    out.textures_delta.clear();
+                    let shapes: Vec<_> = out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Circle(_) | egui::Shape::Path(_))).collect();
+                    assert_eq!(shapes.len(), 2);
+                    let r = shapes[1].shape.visual_bounding_rect();
+                    let expected = if rotation == 0.0 { egui::vec2(20.0 * aspect + 1.0, 21.0) } else { egui::vec2(21.0, 20.0 * aspect + 1.0) };
+                    assert!((r.size() - expected).length() < 0.1, "PAR {aspect} rotation {rotation}: {:?} expected {expected:?}", r.size());
+                }
+            }
+        }
+    }
+
     use crate::PhotocraftApp;
     use crate::canvas::{ToolEvent, tool_event};
     use serde_json::json;
@@ -355,7 +385,7 @@ mod tests {
         let xf = {
             let st = h.state();
             let v = st.ui.views[st.session.active_index().unwrap()].clone();
-            crate::canvas::ViewXform { rect: st.last_canvas_rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation }
+            crate::canvas::ViewXform { aspect: 1.0, rect: st.last_canvas_rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation }
         };
         let from = xf.to_screen(end[0] as f32, end[1] as f32);
         h.event(Event::PointerMoved(target));

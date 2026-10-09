@@ -383,6 +383,9 @@ pub enum DialogKind {
 pub struct View {
     /// Screen pixels per document pixel.
     pub zoom: f32,
+    /// Effective horizontal pixel aspect, refreshed from shell View options before use.
+    #[serde(skip, default = "one")]
+    pub pixel_aspect: f32,
     /// Document-space point shown at the canvas centre.
     pub center: [f32; 2],
     /// Recompute fit-to-screen on next frame.
@@ -400,7 +403,7 @@ pub struct View {
 
 impl Default for View {
     fn default() -> Self {
-        Self { zoom: 1.0, center: [0.0, 0.0], fit_pending: true, fill_pending: false, doc_size: [0, 0], rotation: 0.0 }
+        Self { zoom: 1.0, pixel_aspect: 1.0, center: [0.0, 0.0], fit_pending: true, fill_pending: false, doc_size: [0, 0], rotation: 0.0 }
     }
 }
 

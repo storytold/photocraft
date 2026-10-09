@@ -77,12 +77,12 @@ impl PerspSession {
         if self.mode == PerspMode::Layout { &self.planes[p].src } else { &self.planes[p].dst }
     }
 
-    fn corner_at(&self, p: [f64; 2], tol: f64) -> Option<(usize, usize)> {
+    fn corner_at(&self, p: [f64; 2], tol: crate::canvas::ScreenMetric) -> Option<(usize, usize)> {
         let mut best = None;
-        let mut bd = tol;
+        let mut bd = 8.0;
         for pi in 0..self.planes.len() {
             for (ci, c) in self.corners(pi).iter().enumerate() {
-                let d = (c[0] - p[0]).hypot(c[1] - p[1]);
+                let d = tol.distance(*c, p);
                 if d <= bd {
                     bd = d;
                     best = Some((pi, ci));
@@ -92,10 +92,10 @@ impl PerspSession {
         best
     }
 
-    fn snap(&self, p: [f64; 2], tol: f64, skip: &[(usize, usize)]) -> [f64; 2] {
+    fn snap(&self, p: [f64; 2], tol: crate::canvas::ScreenMetric, skip: &[(usize, usize)]) -> [f64; 2] {
         for (pi, pl) in self.planes.iter().enumerate() {
             for (ci, c) in pl.src.iter().enumerate() {
-                if !skip.contains(&(pi, ci)) && (c[0] - p[0]).hypot(c[1] - p[1]) <= tol {
+                if !skip.contains(&(pi, ci)) && tol.distance(*c, p) <= 8.0 {
                     return *c;
                 }
             }
@@ -197,7 +197,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
 }
 
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) {
-    let tol = crate::distort_ui::tolerance(app);
+    let tol = crate::canvas::ScreenMetric::active(app);
     let Some(s) = app.distort.perspective.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
@@ -339,6 +339,45 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aspect_review_warp_handle_gestures_use_screen_distance() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for rotation in [0.0, 37.0] {
+                    let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    a.run("file.new", json!({"width":400,"height":200})).unwrap();
+                    a.run("layer.new.layer", json!({})).unwrap();
+                    a.session
+                        .edit("paint", |doc, active| {
+                            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 380, 190), &[1.0, 0.0, 0.0, 1.0]);
+                            Ok(())
+                        })
+                        .unwrap();
+                    crate::distort_ui::menu(&mut a, &egui::Context::default(), "edit.perspectiveWarp", &json!({})).unwrap().unwrap();
+
+                    a.distort.perspective.as_mut().unwrap().planes.push(Plane::identity([[100.0, 100.0], [300.0, 100.0], [300.0, 180.0], [100.0, 180.0]]));
+
+                    a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                    a.ui.view.pixel_aspect_correction = true;
+                    a.ui.views[0].zoom = ppp;
+                    a.ui.views[0].zoom /= ppp;
+                    a.ui.views[0].rotation = rotation;
+                    let xf = ViewXform::active(&a).unwrap();
+                    let at = xf.to_screen(100.0, 100.0);
+                    for (delta, expected) in [(2.0, true), (25.0, false)] {
+                        let p = xf.to_doc(at - egui::vec2(delta, delta));
+                        pointer(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
+                        assert_eq!(
+                            matches!(&a.distort.perspective.as_ref().unwrap().drag,Some(Drag::Corner{group,..}) if group==&vec![(0,0)]),
+                            expected,
+                            "{aspect} {ppp} {rotation}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn layout_snaps_planes_then_warp_and_commit() {

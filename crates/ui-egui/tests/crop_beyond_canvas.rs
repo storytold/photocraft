@@ -64,6 +64,7 @@ fn screen(h: &Harness, x: f32, y: f32) -> Pos2 {
     let app = h.state();
     let v = &app.ui.views[0];
     let xf = ViewXform {
+        aspect: 1.0,
         rect: photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect),
         zoom: v.zoom,
         center: v.center,

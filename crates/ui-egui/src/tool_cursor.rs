@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, vec2};
+use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 
 /// winit's cursor limit. Keep allocations bounded even for hostile brush sizes or zooms.
 const MAX_SIDE: u16 = 2048;
@@ -11,6 +11,7 @@ const MAX_SIDE: u16 = 2048;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Shape {
     Circle { radius: f32, centre: bool },
+    Ellipse { radii: Vec2, angle: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
 }
 
@@ -51,6 +52,23 @@ impl egui::plugin::Plugin for CursorLifecycle {
 
 pub(crate) fn circle(painter: &Painter, at: Pos2, radius: f32, centre: bool) -> CursorIcon {
     show(painter, at, Shape::Circle { radius, centre })
+}
+
+/// A document-sized tip under non-square pixel correction; `angle` is the camera rotation.
+pub(crate) fn ellipse(painter: &Painter, at: Pos2, radii: Vec2, angle: f32, centre: bool) -> CursorIcon {
+    show(painter, at, Shape::Ellipse { radii, angle, centre })
+}
+
+pub(crate) fn ellipse_points(at: Pos2, radii: Vec2, angle: f32) -> Vec<Pos2> {
+    let (sin, cos) = angle.sin_cos();
+    let n = ((radii.max_elem() * 0.5) as usize).clamp(32, 192).div_ceil(4) * 4;
+    (0..n)
+        .map(|i| {
+            let a = i as f32 / n as f32 * std::f32::consts::TAU;
+            let q = vec2(a.cos(), a.sin()) * radii;
+            at + vec2(q.x * cos - q.y * sin, q.x * sin + q.y * cos)
+        })
+        .collect()
 }
 
 pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> CursorIcon {
@@ -106,6 +124,12 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
                     paint_crosshair(painter, at, 3.0, 0.0, stroke);
                 }
             }
+            Shape::Ellipse { radii, angle, centre } => {
+                painter.add(egui::Shape::closed_line(ellipse_points(at, radii, angle), stroke));
+                if centre {
+                    paint_crosshair(painter, at, 3.0, 0.0, stroke);
+                }
+            }
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, length, gap, stroke),
         }
     }
@@ -131,6 +155,12 @@ fn extent(shape: Shape) -> Option<f32> {
                 return None;
             }
             if centre { radius.max(3.0) } else { radius }
+        }
+        Shape::Ellipse { radii, angle, centre } => {
+            if !radii.is_finite() || radii.min_elem() <= 0.0 || !angle.is_finite() {
+                return None;
+            }
+            if centre { radii.max_elem().max(3.0) } else { radii.max_elem() }
         }
         Shape::Crosshair { length, gap } => {
             if !length.is_finite() || !gap.is_finite() || gap < 0.0 || length < gap {
@@ -158,15 +188,25 @@ fn rasterize(shape: Shape, scale: f32) -> Option<CustomCursorImage> {
     let mut rgba = Vec::with_capacity(bytes);
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     for row in 0..side {
-        let y = (f32::from(row) - f32::from(hot)).abs();
+        let y = f32::from(row) - f32::from(hot);
         for col in 0..side {
-            let x = (f32::from(col) - f32::from(hot)).abs();
+            let x = f32::from(col) - f32::from(hot);
             let distance = match shape {
                 Shape::Circle { radius, centre } => {
                     let ring = (x.hypot(y) - radius * scale).abs();
-                    if centre { ring.min(cross_distance(x, y, 3.0 * scale, 0.0)) } else { ring }
+                    if centre { ring.min(cross_distance(x.abs(), y.abs(), 3.0 * scale, 0.0)) } else { ring }
                 }
-                Shape::Crosshair { length, gap } => cross_distance(x, y, length * scale, gap * scale),
+                Shape::Ellipse { radii, angle, centre } => {
+                    let (sin, cos) = angle.sin_cos();
+                    let q = vec2(x * cos + y * sin, -x * sin + y * cos) / (radii * scale);
+                    let len = q.length();
+                    let gradient = (q / (radii * scale)).length();
+                    // First-order geometric distance to the ellipse, evaluated only near its
+                    // narrow outline. The centre is transparent unless a crosshair is requested.
+                    let ring = if gradient > 1e-6 { ((len - 1.0) * len / gradient).abs() } else { radii.min_elem() * scale };
+                    if centre { ring.min(cross_distance(x.abs(), y.abs(), 3.0 * scale, 0.0)) } else { ring }
+                }
+                Shape::Crosshair { length, gap } => cross_distance(x.abs(), y.abs(), length * scale, gap * scale),
             };
             let a_dark = (1.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(dark.a()) / 255.0;
             let a_light = (0.5 * scale + 0.5 - distance).clamp(0.0, 1.0) * f32::from(light.a()) / 255.0;
