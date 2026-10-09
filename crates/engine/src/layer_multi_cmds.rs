@@ -1126,6 +1126,9 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
     let sel = selected(s);
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
+        for id in &ids {
+            crate::commands::check_delete_unlocked(doc, *id)?;
+        }
         let below = ids.first().and_then(|id| {
             let order: Vec<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
             let i = order.iter().position(|x| x == id)?;
@@ -1133,9 +1136,6 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
         });
         for id in &ids {
             doc.remove(*id).ok_or(EngineError::NoLayer(*id))?;
-        }
-        if doc.layers.is_empty() {
-            return Err(EngineError::Other("a document must keep at least one layer".into()));
         }
         *active = below.filter(|b| doc.layer(*b).is_some()).or_else(|| doc.top_layer());
         Ok(())
