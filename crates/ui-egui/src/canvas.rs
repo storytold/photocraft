@@ -2442,7 +2442,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
     // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
     app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
-    app.stylus.update(&ui.input(|i| i.events.clone()));
+    app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
     crate::stylus::Stylus::sync_eraser_tool(app);
     // A Magnetic Lasso border left behind by a tool or document switch is dropped.
     crate::magnetic_lasso_ui::frame(app);
@@ -2683,9 +2683,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let n = positions.len();
             for (k, p) in positions.into_iter().enumerate() {
                 app.stylus.clock_ms = spread_ms(base, now_ms, k, n);
+                // This move's share of the pen samples the frame brought (pressure, tilt, rotation).
+                app.stylus.select(k, n);
                 let d = xf.to_doc(p);
                 tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
             }
+            app.stylus.clear_selection();
             app.stylus.clock_ms = now_ms;
             // A held pen keeps the clock running for airbrush build-up and smoothing catch-up.
             if app.drag.is_some() && stroke_wants_time(app) {
