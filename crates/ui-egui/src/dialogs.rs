@@ -176,22 +176,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         fields.insert("tab".into(), json!(chosen));
                     }
                     ui.add_space(8.0);
-                    match chosen {
-                        "contributors" => crate::credits::contributors_ui(ui),
-                        "models" => crate::credits::models_ui(ui),
-                        _ => {
-                            ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
-                            ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
-                            ui.add_space(12.0);
-                            ui.vertical_centered(|ui| {
-                                crate::links::discord_button(app, ui, 220.0);
-                                ui.add_space(8.0);
-                                crate::links::link_row(app, ui);
-                            });
-                            ui.add_space(10.0);
-                            ui.weak("egui · wgpu · photocraft-engine");
-                        }
-                    }
+                    about_tab_body(app, ui, chosen);
                 }
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
@@ -327,6 +312,26 @@ pub const ABOUT_TABS: [&str; 3] = ["about", "contributors", "models"];
 fn about_tab(fields: &serde_json::Map<String, Value>) -> &'static str {
     let want = fields.get("tab").and_then(Value::as_str).unwrap_or("");
     ABOUT_TABS.iter().copied().find(|t| *t == want).unwrap_or("about")
+}
+
+/// One About tab's contents: the credits lists, or the product blurb and links.
+fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
+    match tab {
+        "contributors" => crate::credits::contributors_ui(ui),
+        "models" => crate::credits::models_ui(ui),
+        _ => {
+            ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+            ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                crate::links::discord_button(app, ui, 220.0);
+                ui.add_space(8.0);
+                crate::links::link_row(app, ui);
+            });
+            ui.add_space(10.0);
+            ui.weak("egui · wgpu · photocraft-engine");
+        }
+    }
 }
 
 /// The dialog title as shown: [`title`] in the UI language.
