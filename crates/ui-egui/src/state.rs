@@ -269,7 +269,7 @@ impl Tool {
             Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush => 'Y',
-            Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
+            Tool::Blur | Tool::Sharpen | Tool::Smudge => 'R',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen => 'P',
