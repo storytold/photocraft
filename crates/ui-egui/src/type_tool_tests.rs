@@ -1124,3 +1124,19 @@ fn temporary_type_transform_large_document_preview() {
     );
     crate::type_transform::cancel_drag(&mut app);
 }
+
+#[test]
+fn font_styles_keep_metadata_names_and_numeric_labels() {
+    let styles = super::styles("Inter");
+    assert!(styles.contains(&"Regular".into()));
+    assert!(styles.contains(&"SemiBold".into()));
+    assert_eq!(super::style_label("20"), "20");
+    assert_eq!(super::style_label("30"), "30");
+    assert_eq!(super::styles("Missing test family"), ["Regular"]);
+}
+
+#[test]
+fn postscript_only_style_shows_actual_subfamily() {
+    let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-SemiBold".into()), ..Default::default() };
+    assert_eq!(super::selected_style(&style), "SemiBold");
+}

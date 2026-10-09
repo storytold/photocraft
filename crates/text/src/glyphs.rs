@@ -67,6 +67,13 @@ pub fn in_category(c: char, category: &str) -> bool {
 }
 
 impl FontDb {
+    /// Character coverage of the exact named face used by the type tool.
+    pub fn charmap_for_style(&mut self, style: &CharStyle) -> Vec<char> {
+        let mut style = style.clone();
+        self.select_named_face(&mut style);
+        self.charmap(&style.font_family, style.weight, style.italic)
+    }
+
     /// Characters mapped by the face of `family` nearest to `weight`/`italic`, ascending
     /// (controls and whitespace other than the space excluded). Empty for an unknown family.
     pub fn charmap(&mut self, family: &str, weight: u16, italic: bool) -> Vec<char> {

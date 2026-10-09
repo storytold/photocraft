@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parley::FontContext;
-use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
+use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
 use skrifa::raw::{FileRef, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
 
@@ -57,6 +57,10 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaceInfo {
     pub family: String,
+    /// OpenType typographic subfamily (name 17), or legacy subfamily (name 2).
+    pub style: String,
+    /// Stable face identity, including faces that share the same CSS attributes.
+    pub postscript_name: Option<String>,
     /// CSS weight (100–900); variable fonts report their default.
     pub weight: f32,
     pub italic: bool,
@@ -80,6 +84,8 @@ pub struct FontDb {
     /// PostScript name → (family, weight, italic), filled lazily.
     ps_cache: HashMap<String, Option<ResolvedFont>>,
     fallbacks: Vec<String>,
+    face_cache: HashMap<String, Vec<FaceInfo>>,
+    face_aliases: HashMap<(String, usize), String>,
 }
 
 impl Default for FontDb {
@@ -97,6 +103,8 @@ impl FontDb {
             system_loaded: false,
             ps_cache: HashMap::new(),
             fallbacks: Vec::new(),
+            face_cache: HashMap::new(),
+            face_aliases: HashMap::new(),
         };
         for (_, bytes) in BUNDLED {
             db.register_font_data(bytes.to_vec());
@@ -139,6 +147,7 @@ impl FontDb {
                 self.fcx.collection.load_fonts_from_paths([f]);
             }
             self.ps_cache.clear();
+            self.face_cache.clear();
             self.refresh_generics();
         }
     }
@@ -168,6 +177,7 @@ impl FontDb {
         // metrics differ from the public family's.
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
         self.ps_cache.clear();
+        self.face_cache.clear();
         self.refresh_generics();
         names
     }
@@ -235,20 +245,75 @@ impl FontDb {
             .is_some_and(|features| features.feature_records().iter().any(|record| record.feature_tag() == feature))
     }
 
-    /// Faces of a family (weights, italics, variation axes).
+    /// Faces of a family, preserving names even when multiple faces share CSS attributes.
     pub fn faces(&mut self, family: &str) -> Vec<FaceInfo> {
+        if let Some(faces) = self.face_cache.get(family) {
+            return faces.clone();
+        }
         let Some(info) = self.fcx.collection.family_by_name(family) else {
             return Vec::new();
         };
-        info.fonts()
+        let faces: Vec<_> = info
+            .fonts()
             .iter()
-            .map(|f| FaceInfo {
-                family: info.name().to_string(),
-                weight: f.weight().value(),
-                italic: !matches!(f.style(), FontStyle::Normal),
-                axes: f.axes().iter().map(|a| (a.tag.to_string(), a.min, a.default, a.max)).collect(),
+            .map(|f| {
+                let blob = f.load(Some(&mut self.fcx.source_cache));
+                let font = blob.as_ref().and_then(|b| skrifa::FontRef::from_index(b.as_ref(), f.index()).ok());
+                let name = |id| font.as_ref().and_then(|f| f.localized_strings(id).english_or_first()).map(|s| s.to_string()).filter(|s| !s.is_empty());
+                let italic = !matches!(f.style(), FontStyle::Normal);
+                FaceInfo {
+                    family: info.name().to_string(),
+                    style: name(StringId::TYPOGRAPHIC_SUBFAMILY_NAME)
+                        .or_else(|| name(StringId::SUBFAMILY_NAME))
+                        .unwrap_or_else(|| fallback_style(f.weight().value(), italic)),
+                    postscript_name: name(StringId::POSTSCRIPT_NAME),
+                    weight: f.weight().value(),
+                    italic,
+                    axes: f.axes().iter().map(|a| (a.tag.to_string(), a.min, a.default, a.max)).collect(),
+                }
             })
-            .collect()
+            .collect();
+        self.face_cache.insert(family.to_string(), faces.clone());
+        faces
+    }
+
+    /// Resolve a menu style to its actual metadata instead of guessing from its spelling.
+    pub fn named_face(&mut self, family: &str, style: &str) -> Option<FaceInfo> {
+        self.faces(family).into_iter().find(|f| f.style.eq_ignore_ascii_case(style))
+    }
+
+    /// Select an exact face for shaping. Private aliases are runtime-only: the document keeps
+    /// its public family and PostScript name. CSS matching alone cannot distinguish e.g. the
+    /// numeric subfamilies of Yoon fonts, all of which declare weight 400 / normal.
+    pub(crate) fn select_named_face(&mut self, style: &mut photocraft_doc::text::CharStyle) {
+        let family = style.font_family.clone();
+        let faces = self.faces(&family);
+        let index = style.postscript_name.as_ref().and_then(|ps| faces.iter().position(|f| f.postscript_name.as_ref() == Some(ps))).or_else(|| {
+            faces.iter().position(|f| {
+                !style.font_style.is_empty()
+                    && f.style.eq_ignore_ascii_case(&style.font_style)
+                    && f.weight.round() as u16 == style.weight
+                    && f.italic == style.italic
+            })
+        });
+        let Some(index) = index else { return };
+        let Some(face) = faces.get(index) else { return };
+        let key = (family.clone(), index);
+        let alias = if let Some(alias) = self.face_aliases.get(&key) {
+            alias.clone()
+        } else {
+            let Some(info) = self.fcx.collection.family_by_name(&family) else { return };
+            let Some(font) = info.fonts().get(index) else { return };
+            let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else { return };
+            let Some(blob) = isolated_face(blob, font.index()) else { return };
+            let alias = format!(".PhotoCraft-face-{}-{index}", info.id().to_u64());
+            self.fcx.collection.register_fonts(blob, Some(FontInfoOverride { family_name: Some(&alias), ..Default::default() }));
+            self.face_aliases.insert(key, alias.clone());
+            alias
+        };
+        style.font_family = alias;
+        style.weight = face.weight.round() as u16;
+        style.italic = face.italic;
     }
 
     /// Finds a face by PostScript name (as stored in PSD files): exact match by reading the
@@ -275,30 +340,59 @@ impl FontDb {
 
     fn find_exact(&mut self, ps: &str, family_guess: &str) -> Option<ResolvedFont> {
         let first_word = family_guess.split(' ').next().unwrap_or(family_guess).to_lowercase();
-        let candidates: Vec<String> = self.families().into_iter().filter(|f| f.to_lowercase().replace(' ', "").starts_with(&first_word)).collect();
+        let mut candidates = self.families();
+        candidates.sort_by_key(|f| !f.to_lowercase().replace(' ', "").starts_with(&first_word));
         for fam in candidates {
-            let Some(info) = self.fcx.collection.family_by_name(&fam) else {
-                continue;
-            };
-            for font in info.fonts() {
-                let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else {
-                    continue;
-                };
-                let Ok(fr) = skrifa::FontRef::from_index(blob.as_ref(), font.index()) else {
-                    continue;
-                };
-                let name = fr.localized_strings(StringId::POSTSCRIPT_NAME).english_or_first().map(|s| s.to_string());
-                if name.as_deref() == Some(ps) {
-                    return Some(ResolvedFont {
-                        family: info.name().to_string(),
-                        weight: font.weight().value().round() as u16,
-                        italic: !matches!(font.style(), FontStyle::Normal),
-                        exact: true,
-                    });
+            for face in self.faces(&fam) {
+                let Some(name) = face.postscript_name else { continue };
+                let resolved = ResolvedFont { family: face.family, weight: face.weight.round() as u16, italic: face.italic, exact: true };
+                self.ps_cache.insert(name.clone(), Some(resolved.clone()));
+                if name == ps {
+                    return Some(resolved);
                 }
             }
         }
         None
+    }
+}
+
+/// Make a collection expose only the requested face without rewriting any font tables.
+/// TTC table offsets are absolute; changing its face directory preserves them verbatim.
+fn isolated_face(blob: Blob<u8>, index: u32) -> Option<Blob<u8>> {
+    match FileRef::new(blob.as_ref()).ok()? {
+        FileRef::Font(_) => (index == 0).then_some(blob),
+        FileRef::Collection(collection) => {
+            collection.get(index).ok()?;
+            // Bound a copy of untrusted font data. Ordinary single-face fonts need no copy.
+            if blob.as_ref().len() > 256 * 1024 * 1024 {
+                return None;
+            }
+            let offset = 12usize.checked_add(usize::try_from(index).ok()?.checked_mul(4)?)?;
+            let face_offset: [u8; 4] = blob.as_ref().get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+            let mut bytes = blob.as_ref().to_vec();
+            bytes.get_mut(8..12)?.copy_from_slice(&1u32.to_be_bytes());
+            bytes.get_mut(12..16)?.copy_from_slice(&face_offset);
+            Some(Blob::new(Arc::new(bytes)))
+        }
+    }
+}
+
+fn fallback_style(weight: f32, italic: bool) -> String {
+    let name = match weight.round() as i32 {
+        ..=150 => "Thin",
+        151..=250 => "ExtraLight",
+        251..=350 => "Light",
+        351..=450 => "Regular",
+        451..=550 => "Medium",
+        551..=650 => "SemiBold",
+        651..=750 => "Bold",
+        751..=850 => "ExtraBold",
+        _ => "Black",
+    };
+    match (name, italic) {
+        ("Regular", true) => "Italic".into(),
+        (_, true) => format!("{name} Italic"),
+        (_, false) => name.into(),
     }
 }
 
@@ -471,3 +565,7 @@ mod tests {
         assert!(files.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "font_names_tests.rs"]
+mod font_names_tests;

@@ -418,7 +418,9 @@ impl Layouter {
         // Resolve families (PostScript names from PSDs, unknown families).
         for r in &runs {
             let mut s = r.style.clone();
-            if let Some(ps) = s.postscript_name.clone() {
+            if let Some(ps) = s.postscript_name.clone()
+                && !fonts.faces(&s.font_family).iter().any(|f| f.postscript_name.as_deref() == Some(&ps))
+            {
                 let f = fonts.resolve_postscript(&ps);
                 // An exact face match wins; a guessed family only fills a missing family.
                 if f.exact || (!fonts.has_family(&s.font_family) && fonts.has_family(&f.family)) {
@@ -427,6 +429,7 @@ impl Layouter {
                     s.italic = f.italic;
                 }
             }
+            fonts.select_named_face(&mut s);
             out.styles.push(s);
         }
         let run_starts: Vec<usize> = runs
