@@ -4,7 +4,7 @@
 //! compositor's premultiplied buffers over a region, and into a straight-alpha surface for
 //! proxies and exports.
 
-use photocraft_color::PixelFormat;
+use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{DeepData, LayerContent, Surface};
 use photocraft_geom::Rect;
 
@@ -126,12 +126,18 @@ pub fn render(d: &DeepData, rect: Rect) -> Buffer {
 
 /// The data composited once into a straight-alpha surface of `fmt` (the document's pixel
 /// format), for proxies, exports and PSD materialization. The surface spans the data extent.
-pub fn flat_surface(d: &DeepData, fmt: PixelFormat) -> Surface {
+pub fn flat_surface(d: &DeepData, fmt: PixelFormat) -> Result<Surface, String> {
+    // RGB and grayscale keep their meaning; converting into a CMYK or Lab document needs the
+    // document's profile, which this call does not carry — refuse instead of writing
+    // red-as-cyan and alpha-into-black.
+    if !matches!(fmt.mode, ColorMode::Rgb | ColorMode::Grayscale) {
+        return Err(format!("deep layers render to {:?} documents only", fmt.mode));
+    }
     let npx = d.width as usize * d.height as usize;
     let nc = fmt.mode.color_channels();
     let transparent = vec![0.0; nc + 1];
     let mut s = Surface::with_default(fmt, &transparent);
-    let Some(c) = resolve(d) else { return s };
+    let Some(c) = resolve(d) else { return Ok(s) };
     let gray = c.rgb.is_none();
     let mut vals = Vec::with_capacity(npx * (nc + 1));
     let mut order = Vec::new();
@@ -150,7 +156,7 @@ pub fn flat_surface(d: &DeepData, fmt: PixelFormat) -> Surface {
         }
     }
     s.write_region(Rect::from_xywh(d.x, d.y, d.width, d.height), &vals);
-    s
+    Ok(s)
 }
 
 /// `true` if the document holds any deep layer (canvas ops that rewrite pixels in place would
@@ -225,7 +231,7 @@ mod tests {
     fn flat_surface_un_premultiplies() {
         let d = two_samples();
         let fmt = PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::F32, true);
-        let s = flat_surface(&d, fmt);
+        let s = flat_surface(&d, fmt).expect("rgb flattens");
         let px = s.pixel(0, 0);
         // Straight alpha: the half-covered red front over opaque blue: c = (0.25,0,0.5), a = 1.
         assert!((px[0] - 0.25).abs() < 1e-6 && (px[2] - 0.5).abs() < 1e-6 && (px[3] - 1.0).abs() < 1e-6, "{px:?}");

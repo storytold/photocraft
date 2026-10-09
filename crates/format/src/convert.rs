@@ -502,11 +502,19 @@ impl Loader<'_> {
                         npx + 1
                     )));
                 }
+                if counts_v.windows(2).any(|w| w[1] < w[0]) {
+                    return Err(crate::FormatError::LimitExceeded("deep sample counts must not decrease".into()));
+                }
+                if npx > 1 << 28 {
+                    return Err(crate::FormatError::LimitExceeded(format!("deep grid of {npx} pixels is too large")));
+                }
                 let total = counts_v.last().copied().unwrap_or(0) as usize;
                 let mut channels_v = Vec::with_capacity(channels.len());
                 for c in channels {
                     let bytes = self.fetch.blob(&c.samples)?;
-                    if bytes.len() != total * 4 {
+                    let want =
+                        total.checked_mul(4).ok_or_else(|| crate::FormatError::LimitExceeded(format!("deep channel `{}` declares {total} samples", c.name)))?;
+                    if bytes.len() != want {
                         return Err(crate::FormatError::LimitExceeded(format!(
                             "deep channel `{}` holds {} samples, expected {}",
                             c.name,

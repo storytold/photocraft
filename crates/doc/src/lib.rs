@@ -618,9 +618,11 @@ impl DeepData {
         use std::collections::BTreeMap;
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
-        let x1 = (self.x + self.width as i32).max(other.x + other.width as i32);
-        let y1 = (self.y + self.height as i32).max(other.y + other.height as i32);
-        let (w, h) = ((x1 - x).max(0) as u32, (y1 - y).max(0) as u32);
+        let x1 = i64::from(self.x) + i64::from(self.width);
+        let x1 = x1.max(i64::from(other.x) + i64::from(other.width)).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let y1 = i64::from(self.y) + i64::from(self.height);
+        let y1 = y1.max(i64::from(other.y) + i64::from(other.height)).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        let (w, h) = ((i64::from(x1) - i64::from(x)).max(0).min(u32::MAX as i64) as u32, (i64::from(y1) - i64::from(y)).max(0).min(u32::MAX as i64) as u32);
         let mut names: Vec<String> = self.channels.iter().map(|c| c.name.clone()).collect();
         for c in &other.channels {
             if !names.iter().any(|n| n == &c.name) {
@@ -632,14 +634,19 @@ impl DeepData {
         }
         let (ca, cb) = (chans(self), chans(other));
         let mut out: Vec<Vec<f32>> = names.iter().map(|_| Vec::new()).collect();
-        let mut counts = Vec::with_capacity(w as usize * h as usize + 1);
+        let cells = usize::try_from(w).unwrap_or(usize::MAX).saturating_mul(usize::try_from(h).unwrap_or(0));
+        let mut counts = Vec::with_capacity(cells.saturating_add(1).min(1 << 28));
         counts.push(0u64);
         for py in 0..h as i32 {
             for px in 0..w as i32 {
                 let (cx, cy) = (x + px, y + py);
                 let mut n = 0u64;
                 for (d, cm) in [(self, &ca), (other, &cb)] {
-                    let inside = cx >= d.x && cy >= d.y && cx < d.x + d.width as i32 && cy < d.y + d.height as i32;
+                    let (d_w, d_h) = (i64::from(d.width), i64::from(d.height));
+                    let inside = i64::from(cx) >= i64::from(d.x)
+                        && i64::from(cy) >= i64::from(d.y)
+                        && i64::from(cx) < i64::from(d.x) + d_w
+                        && i64::from(cy) < i64::from(d.y) + d_h;
                     if !inside {
                         continue;
                     }
@@ -656,7 +663,7 @@ impl DeepData {
                                 let from = (range.start as usize).min(samples.len());
                                 let to = (range.end as usize).min(samples.len());
                                 out[k].extend_from_slice(samples.get(from..to).unwrap_or(&[]));
-                                to - from
+                                to.saturating_sub(from)
                             }
                         };
                         out[k].extend(std::iter::repeat_n(0.0, n_here - got));
@@ -1453,5 +1460,28 @@ mod id_tests {
         assert!(super::LayerId::fresh().0 > far);
         super::ensure_ids_above(3); // never moves backwards
         assert!(super::DocId::fresh().0 > far);
+    }
+}
+#[test]
+fn deep_merge_survives_hostile_origins_and_counts() {
+    use crate::{DeepChannel, DeepData};
+    // A file that declares an origin/size whose corner overflows i32, and counts whose
+    // sum overflows the u32 pixel index: the union must stay inside i32 and merge must
+    // not panic (this used to compute `x + width as i32` and `to - from` unchecked).
+    let far = DeepData {
+        x: i32::MAX - 1,
+        y: i32::MAX - 1,
+        width: 4,
+        height: 4,
+        channels: vec![DeepChannel { name: "Z".into(), samples: vec![1.0; 16] }],
+        counts: vec![1; 16],
+    };
+    let near = DeepData { x: -2, y: -2, width: 2, height: 2, channels: vec![], counts: vec![0; 4] };
+    let m = near.merge(&far);
+    assert!(m.width > 0 && m.height > 0);
+    // Every channel slice stays aligned with the merged counts.
+    let total = *m.counts.last().unwrap_or(&0) as usize;
+    for c in &m.channels {
+        assert_eq!(c.samples.len(), total, "channel {}", c.name);
     }
 }

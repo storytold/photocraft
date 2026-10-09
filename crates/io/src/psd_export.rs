@@ -973,9 +973,13 @@ impl Ex {
                 // like Photoshop does when it opens a deep file it cannot keep deep.
                 LayerContent::Deep(d) => {
                     self.warnings.push(format!("layer \"{}\": deep layer written as its composited pixels (PSD has no deep data)", l.name));
-                    let px = photocraft_compose::deep::flat_surface(d, self.fmt);
-                    let r = self.record(l, extra, Some(&px));
-                    self.records.push(r);
+                    match photocraft_compose::deep::flat_surface(d, self.fmt) {
+                        Ok(px) => {
+                            let r = self.record(l, extra, Some(&px));
+                            self.records.push(r);
+                        }
+                        Err(e) => self.warnings.push(format!("layer \"{}\": {e}; skipped", l.name)),
+                    }
                 }
             }
         }

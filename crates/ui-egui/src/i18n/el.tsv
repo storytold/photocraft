@@ -23,7 +23,7 @@
 	Both	Και τα δύο
 	Left	Αριστερά
 	Right	Δεξιά
-	Open Recent	Πρόσφατα αρχεία
+	Open as Deep…	Άνοιγμα ως βάθος…	Open Recent	Πρόσφατα αρχεία
 	Clear Recent Files	Εκκαθάριση πρόσφατων αρχείων
 	Remove from Recent	Αφαίρεση από τα πρόσφατα
 	Remove {name} from Recent	Αφαίρεση του {name} από τα πρόσφατα
@@ -1027,6 +1027,7 @@
 	No Layer Comps	Δεν υπάρχουν συνθέσεις επιπέδων
 	Add to selection  (⇧)	Προσθήκη στην επιλογή  (⇧)
 	Click to zoom in  ·  ⌥-click to zoom out	Κλικ για μεγέθυνση · ⌥-κλικ για σμίκρυνση
+	Filter for deep layers	Φίλτρο για βαθιές στιβάδες
 	Commit Perspective Warp (↩)	Εφαρμογή παραμόρφωσης προοπτικής (↩)
 	Commit Puppet Warp (↩)	Εφαρμογή παραμόρφωσης μαριονέτας (↩)
 	Commit any current edits (⌘↩)	Εφαρμογή τρεχουσών αλλαγών (⌘↩)
