@@ -476,7 +476,7 @@ pub struct PhotocraftApp {
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
-    channel_thumbs: Option<(DocId, std::sync::Weak<Document>, Vec<egui::TextureHandle>)>,
+    channel_thumbs: Option<(DocId, std::sync::Weak<Document>, bool, Vec<egui::TextureHandle>)>,
     /// Channels panel overlays / channel views drawn over the canvas, per document id.
     pub(crate) channel_views: HashMap<u64, channel_view::Cache>,
     /// Selection outline keyed by (document, mask identity × step × visible region).
@@ -1495,7 +1495,8 @@ impl PhotocraftApp {
         // View-only commands bump revision without changing pixels. Keeping a Weak pins allocation
         // identity against address reuse without retaining the document's pixel data.
         let snapshot = std::sync::Arc::downgrade(&doc);
-        if !matches!(&self.channel_thumbs, Some((d, old, _)) if *d == id && old.ptr_eq(&snapshot)) {
+        let show_color = self.session.prefs().interface.show_channels_in_color;
+        if !matches!(&self.channel_thumbs, Some((d, old, in_color, _)) if *d == id && old.ptr_eq(&snapshot) && *in_color == show_color) {
             let comp = photocraft_compose::thumbnail(&doc, 56);
             let (w, h) = (comp.width as usize, comp.height as usize);
             let side = w.max(h);
@@ -1521,7 +1522,21 @@ impl PhotocraftApp {
                             let rgba = [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0);
                             let x = photocraft_raster::from_rgba(&fmt, rgba)[k];
                             let g = if cmyk { 1.0 - x } else { x };
-                            egui::Color32::from_gray((g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+                            let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                            if show_color {
+                                match (fmt.mode, k) {
+                                    (photocraft_doc::ColorMode::Rgb, 0) => egui::Color32::from_rgb(byte, 0, 0),
+                                    (photocraft_doc::ColorMode::Rgb, 1) => egui::Color32::from_rgb(0, byte, 0),
+                                    (photocraft_doc::ColorMode::Rgb, 2) => egui::Color32::from_rgb(0, 0, byte),
+                                    (photocraft_doc::ColorMode::Cmyk, 0) => egui::Color32::from_rgb(255 - byte, 255, 255),
+                                    (photocraft_doc::ColorMode::Cmyk, 1) => egui::Color32::from_rgb(255, 255 - byte, 255),
+                                    (photocraft_doc::ColorMode::Cmyk, 2) => egui::Color32::from_rgb(255, 255, 255 - byte),
+                                    (photocraft_doc::ColorMode::Cmyk, 3) => egui::Color32::from_gray(255 - byte),
+                                    _ => egui::Color32::from_gray(byte),
+                                }
+                            } else {
+                                egui::Color32::from_gray(byte)
+                            }
                         },
                         &format!("c{k}"),
                     ));
@@ -1542,9 +1557,9 @@ impl PhotocraftApp {
                 }
                 texs.push(ctx.load_texture(format!("chan-a{i}"), egui::ColorImage::new([side, side], px), egui::TextureOptions::LINEAR));
             }
-            self.channel_thumbs = Some((id, snapshot, texs));
+            self.channel_thumbs = Some((id, snapshot, show_color, texs));
         }
-        self.channel_thumbs.as_ref().map(|(_, _, t)| t.iter().map(|t| t.id()).collect()).unwrap_or_default()
+        self.channel_thumbs.as_ref().map(|(_, _, _, t)| t.iter().map(|t| t.id()).collect()).unwrap_or_default()
     }
 }
 
@@ -1583,6 +1598,9 @@ fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
 impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     fn export_os_clipboard(&mut self) {
+        if !self.session.prefs().general.export_clipboard {
+            return;
+        }
         let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else { return };
         let b = clip.bounds;
         if b.is_empty() {
@@ -1713,6 +1731,26 @@ mod clipboard_tests {
         let st = app.session.active().unwrap();
         let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
         assert_eq!(surf.content_bounds().width(), 3);
+    }
+
+    #[test]
+    fn os_clipboard_honours_export_clipboard_preference() {
+        let os: OsClip = Arc::default();
+        let a = os.clone();
+        let services = Services {
+            clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+                *a.lock().unwrap() = Some((w, h, px.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.session.execute("prefs.set", serde_json::json!({"values": {"general.exportClipboard": false}})).unwrap();
+        app.session.execute("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+        app.run("edit.copy", serde_json::json!({})).unwrap();
+        assert!(os.lock().unwrap().is_none(), "copy does not mirror to OS clipboard when export_clipboard is off");
     }
 
     type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;

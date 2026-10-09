@@ -1452,8 +1452,10 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     // Layers dragged over a tab show its document (`layer_transfer`).
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
-    let font = crate::theme::medium(12.5);
-    let meta_font = egui::FontId::proportional(10.5);
+    let large_tabs = app.session.prefs().workspace.large_tabs;
+    let tab_h = if large_tabs { 34.0 } else { 26.0 };
+    let font = crate::theme::medium(if large_tabs { 14.0 } else { 12.5 });
+    let meta_font = egui::FontId::proportional(if large_tabs { 12.0 } else { 10.5 });
     // Files opening in the background (#210) are tabs too; they share the fit's index space,
     // after the documents.
     let opening = crate::jobs_ui::open_tabs(app);
@@ -1480,7 +1482,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
         .map_or_else(|| app.session.active_index().unwrap_or(0), |p| tab_count + p);
     let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
-        let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
+        let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::hover());
         let f = crate::tab_strip::fit(&natural, selected, row.width(), DOC_TAB_MIN_W, crate::tab_strip::CHEVRON_W);
         let mut x = row.left();
         let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
@@ -1718,8 +1720,10 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let dragging = crate::layer_transfer::pointer_if_armed(app, ui.ctx());
     let mut drag_over = None;
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let font = egui::FontId::proportional(11.5);
-    let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::hover());
+    let large_tabs = app.session.prefs().workspace.large_tabs;
+    let font = egui::FontId::proportional(if large_tabs { 13.0 } else { 11.5 });
+    let tab_h = if large_tabs { 34.0 } else { 26.0 };
+    let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
     // Files opening in the background (#210) are tabs too ("name (Opening… 45%)" with a progress
     // underline); they share the fit's index space, after the documents.
@@ -4398,6 +4402,32 @@ mod tests {
             h.run_steps(2);
             assert!(h.state().0.session.documents().is_empty(), "{os:?}: the × closes the document");
         }
+    }
+
+    #[test]
+    fn large_tabs_preference_increases_tab_strip_height() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.sync_views();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 60.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    tabs(app, ui);
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.state_mut().1 = true;
+        h.run_steps(2);
+        let normal_h = h.get_by_label_contains("Untitled @").rect().height();
+        assert_eq!(normal_h, 26.0);
+
+        h.state_mut().0.session.execute("prefs.set", json!({"values": {"workspace.largeTabs": true}})).unwrap();
+        h.run_steps(2);
+        let large_h = h.get_by_label_contains("Untitled @").rect().height();
+        assert_eq!(large_h, 34.0);
     }
 
     #[test]

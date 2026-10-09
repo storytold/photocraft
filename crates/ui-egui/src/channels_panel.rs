@@ -401,4 +401,17 @@ mod tests {
             .collect();
         assert_eq!(interrupts, [None, Some(false), Some(false), Some(false)]);
     }
+
+    #[test]
+    fn channel_thumbs_honours_show_channels_in_color() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let ctx = egui::Context::default();
+        let thumbs_gray = app.channel_thumbs(&ctx);
+        assert!(!thumbs_gray.is_empty());
+
+        app.session.execute("prefs.set", json!({"values": {"interface.showChannelsInColor": true}})).unwrap();
+        let thumbs_color = app.channel_thumbs(&ctx);
+        assert_eq!(thumbs_gray.len(), thumbs_color.len());
+    }
 }
