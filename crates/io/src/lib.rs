@@ -203,7 +203,7 @@ pub fn import_deep_exr(name: &str, bytes: &[u8], limits: &photocraft_codecs::Lim
             counts: img.counts,
         }),
     ));
-    Ok(ImportResult { document: doc, warnings: Vec::new() })
+    Ok(ImportResult { document: doc, warnings: Vec::new(), source_read_only: false, preview_only: false })
 }
 
 /// [`import`] for a background open: checks `ctl` between stages (and per layer for PSD/PSB) and
