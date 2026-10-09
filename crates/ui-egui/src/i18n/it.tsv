@@ -2173,6 +2173,7 @@ cameraRaw	Amount	Quantità
 	Patch Tool	Strumento Toppa
 	Patch:	Toppa:
 	Lasso around an area, then drag the selection	Seleziona un'area con lazo, poi trascina la selezione
+	Now drag the selection onto another area	Ora trascina la selezione su un'altra area
 	Edit Type	Modifica testo
 
 # Strings added on main after this catalog was written (2026-10).
@@ -2318,3 +2319,23 @@ fontWeight	Italic	Corsivo
 	Rotate View Tool	Strumento Ruota vista
 	Reset View	Reimposta vista
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Trascina intorno al centro per ruotare la vista  ·  Maiusc vincola a 15°
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Campione puntiforme
+	3 by 3 Average	Media 3 × 3
+	5 by 5 Average	Media 5 × 5
+	11 by 11 Average	Media 11 × 11
+	31 by 31 Average	Media 31 × 31
+	51 by 51 Average	Media 51 × 51
+	101 by 101 Average	Media 101 × 101
+	Sample Size:	Dimensione campione:
+	All Layers No Adjustments	Tutti i livelli senza regolazioni
+	Current & Below No Adjustments	Corrente e inferiori senza regolazioni
+	Show Sampling Ring	Mostra anello di campionamento
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Fuori gamma di stampa: fai clic per il colore stampabile più vicino
+	Not a web colour: click for the nearest web colour	Non è un colore web: fai clic per il colore web più vicino
+	Color to Alpha…	Colore ad alfa…
+	Transparency Threshold	Soglia di trasparenza
+	Opacity Threshold	Soglia di opacità

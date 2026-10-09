@@ -23,6 +23,22 @@ fn rebuild(bytes: &[u8], f: impl Fn(&str, Vec<u8>) -> Option<Vec<u8>>) -> Vec<u8
 }
 
 #[test]
+fn older_bundles_without_text_metadata_still_load() {
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let old = rebuild(&bytes, |name, data| {
+        if name != "manifest.json" {
+            return Some(data);
+        }
+        let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+        assert!(manifest["document"]["metadata"].as_object_mut().unwrap().remove("text").is_some());
+        Some(serde_json::to_vec(&manifest).unwrap())
+    });
+    doc.metadata.text.clear();
+    assert_eq!(load_from_bytes(&old).unwrap(), doc);
+}
+
+#[test]
 fn truncation_never_panics_and_fails() {
     let b = sample();
     let step = (b.len() / 200).max(1);

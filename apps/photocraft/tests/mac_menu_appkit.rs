@@ -134,7 +134,8 @@ fn main() {
         .iter()
         .filter_map(|e| if let egui::Event::Key { key, pressed, modifiers, .. } = e { Some((*key, *pressed, modifiers.command)) } else { None })
         .collect();
-    assert_eq!(keys, [(egui::Key::R, true, true), (egui::Key::R, false, true)], "the key press, then its release");
+    // AppKit took only the key-down; winit delivers the key-up itself (#1638).
+    assert_eq!(keys, [(egui::Key::R, true, true)], "the key press");
     frame(&mut app, raw);
     let ran: Vec<String> = photocraft_ui_egui::shortcut_dispatch::take_log(&ctx).into_iter().map(|(id, _)| id).collect();
     assert_eq!(ran, ["view.rulers"], "⌘R ran Rulers, whichever ⌘R item AppKit matched");

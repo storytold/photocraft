@@ -24,8 +24,8 @@ use crate::file_open::display_name;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
-    /// scripts, notes, presets).
-    Open { multiple: bool },
+    /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
+    Open { multiple: bool, initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
 }
@@ -116,7 +116,8 @@ impl PhotocraftApp {
     /// name (the full path on the desktop) and bytes. A file that can't be read fails with
     /// "<file name>: <why>".
     pub(crate) fn pick_file_bytes(&mut self, then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: false }, move |app, answer| {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir }, move |app, answer| {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
@@ -124,7 +125,8 @@ impl PhotocraftApp {
 
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: true }, |app, answer| {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);
@@ -190,6 +192,12 @@ impl PhotocraftApp {
             self.ui.status_error = true;
         }
     }
+}
+
+/// The folder an open dialog starts in: the directory of the most recent file (UI-217-3).
+fn last_used_dir(recent: &[String]) -> Option<String> {
+    let dir = std::path::Path::new(recent.first()?).parent()?;
+    (!dir.as_os_str().is_empty()).then(|| dir.to_string_lossy().into_owned())
 }
 
 /// The name and bytes of the single file an open dialog answered with.

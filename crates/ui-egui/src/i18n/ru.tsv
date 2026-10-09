@@ -2370,6 +2370,7 @@ cameraRaw	Roughness	Неровность
 	Patch Tool	Заплатка
 	Patch:	Заплатка:
 	Lasso around an area, then drag the selection	Обведите область лассо, затем перетащите выделение
+	Now drag the selection onto another area	Теперь перетащите выделение на другую область
 	Edit Type	Редактировать текст
 
 
@@ -2519,3 +2520,24 @@ fontWeight	Italic	Курсив
 	Rotate View Tool	Инструмент поворота вида
 	Reset View	Сбросить вид
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Перетащите вокруг центра, чтобы повернуть вид  ·  Shift фиксирует шаг 15°
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Точечная выборка
+	3 by 3 Average	Среднее 3 × 3
+	5 by 5 Average	Среднее 5 × 5
+	11 by 11 Average	Среднее 11 × 11
+	31 by 31 Average	Среднее 31 × 31
+	51 by 51 Average	Среднее 51 × 51
+	101 by 101 Average	Среднее 101 × 101
+	Sample Size:	Размер выборки:
+	All Layers No Adjustments	Все слои без коррекции
+	Current & Below No Adjustments	Текущий и ниже без коррекции
+	Show Sampling Ring	Показать кольцо выборки
+	Click to sample the foreground colour  ·  {key}-click for background	Клик — взять основной цвет  ·  {key}-клик — фоновый цвет
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Вне цветового охвата печати: щёлкните, чтобы выбрать ближайший печатаемый цвет
+	Not a web colour: click for the nearest web colour	Не веб-цвет: щёлкните, чтобы выбрать ближайший веб-цвет
+	Color to Alpha…	Цвет в альфа-канал…
+	Transparency Threshold	Порог прозрачности
+	Opacity Threshold	Порог непрозрачности

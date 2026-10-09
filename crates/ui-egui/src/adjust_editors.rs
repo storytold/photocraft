@@ -695,6 +695,16 @@ fn hue_color(deg: f32) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
+/// The Saturation slider's track: grey to the hue at full saturation (UI-217-16).
+fn saturation_track(hue_deg: f32) -> [Color32; 2] {
+    [Color32::from_gray(128), hue_color(hue_deg)]
+}
+
+/// The Lightness slider's track: black, the hue, white (UI-217-16).
+fn lightness_track(hue_deg: f32) -> [Color32; 3] {
+    [Color32::BLACK, hue_color(hue_deg), Color32::WHITE]
+}
+
 fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
     let mut b = HueRange::canonical_bounds(bounds);
     if k >= b.len() {
@@ -758,13 +768,21 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["hue"] = json!(h.round());
         }
         e.add(Edit::of(&r));
+        // The Saturation and Lightness tracks follow the current hue, as in Photoshop (UI-217-16).
+        let sat_track = saturation_track(h);
         let mut s = num(v, "saturation", 0.0).clamp(slo, 100.0);
-        let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", None);
+        let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", Some(&sat_track));
         if r.changed() {
             v["saturation"] = json!(s.round());
         }
         e.add(Edit::of(&r));
-        e.add(sliders(ui, v, &[("lightness", tl!("Lightness"), -100.0, 100.0, 0.0, "%")]));
+        let light_track = lightness_track(h);
+        let mut l = num(v, "lightness", 0.0).clamp(-100.0, 100.0);
+        let r = widgets::slider_row(ui, tl!("Lightness"), &mut l, -100.0..=100.0, "%", Some(&light_track));
+        if r.changed() {
+            v["lightness"] = json!(l.round());
+        }
+        e.add(Edit::of(&r));
     } else {
         let key = HUE_RANGES[range - 1];
         if !v.get(key).is_some_and(Value::is_object) {
@@ -1360,6 +1378,15 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturation_and_lightness_tracks_follow_the_hue() {
+        // The S/L slider tracks recolour with the hue (UI-217-16).
+        assert_eq!(saturation_track(0.0), [Color32::from_gray(128), hue_color(0.0)]);
+        assert_ne!(saturation_track(0.0)[1], saturation_track(120.0)[1]);
+        assert_eq!(saturation_track(720.0)[1], saturation_track(0.0)[1], "hue wraps");
+        assert_eq!(lightness_track(200.0), [Color32::BLACK, hue_color(200.0), Color32::WHITE]);
+    }
 
     #[test]
     fn hue_range_drag_canonicalizes_bounds_before_clamping() {

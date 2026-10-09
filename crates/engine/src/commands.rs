@@ -1089,6 +1089,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_style::specs());
     v.extend(crate::filters::specs());
     v.extend(crate::filters_ext::specs());
+    v.extend(crate::color_to_alpha_cmds::specs());
     v.extend(crate::gallery_cmds::specs());
     v.extend(crate::gradient_fill_cmds::specs());
     v.extend(crate::type_cmds::specs());
@@ -1125,6 +1126,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::prefs::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
+    v.extend(crate::sample_cmds::specs());
     v.extend(crate::brush_key_cmds::specs());
     v.extend(crate::stamp_cmds::specs());
     v.extend(crate::align_cmds::specs());
@@ -1168,7 +1170,21 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::fx_visibility_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
     v.extend(crate::actions_cmds::specs());
+    // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
+    #[cfg(test)]
+    v.push(test_panic_command());
     v
+}
+
+/// A command whose `run` panics on purpose, so the last-resort guard in `jobs::dispatch`
+/// can be tested (REL-3). Test builds only: `commands::build` pushes it under `cfg(test)`.
+#[cfg(test)]
+fn test_panic_command() -> CommandSpec {
+    #[allow(clippy::panic)]
+    fn run(_: &mut Session, _: &Value) -> Result<Value> {
+        panic!("test: this command panicked on purpose")
+    }
+    CommandSpec { id: "test.panic", label: "Test Panic", menu: &[], shortcut: None, params: r##"{}"##, enabled: |_: &Session| Ok(()), run, journal: false }
 }
 
 /// Commands generated from a table share one `run` fn; the kind is recovered from the id.

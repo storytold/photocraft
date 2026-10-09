@@ -8,7 +8,7 @@ use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock as Content};
-use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt, tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -38,6 +38,7 @@ pub struct PhotocraftMcp {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocIndex {
     /// Document index from `session_list` (default: the active document).
     #[serde(default)]
@@ -45,12 +46,14 @@ pub struct DocIndex {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OpenParams {
     /// Forward-slash relative path beneath the configured automation read root.
     pub path: String,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NewParams {
     #[serde(default)]
     pub width: Option<u32>,
@@ -70,6 +73,7 @@ pub struct NewParams {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveParams {
     /// Forward-slash relative target beneath the configured automation write root.
     /// The extension selects the format. Omit to write back to the document's own file, which
@@ -91,6 +95,7 @@ pub struct SaveParams {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewParams {
     /// Headless mode only: document index (default: the active document).
     /// Bridge previews capture the app window and reject `index`.
@@ -112,11 +117,13 @@ pub struct ScreenshotParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelectParams {
     pub index: usize,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListParams {
     /// Only commands whose id or label contains this text (case-insensitive).
     #[serde(default)]
@@ -127,6 +134,7 @@ pub struct ListParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RunParams {
     /// Command id, e.g. `layer.new.layer`, `filter.blur.gaussianBlur`.
     pub id: String,
@@ -141,6 +149,7 @@ pub struct RunParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct JobCancelParams {
     /// The job id from `command_run` / `jobs_list` (omit to cancel every running job).
     #[serde(default)]
@@ -148,6 +157,7 @@ pub struct JobCancelParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BatchParams {
     /// Commands to run in order: `[{"id": "layer.new.layer", "params": {"name": "Ink"}}, …]`. A
     /// step with `"wait": false` starts a long command as a background job (its result is
@@ -176,24 +186,29 @@ pub struct PointerParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MenuParams {
     /// Menu item / command id.
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
-    /// (a blend mode name, for the Gradient tool), gradientClassic (bool). Other fields are an
+    /// (a blend mode name, for the Gradient tool), gradientClassic (bool), eyedropperSampleSize
+    /// ("point" or 1, 3, 5, 11, 31, 51, 101), eyedropperSample (current, currentAndBelow, all,
+    /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool). Other fields are an
     /// error.
     pub fields: Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ControlParams {
     /// Any control-protocol method, e.g. `ui.dialog.open`.
     pub method: String,
@@ -276,9 +291,7 @@ impl PhotocraftMcp {
 
     /// Serve MCP over stdin/stdout until the client disconnects.
     pub async fn serve_stdio(self) -> Result<(), AutomationError> {
-        let running = self.serve(rmcp::transport::stdio()).await.map_err(|e| AutomationError::Other(format!("MCP init: {e}")))?;
-        running.waiting().await.map_err(|e| AutomationError::Other(e.to_string()))?;
-        Ok(())
+        self.serve_io(tokio::io::stdin(), tokio::io::stdout()).await
     }
 
     /// Run `f` on the headless session on a blocking thread.
@@ -438,7 +451,16 @@ impl PhotocraftMcp {
 
     #[tool(description = "Document state as JSON: layer tree (top to bottom), history, selection, active layer.")]
     async fn doc_inspect(&self, Parameters(p): Parameters<DocIndex>) -> Result<CallToolResult, McpError> {
-        if let Some(r) = self.headless_op(move |h| h.inspect(p.index)).await {
+        if let Some(r) = self
+            .headless_op(move |h| {
+                if p.index.is_none() && h.session.active_index().is_none() {
+                    Ok(json!({"document": null, "session": h.session_list()}))
+                } else {
+                    h.inspect(p.index)
+                }
+            })
+            .await
+        {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
@@ -464,6 +486,11 @@ impl PhotocraftMcp {
             return Ok(fail("`index` is only supported in headless mode; bridge previews capture the app window"));
         }
         self.screenshot(b, Some(max)).await
+    }
+
+    #[tool(description = "Render a bounded flattened PNG preview (bridge mode: app window screenshot).")]
+    async fn render_preview(&self, p: Parameters<PreviewParams>) -> Result<CallToolResult, McpError> {
+        self.doc_render_preview(p).await
     }
 
     #[tool(description = "Make the document at `index` active.")]
@@ -711,8 +738,9 @@ impl PhotocraftMcp {
     }
 }
 
-#[tool_handler(router = self.tool_router, name = "photocraft", instructions = "Photocraft image editor. Every edit is an engine command: call `command_list` to discover ids and parameter docs, then `command_run` (or `command_batch` for several at once). Use `doc_open`/`doc_new` first, `doc_inspect` for the layer tree, `doc_render_preview` to see the result, and `doc_save` (.pcraft is lossless native; .psd/.png/.jpg/.tif… export). In bridge mode the `ui_*` tools drive the live app (inspect, screenshot, pointer, menus).")]
-impl ServerHandler for PhotocraftMcp {}
+mod conventions;
+mod progress;
+mod transport;
 
 /// Used by the render helper in tests and the CLI.
 pub fn render_document_png(doc: &photocraft_doc::Document, max_side: u32) -> Result<Vec<u8>, AutomationError> {

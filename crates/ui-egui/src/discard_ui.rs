@@ -144,16 +144,13 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
         let ctx = ctx.clone();
         app.after_file_dialog(move |app, saved| {
             let saved = saved.map_err(couldnt_save)?;
-            // Still the prompt that asked (quitting may have replaced it meanwhile).
-            if app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc) {
-                advance(app, &ctx);
-            }
+            saved_document(app, &ctx, doc);
             Ok(saved)
         });
         return false;
     }
     match saved {
-        Ok(_) => true,
+        Ok(_) => app.tiff_options.is_none(),
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
@@ -164,14 +161,26 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     }
 }
 
+/// A completed save may release the close prompt. Choosing a path only starts a layered TIFF
+/// save; TIFF Options calls this after the write. Copies and failed writes leave the doc dirty.
+pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
+    // Still the prompt that asked (quitting may have replaced it meanwhile).
+    if app.tiff_options.is_none()
+        && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
+        && index_of(app, doc).is_some_and(|i| !app.session.documents()[i].is_dirty())
+    {
+        advance(app, ctx);
+    }
+}
+
 /// A save failure as reported ("cancelled" stays as it is: it isn't reported).
 fn couldnt_save(e: String) -> String {
     if e == crate::file_dialog::CANCELLED { e } else { format!("Couldn't save: {e}") }
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Hidden while Save's file dialog is up; it's back if that is cancelled.
-    if app.file_dialog_open() {
+    // Save can ask for a path and then TIFF Options. Wait for both; cancellation brings us back.
+    if app.file_dialog_open() || app.tiff_options.is_some() {
         return;
     }
     let Some(p) = &app.discard else { return };
@@ -524,6 +533,9 @@ mod tests {
         assert!(h.state().discard.is_none());
         assert!(h.state().session.documents().is_empty());
     }
+
+    #[path = "tiff_tests.rs"]
+    mod tiff_tests;
 
     /// One frame with the window's close button pressed; the commands the guard sent.
     fn window_close_commands(app: &mut PhotocraftApp) -> Vec<egui::ViewportCommand> {

@@ -5,6 +5,9 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, S
 
 use crate::theme::{self, Tokens};
 
+mod color_count;
+pub use color_count::color_count_row;
+
 /// An accent insertion line on one edge of `r` while a drag hovers it (vertical: on its left or,
 /// `after`, right edge; else on its top or bottom).
 pub fn drop_line(ui: &Ui, r: Rect, after: bool, vertical: bool, t: &Tokens) {
@@ -59,11 +62,12 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
     if t.pro {
         return pro_panel(ui, id, tabs, selected, collapsed, body);
     }
+    let m = body_margin(false);
     let frame = egui::Frame::NONE
         .fill(t.card)
         .stroke(Stroke::new(1.0, t.card_border))
         .corner_radius(CornerRadius::same(t.radius as u8))
-        .inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: if collapsed { 6 } else { 10 } });
+        .inner_margin(egui::Margin { bottom: if collapsed { 6 } else { m.bottom }, ..m });
     let out = frame
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -88,6 +92,36 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
     out
 }
 
+/// Inner margin of a dock panel's body: a Pro panel's, or a Studio card's below its tab strip.
+fn body_margin(pro: bool) -> egui::Margin {
+    if pro { egui::Margin::same(8) } else { egui::Margin { left: 8, right: 8, top: 6, bottom: 10 } }
+}
+
+/// Height of a panel footer's bar ([`panel_footer`]), under its 1 px line.
+pub const FOOTER_BAR: f32 = 30.0;
+
+/// The height a [`panel_footer`] takes from the panel body: its line, and its bar down to the
+/// body's bottom margin (the bar runs on over the margin).
+pub fn footer_height(ui: &Ui) -> f32 {
+    1.0 + FOOTER_BAR - body_margin(Tokens::get(ui.ctx()).pro).bottom as f32
+}
+
+/// A panel footer as in Photoshop's Layers and History panels: a bar of buttons under a line that
+/// runs from edge to edge of the panel, the buttons centred in the bar's height and laid out from
+/// the right. Drawn last in a body that fills its group (leave it [`footer_height`]), the bar ends
+/// at the panel's bottom edge.
+pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get(ui.ctx());
+    let m = body_margin(t.pro);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), footer_height(ui)), Sense::hover());
+    let y = r.top() + 0.5;
+    ui.painter().line_segment([pos2(r.left() - m.left as f32, y), pos2(r.right() + m.right as f32, y)], Stroke::new(1.0, t.separator));
+    let bar = Rect::from_min_size(pos2(r.left(), r.top() + 1.0), vec2(r.width(), FOOTER_BAR));
+    let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    bar_ui.spacing_mut().item_spacing.x = 2.0;
+    add(&mut bar_ui)
+}
+
 /// Photoshop-grammar panel group: dark tab strip with flat tabs, flat body, hamburger menu.
 fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
     let t = Tokens::get(ui.ctx());
@@ -109,14 +143,10 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
     }
     // Body.
     if !collapsed {
-        egui::Frame::NONE
-            .fill(t.card)
-            .corner_radius(CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 })
-            .inner_margin(egui::Margin { left: 8, right: 8, top: 8, bottom: 8 })
-            .show(ui, |ui| {
-                ui.set_width(width - 16.0);
-                body(ui, *selected);
-            });
+        egui::Frame::NONE.fill(t.card).corner_radius(CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 }).inner_margin(body_margin(true)).show(ui, |ui| {
+            ui.set_width(width - 16.0);
+            body(ui, *selected);
+        });
     }
     ui.add_space(2.0);
     CardResponse { strip: strip_resp, menu: mresp, tab_double_clicked: tabs_out.double_clicked, tabs: tabs_out.tabs, chevron: tabs_out.chevron }

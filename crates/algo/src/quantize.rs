@@ -8,6 +8,9 @@
 use photocraft_color::convert::srgb_to_lab;
 use serde::{Deserialize, Serialize};
 
+mod nearest;
+use nearest::Nearest;
+
 pub type Rgb8 = [u8; 3];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,10 +236,11 @@ fn kmeans(pts: &[([f32; 3], u32)], centers: &mut [[f32; 3]], iters: usize) {
         return;
     }
     for _ in 0..iters {
+        let lookup = Nearest::new(centers.iter().copied());
         let mut sum = vec![[0.0f64; 3]; centers.len()];
         let mut cnt = vec![0.0f64; centers.len()];
         for (p, w) in pts {
-            let i = nearest_f(centers, *p);
+            let i = lookup.find(*p);
             for a in 0..3 {
                 sum[i][a] += f64::from(p[a]) * f64::from(*w);
             }
@@ -250,17 +254,6 @@ fn kmeans(pts: &[([f32; 3], u32)], centers: &mut [[f32; 3]], iters: usize) {
     }
 }
 
-fn nearest_f(centers: &[[f32; 3]], p: [f32; 3]) -> usize {
-    let mut best = (f32::MAX, 0);
-    for (i, c) in centers.iter().enumerate() {
-        let d = (c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2) + (c[2] - p[2]).powi(2);
-        if d < best.0 {
-            best = (d, i);
-        }
-    }
-    best.1
-}
-
 fn lab_to_rgb8(lab: [f32; 3]) -> Rgb8 {
     photocraft_color::convert::lab_to_srgb(lab).map(to8)
 }
@@ -271,7 +264,13 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
     let colors = colors.clamp(2, 256);
     let mut pal = forced_colors(forced);
     let room = colors.saturating_sub(pal.len());
-    let hist = histogram(px);
+    // Fixed palettes, or computed palettes already filled by forced colours, need no scan.
+    // Exact still counts every colour to enforce its 256-colour limit.
+    let hist = if kind == PaletteKind::Exact || (room > 0 && matches!(kind, PaletteKind::Adaptive | PaletteKind::Perceptual | PaletteKind::Selective)) {
+        histogram(px)
+    } else {
+        Vec::new()
+    };
     let computed: Vec<Rgb8> = match kind {
         PaletteKind::Exact => {
             if hist.len() > 256 {
@@ -331,17 +330,6 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
     Ok(pal)
 }
 
-fn nearest(pal: &[Rgb8], c: [f32; 3]) -> usize {
-    let mut best = (f32::MAX, 0);
-    for (i, e) in pal.iter().enumerate() {
-        let d: f32 = (0..3).map(|k| (c[k] * 255.0 - f32::from(e[k])).powi(2)).sum();
-        if d < best.0 {
-            best = (d, i);
-        }
-    }
-    best.1
-}
-
 /// 8×8 Bayer threshold in -0.5..0.5.
 pub fn bayer8(x: usize, y: usize) -> f32 {
     const M: [u8; 64] = [
@@ -363,6 +351,19 @@ fn hash01(x: usize, y: usize, seed: u32) -> f32 {
 /// index per pixel. Pixels with alpha < ½ become index `transparent` (and alpha 0) when given;
 /// otherwise alpha is kept. `amount` (0..=1) scales diffusion / pattern / noise strength.
 pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amount: f32, transparent: Option<usize>) -> Vec<u8> {
+    let lookup = Nearest::new(pal.iter().map(|c| c.map(f32::from)));
+    quantize_with(px, w, pal, dither, amount, transparent, |c| lookup.find(c.map(|v| v * 255.0)))
+}
+
+fn quantize_with(
+    px: &mut [[f32; 4]],
+    w: usize,
+    pal: &[Rgb8],
+    dither: Dither,
+    amount: f32,
+    transparent: Option<usize>,
+    nearest: impl Fn([f32; 3]) -> usize + Sync,
+) -> Vec<u8> {
     let h = px.len().checked_div(w).unwrap_or(0);
     let mut idx = vec![0u8; px.len()];
     // Typical palette spacing sets the ordered/noise dither amplitude.
@@ -390,7 +391,7 @@ pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amo
                     _ => {}
                 }
                 let c = c.map(|v| v.clamp(0.0, 1.0));
-                let k = nearest(pal, c);
+                let k = nearest(c);
                 *ip = k as u8;
                 let e = pal[k].map(|v| f32::from(v) / 255.0);
                 *p = [e[0], e[1], e[2], if transparent.is_some() { 1.0 } else { pv[3] }];
@@ -437,7 +438,7 @@ pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amo
                 }
             }
             let c = c.map(|v| v.clamp(0.0, 1.0));
-            let k = nearest(pal, c);
+            let k = nearest(c);
             idx[i] = k as u8;
             let e = pal[k].map(|v| f32::from(v) / 255.0);
             if dither == Dither::Diffusion {
@@ -482,15 +483,16 @@ pub enum HalftoneShape {
 }
 
 impl HalftoneShape {
-    pub fn from_id(s: &str) -> Self {
-        match s {
+    pub fn from_id(s: &str) -> Option<Self> {
+        Some(match s {
+            "round" => HalftoneShape::Round,
             "ellipse" => HalftoneShape::Ellipse,
             "line" => HalftoneShape::Line,
             "square" => HalftoneShape::Square,
             "diamond" => HalftoneShape::Diamond,
             "cross" => HalftoneShape::Cross,
-            _ => HalftoneShape::Round,
-        }
+            _ => return None,
+        })
     }
 }
 
@@ -608,6 +610,71 @@ mod tests {
             assert_eq!(pal, vec![[0, 0, 0], [255, 255, 255]], "{kind:?}");
             let pal = build_palette(&gradient(8, 8), kind, 8, Forced::Primaries).unwrap();
             assert_eq!(pal.len(), 8, "{kind:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "24 MP release timing comparison; run with --release --ignored --nocapture"]
+    fn indexed_diffusion_24mp_release_comparison() {
+        let source = gradient(6000, 4000);
+        let pal = web_palette();
+        for run in 0..4 {
+            let mut linear = source.clone();
+            let mut accelerated = source.clone();
+            let mut before = None;
+            let mut after = None;
+            // Reverse the order on alternating rounds; exclude the first round as warmup.
+            for old in if run % 2 == 0 { [true, false] } else { [false, true] } {
+                let start = std::time::Instant::now();
+                if old {
+                    let indices = quantize_with(&mut linear, 6000, &pal, Dither::Diffusion, 0.75, None, |c| linear_rgb_nearest(&pal, c));
+                    before = Some((start.elapsed().as_secs_f64() * 1000.0, indices));
+                } else {
+                    let indices = quantize(&mut accelerated, 6000, &pal, Dither::Diffusion, 0.75, None);
+                    after = Some((start.elapsed().as_secs_f64() * 1000.0, indices));
+                }
+            }
+            let (before_ms, before_indices) = before.unwrap();
+            let (after_ms, after_indices) = after.unwrap();
+            assert_eq!(before_indices.iter().zip(&after_indices).position(|(a, b)| a != b), None, "first differing index");
+            assert_eq!(linear.iter().zip(&accelerated).position(|(a, b)| a != b), None, "first differing pixel");
+            println!(
+                "{}",
+                serde_json::json!({"run":run,"warmup":run==0,"pixels":24_000_000,"palette_entries":216,"linear_ms":before_ms,"accelerated_ms":after_ms})
+            );
+        }
+    }
+
+    fn linear_rgb_nearest(pal: &[Rgb8], c: [f32; 3]) -> usize {
+        let mut best = (f32::MAX, 0);
+        for (i, e) in pal.iter().enumerate() {
+            let d: f32 = (0..3).map(|k| (c[k] * 255.0 - f32::from(e[k])).powi(2)).sum();
+            if d < best.0 {
+                best = (d, i);
+            }
+        }
+        best.1
+    }
+
+    #[test]
+    fn all_dithers_match_the_original_linear_palette_search_exactly() {
+        let mut source = gradient(93, 61);
+        for (i, p) in source.iter_mut().enumerate() {
+            p[2] = (i % 71) as f32 / 70.0;
+            p[3] = [0.0, 0.2, 0.7, 1.0][i % 4];
+        }
+        for count in [8, 16, 32, 64, 128, 256] {
+            let pal = build_palette(&source, PaletteKind::Selective, count, Forced::BlackWhite).unwrap();
+            for dither in [Dither::None, Dither::Diffusion, Dither::Pattern, Dither::Noise] {
+                for transparent in [None, Some(1)] {
+                    let mut actual = source.clone();
+                    let mut expected = source.clone();
+                    let indices = quantize(&mut actual, 93, &pal, dither, 0.75, transparent);
+                    let old_indices = quantize_with(&mut expected, 93, &pal, dither, 0.75, transparent, |c| linear_rgb_nearest(&pal, c));
+                    assert_eq!(indices, old_indices, "{count} {dither:?} {transparent:?}");
+                    assert_eq!(actual, expected, "{count} {dither:?} {transparent:?}");
+                }
+            }
         }
     }
 

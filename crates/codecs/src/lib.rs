@@ -20,6 +20,7 @@ mod format;
 mod image;
 mod options;
 pub mod orientation;
+pub mod resolution;
 pub mod web;
 
 pub use crate::codecs::png::encode_indexed as encode_png_indexed;
@@ -31,6 +32,7 @@ pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect,
 pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, Metadata, SampleType};
 pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
+pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use half::f16;
 
 use crate::codecs::{exr, heif, jpeg, png, pnm, tiff, via_image, webp};
@@ -68,6 +70,13 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
     }?;
+    // Without a resolution of the format's own (PNG pHYs, TIFF tags, JPEG's metadata), the
+    // XMP or EXIF one counts, like Photoshop: a WebP, HEIF or PNG from a camera or phone
+    // opens at its recorded resolution, not at the 72 ppi default.
+    let mut img = img;
+    if img.meta.dpi.is_none() && format != Format::Tiff {
+        img.meta.dpi = resolution::from_metadata(img.meta.exif.as_deref(), img.meta.xmp.as_deref());
+    }
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
     // on the way. HEIF keeps it in its container, and its decoder has already applied it.

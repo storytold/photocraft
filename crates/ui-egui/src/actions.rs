@@ -120,11 +120,11 @@ pub(crate) fn run_view(app: &mut PhotocraftApp, id: &str, params: Value) -> Resu
         "view.fitOnScreen" => v.fit_pending = true,
         "view.zoomIn" => {
             v.fit_pending = false;
-            v.zoom = crate::canvas::zoom_step(v.zoom, 1);
+            v.zoom = crate::zoom_levels::step(v.zoom, 1, v.doc_size);
         }
         "view.zoomOut" => {
             v.fit_pending = false;
-            v.zoom = crate::canvas::zoom_step(v.zoom, -1);
+            v.zoom = crate::zoom_levels::step(v.zoom, -1, v.doc_size);
         }
         "view.actualPixels" => {
             v.fit_pending = false;

@@ -2167,6 +2167,7 @@ cameraRaw	Amount	Cantidad
 	Patch Tool	Herramienta Parche
 	Patch:	Parche:
 	Lasso around an area, then drag the selection	Rodee un área con el lazo y arrastre la selección
+	Now drag the selection onto another area	Ahora arrastre la selección a otra área
 	Edit Type	Editar texto
 
 
@@ -2317,3 +2318,23 @@ fontWeight	Italic	Cursiva
 	Rotate View Tool	Herramienta Rotar vista
 	Reset View	Restablecer vista
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arrastre alrededor del centro para rotar la vista  ·  Mayús fija a 15°
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Muestra puntual
+	3 by 3 Average	Promedio de 3 × 3
+	5 by 5 Average	Promedio de 5 × 5
+	11 by 11 Average	Promedio de 11 × 11
+	31 by 31 Average	Promedio de 31 × 31
+	51 by 51 Average	Promedio de 51 × 51
+	101 by 101 Average	Promedio de 101 × 101
+	Sample Size:	Tamaño de muestra:
+	All Layers No Adjustments	Todas las capas sin ajustes
+	Current & Below No Adjustments	Actual e inferiores sin ajustes
+	Show Sampling Ring	Mostrar anillo de muestreo
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Fuera de la gama de impresión: haga clic para el color imprimible más cercano
+	Not a web colour: click for the nearest web colour	No es un color web: haga clic para el color web más cercano
+	Color to Alpha…	Color a alfa…
+	Transparency Threshold	Umbral de transparencia
+	Opacity Threshold	Umbral de opacidad

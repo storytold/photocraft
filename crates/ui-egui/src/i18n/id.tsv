@@ -2492,6 +2492,7 @@ cameraRaw	Blending	Pembauran
 	Patch Tool	Alat Patch
 	Patch:	Patch:
 	Lasso around an area, then drag the selection	Lingkari area dengan lasso, lalu seret seleksinya
+	Now drag the selection onto another area	Sekarang seret seleksi ke area lain
 	Rendering Mode	Mode Rendering
 	Automatic (recommended)	Otomatis (disarankan)
 	CPU / Compatibility	CPU / Kompatibilitas
@@ -2658,3 +2659,23 @@ fontWeight	Italic	Miring
 	Rotate View Tool	Alat Putar Tampilan
 	Reset View	Atur Ulang Tampilan
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Seret di sekitar pusat untuk memutar tampilan  ·  Shift membatasi ke 15°
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Sampel Titik
+	3 by 3 Average	Rata-rata 3 × 3
+	5 by 5 Average	Rata-rata 5 × 5
+	11 by 11 Average	Rata-rata 11 × 11
+	31 by 31 Average	Rata-rata 31 × 31
+	51 by 51 Average	Rata-rata 51 × 51
+	101 by 101 Average	Rata-rata 101 × 101
+	Sample Size:	Ukuran Sampel:
+	All Layers No Adjustments	Semua Layer Tanpa Penyesuaian
+	Current & Below No Adjustments	Saat Ini & Di Bawahnya Tanpa Penyesuaian
+	Show Sampling Ring	Tampilkan Cincin Sampel
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Di luar gamut cetak: klik untuk warna cetak terdekat
+	Not a web colour: click for the nearest web colour	Bukan warna web: klik untuk warna web terdekat
+	Color to Alpha…	Warna ke Alpha…
+	Transparency Threshold	Ambang transparansi
+	Opacity Threshold	Ambang opasitas

@@ -2518,6 +2518,7 @@ cameraRaw	Blending	Fusion
 	Patch Tool	Outil Pièce
 	Patch:	Pièce :
 	Lasso around an area, then drag the selection	Entourez une zone au lasso, puis faites glisser la sélection
+	Now drag the selection onto another area	Faites maintenant glisser la sélection vers une autre zone
 
 # Warp grid presets (#388)
 	3 x 3	3 × 3
@@ -2671,3 +2672,23 @@ fontWeight	Italic	Italique
 	Rotate View Tool	Outil Rotation de la vue
 	Reset View	Réinitialiser la vue
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Faites glisser autour du centre pour tourner la vue  ·  Maj contraint à 15°
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Échantillon ponctuel
+	3 by 3 Average	Moyenne 3 × 3
+	5 by 5 Average	Moyenne 5 × 5
+	11 by 11 Average	Moyenne 11 × 11
+	31 by 31 Average	Moyenne 31 × 31
+	51 by 51 Average	Moyenne 51 × 51
+	101 by 101 Average	Moyenne 101 × 101
+	Sample Size:	Taille de l'échantillon :
+	All Layers No Adjustments	Tous les calques sans ajustements
+	Current & Below No Adjustments	Actif et inférieurs sans ajustements
+	Show Sampling Ring	Afficher l'anneau d'échantillonnage
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Hors de la gamme d’impression : cliquez pour la couleur imprimable la plus proche
+	Not a web colour: click for the nearest web colour	Pas une couleur web : cliquez pour la couleur web la plus proche
+	Color to Alpha…	Couleur vers alpha…
+	Transparency Threshold	Seuil de transparence
+	Opacity Threshold	Seuil d'opacité

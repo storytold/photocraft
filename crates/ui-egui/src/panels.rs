@@ -283,10 +283,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub fn toolbar_needs_double(slots: usize, sections: usize, bx: f32, pro: bool, avail_h: f32) -> bool {
     let pitch = bx + 3.0;
     let needed = if pro {
-        // margins + header + slots + "…" + gap + chips (38 + swap row) + gap + 2 buttons
-        16.0 + 21.0 + (slots + 1) as f32 * pitch + 8.0 + 59.0 + 8.0 + 2.0 * pitch
+        // margins + header + slots + "…" + gap + colour chips + gap + 2 buttons
+        16.0 + 21.0 + (slots + 1) as f32 * pitch + 8.0 + chips_height(true) + 8.0 + 2.0 * pitch
     } else {
-        16.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + 59.0
+        16.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + chips_height(false)
     };
     needed > avail_h
 }
@@ -295,17 +295,45 @@ fn c32(c: [f32; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8)
 }
 
+/// Colour chips: chip size and the background chip's offset (points).
+fn chip_metrics(pro: bool) -> (f32, f32) {
+    if pro { (18.0, 10.0) } else { (21.0, 12.0) }
+}
+
+/// Height of the default-colours and swap icons over the chips.
+const CHIP_ICON: f32 = 13.0;
+
+/// Height of the colour chips block.
+fn chips_height(pro: bool) -> f32 {
+    let (chip, step) = chip_metrics(pro);
+    CHIP_ICON + 3.0 + chip + step
+}
+
+/// Photoshop's foreground / background colour chips: the Default Colors (D) and Switch Colors (X)
+/// icons above them, the foreground chip over the background one, all centred in the toolbar
+/// column and kept inside it.
 fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(36.0, 38.0), Sense::hover());
-    let bg = Rect::from_min_size(rect.min + vec2(13.0, 13.0), vec2(21.0, 21.0));
-    let fg = Rect::from_min_size(rect.min + vec2(2.0, 2.0), vec2(21.0, 21.0));
+    let (chip, step) = chip_metrics(t.pro);
+    let group = chip + step;
+    let w = ui.available_width().max(group);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, chips_height(t.pro)), Sense::hover());
+    let left = (rect.left() + (w - group) / 2.0).round();
+    let fg = Rect::from_min_size(pos2(left, rect.top() + CHIP_ICON + 3.0), vec2(chip, chip));
+    let bg = fg.translate(vec2(step, step));
+    let radius = t.radius_sm.min(3.0);
     let p = ui.painter();
-    p.rect_filled(bg, 5.0, c32(app.session.tools.background));
-    p.rect_stroke(bg, 5.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    p.rect_filled(fg, 5.0, c32(app.session.tools.foreground));
-    p.rect_stroke(fg, 5.0, Stroke::new(1.5, t.chrome), StrokeKind::Outside);
-    p.rect_stroke(fg, 5.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+    let frame = |r: Rect| {
+        // A light line inside a dark one, so any colour reads against the toolbar.
+        p.rect_stroke(r, radius, Stroke::new(1.0, t.text.gamma_multiply(0.9)), StrokeKind::Inside);
+        p.rect_stroke(r, radius, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    };
+    p.rect_filled(bg, radius, c32(app.session.tools.background));
+    frame(bg);
+    // The foreground chip sits on the background one, a toolbar-coloured gap between them.
+    p.rect_filled(fg.expand(2.0), radius + 2.0, t.chrome);
+    p.rect_filled(fg, radius, c32(app.session.tools.foreground));
+    frame(fg);
     // Photoshop: clicking a chip opens the Color Picker for that colour.
     let bg_resp = ui.interact(bg, ui.id().with("bgchip"), Sense::click());
     let fg_resp = ui.interact(fg, ui.id().with("fgchip"), Sense::click());
@@ -314,15 +342,50 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else if bg_resp.on_hover_text(tl!("Set background color")).clicked() {
         crate::color_picker_ui::open(app, "background");
     }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        if icons::button(ui, "arrow-left-right", 18.0, false, tl!("Swap colours (X)")).clicked() {
-            let _ = app.run("tools.swapColors", json!({}));
+    // Default Colors at the left, Switch Colors at the right, over the chips.
+    let icon = |x: f32| Rect::from_min_size(pos2(x, rect.top()), vec2(CHIP_ICON, CHIP_ICON));
+    let (dr, sr) = (icon(left), icon(left + group - CHIP_ICON));
+    let d = ui.interact(dr, ui.id().with("default-colors"), Sense::click());
+    let s = ui.interact(sr, ui.id().with("swap-colors"), Sense::click());
+    let p = ui.painter();
+    for (r, resp) in [(dr, &d), (sr, &s)] {
+        if resp.hovered() {
+            p.rect_filled(r.expand(2.0), radius, t.hover);
         }
-        if icons::button(ui, "contrast", 18.0, false, tl!("Default colours (D)")).clicked() {
-            let _ = app.run("tools.defaultColors", json!({}));
-        }
-    });
+    }
+    let ink = |resp: &egui::Response| if resp.hovered() { t.text } else { t.icon };
+    // Default Colors: a small black chip over a small white one.
+    let small = 7.0;
+    let (b, w) = (Rect::from_min_size(dr.min + vec2(1.0, 1.0), vec2(small, small)), Rect::from_min_size(dr.min + vec2(5.0, 5.0), vec2(small, small)));
+    p.rect_filled(w, 1.0, Color32::WHITE);
+    p.rect_stroke(w, 1.0, Stroke::new(1.0, ink(&d)), StrokeKind::Inside);
+    p.rect_filled(b.expand(1.0), 1.5, t.chrome);
+    p.rect_filled(b, 1.0, Color32::BLACK);
+    p.rect_stroke(b, 1.0, Stroke::new(1.0, ink(&d)), StrokeKind::Inside);
+    // Switch Colors: a quarter-circle arrow with a head at each end.
+    let stroke = Stroke::new(1.3, ink(&s));
+    let (c, rad) = (pos2(sr.left() + 2.0, sr.bottom() - 1.0), sr.width() - 4.0);
+    let arc: Vec<_> = (0..=8)
+        .map(|i| {
+            let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+            c + vec2(rad * a.sin(), -rad * a.cos())
+        })
+        .collect();
+    let (start, end) = (arc[0], arc[arc.len() - 1]);
+    p.add(egui::Shape::line(arc, stroke));
+    let head = 3.0;
+    p.line_segment([start, start + vec2(head, -head)], stroke);
+    p.line_segment([start, start + vec2(head, head)], stroke);
+    p.line_segment([end, end + vec2(-head, -head)], stroke);
+    p.line_segment([end, end + vec2(head, -head)], stroke);
+    d.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Default colours (D)")));
+    s.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Swap colours (X)")));
+    if s.on_hover_text(tl!("Swap colours (X)")).clicked() {
+        let _ = app.run("tools.swapColors", json!({}));
+    }
+    if d.on_hover_text(tl!("Default colours (D)")).clicked() {
+        let _ = app.run("tools.defaultColors", json!({}));
+    }
 }
 
 // ----------------------------------------------------------------------------- title bar
@@ -872,13 +935,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::checkbox(ui, &mut app.ui.tool_options.move_auto_select, tl!("Auto-Select:"));
                         hint(ui, tl!("Drag to move the active layer"));
                     }
-                    Tool::Eyedropper => hint(
-                        ui,
-                        &crate::i18n::fmt(
-                            tl!("Click to sample the foreground colour  ·  {key}-click for background"),
-                            &[("key", &crate::shortcuts::pretty("Alt"))],
-                        ),
-                    ),
+                    Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
                     Tool::Zoom => {
                         widgets::checkbox(ui, &mut app.ui.tool_options.zoom_scrubby, tl!("Scrubby Zoom"));
                         hint(
@@ -1038,8 +1095,8 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let (w, h, mode, bits, layers) =
                         (st.doc.size.width, st.doc.size.height, crate::canvas::mode_label(&st.doc), st.doc.depth.bits(), st.doc.layer_count());
                     let mut pct = app.ui.views[i].zoom * 100.0;
-                    if widgets::value_field(ui, &mut pct, 1.0..=3200.0, "%", 78.0).changed() {
-                        app.ui.views[i].zoom = pct / 100.0;
+                    if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 78.0).changed() {
+                        app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
                         app.ui.views[i].fit_pending = false;
                     }
                     widgets::vline(ui, 16.0);
@@ -1199,15 +1256,18 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .hover_doc
         .map(|p| (p[0].floor() as i32, p[1].floor() as i32))
         .filter(|(x, y)| *x >= 0 && *y >= 0 && *x < size.width as i32 && *y < size.height as i32);
+    // The readout averages the Eyedropper's Sample Size, as in Photoshop (#1649).
+    let sample_size = app.ui.tool_options.eyedropper_size;
     let rgba = pos.and_then(|(x, y)| {
-        if let Some(((cx, cy, cr), v)) = app.info_sample
-            && (cx, cy, cr) == (x, y, rev)
+        if let Some(((cx, cy, cr, cs), v)) = app.info_sample
+            && (cx, cy, cr, cs) == (x, y, rev, sample_size)
         {
             return Some(v);
         }
-        let v: Vec<f32> = serde_json::from_value(app.session.execute("document.pixel", json!({"x": x, "y": y})).ok()?).ok()?;
-        let v = [v[0], v[1], v[2], v[3]];
-        app.info_sample = Some(((x, y, rev), v));
+        let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
+        let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
+        let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+        app.info_sample = Some(((x, y, rev, sample_size), v));
         Some(v)
     });
     let mono = theme::mono(11.5);
@@ -1298,9 +1358,11 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
     });
-    let mut lz = v.zoom.max(0.01).log2();
-    if widgets::slider(ui, &mut lz, -6.64..=5.0, None).changed() {
-        app.ui.views[idx].zoom = 2f32.powf(lz);
+    // The whole zoom range, and always the current zoom: a narrower slider would pull it back.
+    let (lo, hi) = (crate::zoom_levels::min(v.doc_size).min(v.zoom).log2(), crate::zoom_levels::MAX.max(v.zoom).log2());
+    let mut lz = v.zoom.log2();
+    if lz.is_finite() && widgets::slider(ui, &mut lz, lo..=hi, None).changed() {
+        app.ui.views[idx].zoom = crate::zoom_levels::clamp(2f32.powf(lz), v.doc_size);
         app.ui.views[idx].fit_pending = false;
     }
 }
@@ -1371,20 +1433,22 @@ fn blend_options(groups: bool) -> Vec<(BlendMode, &'static str)> {
     std::iter::once(BlendMode::PassThrough).filter(|_| groups).chain(BlendMode::LAYER_MODES).map(|m| (m, m.label())).collect()
 }
 
-/// Scroll the Layers panel while holding a layer drag over its top/bottom edge.
+/// Scroll the Layers panel while holding a layer drag over its top/bottom edge or past them.
 ///
 /// Returns the *content* displacement in points for this frame, so positive moves the
 /// list downward (reveals rows above) and negative upward (reveals rows below).
-/// The speed ramps with proximity to the edge and uses elapsed time instead of
-/// assuming a particular refresh rate.
+/// The speed ramps with proximity to the edge and clamps to the maximum speed when
+/// dragged outside, using elapsed time instead of assuming a particular refresh rate.
 fn layer_drag_edge_scroll(pointer: Option<Pos2>, viewport: Rect, dragging: bool, dt: f32) -> f32 {
-    if !dragging || viewport.width() <= 0.0 || viewport.height() <= 0.0 {
+    if !dragging || viewport.width() <= 0.0 || viewport.height() <= 0.0 || dt.is_nan() || dt <= 0.0 {
         return 0.0;
     }
-    let Some(pointer) = pointer.filter(|p| viewport.contains(*p)) else { return 0.0 };
+    let Some(pointer) = pointer.filter(|p| p.x.is_finite() && p.y.is_finite() && p.x >= viewport.left() && p.x <= viewport.right()) else {
+        return 0.0;
+    };
     let edge = 32.0_f32.min(viewport.height() * 0.25);
-    let top = (edge - (pointer.y - viewport.top())).max(0.0) / edge;
-    let bottom = (edge - (viewport.bottom() - pointer.y)).max(0.0) / edge;
+    let top = ((edge - (pointer.y - viewport.top())) / edge).clamp(0.0, 1.0);
+    let bottom = ((edge - (viewport.bottom() - pointer.y)) / edge).clamp(0.0, 1.0);
     let direction = top - bottom;
     if direction == 0.0 {
         return 0.0;
@@ -1419,7 +1483,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.add_space(4.0);
             for (kind, icon, tip) in [
                 ("pixel", "image", tl!("Filter for pixel layers")),
-                ("adjustment", "contrast", tl!("Filter for adjustment layers")),
+                ("adjustment", "adjustment-layer", tl!("Filter for adjustment layers")),
                 ("type", "type", tl!("Filter for type layers")),
                 ("shape", "square", tl!("Filter for shape layers")),
                 ("smart", "app-window", tl!("Filter for smart objects")),
@@ -1514,7 +1578,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Top of the stack first, groups above their contents, closed groups' contents hidden (#126).
     let rows = crate::layer_tree_ui::display_rows(&doc, !app.ui.layer_filter.is_empty());
     let ctx = ui.ctx().clone();
-    let footer = 38.0;
+    let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
     let fill = ui.available_height() > footer + 60.0;
     let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
     egui::ScrollArea::vertical()
@@ -1523,9 +1587,14 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .min_scrolled_height(if fill { rows_h } else { 0.0 })
         .auto_shrink([false, !fill])
         .show(ui, |ui| {
-            // The drag key is set only by actual layer-row drags, not clicks or
+            // The drag keys are set only by actual layer-row and fx drags, not clicks or
             // ordinary scrolling. The ScrollArea applies this to its own content.
-            let dragging = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag"))).is_some() && ctx.input(|i| i.pointer.primary_down());
+            // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
+            if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
+                ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+            }
+            let held = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag")).is_some() || d.get_temp::<FxDrag>(fx_drag_key()).is_some());
+            let dragging = held && ctx.input(|i| i.pointer.primary_down());
             let pointer = ctx.input(|i| i.pointer.interact_pos());
             let delta = layer_drag_edge_scroll(pointer, ui.clip_rect(), dragging, ctx.input(|i| i.stable_dt));
             if delta != 0.0 {
@@ -1581,83 +1650,79 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let in_selection = selection.iter().any(|s| s.0 == id);
         (id, in_selection)
     });
+    fx_drag_feedback(&ctx, &doc);
     // End any layer drag after every row has had a chance to accept the drop.
     if ctx.input(|i| i.pointer.any_released()) {
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
+        ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
     }
-    ui.add_space(4.0);
-    widgets::hairline(ui);
-    ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete layer"));
-            if trash.clicked() {
-                actions.push(("layer.delete".into(), json!({})));
-            }
-            actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
-            let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
-            if new_layer.clicked() {
-                actions.push(("layer.new.layer".into(), json!({})));
-            }
-            actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
-            let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));
-            if group.clicked() {
-                actions.push(("layer.new.group".into(), json!({})));
-            }
-            actions.extend(footer_drop(ui, &group, footer_drag, "layer.groupLayers"));
-            let adj = footer_menu_button(ui, "contrast", 26.0, tl!("Create new fill or adjustment layer"));
-            egui::Popup::menu(&adj).open_memory(footer_menu_right_click(&adj)).show(|ui| {
-                ui.set_min_width(190.0);
-                for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
-                    if ui.button(tl!(c.label).trim_end_matches('…')).clicked() {
-                        actions.push((c.id.into(), json!({})));
-                        ui.close();
-                    }
-                }
-                ui.separator();
-                if ui.button(tl!("Solid Color…")).clicked() {
-                    actions.push(("layer.newFillLayer.solidColor".into(), json!({})));
+    widgets::panel_footer(ui, |ui| {
+        let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete layer"));
+        if trash.clicked() {
+            actions.push(("layer.delete".into(), json!({})));
+        }
+        actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
+        let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
+        if new_layer.clicked() {
+            actions.push(("layer.new.layer".into(), json!({})));
+        }
+        actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
+        let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));
+        if group.clicked() {
+            actions.push(("layer.new.group".into(), json!({})));
+        }
+        actions.extend(footer_drop(ui, &group, footer_drag, "layer.groupLayers"));
+        let adj = footer_menu_button(ui, "adjustment-layer", 26.0, tl!("Create new fill or adjustment layer"));
+        egui::Popup::menu(&adj).open_memory(footer_menu_right_click(&adj)).show(|ui| {
+            ui.set_min_width(190.0);
+            for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
+                if ui.button(tl!(c.label).trim_end_matches('…')).clicked() {
+                    actions.push((c.id.into(), json!({})));
                     ui.close();
                 }
-                if ui.button(tl!("Gradient…")).clicked() {
-                    actions.push(("layer.newFillLayer.gradient".into(), json!({})));
-                    ui.close();
-                }
-            });
-            if icons::button(
-                ui,
-                "square-dot",
-                26.0,
-                false,
-                &crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
-            )
-            .clicked()
-            {
-                let alt = ui.input(|i| i.modifiers.alt);
-                actions.push((crate::layer_menu_ui::add_mask_command(doc.selection.is_some(), alt).into(), json!({})));
             }
-            let fx = fx_button(ui, 26.0, tl!("Add a layer style"));
-            egui::Popup::menu(&fx).open_memory(footer_menu_right_click(&fx)).show(|ui| {
-                ui.set_min_width(180.0);
-                if ui.button(tl!("Blending Options…")).clicked() {
-                    crate::layer_style::open(app, None);
-                    ui.close();
-                }
-                ui.separator();
-                for &(kind, label) in crate::layer_style::KINDS {
-                    if ui.button(format!("{}…", tl!(label))).clicked() {
-                        crate::layer_style::open(app, Some(kind));
-                        ui.close();
-                    }
-                }
-            });
-            // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
-            let can_link = app.session.is_enabled("layer.linkLayers");
-            if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "link", 26.0, false, tl!("Link layers"))).inner.clicked() {
-                actions.push(("layer.linkLayers".into(), json!({})));
+            ui.separator();
+            if ui.button(tl!("Solid Color…")).clicked() {
+                actions.push(("layer.newFillLayer.solidColor".into(), json!({})));
+                ui.close();
+            }
+            if ui.button(tl!("Gradient…")).clicked() {
+                actions.push(("layer.newFillLayer.gradient".into(), json!({})));
+                ui.close();
             }
         });
+        if icons::button(
+            ui,
+            "layer-mask",
+            26.0,
+            false,
+            &crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
+        )
+        .clicked()
+        {
+            let alt = ui.input(|i| i.modifiers.alt);
+            actions.push((crate::layer_menu_ui::add_mask_command(doc.selection.is_some(), alt).into(), json!({})));
+        }
+        let fx = fx_button(ui, 26.0, tl!("Add a layer style"));
+        egui::Popup::menu(&fx).open_memory(footer_menu_right_click(&fx)).show(|ui| {
+            ui.set_min_width(180.0);
+            if ui.button(tl!("Blending Options…")).clicked() {
+                crate::layer_style::open(app, None);
+                ui.close();
+            }
+            ui.separator();
+            for &(kind, label) in crate::layer_style::KINDS {
+                if ui.button(format!("{}…", tl!(label))).clicked() {
+                    crate::layer_style::open(app, Some(kind));
+                    ui.close();
+                }
+            }
+        });
+        // Photoshop's footer starts with Link Layers (enabled with two or more layers selected).
+        let can_link = app.session.is_enabled("layer.linkLayers");
+        if ui.add_enabled_ui(can_link, |ui| icons::button(ui, "link-2", 26.0, false, tl!("Link layers"))).inner.clicked() {
+            actions.push(("layer.linkLayers".into(), json!({})));
+        }
     });
     for (id, p) in actions {
         if id == "ui.maskTarget" {
@@ -1829,6 +1894,7 @@ fn layer_row(
     let row_h = if t.pro { 32.0 } else { 46.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
+    fx_drop(ctx, ui, l, rect, actions);
     if resp.drag_started() {
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
     }
@@ -1920,6 +1986,13 @@ fn layer_row(
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
     let fx_open = app.session.active().is_none_or(|d| !d.fx_collapsed.contains(&l.id));
     let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
+    // Dragging the fx badge drags all the layer's effects, not the layer (Photoshop). Like the eye,
+    // it takes the drag from the row; clicks still reach the row.
+    if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx)
+        && ui.interact(badge, ui.id().with(("fx-badge", l.id.0)), Sense::drag()).drag_started()
+    {
+        start_fx_drag(ctx, l.id, None);
+    }
     let name_color = if l.visible { t.text } else { t.text_faint };
     let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
@@ -2102,7 +2175,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut target: Option<isize> = None;
     let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
-    let footer = if t.pro { 34.0 } else { 0.0 };
+    let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
     let max_h = (ui.available_height() - footer).max(40.0);
     egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
         for (i, (e, is_redo)) in all.enumerate() {
@@ -2135,14 +2208,10 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     if t.pro {
-        widgets::hairline(ui);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let _ = icons::button(ui, "trash", 24.0, false, tl!("Delete current state"));
-                let _ = icons::button(ui, "scan", 24.0, false, tl!("Create new snapshot"));
-                let _ = icons::button(ui, "file-plus", 24.0, false, tl!("Create new document from current state"));
-            });
+        widgets::panel_footer(ui, |ui| {
+            let _ = icons::button(ui, "trash", 26.0, false, tl!("Delete current state"));
+            let _ = icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"));
+            let _ = icons::button(ui, "file-plus", 26.0, false, tl!("Create new document from current state"));
         });
     }
     // An open Free Transform owns Undo (transform_tool::intercept): stepping the document's history under
@@ -2772,6 +2841,60 @@ fn layer_drag_and_drop(
     }
 }
 
+/// An fx row being dragged: the layer it belongs to and the effect index (`None` = the "Effects"
+/// row, all of them).
+type FxDrag = (u64, Option<usize>);
+
+fn fx_drag_key() -> egui::Id {
+    egui::Id::new("fx-drag")
+}
+
+/// Start dragging the effects of `layer`: one (`effect`) or all of them.
+fn start_fx_drag(ctx: &egui::Context, layer: LayerId, effect: Option<usize>) {
+    ctx.data_mut(|d| d.insert_temp::<FxDrag>(fx_drag_key(), (layer.0, effect)));
+}
+
+/// While effects are dragged: their name by the pointer, and the copy cursor while ⌥ is held.
+fn fx_drag_feedback(ctx: &egui::Context, doc: &photocraft_doc::Document) {
+    let Some((from, effect)) = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key())) else { return };
+    let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    let label = match effect {
+        Some(i) => doc.layer(LayerId(from)).and_then(|l| l.effects.items.get(i)).map_or("", |e| e.label()),
+        None => "Effects",
+    };
+    crate::layer_transfer::ghost(ctx, p, label);
+    if ctx.input(|i| i.modifiers.alt) {
+        ctx.set_cursor_icon(egui::CursorIcon::Copy);
+    }
+}
+
+/// The command for dropping effects of layer `from` on `target`: they move there, or with ⌥ held
+/// on release are copied (Photoshop). `effect` is one effect row, or all effects when `None`.
+fn fx_drop_action(from: u64, effect: Option<usize>, target: LayerId, copy: bool) -> (String, Value) {
+    let mut payload = json!({"from": from, "to": target.0, "copy": copy});
+    if let Some(o) = payload.as_object_mut()
+        && let Some(i) = effect
+    {
+        o.insert("effect".into(), json!(i));
+    }
+    ("layer.layerStyle.transferEffects".into(), payload)
+}
+
+/// A layer row accepts the fx row being dragged: outlined while the pointer is over it, dropped
+/// on release.
+fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, actions: &mut Vec<(String, Value)>) {
+    let Some((from, effect)) = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key())) else { return };
+    let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    if from == l.id.0 || !rect.contains(p) {
+        return;
+    }
+    let t = Tokens::get(ctx);
+    ui.painter().rect_stroke(rect.shrink(1.0), t.radius_sm, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+    if ctx.input(|i| i.pointer.any_released()) {
+        actions.push(fx_drop_action(from, effect, l.id, ctx.input(|i| i.modifiers.alt)));
+    }
+}
+
 /// Photoshop shows a layer's effects as indented sub-rows ("Effects", then each effect). The eye
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
 fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
@@ -2783,7 +2906,11 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
         rows.push((e.label().to_string(), e.enabled(), kind));
     }
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+        // Drag the row onto another layer to move its effects there, ⌥-drag to copy them.
+        if resp.drag_started() {
+            start_fx_drag(ui.ctx(), l.id, i.checked_sub(1));
+        }
         if !ui.is_rect_visible(rect) {
             continue;
         }
@@ -3120,6 +3247,10 @@ mod history_transform_tests {
 mod layer_pct_slider_tests;
 
 #[cfg(test)]
+#[path = "fx_drag_tests.rs"]
+mod fx_drag_tests;
+
+#[cfg(test)]
 mod lock_tests {
     use super::*;
     use crate::canvas::{ToolEvent, tool_event};
@@ -3433,7 +3564,7 @@ mod layer_drag_edge_scroll_tests {
     use super::*;
 
     #[test]
-    fn scrolls_both_edges_with_distance_dependent_velocity() {
+    fn inside_edge_scrolls_proportional_to_proximity() {
         let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
         let point = |y| Some(pos2(100.0, y));
         let near_top = layer_drag_edge_scroll(point(33.0), viewport, true, 1.0 / 60.0);
@@ -3447,18 +3578,45 @@ mod layer_drag_edge_scroll_tests {
     }
 
     #[test]
-    fn scrolling_stops_outside_or_after_the_drag_finishes() {
+    fn outside_edges_scroll_in_drag_direction() {
+        let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
+        let above = layer_drag_edge_scroll(Some(pos2(100.0, 20.0)), viewport, true, 1.0 / 60.0);
+        let below = layer_drag_edge_scroll(Some(pos2(100.0, 335.0)), viewport, true, 1.0 / 60.0);
+        assert!(above > 0.0, "dragging past the top continues scrolling upward");
+        assert!(below < 0.0, "dragging past the bottom continues scrolling downward");
+    }
+
+    #[test]
+    fn clamp_bounds_speed_outside_edges_and_across_frame_times() {
+        let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
+        let at_top = layer_drag_edge_scroll(Some(pos2(100.0, 30.0)), viewport, true, 1.0 / 60.0);
+        let past_top = layer_drag_edge_scroll(Some(pos2(100.0, 15.0)), viewport, true, 1.0 / 60.0);
+        let far_past_top = layer_drag_edge_scroll(Some(pos2(100.0, -50.0)), viewport, true, 1.0 / 60.0);
+        assert_eq!(past_top, at_top, "speed past top edge is clamped to maximum edge speed");
+        assert_eq!(far_past_top, at_top, "speed far past top edge remains clamped");
+
+        let at_bottom = layer_drag_edge_scroll(Some(pos2(100.0, 330.0)), viewport, true, 1.0 / 60.0);
+        let past_bottom = layer_drag_edge_scroll(Some(pos2(100.0, 345.0)), viewport, true, 1.0 / 60.0);
+        let far_past_bottom = layer_drag_edge_scroll(Some(pos2(100.0, 500.0)), viewport, true, 1.0 / 60.0);
+        assert_eq!(past_bottom, at_bottom, "speed past bottom edge is clamped to maximum edge speed");
+        assert_eq!(far_past_bottom, at_bottom, "speed far past bottom edge remains clamped");
+
+        let active = Some(pos2(100.0, 325.0));
+        let step = layer_drag_edge_scroll(active, viewport, true, 1.0 / 60.0);
+        let twice = layer_drag_edge_scroll(active, viewport, true, 2.0 / 60.0);
+        assert!((twice - step * 2.0).abs() < 1e-4, "time-based scrolling scales across refresh rates");
+        assert!(layer_drag_edge_scroll(active, viewport, true, 0.5).abs() <= 30.0, "long frames have a bounded step");
+    }
+
+    #[test]
+    fn zero_when_no_drag_or_outside_horizontal_bounds() {
         let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
         let active = Some(pos2(100.0, 325.0));
         assert_eq!(layer_drag_edge_scroll(active, viewport, false, 1.0 / 60.0), 0.0);
         assert_eq!(layer_drag_edge_scroll(None, viewport, true, 1.0 / 60.0), 0.0);
         assert_eq!(layer_drag_edge_scroll(Some(pos2(9.0, 325.0)), viewport, true, 1.0 / 60.0), 0.0);
-        assert_eq!(layer_drag_edge_scroll(Some(pos2(100.0, 335.0)), viewport, true, 1.0 / 60.0), 0.0);
+        assert_eq!(layer_drag_edge_scroll(Some(pos2(311.0, 325.0)), viewport, true, 1.0 / 60.0), 0.0);
         assert_eq!(layer_drag_edge_scroll(active, viewport, true, 0.0), 0.0);
-        let step = layer_drag_edge_scroll(active, viewport, true, 1.0 / 60.0);
-        let twice = layer_drag_edge_scroll(active, viewport, true, 2.0 / 60.0);
-        assert!((twice - step * 2.0).abs() < 1e-4, "time-based scrolling scales across refresh rates");
-        assert!(layer_drag_edge_scroll(active, viewport, true, 0.5).abs() <= 30.0, "long frames have a bounded step");
     }
 
     #[test]

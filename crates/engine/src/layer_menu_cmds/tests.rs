@@ -526,3 +526,56 @@ fn load_files_into_stack_as_smart_object_then_median() {
     assert!((px[0] - 0.2).abs() < 2.0 / 255.0, "{px:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn transfer_effects_moves_or_copies_between_layers() {
+    let mut s = session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let a = active(&s).id;
+    s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
+    s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff8000"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let b = active(&s).id;
+    let layer = |s: &Session, id| s.active().unwrap().doc.layer(id).unwrap().clone();
+    let labels = |l: &Layer| l.effects.items.iter().map(Effect::label).collect::<Vec<_>>();
+    let both = labels(&layer(&s, a));
+    assert_eq!(both.len(), 2);
+
+    // Alt-drag of the whole fx row copies: both layers have the style.
+    s.execute("layer.layerStyle.transferEffects", json!({"from": a.0, "to": b.0, "copy": true})).unwrap();
+    assert_eq!(labels(&layer(&s, a)), both);
+    assert_eq!(labels(&layer(&s, b)), both);
+
+    // Dragging one effect row moves just that effect.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let c = active(&s).id;
+    s.execute("layer.layerStyle.transferEffects", json!({"from": a.0, "to": c.0, "effect": 1})).unwrap();
+    assert_eq!(labels(&layer(&s, a)), both[..1]);
+    assert_eq!(labels(&layer(&s, c)), both[1..]);
+
+    // Dragging the whole fx row moves everything and leaves the source without a style.
+    s.execute("layer.layerStyle.transferEffects", json!({"from": b.0, "to": a.0})).unwrap();
+    assert!(layer(&s, b).effects.items.is_empty());
+    assert_eq!(labels(&layer(&s, a)), both);
+
+    // One history step per drop.
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.layerStyle.transferEffects", json!({"from": a.0, "to": b.0})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(labels(&layer(&s, a)), both);
+    assert!(layer(&s, b).effects.items.is_empty());
+
+    // Bad input is an error and changes nothing.
+    for bad in [
+        json!({"from": a.0, "to": a.0}),
+        json!({"from": a.0}),
+        json!({"from": a.0, "to": 9999}),
+        json!({"from": a.0, "to": b.0, "effect": 7}),
+        json!({"from": a.0, "to": b.0, "effect": -1}),
+        json!({"from": b.0, "to": a.0}),
+    ] {
+        assert!(s.execute("layer.layerStyle.transferEffects", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+}

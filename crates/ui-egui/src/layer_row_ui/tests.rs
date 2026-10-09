@@ -358,3 +358,23 @@ fn alt_dragging_a_row_drops_a_copy_and_a_plain_drag_moves() {
     assert_eq!(names(&h), ["Background", "L0", "L2", "L0 copy", "L1"]);
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Reorder Layers"));
 }
+
+/// Photoshop's Layers footer is a bar along the panel's bottom edge: its buttons sit in the middle
+/// of the bar's height, from the right. They used to hang under the line with twice the gap below.
+#[test]
+fn the_footer_is_a_bar_along_the_panel_bottom_with_its_buttons_centred() {
+    for theme in ["promedium", "studio"] {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let h = harness(s, 1.0, theme, 290.0);
+        let group = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).unwrap().1;
+        let delete = h.get_by_label("Delete layer").rect();
+        let bar_middle = group.bottom() - crate::widgets::FOOTER_BAR / 2.0;
+        assert!((delete.center().y - bar_middle).abs() <= 1.5, "{theme}: button at {delete:?}, bar middle {bar_middle}, group {group:?}");
+        assert!(group.right() - delete.right() <= 10.0, "{theme}: laid out from the right: {delete:?} in {group:?}");
+        let new_layer = h.get_by_label("Create a new layer").rect();
+        assert_eq!(new_layer.center().y, delete.center().y, "{theme}: one row");
+        assert!(new_layer.right() <= delete.left(), "{theme}: New Layer left of Delete");
+    }
+}
