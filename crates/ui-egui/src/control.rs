@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::{DialogKind, Tool, UiState};
+use crate::state::{DialogKind, Tool};
 
 pub type ControlResponse = Value;
 
@@ -525,7 +525,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 other => return err(format!("unknown dialog kind `{other}`")),
             };
-            let mut fields = if kind == DialogKind::NewDocument { UiState::new_document_fields() } else { Default::default() };
+            let mut fields = if kind == DialogKind::NewDocument { app.new_document_fields() } else { Default::default() };
             if let Some(f) = p.get("fields").and_then(Value::as_object) {
                 fields.extend(f.clone());
             }
@@ -944,6 +944,24 @@ mod tests {
         assert_eq!(call(&mut app, &ctx, "ui.dialog.apply", json!({"dialog": "shell"}))["ok"], false);
         assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": 0}))["ok"], false);
         assert!(app.ui.shell.dialog.is_some());
+    }
+
+    #[test]
+    fn opening_new_document_through_control_matches_clipboard_image_size() {
+        // #2034: every way of opening New Document uses the clipboard-aware initial fields.
+        let clipboard = std::sync::Arc::new(std::sync::Mutex::new(Some((100, 200, vec![255; 100 * 200 * 4]))));
+        let image = clipboard.clone();
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services { clipboard_get_image: Some(Box::new(move || image.lock().ok()?.clone())), ..Default::default() },
+        );
+        let ctx = egui::Context::default();
+        let opened = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"newDocument"}));
+        assert_eq!(opened["ok"], true);
+        let id = opened["result"]["dialog"].as_u64().expect("dialog id is returned");
+        let fields = &app.ui.dialog_mut(id).expect("dialog was opened").fields;
+        assert_eq!((fields["width"].as_u64(), fields["height"].as_u64()), (Some(100), Some(200)));
+        assert_eq!(fields["__preset"], "Clipboard");
     }
 
     #[test]
