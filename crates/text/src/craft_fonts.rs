@@ -155,6 +155,13 @@ mod tests {
     }
 
     #[test]
+    fn only_fonts_for_scripts_photocraft_registers_are_embedded() {
+        for f in CRAFT_FONTS {
+            assert!(f.is_japanese() || f.is_arabic(), "{} ({:?}) is embedded but never registered", f.family, f.scripts);
+        }
+    }
+
+    #[test]
     fn arabic_craft_fonts_are_registered() {
         let arabic: Vec<_> = CRAFT_FONTS.iter().filter(|f| f.is_arabic()).collect();
         if arabic.is_empty() {

@@ -1,11 +1,12 @@
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`; rules in `craftrules/standards/fonts.md`).
 //!
-//! With `CRAFT_FONTS_DIR=<craft-fonts checkout>`, every font in its `fonts/manifest.txt` is
-//! embedded and exposed as `photocraft_text::CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty and the
-//! build is exactly as before (an empty value counts as unset). Use an absolute path: build
-//! scripts run in the crate's directory, so a relative one resolves from `crates/text`. A bad
-//! checkout is a warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds).
+//! With `CRAFT_FONTS_DIR=<craft-fonts checkout>`, every font in its `fonts/manifest.txt` for a
+//! script PhotoCraft registers (Japanese, Arabic) is embedded and exposed as
+//! `photocraft_text::CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty and the build is exactly as
+//! before (an empty value counts as unset). Use an absolute path: build scripts run in the
+//! crate's directory, so a relative one resolves from `crates/text`. A bad checkout is a warning,
+//! or an error with `CRAFT_FONTS_REQUIRED=1` (release builds).
 //!
 //! PhotoCraft difference from the recipe: the web build (wasm32) embeds nothing. The wasm must
 //! stay under the 24 MiB gate in `packaging/web/package.sh` (#237; Cloudflare's per-file cap is
@@ -37,7 +38,10 @@ fn main() {
     }
 }
 
-/// One `CraftFont { .. }` initialiser per manifest line.
+/// Scripts PhotoCraft registers (`CraftFont::is_japanese`, `CraftFont::is_arabic`).
+const EMBEDDED_SCRIPTS: &[&str] = &["Jpan", "Arab"];
+
+/// One `CraftFont { .. }` initialiser per manifest line for an embedded script.
 fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
     let manifest = dir.join("fonts/manifest.txt");
     println!("cargo::rerun-if-changed={}", manifest.display());
@@ -48,6 +52,10 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
+        // Fonts for other scripts would sit unused in every binary (Noto Sans CJK SC alone is 16 MB).
+        if !scripts.split(',').any(|s| EMBEDDED_SCRIPTS.contains(&s.trim())) {
+            continue;
+        }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
         let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
