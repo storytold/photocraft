@@ -59,3 +59,26 @@ fn pattern_fill_survives_psd_and_layered_tiff_in_every_mode() {
         }
     }
 }
+
+/// A pattern fill seen through a vector mask (Photoshop's pattern-filled shape) stays a pattern
+/// fill layer after a save and reopen: its stored pixels are the unclipped fill, which must not
+/// turn it into a shape layer drawing the pattern over the whole canvas (psd-tools
+/// adjustment-fillers.psd).
+#[test]
+fn vector_masked_pattern_fill_survives_psd() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+        let mut d = doc(mode, SampleType::U8);
+        let fmt = d.pixel_format();
+        let mut white = Layer::raster("Background", fmt);
+        white.surface_mut().expect("raster").fill_rect(Rect::new(0, 0, 40, 24), &photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 1.0, 1.0]));
+        d.layers.insert(0, white);
+        d.layers[1].vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_vector::shapes::rect(8.0, 4.0, 16.0, 12.0)));
+        let r = export(&d, "x.psd", &ExportOptions::default()).expect("export");
+        let back = import("x.psd", &r.bytes).expect("import").document;
+        let l = back.layers.iter().find(|l| l.name == "Pattern Fill 1").expect("layer");
+        assert!(matches!(l.content, LayerContent::Fill(Fill::Pattern { .. })), "{mode:?}: reopened as a pattern fill");
+        assert!(l.vector_mask.is_some(), "{mode:?}: keeps its vector mask");
+        let diff = max_diff(&d, &back);
+        assert!(diff < 0.02, "{mode:?}: the reopened layer differs by {diff}");
+    }
+}
