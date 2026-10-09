@@ -5,6 +5,15 @@
 //! directly above in the stack: a line inside an open group, under a group's last child or
 //! across rows hidden by a filter clips nothing. While ⌥ is held over a line the pointer is the
 //! clip cursor, and a click there goes to the line, not to the rows on either side of it.
+//!
+//! Measured on Photoshop 25.4 (Background, a pixel layer, an adjustment layer and a layer on
+//! top; ⌥-hover and ⌥-click swept a pixel at a time across each line, the result read back by
+//! script):
+//! - the line takes the pointer from 3 px above it to 5 px below it;
+//! - a click that clips keeps the active layer;
+//! - a click that releases frees the layer above the line together with the clipped layers
+//!   stacked above it (in one history step), and makes it the active layer;
+//! - the release cursor is the clip cursor struck through.
 
 use egui::{Pos2, Rangef, Rect, Sense, vec2};
 use photocraft_doc::{Document, LayerContent, LayerId};
@@ -12,10 +21,13 @@ use serde_json::{Value, json};
 
 use crate::layer_row_ui::{RIGHT_PAD, RowRects};
 
-/// Half the height of a line's hit band (the thumbnails stay clear of it).
-const BAND: f32 = 3.0;
+/// How far above and below a line its hit band reaches (Photoshop: 3 px up, 5 px down).
+const ABOVE: f32 = 3.5;
+const BELOW: f32 = 5.0;
 /// The eye column, left of the band: ⌥-click there shows only that layer.
 const EYE_W: f32 = 30.0;
+/// Size of the clip cursors (points).
+const CURSOR_SIZE: f32 = 22.0;
 
 /// A line between two layers.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,11 +41,33 @@ pub struct ClipLine {
 }
 
 impl ClipLine {
-    /// The Layer menu command a click runs.
-    pub fn command(&self) -> (String, Value) {
-        let id = if self.release { "layer.releaseClippingMask" } else { "layer.createClippingMask" };
-        (id.into(), json!({"layer": self.upper.0}))
+    /// The commands a click runs: Create Clipping Mask on the upper layer, or Release Clipping
+    /// Mask on it and the clipped layers stacked above it (`key` makes that one history step)
+    /// before it becomes the active layer.
+    pub fn commands(&self, doc: &Document, key: &str) -> Vec<(String, Value)> {
+        if !self.release {
+            return vec![("layer.createClippingMask".into(), json!({"layer": self.upper.0}))];
+        }
+        let mut out: Vec<(String, Value)> =
+            release_chain(doc, self.upper).into_iter().map(|id| ("layer.releaseClippingMask".into(), json!({"layer": id.0, "coalesce": key}))).collect();
+        out.push(("layer.select".into(), json!({"layer": self.upper.0, "mode": "replace"})));
+        out
     }
+}
+
+/// The layers a release on `upper` frees: it and the clipped layers stacked directly above it.
+fn release_chain(doc: &Document, upper: LayerId) -> Vec<LayerId> {
+    let mut out = vec![upper];
+    let Some(mut path) = doc.path_of(upper) else { return out };
+    while let Some(last) = path.pop() {
+        let Some(next) = last.checked_add(1) else { break };
+        path.push(next);
+        match doc.layer_at(&path) {
+            Some(l) if l.clipped => out.push(l.id),
+            _ => break,
+        }
+    }
+    out
 }
 
 /// The line under `p` among the layer rows the panel drew (top to bottom), if two layers that
@@ -44,7 +78,7 @@ pub fn at(doc: &Document, rows: &[RowRects], p: Pos2) -> Option<ClipLine> {
         // Between the eye column and the right-hand indicators (the effects triangle takes clicks).
         let right = above.indicators.iter().chain(&below.indicators).map(|(_, r)| r.left()).fold(below.row.right() - RIGHT_PAD, f32::min);
         let y = below.row.top();
-        let rect = Rect::from_x_y_ranges(Rangef::new(below.row.left() + EYE_W, right), Rangef::new(y - BAND, y + BAND));
+        let rect = Rect::from_x_y_ranges(Rangef::new(below.row.left() + EYE_W, right), Rangef::new(y - ABOVE, y + BELOW));
         if !rect.contains(p) {
             return None;
         }
@@ -74,11 +108,14 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, actions: &mut Vec<(String, Value)
     let resp = ui.interact(line.rect, ui.id().with("clip-line"), Sense::click());
     let label = if line.release { "Release Clipping Mask" } else { "Create Clipping Mask" };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    // The arrow's tip, (15, 20) of its 24-unit box, points at the line.
-    crate::icons::cursor(&ctx, "corner-right-down", p, vec2(15.0, 20.0) / 24.0, 18.0);
+    // PhotoCraft's own cursors: a hooked arrow onto the layer below, and the same arrow with a
+    // small "no" badge to release. The arrow's tip, (15, 16) of the 24-unit box, is the hot spot.
+    let icon = if line.release { "clip-release" } else { "clip-below" };
+    crate::icons::cursor(&ctx, icon, p, vec2(15.0, 16.0) / 24.0, CURSOR_SIZE);
     ctx.set_cursor_icon(egui::CursorIcon::None);
     if resp.clicked() {
-        actions.push(line.command());
+        let key = format!("clip-line:{}:{}", line.upper.0, ctx.cumulative_pass_nr());
+        actions.extend(line.commands(doc, &key));
     }
 }
 

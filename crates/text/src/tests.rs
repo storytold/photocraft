@@ -1,6 +1,6 @@
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
+use photocraft_doc::text::{Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
 use photocraft_geom::Affine;
 
 use crate::{TextEngine, fonts};
@@ -53,6 +53,20 @@ fn metrics_are_stable_and_scale_with_dpi() {
     // Point text: first baseline at the anchor.
     assert_eq!(a.lines[0].baseline, 0.0);
     assert!(a.lines[0].ascent > 8.0 && a.lines[0].ascent < 13.0);
+}
+
+#[test]
+fn small_caps_are_synthesized_when_the_font_has_no_small_caps_feature() {
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 40.0, caps: Caps::SmallCaps, ..Default::default() };
+    let mut engine = TextEngine::new();
+    let small = engine.layout(&styled("aA", style), 72.0);
+    let upper = engine.layout(&styled("AA", CharStyle { font_family: "Inter".into(), size_pt: 40.0, ..Default::default() }), 72.0);
+    assert_eq!(small.glyphs.len(), 2);
+    assert_eq!(small.glyphs[0].id, upper.glyphs[0].id, "lowercase uses the uppercase glyph");
+    assert_eq!(small.glyphs[1].id, upper.glyphs[1].id, "uppercase remains uppercase");
+    let size = |layout: &crate::TextLayout, glyph: usize| layout.faces[layout.glyphs[glyph].face as usize].size_px;
+    assert!((size(&small, 0) - 28.0).abs() < 0.01, "{}", size(&small, 0));
+    assert!((size(&small, 1) - 40.0).abs() < 0.01, "{}", size(&small, 1));
 }
 
 #[test]
@@ -666,6 +680,48 @@ fn psd_round_trips_antialias_opentype_and_warp() {
         let mut tags: Vec<&str> = st.features.iter().map(|f| f.tag.as_str()).collect();
         tags.sort_unstable();
         assert_eq!(tags, ["frac", "swsh"]);
+    }
+}
+
+/// #1469: Some older PSD writers combine a zero PointBase with an enormous local ink origin.
+/// The TySh transform cancels that origin, so importing it as a zero-based layout puts text far
+/// off-canvas. Fold the descriptor origin into the imported transform and preserve it on a TySh
+/// round trip so every editing and export path uses the same position.
+#[test]
+fn legacy_tysh_point_origin_imports_and_round_trips_on_canvas() {
+    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+
+    let source = styled("Name", CharStyle { font_family: "Inter".into(), size_pt: 120.0, ..Default::default() });
+    let mut tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(&source, 72.0, None)).unwrap();
+    tysh.transform = Affine { m: [4.1667, 0.0, 0.0, 4.1667, -32375.0, -32887.5] };
+    let ink = [8050.0, 8160.0, 8220.0, 8300.0];
+    let rect = |class| {
+        D::Descriptor(
+            Descriptor::new(class)
+                .with("Left", D::UnitFloat { unit: *b"#Pnt", value: ink[0] })
+                .with("Top ", D::UnitFloat { unit: *b"#Pnt", value: ink[1] })
+                .with("Rght", D::UnitFloat { unit: *b"#Pnt", value: ink[2] })
+                .with("Btom", D::UnitFloat { unit: *b"#Pnt", value: ink[3] }),
+        )
+    };
+    tysh.text.items.retain(|(key, _)| !key.is("bounds") && !key.is("boundingBox"));
+    tysh.text.items.push((Id::new("bounds"), rect("bounds")));
+    tysh.text.items.push((Id::new("boundingBox"), rect("boundingBox")));
+    let data = crate::psd::write_tysh(&tysh);
+
+    let imported = crate::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+    let expected = [4.1667, 0.0, 0.0, 4.1667, 1166.935, 1112.772];
+    for (got, want) in imported.transform.m.iter().zip(expected) {
+        assert!((got - want).abs() < 0.001, "{:?}", imported.transform.m);
+    }
+    let (_, rendered) = TextEngine::new().render(&imported, 72.0, PixelFormat::RGBA8);
+    let placed = rendered.surface.content_bounds();
+    assert!(!placed.is_empty(), "the normalized layer renders");
+    assert!((1000..3000).contains(&placed.x0) && (500..2000).contains(&placed.y0), "{placed:?}");
+
+    let round_trip = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&imported, 72.0, Some(ink.map(|v| v as f32))), 72.0).unwrap();
+    for (got, want) in round_trip.transform.m.iter().zip(expected) {
+        assert!((got - want).abs() < 0.001, "{:?}", round_trip.transform.m);
     }
 }
 

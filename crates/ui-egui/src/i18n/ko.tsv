@@ -1975,6 +1975,8 @@
 	CPU (no GPU acceleration)	CPU(GPU 가속 없음)
 	DirectX 12	DirectX 12
 	GPU backend	GPU 백엔드
+	Linux display server	Linux 디스플레이 서버
+	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	태블릿 필압 사용
@@ -2001,6 +2003,7 @@
 	Native file drag-and-drop is unavailable	파일 드래그 앤 드롭을 사용할 수 없습니다
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland에서는 아직 파일 드래그 앤 드롭을 지원하지 않습니다. 파일 › 열기를 사용하거나, 파일 관리자에서 이미지를 복사한 뒤 {paste}(으)로 붙여넣으세요.
 	To drop files, start PhotoCraft under XWayland: `{command}`	파일을 끌어다 놓으려면 XWayland에서 PhotoCraft를 실행하세요: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	또는 환경 설정 › 성능 › Linux 디스플레이 서버를 X11로 설정하면 PhotoCraft가 항상 XWayland에서 시작됩니다.
 	Edit › Paste	편집 › 붙여넣기
 	Use File › Open, or paste a copied image with {paste}.	파일 › 열기를 사용하거나, 복사한 이미지를 {paste}(으)로 붙여넣으세요.
 	Invalid {mode} profile	유효하지 않은 {mode} 프로파일
@@ -2824,6 +2827,10 @@ fontWeight	Italic	기울임
 	Rotate View Tool	보기 회전 도구
 	Reset View	보기 재설정
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기를 회전합니다  ·  Shift는 15°로 제한
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	인쇄 색역 밖: 클릭하면 가장 가까운 인쇄 가능한 색상으로 바뀝니다
+	Not a web colour: click for the nearest web colour	웹 색상이 아님: 클릭하면 가장 가까운 웹 색상으로 바뀝니다
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값

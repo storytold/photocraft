@@ -1981,6 +1981,8 @@
 	CPU (no GPU acceleration)	CPU (sans accélération GPU)
 	DirectX 12	DirectX 12
 	GPU backend	Moteur GPU
+	Linux display server	Serveur d'affichage Linux
+	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	Utiliser la pression de la tablette
@@ -2471,6 +2473,7 @@
 	Native file drag-and-drop is unavailable	Le glisser-déposer natif de fichiers n'est pas disponible
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Le glisser-déposer natif de fichiers n'est pas encore pris en charge sous Wayland. Utilisez Fichier › Ouvrir, ou copiez l'image dans votre gestionnaire de fichiers et collez-la avec {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Pour déposer des fichiers, lancez PhotoCraft sous XWayland : `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Ou réglez Préférences › Performances › Serveur d'affichage Linux sur X11 : PhotoCraft démarre alors toujours sous XWayland.
 	Edit › Paste	Édition › Coller
 	Use File › Open, or paste a copied image with {paste}.	Utilisez Fichier › Ouvrir, ou collez une image copiée avec {paste}.
 	Mixer Brush Tool	Outil Pinceau mélangeur
@@ -2668,6 +2671,10 @@ fontWeight	Italic	Italique
 	Rotate View Tool	Outil Rotation de la vue
 	Reset View	Réinitialiser la vue
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Faites glisser autour du centre pour tourner la vue  ·  Maj contraint à 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Hors de la gamme d’impression : cliquez pour la couleur imprimable la plus proche
+	Not a web colour: click for the nearest web colour	Pas une couleur web : cliquez pour la couleur web la plus proche
 	Color to Alpha…	Couleur vers alpha…
 	Transparency Threshold	Seuil de transparence
 	Opacity Threshold	Seuil d'opacité

@@ -10,7 +10,7 @@ id = "UI-217-1"
 target = "Tool options, last Export As / Save for Web / Fill settings and font recents persist"
 status = "partial"
 issue = 217
-note = "Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) keep their settings in Preferences (prefs.dialogs); no tool_options/export fields in Preferences; export_dialog.rs:21 png/85"
+note = "Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) keep their settings in Preferences (prefs.dialogs); no tool_options/export fields in Preferences; export_dialog.rs:21 png/85. Each painting tool keeps its own brush (paint_mouse.rs sync_tool_brush, #218), but those live in UiState, so they are lost at quit like the other tool options"
 
 [[item]]
 id = "UI-217-2"

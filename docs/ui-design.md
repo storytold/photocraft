@@ -88,6 +88,9 @@ Preferences has **Apply**, **OK** and **Cancel**. Apply saves the edited section
 dialog open; it is disabled when the values match the saved preferences. OK saves and closes.
 Cancel discards only changes made since the last successful Apply. A failed Apply leaves the
 draft open for correction. Settings marked for the next launch still require a restart.
+On Windows and Linux, System Title Bar displays “Applies at next launch.” beneath its checkbox,
+including before editing and after Apply. Saving this preference does not restart the app or
+change the current window's decorations; the next launch reads the saved choice.
 
 ## High DPI and 4K displays
 

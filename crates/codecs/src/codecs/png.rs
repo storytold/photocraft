@@ -161,9 +161,11 @@ fn read_text_metadata(bytes: &[u8], mut remaining: usize, meta: &mut Metadata) -
         remaining = remaining.checked_sub(keyword_len).and_then(|left| left.checked_sub(text.len())).ok_or_else(text_limit)?;
         let keyword: String = keyword.iter().map(|&b| char::from(b)).collect();
         match kind {
+            // Some writers put XMP in Latin-1 text chunks instead of the usual iTXt.
+            // Treat the reserved keyword consistently, after the same budget checks.
+            _ if keyword == XMP_KEYWORD => meta.xmp = Some(text),
             b"tEXt" => plain.push((keyword, text)),
             b"zTXt" => compressed.push((keyword, text)),
-            _ if keyword == XMP_KEYWORD => meta.xmp = Some(text),
             _ => international.push((keyword, text)),
         }
     }

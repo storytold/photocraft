@@ -40,6 +40,7 @@ pub mod filters_ext;
 pub mod float_cmds;
 mod frame_cmds;
 pub mod fx_view_cmds;
+pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
@@ -96,6 +97,7 @@ pub mod type_styles_cmds;
 mod variables_cmds;
 pub mod vector_cmds;
 mod video_cmds;
+pub use video_cmds::render_video_with;
 pub mod vp_cmds;
 pub mod warp_cmds;
 pub mod web_cmds;
@@ -161,6 +163,8 @@ pub struct DocState {
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
+    /// An Affinity document (or its preview) must not acquire the native source as its Save path.
+    pub source_read_only: bool,
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
@@ -197,6 +201,7 @@ impl DocState {
             selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
+            source_read_only: false,
             revision: 1,
             saved_revision: 1,
             last_damage: None,

@@ -647,17 +647,6 @@ impl NativeMenu {
     }
 }
 
-/// Dialogs, the unsaved-changes prompt and Camera Raw are modal, as they are for shortcuts
-/// ([`crate::shortcuts::handle`]): while one is open, only the view navigation Photoshop keeps
-/// live under a dialog may run from the menu bar. A rotation under Image Size used to leave the
-/// dialog's stale size to be applied on OK (#1354).
-fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
-    if app.camera_raw.is_some() {
-        return false;
-    }
-    (app.ui.dialogs.is_empty() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
-}
-
 /// Run the native menu clicks that arrived since the last frame, like in-window menu clicks.
 pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_mut() else { return };
@@ -668,7 +657,7 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
             continue;
         }
         // The rows are disabled while a dialog is open; a click that raced the update is dropped.
-        if !modal_allows(app, &id) {
+        if !crate::menus::modal_allows(app, &id) {
             continue;
         }
         if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
@@ -691,7 +680,7 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let lang = crate::i18n::current();
     let mut items = crate::menus::menu_items(app);
     for it in &mut items {
-        it.enabled &= modal_allows(app, &it.id);
+        it.enabled &= crate::menus::modal_allows(app, &it.id);
     }
     let layout = photocraft_layout(&items, lang, &app.session.prefs().interface.language);
     let Some(menu) = app.services.native_menu.as_mut() else { return };

@@ -1395,6 +1395,7 @@
 	Native file drag-and-drop is unavailable	Нативное перетаскивание файлов в Wayland недоступно
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Нативное перетаскивание файлов в Wayland пока не поддерживается. Откройте файл через Файл › Открыть или скопируйте изображение в файловом менеджере и вставьте его с помощью {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Чтобы перетаскивать файлы, запустите PhotoCraft в XWayland: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Или выберите в Настройки › Производительность › Дисплейный сервер Linux значение X11: PhotoCraft будет всегда запускаться в XWayland.
 	Edit › Paste	Редактирование › Вставить
 	Photo	Фото
 	Print	Печать
@@ -2179,6 +2180,8 @@
 	Font preview	Предпросмотр шрифтов
 	Full size tip	Весь диаметр кисти
 	GPU backend	Бэкенд GPU
+	Linux display server	Дисплейный сервер Linux
+	X11	X11
 	Gamut warning color	Цвет предупреждения об охвате
 	Gamut warning opacity	Непрозрачность предупреждения об охвате
 	General	Основные
@@ -2516,6 +2519,10 @@ fontWeight	Italic	Курсив
 	Rotate View Tool	Инструмент поворота вида
 	Reset View	Сбросить вид
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Перетащите вокруг центра, чтобы повернуть вид  ·  Shift фиксирует шаг 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Вне цветового охвата печати: щёлкните, чтобы выбрать ближайший печатаемый цвет
+	Not a web colour: click for the nearest web colour	Не веб-цвет: щёлкните, чтобы выбрать ближайший веб-цвет
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности

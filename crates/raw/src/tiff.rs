@@ -89,7 +89,7 @@ pub(crate) struct Entry {
 
 impl Entry {
     /// Size in bytes of one value of this entry's type (0 = unknown type).
-    fn unit(&self) -> usize {
+    pub(crate) fn unit(&self) -> usize {
         type_size(self.typ)
     }
 }

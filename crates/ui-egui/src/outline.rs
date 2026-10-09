@@ -17,6 +17,16 @@ pub fn outline(mask: &Surface, bounds: Rect) -> Vec<Segment> {
 
 /// Like [`outline`], sampling one pixel per `step`×`step` block (segments stay in document space).
 pub fn outline_scaled(mask: &Surface, bounds: Rect, step: u32) -> Vec<Segment> {
+    outline_scaled_impl(mask, bounds, step, true)
+}
+
+/// Trace without waiting for Rayon's shared worker pool. The UI uses this while background jobs
+/// are active, because a long-running filter can occupy all the workers (#1554).
+pub fn outline_scaled_serial(mask: &Surface, bounds: Rect, step: u32) -> Vec<Segment> {
+    outline_scaled_impl(mask, bounds, step, false)
+}
+
+fn outline_scaled_impl(mask: &Surface, bounds: Rect, step: u32, parallel: bool) -> Vec<Segment> {
     if bounds.is_empty() {
         return Vec::new();
     }
@@ -42,12 +52,17 @@ pub fn outline_scaled(mask: &Surface, bounds: Rect, step: u32) -> Vec<Segment> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    {
+    if parallel {
         use rayon::prelude::*;
         grid.par_chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
+    } else {
+        grid.chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
     }
     #[cfg(target_arch = "wasm32")]
-    grid.chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
+    {
+        let _ = parallel;
+        grid.chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
+    }
     let inside = |x: usize, y: usize| grid[y * w + x];
     // Grid → document coordinates, clamped so coarse cells never draw outside the selection bounds.
     let r = Rect::new(gx0 * step, gy0 * step, gx1 * step, gy1 * step);
@@ -127,6 +142,21 @@ mod tests {
         for seg in outline_scaled(&m, m.content_bounds(), 8) {
             for p in [seg.0, seg.1] {
                 assert!(p[0] >= 3 && p[0] <= 30 && p[1] >= 5 && p[1] <= 21, "{seg:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn serial_outline_matches_parallel_for_scales_and_clipped_bounds() {
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        mask.fill_rect(Rect::new(3, 5, 110, 90), &[1.0]);
+        mask.fill_rect(Rect::new(17, 21, 45, 65), &[0.0]);
+        mask.fill_rect(Rect::new(73, 9, 88, 42), &[0.0]);
+        for step in [1, 2, 4, 8, 16] {
+            for bounds in [mask.content_bounds(), Rect::new(13, 19, 91, 77), Rect::new(200, 200, 240, 240)] {
+                let parallel = outline_scaled(&mask, bounds, step);
+                let serial = outline_scaled_serial(&mask, bounds, step);
+                assert_eq!(serial, parallel, "outline differs at step {step}, bounds {bounds:?}");
             }
         }
     }

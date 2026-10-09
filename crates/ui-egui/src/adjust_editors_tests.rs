@@ -396,3 +396,39 @@ fn color_balance_properties_history_and_reset_like_photoshop() {
     assert_eq!(cb(&h), ([0.0; 3], [0.0; 3], [0.0; 3], false), "third Reset: still the defaults");
     assert_eq!(steps(&h), before, "the edit and the Resets share one history step");
 }
+
+fn map_stops(a: &Adjustment) -> Vec<(f32, [u8; 3])> {
+    let q = |v: f32| (v * 255.0).round() as u8;
+    match a {
+        Adjustment::GradientMap { stops, .. } => stops.iter().map(|(t, c)| (*t, [q(c[0]), q(c[1]), q(c[2])])).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Issue #1588: the Gradient Map preset picker offers the session's gradient library (built-in
+/// groups beyond Basics and the user's own saved gradients), and picking one writes its stops as
+/// one history step.
+#[test]
+fn gradient_map_picker_offers_the_gradient_library() {
+    use photocraft_engine::presets::{Group, gradients};
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    // A short library so every row fits the popup: Basics, Blues and a user-saved group.
+    let mut lib: Vec<_> = gradients::builtin().into_iter().take(2).collect();
+    lib.push(Group::new("Mine", vec![gradients::GradientPreset::new("My Teal", &["#008080", "#ffee00"])]));
+    h.state_mut().session.presets.gradients = lib;
+    h.run_steps(2);
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    for (name, want) in
+        [("Blue 03", vec![(0.0, [0x00, 0xb4, 0xd8]), (1.0, [0x03, 0x04, 0x5e])]), ("My Teal", vec![(0.0, [0x00, 0x80, 0x80]), (1.0, [0xff, 0xee, 0x00])])]
+    {
+        let before = steps(&h);
+        // The picker sits right of its "Preset:" label.
+        let preset = label_rect(&h, "Preset:").expect("the preset picker");
+        click(&mut h, Pos2::new(preset.right() + 60.0, preset.center().y));
+        let item = h.query_by_label(name).unwrap_or_else(|| panic!("`{name}` in the picker")).rect();
+        click(&mut h, item.center());
+        h.run_steps(4);
+        assert_eq!(map_stops(&layer(&h).1), want, "{name}");
+        assert_eq!(steps(&h), before + 1, "{name}: one history step");
+    }
+}

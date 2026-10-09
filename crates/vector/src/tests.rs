@@ -337,6 +337,37 @@ fn coverage_surface_and_vector_mask_values() {
     assert!(vector_mask_values(&empty, Rect::new(0, 0, 4, 4)).iter().all(|x| *x == 0.0));
 }
 
+#[test]
+fn sequential_vector_masks_match_parallel_rendering() {
+    let rect = Rect::new(-3, -7, 510, 250);
+    let mut path = shapes::ellipse(10.25, 8.75, 470.0, 220.0);
+    path.subpaths.push(shapes::rect(200.5, 90.25, 45.0, 50.0).subpaths.remove(0).with_op(PathOp::Subtract));
+    for inverted in [false, true] {
+        for density in [0.0, 0.25, 1.0] {
+            path.inverted = inverted;
+            let mut mask = VectorMask::new(path.clone());
+            mask.density = density;
+            let compiled = CompiledVectorMask::new(&mask);
+            assert_eq!(compiled.render_sequential(rect), compiled.render(rect));
+        }
+    }
+    let compiled = CompiledVectorMask::new(&VectorMask::new(path.clone()));
+    for empty in [Rect::EMPTY, Rect::new(1, 1, 1, 10), Rect::new(1, 1, 10, 1)] {
+        assert_eq!(compiled.render_sequential(empty), compiled.render(empty));
+    }
+    let mut empty = VectorMask::new(Path::default());
+    for inverted in [false, true] {
+        empty.path.inverted = inverted;
+        let compiled = CompiledVectorMask::new(&empty);
+        assert_eq!(compiled.render_sequential(rect), compiled.render(rect));
+    }
+    let mut disabled = VectorMask::new(path);
+    disabled.enabled = false;
+    let compiled = CompiledVectorMask::new(&disabled);
+    assert_eq!(compiled.render_sequential(rect), compiled.render(rect));
+    assert_eq!(compiled.render_sequential(Rect::EMPTY), compiled.render(Rect::EMPTY));
+}
+
 fn iou(a: &[f32], b: &[f32]) -> f64 {
     let (mut i, mut u) = (0.0, 0.0);
     for (x, y) in a.iter().zip(b) {

@@ -268,6 +268,8 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
         *crate::pixels_mut(&mut l)? = clip.surface;
         let nid = doc.insert_above(Some(id), l);
         *active = Some(nid);
+        // Photoshop deselects: a following Free Transform moves the whole new layer (#1096).
+        doc.selection = None;
         Ok(nid)
     })?;
     Ok(json!({"layer": nid.0}))
@@ -915,6 +917,25 @@ mod tests {
         let d = &s.active().unwrap().doc;
         assert_eq!(d.layers.len(), 3);
         assert!(d.layers[2].name.ends_with("copy"));
+    }
+
+    /// #1096: Layer via Copy and Cut deselect, as Photoshop does, so a following Free Transform
+    /// moves the whole new layer; one undo brings back both the selection and the old layers.
+    #[test]
+    fn layer_via_copy_and_cut_deselect_in_one_step() {
+        for cmd in ["layer.new.layerViaCopy", "layer.new.layerViaCut"] {
+            let mut s = session();
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 20})).unwrap();
+            let (layers, steps) = (s.active().unwrap().doc.layers.len(), s.active().unwrap().history.past_len());
+            s.execute(cmd, json!({})).unwrap();
+            let st = s.active().unwrap();
+            assert!(st.doc.selection.is_none(), "{cmd}: deselected");
+            assert_eq!((st.doc.layers.len(), st.history.past_len()), (layers + 1, steps + 1), "{cmd}");
+            assert!(s.undo());
+            let st = s.active().unwrap();
+            assert_eq!(st.doc.layers.len(), layers, "{cmd}: undo removes the layer");
+            assert!(st.doc.selection.is_some(), "{cmd}: and restores the selection");
+        }
     }
 
     fn active_content(s: &Session) -> LayerContent {

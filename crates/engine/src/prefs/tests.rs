@@ -363,3 +363,10 @@ fn gpu_backend_round_trips_and_validates() {
         assert_eq!(GpuBackend::parse(n).map(GpuBackend::name), Some(*n));
     }
 }
+
+#[test]
+fn linux_only_preferences_show_only_on_linux() {
+    assert_eq!(is_hidden("performance.linuxDisplayServer"), !cfg!(target_os = "linux"));
+    assert!(!is_hidden("performance.gpuBackend"));
+    assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
+}

@@ -5,6 +5,16 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::state::DialogKind;
 
+/// Shared gate for native menu clicks and control-channel `ui.menu.invoke`.
+/// Dialogs and unsaved-changes prompts block edits, but allow the four view-navigation
+/// commands also usable through shortcuts. Camera Raw blocks menu commands entirely.
+pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
+    if app.camera_raw.is_some() {
+        return false;
+    }
+    (app.ui.dialogs.is_empty() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+}
+
 /// Top-level menus in Photoshop order.
 pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"];
 
@@ -907,6 +917,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         let id = alt_click(id, ctx.input(|i| i.modifiers.alt));
         if let Err(e) = invoke(app, &ctx, &id, json!({})) {
             app.ui.status = e;
+            app.ui.status_error = true;
         }
     }
     right

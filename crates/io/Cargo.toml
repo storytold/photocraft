@@ -26,6 +26,7 @@ photocraft-algo = { workspace = true }
 photocraft-psd = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-raw = { workspace = true }
+photocraft-affinity = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
@@ -42,6 +43,9 @@ resvg = { version = "0.45", default-features = false, features = ["text", "syste
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
 
 [dev-dependencies]
+crc32fast = "1.5"
+photocraft-affinity = { workspace = true, features = ["synth"] }
+flate2 = { workspace = true }
 photocraft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 proptest = { workspace = true }

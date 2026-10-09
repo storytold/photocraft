@@ -986,6 +986,7 @@
 	Native file drag-and-drop is unavailable	Wayland 上不支持原生文件拖放
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland 尚不支持原生文件拖放。请使用“文件 › 打开”，或在文件管理器中复制图像后使用 {paste} 粘贴。
 	To drop files, start PhotoCraft under XWayland: `{command}`	要拖放文件，请在 XWayland 下启动 PhotoCraft：`{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	或将 首选项 › 性能 › Linux 显示服务器 设为 X11：PhotoCraft 将始终在 XWayland 下启动。
 	Edit › Paste	“编辑 › 粘贴”
 	Duplicate Layers…	复制图层…
 	Duplicate style	复制样式
@@ -2069,6 +2070,8 @@ cameraRaw	Blending	混合
 	CPU (no GPU acceleration)	CPU（无 GPU 加速）
 	DirectX 12	DirectX 12
 	GPU backend	GPU 后端
+	Linux display server	Linux 显示服务器
+	X11	X11
 	Metal	Metal
 	OpenGL	OpenGL
 	Use tablet pressure	使用数位板压感
@@ -2253,6 +2256,10 @@ fontWeight	Italic	斜体
 	Rotate View Tool	旋转视图工具
 	Reset View	重置视图
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	超出打印色域：单击使用最接近的可打印颜色
+	Not a web colour: click for the nearest web colour	不是 Web 颜色：单击使用最接近的 Web 颜色
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值

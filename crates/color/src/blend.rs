@@ -151,6 +151,20 @@ impl BlendMode {
 /// Separable per-channel blend function `B(cb, cs)`.
 #[inline]
 pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    channel(mode, cb, cs, 1.0)
+}
+
+/// [`blend_channel`] for 32-bit float documents, whose values may exceed 1: Linear Dodge (Add)
+/// and Divide don't clip at 1 there (Photoshop's 32-bit Add is how light is added in HDR), only
+/// at `f32::MAX`, so they stay finite. Every other mode is [`blend_channel`].
+#[inline]
+pub fn blend_channel_hdr(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    channel(mode, cb, cs, f32::MAX)
+}
+
+/// `B(cb, cs)` with Linear Dodge and Divide clipped at `hi` (1 at integer depths).
+#[inline]
+fn channel(mode: BlendMode, cb: f32, cs: f32, hi: f32) -> f32 {
     match mode {
         BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough => cs,
         BlendMode::Darken => cb.min(cs),
@@ -160,7 +174,7 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         BlendMode::Lighten => cb.max(cs),
         BlendMode::Screen => cb + cs - cb * cs,
         BlendMode::ColorDodge => color_dodge(cb, cs),
-        BlendMode::LinearDodge => (cb + cs).min(1.0),
+        BlendMode::LinearDodge => (cb + cs).min(hi),
         BlendMode::Overlay => hard_light(cs, cb),
         BlendMode::SoftLight => soft_light_ps(cb, cs),
         BlendMode::HardLight => hard_light(cb, cs),
@@ -195,7 +209,7 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
             if cs <= 0.0 {
                 if cb <= 0.0 { 0.0 } else { 1.0 }
             } else {
-                (cb / cs).min(1.0)
+                (cb / cs).min(hi)
             }
         }
         // Non-separable modes are handled by `blend_rgb`; fall back to source.
@@ -337,6 +351,11 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// [`blend_rgb`] for 32-bit float documents: separable modes use [`blend_channel_hdr`].
+pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    if mode.is_separable() { std::array::from_fn(|i| blend_channel_hdr(mode, cb[i], cs[i])) } else { blend_rgb(mode, cb, cs) }
+}
+
 /// Composite a straight-alpha source over a straight-alpha backdrop with blend mode and opacity.
 ///
 /// Uses the W3C/PDF general formula:
@@ -474,6 +493,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn add_and_divide_clip_at_integer_depths_but_not_in_float() {
+        // Integer depths: Photoshop clips Linear Dodge (Add) and Divide at 1.
+        assert_eq!(blend_channel(BlendMode::LinearDodge, 2.0, 0.5), 1.0);
+        assert_eq!(blend_channel(BlendMode::LinearDodge, 0.75, 0.5), 1.0);
+        assert_eq!(blend_channel(BlendMode::Divide, 2.0, 0.5), 1.0);
+        assert_eq!(blend_channel(BlendMode::Divide, 0.5, 0.25), 1.0);
+        // 32-bit float: light adds up past 1 (adding light never darkens).
+        assert!(close(blend_channel_hdr(BlendMode::LinearDodge, 2.0, 0.5), 2.5));
+        assert!(close(blend_channel_hdr(BlendMode::LinearDodge, 0.75, 0.5), 1.25));
+        assert!(close(blend_channel_hdr(BlendMode::Divide, 2.0, 0.5), 4.0));
+        assert!(close(blend_channel_hdr(BlendMode::Divide, 0.5, 0.25), 2.0));
+        assert_eq!(blend_rgb_hdr(BlendMode::LinearDodge, [2.0, 0.5, 4.0], [0.5, 0.25, 0.5]), [2.5, 0.75, 4.5]);
+        assert_eq!(blend_rgb_hdr(BlendMode::Divide, [2.0, 0.5, 4.0], [0.5, 0.25, 0.5]), [4.0, 2.0, 8.0]);
+        // Divide by zero keeps its guard; overflow stays finite.
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, 0.0, 0.0), 0.0);
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, 3.0, 0.0), 1.0);
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, 3.0, -1.0), 1.0);
+        assert_eq!(blend_channel_hdr(BlendMode::Divide, f32::MAX, 1e-30), f32::MAX);
+        assert_eq!(blend_channel_hdr(BlendMode::LinearDodge, f32::MAX, f32::MAX), f32::MAX);
+        assert!(blend_channel_hdr(BlendMode::LinearDodge, f32::INFINITY, 1.0).is_finite());
+        // Every other mode is unchanged, and the in-range results agree.
+        for m in BlendMode::LAYER_MODES.into_iter().filter(|m| !matches!(m, BlendMode::LinearDodge | BlendMode::Divide)) {
+            for (cb, cs) in [(0.2, 0.3), (0.9, 0.05), (2.0, 0.5), (0.4, 1.5)] {
+                assert_eq!(blend_rgb(m, [cb, cs, 0.5], [cs, cb, 0.25]), blend_rgb_hdr(m, [cb, cs, 0.5], [cs, cb, 0.25]), "{m:?} cb={cb} cs={cs}");
+            }
+        }
+        let (cb, cs) = ([0.2, 0.3, 0.1], [0.3, 0.4, 0.4]);
+        assert_eq!(blend_rgb_hdr(BlendMode::LinearDodge, cb, cs), blend_rgb(BlendMode::LinearDodge, cb, cs));
+        assert_eq!(blend_rgb_hdr(BlendMode::Divide, cb, cs), blend_rgb(BlendMode::Divide, cb, cs));
     }
 
     #[test]

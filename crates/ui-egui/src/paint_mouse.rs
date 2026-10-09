@@ -5,38 +5,55 @@
 //! with `"erase": true`, so one undo step, with the pen pressure and tilt of a normal stroke.
 
 use egui::{PointerButton, Response};
+use photocraft_engine::BrushSettings;
 use photocraft_engine::prefs::RightClickPaint;
 
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-/// Smoothing is a tool option, kept per tool like Photoshop's options bar: switching between the
-/// Brush and the Eraser saves the session brush's smoothing for the old tool and loads the new
-/// tool's (Photoshop's 10 % the first time). Other tools leave it alone.
-pub fn sync_tool_smoothing(app: &mut PhotocraftApp) {
+/// The brush is a tool option, kept per tool like Photoshop's options bar: switching from the
+/// Brush to the Eraser saves the session brush for the old tool and loads the new tool's, so each
+/// keeps its own size, hardness, mode, opacity, dynamics and smoothing. A tool seen for the
+/// first time takes what the brush already has, at Photoshop's 10 % smoothing. Other tools leave
+/// the brush alone.
+///
+/// The foreground and background colours, the erase flag and the stroke seed belong to the
+/// session rather than to the tool, so a swap never carries them between tools: picking a colour
+/// or painting with the Eraser works with any tool's brush.
+pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     let tool = app.ui.tool;
-    if !matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) || app.ui.smoothing_tool == Some(tool) {
+    if !has_brush_picker(tool) || app.ui.brush_tool == tool {
         return;
     }
-    let current = app.session.tools.brush.smoothing.clone();
-    let next = match app.ui.smoothing_tool {
-        // The first smoothing tool takes what the brush has.
-        None => current,
-        Some(prev) => {
-            let saved = &mut app.ui.tool_smoothing;
-            match saved.iter_mut().find(|(t, _)| *t == prev) {
-                Some(e) => e.1 = current,
-                None => saved.push((prev, current)),
-            }
-            saved
-                .iter()
-                .find(|(t, _)| *t == tool)
-                .map(|(_, s)| s.clone())
-                .unwrap_or_else(|| photocraft_engine::paint::brush::Smoothing { amount: 0.1, ..Default::default() })
-        }
+    // The live brush is the outgoing tool's, so save it there before the new one takes over: any
+    // edit it made since it was last active is in it, so its copy never goes stale.
+    let current = app.session.tools.brush.clone();
+    save_brush(app, app.ui.brush_tool, current.clone());
+    app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
+        Some((_, b)) => session_fields(&current, b),
+        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
+        None => BrushSettings { smoothing: first_smoothing(), ..current },
     };
-    app.session.tools.brush.smoothing = next;
-    app.ui.smoothing_tool = Some(tool);
+    app.ui.brush_tool = tool;
+}
+
+/// The brush `tool` had when it was last active.
+fn save_brush(app: &mut PhotocraftApp, tool: Tool, brush: BrushSettings) {
+    match app.ui.tool_brushes.iter_mut().find(|(t, _)| *t == tool) {
+        Some(e) => e.1 = brush,
+        None => app.ui.tool_brushes.push((tool, brush)),
+    }
+}
+
+/// The session's own brush fields, which a tool swap never carries: the colours, the erase flag
+/// and the stroke seed (a stroke's replay seed is the command's, not the tool's).
+fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettings {
+    BrushSettings { color: current.color, background: current.background, erase: current.erase, seed: current.seed, ..brush.clone() }
+}
+
+/// Photoshop's 10 % stroke smoothing, what a tool's brush starts at.
+fn first_smoothing() -> photocraft_engine::paint::brush::Smoothing {
+    photocraft_engine::paint::brush::Smoothing { amount: 0.1, ..Default::default() }
 }
 
 /// Which tool events this frame's canvas response produces.
@@ -460,12 +477,12 @@ mod tests {
     }
 
     #[test]
-    fn smoothing_is_a_per_tool_option_that_presets_keep() {
+    fn the_brush_is_a_per_tool_option_that_presets_keep() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
         let amount = |app: &PhotocraftApp| app.session.tools.brush.smoothing.amount;
         app.ui.tool = Tool::Brush;
-        sync_tool_smoothing(&mut app);
+        sync_tool_brush(&mut app);
         assert_eq!(amount(&app), 0.1, "Photoshop's default");
         // Picking a preset (whose own smoothing is 0) keeps the tool's smoothing.
         let preset = app.session.tools.presets.iter().find(|p| p.brush.smoothing.amount == 0.0).map(|p| p.name.clone()).unwrap();
@@ -478,21 +495,85 @@ mod tests {
         assert_eq!((amount(&app), app.session.tools.brush.smoothing.pulled_string), (0.42, true));
         // The Eraser has its own (10 % at first); switching back restores the Brush's.
         app.ui.tool = Tool::Eraser;
-        sync_tool_smoothing(&mut app);
+        sync_tool_brush(&mut app);
         assert_eq!(amount(&app), 0.1);
         app.session.tools.brush.smoothing.amount = 0.0;
         app.ui.tool = Tool::Brush;
-        sync_tool_smoothing(&mut app);
+        sync_tool_brush(&mut app);
         assert_eq!((amount(&app), app.session.tools.brush.smoothing.pulled_string), (0.42, true));
         // Other tools leave it alone; the Eraser kept its 0 %.
         app.ui.tool = Tool::Move;
-        sync_tool_smoothing(&mut app);
+        sync_tool_brush(&mut app);
         assert_eq!(amount(&app), 0.42);
         app.ui.tool = Tool::Eraser;
-        // A stroke picks up the tool's smoothing even without a frame in between.
+        // A stroke picks up the tool's brush even without a frame in between.
         tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, Modifiers::NONE);
         assert_eq!(amount(&app), 0.0);
         tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 5.0 }, Modifiers::NONE);
+    }
+
+    /// #218: Photoshop keeps a brush per painting tool, so the size, hardness, mode, opacity and
+    /// dynamics of one tool never leak into another's, and each tool gets its own back.
+    #[test]
+    fn each_tool_keeps_its_own_brush() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let brush = |app: &PhotocraftApp| app.session.tools.brush.clone();
+        let size = |b: &BrushSettings| b.size;
+        let hardness = |b: &BrushSettings| b.hardness;
+        let opacity = |b: &BrushSettings| b.opacity;
+        let mode = |b: &BrushSettings| b.mode;
+
+        app.ui.tool = Tool::Brush;
+        sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 0.2, "opacity": 0.7, "mode": "Multiply"}})).unwrap();
+        assert_eq!(size(&brush(&app)), 40.0);
+
+        // A tool seen for the first time starts from the brush the old tool left (Photoshop's
+        // 10 % smoothing), so nothing is lost by switching.
+        app.ui.tool = Tool::Eraser;
+        sync_tool_brush(&mut app);
+        assert_eq!(size(&brush(&app)), 40.0, "a new tool inherits the current brush");
+
+        // The Eraser edits its own size; the Brush keeps 40 px.
+        app.run("tools.setBrush", json!({"brush": {"size": 8, "hardness": 1.0}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        sync_tool_brush(&mut app);
+        assert_eq!(size(&brush(&app)), 40.0, "the Brush keeps its own size");
+        assert_eq!(hardness(&brush(&app)), 0.2, "and its hardness");
+        app.ui.tool = Tool::Eraser;
+        sync_tool_brush(&mut app);
+        assert_eq!(size(&brush(&app)), 8.0, "the Eraser keeps its own size");
+        assert_eq!(hardness(&brush(&app)), 1.0, "and its hardness");
+
+        // Mode, opacity, flow and the dynamics sections are per tool too.
+        app.ui.tool = Tool::CloneStamp;
+        sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"mode": "Screen", "opacity": 0.3}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        sync_tool_brush(&mut app);
+        assert_eq!((mode(&brush(&app)), opacity(&brush(&app))), (photocraft_color::BlendMode::Multiply, 0.7), "the Brush's own mode and opacity");
+        app.ui.tool = Tool::CloneStamp;
+        sync_tool_brush(&mut app);
+        assert_eq!((mode(&brush(&app)), opacity(&brush(&app))), (photocraft_color::BlendMode::Screen, 0.3), "the Clone Stamp keeps its own");
+
+        // The colours, the erase flag and the seed belong to the session, so a swap keeps what is
+        // live now instead of restoring another tool's copy (a picked colour reaches every tool).
+        app.run("tools.setBrush", json!({"brush": {"color": [0.0, 1.0, 0.0, 1.0], "background": [1.0, 0.0, 1.0, 1.0], "erase": true, "seed": 42}})).unwrap();
+        app.ui.tool = Tool::Brush;
+        sync_tool_brush(&mut app);
+        let b = brush(&app);
+        assert_eq!(
+            (b.color, b.background, b.erase, b.seed),
+            ([0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 1.0, 1.0], true, 42),
+            "the session's own brush fields survive the swap"
+        );
+
+        // Tools with no brush of their own (the Move) leave the brush alone.
+        let before = brush(&app);
+        app.ui.tool = Tool::Move;
+        sync_tool_brush(&mut app);
+        assert_eq!(brush(&app), before);
     }
 
     #[test]

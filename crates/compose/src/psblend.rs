@@ -76,6 +76,9 @@ thread_local! {
     /// (Photoshop composites Lab documents in Lab; an anti-aliased edge between two colours
     /// differs by up to 14 / 255 from an sRGB mix: psd-tools stroke-color-descriptors-lab).
     pub static LAB_MIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while rendering a 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1
+    /// ([`generic::blend_rgb_hdr`]), as in Photoshop's 32-bit mode; integer depths clip.
+    pub static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `B(Cb, Cs)` with Photoshop's variants.
@@ -85,6 +88,7 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
         BlendMode::HardMix => std::array::from_fn(|i| hard_mix_ps(cb[i], cs[i])),
         BlendMode::ColorBurn => std::array::from_fn(|i| color_burn(cb[i], cs[i])),
         BlendMode::ColorDodge => std::array::from_fn(|i| color_dodge(cb[i], cs[i])),
+        m if HDR.with(|h| h.get()) => generic::blend_rgb_hdr(m, cb, cs),
         m => generic::blend_rgb(m, cb, cs),
     }
 }

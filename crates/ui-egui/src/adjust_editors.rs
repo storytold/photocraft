@@ -14,6 +14,8 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2}
 use photocraft_doc::adjust::{HueRange, ToneSpace};
 use photocraft_doc::{Adjustment, LayerId};
 use photocraft_engine::adjust_params::{self, HUE_RANGES, PHOTO_FILTERS};
+use photocraft_engine::presets::Group;
+use photocraft_engine::presets::gradients::GradientPreset;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -79,6 +81,8 @@ pub struct EditorCx {
     pub gray: bool,
     /// Current foreground and background colours (Gradient Map preset).
     pub swatches: [[f32; 3]; 2],
+    /// The session's gradient preset library (Gradient Map's picker; empty for other kinds).
+    pub gradients: Vec<Group<GradientPreset>>,
     /// Hosted by an Image › Adjustments dialog (false: the Properties panel). Photoshop's dialog
     /// sliders follow the mouse wheel; the panel's don't.
     pub dialog: bool,
@@ -1109,22 +1113,34 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();
     let mut stops = read_stops(v);
-    let presets: [(&str, Vec<Stop>); 5] = [
-        (tl!("Black, White"), vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])]),
-        (tl!("Foreground to Background"), vec![(0.0, cx.swatches[0]), (1.0, cx.swatches[1])]),
-        (tl!("Violet, Orange"), vec![(0.0, [0.161, 0.039, 0.349]), (1.0, [1.0, 0.486, 0.0])]),
-        (tl!("Blue, Red, Yellow"), vec![(0.0, [0.039, 0.0, 0.698]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 0.988, 0.0])]),
-        (tl!("Copper"), vec![(0.0, [0.592, 0.275, 0.102]), (0.4, [0.984, 0.847, 0.773]), (0.7, [0.424, 0.180, 0.086]), (1.0, [0.937, 0.859, 0.804])]),
-    ];
-    let mut preset = usize::MAX;
+    // Photoshop's gradient picker: the same library as the Gradient tool and Gradients panel
+    // (built-in groups and the user's own), Foreground/Background resolved to the current colours.
+    let [fg, bg] = cx.swatches.map(|c| [c[0], c[1], c[2], 1.0]);
     ui.horizontal(|ui| {
         label(ui, tl!("Preset:"));
-        let mut opts: Vec<(usize, &str)> = vec![(usize::MAX, tl!("Custom"))];
-        opts.extend(presets.iter().enumerate().map(|(i, p)| (i, p.0)));
-        if widgets::dropdown(ui, &format!("{:?}-gm-preset", cx.mem), &mut preset, &opts, 190.0)
-            && let Some(p) = presets.get(preset)
-        {
-            stops = p.1.clone();
+        let mut picked = None;
+        egui::ComboBox::from_id_salt(cx.mem.with("gm-preset")).selected_text(tl!("Custom")).width(190.0).height(420.0).icon(widgets::chevron_icon).show_ui(
+            ui,
+            |ui| {
+                for g in &cx.gradients {
+                    ui.label(RichText::new(&g.name).color(t.text_faint));
+                    for p in &g.items {
+                        ui.horizontal(|ui| {
+                            // A map has no transparency: colour stops only, shown opaque.
+                            let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                            let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                            crate::preset_panels::paint_gradient(ui, r, &rgba);
+                            // Both, not short-circuited: the name is drawn either way.
+                            if swatch.clicked() | ui.selectable_label(false, &p.name).clicked() {
+                                picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                            }
+                        });
+                    }
+                }
+            },
+        );
+        if let Some(p) = picked {
+            stops = p;
             write_stops(v, &stops);
             e.add(Edit::discrete(true));
         }
@@ -1200,6 +1216,11 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 /// Whether a document of this mode edits Levels/Curves through a single Gray channel.
 pub fn is_gray(mode: photocraft_doc::ColorMode) -> bool {
     matches!(mode, photocraft_doc::ColorMode::Grayscale | photocraft_doc::ColorMode::Duotone | photocraft_doc::ColorMode::Bitmap)
+}
+
+/// The gradient preset library for a `kind` editor's picker (Gradient Map only; empty otherwise).
+pub fn gradient_presets(app: &PhotocraftApp, kind: &str) -> Vec<Group<GradientPreset>> {
+    if kind == "gradientMap" { app.session.presets.gradients.clone() } else { Vec::new() }
 }
 
 pub fn swatches(app: &PhotocraftApp) -> [[f32; 3]; 2] {
@@ -1313,7 +1334,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     };
     let gray = app.session.active().is_some_and(|s| is_gray(s.doc.mode));
     let hist = needs_histogram(kind).then(|| tone::histograms(app, HistSource::BelowLayer(id), space_of(&values)));
-    let cx = EditorCx { mem: layer_mem(id), hist, gray, swatches: swatches(app), dialog: false };
+    let cx = EditorCx { mem: layer_mem(id), hist, gray, swatches: swatches(app), gradients: gradient_presets(app, kind), dialog: false };
     let e = editor(ui, kind, &mut values, &cx);
     if e.changed {
         app.live_adjust = Some((id, values.clone()));

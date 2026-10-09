@@ -337,6 +337,57 @@ fn live_stroke_matches_the_committed_stroke() {
 }
 
 #[test]
+fn stroke_coordinate_validation_keeps_the_existing_bounds() {
+    let edges = [StrokePoint::new(-MAX_COORD, MAX_COORD, 1.0), StrokePoint::new(MAX_COORD, -MAX_COORD, 1.0)];
+    assert!(check_coords(&edges, "paint.stroke").is_ok());
+    assert!(check_coords(&[], "paint.stroke").is_ok(), "an empty live update is allowed");
+    for (x, y) in [(MAX_COORD + 1.0, 0.0), (0.0, -MAX_COORD - 1.0), (f64::NAN, 0.0), (0.0, f64::INFINITY)] {
+        assert!(check_coords(&[StrokePoint::new(x, y, 1.0)], "paint.stroke").is_err());
+    }
+    // The command parser still rejects empty strokes and shares the same inclusive boundary.
+    assert!(parse_points(&json!({"points": []}), "paint.stroke").is_err());
+    assert!(parse_points(&json!({"points": [[MAX_COORD, -MAX_COORD]]}), "paint.stroke").is_ok());
+}
+
+#[test]
+fn live_brush_and_pencil_reject_invalid_batches_without_changing_the_preview() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32, "depth": depth, "background": "transparent"})).unwrap();
+        let st = s.active().unwrap();
+        let (doc, revision, history) = (st.doc.clone(), st.revision, st.history.past_len());
+        let id = st.active_layer.unwrap();
+        for (cmd, erase) in [("paint.stroke", false), ("paint.stroke", true), ("paint.pencil", false)] {
+            let p = json!({"points": [[8, 16]], "size": 4, "erase": erase, "seed": 7});
+            let mut live = LiveStroke::begin_with(&s, cmd, &p).unwrap();
+            let mut control = LiveStroke::begin_with(&s, cmd, &p).unwrap();
+            // NaN first: on an unguarded renderer this fails without starting the enormous segment.
+            for (x, y) in [(f64::NAN, 16.0), (16.0, f64::NAN), (f64::INFINITY, 16.0), (16.0, f64::NEG_INFINITY), (1e300, 16.0), (16.0, -MAX_COORD - 1.0)] {
+                let shown = live.doc.clone();
+                let bounds = live.bounds();
+                let batch = [StrokePoint::new(12.0, 18.0, 1.0), StrokePoint::new(x, y, 1.0)];
+                let err = live.push(&batch).unwrap_err();
+                assert!(matches!(err, EngineError::BadParams { cmd: ref actual, ref msg }
+                    if actual == cmd && msg.contains("point coordinates must be finite")));
+                assert!(std::sync::Arc::ptr_eq(&shown, &live.doc), "reject the whole batch before touching the preview");
+                assert_eq!(live.bounds(), bounds);
+            }
+            // A rejected batch must not advance the renderer; resuming is identical to never
+            // receiving it. Ordinary off-canvas points remain valid too.
+            let next = [StrokePoint::new(-4.0, 16.0, 1.0), StrokePoint::new(24.0, 16.0, 1.0)];
+            assert_eq!(live.push(&next).unwrap(), control.push(&next).unwrap());
+            assert_eq!(live.bounds(), control.bounds());
+            let (got, want) = (live.doc.layer(id).unwrap().surface().unwrap(), control.doc.layer(id).unwrap().surface().unwrap());
+            assert!(same_pixels(got, want, live.bounds()));
+            assert_eq!(got.content_bounds(), want.content_bounds());
+        }
+        let st = s.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+        assert_eq!((st.revision, st.history.past_len()), (revision, history));
+    }
+}
+
+#[test]
 fn live_pencil_matches_the_committed_pencil_and_auto_erases() {
     let mut s = session(80, 40);
     s.execute("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();

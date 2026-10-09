@@ -266,3 +266,17 @@ fn background_layer_is_floated_by_geometric_warps() {
     assert!(l.surface().unwrap().format().alpha);
     assert!(l.surface().unwrap().pixel(2, 15)[3] < 0.01, "exposed area is transparent");
 }
+
+#[test]
+fn liquify_with_a_far_off_stroke_point_returns() {
+    // #937: the issue's request walked ~3.3e14 dab steps along a segment to (1e15, 0).
+    for depth in [8u64, 16, 32] {
+        let mut s = session(depth);
+        let r = s.execute(LIQUIFY, json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[0, 0], [1e15, 0]]}]})).unwrap();
+        assert_eq!(r["changed"], true, "{depth}: the start of the stroke is on the canvas");
+        let mut s = session(depth);
+        let before = active_surface(&s);
+        s.execute(LIQUIFY, json!({"strokes": [{"tool": "bloat", "size": 30, "points": [[5000, 5000], [1e15, 1e15]]}]})).unwrap();
+        assert_eq!(active_surface(&s).read_region(Rect::new(0, 0, 80, 60)), before.read_region(Rect::new(0, 0, 80, 60)), "{depth}: off-canvas only");
+    }
+}

@@ -4,7 +4,7 @@
 //! typing session is one "Edit Type" history step and automation sees exactly what the user does.
 //! Offsets in [`TextEdit`] are character indices (the engine's unit); the layout works in bytes.
 
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use egui::{Color32, Pos2, Stroke};
 use photocraft_doc::{Document, LayerContent, LayerId, TextLayer};
@@ -76,7 +76,7 @@ fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
 /// they sit somewhere else than the glyphs the caret and selection are placed on.
 fn shows_own_layout(doc: &Document, t: &TextLayer) -> bool {
     let Some(cache) = &t.cache else { return false };
-    let Ok(mut eng) = photocraft_text::shared().lock() else { return true };
+    let mut eng = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
     let ours = eng.render(t, doc.resolution_dpi, doc.pixel_format()).1.surface.content_bounds();
     let have = cache.content_bounds();
     [(ours.x0, have.x0), (ours.y0, have.y0), (ours.x1, have.x1), (ours.y1, have.y1)].iter().all(|(a, b)| (a - b).abs() <= 1)

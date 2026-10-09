@@ -552,6 +552,11 @@ fn fifty() -> f32 {
     50.0
 }
 
+/// The session brush starts out as the Brush's (the tool the app opens with).
+fn default_brush_tool() -> Tool {
+    Tool::Brush
+}
+
 impl Default for ToolOptions {
     fn default() -> Self {
         Self {
@@ -809,12 +814,13 @@ pub struct UiState {
     /// Selection-tool context menu opened by a plain canvas right-click.
     #[serde(default)]
     pub canvas_tool_menu: Option<crate::canvas_tool_menu::CanvasToolMenu>,
-    /// Smoothing is a per-tool option (Brush and Eraser each keep theirs): the tool whose
-    /// smoothing the session brush holds, and the other tools' saved values.
+    /// The brush is a per-tool option (the Brush, the Eraser and every retouching tool each keep
+    /// their own size, hardness, tip and dynamics, as in Photoshop): the tool whose brush the
+    /// session brush holds, and the other tools' saved brushes.
+    #[serde(default = "default_brush_tool")]
+    pub brush_tool: Tool,
     #[serde(default)]
-    pub smoothing_tool: Option<Tool>,
-    #[serde(default)]
-    pub tool_smoothing: Vec<(Tool, photocraft_engine::paint::brush::Smoothing)>,
+    pub tool_brushes: Vec<(Tool, photocraft_engine::paint::BrushSettings)>,
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
@@ -935,8 +941,8 @@ impl Default for UiState {
             brush_picker_list: crate::brush_picker::list_state(),
             layer_menu: None,
             canvas_tool_menu: None,
-            smoothing_tool: None,
-            tool_smoothing: Vec::new(),
+            brush_tool: Tool::Brush,
+            tool_brushes: Vec::new(),
             clone_source: None,
             clone_offset: None,
             pattern_stamp_phase: None,
@@ -1037,6 +1043,29 @@ mod tests {
         assert_eq!(Tool::from_name("Rotate View Tool"), Some(Tool::RotateView));
         assert_eq!(Tool::RotateView.key(), 'R');
         assert_eq!(Tool::from_name("nope"), None);
+    }
+
+    /// The README's "Everything in the box" tool heading and list name exactly the tools a user can
+    /// pick, `Tool::ALL` (#996).
+    #[test]
+    fn readme_tool_list_matches_tool_all() {
+        let readme = include_str!("../../../README.md");
+        let (_, rest) = readme.split_once("<h4>🧰 ").unwrap();
+        let (count, rest) = rest.split_once(" tools</h4>").unwrap();
+        assert_eq!(count.parse::<usize>().unwrap(), Tool::ALL.len(), "README.md tool heading");
+        let list = rest.trim_start().lines().next().unwrap();
+        // "Rectangular and Elliptical Marquee" names two tools: "Rectangular Marquee", "Elliptical Marquee".
+        let mut named: Vec<String> = Vec::new();
+        for entry in list.split(" · ") {
+            match entry.split_once(" and ").and_then(|(first, rest)| Some((first, rest.split_once(' ')?))) {
+                Some((first, (second, noun))) => named.extend([format!("{first} {noun}"), format!("{second} {noun}")]),
+                None => named.push(entry.to_owned()),
+            }
+        }
+        named.sort();
+        let mut labels: Vec<String> = Tool::ALL.iter().map(|tool| tool.label().trim_end_matches(" Tool").to_owned()).collect();
+        labels.sort();
+        assert_eq!(named, labels, "README.md tool list");
     }
 
     #[test]

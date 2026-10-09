@@ -5,6 +5,29 @@
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
 - macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
 
+### Windows source builds
+
+Use the Rust MSVC toolchain and install Visual Studio or Microsoft C++ Build Tools with the
+**Desktop development with C++** workload. Follow Microsoft's
+[Rust setup guide](https://learn.microsoft.com/en-us/windows/dev-environment/rust/setup),
+then open a new terminal and check `cargo --version` and `rustc --version`.
+
+On Windows 11, Smart App Control can block Cargo, rustc or executables generated during a build.
+If a build reports `An Application Control policy has blocked this file. (os error 4551)`
+([#1585](https://github.com/storytold/photocraft/issues/1585)), check:
+
+- **Windows Security → App & browser control → Smart App Control settings** for its status.
+- **Event Viewer → Applications and Services Logs → Microsoft → Windows → CodeIntegrity →
+  Operational** for the blocked executable and policy, especially on managed machines.
+
+This error indicates an application-control restriction; moving `CARGO_TARGET_DIR` or
+reinstalling Rust does not establish that the blocked executable is trusted. See Microsoft's
+[Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
+for the available controls; there is no per-app exception. On a managed device, ask your
+administrator about an approved development environment. If you only want to run PhotoCraft,
+use the [packaged Windows release](https://github.com/storytold/photocraft/releases) to avoid
+building locally; the downloaded app is still subject to Windows application-control checks.
+
 ## Build and run
 
 ```sh
@@ -65,8 +88,8 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
 | `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
-| `PHOTOCRAFT_AUTOMATION_READ_ROOT` | Directory capability for automation reads; requests use relative paths |
-| `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` | Separate directory capability for automation writes; requests use relative paths |
+| `PHOTOCRAFT_AUTOMATION_READ_ROOT` | Desktop app only: automation read root. Headless CLI modes require the `--automation-read-root` flag |
+| `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` | Desktop app only: automation write root. Headless CLI modes require the `--automation-write-root` flag |
 | `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
 | `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached (by default the window then opens through Xwayland, because Wayland gives the app no pen input; #639) |
 | `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback |
@@ -138,6 +161,8 @@ Keep one `PcraftWriter` per open document: re-saving then only compresses and wr
 - **Headless:** `photocraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`. It drives an in-process engine session and has no file authority when a root is omitted.
 - **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <dir> --automation-write-root <dir>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots. See `docs/control-protocol.md#mcp-bridge`.
 
+For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
+
 Tools:
 
 - `session_list`
@@ -153,7 +178,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp"]
+      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -165,7 +190,10 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
 
 ```sh
 cargo build --release -p photocraft-cli
-claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp
+mkdir -p "$PWD/photocraft-work"
+claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
+  --automation-read-root "$PWD/photocraft-work" \
+  --automation-write-root "$PWD/photocraft-work"
 ```
 
 `doc_inspect` (and the engine command `document.inspect`) reports the layer tree with kinds,
@@ -178,7 +206,7 @@ capability-scoped export, resize/crop, CMYK + native save) driven purely over MC
 Without MCP, `photocraft-cli serve [--port N]` keeps a headless session open and answers JSON lines
 (see `docs/control-protocol.md#headless-server`).
 
-A typical agent loop:
+A typical agent loop (place inputs under the configured read root and outputs under the write root):
 
 1. `doc_open {path}`
 2. `command_list {filter:"blur"}`
@@ -355,6 +383,7 @@ against committed **sha256 manifests**. All pins are in one place:
 | `corpus/psd-tools/` | the complete psd-tools test set (309 files) | psd-tools upstream (MIT) | `xtask/psd-tools-corpus.sha256` |
 | `corpus/heif/` | 9 small HEIC/HEIF files (checkerboards, RGB strips, a grid-tiled photo with EXIF/XMP, each with Apple's decode as `.ref.png`; a 10-bit RGBA file with its source PNG), for the `heif` feature | heic-rs (MIT OR Apache-2.0) and pillow-heif (BSD-3-Clause) upstreams | `xtask/heif-corpus.sha256` |
 | `corpus/exr/` | the 5 deep OpenEXR test images (scanline deep data with half colour and u32 ID channels; 2.3 MB), checked against the ID manifests of their upstream sidecars | OpenEXR upstream at v3.5.2 (BSD-3-Clause) | `xtask/exr-corpus.sha256` |
+| `corpus/affinity/` | 21 public Affinity documents (four Affinity 3 `.af` files, `.afdesign` vector art, layer/shape/raster test files, a template with artboards), each holding Affinity's own render as its thumbnail | vector-art (CC0), AFDesignLoad, Jac21/Branding and AssetStoreTemplate (MIT) upstreams | `xtask/affinity-corpus.sha256` |
 | `corpus/pngsuite/` | PngSuite | schaik.com release archive (public domain) | (fixed archive) |
 
 ```sh
@@ -362,7 +391,7 @@ cargo xtask corpus                 # where each corpus lives, its pin, present o
 cargo xtask corpus --all           # fetch everything missing or stale (cold: about 15 s; verified copies are left alone)
 cargo xtask test-corpus            # fetch, then cargo test --release --features corpus (+ heif on codecs, io) on psd, codecs, io, engine
 cargo xtask test-corpus -p io      # narrow to one crate (repeat -p for more)
-cargo xtask test-corpus --changed  # only if psd, io, codecs, compose, gpu, text or format changed vs origin/main
+cargo xtask test-corpus --changed  # only if psd, io, codecs, compose, gpu, text, format or affinity changed vs origin/main
 cargo xtask test-corpus -- --nocapture   # pass arguments to the test binaries (per-file tables)
 scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 ```

@@ -437,8 +437,8 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
     let layer = p.get("mapLayer").and_then(Value::as_u64);
     let img = if let Some(path) = p.get("mapPath").and_then(Value::as_str).filter(|p| !p.is_empty()) {
         let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("cannot read displacement map `{path}`: {e}")))?;
-        let imported = photocraft_io::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
-        map_from_document(&imported.document, layer)
+        let imported = crate::file_cmds::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
+        map_from_document(&imported, layer)
     } else if let Some(d) = p.get("mapDocument") {
         let docs = s.documents();
         let found = match d {

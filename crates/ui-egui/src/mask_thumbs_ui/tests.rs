@@ -176,9 +176,9 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     let p = h.get_by_label("Badge Shape Path").rect().center();
     click_with(&mut h, p, Modifiers::NONE);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"));
-    // Footer: fill, stroke, load as selection, … (24 pt buttons, 2 pt apart).
+    // Footer: fill, stroke, load as selection, … (26 pt buttons, 2 pt apart).
     let footer = crate::vector_ui::paths_footer(&h.ctx).unwrap();
-    let p = pos2(footer.left() + 2.0 * 26.0 + 12.0, footer.center().y);
+    let p = pos2(footer.left() + 2.0 * 28.0 + 13.0, footer.center().y);
     click_with(&mut h, p, Modifiers::NONE);
     let sel = h.state().session.active().unwrap().doc.selection.clone().expect("selection from the shape path");
     let b = sel.content_bounds();

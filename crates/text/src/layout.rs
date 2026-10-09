@@ -23,8 +23,29 @@ use parley::{
 };
 use photocraft_doc::TextLayer;
 use photocraft_doc::text::{Caps, CharStyle, Kerning, Orientation, TextAlign, TextDirection, TextShape};
+use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
+
+/// Photoshop synthesizes small caps for faces without an OpenType `smcp` table. Keep the same
+/// readable hierarchy for every font instead of silently rendering lowercase text unchanged.
+const SYNTHETIC_SMALL_CAPS_SCALE: f32 = 0.7;
+
+/// The rendering path for a `SmallCaps` character style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SmallCapsMode {
+    None,
+    OpenType,
+    Synthetic,
+}
+
+fn small_caps_mode(caps: Caps, face_has_smcp: bool) -> SmallCapsMode {
+    match caps {
+        Caps::SmallCaps if face_has_smcp => SmallCapsMode::OpenType,
+        Caps::SmallCaps => SmallCapsMode::Synthetic,
+        _ => SmallCapsMode::None,
+    }
+}
 
 /// Index of the character run whose style a glyph uses, plus the vertical-type class of its
 /// characters ([`VClass`] as `u8`; always 0 in horizontal type).
@@ -449,6 +470,17 @@ impl Layouter {
             };
             let mut ptext = String::with_capacity(prefix.len() + content.len());
             ptext.push_str(prefix);
+            // A real `smcp` substitution must receive lowercase source text; only the fallback
+            // path uppercases it and scales it down.
+            let small_caps: Vec<SmallCapsMode> = out
+                .styles
+                .iter()
+                .map(|style| small_caps_mode(style.caps, fonts.selected_face_has_feature(&style.font_family, style.weight, style.italic, Tag::new(b"smcp"))))
+                .collect();
+            // Ranges in `ptext` for lowercase characters rendered as synthetic small caps.
+            // They have the same UTF-8 length as their uppercase form, so the layer's byte-based
+            // run and caret offsets remain unchanged.
+            let mut synthetic_small_caps: Vec<(Range<usize>, f32)> = Vec::new();
             for (i, ch) in content.char_indices() {
                 // A forced line break ends the line but not the paragraph. The line breaker knows
                 // it as a newline, which has the same length, so text offsets don't move.
@@ -456,11 +488,16 @@ impl Layouter {
                     ptext.push('\n');
                     continue;
                 }
-                let caps = out.styles[style_at(prange.start + i)].caps;
-                if caps == Caps::AllCaps {
+                let style = &out.styles[style_at(prange.start + i)];
+                let caps = style.caps;
+                if caps == Caps::AllCaps || small_caps[style_at(prange.start + i)] == SmallCapsMode::Synthetic {
                     let up: String = ch.to_uppercase().collect();
                     if up.len() == ch.len_utf8() {
                         ptext.push_str(&up);
+                        if caps == Caps::SmallCaps && ch.is_lowercase() {
+                            let end = ptext.len();
+                            synthetic_small_caps.push((end - up.len()..end, style.size_pt * k * SYNTHETIC_SMALL_CAPS_SCALE));
+                        }
                         continue;
                     }
                 }
@@ -474,7 +511,7 @@ impl Layouter {
                 // Paragraph-start style as the default (covers the direction mark and empty
                 // paragraphs), then every run piece intersecting this paragraph.
                 let si0 = style_at(prange.start);
-                for p in style_props(&out.styles[si0], k, &fallback, si0 as u32) {
+                for p in style_props(&out.styles[si0], k, &fallback, si0 as u32, small_caps[si0]) {
                     b.push_default(p);
                 }
                 for (ri, st) in out.styles.iter().enumerate() {
@@ -484,7 +521,7 @@ impl Layouter {
                         continue;
                     }
                     let range = (a - prange.start + prefix.len())..(z - prange.start + prefix.len());
-                    for p in style_props(st, k, &fallback, ri as u32) {
+                    for p in style_props(st, k, &fallback, ri as u32, small_caps[ri]) {
                         b.push(p, range.clone());
                     }
                     if vertical {
@@ -495,7 +532,7 @@ impl Layouter {
                             if cls == VClass::Rotate || from >= to {
                                 return;
                             }
-                            let mut feats = feature_list(st);
+                            let mut feats = feature_list(st, small_caps[ri]);
                             feats.push("\"vert\" 1".into());
                             let r = (range.start + from)..(range.start + to);
                             b.push(StyleProperty::FontFeatures(FontFeatures::Source(Cow::Owned(feats.join(", ")))), r.clone());
@@ -516,6 +553,9 @@ impl Layouter {
                             flush(&mut b, from, piece.len(), c);
                         }
                     }
+                }
+                for (range, size) in synthetic_small_caps {
+                    b.push(StyleProperty::FontSize(size), range);
                 }
                 b.build(&ptext)
             };
@@ -1014,7 +1054,7 @@ impl skrifa::outline::OutlinePen for YMax {
 }
 
 /// OpenType feature settings of a character style (CSS `font-feature-settings` items).
-fn feature_list(st: &CharStyle) -> Vec<String> {
+fn feature_list(st: &CharStyle, small_caps: SmallCapsMode) -> Vec<String> {
     let mut feats: Vec<String> = Vec::new();
     // Optical and manual kerning replace the font's kerning table; a character with a manual
     // kern is manually kerned whatever its mode (as in Photoshop).
@@ -1028,7 +1068,7 @@ fn feature_list(st: &CharStyle) -> Vec<String> {
     if st.discretionary_ligatures {
         feats.push("\"dlig\" 1".into());
     }
-    if st.caps == Caps::SmallCaps {
+    if small_caps == SmallCapsMode::OpenType {
         feats.push("\"smcp\" 1".into());
     }
     for f in &st.features {
@@ -1039,7 +1079,7 @@ fn feature_list(st: &CharStyle) -> Vec<String> {
     feats
 }
 
-fn style_props(st: &CharStyle, k: f32, fallback: &[String], idx: u32) -> Vec<StyleProperty<'static, RunBrush>> {
+fn style_props(st: &CharStyle, k: f32, fallback: &[String], idx: u32, small_caps: SmallCapsMode) -> Vec<StyleProperty<'static, RunBrush>> {
     let px = (st.size_pt * k).max(0.01);
     let mut fam: Vec<String> = Vec::new();
     if !st.font_family.is_empty() {
@@ -1052,7 +1092,7 @@ fn style_props(st: &CharStyle, k: f32, fallback: &[String], idx: u32) -> Vec<Sty
         fam.extend(fallback.iter().map(|f| quote(f)));
     }
     fam.push("sans-serif".into());
-    let feats = feature_list(st);
+    let feats = feature_list(st, small_caps);
     let vars: Vec<String> = st.variations.iter().filter(|v| v.axis.len() == 4 && v.axis.is_ascii()).map(|v| format!("\"{}\" {}", v.axis, v.value)).collect();
     vec![
         StyleProperty::FontFamily(FontFamily::Source(Cow::Owned(fam.join(", ")))),
@@ -1153,4 +1193,22 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SmallCapsMode, feature_list, small_caps_mode};
+    use photocraft_doc::text::{Caps, CharStyle};
+
+    #[test]
+    fn uses_real_small_caps_only_when_the_selected_face_supports_smcp() {
+        let style = CharStyle { caps: Caps::SmallCaps, ..Default::default() };
+        let real = small_caps_mode(style.caps, true);
+        let synthetic = small_caps_mode(style.caps, false);
+
+        assert_eq!(real, SmallCapsMode::OpenType);
+        assert!(feature_list(&style, real).iter().any(|feature| feature == "\"smcp\" 1"));
+        assert_eq!(synthetic, SmallCapsMode::Synthetic);
+        assert!(!feature_list(&style, synthetic).iter().any(|feature| feature == "\"smcp\" 1"));
+    }
 }

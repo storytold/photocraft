@@ -30,9 +30,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Which OSes the test job runs on. main, manual runs and PRs labelled `full-ci` get all three.
-  # Other PRs get Linux, plus macOS and Windows when they touch code whose behaviour differs by
+  # Which OSes the test job runs on. main, manual runs and PRs labelled `full-ci` get Linux and
+  # Windows. Other PRs get Linux, plus Windows when they touch code whose behaviour differs by
   # platform: the app shell, UI, text and fonts, GPU, pen input, build scripts or the lockfile.
+  # macOS is tested only by release.yml.
   platforms:
     name: select platforms
     runs-on: ubuntu-latest
@@ -48,7 +49,9 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
-          all='["ubuntu-latest","macos-latest","windows-latest"]'
+          # No macOS on PRs or main: the org's 5 macOS slots are kept for release builds, and
+          # release.yml builds and tests macOS (a failing release is fixed and rebuilt).
+          all='["ubuntu-latest","windows-latest"]'
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
             echo "os=$all" >> "$GITHUB_OUTPUT"
             exit 0
@@ -206,6 +209,8 @@ jobs:
           - { crate: codecs, name: decode_tiff }
           - { crate: codecs, name: decode_exr }
           - { crate: codecs, name: decode_heif }
+          - { crate: affinity, name: preview }
+          - { crate: affinity, name: import_preview, args: "--features io" }
           - { crate: format, name: load }
     steps:
       - uses: actions/checkout@v4
@@ -217,7 +222,7 @@ jobs:
         run: cargo install cargo-fuzz --locked
       - name: Fuzz
         working-directory: crates/${{ matrix.target.crate }}
-        run: cargo fuzz run ${{ matrix.target.name }} -- -max_total_time=${{ inputs.fuzz_seconds }}
+        run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time=${{ inputs.fuzz_seconds }}
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4

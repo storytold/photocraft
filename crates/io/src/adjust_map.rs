@@ -112,7 +112,7 @@ pub enum Channels {
 pub fn parse(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>, channels: Channels) -> Adjustment {
     // A CMYK Channel Mixer (any record using the fourth, black, source) has no RGB meaning:
     // keep it raw. Mixers written by `write` leave that source at 0 and map in every mode.
-    if key == b"mixr" && channels == Channels::Other && (0..).map_while(|r| bei16(data, 4 + r * 10 + 6)).any(|k| k != 0) {
+    if key == b"mixr" && matches!(channels, Channels::Cmyk | Channels::Other) && (0..).map_while(|r| bei16(data, 4 + r * 10 + 6)).any(|k| k != 0) {
         return unsupported(key, data);
     }
     let mut a = parse_any(key, data, cged);
@@ -878,8 +878,10 @@ mod tests {
         for r in 0..4 {
             cmyk.extend(i16s(&std::array::from_fn::<i16, 5, _>(|k| if k == r { 100 } else { 0 })));
         }
+        assert!(matches!(parse(b"mixr", &cmyk, None, Channels::Cmyk), Adjustment::Unsupported { .. }));
         assert!(matches!(parse(b"mixr", &cmyk, None, Channels::Other), Adjustment::Unsupported { .. }));
         let ours = write(&Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false });
+        assert!(matches!(parse(b"mixr", &ours[0].1, None, Channels::Cmyk), Adjustment::ChannelMixer { .. }));
         assert!(matches!(parse(b"mixr", &ours[0].1, None, Channels::Other), Adjustment::ChannelMixer { .. }));
         assert!(matches!(parse(b"mixr", &[0, 1, 0, 0, 0, 100], None, Channels::Rgb), Adjustment::Unsupported { .. }));
         // Photo Filter: unknown version, HSB colour space, out-of-range version-3 Lab, truncated.

@@ -588,6 +588,9 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     doc.patterns = crate::pattern_map::from_global_blocks(&doc);
     // Notes (`Anno`) and the measurement scale (resource 1074); raw data stays for verbatim export.
     doc.notes = crate::annotations_map::notes_from_blocks(&doc);
+    if crate::annotations_map::anno_unreadable(&doc) {
+        warnings.push("the notes (Anno block) could not be read; they are kept unchanged on PSD save unless a note is added".into());
+    }
     if let Some(scale) = crate::annotations_map::raw_scale(&doc) {
         doc.measurement.scale = scale;
     }

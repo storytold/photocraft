@@ -79,6 +79,7 @@ pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
     if let Some(command) = &app.services.xwayland_command {
         lines.push("To drop files, start PhotoCraft under XWayland: `{command}`".to_owned());
         args.push(("command".to_owned(), command.clone()));
+        lines.push("Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.".to_owned());
     }
     let id = post(app, "Native file drag-and-drop is unavailable", lines, false, Some(WAYLAND_FILE_DROP_DISMISSED));
     if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
@@ -229,6 +230,7 @@ mod tests {
         assert!(guidance.contains(&format!("paste it with {paste}")), "{guidance}");
         // The relaunch command is the one for this install (an AppImage here), not a guess.
         assert!(guidance.contains("under XWayland: `WAYLAND_DISPLAY= '/apps/Photo Craft.AppImage'`"), "{guidance}");
+        assert!(guidance.contains("Linux display server to X11"), "{guidance}");
         assert_eq!(app.ui.notices[0].dismiss_pref.as_deref(), Some(WAYLAND_FILE_DROP_DISMISSED));
         for i in 0..MAX_NOTICES {
             post(&mut app, format!("Transient {i}"), Vec::new(), false, None);

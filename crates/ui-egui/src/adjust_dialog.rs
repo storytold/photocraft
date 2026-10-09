@@ -182,7 +182,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         Some(id) if adjust_editors::needs_histogram(&kind) => Some(tone::histograms(app, HistSource::Layer(id), adjust_editors::space_of(&values))),
         _ => None,
     };
-    let cx = EditorCx { mem: dialog_mem(&kind), hist, gray, swatches: adjust_editors::swatches(app), dialog: true };
+    let cx = EditorCx {
+        mem: dialog_mem(&kind),
+        hist,
+        gray,
+        swatches: adjust_editors::swatches(app),
+        gradients: adjust_editors::gradient_presets(app, &kind),
+        dialog: true,
+    };
     let e = adjust_editors::editor(ui, &kind, &mut values, &cx);
     if e.changed
         && let Value::Object(v) = values
