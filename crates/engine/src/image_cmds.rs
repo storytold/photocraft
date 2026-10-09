@@ -223,6 +223,30 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 /// Moves every surface, channel, selection and guide by `(dx, dy)`.
 ///
+/// Whether shifting `l` by `(dx, dy)` keeps every pixel store inside the i32 coordinate
+/// range: the content bounds of its surfaces and the canvas origin of deep data. Shared by
+/// the document, layer and smart-object moves, which all refuse such shifts with an error.
+pub(crate) fn layer_shift_fits(l: &Layer, dx: i32, dy: i32) -> bool {
+    let rect = |r: Rect| {
+        r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
+    };
+    let surface = |s: &photocraft_raster::Surface| rect(s.content_bounds());
+    l.mask.as_ref().is_none_or(|m| surface(&m.surface))
+        && l.fill_cache.as_ref().is_none_or(|fc| surface(&fc.surface))
+        && match &l.content {
+            LayerContent::Raster(s) => surface(s),
+            LayerContent::Text(t) => t.cache.as_ref().is_none_or(surface),
+            LayerContent::Deep(d) => d.x.checked_add(dx).is_some() && d.y.checked_add(dy).is_some(),
+            LayerContent::Group(g) => g.children.iter().all(|c| layer_shift_fits(c, dx, dy)),
+            _ => true,
+        }
+}
+
+/// [`layer_shift_fits`] over a whole layer list.
+pub(crate) fn layer_shift_fits_all(layers: &[Layer], dx: i32, dy: i32) -> bool {
+    layers.iter().all(|l| layer_shift_fits(l, dx, dy))
+}
+
 /// Fails, before moving anything, when some pixels would land outside the i32 coordinate
 /// range: the surface copy saturates its target rectangle there, which no longer matches
 /// the pixel data and panics (#959).
@@ -233,7 +257,7 @@ fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> 
     let fits = |r: Rect| {
         r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
     };
-    let mut ok = true;
+    let mut ok = layer_shift_fits_all(&doc.layers, dx, dy);
     for_each_surface(&mut doc.layers, true, &mut |surf, _| ok = ok && fits(surf.content_bounds()));
     ok = ok
         && doc.channels.iter().chain(doc.quick_mask.as_ref()).all(|ch| fits(ch.surface.content_bounds()))
@@ -815,6 +839,26 @@ mod tests {
         // Resampling deep samples is refused instead of silently desyncing them.
         let err = s.execute("image.imageSize", json!({"width": 20, "height": 10})).unwrap_err();
         assert!(err.to_string().contains("deep layers"), "{err}");
+    }
+
+    #[test]
+    fn moving_the_canvas_refuses_a_deep_origin_overflow() {
+        let mut s = session();
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: i32::MAX - 5,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        s.edit("deep", |doc, _| {
+            doc.layers.push(Layer::new("deep", deep));
+            Ok(())
+        })
+        .unwrap();
+        let err = s.edit("move", |doc, _| translate_doc(doc, "move", 10, 0)).unwrap_err();
+        assert!(err.to_string().contains("32-bit coordinate range"), "{err}");
     }
 
     #[test]

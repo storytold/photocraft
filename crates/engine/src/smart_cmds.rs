@@ -613,10 +613,14 @@ fn detach_psd(l: &mut Layer) {
 
 // ---------- conversion ----------
 
-/// Moves a layer (any kind) by whole pixels without re-rendering anything.
-fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
+/// Moves a layer (any kind) by whole pixels without re-rendering anything. Refuses a shift
+/// that would push any pixel store outside the i32 coordinate range.
+fn shift_layer(l: &mut Layer, dx: i32, dy: i32) -> Result<()> {
     if dx == 0 && dy == 0 {
-        return;
+        return Ok(());
+    }
+    if !crate::image_cmds::layer_shift_fits(l, dx, dy) {
+        return Err(other(format!("moving the layer by ({dx}, {dy}) would push pixels outside the 32-bit coordinate range")));
     }
     let a = Affine::translate(dx as f64, dy as f64);
     let mv = |s: &Surface| translate_surface(s, dx, dy);
@@ -648,9 +652,14 @@ fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
             }
         }
         LayerContent::Smart(sm) => shift_smart(sm, dx, dy),
-        LayerContent::Group(g) => g.children.iter_mut().for_each(|c| shift_layer(c, dx, dy)),
+        LayerContent::Group(g) => {
+            for c in g.children.iter_mut() {
+                shift_layer(c, dx, dy)?;
+            }
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
+    Ok(())
 }
 
 fn subtree_bounds(l: &Layer, canvas: Rect) -> Rect {
@@ -735,7 +744,9 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     cache = photocraft_algo::resample::crop_surface(&cache, b);
     cache.prune();
 
-    sub.layers.iter_mut().for_each(|l| shift_layer(l, -b.x0, -b.y0));
+    for l in sub.layers.iter_mut() {
+        shift_layer(l, -b.x0, -b.y0)?;
+    }
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // Seed the decode cache with the composite we already have.

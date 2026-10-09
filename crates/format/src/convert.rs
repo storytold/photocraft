@@ -510,7 +510,8 @@ impl Loader<'_> {
                 if counts_v.windows(2).any(|w| w[1] < w[0]) {
                     return Err(crate::FormatError::LimitExceeded("deep sample counts must not decrease".into()));
                 }
-                let total = counts_v.last().copied().unwrap_or(0) as usize;
+                let total = usize::try_from(counts_v.last().copied().unwrap_or(0))
+                    .map_err(|_| crate::FormatError::LimitExceeded("the deep sample count is too large for this platform".into()))?;
                 let mut channels_v = Vec::with_capacity(channels.len());
                 for c in channels {
                     let bytes = self.fetch.blob(&c.samples)?;

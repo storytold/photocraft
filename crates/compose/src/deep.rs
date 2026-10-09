@@ -133,13 +133,24 @@ pub fn flat_surface(d: &DeepData, fmt: PixelFormat) -> Result<Surface, String> {
     if !matches!(fmt.mode, ColorMode::Rgb | ColorMode::Grayscale) {
         return Err(format!("deep layers render to {:?} documents only", fmt.mode));
     }
-    let npx = d.width as usize * d.height as usize;
+    // Checked: a hostile `.pcraft` can claim huge deep dimensions, and the byte size must
+    // not overflow (it does at ~4 GiB on wasm32, where usize is 32 bits).
+    let npx = usize::try_from(d.width)
+        .ok()
+        .and_then(|w| usize::try_from(d.height).ok().and_then(|h| w.checked_mul(h)))
+        .ok_or_else(|| "the deep data extent is too large to render".to_string())?;
     let nc = fmt.mode.color_channels();
+    let per_pixel = nc.checked_add(1).ok_or_else(|| "too many channels to render".to_string())?;
+    // f32 samples; cap the flat buffer at 2^31 bytes so no platform overflows the allocation.
+    let flat = npx
+        .checked_mul(per_pixel)
+        .filter(|n| n.checked_mul(4).is_some_and(|b| b <= i32::MAX as usize))
+        .ok_or_else(|| "the deep data extent is too large to render".to_string())?;
     let transparent = vec![0.0; nc + 1];
     let mut s = Surface::with_default(fmt, &transparent);
     let Some(c) = resolve(d) else { return Ok(s) };
     let gray = c.rgb.is_none();
-    let mut vals = Vec::with_capacity(npx * (nc + 1));
+    let mut vals = Vec::with_capacity(flat);
     let mut order = Vec::new();
     for p in 0..npx {
         match composite_pixel(d, &c, p, &mut order) {
