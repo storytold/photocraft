@@ -893,7 +893,13 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 format: PRESET_FORMAT.into(),
                 version: 1,
                 brushes: if want("brushes") {
-                    s.tools.presets.iter().filter(|b| !b.builtin || bool_or(p, "includeBuiltins", false)).cloned().collect()
+                    let mut out: Vec<photocraft_paint::BrushPreset> =
+                        s.tools.presets.iter().filter(|b| !b.builtin || bool_or(p, "includeBuiltins", false)).cloned().collect();
+                    // The file embeds every bitmap: load the tips the preset store keeps (#1843).
+                    for b in &mut out {
+                        s.load_brush_tips(&mut b.brush).map_err(|e| bad(cmd, format!("brush preset `{}`: {e}", b.name)))?;
+                    }
+                    out
                 } else {
                     Vec::new()
                 },

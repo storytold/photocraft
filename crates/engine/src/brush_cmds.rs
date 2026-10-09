@@ -182,6 +182,8 @@ pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings>
     if let Some(patch) = p.get("brush").filter(|v| v.is_object()) {
         b = merge_brush(&b, patch, cmd)?;
     }
+    // A library preset's tips stay on disk until a stroke uses them (#1843).
+    s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
     if let Some(v) = num(p, "size") {
         b.size = v.max(0.5);
     }
@@ -410,6 +412,12 @@ impl LiveStroke {
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 
+    /// Does the stroke change with time while the pointer is held still (airbrush Build-up, or
+    /// smoothing still catching up)? See `photocraft_paint::dynamics::DabGenerator::wants_time`.
+    pub fn wants_time(&self) -> bool {
+        self.renderer.wants_time()
+    }
+
     /// Render more points; returns the rectangle that changed. The doc shows the stroke as
     /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and
@@ -569,10 +577,14 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
                 "builtin": pr.builtin,
                 "size": pr.brush.size,
                 "hardness": pr.brush.hardness,
-                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) => "sampled" },
+                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
             });
             if full {
-                v["brush"] = brush_json(&pr.brush);
+                // Full settings embed the bitmaps: load stored tips (a tip that can't be loaded
+                // stays a reference to the store).
+                let mut b = pr.brush.clone();
+                let _ = s.load_brush_tips(&mut b);
+                v["brush"] = brush_json(&b);
             }
             v
         }).collect::<Vec<_>>()
@@ -703,6 +715,8 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     b = merge_brush(&b, &patch, cmd)?;
     validate_brush(&b, cmd)?;
+    // The tool's brush always paints with full tips: load a library preset's from the store.
+    s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
     let before = std::mem::replace(&mut s.tools.brush, b);
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());

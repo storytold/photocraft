@@ -375,6 +375,12 @@ pub enum DngStorage {
     Lj92Tiles { width: usize, height: usize },
     /// Lossless-JPEG strips of this many rows, 1 component.
     Lj92Strips { rows: usize },
+    /// JPEG XL strips of this many rows (Compression 52546): one codestream per strip, taken from
+    /// [`DngSpec::jxl_segments`] (the tests encode them; this crate has no JPEG XL encoder).
+    JxlStrips { rows: usize },
+    /// JPEG XL tiles of this size, one codestream per tile in row-major order from
+    /// [`DngSpec::jxl_segments`].
+    JxlTiles { width: usize, height: usize },
 }
 
 /// A synthetic DNG.
@@ -411,6 +417,10 @@ pub struct DngSpec {
     pub baseline_exposure: Option<f64>,
     /// Raw OpcodeList2 bytes (see [`gain_map_opcode_list`]).
     pub opcode_list2: Option<Vec<u8>>,
+    /// Encoded segments for [`DngStorage::JxlStrips`] / [`DngStorage::JxlTiles`].
+    pub jxl_segments: Vec<Vec<u8>>,
+    /// Raw ProfileGainTableMap bytes, written to IFD0 (contents are not interpreted).
+    pub profile_gain_table_map: Option<Vec<u8>>,
     pub orientation: u16,
     pub make: String,
     pub model: String,
@@ -444,6 +454,8 @@ impl DngSpec {
             baseline_exposure: None,
             orientation: 1,
             opcode_list2: None,
+            jxl_segments: Vec::new(),
+            profile_gain_table_map: None,
             make: "Photocraft".into(),
             model: "Synthetic".into(),
         }
@@ -596,6 +608,23 @@ impl DngSpec {
                 raw.push((324, Val::Blobs(offs)));
                 raw.push((325, Val::Long(lens)));
             }
+            DngStorage::JxlStrips { rows } => {
+                let lens = self.jxl_segments.iter().map(|j| j.len() as u32).collect();
+                let offs = self.jxl_segments.iter().map(|j| t.blob(j.clone())).collect();
+                raw.push((259, Val::Short(vec![52546])));
+                raw.push((278, Val::Long(vec![rows as u32])));
+                raw.push((273, Val::Blobs(offs)));
+                raw.push((279, Val::Long(lens)));
+            }
+            DngStorage::JxlTiles { width: tw, height: th } => {
+                let lens = self.jxl_segments.iter().map(|j| j.len() as u32).collect();
+                let offs = self.jxl_segments.iter().map(|j| t.blob(j.clone())).collect();
+                raw.push((259, Val::Short(vec![52546])));
+                raw.push((322, Val::Long(vec![tw as u32])));
+                raw.push((323, Val::Long(vec![th as u32])));
+                raw.push((324, Val::Blobs(offs)));
+                raw.push((325, Val::Long(lens)));
+            }
         }
         if let Some(a) = self.active_area {
             raw.push((50829, Val::Long(a.to_vec())));
@@ -656,6 +685,9 @@ impl DngSpec {
         }
         if let Some(b) = self.baseline_exposure {
             ifd0.push((50730, Val::SRational(vec![srat(b)])));
+        }
+        if let Some(m) = &self.profile_gain_table_map {
+            ifd0.push((52525, Val::Undefined(m.clone())));
         }
         let i0 = t.ifd(ifd0);
         t.chain = vec![i0];

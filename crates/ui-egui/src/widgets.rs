@@ -1500,6 +1500,17 @@ fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
     ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     response
 }
+/// A colour swatch that only reports clicks (no popup): for colours edited in PhotoCraft's own
+/// Color Picker dialog. `label` names it for hover text and accessibility.
+pub fn color_swatch_button(ui: &mut Ui, color: Color32, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, label));
+    checker(ui.painter(), rect, 4.0);
+    ui.painter().rect_filled(rect.shrink(1.0), t.radius_sm, color);
+    ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+    response.on_hover_text(label)
+}
 fn color_edit_button(ui: &mut Ui, color: &mut Color32, alpha: egui::color_picker::Alpha) -> Response {
     let mut response = color_swatch(ui, *color);
     let id = response.id.with("screen-color");

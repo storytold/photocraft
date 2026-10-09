@@ -1,5 +1,7 @@
 use super::*;
 
+mod selection;
+
 const DEPTHS: [u64; 3] = [8, 16, 32];
 const W: i32 = 64;
 const H: i32 = 48;

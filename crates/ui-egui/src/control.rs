@@ -74,7 +74,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 28] = [
+pub const UI_SET_FIELDS: [&str; 29] = [
     "tool",
     "panels",
     "dock",
@@ -103,6 +103,7 @@ pub const UI_SET_FIELDS: [&str; 28] = [
     "cropOverlay",
     "cropOverlayShow",
     "cropOverlayOrientation",
+    "cropShield",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -350,6 +351,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Some(_) => return Err("cropOverlayOrientation must be 0, 1, 2 or 3".into()),
                     None => None,
                 };
+                // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
+                let crop_shield = merged_object(&app.ui.tool_options.crop_shield, p.get("cropShield"), "cropShield")?;
+                if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
+                    return Err("cropShield.opacity must be 0..100".into());
+                }
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
@@ -458,6 +464,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(o) = crop_overlay_orientation {
                     app.ui.tool_options.crop_overlay_orientation = o;
+                }
+                if let Some(s) = crop_shield {
+                    app.ui.tool_options.crop_shield = s;
                 }
                 if let Some(v) = panels {
                     app.ui.panels = v;
@@ -1244,6 +1253,37 @@ mod tests {
             assert_eq!(r["ok"], false, "{bad}: {r}");
         }
         assert_eq!(app.ui.tool_options.crop_overlay, CropOverlay::GoldenSpiral, "a rejected call applies none of its fields");
+    }
+
+    /// #1919: the Crop tool's gear menu (Show Cropped Area, crop shield) over the control channel.
+    #[test]
+    fn ui_set_drives_the_crop_shield_options() {
+        use crate::crop_shield::{CropShield, ShieldColor};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let good = call(&mut app, &ctx, "ui.set", json!({"cropShield": {"color": "custom", "custom_color": [255, 0, 0], "opacity": 40}}));
+        assert_eq!(good["ok"], true, "{good}");
+        let want = CropShield { color: ShieldColor::Custom, custom_color: [255, 0, 0], opacity: 40.0, ..Default::default() };
+        assert_eq!(app.ui.tool_options.crop_shield, want);
+        // A patch: the other fields stay.
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"cropShield": {"show_cropped_area": false}}))["ok"], true);
+        assert_eq!(app.ui.tool_options.crop_shield, CropShield { show_cropped_area: false, ..want.clone() });
+        let t = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["crop_shield"];
+        assert_eq!((t["color"].as_str(), t["opacity"].as_f64(), t["show_cropped_area"].as_bool()), (Some("custom"), Some(40.0), Some(false)));
+        for bad in [
+            json!({"cropShield": true}),
+            json!({"cropShield": {"opacity": 101}}),
+            json!({"cropShield": {"opacity": -1}}),
+            json!({"cropShield": {"opacity": "50"}}),
+            json!({"cropShield": {"color": "red"}}),
+            json!({"cropShield": {"custom_color": [256, 0, 0]}}),
+            json!({"cropShield": {"shield": true}}),
+            json!({"cropShield": {"enabled": false}, "cropOverlay": "nope"}),
+        ] {
+            let r = call(&mut app, &ctx, "ui.set", bad.clone());
+            assert_eq!(r["ok"], false, "{bad}: {r}");
+        }
+        assert_eq!(app.ui.tool_options.crop_shield, CropShield { show_cropped_area: false, ..want }, "a rejected call applies none of its fields");
     }
 
     #[test]

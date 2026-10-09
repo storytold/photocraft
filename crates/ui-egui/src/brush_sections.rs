@@ -233,6 +233,8 @@ fn same_tip(tip: &TipShape, size: f32, hardness: f32, p: &BrushPreset) -> bool {
         && match (tip, pt) {
             (TipShape::Round, TipShape::Round) => (hardness - ph).abs() < 0.01,
             (TipShape::Sampled(a), TipShape::Sampled(b)) => a.width == b.width && a.height == b.height && a.data == b.data,
+            // Stored tips (#1843) match by key: the bitmap is the same one.
+            (TipShape::Stored(a), TipShape::Stored(b)) => a == b,
             _ => false,
         }
 }
@@ -291,10 +293,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) 
         b.roundness = pr;
         b.spacing = psp;
     }
-    let orig = match &b.tip {
-        TipShape::Sampled(g) => Some(g.width.max(g.height) as f32),
-        TipShape::Round => None,
-    };
+    let orig = b.tip.bitmap_size().map(|(w, h)| w.max(h) as f32);
     size_row(ui, tl!("Size"), &mut b.size, MAX_BRUSH_SIZE, orig);
     ui.horizontal(|ui| {
         widgets::checkbox(ui, &mut b.flip_x, tl!("Flip X"));
@@ -379,10 +378,11 @@ fn pattern_swatch(ui: &mut egui::Ui, tx: &paint::Texture) {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         serde_json::to_vec(&(
             match &tx.pattern {
-                Pattern::Tile(g) => {
-                    (g.width, g.height, g.data.len() as u32, g.data.iter().step_by((g.data.len() / 512).max(1)).map(|v| *v as u32).sum::<u32>())
-                }
                 Pattern::Procedural { style, size, seed } => (*style as u32, *size, *seed, 0),
+                // A bitmap tile (a stored one's preview until it is loaded, #1843).
+                p => p.bitmap().map_or((0, 0, 0, 0), |g| {
+                    (g.width, g.height, g.data.len() as u32, g.data.iter().step_by((g.data.len() / 512).max(1)).map(|v| *v as u32).sum::<u32>())
+                }),
             },
             tx.invert,
             tx.brightness,
@@ -396,8 +396,10 @@ fn pattern_swatch(ui: &mut egui::Ui, tx: &paint::Texture) {
         c.get("texture-swatch", sig, || {
             let img = match &tx.pattern {
                 Pattern::Procedural { style, size, seed } => paint::procedural::pattern(*style, (*size).clamp(4, 1024), *seed),
-                Pattern::Tile(g) if g.is_valid() => paint::tile::PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
-                Pattern::Tile(_) => paint::tile::PatternImage { width: 1, height: 1, data: vec![0.5] },
+                p => match p.bitmap() {
+                    Some(g) if g.is_valid() => paint::tile::PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
+                    _ => paint::tile::PatternImage { width: 1, height: 1, data: vec![0.5] },
+                },
             };
             let (br, ct) = (tx.brightness.clamp(-1.0, 1.0), tx.contrast.clamp(-1.0, 1.0));
             let px: Vec<u8> = (0..n * n)
@@ -427,7 +429,7 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
         ui.vertical(|ui| {
             let mut style = match &tx.pattern {
                 Pattern::Procedural { style, .. } => Some(*style),
-                Pattern::Tile(_) => None,
+                Pattern::Tile(_) | Pattern::Stored(_) => None,
             };
             let mut opts: Vec<(Option<PatternStyle>, &str)> = PATTERNS.iter().map(|(s, l)| (Some(*s), *l)).collect();
             if style.is_none() {
@@ -438,7 +440,7 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
             {
                 let size = match &tx.pattern {
                     Pattern::Procedural { size, .. } => *size,
-                    Pattern::Tile(_) => 128,
+                    Pattern::Tile(_) | Pattern::Stored(_) => 128,
                 };
                 tx.pattern = Pattern::Procedural { style: s, size, seed: 1 };
             }
@@ -498,10 +500,7 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
         d.roundness = pr;
         d.spacing = psp;
     }
-    let orig = match &d.tip {
-        TipShape::Sampled(g) => Some(g.width.max(g.height) as f32),
-        TipShape::Round => None,
-    };
+    let orig = d.tip.bitmap_size().map(|(w, h)| w.max(h) as f32);
     size_row(ui, tl!("Size"), &mut d.size, 2500.0, orig);
     signed_pct(ui, tl!("Spacing"), &mut d.spacing, 0.01, 10.0);
     pct(ui, tl!("Scatter"), &mut d.scatter, 10.0);

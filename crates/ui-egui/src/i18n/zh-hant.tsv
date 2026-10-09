@@ -762,7 +762,7 @@
 	All Caps	全部大寫
 	All Slices	所有切片
 	All User Slices	所有使用者切片
-	All shortcuts reset to Photoshop defaults.	所有快速鍵已重設為 Photoshop 預設值。
+	All shortcuts reset to PhotoCraft defaults.	所有快速鍵已重設為 PhotoCraft 預設值。
 	Alt	Alt
 	Always use pressure for opacity	一律以壓力控制不透明度
 	Always use pressure for size	一律以壓力控制大小
@@ -1083,7 +1083,7 @@
 	Ignore All	全部略過
 	Image Size	影像尺寸
 	Import Brushes…	匯入筆刷…
-	Import Photoshop brushes (.abr)	匯入 Photoshop 筆刷 (.abr)
+	Import brushes (.abr)	匯入筆刷 (.abr)
 	Import Presets	匯入預設集
 	Imported	已匯入
 	Indent First	首行縮排
@@ -1133,7 +1133,6 @@
 	Liquify is not open	液化未開啟
 	Load	載入
 	Load 3D LUT…	載入 3D LUT…
-	Load Photoshop brushes (.abr)	載入 Photoshop 筆刷 (.abr)
 	Load channel as selection	將色版載入為選取範圍
 	Load…	載入…
 	Localized Color Clusters	局部色彩群集
@@ -1529,7 +1528,7 @@
 	Current Tool	目前工具
 	Custom Shape Tool	自訂形狀工具
 	Cyans	青色系
-	Default Photoshop Size	預設 Photoshop 尺寸
+	Default PhotoCraft Size	預設 PhotoCraft 尺寸
 	Delete Workspace	刪除工作區
 	Diamond	菱形
 	Dimensions:	尺寸：
@@ -2160,6 +2159,10 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	檢色器（文字顏色）
+	Color Picker (Fill Color)	檢色器（填滿顏色）
+	Fill color	填滿顏色
+	Color Picker (Stroke Color)	檢色器（筆畫顏色）
+	Stroke color	筆畫顏色
 	Pick screen color	選取螢幕顏色
 	Sample a pixel anywhere on the screen	在螢幕任意位置取樣像素
 	Click to pick · Esc to cancel	按一下選取 · Esc 取消
@@ -2267,3 +2270,18 @@ fontWeight	Italic	斜體
 	Cycle Orientation	循環切換方向
 	Set the overlay options for the Crop tool	設定裁切工具的覆蓋選項
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 按一下被桌面環境攔截了，它用 Alt 拖曳來移動視窗。請把桌面的視窗移動鍵改為 Super，或在 視窗 › 輔助鍵 中鎖定 Alt。
+	Straighten the image by drawing a line on it	在影像上繪製一條線以拉直影像
+	Set additional Crop options	設定其他裁切選項
+	Show Cropped Area	顯示裁切區域
+	Enable Crop Shield	啟用裁切遮蔽
+	Match Canvas	符合畫布
+	Auto Adjust Opacity	自動調整不透明度
+	Crop Shield color	裁切遮蔽顏色
+	Color Picker (Crop Shield Color)	檢色器（裁切遮蔽顏色）
+	From Center	從中心
+	Link radii	連結半徑
+	Star Ratio:	星形比例：
+	Create Rectangle	建立矩形
+	Create Ellipse	建立橢圓
+	Create Triangle	建立三角形
+	Create Polygon	建立多邊形

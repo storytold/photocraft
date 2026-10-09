@@ -455,6 +455,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ("Photography".to_string(), tl!("Photography")),
                         ("Painting".to_string(), tl!("Painting")),
                         ("Graphic and Web".to_string(), tl!("Graphic and Web")),
+                        ("Pixel Art".to_string(), tl!("Pixel Art")),
+                        ("Motion".to_string(), tl!("Motion")),
                     ];
                     // A narrow bar drops what is also in a menu, Discord first (below), then
                     // the theme toggle (Preferences), then search (Edit › Search), and narrows
@@ -988,8 +990,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
                             o.crop_ratio.clear();
                         }
+                        crate::crop_straighten::options_button(&mut app.crop.straighten, ui);
                         crate::crop_overlay::options_button(o, ui);
+                        let pick_shield_color = crate::crop_shield::options_button(&mut o.crop_shield, ui);
                         widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"));
+                        if pick_shield_color {
+                            crate::crop_shield::pick_custom_color(app);
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if icons::button(
                                 ui,
@@ -1823,17 +1830,20 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.close();
             }
         });
-        if icons::button(
-            ui,
-            "layer-mask",
-            26.0,
-            false,
-            &crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
-        )
-        .clicked()
+        // Like Photoshop the button never replaces a mask (#2075): with a layer mask it adds a
+        // vector mask, and with both it is greyed.
+        let alt = ui.input(|i| i.modifiers.alt);
+        let mask_cmd = crate::layer_menu_ui::mask_button_command(active_layer, doc.selection.is_some(), alt);
+        let mask_tip = if active_layer.is_some_and(|l| l.mask.is_some()) {
+            tl!("Add vector mask").to_string()
+        } else {
+            crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
+        };
+        let mask_btn = ui.add_enabled_ui(mask_cmd.is_some(), |ui| icons::button(ui, "layer-mask", 26.0, false, &mask_tip)).inner;
+        if mask_btn.clicked()
+            && let Some(cmd) = mask_cmd
         {
-            let alt = ui.input(|i| i.modifiers.alt);
-            actions.push((crate::layer_menu_ui::add_mask_command(doc.selection.is_some(), alt).into(), json!({})));
+            actions.push((cmd.into(), json!({})));
         }
         let fx = fx_button(ui, 26.0, tl!("Add a layer style"));
         egui::Popup::menu(&fx).open_memory(footer_menu_right_click(&fx)).show(|ui| {

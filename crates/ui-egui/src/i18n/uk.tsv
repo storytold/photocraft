@@ -583,7 +583,7 @@
 	Additional plugins folder	Додаткова тека плагінів
 	Install Plug-in…	Установити плагін…
 	Export Presets	Експортувати набори
-	Import Photoshop brushes (.abr)	Імпортувати пензлі Photoshop (.abr)
+	Import brushes (.abr)	Імпортувати пензлі (.abr)
 	Migrate Presets	Перенести набори
 	Thumbnail size (smallest: list)	Розмір мініатюр (найменший: список)
 	Reset GPU Backend	Скинути графічний бекенд
@@ -1396,7 +1396,7 @@
 	Art & Illustration	Мистецтво та ілюстрація
 	Mobile	Мобільні пристрої
 	Film & Video	Фільм і відео
-	Default Photoshop Size	Типовий розмір Photoshop
+	Default PhotoCraft Size	Типовий розмір PhotoCraft
 	Clipboard	Буфер обміну
 	Photo (2 × 3 in)	Фото (2 × 3 дюйми)
 	Photo (4 × 6 in)	Фото (4 × 6 дюймів)
@@ -1563,7 +1563,7 @@
 	Yes	Так
 	These settings aren't available in PhotoCraft yet.	Ці параметри ще недоступні у PhotoCraft.
 	Shortcut removed.	Клавіатурне скорочення вилучено.
-	All shortcuts reset to Photoshop defaults.	Усі клавіатурні скорочення скинуто до типових значень Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Усі клавіатурні скорочення скинуто до типових значень PhotoCraft.
 	Delete Shortcut	Видалити клавіатурне скорочення
 	Press keys…	Натисніть клавіші…
 	shortcut	клавіатурне скорочення
@@ -2445,6 +2445,10 @@ cameraRaw	Roughness	Шорсткість
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Вибір кольору (колір тексту)
+	Color Picker (Fill Color)	Вибір кольору (колір заливки)
+	Fill color	Колір заливки
+	Color Picker (Stroke Color)	Вибір кольору (колір обведення)
+	Stroke color	Колір обведення
 	Pick screen color	Вибрати колір з екрана
 	Sample a pixel anywhere on the screen	Взяти зразок пікселя будь-де на екрані
 	Click to pick · Esc to cancel	Клацніть для вибору · Esc для скасування
@@ -2572,7 +2576,6 @@ fontWeight	Italic	Курсивний
 	Leading (set to the font size × auto-leading when Auto)	Інтерліньяж (в Авто: розмір шрифту × автоматичний інтерліньяж)
 	Linear Gradient	Лінійний градієнт
 	Link layers	Зв'язати шари
-	Load Photoshop brushes (.abr)	Завантажити пензлі Photoshop (.abr)
 	Lock	Заблокувати
 	Lock all	Заблокувати все
 	Lock image pixels	Заблокувати пікселі зображення
@@ -3399,3 +3402,18 @@ cameraRaw	Masking	Маскування
 	Cycle Orientation	Змінити орієнтацію
 	Set the overlay options for the Crop tool	Задати параметри накладання для інструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-клік перехопило робоче середовище, яке переміщує вікна через Alt-перетягування. Призначте для переміщення вікон клавішу Super або зафіксуйте Alt у меню Вікно › Клавіші-модифікатори.
+	Straighten the image by drawing a line on it	Вирівняти зображення, намалювавши на ньому лінію
+	Set additional Crop options	Задати додаткові параметри кадрування
+	Show Cropped Area	Показати відсічену область
+	Enable Crop Shield	Увімкнути екран кадрування
+	Match Canvas	Як у полотна
+	Auto Adjust Opacity	Автоматично налаштовувати непрозорість
+	Crop Shield color	Колір екрана кадрування
+	Color Picker (Crop Shield Color)	Вибір кольору (колір екрана кадрування)
+	From Center	Від центру
+	Link radii	Зв'язати радіуси
+	Star Ratio:	Пропорції зірки:
+	Create Rectangle	Створити прямокутник
+	Create Ellipse	Створити еліпс
+	Create Triangle	Створити трикутник
+	Create Polygon	Створити багатокутник

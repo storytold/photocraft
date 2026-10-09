@@ -38,7 +38,7 @@ pub fn read_abr(bytes: &[u8], group: &str) -> Result<AbrImport, String> {
 /// [`read_abr`] that checks `ctl` before each brush (and reports progress): a cancelled import
 /// fails with "cancelled".
 pub fn read_abr_with(bytes: &[u8], group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, String> {
-    let f = abr::parse(bytes).map_err(|e| format!("not a readable Photoshop brush file: {e}"))?;
+    let f = abr::parse(bytes).map_err(|e| format!("not a readable brush file (.abr): {e}"))?;
     // Parsing is the small part; mapping (tip decoding) reports 10–100 %.
     ctl.progress(0.1);
     let cancel = || ctl.cancelled();

@@ -61,10 +61,17 @@ fn tile_sig(h: &mut DefaultHasher, t: &paint::GrayTile) {
     t.data.iter().step_by(step).for_each(|v| v.hash(h));
 }
 
+/// A stored tile (#1843) by its key, size and whether its full bitmap is loaded (the preview
+/// drawn until then is replaced once it is).
+fn stored_sig(h: &mut DefaultHasher, r: &paint::StoredTile) {
+    (&r.key, r.width, r.height, r.is_loaded()).hash(h);
+}
+
 fn tip_shape_sig(h: &mut DefaultHasher, t: &TipShape) {
     match t {
         TipShape::Round => 0u8.hash(h),
         TipShape::Sampled(g) => tile_sig(h, g),
+        TipShape::Stored(r) => stored_sig(h, r),
     }
 }
 
@@ -82,6 +89,7 @@ pub fn preview_sig(b: &BrushSettings) -> u64 {
     js(&mut h, &(t.enabled, t.invert, t.scale, t.brightness, t.contrast, t.each_tip, t.mode, t.depth, t.depth_jitter));
     match &t.pattern {
         Pattern::Tile(g) => tile_sig(&mut h, g),
+        Pattern::Stored(r) => stored_sig(&mut h, r),
         p => js(&mut h, p),
     }
     h.finish()
@@ -156,10 +164,8 @@ pub fn tip_alpha(tip: &TipShape, hardness: f32, angle: f32, roundness: f32, flip
     let r = c - 1.0;
     let (sin, cos) = angle.to_radians().sin_cos();
     let round = roundness.clamp(0.01, 1.0);
-    let sampled = match tip {
-        TipShape::Sampled(g) => Some(shrink(g, n * 2)),
-        TipShape::Round => None,
-    };
+    // A stored tip draws from its saved preview unless loaded (#1843).
+    let sampled = tip.bitmap().map(|g| shrink(g, n * 2));
     let mut out = vec![0.0f32; (n * n) as usize];
     // 2×2 supersampling keeps small thumbnails smooth.
     for y in 0..n {
@@ -307,6 +313,26 @@ mod tests {
         let t0 = std::time::Instant::now();
         preview_pixels(&b, 488, 76, [1.0; 4]);
         eprintln!("strip render: {:.2} ms", t0.elapsed().as_secs_f64() * 1e3);
+    }
+
+    #[test]
+    fn stored_tips_draw_their_saved_preview_until_loaded() {
+        // #1843: library presets keep a small preview, and thumbnails never need the full tip.
+        let full = paint::GrayTile::from_fn(900, 300, |x, _| if x < 450 { 1.0 } else { 0.4 });
+        let r =
+            paint::StoredTile { key: "k".into(), width: 900, height: 300, preview: std::sync::Arc::new(full.preview(paint::tile::PREVIEW_SIDE)), full: None };
+        let loaded = paint::StoredTile { full: Some(std::sync::Arc::new(full.clone())), ..r.clone() };
+        let n = 36;
+        let thumb = |t: &TipShape| tip_alpha(t, 1.0, 0.0, 1.0, (false, false), n);
+        let (from_preview, from_full) = (thumb(&TipShape::Stored(r.clone())), thumb(&TipShape::Sampled(full)));
+        let worst = from_preview.iter().zip(&from_full).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 0.05, "preview thumbnail differs by {worst}");
+        // Loading the tip re-renders the thumbnail; the stroke preview paints with the preview.
+        let sig = |t: paint::StoredTile| tip_sig(&TipShape::Stored(t), 1.0, 0.0, 1.0, (false, false));
+        assert_ne!(sig(r.clone()), sig(loaded));
+        let b = BrushSettings { tip: TipShape::Stored(r), size: 900.0, ..Default::default() };
+        let px = preview_pixels(&b, 120, 40, [1.0, 0.0, 0.0, 1.0]);
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[3] > 128));
     }
 
     #[test]

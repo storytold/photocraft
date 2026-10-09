@@ -139,8 +139,8 @@ fn list() {
                      pillow-heif@{} (BSD-3-Clause), manifest xtask/heif-corpus.sha256. Fetch: --heif
   corpus/exr/        [{}] the deep OpenEXR test images (BSD-3-Clause), openexr@{}
                      manifest xtask/exr-corpus.sha256. Fetch: --exr
-  corpus/affinity/   [{}] 21 public Affinity 1–3 documents (CC0, MIT): vector-art, AFDesignLoad,
-                     Jac21/Branding, AssetStoreTemplate; manifest xtask/affinity-corpus.sha256. Fetch: --affinity
+  corpus/affinity/   [{}] public Affinity documents and #1606 samples (CC0, MIT), with PNG references;
+                     manifest xtask/affinity-corpus.sha256. Fetch: --affinity
   corpus/pngsuite/   [{}] PngSuite (public domain), {PNGSUITE_URL}. Fetch: --pngsuite
   corpus/pixls/      [opt-in] real camera raws from raw.pixls.us (public domain), one per decode
                      path plus the known-unsupported packed ORF. Fetch: --pixls (opt-in)

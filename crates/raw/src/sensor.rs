@@ -3,7 +3,7 @@
 use crate::color::ColorInfo;
 use crate::error::{RawError, Result};
 use crate::tiff::{Ifd, Tiff, tag};
-use crate::{Limits, RawFormat, ljpeg, par};
+use crate::{Limits, RawFormat, jxl, ljpeg, par};
 
 /// A rectangle in sensor-data pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,7 +189,10 @@ pub(crate) enum JpegLayout {
     Quads,
 }
 
-/// Reads the (uncompressed or lossless-JPEG) image of a raw IFD.
+/// DNG 1.7 JPEG XL compression.
+const JPEG_XL: u32 = 52546;
+
+/// Reads the (uncompressed, lossless-JPEG or JPEG XL) image of a raw IFD.
 pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayout) -> Result<Plane> {
     let width = t.tag_uint(ifd, tag::IMAGE_WIDTH).ok_or_else(|| RawError::malformed("raw image has no width"))? as usize;
     let height = t.tag_uint(ifd, tag::IMAGE_LENGTH).ok_or_else(|| RawError::malformed("raw image has no height"))? as usize;
@@ -209,9 +212,8 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         return Err(RawError::unsupported("planar raw data"));
     }
     match compression {
-        1 | 7 | 8 => {}
+        1 | 7 | 8 | JPEG_XL => {}
         34892 => return Err(RawError::unsupported("lossy-compressed DNG")),
-        52546 => return Err(RawError::unsupported("JPEG XL-compressed DNG")),
         34713 => return Err(RawError::unsupported("Nikon compressed NEF")),
         32767 => return Err(RawError::unsupported("Sony compressed ARW")),
         65535 => return Err(RawError::unsupported("Pentax compressed PEF")),
@@ -245,6 +247,13 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
                     3 => Err(RawError::unsupported("floating-point predictor (compression 8, predictor 3)")),
                     p => Err(RawError::malformed(format!("unknown predictor {p}"))),
                 }
+            }
+            // A JPEG XL segment codes only the rows inside the image (strips) or the whole tile.
+            JPEG_XL => {
+                let coded_rows = if t.tag_uint(ifd, tag::TILE_WIDTH).is_some() { s.h } else { rows };
+                let mut v = jxl::decode(src, s.w, coded_rows, samples, bits, limits)?;
+                v.resize(s.w * s.h * samples, 0);
+                Ok(v)
             }
             _ => {
                 let need = s.w * rows * samples;
