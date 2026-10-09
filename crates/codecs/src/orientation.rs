@@ -274,12 +274,12 @@ fn orient_n<const N: usize>(src: &[u8], o: u16, (w, h): (usize, usize), ow: usiz
     let (s, _) = src.as_chunks::<N>();
     let (d, _) = out.as_chunks_mut::<N>();
     let per = (BAND * ow).max(1);
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         d.par_chunks_mut(per).enumerate().for_each(|(b, chunk)| band(s, chunk, o, (w, h), ow, b * BAND));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     for (b, chunk) in d.chunks_mut(per).enumerate() {
         band(s, chunk, o, (w, h), ow, b * BAND);
     }

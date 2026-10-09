@@ -137,7 +137,7 @@ impl GpuCanvas {
         let mut res = Resources::new(&rs.device, &rs.queue, rs.target_format, high != HighPolicy::Off);
         res.health = health.clone();
         res.separate_mip_targets = rs.adapter.get_info().backend == wgpu::Backend::Dx12;
-        rs.renderer.write().callback_resources.insert(res);
+        rs.renderer.write().callback_resources.insert(stored(res));
         log::info!("gpu canvas: target {:?}, max texture {max}, tile {tile}, 16F canvas {high:?}", rs.target_format);
         Self { rs: rs.clone(), tile, high, health }
     }
@@ -156,7 +156,7 @@ impl GpuCanvas {
     /// a fault; the paint callback draws nothing from then on.
     pub fn release(&self) {
         let mut r = self.rs.renderer.write();
-        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+        if let Some(res) = r.callback_resources.get_mut::<StoredResources>() {
             res.compositor = None;
             res.compositor_failed = Some(photocraft_gpu::Unsupported(self.fault().map_or_else(|| "GPU canvas released".into(), |f| f.to_string())));
             res.docs.clear();
@@ -192,7 +192,7 @@ impl GpuCanvas {
     /// Format and GPU bytes (all tiles, all mip levels) of document `key`'s canvas texture.
     pub fn texture_info(&self, key: u64) -> Option<(wgpu::TextureFormat, u64)> {
         let r = self.rs.renderer.read();
-        let d = r.callback_resources.get::<Resources>()?.docs.get(&key)?;
+        let d = r.callback_resources.get::<StoredResources>()?.docs.get(&key)?;
         let bpp = texel_bytes(d.format);
         let bytes = d
             .tiles
@@ -206,7 +206,7 @@ impl GpuCanvas {
     /// [`memory_budget`]); pages beyond it are evicted least recently used first.
     pub fn set_memory_budget(&self, bytes: u64) {
         let mut r = self.rs.renderer.write();
-        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+        if let Some(res) = r.callback_resources.get_mut::<StoredResources>() {
             res.compositor_budget = Some(bytes);
         }
     }
@@ -214,14 +214,14 @@ impl GpuCanvas {
     /// The compositor's memory budget (`None` until [`GpuCanvas::set_memory_budget`]).
     pub fn memory_budget(&self) -> Option<u64> {
         let r = self.rs.renderer.read();
-        r.callback_resources.get::<Resources>()?.compositor_budget
+        r.callback_resources.get::<StoredResources>()?.compositor_budget
     }
 
     /// The document area the view shows: full refreshes composite it last, so its layer pages
     /// are the ones still resident for the edits that follow.
     pub fn set_focus(&self, focus: Option<photocraft_geom::Rect>) {
         let mut r = self.rs.renderer.write();
-        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+        if let Some(res) = r.callback_resources.get_mut::<StoredResources>() {
             res.compositor_focus = focus;
         }
     }
@@ -229,14 +229,14 @@ impl GpuCanvas {
     /// GPU bytes the wgpu compositor holds: resident layer pages and cached effect maps.
     pub fn compositor_bytes(&self) -> Option<(u64, usize)> {
         let r = self.rs.renderer.read();
-        let c = r.callback_resources.get::<Resources>()?.compositor.as_ref()?;
+        let c = r.callback_resources.get::<StoredResources>()?.compositor.as_ref()?;
         Some((c.resident_bytes(), c.fx_cache_bytes()))
     }
 
     /// Set the checkerboard and gamut warning colours.
     pub fn set_style(&self, style: CanvasStyle) {
         let mut r = self.rs.renderer.write();
-        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+        if let Some(res) = r.callback_resources.get_mut::<StoredResources>() {
             res.style = style;
         }
     }
@@ -244,7 +244,7 @@ impl GpuCanvas {
     /// Whether document `doc` has been uploaded with this size.
     pub fn has(&self, doc: u64, size: [u32; 2]) -> bool {
         let r = self.rs.renderer.read();
-        r.callback_resources.get::<Resources>().and_then(|res| res.docs.get(&doc)).is_some_and(|d| d.size == size)
+        r.callback_resources.get::<StoredResources>().and_then(|res| res.docs.get(&doc)).is_some_and(|d| d.size == size)
     }
 
     /// Whether [`GpuCanvas::composite`] would draw `doc` with the wgpu compositor (rather than
@@ -254,7 +254,7 @@ impl GpuCanvas {
             return false;
         }
         let r = self.rs.renderer.read();
-        let Some(res) = r.callback_resources.get::<Resources>() else { return false };
+        let Some(res) = r.callback_resources.get::<StoredResources>() else { return false };
         if res.compositor_failed.is_some() {
             return false;
         }
@@ -278,7 +278,7 @@ impl GpuCanvas {
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() else { return };
         if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
             let tex = DocTextures::new(device, res, size, self.tile, format);
             res.docs.insert(doc, tex);
@@ -297,7 +297,7 @@ impl GpuCanvas {
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() else { return false };
         let Some(d) = res.docs.get(&doc) else { return false };
         if texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(d.format)
             || origin[0].saturating_add(size[0]) > d.size[0]
@@ -316,7 +316,7 @@ impl GpuCanvas {
     /// The texture format of uploaded document `doc`.
     fn format_of(&self, doc: u64) -> Option<wgpu::TextureFormat> {
         let r = self.rs.renderer.read();
-        r.callback_resources.get::<Resources>().and_then(|res| res.docs.get(&doc)).map(|d| d.format)
+        r.callback_resources.get::<StoredResources>().and_then(|res| res.docs.get(&doc)).map(|d| d.format)
     }
 
     /// Upload a CPU composite covering the whole document (a preview of a document of `depth`:
@@ -360,7 +360,7 @@ impl GpuCanvas {
             return Err(photocraft_gpu::Unsupported(f.to_string()));
         }
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return Err(photocraft_gpu::Unsupported("no GPU canvas".into())) };
+        let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() else { return Err(photocraft_gpu::Unsupported("no GPU canvas".into())) };
         // A driver that couldn't build the pipelines once won't later: stay on the CPU compositor.
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
@@ -546,7 +546,7 @@ impl GpuCanvas {
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         {
             let mut renderer = self.rs.renderer.write();
-            let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+            let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() else { return };
             if res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format) {
                 let tex = DocTextures::new(device, res, size, self.tile, format);
                 res.docs.insert(key, tex);
@@ -559,7 +559,7 @@ impl GpuCanvas {
             }
             texels_into(format, &texture_buffer(display, &band).px, &mut rgba);
             let renderer = self.rs.renderer.read();
-            let d = renderer.callback_resources.get::<Resources>().and_then(|r| r.docs.get(&key)).ok_or(())?;
+            let d = renderer.callback_resources.get::<StoredResources>().and_then(|r| r.docs.get(&key)).ok_or(())?;
             d.write(queue, [0, band.rect.y0 as u32], [size[0], band.rect.height()], size[0], &rgba);
             drop(renderer);
             // Flush the staged band so its staging memory is reclaimed while the next renders.
@@ -571,7 +571,7 @@ impl GpuCanvas {
             return;
         }
         let mut renderer = self.rs.renderer.write();
-        if let Some(res) = renderer.callback_resources.get_mut::<Resources>()
+        if let Some(res) = renderer.callback_resources.get_mut::<StoredResources>()
             && let Some(d) = res.docs.get(&key)
         {
             d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
@@ -581,7 +581,7 @@ impl GpuCanvas {
     /// Free textures, display LUTs and their signatures for documents not in `live`.
     pub fn retain(&self, live: &[u64]) {
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() else { return };
         if res.docs.keys().any(|k| !live.contains(k)) {
             let gone: Vec<u64> = res.docs.keys().filter(|k| !live.contains(k)).copied().collect();
             if let Some(c) = res.compositor.as_mut() {
@@ -599,19 +599,19 @@ impl GpuCanvas {
 
     pub(crate) fn display_lut_signature(&self, doc: u64, output: u32) -> Option<(u64, u8)> {
         let renderer = self.rs.renderer.read();
-        renderer.callback_resources.get::<Resources>()?.display_lut_signatures.get(&(doc, output)).copied()
+        renderer.callback_resources.get::<StoredResources>()?.display_lut_signatures.get(&(doc, output)).copied()
     }
 
     /// Whether document `doc` has a display LUT for display `output` (tests).
     #[cfg(test)]
     pub(crate) fn has_display_lut(&self, doc: u64, output: u32) -> bool {
         let renderer = self.rs.renderer.read();
-        renderer.callback_resources.get::<Resources>().is_some_and(|r| r.luts.contains_key(&(doc, output)))
+        renderer.callback_resources.get::<StoredResources>().is_some_and(|r| r.luts.contains_key(&(doc, output)))
     }
 
     pub(crate) fn cache_display_lut_signature(&self, doc: u64, output: u32, signature: u64, mode: u8) {
         let mut renderer = self.rs.renderer.write();
-        if let Some(res) = renderer.callback_resources.get_mut::<Resources>() {
+        if let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() {
             res.display_lut_signatures.insert((doc, output), (signature, mode));
         }
     }
@@ -625,7 +625,7 @@ impl GpuCanvas {
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let Some(res) = renderer.callback_resources.get_mut::<StoredResources>() else { return };
         res.display_lut_signatures.remove(&(doc, output));
         match rgba {
             None => {
@@ -652,7 +652,7 @@ impl GpuCanvas {
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let renderer = self.rs.renderer.read();
-        let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
+        let d = renderer.callback_resources.get::<StoredResources>()?.docs.get(&key)?;
         let bpp = texel_bytes(d.format);
         let (w, h) = (d.size[0] as usize, d.size[1] as usize);
         let mut out = vec![[0.0f32; 4]; w.checked_mul(h)?];
@@ -1097,6 +1097,23 @@ fn detect_physical_memory() -> Option<u64> {
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
 fn detect_physical_memory() -> Option<u64> {
     None
+}
+
+/// How [`Resources`] sit in egui-wgpu's `callback_resources`, which requires `Send + Sync`. wgpu's
+/// objects are neither on wasm with threads (`atomics`), so that build keeps them in a
+/// `SendWrapper`, which checks at runtime that only the main thread (where egui paints) uses them.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+type StoredResources = send_wrapper::SendWrapper<Resources>;
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+type StoredResources = Resources;
+
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+fn stored(res: Resources) -> StoredResources {
+    send_wrapper::SendWrapper::new(res)
+}
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+fn stored(res: Resources) -> StoredResources {
+    res
 }
 
 struct Resources {
@@ -1699,7 +1716,9 @@ impl CallbackTrait for CanvasCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
+        let Some(res) = resources.get_mut::<StoredResources>() else { return Vec::new() };
+        // One deref up front, so the fields below borrow separately through the threads build's wrapper.
+        let res: &mut Resources = res;
         if !res.health.is_ok() {
             return Vec::new();
         }
@@ -1730,7 +1749,7 @@ impl CallbackTrait for CanvasCallback {
     }
 
     fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &CallbackResources) {
-        let Some(res) = resources.get::<Resources>() else { return };
+        let Some(res) = resources.get::<StoredResources>() else { return };
         if !res.health.is_ok() {
             return;
         }

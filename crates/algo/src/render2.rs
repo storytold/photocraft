@@ -252,12 +252,12 @@ pub fn composite(surface: &mut Surface, prims: &[Prim], clip: Rect, selection: O
         }
         (*t, data)
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let results: Vec<(Rect, Vec<f32>)> = {
         use rayon::prelude::*;
         jobs.par_iter().map(run).collect()
     };
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let results: Vec<(Rect, Vec<f32>)> = jobs.iter().map(run).collect();
     for (t, data) in results {
         surface.write_region(t, &data);

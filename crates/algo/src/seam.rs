@@ -29,12 +29,12 @@ pub fn energy(w: usize, h: usize, ch: usize, img: &[f32]) -> Vec<f32> {
             *v = energy_at(img, w, w, h, ch, x, y);
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         e.par_chunks_mut(w).enumerate().for_each(row);
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     e.chunks_mut(w).enumerate().for_each(row);
     e
 }
@@ -191,12 +191,12 @@ impl Carver {
                 e[x] = v;
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         {
             use rayon::prelude::*;
             self.e.par_chunks_mut(stride).enumerate().for_each(row);
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         self.e.chunks_mut(stride).enumerate().for_each(row);
     }
 
@@ -214,12 +214,12 @@ impl Carver {
 /// are in use, by shifting the rest of the row left.
 fn shift_rows<T: Copy + Send>(buf: &mut [T], row_len: usize, seam: &[usize], n: usize, cw: usize) {
     let shift = |(r, &x): (&mut [T], &usize)| r.copy_within((x + 1) * n..cw * n, x * n);
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         buf.par_chunks_mut(row_len).zip(seam.par_iter()).for_each(shift);
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     buf.chunks_mut(row_len).zip(seam).for_each(shift);
 }
 

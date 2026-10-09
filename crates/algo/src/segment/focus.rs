@@ -75,12 +75,12 @@ pub fn focus_area(sampler: &dyn Sampler, canvas: Rect, range: f32, noise: f32) -
             *px = (((v - 0.5) * 3.0 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         out.par_chunks_mut(fw).enumerate().for_each(|(y, o)| row(y, o));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     out.chunks_mut(fw).enumerate().for_each(|(y, o)| row(y, o));
     super::trim_region(Region { bbox: canvas, mask: out })
 }

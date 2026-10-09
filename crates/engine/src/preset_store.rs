@@ -575,12 +575,12 @@ fn decode_tips(backend: &dyn PresetBackend, hashes: &[String], sizes: &HashMap<S
     // Reads stay sequential (the backend need not be Sync); decoding is the expensive part.
     let raw: Vec<Result<Vec<u8>, String>> = hashes.iter().map(read).collect();
     let dec = |r: &Result<Vec<u8>, String>| r.as_ref().map_err(Clone::clone).and_then(|b| decode_tip(b));
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         raw.par_iter().map(dec).collect()
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     {
         raw.iter().map(dec).collect()
     }

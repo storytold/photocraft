@@ -52,3 +52,9 @@ photocraft-psd = { workspace = true }
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
+
+# The browser threads build (wasm with `atomics`, packaging/web-threads) takes the rayon paths too.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+rayon = { workspace = true }
+# wgpu objects are !Send/!Sync with atomics; the GPU canvas keeps them in a main-thread SendWrapper.
+send_wrapper = "0.6"

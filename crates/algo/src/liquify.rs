@@ -651,12 +651,12 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
         }
         Some((*t, outp))
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let done: Vec<(Rect, Vec<f32>)> = {
         use rayon::prelude::*;
         tiles.par_iter().filter_map(work).collect()
     };
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let done: Vec<(Rect, Vec<f32>)> = tiles.iter().filter_map(work).collect();
     for (r, v) in done {
         out.write_region(r, &v);
@@ -714,12 +714,12 @@ impl ProxyImage {
                 }
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         {
             use rayon::prelude::*;
             px.par_chunks_mut(w).enumerate().for_each(|(y, row)| fill_rows(y, row));
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         px.chunks_mut(w).enumerate().for_each(|(y, row)| fill_rows(y, row));
         ProxyImage { bounds, scale, w, h, px }
     }
@@ -751,7 +751,7 @@ impl ProxyImage {
         };
         let rows = &mut out[y0 * self.w..y1 * self.w];
         // A dab's few thousand pixels are faster on this thread than waking the pool.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         if (x1 - x0) * (y1 - y0) > 150_000 {
             use rayon::prelude::*;
             rows.par_chunks_mut(self.w).enumerate().for_each(|(i, line)| row(y0 + i, line));

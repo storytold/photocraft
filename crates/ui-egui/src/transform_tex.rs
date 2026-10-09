@@ -178,12 +178,12 @@ pub fn read_surface(surf: &photocraft_raster::Surface, mask: Option<&PreviewMask
             *o = Color32::from_rgba_premultiplied(v[0], v[1], v[2], v[3]);
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         px.par_chunks_mut(tw).enumerate().for_each(|(ty, out)| band(ty, out));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     for (ty, out) in px.chunks_mut(tw).enumerate() {
         band(ty, out);
     }
