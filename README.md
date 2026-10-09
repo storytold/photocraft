@@ -275,6 +275,80 @@ flatpak install --user photocraft-<version>-linux-x86_64.flatpak   # or -linux-a
 flatpak run ai.storyteller.photocraft
 ```
 
+### Nix / NixOS / Home Manager
+
+PhotoCraft includes a Nix flake providing packages, a development shell, an overlay, and NixOS/Home Manager modules.
+
+Run directly via the flake:
+
+```sh
+nix run github:storytold/photocraft              # GUI app
+nix run github:storytold/photocraft#photocraft-cli -- --help # CLI tool
+nix develop github:storytold/photocraft          # Rust dev environment
+```
+
+#### NixOS
+
+Add the flake input and import the module:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    photocraft.url = "github:storytold/photocraft";
+  };
+
+  outputs = { nixpkgs, photocraft, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        photocraft.nixosModules.default
+        {
+          programs.photocraft.enable = true;
+          # Optional override:
+          # programs.photocraft.package = pkgs.photocraft;
+        }
+      ];
+    };
+  };
+}
+```
+
+#### Home Manager
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    photocraft.url = "github:storytold/photocraft";
+  };
+
+  outputs = { nixpkgs, home-manager, photocraft, ... }: {
+    homeConfigurations."user@myhost" = home-manager.lib.homeManagerConfiguration {
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      modules = [
+        photocraft.homeManagerModules.default
+        {
+          programs.photocraft.enable = true;
+        }
+      ];
+    };
+  };
+}
+```
+
+#### Nixpkgs Overlay
+
+If you want `photocraft` available in `pkgs` without adding another nixpkgs instance:
+
+```nix
+{
+  nixpkgs.overlays = [ photocraft.overlays.default ];
+  # pkgs.photocraft and pkgs.photocraft-cli are now available
+}
+```
+
 The AppImage needs no install: the first run registers its launcher icon and menu entry in `~/.local/share` so the dock shows PhotoCraft's icon on Wayland. Set `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` to skip that, and see [`docs/releasing.md`](docs/releasing.md) › Linux to undo it.
 
 On a Wayland session, files dropped on the window don't open yet: winit 0.30, the windowing library under egui, has no Wayland drag and drop (#386). Use File › Open, or copy the image in your file manager and paste it with Ctrl+V. To drag and drop, start PhotoCraft under XWayland: `WAYLAND_DISPLAY= photocraft`, `WAYLAND_DISPLAY= ./photocraft-<version>-linux-x86_64.AppImage`, or `flatpak run --nosocket=wayland --socket=x11 ai.storyteller.photocraft`. On Wayland, PhotoCraft shows the command for your install in a notice until you dismiss it.
