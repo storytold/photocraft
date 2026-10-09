@@ -571,7 +571,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "app.open" => match s("path") {
             Some(path) => {
-                if matches!(path.rsplit('.').next().map(str::to_ascii_lowercase).as_deref(), Some("psd" | "psb" | "psdt"))
+                if matches!(path.rsplit('.').next().map(str::to_ascii_lowercase).as_deref(), Some("psd" | "psb" | "psdt" | "exr"))
                     && let Some(import) = app.services.automation_import_path.clone()
                 {
                     return run_waiting(app, wait, |app| crate::jobs_ui::open_authorized(app, path.into(), import));
@@ -906,6 +906,44 @@ mod tests {
         app.automation_input = true;
         let error = crate::menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap_err();
         assert_eq!(error, "filesystem command denied");
+    }
+
+    #[test]
+    fn automation_exr_open_uses_authorized_seekable_import() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let reads = Arc::new(AtomicUsize::new(0));
+        let imported = reads.clone();
+        let services = crate::Services {
+            automation_import_path: Some(Arc::new(move |path, _| {
+                assert_eq!(path, "in/starmap.EXR");
+                imported.fetch_add(1, Ordering::Relaxed);
+                Ok((
+                    photocraft_doc::Document::new(
+                        "starmap.EXR",
+                        photocraft_geom::Size::new(65536, 32768),
+                        photocraft_color::ColorMode::Rgb,
+                        photocraft_color::SampleType::F32,
+                    ),
+                    Vec::new(),
+                ))
+            })),
+            automation_read: Some(Box::new(|_| Err("whole-file read must not run".into()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let response = call(&mut app, &egui::Context::default(), "app.open", json!({"path": "in/starmap.EXR", "wait": false}));
+        assert_eq!(response["ok"], true, "{response}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.session.jobs().is_empty() && std::time::Instant::now() < deadline {
+            app.session.poll_jobs();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(app.session.jobs().is_empty(), "EXR import did not finish");
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+        assert_eq!(app.session.active().unwrap().doc.size, photocraft_geom::Size::new(65536, 32768));
     }
 
     #[test]
