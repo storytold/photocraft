@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use egui_kittest::kittest::Queryable;
-use photocraft_ui_egui::{PhotocraftApp, Services, menus};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services, menus};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
@@ -20,7 +20,13 @@ fn harness() -> Option<(Harness, Writes)> {
             move |cc| {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
                 let services = Services {
-                    pick_save: Some(Box::new(|suggested| Some(suggested.to_string()))),
+                    // Save dialogs answer with the suggested name.
+                    file_dialog: Some(Box::new(|request, _parent, reply| {
+                        reply.send(match request {
+                            FileDialogRequest::Save { suggested } => Some(FileDialogAnswer::SaveTo(suggested)),
+                            FileDialogRequest::Open { .. } => None,
+                        })
+                    })),
                     export: Some(Box::new(|doc, path, settings| {
                         let opts = photocraft_io::ExportOptions {
                             xmp: if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None },

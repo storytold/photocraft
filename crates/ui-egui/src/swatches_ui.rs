@@ -171,20 +171,20 @@ pub fn import_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8], replace: 
 }
 
 fn import_dialog(app: &mut PhotocraftApp, replace: bool) -> Result<Value, String> {
-    let (name, bytes) = app.pick_file_bytes().ok_or("cancelled")??;
-    import_bytes(app, &name, &bytes, replace)
+    app.pick_file_bytes(move |app, name, bytes| import_bytes(app, &name, &bytes, replace))
 }
 
 fn export_dialog(app: &mut PhotocraftApp, format: &str) -> Result<Value, String> {
     let r = app.run("swatches.export", json!({"format": format}))?;
     let bytes = r["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the export returned no data")?;
-    let path = app.services.pick_save.as_mut().and_then(|f| f(&format!("Swatches.{format}"))).ok_or("cancelled")?;
-    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(&path, &bytes)?;
     let n = r["count"].as_u64().unwrap_or(0);
-    app.ui.status_error = false;
-    app.ui.status = format!("Exported {n} swatches to {}", crate::file_open::display_name(&path));
-    Ok(json!({"path": path, "count": n}))
+    app.pick_save(&format!("Swatches.{format}"), move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status_error = false;
+        app.ui.status = format!("Exported {n} swatches to {}", crate::file_open::display_name(&path));
+        Ok(json!({"path": path, "count": n}))
+    })
 }
 
 /// The Swatches entries of the panel group's menu ("…").
@@ -348,9 +348,14 @@ mod tests {
         let aco =
             photocraft_psd::aco::write(&[photocraft_psd::aco::AcoSwatch { name: "Teal".into(), color: photocraft_psd::aco::AcoColor::Rgb([0, 32768, 32768]) }])
                 .unwrap();
+        use crate::file_dialog::FileDialogAnswer;
+        let answers = vec![
+            Some(FileDialogAnswer::Contents("Ocean.aco".into(), aco.clone())),
+            Some(FileDialogAnswer::Contents("Ocean.aco".into(), aco)),
+            Some(FileDialogAnswer::SaveTo("out/Swatches.ase".into())),
+        ];
         let services = crate::Services {
-            pick_open: Some(Box::new(move || Some(("Ocean.aco".to_string(), Ok(aco.clone()))))),
-            pick_save: Some(Box::new(|s: &str| Some(format!("out/{s}")))),
+            file_dialog: Some(crate::file_dialog::fake(answers).0),
             write: Some(Box::new(move |p: &str, b: &[u8]| {
                 w.lock().unwrap().push((p.to_string(), b.to_vec()));
                 Ok(())
@@ -358,11 +363,16 @@ mod tests {
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        // Each dialog answers at the end of the frame.
+        let frame = |app: &mut PhotocraftApp| app.poll_file_dialog(&egui::Context::default(), None);
         import_dialog(&mut app, false).unwrap();
+        frame(&mut app);
         assert_eq!(app.session.presets.swatches.last().unwrap().name, "Ocean");
         import_dialog(&mut app, true).unwrap();
+        frame(&mut app);
         assert_eq!(app.session.presets.swatches.len(), 1, "replace");
         export_dialog(&mut app, "ase").unwrap();
+        frame(&mut app);
         let out = written.lock().unwrap();
         assert_eq!(out[0].0, "out/Swatches.ase");
         assert!(out[0].1.starts_with(b"ASEF"));
