@@ -366,6 +366,8 @@ impl Builder {
                 let style = match g.kind {
                     GradientKind::Linear => GradientStyle::Linear,
                     GradientKind::Radial => GradientStyle::Radial,
+                    // Affinity's conical ramp is an angular sweep around the gradient origin;
+                    // PhotoCraft represents that geometry with its Angle style.
                     GradientKind::Conical => GradientStyle::Angle,
                 };
                 let m = to_doc.mul(&affine(g.transform));
