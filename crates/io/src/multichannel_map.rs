@@ -60,7 +60,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<
     // Photoshop's Multichannel mode is 8 or 16 bits per channel.
     let sample = match doc.depth {
         SampleType::F32 => {
-            warnings.push("32-bit Multichannel written as 16 bits/channel (Photoshop has no 32-bit Multichannel)".into());
+            warnings.push("32-bit Multichannel written as 16 bits/channel (PSD does not support 32-bit Multichannel)".into());
             SampleType::U16
         }
         s => s,

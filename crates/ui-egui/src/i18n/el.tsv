@@ -239,8 +239,7 @@
 	Filter for shape layers	Φιλτράρισμα επιπέδων σχημάτων
 	Filter for type layers	Φιλτράρισμα επιπέδων κειμένου
 	Import Brushes…	Εισαγωγή πινέλων…
-	Import Photoshop brushes (.abr)	Εισαγωγή πινέλων Photoshop (.abr)
-	Load Photoshop brushes (.abr)	Φόρτωση πινέλων Photoshop (.abr)
+	Import brushes (.abr)	Εισαγωγή πινέλων (.abr)
 	Mask All	Απόκρυψη όλων με μάσκα
 	Mask Options	Επιλογές μάσκας
 	Masking	Χρήση μασκών
@@ -1929,7 +1928,7 @@
 	All Caps	Όλα κεφαλαία
 	All Slices	Όλες οι τομές
 	All User Slices	Όλες οι τομές χρήστη
-	All shortcuts reset to Photoshop defaults.	Όλες οι συντομεύσεις επανήλθαν στις προεπιλογές του Photoshop.
+	All shortcuts reset to defaults.	Όλες οι συντομεύσεις επανήλθαν στις προεπιλογές.
 	Alternates for Current Selection	Εναλλακτικοί χαρακτήρες για την τρέχουσα επιλογή
 	Altitude	Υψόμετρο
 	Always	Πάντα
@@ -3305,7 +3304,7 @@ cameraRaw	Yellow	Κίτρινο
 	Color…	Χρώμα…
 	Cone (Inverted)	Κώνος (αντεστραμμένος)
 	Could not open	Δεν ήταν δυνατό το άνοιγμα
-	Default Photoshop Size	Προεπιλεγμένο μέγεθος Photoshop
+	Default Size	Προεπιλεγμένο μέγεθος
 	Diagonal (Descending)	Διαγώνιος (φθίνουσα)
 	DirectX 12	DirectX 12
 	Display p3	Display P3

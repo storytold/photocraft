@@ -35,7 +35,7 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 /// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
 /// keeps defaulting to Photoshop.
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
-    ("Photoshop", &["psd", "psb"]),
+    ("PSD Document", &["psd", "psb"]),
     ("PhotoCraft", &["pcraft"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg"]),
@@ -529,7 +529,7 @@ mod tests {
         for (name, ext) in asked.iter().zip(exts) {
             assert!(save_filters(name)[0].1.iter().any(|e| e == ext), "{name}: {:?}", save_filters(name)[0]);
         }
-        assert_eq!(save_filters("Untitled")[0].0, "Photoshop", "no extension keeps the default");
+        assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
     }
 
     #[test]

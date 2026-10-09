@@ -754,7 +754,7 @@
 	All Caps	Todo en mayúsculas
 	All Slices	Todas las secciones
 	All User Slices	Todas las secciones de usuario
-	All shortcuts reset to Photoshop defaults.	Se restablecieron todos los atajos a los valores predeterminados de Photoshop.
+	All shortcuts reset to defaults.	Se restablecieron todos los atajos a los valores predeterminados.
 	Alt	Alt
 	Always use pressure for opacity	Usar siempre la presión para la opacidad
 	Always use pressure for size	Usar siempre la presión para el tamaño
@@ -1075,7 +1075,7 @@
 	Ignore All	Ignorar todo
 	Image Size	Tamaño de imagen
 	Import Brushes…	Importar pinceles…
-	Import Photoshop brushes (.abr)	Importar pinceles de Photoshop (.abr)
+	Import brushes (.abr)	Importar pinceles (.abr)
 	Import Presets	Importar preajustes
 	Imported	Importado
 	Indent First	Sangría primera
@@ -1125,7 +1125,6 @@
 	Liquify is not open	Licuar no está abierto
 	Load	Cargar
 	Load 3D LUT…	Cargar LUT 3D…
-	Load Photoshop brushes (.abr)	Cargar pinceles de Photoshop (.abr)
 	Load channel as selection	Cargar el canal como selección
 	Load…	Cargar…
 	Localized Color Clusters	Agrupaciones de color localizadas
@@ -1521,7 +1520,7 @@
 	Current Tool	Herramienta actual
 	Custom Shape Tool	Herramienta Forma personalizada
 	Cyans	Cianes
-	Default Photoshop Size	Tamaño predeterminado de Photoshop
+	Default Size	Tamaño predeterminado
 	Delete Workspace	Eliminar espacio de trabajo
 	Diamond	Diamante
 	Dimensions:	Dimensiones:

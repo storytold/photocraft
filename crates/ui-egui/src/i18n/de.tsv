@@ -750,7 +750,7 @@
 	All Caps	Großbuchstaben
 	All Slices	Alle Slices
 	All User Slices	Alle Benutzer-Slices
-	All shortcuts reset to Photoshop defaults.	Alle Kurzbefehle wurden auf die Photoshop-Standards zurückgesetzt.
+	All shortcuts reset to defaults.	Alle Kurzbefehle wurden auf die Standardwerte zurückgesetzt.
 	Alt	Alt
 	Always use pressure for opacity	Druck immer für Deckkraft verwenden
 	Always use pressure for size	Druck immer für Größe verwenden
@@ -1074,7 +1074,7 @@
 	Ignore All	Alle ignorieren
 	Image Size	Bildgröße
 	Import Brushes…	Pinsel importieren…
-	Import Photoshop brushes (.abr)	Photoshop-Pinsel (.abr) importieren
+	Import brushes (.abr)	Pinsel (.abr) importieren
 	Import Presets	Vorgaben importieren
 	Imported	Importiert
 	Indent First	Erste Zeile einrücken
@@ -1124,7 +1124,6 @@
 	Liquify is not open	Verflüssigen ist nicht geöffnet
 	Load	Laden
 	Load 3D LUT…	3D-LUT laden…
-	Load Photoshop brushes (.abr)	Photoshop-Pinsel (.abr) laden
 	Load channel as selection	Kanal als Auswahl laden
 	Load…	Laden…
 	Localized Color Clusters	Lokalisierte Farbcluster
@@ -1517,7 +1516,7 @@
 	Current Tool	Aktuelles Werkzeug
 	Custom Shape Tool	Werkzeug für benutzerdefinierte Formen
 	Cyans	Cyantöne
-	Default Photoshop Size	Standard-Photoshop-Größe
+	Default Size	Standardgröße
 	Delete Workspace	Arbeitsbereich löschen
 	Diamond	Raute
 	Dimensions:	Abmessungen:

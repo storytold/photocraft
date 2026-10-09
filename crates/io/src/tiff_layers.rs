@@ -53,7 +53,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
         Ok(v) => v,
         Err(e) => {
             let mut r = image_to_document(name, img)?;
-            r.warnings.push(format!("the Photoshop layer data could not be read ({e}); opened flattened"));
+            r.warnings.push(format!("the PSD layer data could not be read ({e}); opened flattened"));
             return Ok(r);
         }
     };
@@ -61,7 +61,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     let (mut resources, w) = match img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty()).map(resources_from_bytes) {
         Some(Ok(v)) => v,
         Some(Err(e)) => {
-            warnings.push(format!("the Photoshop image resources could not be read: {e}"));
+            warnings.push(format!("the PSD image resources could not be read: {e}"));
             (Vec::new(), Vec::new())
         }
         None => (Vec::new(), Vec::new()),

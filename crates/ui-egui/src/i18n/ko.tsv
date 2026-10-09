@@ -732,7 +732,7 @@
 	All Caps	모두 대문자
 	All Slices	모든 분할 영역
 	All User Slices	모든 사용자 분할 영역
-	All shortcuts reset to Photoshop defaults.	모든 단축키를 Photoshop 기본값으로 초기화했습니다.
+	All shortcuts reset to defaults.	모든 단축키를 기본값으로 초기화했습니다.
 	Alt	Alt
 	Alt-click to define a source point to clone from	Alt 키를 누른 채 클릭하여 복제 원본 지점 지정
 	Always use pressure for opacity	불투명도에 항상 필압 사용
@@ -1051,7 +1051,7 @@
 	Ignore All	모두 무시
 	Image Size	이미지 크기
 	Import Brushes…	브러시 가져오기…
-	Import Photoshop brushes (.abr)	Photoshop 브러시 가져오기(.abr)
+	Import brushes (.abr)	브러시(.abr) 가져오기
 	Import Presets	사전 설정 가져오기
 	Imported	가져옴
 	Indent First	첫 줄 들여쓰기
@@ -1101,7 +1101,6 @@
 	Liquify is not open	픽셀 유동화가 열려 있지 않습니다
 	Load	불러오기
 	Load 3D LUT…	3D LUT 불러오기…
-	Load Photoshop brushes (.abr)	Photoshop 브러시 불러오기(.abr)
 	Load channel as selection	채널을 선택 영역으로 불러오기
 	Load…	불러오기…
 	Localized Color Clusters	지역화된 색상 군집
@@ -1496,7 +1495,7 @@
 	Current Tool	현재 도구
 	Custom Shape Tool	사용자 정의 모양 도구
 	Cyans	사이안 계열
-	Default Photoshop Size	Photoshop 기본 크기
+	Default Size	기본 크기
 	Delete Workspace	작업 영역 삭제
 	Diamond	다이아몬드
 	Dimensions:	치수:

@@ -737,7 +737,7 @@
 	All Caps	Huruf Kapital Semua
 	All Slices	Semua Slice
 	All User Slices	Semua Slice Pengguna
-	All shortcuts reset to Photoshop defaults.	Semua pintasan direset ke default Photoshop.
+	All shortcuts reset to defaults.	Semua pintasan direset ke setelan default.
 	Alt	Alt
 	Alt-click to define a source point to clone from	Alt-klik untuk menentukan titik sumber yang mau di-clone
 	Always use pressure for opacity	Selalu pakai tekanan untuk opasitas
@@ -1053,7 +1053,7 @@
 	Ignore All	Abaikan Semua
 	Image Size	Ukuran Gambar
 	Import Brushes…	Impor Kuas…
-	Import Photoshop brushes (.abr)	Impor kuas Photoshop (.abr)
+	Import brushes (.abr)	Impor kuas (.abr)
 	Import Presets	Impor Preset
 	Imported	Diimpor
 	Indent First	Indentasi Pertama
@@ -1103,7 +1103,6 @@
 	Liquify is not open	Liquify tidak terbuka
 	Load	Muat
 	Load 3D LUT…	Muat 3D LUT…
-	Load Photoshop brushes (.abr)	Muat kuas Photoshop (.abr)
 	Load channel as selection	Muat channel sebagai seleksi
 	Load…	Muat…
 	Localized Color Clusters	Klaster Warna Lokal
@@ -1494,7 +1493,7 @@
 	Current Tool	Alat Saat Ini
 	Custom Shape Tool	Alat Bentuk Kustom
 	Cyans	Cyan
-	Default Photoshop Size	Ukuran Default Photoshop
+	Default Size	Ukuran default
 	Delete Workspace	Hapus Ruang Kerja
 	Diamond	Diamond
 	Dimensions:	Dimensi:

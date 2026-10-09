@@ -193,7 +193,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         None if !stem.is_empty() => stem,
         None => "Imported Gradients".to_string(),
     };
-    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable Photoshop gradient file: {e}")))?;
+    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
     let mut warnings = Vec::new();
     let mut items = Vec::new();
     let (mut noise, mut midpoints) = (0, false);
