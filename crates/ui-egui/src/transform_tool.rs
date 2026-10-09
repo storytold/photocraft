@@ -1,12 +1,13 @@
 //! Free Transform (⌘T): bounding box with handles over the canvas, live preview, commit via the
 //! engine's `edit.transform` (one quad for scale/rotate/skew/distort/perspective).
 //!
-//! Gestures follow Photoshop CC: corner drag scales proportionally (⇧ for free), edges scale one
-//! axis, ⌥ scales about the reference point, ⌘-drag a corner distorts (⌘⌥⇧: perspective), ⌘-drag
-//! an edge skews (⇧ along the edge), drag outside rotates (⇧ snaps to 15°), drag inside moves
-//! (⇧ locks to 8 directions), the reference point can be dragged and ⌥-click puts it under the
-//! pointer. Arrow keys nudge the box (move_mods.rs). ↩ commits, Esc cancels. Undo and Redo step
-//! through the session's own changes (`Steps`), not the document's history.
+//! Gestures follow Photoshop CC: corner and edge drags scale proportionally (⇧ for free: an edge
+//! then stretches its one axis), ⌥ scales about the reference point, ⌘-drag a corner distorts
+//! (⌘⌥⇧: perspective), ⌘-drag an edge skews (⇧ along the edge), drag outside rotates (⇧ snaps to
+//! 15°), drag inside moves (⇧ locks to 8 directions), the reference point can be dragged and
+//! ⌥-click puts it under the pointer. Arrow keys nudge the box (move_mods.rs). ↩ commits, Esc
+//! cancels. Undo and Redo step through the session's own changes (`Steps`), not the document's
+//! history.
 
 use std::sync::Arc;
 
@@ -722,18 +723,23 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
             let legacy = app.session.prefs().general.use_legacy_free_transform;
             if let (Some(g), Some(s)) = (g, app.ui.transform.as_mut()) {
-                apply_drag(s, g, [x, y], mode_mods(t.mode, g.hit, corner_mods(legacy, g.hit, mods)));
+                apply_drag(s, g, [x, y], mode_mods(t.mode, g.hit, legacy_mods(legacy, g.hit, mods)));
             }
         }
     }
     true
 }
 
-/// Preferences › General › Use Legacy Free Transform: corner drags stretch freely and ⇧ keeps
-/// the proportions, the reverse of the default (proportional, ⇧ frees them).
-fn corner_mods(legacy: bool, hit: Hit, mut mods: egui::Modifiers) -> egui::Modifiers {
-    if legacy && matches!(hit, Hit::Corner(_)) && !mods.command {
-        mods.shift = !mods.shift;
+/// Preferences › General › Use Legacy Free Transform, Photoshop's scaling before CC 2019: corner
+/// drags stretch freely and ⇧ keeps the proportions, edge drags stretch their one axis whatever
+/// the keys. The default is proportional for both, with ⇧ freeing them.
+fn legacy_mods(legacy: bool, hit: Hit, mut mods: egui::Modifiers) -> egui::Modifiers {
+    if legacy && !mods.command {
+        match hit {
+            Hit::Corner(_) => mods.shift = !mods.shift,
+            Hit::Edge(_) => mods.shift = true,
+            _ => {}
+        }
     }
     mods
 }
@@ -922,9 +928,26 @@ pub(crate) fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods
                     r[1] = 2.0 * pv - r[3];
                 }
             }
-            // Corners scale proportionally by default; ⇧ frees them (the legacy preference swaps
-            // the two, `corner_mods`).
+            // Corners and edges scale proportionally by default; ⇧ frees them (the legacy
+            // preference swaps the two for corners and always stretches edges, `legacy_mods`).
             let corner = matches!(g.hit, Hit::Corner(_));
+            if !corner && !mods.shift {
+                // An edge sets the scale of its own axis, and the other axis follows by the same
+                // factor about the middle of the box (⌥: about the reference point, as for
+                // corners), so the opposite edge's handle stays put. Past the opposite edge only
+                // the dragged axis flips.
+                if mu.0 || mu.1 {
+                    let k = (r[2] - r[0]).abs();
+                    let c = if mods.alt { pv } else { 0.5 };
+                    r[1] = c - k / 2.0;
+                    r[3] = c + k / 2.0;
+                } else {
+                    let k = (r[3] - r[1]).abs();
+                    let c = if mods.alt { pu } else { 0.5 };
+                    r[0] = c - k / 2.0;
+                    r[2] = c + k / 2.0;
+                }
+            }
             if corner && !mods.shift {
                 let (sx, sy) = (r[2] - r[0], r[3] - r[1]);
                 let k = if sx.abs() > sy.abs() { sx.abs() } else { sy.abs() };
@@ -1894,14 +1917,39 @@ mod tests {
         assert!(close(s.quad, corners([0.0, 0.0, 200.0, 60.0])), "shift = free: {:?}", s.quad);
     }
 
+    /// Photoshop CC 2019 and later: an edge scales proportionally too, about the middle of the
+    /// opposite edge, and ⇧ stretches its one axis instead.
     #[test]
-    fn alt_scales_about_reference_point_and_edges_scale_one_axis() {
+    fn edge_drag_scales_proportionally_about_the_opposite_edge() {
+        // Right edge: 100 × 50 → 150 × 75; the left edge's middle (0, 25) stays, and so does the
+        // reference point's place in the box (its centre).
+        let mut s = session();
+        drag(&mut s, [100.0, 25.0], [150.0, 25.0], egui::Modifiers::NONE);
+        assert!(close(s.quad, corners([0.0, -12.5, 150.0, 62.5])), "{:?}", s.quad);
+        assert!(near(s.pivot, [75.0, 25.0]), "{:?}", s.pivot);
+        // Top edge to twice the height: twice the width, about x = 50.
+        let mut s = session();
+        drag(&mut s, [50.0, 0.0], [50.0, -50.0], egui::Modifiers::NONE);
+        assert!(close(s.quad, corners([-50.0, -50.0, 150.0, 50.0])), "{:?}", s.quad);
+        // Past the opposite edge: the dragged axis flips, the other only shrinks.
+        let mut s = session();
+        drag(&mut s, [100.0, 25.0], [-50.0, 25.0], egui::Modifiers::NONE);
+        assert!(close(s.quad, corners([0.0, 12.5, -50.0, 37.5])), "{:?}", s.quad);
+        // ⇧: one axis.
+        let mut s = session();
+        drag(&mut s, [50.0, 50.0], [50.0, 80.0], egui::Modifiers::SHIFT);
+        assert!(close(s.quad, corners([0.0, 0.0, 100.0, 80.0])), "{:?}", s.quad);
+    }
+
+    #[test]
+    fn alt_scales_edges_about_reference_point() {
         let mut s = session();
         drag(&mut s, [100.0, 25.0], [150.0, 25.0], egui::Modifiers::ALT);
-        assert!(close(s.quad, corners([-50.0, 0.0, 150.0, 50.0])), "{:?}", s.quad);
+        assert!(close(s.quad, corners([-50.0, -25.0, 150.0, 75.0])), "{:?}", s.quad);
+        // ⌥⇧: one axis, about the reference point.
         let mut s = session();
-        drag(&mut s, [50.0, 50.0], [50.0, 80.0], egui::Modifiers::NONE);
-        assert!(close(s.quad, corners([0.0, 0.0, 100.0, 80.0])), "{:?}", s.quad);
+        drag(&mut s, [100.0, 25.0], [150.0, 25.0], egui::Modifiers { alt: true, shift: true, ..Default::default() });
+        assert!(close(s.quad, corners([-50.0, 0.0, 150.0, 50.0])), "{:?}", s.quad);
     }
 
     fn near(a: [f64; 2], b: [f64; 2]) -> bool {
@@ -1921,10 +1969,12 @@ mod tests {
         // A reference point set to a corner stays at that corner; an edge drag carries it too.
         let mut s = session();
         s.pivot = [100.0, 0.0];
-        drag(&mut s, [50.0, 50.0], [50.0, 80.0], egui::Modifiers::NONE);
+        drag(&mut s, [50.0, 50.0], [50.0, 80.0], egui::Modifiers::SHIFT);
         assert!(near(s.pivot, [100.0, 0.0]), "{:?}", s.pivot);
-        drag(&mut s, [100.0, 40.0], [150.0, 40.0], egui::Modifiers::NONE);
+        drag(&mut s, [100.0, 40.0], [150.0, 40.0], egui::Modifiers::SHIFT);
         assert!(near(s.pivot, s.quad[1]), "{:?} {:?}", s.pivot, s.quad);
+        drag(&mut s, [150.0, 40.0], [180.0, 40.0], egui::Modifiers::NONE);
+        assert!(near(s.pivot, s.quad[1]), "proportional edge drag: {:?} {:?}", s.pivot, s.quad);
         // Skew: the centre follows the box's centre.
         let mut s = session();
         drag(&mut s, [50.0, 0.0], [70.0, 0.0], egui::Modifiers::COMMAND);
@@ -2276,27 +2326,35 @@ mod tests {
     }
 
     #[test]
-    fn the_legacy_preference_swaps_corner_proportions() {
+    fn the_legacy_preference_swaps_corner_proportions_and_stretches_edges() {
         let none = egui::Modifiers::NONE;
         let corner = Hit::Corner(1);
+        let edge = Hit::Edge(1);
         // Default: proportional (⇧ frees), so the drag keeps its keys.
-        assert!(!corner_mods(false, corner, none).shift);
-        // Legacy: free by default, ⇧ keeps proportions; edges and ⌘ gestures are left alone.
-        assert!(corner_mods(true, corner, none).shift);
-        assert!(!corner_mods(true, corner, egui::Modifiers::SHIFT).shift);
-        assert!(!corner_mods(true, Hit::Edge(1), none).shift);
-        assert!(!corner_mods(true, corner, egui::Modifiers::COMMAND).shift);
-        // Through the box: a plain corner drag on a 16×16 square.
+        assert!(!legacy_mods(false, corner, none).shift);
+        assert!(!legacy_mods(false, edge, none).shift);
+        // Legacy: corners free by default, ⇧ keeps proportions; edges always stretch one axis;
+        // ⌘ gestures are left alone.
+        assert!(legacy_mods(true, corner, none).shift);
+        assert!(!legacy_mods(true, corner, egui::Modifiers::SHIFT).shift);
+        assert!(legacy_mods(true, edge, none).shift);
+        assert!(legacy_mods(true, edge, egui::Modifiers::SHIFT).shift);
+        assert!(!legacy_mods(true, corner, egui::Modifiers::COMMAND).shift);
+        assert!(!legacy_mods(true, edge, egui::Modifiers::COMMAND).shift);
+        // Through the box: a plain corner drag, then a plain right-edge drag, on a 16×16 square.
         for (legacy, proportional) in [(false, true), (true, false)] {
-            let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
-            app.ui.extras.snap = false;
-            app.session.prefs.edit(|p| p.general.use_legacy_free_transform = legacy);
-            begin(&mut app, &egui::Context::default()).unwrap();
-            let q0 = app.ui.transform.as_ref().unwrap().quad;
-            press_drag(&mut app, q0[2], [q0[2][0] + 16.0, q0[2][1]], none);
-            let q = app.ui.transform.as_ref().unwrap().quad;
-            let (w, h) = (q[2][0] - q[0][0], q[2][1] - q[0][1]);
-            assert_eq!((w - h).abs() < 1e-6, proportional, "legacy {legacy}: {w} × {h}");
+            for at_edge in [false, true] {
+                let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+                app.ui.extras.snap = false;
+                app.session.prefs.edit(|p| p.general.use_legacy_free_transform = legacy);
+                begin(&mut app, &egui::Context::default()).unwrap();
+                let q0 = app.ui.transform.as_ref().unwrap().quad;
+                let from = if at_edge { [q0[1][0], (q0[1][1] + q0[2][1]) / 2.0] } else { q0[2] };
+                press_drag(&mut app, from, [from[0] + 16.0, from[1]], none);
+                let q = app.ui.transform.as_ref().unwrap().quad;
+                let (w, h) = (q[2][0] - q[0][0], q[2][1] - q[0][1]);
+                assert_eq!((w - h).abs() < 1e-6, proportional, "legacy {legacy}, edge {at_edge}: {w} × {h}");
+            }
         }
     }
 
