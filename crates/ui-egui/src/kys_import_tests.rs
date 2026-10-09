@@ -104,7 +104,7 @@ fn rows_match_our_commands_by_label_with_photoshop_tie_breaks() {
 #[test]
 fn an_unreadable_shortcut_is_reported_not_imported() {
     let app = app();
-    let set = super::KysSet { commands: vec![KysCommand { name: "Undo".into(), shortcuts: vec!["Cmd+Shift+Ctrl".into()] }], tool_keys: 0 };
+    let set = super::KysSet { name: None, commands: vec![KysCommand { name: "Undo".into(), shortcuts: vec!["Cmd+Shift+Ctrl".into()] }], tool_keys: 0 };
     let p = plan(&app, &set);
     assert!(p.set.is_empty());
     assert_eq!(p.unreadable, vec!["Undo".to_string()]);
@@ -176,4 +176,75 @@ fn an_opened_kys_file_opens_the_dialog_filled() {
     assert_eq!(d.fields["message"], json!("Imported 1 shortcuts from more.kys. Click OK to keep them."));
     let bad = crate::preset_files_ui::open(&mut app, "notes.kys", b"hello").unwrap().unwrap_err();
     assert!(bad.contains("not a Photoshop keyboard shortcuts file"), "{bad}");
+}
+
+type Store = std::sync::Arc<std::sync::Mutex<Option<String>>>;
+
+/// An app beside a Photoshop whose live set is `set`; `saved_prefs` is this app's own saved
+/// preferences file, and the store receives what it writes back.
+fn with_photoshop(set: &'static str, saved_prefs: Option<&'static str>) -> (PhotocraftApp, Store) {
+    let store: Store = Default::default();
+    let written = store.clone();
+    let services = crate::Services {
+        photoshop_shortcuts: Some(Box::new(move || {
+            Some(("/Users/me/Library/Preferences/Adobe Photoshop 2026 Settings/Keyboard Shortcuts.psp".into(), set.into()))
+        })),
+        load_prefs: Some(Box::new(move || saved_prefs.map(str::to_string))),
+        save_prefs: Some(Box::new(move |text: &str| {
+            *written.lock().unwrap() = Some(text.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    (PhotocraftApp::new(photocraft_engine::Session::new(), services), store)
+}
+
+/// First launch beside Photoshop: its live set is applied, a notice says so, and the
+/// preference remembers it so the next launch leaves the user's shortcuts alone.
+#[test]
+fn first_launch_imports_photoshops_live_set_once() {
+    let (mut app, store) = with_photoshop(SAMPLE, None);
+    assert!(app.ui.dialogs.is_empty(), "applied without a dialog");
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.blur.gaussianBlur", None).as_deref(), Some("Cmd+Ctrl+Alt+G"));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.preferences.general", None).as_deref(), Some("Cmd+K"));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.search", Some("Cmd+K")), None, "taken by Preferences");
+    assert_eq!(app.session.prefs().dialogs[super::IMPORTED_PREF]["source"].as_str().map(|s| s.ends_with("Keyboard Shortcuts.psp")), Some(true));
+    let notice = app.ui.notices.last().unwrap();
+    assert_eq!(notice.title, "Photoshop shortcuts imported");
+    let line = notice.text(&notice.lines[0]);
+    assert!(line.starts_with("Your Photoshop keyboard shortcut set texcuts is in use here: "), "{line}");
+    assert!(line.contains(" shortcuts differ from the defaults."), "{line}");
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    // The preference moved past the loaded revision, so the next frame saves it.
+    crate::prefs_ui::tick(&mut app, &egui::Context::default());
+    let saved = store.lock().unwrap().clone().unwrap();
+    assert!(saved.contains("Cmd+Ctrl+Alt+G") && saved.contains(super::IMPORTED_PREF), "{saved}");
+    // Reset in the dialog, then a second run: the preference says it was done.
+    app.run("edit.keyboardShortcuts", json!({"reset": true})).unwrap();
+    super::auto_import(&mut app);
+    assert!(app.session.prefs().shortcuts.is_empty());
+}
+
+/// Shortcuts the user already changed are theirs: the set is not applied, but the launch is
+/// still remembered, so it is never applied over them later either.
+#[test]
+fn a_user_with_their_own_shortcuts_keeps_them() {
+    let saved = r#"{"shortcuts": {"edit.undo": "F1"}}"#;
+    let (mut app, _) = with_photoshop(SAMPLE, Some(saved));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.undo", Some("Cmd+Z")).as_deref(), Some("F1"));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.blur.gaussianBlur", None), None);
+    assert!(app.ui.notices.is_empty());
+    assert!(app.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
+    // A set that is just Photoshop's defaults changes nothing and says nothing.
+    let defaults = "<photoshop-keyboard-shortcuts><command kind=\"static\" name=\"Undo\"><shortcut>Cmd+Z</shortcut></command></photoshop-keyboard-shortcuts>";
+    let (mut quiet, _) = with_photoshop(defaults, None);
+    assert!(quiet.session.prefs().shortcuts.is_empty());
+    assert!(quiet.ui.notices.is_empty());
+    assert!(quiet.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
+    // A file that is not a set is reported, not applied, and not retried.
+    let (mut bad, _) = with_photoshop("binary junk", None);
+    assert!(bad.ui.status_error, "{}", bad.ui.status);
+    assert!(bad.ui.status.contains("not a Photoshop keyboard shortcuts file"), "{}", bad.ui.status);
+    assert!(bad.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
+    let _ = (&mut app, &mut quiet, &mut bad);
 }

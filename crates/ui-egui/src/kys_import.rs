@@ -28,14 +28,18 @@ pub struct KysCommand {
     pub shortcuts: Vec<String>,
 }
 
-/// The parsed set: its command rows and how many tools carry a key.
+/// The parsed set: its name, its command rows and how many tools carry a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KysSet {
+    /// The set's name as Photoshop shows it (`texcuts`), from the root's `filename` attribute,
+    /// which a saved set spells `$$$/FileName/Presets/KeyboardCustomization/texcuts=texcuts`.
+    pub name: Option<String>,
     pub commands: Vec<KysCommand>,
     pub tool_keys: usize,
 }
 
-/// Parse a `.kys` file. Rows without a name or a shortcut are skipped.
+/// Parse a `.kys` file (or Photoshop's live `Keyboard Shortcuts.psp`, the same XML). Rows
+/// without a name or a shortcut are skipped.
 pub fn parse(text: &str) -> Result<KysSet, String> {
     let text = text.trim_start_matches('\u{feff}');
     let doc = roxmltree::Document::parse(text).map_err(|e| format!("not a Photoshop keyboard shortcuts file ({e})"))?;
@@ -43,7 +47,8 @@ pub fn parse(text: &str) -> Result<KysSet, String> {
     if root.tag_name().name() != "photoshop-keyboard-shortcuts" {
         return Err("not a Photoshop keyboard shortcuts file (no <photoshop-keyboard-shortcuts> root)".into());
     }
-    let mut set = KysSet::default();
+    let name = root.attribute("filename").map(|f| f.rsplit(['=', '/']).next().unwrap_or(f).trim()).filter(|n| !n.is_empty()).map(str::to_string);
+    let mut set = KysSet { name, ..Default::default() };
     for node in root.children().filter(|n| n.is_element()) {
         match node.tag_name().name() {
             "command" => {
@@ -162,6 +167,7 @@ pub fn import_text(app: &mut PhotocraftApp, file_name: &str, text: &str) -> Resu
     f.insert("message".into(), json!(message));
     Ok(json!({
         "dialog": id,
+        "name": set.name,
         "imported": plan.set.len(),
         "set": plan.set,
         "unknown": plan.unknown,
@@ -180,6 +186,56 @@ pub fn open_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<V
 /// The dialog's Import Photoshop Shortcuts… button: ask for the file, then fill the dialog.
 pub fn import_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.pick_file_bytes(|app, name, bytes| open_bytes(app, &name, &bytes))
+}
+
+/// Preferences › `dialogs` key that records the one-time import (its value names the source).
+pub const IMPORTED_PREF: &str = "photoshopShortcuts";
+
+/// First launch on a machine with Photoshop: its live shortcut set ([`crate::Services::photoshop_shortcuts`])
+/// is applied once, so Photoshop's hands work here from the start. Someone who already changed
+/// a shortcut keeps their own set. Either way the preference remembers it, so a later launch
+/// never asks again; Edit › Keyboard Shortcuts › Reset All to Defaults undoes the import.
+pub fn auto_import(app: &mut PhotocraftApp) {
+    if app.session.prefs().dialogs.contains_key(IMPORTED_PREF) {
+        return;
+    }
+    let Some((source, text)) = app.services.photoshop_shortcuts.as_mut().and_then(|f| f()) else { return };
+    let outcome = if app.session.prefs().shortcuts.is_empty() {
+        import_text(app, &source, &text).and_then(|r| {
+            let id = r["dialog"].as_u64().ok_or("no dialog")?;
+            crate::dialogs::confirm(app, id)?;
+            Ok(Some(r))
+        })
+    } else {
+        Ok(None)
+    };
+    app.session.prefs.edit(|p| {
+        p.dialogs.insert(IMPORTED_PREF.into(), json!({"source": source}));
+    });
+    match outcome {
+        Ok(Some(r)) => {
+            let changed = app.session.prefs().shortcuts.len();
+            if changed == 0 {
+                return; // The set is Photoshop's defaults, which are ours too.
+            }
+            let set = r["name"].as_str().unwrap_or("Photoshop").to_string();
+            let id = crate::notices::post(
+                app,
+                "Photoshop shortcuts imported",
+                vec!["Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.".to_owned()],
+                false,
+                None,
+            );
+            if let Some(n) = app.ui.notices.iter_mut().find(|n| n.id == id) {
+                n.args = vec![("set".to_owned(), set), ("n".to_owned(), changed.to_string())];
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            app.ui.status = format!("Photoshop's shortcuts were not imported: {e}");
+            app.ui.status_error = true;
+        }
+    }
 }
 
 #[cfg(test)]

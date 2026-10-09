@@ -534,6 +534,8 @@
 	Load a shortcut set saved by Photoshop (.kys)	Загрузить набор сочетаний клавиш, сохранённый Photoshop (.kys)
 	Imported {n} shortcuts from {file}. Click OK to keep them.	Импортировано сочетаний: {n} из {file}. Нажмите OK, чтобы сохранить их.
 	{n} commands are not in PhotoCraft.	Команд, которых нет в PhotoCraft: {n}.
+	Photoshop shortcuts imported	Сочетания клавиш Photoshop импортированы
+	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Здесь используется ваш набор сочетаний клавиш Photoshop {set}: сочетаний, отличных от стандартных: {n}. Их показывает Редактирование › Сочетания клавиш; «Сбросить всё к значениям по умолчанию» отменяет импорт.
 	Defaults restored.	Значения по умолчанию восстановлены.
 	Restore Defaults	Восстановить по умолчанию
 	Restore original size	Восстановить исходный размер

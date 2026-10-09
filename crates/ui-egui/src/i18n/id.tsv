@@ -1283,6 +1283,8 @@
 	Load a shortcut set saved by Photoshop (.kys)	Muat set pintasan yang disimpan Photoshop (.kys)
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} pintasan diimpor dari {file}. Klik OK untuk menyimpannya.
 	{n} commands are not in PhotoCraft.	{n} perintah tidak ada di PhotoCraft.
+	Photoshop shortcuts imported	Pintasan Photoshop diimpor
+	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan Photoshop Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
 	Reset Section	Reset Bagian
 	Reset Transform	Reset Transformasi
 	Reset to defaults	Reset ke default

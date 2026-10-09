@@ -1281,6 +1281,8 @@
 	Load a shortcut set saved by Photoshop (.kys)	Photoshop에서 저장한 단축키 세트(.kys) 불러오기
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{file}에서 단축키 {n}개를 가져왔습니다. 유지하려면 확인을 클릭하세요.
 	{n} commands are not in PhotoCraft.	명령 {n}개는 PhotoCraft에 없습니다.
+	Photoshop shortcuts imported	Photoshop 단축키를 가져왔습니다
+	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Photoshop 단축키 세트 {set}을(를) 여기서 사용합니다. 단축키 {n}개가 기본값과 다릅니다. 편집 › 키보드 단축키에서 확인할 수 있고, 모두 기본값으로 재설정으로 되돌릴 수 있습니다.
 	Reset Section	섹션 초기화
 	Reset Transform	변형 초기화
 	Reset to defaults	기본값으로 초기화

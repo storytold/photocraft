@@ -1304,6 +1304,8 @@
 	Load a shortcut set saved by Photoshop (.kys)	Carica un set di scelte rapide salvato da Photoshop (.kys)
 	Imported {n} shortcuts from {file}. Click OK to keep them.	Importate {n} scelte rapide da {file}. Fai clic su OK per conservarle.
 	{n} commands are not in PhotoCraft.	{n} comandi non esistono in PhotoCraft.
+	Photoshop shortcuts imported	Scelte rapide di Photoshop importate
+	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Il tuo set di scelte rapide di Photoshop {set} è in uso qui: {n} scelte rapide differiscono dai valori predefiniti. Modifica › Scelte rapide da tastiera le mostra; Ripristina tutto ai valori predefiniti annulla l'importazione.
 	Reset Section	Reimposta sezione
 	Reset Transform	Reimposta trasformazione
 	Reset to defaults	Ripristina predefiniti

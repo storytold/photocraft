@@ -1304,6 +1304,8 @@
 	Load a shortcut set saved by Photoshop (.kys)	Einen von Photoshop gespeicherten Tastaturbefehlssatz laden (.kys)
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} Tastaturbefehle aus {file} importiert. Mit OK übernehmen.
 	{n} commands are not in PhotoCraft.	{n} Befehle gibt es in PhotoCraft nicht.
+	Photoshop shortcuts imported	Photoshop-Tastaturbefehle importiert
+	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Dein Photoshop-Tastaturbefehlssatz {set} wird hier verwendet: {n} Tastaturbefehle weichen von den Standardwerten ab. Bearbeiten › Tastaturbefehle zeigt sie; Alles auf Standardwerte zurücksetzen macht es rückgängig.
 	Reset Section	Abschnitt zurücksetzen
 	Reset Transform	Transformation zurücksetzen
 	Reset to defaults	Auf Standardwerte zurücksetzen

@@ -226,6 +226,9 @@ pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
 /// Load recoverable documents left by a previous session. Their recovery data stays until the
 /// documents are saved or closed.
 pub type RecoverFn = Box<dyn FnMut() -> Vec<Recovered>>;
+/// Photoshop's own keyboard shortcut set on this machine, as (source path, `.kys` XML text):
+/// the newest install's live `Keyboard Shortcuts.psp` on the desktop, `None` without one.
+pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.
 pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
@@ -283,6 +286,8 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
+    pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -607,6 +612,8 @@ impl PhotocraftApp {
         };
         // Saved preferences (and recovered documents) are in place before the first frame.
         prefs_ui::load(&mut app);
+        // After the saved preferences and their revision mark, so the imported set is saved.
+        kys_import::auto_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
