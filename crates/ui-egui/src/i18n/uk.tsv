@@ -3398,3 +3398,4 @@ cameraRaw	Masking	Маскування
 	Cycle Overlay	Змінити накладання
 	Cycle Orientation	Змінити орієнтацію
 	Set the overlay options for the Crop tool	Задати параметри накладання для інструмента «Рамка»
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-клік перехопило робоче середовище, яке переміщує вікна через Alt-перетягування. Призначте для переміщення вікон клавішу Super або зафіксуйте Alt у меню Вікно › Клавіші-модифікатори.
