@@ -125,3 +125,24 @@ fn wrapped_lines_never_start_inside_a_grapheme() {
         assert!(starts.contains(&ln.range.start), "line starts inside a grapheme at byte {}", ln.range.start);
     }
 }
+
+#[test]
+fn start_indent_is_on_the_right_in_rtl_paragraphs() {
+    let mut e = TextEngine::new();
+    // Box 100..500, right-aligned RTL: the start indent keeps the text 50 px from the right edge.
+    let p = ParagraphStyle { align: TextAlign::Right, start_indent_pt: 50.0, ..Default::default() };
+    let l = e.layout(&boxed("مرحبا", 20.0, 400.0, p), 72.0);
+    assert!((l.lines[0].x1 - 450.0).abs() < 0.5, "{:?}", l.lines[0]);
+    // Left-aligned RTL: the end indent is on the left.
+    let p = ParagraphStyle { align: TextAlign::Left, end_indent_pt: 30.0, ..Default::default() };
+    let l = e.layout(&boxed("مرحبا", 20.0, 400.0, p), 72.0);
+    assert!((l.lines[0].x0 - 130.0).abs() < 0.5, "{:?}", l.lines[0]);
+    // LTR is unchanged: the start indent is on the left.
+    let p = ParagraphStyle { align: TextAlign::Left, start_indent_pt: 50.0, ..Default::default() };
+    let l = e.layout(&boxed("hello", 20.0, 400.0, p), 72.0);
+    assert!((l.lines[0].x0 - 150.0).abs() < 0.5, "{:?}", l.lines[0]);
+    // Point text: right-aligned RTL ends the start indent before its anchor (x 0).
+    let t = with_para(point("مرحبا", 20.0), ParagraphStyle { align: TextAlign::Right, start_indent_pt: 30.0, ..Default::default() });
+    let l = e.layout(&t, 72.0);
+    assert!((l.lines[0].x1 + 30.0).abs() < 0.5, "{:?}", l.lines[0]);
+}

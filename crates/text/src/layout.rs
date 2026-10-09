@@ -774,7 +774,8 @@ impl Layouter {
                     0.0
                 };
                 let dx = if is_box {
-                    let base = line_origin + indent_start - kern_align;
+                    // The start indent is on the paragraph's start side (the right in RTL).
+                    let base = line_origin + if rtl { indent_end } else { indent_start } - kern_align;
                     let slack = avail.unwrap_or(0.0) - adv - line_kern;
                     base + if last_line {
                         match ps.align {
@@ -786,9 +787,11 @@ impl Layouter {
                         0.0
                     }
                 } else {
+                    // The start indent pushes the text away from the anchor on its start side.
                     let target = match ps.align {
                         TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
-                        TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
+                        TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern) - if rtl { indent_start } else { 0.0 },
+                        _ if rtl => 0.0,
                         _ => indent_start,
                     };
                     target - m.offset
