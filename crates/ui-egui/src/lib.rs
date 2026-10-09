@@ -19,6 +19,7 @@ pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
 pub mod adjust_ui;
+mod alt_grab;
 pub mod analysis_ui;
 pub mod artboard_ui;
 pub(crate) mod blend_preview;
@@ -1735,6 +1736,9 @@ mod marquee_tests;
 
 #[cfg(test)]
 mod stamp_tests;
+
+#[cfg(test)]
+mod alt_click_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;

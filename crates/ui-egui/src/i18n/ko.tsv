@@ -2867,3 +2867,4 @@ fontWeight	Italic	기울임
 	Cycle Overlay	오버레이 순환
 	Cycle Orientation	방향 순환
 	Set the overlay options for the Crop tool	자르기 도구의 오버레이 옵션 설정
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 클릭이 데스크톱으로 전달되었습니다. 데스크톱이 Alt 드래그로 창을 이동합니다. 창 이동 키를 Super로 바꾸거나 창 › 보조 키에서 Alt를 고정하세요.

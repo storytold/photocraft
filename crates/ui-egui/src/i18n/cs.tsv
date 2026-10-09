@@ -2289,3 +2289,4 @@ fontWeight	Italic	Kurzíva
 	Cycle Overlay	Přepnout překryv
 	Cycle Orientation	Přepnout orientaci
 	Set the overlay options for the Crop tool	Nastavit volby překryvu pro nástroj Oříznutí
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+klik převzalo pracovní prostředí, které pomocí Alt+tažení přesouvá okna. Nastavte jeho klávesu pro přesun oken na Super, nebo zamkněte Alt v nabídce Okno › Modifikační klávesy.

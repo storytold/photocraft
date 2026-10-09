@@ -3311,3 +3311,4 @@ cameraRaw	Roughness	Chropowatość
 	Cycle Overlay	Przełącz nakładkę
 	Cycle Orientation	Przełącz orientację
 	Set the overlay options for the Crop tool	Ustaw opcje nakładki narzędzia Kadrowanie
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+kliknięcie przejęło środowisko pulpitu, które przesuwa okna przez Alt+przeciąganie. Ustaw w nim klawisz przesuwania okien na Super lub zablokuj Alt w Okno › Klawisze modyfikujące.

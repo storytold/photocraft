@@ -2327,3 +2327,5 @@ fontWeight	Italic	Kursiv
 	Cycle Overlay	Überlagerung wechseln
 	Cycle Orientation	Ausrichtung wechseln
 	Set the overlay options for the Crop tool	Überlagerungsoptionen für das Freistellungswerkzeug festlegen
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Ziehen Sie um die Mitte, um die Ansicht zu drehen  ·  Umschalt rastet auf 15° ein
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Der Alt-Klick ging an die Arbeitsumgebung, die Fenster mit Alt-Ziehen verschiebt. Stelle dort die Taste zum Verschieben von Fenstern auf Super oder raste Alt unter Fenster › Modifikatortasten ein.

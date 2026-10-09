@@ -2488,6 +2488,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         view.center[1] -= d.y;
     } else if primary {
         let mods = ui.input(|i| i.modifiers);
+        // An ⌥-click the window manager took never arrives; say so (alt_grab.rs).
+        crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog);
         // Tools follow the left button; the right one opens the Brush Preset picker or erases
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_brush(app);
@@ -3388,7 +3390,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
 
 /// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
 /// foreground colour, as with the Eyedropper itself (#417).
-fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
+pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
     mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
 }

@@ -2297,3 +2297,4 @@ fontWeight	Italic	斜体
 	Cycle Overlay	循环切换叠加
 	Cycle Orientation	循环切换取向
 	Set the overlay options for the Crop tool	设置裁剪工具的叠加选项
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 单击被桌面环境截获了，它用 Alt 拖动来移动窗口。请把桌面的窗口移动键改为 Super，或在 窗口 › 修饰键 中锁定 Alt。
