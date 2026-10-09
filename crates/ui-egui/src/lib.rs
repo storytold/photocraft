@@ -323,7 +323,7 @@ pub struct Services {
     pub caps_lock: Option<CapsLockFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
-    /// one, brush presets are session-only (web, tests).
+    /// one, brush presets are session-only unless the shell attached a store before startup.
     pub preset_store: Option<std::sync::mpsc::Receiver<photocraft_engine::preset_store::Opened>>,
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.

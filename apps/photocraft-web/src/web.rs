@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
-use photocraft_engine::Session;
 use photocraft_ui_egui::served_fonts;
 use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
@@ -60,6 +59,16 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        // Hydrate before constructing an interactive session: a late load must never undo a
+        // user deletion/reorder. Storage denial or timeout still opens a usable session.
+        let (database, presets, mut preset_warnings) = match crate::indexed_presets::load().await {
+            Ok((db, bridge, warnings)) => (Some(db), bridge, warnings),
+            Err(e) => {
+                let bridge = crate::preset_bridge::Bridge::default();
+                bridge.unavailable(e);
+                (None, bridge, Vec::new())
+            }
+        };
         let pen_target = canvas.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -70,7 +79,12 @@ pub fn start() {
                     let inbox: Inbox = Arc::default();
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
-                    let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone()));
+                    let (session, warnings) = crate::preset_bridge::session(presets.clone());
+                    preset_warnings.extend(warnings);
+                    let mut app = PhotocraftApp::new(session, services(inbox.clone()));
+                    if !preset_warnings.is_empty() {
+                        photocraft_ui_egui::notices::post(&mut app, "Some brush presets could not be loaded", preset_warnings, true, None);
+                    }
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
                     if let Some(rs) = cc.wgpu_render_state.clone()
@@ -81,7 +95,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, unsaved, served }))
+                    Ok(Box::new(WebShell { app, inbox, unsaved, served, database, presets }))
                 }),
             )
             .await;
@@ -193,9 +207,29 @@ struct WebShell {
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
+    database: Option<web_sys::IdbDatabase>,
+    presets: crate::preset_bridge::Bridge,
 }
 
 impl WebShell {
+    fn save_presets(&mut self, ctx: &egui::Context) {
+        if let Some(db) = self.database.clone()
+            && let Some(batch) = self.presets.begin()
+        {
+            let presets = self.presets.clone();
+            let wake = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = crate::indexed_presets::write(&db, &batch).await;
+                if let Err(e) = &result {
+                    log::error!("Could not save browser presets: {e}");
+                }
+                presets.finish(batch, result);
+                wake.request_repaint();
+            });
+        }
+        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved(), Ordering::Relaxed);
+    }
+
     /// Fetches the served families asked for (picked in a font menu, or needed by a layout) and
     /// installs the files that arrived.
     fn serve_fonts(&mut self, ctx: &egui::Context) {
@@ -248,11 +282,35 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic(ctx, frame);
-        self.unsaved.store(self.app.has_unsaved_work(), Ordering::Relaxed);
+        self.save_presets(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let error = self.presets.error();
+        if error.is_some() || self.presets.unsaved() {
+            egui::Panel::top("browser_preset_storage").show(ui, |ui| {
+                if let Some(error) = error {
+                    let tokens = photocraft_ui_egui::theme::Tokens::for_kind(self.app.ui.theme);
+                    // Put retry first so floating brush windows cannot cover the control.
+                    ui.horizontal_wrapped(|ui| {
+                        if self.database.is_some() && ui.button("Retry saving presets").clicked() {
+                            self.presets.retry();
+                            ui.ctx().request_repaint();
+                        }
+                        ui.colored_label(tokens.warning, format!("Brush preset changes are not saved: {error}"));
+                    });
+                    ui.label(if self.database.is_some() {
+                        "Keep this tab open to retain your brushes."
+                    } else {
+                        "Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them."
+                    });
+                } else {
+                    ui.label("Saving brush presets… Keep this tab open until saving finishes.");
+                }
+            });
+        }
         self.app.ui(ui, frame);
+        self.save_presets(ui.ctx());
     }
 }
 
