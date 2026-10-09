@@ -521,19 +521,18 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Whether the window shows the system's title bar instead of the app drawing its own: Windows
 /// and Linux with Preferences › Interface › System Title Bar. macOS always has system decorations,
-/// but keeps the in-app brand mark and centred title, so it never counts as system mode here.
+/// but keeps the in-app brand mark and centred title, so it never counts as system mode here; nor
+/// does the web build (the browser tab has no document title), nor an embedder or the snapshot
+/// example that never turned the preference on.
 pub fn system_title_bar(app: &PhotocraftApp) -> bool {
-    !app.custom_titlebar && !cfg!(target_os = "macos")
+    !app.custom_titlebar && app.session.prefs().interface.system_title_bar && !cfg!(any(target_os = "macos", target_arch = "wasm32"))
 }
 
 /// The OS window title: the active document's name suffixed with the app name (a `*` prefix
 /// marks unsaved changes, like the `•` in the app-drawn title), or just the app name with no
 /// document open.
 pub fn window_title(app: &PhotocraftApp) -> String {
-    app.session
-        .active()
-        .map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, d.doc.name))
-        .unwrap_or_else(|| "PhotoCraft".into())
+    app.session.active().map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, d.doc.name)).unwrap_or_else(|| "PhotoCraft".into())
 }
 
 /// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends
@@ -589,17 +588,21 @@ mod title_tests {
     fn app(custom_titlebar: bool) -> crate::PhotocraftApp {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.custom_titlebar = custom_titlebar;
+        // The preference that makes the shell launch without its own title bar.
+        app.session.edit_prefs(|p| p.interface.system_title_bar = !custom_titlebar);
         app
+    }
+
+    #[test]
+    fn without_the_preference_the_mark_stays() {
+        // The default (e.g. the web build or the snapshot example): no custom bar, no preference.
+        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(!system_title_bar(&app));
     }
 
     fn open_named(app: &mut crate::PhotocraftApp, name: &str) {
         app.session.add_document(
-            photocraft_doc::Document::new(
-                name,
-                photocraft_doc::Size::new(4, 4),
-                photocraft_doc::ColorMode::Rgb,
-                photocraft_doc::SampleType::U8,
-            ),
+            photocraft_doc::Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
             None,
         );
     }
