@@ -36,6 +36,10 @@ pub struct CropState {
     pub default_frame: bool,
     /// The document (index and size) the default frame was made for.
     frame_for: Option<(usize, u32, u32)>,
+    /// The document a pending frame belongs to. A crop drawn on one document must never show over,
+    /// or be applied to, another: when the active document changes, [`ensure_frame`] cancels it
+    /// (Photoshop treats a pending crop as modal instead; cancelling first is the same outcome).
+    frame_doc: Option<photocraft_doc::DocId>,
     /// The frame is being edited (pressed since it was made): the canvas shows what lies past it.
     pub editing: bool,
 }
@@ -173,11 +177,22 @@ pub fn ensure_frame(app: &mut PhotocraftApp) {
         return;
     }
     let key = app.session.active_index().zip(app.session.active()).map(|(i, st)| (i, st.doc.size.width, st.doc.size.height));
+    let doc_id = app.session.active().map(|st| st.doc.id);
+    // A pending crop belongs to the document it was drawn on: switching documents cancels it, so it
+    // is never drawn over — or committed into — another document (#1918).
+    if app.crop.drag.is_none() && app.crop.frame_doc.is_some() && app.crop.frame_doc != doc_id {
+        app.ui.crop_rect = None;
+        app.crop.editing = false;
+        app.crop.default_frame = false;
+        app.crop.frame_doc = None;
+    }
     // Another document (or a resized one) gets its own default frame.
     if app.crop.default_frame && app.crop.frame_for != key && app.crop.drag.is_none() {
         app.ui.crop_rect = None;
     }
     if app.ui.crop_rect.is_some() || app.crop.drag.is_some() {
+        // Record (or re-affirm) which document the frame now belongs to.
+        app.crop.frame_doc = doc_id;
         return;
     }
     let Some(st) = app.session.active() else { return };
@@ -190,6 +205,7 @@ pub fn ensure_frame(app: &mut PhotocraftApp) {
     app.ui.crop_rect = Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)]);
     app.crop.default_frame = true;
     app.crop.frame_for = key;
+    app.crop.frame_doc = doc_id;
     app.crop.editing = false;
 }
 
@@ -373,6 +389,28 @@ mod tests {
         app.ui.tool = Tool::Brush;
         ensure_frame(&mut app);
         assert_eq!(app.ui.crop_rect, None);
+    }
+
+    #[test]
+    fn a_pending_crop_does_not_leak_into_another_document() {
+        // #1918: a drawn frame must not carry over to another document.
+        let mut app = app(SampleType::U8);
+        ensure_frame(&mut app);
+        drag(&mut app, &[[10.0, 10.0], [60.0, 50.0]], NONE);
+        assert_eq!(app.ui.crop_rect, Some([10.0, 10.0, 60.0, 50.0]));
+        assert!(!app.crop.default_frame);
+        // File › New (a second document becomes active): the pending frame is cancelled and the new
+        // document gets a fresh default frame of its own.
+        let two = Document::with_background("two", Size::new(80, 80), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        app.session.add_document(two, None);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 80.0, 80.0]));
+        assert!(app.crop.default_frame);
+        // ↵ on it crops nothing, so the old frame can't be applied here either.
+        let steps = app.session.active().unwrap().history.past_len();
+        crate::canvas::commit_crop(&mut app);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(80, 80));
     }
 
     #[test]
