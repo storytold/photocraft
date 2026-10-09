@@ -22,7 +22,8 @@ use crate::state::Tool;
 /// layers still move whole, as without one.
 pub(crate) fn moves_selected_pixels(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
-    app.ui.tool == Tool::Move
+    // The Move tool, or ⌘ held with a painting tool (`hold_keys::cmd_moves`).
+    app.active_tool() == Tool::Move
         && app.ui.transform.is_none()
         && st.doc.selection.is_some()
         && st.selected_layers().len() <= 1
