@@ -3466,3 +3466,8 @@ cameraRaw	Masking	Маскування
 	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+	Drop an image, PSD or PDF anywhere to open it.	Перетягніть зображення, PSD або PDF будь-куди, щоб відкрити його.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Кожна монтажна область стає сторінкою PDF. Шари об’єднуються; прозорість зберігається.
+
+	Export All Tabs to PDF…	Експортувати всі вкладки в PDF…

@@ -2356,3 +2356,9 @@ fontWeight	Italic	Kurzíva
 	XOR	XOR
 	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
 	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Přetáhněte sem obrázek, PSD nebo PDF a otevře se.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Každé kreslicí plátno se stane jednou stránkou PDF. Vrstvy se sloučí; průhlednost zůstane zachována.
+
+	Export All Tabs to PDF…	Exportovat všechny karty do PDF…

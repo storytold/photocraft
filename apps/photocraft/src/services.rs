@@ -22,7 +22,7 @@ mod recovery_tests;
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
     "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
-    "kys", "af", "afdesign", "afphoto", "afpub",
+    "kys", "af", "afdesign", "afphoto", "afpub", "pdf",
 ];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
@@ -41,6 +41,7 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PSD Document", &["psd", "psb"]),
     ("PhotoCraft", &["pcraft"]),
+    ("PDF", &["pdf"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg"]),
     ("WebP", &["webp"]),

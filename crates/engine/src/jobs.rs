@@ -389,6 +389,8 @@ pub enum OpenSource {
     Bytes(Arc<Vec<u8>>),
     /// A path the worker reads itself (native), so even the read stays off the UI thread.
     Path(String),
+    /// Pages explicitly selected in the PDF import picker.
+    PdfPages { bytes: Arc<Vec<u8>>, pages: Vec<usize> },
 }
 
 /// The command id open jobs report (there is no engine command: opening is the shell's).
@@ -414,6 +416,7 @@ impl Session {
     /// [`Session::open_document`] (Color Settings policies apply). `name` names the document.
     /// The job's result is `{document, name, warnings, color}`; on wasm it runs inline.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
+        let split_pdf = matches!(&source, OpenSource::PdfPages { .. });
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
@@ -424,18 +427,34 @@ impl Session {
             false,
             move |ctx| {
                 ctx.progress(0.0, "Reading");
-                let bytes = match source {
-                    OpenSource::Bytes(b) => b,
-                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
+                let (bytes, pages) = match source {
+                    OpenSource::Bytes(b) => (b, None),
+                    OpenSource::Path(p) => (Arc::new(read_path(&p)?), None),
+                    OpenSource::PdfPages { bytes, pages } => (bytes, Some(pages)),
                 };
                 ctx.check()?;
                 ctx.progress(0.02, "Decoding");
-                ctx.stage(0.02, 1.0, "Decoding", |ctl| photocraft_io::import_with(&name_w, &bytes, ctl)).map_err(|e| match e {
+                ctx.stage(0.02, 1.0, "Decoding", |ctl| match &pages {
+                    Some(pages) => photocraft_io::pdf::import_pdf_pages(&name_w, &bytes, Some(pages), ctl),
+                    None => photocraft_io::import_with(&name_w, &bytes, ctl),
+                }).map_err(|e| match e {
                     photocraft_io::IoError::Cancelled => EngineError::Cancelled,
                     e => EngineError::Other(e.to_string()),
                 })
             },
             move |s, r: photocraft_io::ImportResult| {
+                if split_pdf {
+                    let documents = pdf_page_documents(&r.document)?;
+                    let mut indices = Vec::new();
+                    for doc in documents {
+                        let (index, _) = s.open_document(doc, None);
+                        if let Some(st) = s.active_mut() { st.source_read_only = true; }
+                        indices.push(index);
+                    }
+                    let index = *indices.first().ok_or_else(|| EngineError::Other("no PDF pages selected".into()))?;
+                    s.set_active(index);
+                    return Ok(json!({"document": index, "documents": indices, "name": name_a, "warnings": ["PDF pages opened as images at 144 ppi. Save As PDF saves the active page; save .pcraft to retain editing layers."], "color": null}));
+                }
                 let (index, color) = s.open_document(r.document, None);
                 if let Some(st) = s.active_mut() {
                     st.source_read_only = r.source_read_only;
@@ -754,6 +773,21 @@ impl Session {
         }
         self.jobs.events.push(JobEvent { id: job.id, command: job.command.clone(), label: job.label.clone(), document: job.doc, outcome });
     }
+}
+
+/// Turn imported PDF artboards into independent, origin-aligned editing documents.
+pub fn pdf_page_documents(doc: &Document) -> Result<Vec<Document>> {
+    let stem = std::path::Path::new(&doc.name).file_stem().unwrap_or_default().to_string_lossy();
+    doc.artboards()
+        .iter()
+        .rev()
+        .map(|(id, _, _)| {
+            let mut page = crate::artboard_cmds::artboard_document(doc, *id)?.ok_or_else(|| EngineError::Other("missing PDF page".into()))?;
+            page.id = DocId::fresh();
+            page.name = format!("{stem} - {}.pdf", page.name);
+            Ok(page)
+        })
+        .collect()
 }
 
 /// Engine commands for the job table (the control channel and MCP use them too).

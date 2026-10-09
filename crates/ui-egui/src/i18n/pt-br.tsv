@@ -2785,3 +2785,9 @@ fontWeight	Italic	Itálico
 	XOR	XOR
 	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
 	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Solte uma imagem, PSD ou PDF em qualquer lugar para abri-lo.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Cada prancheta se torna uma página PDF. As camadas são achatadas; a transparência é preservada.
+
+	Export All Tabs to PDF…	Exportar todas as abas para PDF…

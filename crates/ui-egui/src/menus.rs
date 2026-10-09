@@ -338,6 +338,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = app.ui.open_dialog(DialogKind::About, fields);
             Ok(json!({"dialog": dialog, "info": crate::gpu_status::system_info_json(app)}))
         }
+        "file.export.allTabsPdf" if params.as_object().is_none_or(|p| p.is_empty()) => Ok(json!({"dialog": crate::export_dialog::open_all_pdf(app)?})),
         "file.export.exportAs" => Ok(json!({"dialog": crate::export_dialog::open(app)?})),
         "file.export.quickExportAsPng" => crate::export_dialog::quick_export_png(app),
         // Layer › Export As… / Quick Export as PNG: the export pipeline on just the active layer.

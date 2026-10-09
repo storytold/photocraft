@@ -2395,3 +2395,9 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Ziehe ein Bild, PSD oder PDF an eine beliebige Stelle, um es zu öffnen.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Jede Zeichenfläche wird zu einer PDF-Seite. Ebenen werden zusammengeführt; Transparenz bleibt erhalten.
+
+	Export All Tabs to PDF…	Alle Tabs als PDF exportieren…

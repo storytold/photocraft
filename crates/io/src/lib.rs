@@ -42,6 +42,7 @@ pub mod linked;
 mod multichannel_map;
 pub mod pattern_map;
 mod pdn;
+pub mod pdf;
 pub mod pixels;
 mod psd_export;
 mod psd_import;
@@ -90,6 +91,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// PDF parsing, rendering or writing failed.
+    #[error("PDF: {0}")]
+    Pdf(String),
     /// A background import was cancelled ([`import_with`]).
     #[error("cancelled")]
     Cancelled,
@@ -185,6 +189,9 @@ pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt)
 }
 
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    if has_extension(name, "pdf") || bytes.starts_with(b"%PDF-") {
+        return pdf::import_pdf(name, bytes, ctl);
+    }
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
@@ -232,6 +239,9 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
     let ext = extension(name_or_ext);
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
+    }
+    if ext == "pdf" {
+        return pdf::export_pdf(doc, opts);
     }
     if affinity::EXTENSIONS.contains(&ext.as_str()) {
         return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));

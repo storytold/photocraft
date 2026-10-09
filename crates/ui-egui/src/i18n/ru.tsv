@@ -2631,3 +2631,9 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Перетащите изображение, PSD или PDF в любое место окна, чтобы открыть.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Каждая монтажная область становится страницей PDF. Слои объединяются; прозрачность сохраняется.
+
+	Export All Tabs to PDF…	Экспортировать все вкладки в PDF…

@@ -3380,3 +3380,9 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	画像、PSD、PDFをここにドロップすると開きます。
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	各アートボードが1つのPDFページになります。レイヤーは統合され、透明度は保持されます。
+
+	Export All Tabs to PDF…	すべてのタブをPDFに書き出し…
