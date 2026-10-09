@@ -223,6 +223,10 @@ pub struct LayerM {
     /// Blend If ranges (empty = everything blends).
     #[serde(default, skip_serializing_if = "photocraft_doc::BlendIf::is_default")]
     pub blend_if: photocraft_doc::BlendIf,
+    /// Advanced Blending switches (knockout, as-group, transparency shapes, masks hide effects);
+    /// omitted at Photoshop's defaults, and missing in older files = the defaults.
+    #[serde(default, skip_serializing_if = "photocraft_doc::AdvancedBlending::is_default")]
+    pub advanced: photocraft_doc::AdvancedBlending,
     #[serde(default)]
     pub video: Option<VideoDataM>,
 }

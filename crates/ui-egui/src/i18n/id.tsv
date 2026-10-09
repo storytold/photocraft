@@ -17,6 +17,10 @@
 	Layer	Layer
 	Type	Teks
 	Select	Seleksi
+	Top Left	Kiri atas
+	Top Right	Kanan atas
+	Bottom Left	Kiri bawah
+	Bottom Right	Kanan bawah
 	Filter	Filter
 	View	Tampilan
 	Window	Jendela
@@ -28,6 +32,9 @@
 	Open Recent	Terakhir Dibuka
 	Clear Recent Files	Hapus Daftar Berkas Terakhir
 	Close	Tutup
+	Minimize	Minimalkan
+	Maximize	Maksimalkan
+	Restore	Pulihkan
 	Close All	Tutup Semua
 	Close Others	Tutup Lainnya
 	Save	Simpan
@@ -95,6 +102,7 @@
 	Fill…	Isi…
 	Stroke…	Stroke…
 	Content-Aware Fill…	Isi Content-Aware…
+	Delete and Fill Selection	Hapus dan Isi Seleksi
 	Content-Aware Scale	Skala Content-Aware
 	Puppet Warp	Puppet Warp
 	Perspective Warp	Perspective Warp
@@ -298,6 +306,7 @@
 	Smart Object	Smart Object
 	Convert to Smart Object	Konversi ke Smart Object
 	Convert to Embedded	Konversi ke Tertanam
+	Convert to Layers	Konversi ke Layer
 	Convert to Linked…	Konversi ke Tertaut…
 	Edit Contents	Edit Isi
 	Replace Contents…	Ganti Isi…
@@ -950,6 +959,7 @@
 	Drag a rectangle around the object	Seret persegi panjang di sekeliling objek
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Seret pada gambar untuk menambah batasan; Shift untuk horizontal/vertikal; klik kanan untuk menghapus.
 	Drag to move the active shape's path or the Work Path	Seret untuk memindah path bentuk aktif atau Work Path
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klik: pilih titik jangkar · Seret: pindahkan titik, gagang, atau segmen · {shift}-klik: tambah · {alt}-klik: seluruh subpath
 	Draw with the Pen tool (P) or make a work path from a selection.	Gambar dengan alat Pen (P) atau buat work path dari seleksi.
 	Drop an image or PSD anywhere to open it.	Jatuhkan gambar atau PSD di mana saja untuk membukanya.
 	Duplicate Layers…	Duplikat Layer…
@@ -989,6 +999,7 @@
 	Fisheye	Fisheye
 	Fit	Pas
 	Fit Screen	Pas Layar
+	Fill Screen	Isi Layar
 	Fit in View	Pas di Tampilan
 	Fixed	Tetap
 	Fixed Ratio	Rasio Tetap
@@ -1317,6 +1328,7 @@
 	Set background color	Atur warna background
 	Set foreground color	Atur warna foreground
 	Set painting symmetry options	Atur opsi simetri lukisan
+	Symmetry Off	Simetri Mati
 	Set shape fill type	Atur jenis isian bentuk
 	Set shape stroke type	Atur jenis stroke bentuk
 	Set the text color	Atur warna teks
@@ -1573,6 +1585,7 @@
 	Paint Bucket Tool	Alat Paint Bucket
 	Paints from the document's opening state	Melukis dari kondisi awal dokumen saat dibuka
 	Path Selection Tool	Alat Path Selection
+	Direct Selection Tool	Alat Direct Selection
 	Pattern Overlay	Overlay Pola
 	Pen Pressure	Tekanan Pena
 	Pen Tilt	Kemiringan Pena
@@ -1768,12 +1781,14 @@
 	Memory usage mb	Pemakaian memori MB
 	GPU memory mb	Memori GPU (MB)
 	Memory usage percent	Pemakaian memori (%)
+	Low resolution previews	Pratinjau resolusi rendah
 	Missing glyph protection	Perlindungan glyph hilang
 	Modern	Modern
 	Nearest neighbor	Nearest neighbor
 	Never	Tidak pernah
 	Normal tip	Ujung normal
 	Open as smart object	Buka sebagai smart object
+	Open in camera raw	Buka di Camera Raw
 	Open documents as tabs	Buka dokumen sebagai tab
 	Overscroll	Overscroll
 	Performance	Performa
@@ -1889,6 +1904,7 @@
 	System Info…	Info Sistem…
 	System Info	Info Sistem
 	More panels	Panel lainnya
+	More documents	Dokumen lainnya
 	These settings aren't available in PhotoCraft yet.	Pengaturan ini belum tersedia di PhotoCraft.
 	Graphics	Grafis
 	Reset GPU Backend	Reset Backend GPU
@@ -1917,6 +1933,8 @@
 	Brush Settings…  (F5): every option of this brush	Pengaturan Kuas…  (F5): semua opsi kuas ini
 	Rename Brush…	Ganti Nama Kuas…
 	Delete Brush	Hapus Kuas
+	New Brush Preset…	Preset Kuas Baru…
+	Brush Preset Options	Opsi Preset Kuas
 	Group name	Nama grup
 	Brush name	Nama kuas
 	Grid view	Tampilan grid
@@ -1964,6 +1982,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Tidak ada path untuk dibuat seleksi: gambar dengan alat Pen atau pilih salah satu di panel Path.
 	Cancel opening	Batalkan pembukaan
 	Cancelled opening {name}	Pembukaan {name} dibatalkan
+	Developing {name}	Mengembangkan {name}
 	Cancelled {label}	{label} dibatalkan
 	Esc to cancel	Esc untuk batal
 	Opening {name}	Membuka {name}
@@ -2012,7 +2031,7 @@
 	Magnetic Lasso	Magnetic Lasso
 	History Brush	History Brush
 	Art History Brush	Art History Brush
-	Pattern Stamp	Pattern Stamp
+	Pattern Stamp	Stempel Pola
 	Spot Healing	Spot Healing
 	Red Eye	Red Eye
 	Patch	Patch
@@ -2440,12 +2459,15 @@
 	Floating point	Titik mengambang
 	Use Global Light	Gunakan Cahaya Global
 	Native file drag-and-drop is unavailable	Seret dan lepas berkas native tidak tersedia
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Seret dan lepas berkas native belum didukung di Wayland. Gunakan Berkas › Buka, atau jalankan PhotoCraft di XWayland dengan `WAYLAND_DISPLAY= photocraft`.
-	Use File › Open to open an image.	Gunakan Berkas › Buka untuk membuka gambar.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Seret dan lepas berkas native belum didukung di Wayland. Gunakan Berkas › Buka, atau salin gambar di pengelola berkas lalu tempel dengan {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Untuk menjatuhkan berkas, jalankan PhotoCraft di XWayland: `{command}`
+	Edit › Paste	Edit › Tempel
+	Use File › Open, or paste a copied image with {paste}.	Gunakan Berkas › Buka, atau tempel gambar yang disalin dengan {paste}.
 	Mixer Brush Tool	Alat Kuas Pencampur
 	Invalid {mode} profile	Profil {mode} tidak valid
 	Unnamed {mode} profile	Profil {mode} tanpa nama
 	Show bounding box when dragging layer	Tampilkan kotak pembatas saat menyeret layer
+	System title bar	Bilah judul sistem
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lasso Bekukan: seret untuk membekukan area, seret dengan Alt untuk mencairkannya (L)
 	Shadow Clipping Warning (U)	Peringatan Clipping Bayangan (U)
 	Highlight Clipping Warning (O)	Peringatan Clipping Highlight (O)
@@ -2457,6 +2479,7 @@
 	Show Selected Region	Tampilkan Wilayah Terpilih
 cameraRaw	Light	Cahaya
 	Camera Raw Filter ({layer})	Filter Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Nada Terang
 cameraRaw	Darks	Nada Gelap
 cameraRaw	Blacks	Hitam
@@ -2516,6 +2539,7 @@ cameraRaw	Blending	Pembauran
 	Frequency	Frekuensi
 	Use tablet pressure to change pen width	Gunakan tekanan tablet untuk mengubah lebar pena
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	Tentang
 	Contributors	Kontributor
@@ -2547,3 +2571,77 @@ cameraRaw	Blending	Pembauran
 	% of all commits	% dari semua commit
 	Lines +/−	Baris +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} baris (Δ {delta}), +{binAdded} / −{binDeleted} berkas biner, {first} – {last}
+
+# Swatches panel
+	Create new swatch	Buat swatch baru
+	New Swatch…	Swatch Baru…
+	New Swatch Group…	Grup Swatch Baru…
+	Import Swatches…	Impor Swatch…
+	Replace Swatches…	Ganti Swatch…
+	Export Swatches…	Ekspor Swatch…
+	Export Swatches for Exchange…	Ekspor Swatch untuk Pertukaran…
+	Reset Swatches	Atur Ulang Swatch
+	Add to Swatches	Tambahkan ke Swatch
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	Blend If:
+	Channels:	Channel:
+	Knockout	Knockout
+	Apply At Canvas Bounds	Terapkan efek di batas kanvas
+	Show/Hide All Panels	Tampilkan/Sembunyikan Semua Panel
+	Show/Hide Panels	Tampilkan/Sembunyikan Panel
+	Could not open	Tidak dapat membuka
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: jalur bukan Unicode yang valid; ganti nama file lalu buka lagi.
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	Isi:
+	Custom Pattern:	Pola Kustom:
+	Foreground Color	Warna Foreground
+	Color…	Warna…
+	50% Gray	Abu-abu 50%
+	{size} (was {old})	{size} (sebelumnya {old})
+	Cone	Kerucut
+	Cone (Inverted)	Kerucut (Terbalik)
+	Domed	Kubah
+	Domed (Inverted)	Kubah (Terbalik)
+	Diagonal (Descending)	Diagonal (Menurun)
+
+	Red Eye Tool	Alat Mata Merah
+	Pupil Size	Ukuran pupil
+	Darken Amount	Jumlah penggelapan
+	Click a red pupil to neutralize it	Klik pupil merah untuk memperbaikinya
+	open source	sumber terbuka
+	…and {n} more	…dan {n} lagi
+
+	Eyedroppers:	Eyedropper:
+	Set Black Point	Atur Titik Hitam
+	Set Neutral Gray Point	Atur Titik Abu-abu Netral
+	Set White Point	Atur Titik Putih
+	Unavailable in this color mode	Tidak tersedia dalam mode warna ini
+	Selection Preview:	Pratinjau Seleksi:
+	Black Matte	Latar Hitam
+	White Matte	Latar Putih
+
+# Layer colour labels.
+	Seafoam	Busa Laut
+	Indigo	Nila
+	Fuchsia	Fuksia
+	Violet	Ungu
+	Large document: redrawing on the CPU	Dokumen besar: menggambar ulang di CPU
+	This redraw took {seconds} s on the CPU.	Penggambaran ulang di CPU ini memakan waktu {seconds} dtk.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Suntingan yang mengubah seluruh dokumen, seperti mode campuran, opasitas, atau visibilitas layer, menggambar ulang semuanya.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Layer tidak muat dalam anggaran memori GPU. Menaikkan Pemakaian memori di Preferensi › Performa menaikkan anggaran, hingga seperempat memori komputer ini.
+	The GPU compositor wasn't used: {reason}	Kompositor GPU tidak digunakan: {reason}
+fontWeight	Thin	Sangat Tipis
+fontWeight	ExtraLight	Ekstra Tipis
+fontWeight	Light	Tipis
+fontWeight	Regular	Reguler
+fontWeight	Medium	Sedang
+fontWeight	SemiBold	SemiTebal
+fontWeight	Bold	Tebal
+fontWeight	ExtraBold	Ekstra Tebal
+fontWeight	Black	Sangat Tebal
+fontWeight	Italic	Miring
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	Alat Stempel Pola
+	Impressionist	Impresionis

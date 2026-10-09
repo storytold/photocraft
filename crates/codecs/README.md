@@ -35,7 +35,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | PNG | yes | yes | U8, U16 | Gray, GrayA, RGB, RGBA | yes | yes (iCCP) | yes (eXIf) | yes (iTXt `XML:com.adobe.xmp`) | yes (pHYs) | yes (tEXt/zTXt/iTXt) | no | `png` |
 | JPEG | yes | yes | U8 | Gray, RGB, CMYK | no | yes (multi-segment APP2) | yes (APP1) | yes (APP1) | yes (JFIF) | no | yes | `zune-jpeg` / `jpeg-encoder` |
 | TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included) | yes | yes (tag 34675) | no | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
-| WebP | yes | yes (lossless only) | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | no | `image-webp` |
+| WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
 | GIF | yes | yes | U8 | RGBA | 1-bit | no | no | no | no | no | yes (256-colour palette) | `image` |
 | BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` |
@@ -80,18 +80,23 @@ the same.
   needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated
   behind the non-default `avif` feature. In a default build it is neither readable nor writable,
   so the symmetric guarantee holds. It is listed in `ASYMMETRIC_EXCEPTIONS`.
-* **Lossy WebP.** There is no pure-Rust lossy WebP encoder. We always write lossless WebP, and
-  `webp_lossless: false` returns `CodecError::Unsupported`. We can read both lossy and lossless
-  files.
+* **Lossy WebP.** Lossless (VP8L, via `image-webp`) is the default. `webp_lossless: false`
+  writes a lossy file with our own clean-room VP8 key-frame encoder (`codecs::vp8`, from
+  RFC 6386; `webp_quality` 0–100 on libwebp's scale sets the quantizer). Alpha travels losslessly
+  in an `ALPH` chunk and ICC/EXIF/XMP in their own chunks of the extended (`VP8X`) container. The
+  encoder makes no rate-distortion decisions yet, and a side longer than 16383 px (the VP8 frame
+  header's limit) is refused with `CodecError::Encode`. We read both lossy and lossless files.
 * **Animation and multi-page files** (APNG, animated GIF/WebP, multi-page TIFF): only the first
   frame or page is decoded, and a single frame is written. `FormatCaps::animation` marks
   containers that can hold more frames. The decoded image then carries a
   `DecodeWarning::MoreFrames` / `MorePages` in `Image::warnings`, with the total when the file
   states it (frames and TIFF directories are counted without decoding them; reduced-resolution
-  TIFF directories and transparency masks are not pages).
+  TIFF directories and transparency masks are not pages). Any TIFF page can still be opened
+  with `decode_tiff_page` (and `photocraft_io::import_tiff_page`).
 * **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
   `caps.exif = false` for TIFF, and a warning is raised.
-* **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the IFD0 tag in TIFF) is applied on
+* **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the decoded page's tag in TIFF and
+  BigTIFF) is applied on
   decode, like Photoshop: the pixels come back upright and the EXIF/XMP orientation is rewritten
   to 1 (`DecodeOptions::keep_orientation` opts out). Encoders always write Orientation = 1
   (`upright_exif`, `upright_xmp`, which change only the tag's value, kept in its own type), so upright pixels
@@ -109,17 +114,41 @@ the same.
   * CMYK is always written 4:4:4 (subsampled CMYK is not portable) as Adobe-inverted CMYK with an
     APP14 marker.
   * Text is not written because there is no COM-segment support.
-  * EXIF and XMP must each fit in one 64 KiB APP1 segment, otherwise the encoder returns an error.
-    Extended XMP is not written.
+  * EXIF and XMP must each fit in one APP1 segment (65 533 bytes with its header). Metadata that
+    doesn't fit is dropped and the export still succeeds, with a
+    `MetadataTooLarge` warning ("EXIF (… bytes) is too large for the format; it will be dropped").
+    Before dropping XMP, the encoder first removes the layered-document properties
+    (`DocumentAncestors`, `TextLayers`) that mean nothing in a flat JPEG. Extended XMP is not
+    written.
 * **TIFF decode**
-  * Supports 1, 2 and 4-bit gray (best effort, not yet covered by tests), 8/16/32-bit integers (32-bit is reduced to U16), F16, F32 and
-    F64 (converted to F32), and WhiteIsZero.
-  * Palette and YCbCr TIFFs, and compressions that the `tiff` crate lacks (CCITT, JPEG-in-TIFF),
-    return `Unsupported`.
+  * Classic TIFF and BigTIFF (version 43, 8-byte offsets), both byte orders, strips or tiles,
+    planar configuration 1 or 2.
+  * Supports 1, 2 and 4-bit gray, 8/16/32/64-bit integers (32 and 64-bit are reduced to U16),
+    F16, F32 and F64 (converted to F32), WhiteIsZero (#691: the tones are no longer inverted),
+    palette images (opened as RGB), associated alpha (made straight) and extra samples (dropped
+    unless the first is alpha).
+  * Every directory is reachable: `tiff_info` lists the main IFD chain and its SubIFDs (tag 330)
+    with each page's size, kind (page, reduced-resolution copy, mask) and storage, walked with a
+    seen-set, a depth limit and a 10 000-directory cap; `decode_tiff_page` opens any of them.
+    `decode` opens the first full-resolution page, like Photoshop (thumbnails are skipped).
+  * Banded decoding: the image is allocated once at its final size and each strip or row of
+    tiles is decoded straight into it, in parallel on native targets, with at most one
+    strip/tile-sized scratch buffer per worker (30 MP RGB8: Deflate 345 → 32 ms, LZW 428 → 43
+    ms in release). Image data cut off by the end of the file decodes with
+    `DecodeWarning::Truncated`; a file far too small for its declared size (more than any
+    compression could expand) is refused before allocating.
+  * YCbCr, CIE Lab, signed integers and compressions that the `tiff` crate lacks (CCITT,
+    JPEG-in-TIFF) return `Unsupported`.
+* **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
+  the file could pass 4 GiB.
 * **EXR**
   * Reads the first valid layer at full resolution, from its data window.
   * Channel names are matched by suffix, so `layer.R` counts as `R`.
-  * Subsampled channels and deep data are unsupported.
+  * Subsampled channels are unsupported.
+  * Deep data (scanlines or single-level tiles, compressed NONE, RLE or ZIPS) opens as a flat
+    image: each pixel's samples are composited into one, with
+    `DecodeWarning::DeepFlattened` because per-pixel depth is not kept. Deep ZIP (16-line
+    blocks) and deep mip-map or rip-map tiles return `Unsupported`.
   * Only lossless compressions are offered for writing: None, RLE, ZIP1, ZIP16 and PIZ.
 * **Netpbm writing** picks the subtype from the image: float gives PFM, gray gives P5, RGB gives
   P6, and anything with alpha or CMYK gives P7 (PAM). Writing a `.pbm` file therefore produces
@@ -133,6 +162,8 @@ the same.
 decoding. Header dimensions are checked before the pixel buffer is allocated, and the budget is
 also passed to the underlying decoders. A violation returns `CodecError::LimitExceeded`. The
 defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
+PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
+including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 
 ## Tests
 

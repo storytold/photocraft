@@ -605,10 +605,12 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             // A lookup without a usable table (none chosen yet, or a bad size) renders as the
             // identity, so it is written as a 2³ identity cube rather than dropped.
             let n = *size as usize;
-            let (file, dither) = match lut {
-                Some(table) if (2..=256).contains(&n) && table.len() >= n * n * n * 3 => {
-                    (photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: table[..n * n * n * 3].to_vec() }, *dither)
-                }
+            let cube = lut.as_deref().zip(photocraft_doc::adjust::lut3d_len(*size)).and_then(|(table, len)| table.get(..len)).filter(|_| n <= 256);
+            let (file, dither) = match cube {
+                Some(cube) => (
+                    photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: [0.0; 3], domain_max: [1.0; 3] },
+                    *dither,
+                ),
                 _ => (photocraft_cms::lutfile::LutFile { title: String::new(), ..photocraft_cms::lutfile::LutFile::identity(2) }, false),
             };
             let en =
@@ -674,7 +676,11 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             put16(&mut v, 0);
             v.extend_from_slice(&((density.clamp(0.0, 1.0) * 100.0).round() as u32).to_be_bytes());
             v.push(u8::from(*preserve_luminosity));
-            v.push(0);
+            // Photoshop requires the 17-byte Photo Filter payload after the version to be
+            // padded to a 4-byte boundary INSIDE the tagged block's declared length.
+            // A single pad byte made an 18-byte `phfl` block that Photoshop could not open
+            // even though PhotoCraft and other tolerant readers accepted it (#1455).
+            v.extend_from_slice(&[0, 0, 0]);
             return vec![(*b"phfl", v)];
         }
         Adjustment::ChannelMixer { matrix, monochrome } => {
@@ -921,12 +927,35 @@ mod tests {
         let mut v2 = i16s(&[2, 0]);
         v2.extend([0xff, 0xff, 0x80, 0x00, 0, 0, 0, 0]);
         v2.extend(40u32.to_be_bytes());
-        v2.extend([1, 0]);
+        v2.extend([1, 0, 0, 0]);
+        assert_eq!(v2.len(), 20, "Photo Filter must occupy 20 bytes");
+        assert_eq!(&v2[17..], &[0, 0, 0], "padding is included inside the block length");
         let a = parse(b"phfl", &v2, None, Channels::Rgb);
         let Adjustment::PhotoFilter { color, density, preserve_luminosity: true } = a else { panic!("{a:?}") };
         assert_eq!(color, [1.0, 32768.0 / 65535.0, 0.0]);
         assert_eq!(density, 0.4);
         assert_eq!(write(&a)[0].1, v2, "version 2 RGB is written back byte-exact");
+        // Older PhotoCraft files used only one padding byte (18 bytes); keep importing them,
+        // but never produce that Photoshop-incompatible length again.
+        assert_eq!(parse(b"phfl", &v2[..18], None, Channels::Rgb), a);
+        for preserve_luminosity in [false, true] {
+            for density in [0.0, 0.14, 1.0] {
+                let adjustment = Adjustment::PhotoFilter { color: [0.8, 0.4, 0.2], density, preserve_luminosity };
+                let blocks = write(&adjustment);
+                assert_eq!(blocks.len(), 1);
+                assert_eq!(blocks[0].0, *b"phfl");
+                assert_eq!(blocks[0].1.len(), 20);
+                assert_eq!(&blocks[0].1[17..], &[0, 0, 0]);
+                let Adjustment::PhotoFilter { color, density: read_density, preserve_luminosity: read_preserve } =
+                    parse(b"phfl", &blocks[0].1, None, Channels::Rgb)
+                else {
+                    panic!("written phfl must parse")
+                };
+                assert!(color.iter().zip([0.8, 0.4, 0.2]).all(|(got, expected)| (got - expected).abs() <= 1.0 / 65535.0));
+                assert!((read_density - density).abs() < 0.00001);
+                assert_eq!(read_preserve, preserve_luminosity);
+            }
+        }
         // Version 2, Lab colour structure: L 50, a 0, b 0 is mid gray.
         let mut lab = i16s(&[2, 7, 5000, 0, 0, 0]);
         lab.extend(25u32.to_be_bytes());

@@ -45,12 +45,38 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Layer masks | `panels.rs` | Clicking the mask thumbnail targets the mask (corner-bracket frame; the tab reads "Layer, Layer Mask/8"). Brush, eraser (paints background colour), gradient and bucket then send `"target": "mask"`. Adjustment and fill layers target their mask automatically. |
 | Levels / Curves | `tone.rs` | Histogram of the image *below* the adjustment. Curves: click to add a point, drag out to delete. Every change is a coalesced `layer.setAdjustment`, so one drag = one undo step and the canvas updates at full resolution on the GPU. |
 
+While editing type, hold Ctrl (Windows/Linux) or Command (macOS) for an oriented transform
+frame. Drag inside to move, a corner to scale (Shift keeps proportions; Alt/Option scales about
+the reference point), a middle handle to skew, or just outside the frame to rotate (Shift snaps
+to 15°). Drag the reference point to move the rotation centre. These Type gestures follow
+[Adobe's type guide](https://helpx.adobe.com/photoshop/using/creating-type.html), independently
+of the Free Transform preference: Ctrl/Cmd never distorts a Type corner.
+
+Without Ctrl/Cmd, paragraph handles resize the container and reflow its text. Temporary
+transforms keep its logical dimensions and all character/paragraph styles. A drag begun with
+Ctrl/Cmd owns the pointer until button release, even if the modifier is released first. Its
+preview does not change the document; release applies one coalesced `type.edit`, and typing
+continues in the same layer. Escape during a drag cancels that preview; focus loss or changes
+to its source also discard it. Holding the modifier, moving the reference point, or returning
+the pointer to its start creates no history entry. Ctrl/Cmd+T while typing still toggles the
+Character panel.
+
 Where the font lacks a symbol (e.g. ∠ ↦ ▔), draw it with the painter or use a Lucide icon; never ship
 missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`docs/development.md`).
+
+## Title bar
+
+The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon, `brand.rs`), then the menus, the document title and the workspace controls, like Photoshop's Ps tile and menu row.
+
+- **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 5 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
+- **macOS:** the traffic lights sit over the integrated title strip (`integrated_titlebar`).
+- **Narrow windows** drop controls that are also in a menu before anything overlaps: Discord (Help › Discord), then the theme toggle, then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
 
 ## Menus
 
 `menu_catalog.rs` holds Photoshop's menu tree (standard command names, order, separators, default shortcuts). Items whose id matches an engine or UI command are live; others render disabled until implemented. Give new commands the catalogue's id (for example `image.imageSize`) and they light up in the right place automatically.
+
+Menus never run off the window: the menu bar's menus and submenus scroll with arrows (`menu_nav::level`), and long right-click menus (Layers, canvas tools, Channels, Paths, document tabs) wrap their rows in `widgets::menu_scroll`, so they move up to fit and scroll only when taller than the visible window.
 
 ## Automation for visual checks
 
@@ -66,8 +92,9 @@ draft open for correction. Settings marked for the next launch still require a r
 ## High DPI and 4K displays
 
 Edit → Preferences → Interface → UI Scale applies immediately. Auto follows the operating
-system's display scale (including fractional scales). For a 4K or larger monitor,
-Auto uses at least 200% so text and controls remain readable. Detection uses the current monitor,
+system's display scale, including fractional scales such as 125%, 150% and 175% (on Linux,
+Wayland's fractional scale or X11's `Xft.dpi`). Only when the system reports no scaling (100%) on
+a 4K or larger monitor does Auto use 200%, so text and controls remain readable. Detection uses the current monitor,
 including portrait displays, and updates when the window moves between monitors. If monitor
 size is unavailable, Auto follows system DPI. The fixed choices (75% to 300%) set an absolute UI
 scale, allowing large 4K displays to use smaller controls when desired. Canvas zoom shortcuts

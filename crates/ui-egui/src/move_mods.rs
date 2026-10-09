@@ -9,6 +9,8 @@
 //!   history step ("Duplicate + Move"). ⇧⌥ combines both.
 //! - Arrow keys nudge the selected layers 1 px (⇧: 10 px); ⌥ duplicates first. While Free
 //!   Transform is active they nudge the box instead.
+//! - With a selection the drag and the arrow keys move the selected pixels (`move_ui`): ⇧ locks
+//!   the drag to multiples of 45° and ⌥ copies the pixels instead of duplicating the layer.
 //!
 //! The hooks are small and local: [`filter_event`] rewrites pointer events before the Move tool
 //! sees them and [`finish`] folds the history after the drag, so the Move drag pipeline itself is
@@ -22,7 +24,8 @@ use crate::state::Tool;
 
 /// Directions ⇧ locks a Move-tool drag to: horizontal and vertical (Photoshop's Move tool).
 pub const MOVE_DIRECTIONS: u32 = 4;
-/// Directions ⇧ locks a Free Transform body drag to: the axes and the 45° diagonals.
+/// Directions ⇧ locks a Free Transform body drag, or a Move-tool drag of selected pixels, to: the
+/// axes and the 45° diagonals.
 pub const TRANSFORM_DIRECTIONS: u32 = 8;
 /// Extra angle (degrees) the pointer must pass the half-way line by before the locked axis
 /// switches, so it doesn't flicker when dragging near the diagonal.
@@ -84,7 +87,8 @@ fn moving(app: &PhotocraftApp) -> bool {
 /// length before so [`fold_history`] can merge the copy and the move into one step.
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
-    match app.run("layer.duplicate", json!({})) {
+    // In place: the copy follows the pointer from the original, artboards too (#1531).
+    match app.run("layer.duplicate", json!({"inPlace": true})) {
         Ok(_) => Some(before),
         Err(e) => {
             app.ui.status = e;
@@ -131,13 +135,15 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
     let Some(start) = app.move_mods.start.filter(|_| moving(app)) else { return p };
+    // Selected pixels (`move_ui`): ⌥ copied them at the press.
+    let pixels = app.drag.as_ref().is_some_and(|d| d.sel_move.is_some());
     let mut d = [p[0] - start[0], p[1] - start[1]];
     if mods.shift {
-        d = constrain(d, app.move_mods.last, MOVE_DIRECTIONS);
+        d = constrain(d, app.move_mods.last, if pixels { TRANSFORM_DIRECTIONS } else { MOVE_DIRECTIONS });
     }
     app.move_mods.last = Some(d);
     let zoom = f64::from(app.current_zoom().max(0.01));
-    if app.move_mods.alt && app.move_mods.dup_from.is_none() && d[0].hypot(d[1]) * zoom >= DUPLICATE_THRESHOLD {
+    if app.move_mods.alt && !pixels && app.move_mods.dup_from.is_none() && d[0].hypot(d[1]) * zoom >= DUPLICATE_THRESHOLD {
         app.move_mods.dup_from = duplicate(app);
         // Only once per drag, even if duplicating failed.
         app.move_mods.alt = false;
@@ -153,16 +159,25 @@ pub fn finish(app: &mut PhotocraftApp) {
     }
 }
 
+/// Call when a Move drag ends without moving (its layers were dragged to another document): an
+/// ⌥-drag's copy is taken back.
+pub fn abandon(app: &mut PhotocraftApp) {
+    if std::mem::take(&mut app.move_mods).dup_from.is_some() {
+        app.session.undo();
+    }
+}
+
 /// Arrow keys with the Move tool (or while Free Transform is active): nudge 1 px, ⇧ 10 px;
 /// ⌥ duplicates the layers first. Returns true when a key was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.tool != Tool::Move && app.ui.transform.is_none() {
-        return false;
+        return selection_arrow_keys(app, ctx);
     }
     use egui::{Key, Modifiers};
     let keys = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
     for (key, ux, uy) in keys {
-        for mods in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT, Modifiers::SHIFT | Modifiers::ALT] {
+        // Most specific first: `consume_key` ignores extra ⇧ / ⌥ (`matches_logically`).
+        for mods in [Modifiers::SHIFT | Modifiers::ALT, Modifiers::SHIFT, Modifiers::ALT, Modifiers::NONE] {
             if ctx.input_mut(|i| i.consume_key(mods, key)) {
                 let k = if mods.shift { 10.0 } else { 1.0 };
                 nudge(app, ux * k, uy * k, mods.alt);
@@ -173,7 +188,8 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     false
 }
 
-/// Moves the selected layers (or the Free Transform box) by `(dx, dy)` pixels.
+/// Moves the selected layers (or the Free Transform box, or the selected pixels) by `(dx, dy)`
+/// pixels.
 pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     if let Some(t) = app.ui.transform.as_mut() {
         if t.warp.is_none() {
@@ -185,6 +201,10 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     if app.drag.is_some() {
         return;
     }
+    if crate::move_ui::moves_selected_pixels(app) {
+        crate::move_ui::float_selected(app, duplicate_first, dx, dy);
+        return;
+    }
     let from = if duplicate_first { duplicate(app) } else { None };
     if let Err(e) = app.run("layer.translate", json!({"dx": dx, "dy": dy})) {
         app.ui.status = e;
@@ -192,6 +212,38 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     if let Some(from) = from {
         fold_history(app, from);
     }
+}
+
+/// Arrow keys with a selection tool (#1428), as in Photoshop: nudge the selection outline 1 px
+/// (⇧ 10 px) through `select.transformSelection`, one history step per press; the pixels stay
+/// put. A floating piece (⌘-dragged pixels) moves instead, like a plain drag on it. Not while a
+/// drag, a polygon or a Magnetic Lasso border is in progress. Returns true when a key was used.
+fn selection_arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    if !crate::tool_feedback::is_selection_tool(app.ui.tool) || app.drag.is_some() || !app.ui.polygon.is_empty() || app.ui.magnetic.active() {
+        return false;
+    }
+    let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
+    if !floating && !app.session.is_enabled("select.transformSelection") {
+        return false;
+    }
+    use egui::{Key, Modifiers};
+    let keys = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
+    for (key, ux, uy) in keys {
+        // ⇧ first: `consume_key` ignores an extra ⇧.
+        for mods in [Modifiers::SHIFT, Modifiers::NONE] {
+            if ctx.input_mut(|i| i.consume_key(mods, key)) {
+                let k = if mods.shift { 10.0 } else { 1.0 };
+                let (dx, dy) = (ux * k, uy * k);
+                let id = if floating { "select.float" } else { "select.transformSelection" };
+                if let Err(e) = app.run(id, json!({"dx": dx, "dy": dy})) {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -335,5 +387,54 @@ mod tests {
         let q0 = app.ui.transform.as_ref().unwrap().quad;
         nudge(&mut app, 0.0, 10.0, false);
         assert_eq!(app.ui.transform.as_ref().unwrap().quad[0], [q0[0][0], q0[0][1] + 10.0]);
+    }
+
+    /// One key press through `arrow_keys`, as egui delivers it.
+    fn press(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers) -> bool {
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| {
+            i.modifiers = mods;
+            i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods });
+        });
+        arrow_keys(app, &ctx)
+    }
+
+    /// Real key events: ⇧ nudges 10 px and ⌥ duplicates first (egui ignores extra ⇧ / ⌥ when
+    /// matching, so the plain arrow must not be tried first).
+    #[test]
+    fn arrow_key_modifiers_reach_the_move_tool() {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let n0 = app.session.active().unwrap().doc.layers.len();
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(9, 8, 25, 24));
+        assert!(press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(9, 18, 25, 34));
+        assert!(press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::ALT));
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n0 + 1, "⌥ duplicated first");
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(9, 18, 25, 34), "the original stays");
+    }
+
+    /// #1428: with a selection tool the arrows nudge the selection outline (⇧ 10 px), one step
+    /// each; the layer stays put. Without a selection they are left alone.
+    #[test]
+    fn arrow_keys_nudge_the_selection_with_a_selection_tool() {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.tool = Tool::Lasso;
+        assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE), "no selection: not used");
+        app.session.execute("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
+        let sel = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+        let h0 = app.session.active().unwrap().history.past_len();
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert!(press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
+        assert_eq!(sel(&app), photocraft_geom::Rect::new(5, 14, 15, 24));
+        assert_eq!(app.session.active().unwrap().history.past_len(), h0 + 2);
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels stay put");
+        // Not while a polygon is being drawn.
+        app.ui.tool = Tool::PolygonLasso;
+        app.ui.polygon = vec![[1.0, 1.0]];
+        assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
     }
 }

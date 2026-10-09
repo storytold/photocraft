@@ -48,7 +48,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 }
 
 /// Largest stroke coordinate accepted (a few times the largest document side, 300 000 px).
-const MAX_COORD: f64 = 1_000_000.0;
+pub(crate) const MAX_COORD: f64 = 1_000_000.0;
 
 /// Parse `points`: arrays `[x, y, pressure?, tiltX?, tiltY?, rotation?, timeMs?, wheel?]` or
 /// objects `{"x":…, "y":…, "pressure":…, "tiltX":…, …, "time":…}`.
@@ -137,13 +137,27 @@ pub fn merge_brush(base: &BrushSettings, patch: &Value, cmd: &str) -> Result<Bru
     Ok(out)
 }
 
-pub(crate) fn validate_brush_size(brush: &BrushSettings, cmd: &str) -> Result<()> {
+/// Rejects brush sizes and Scatter amounts outside their documented ranges, before a brush is
+/// stored or painted with.
+pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
     let max = photocraft_paint::MAX_BRUSH_SIZE;
     if !brush.size.is_finite() || brush.size > max {
         return Err(bad(cmd, format!("brush size must be finite and at most {max} px")));
     }
     if brush.dual_brush.enabled && (!brush.dual_brush.size.is_finite() || brush.dual_brush.size > max) {
         return Err(bad(cmd, format!("dual brush size must be finite and at most {max} px")));
+    }
+    // Scatter may exceed 1 (100 %) but not the 1000 % maximum: a huge amount pushed dab centres to
+    // infinity (#977). `{:?}` keeps 1e38 short and shows infinity as `inf`.
+    let scatter_max = photocraft_paint::MAX_SCATTER;
+    let in_range = |v: f32| (0.0..=scatter_max).contains(&v);
+    let sc = brush.scattering.scatter.jitter;
+    if brush.scattering.enabled && !in_range(sc) {
+        return Err(bad(cmd, format!("scatter amount {sc:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
+    }
+    let ds = brush.dual_brush.scatter;
+    if brush.dual_brush.enabled && !in_range(ds) {
+        return Err(bad(cmd, format!("dual brush scatter amount {ds:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
     }
     Ok(())
 }
@@ -187,7 +201,7 @@ pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings>
         Some(v) => v,
         None => photocraft_paint::rng::seed_from_bytes(p.get("points").map(|v| v.to_string()).unwrap_or_default().as_bytes()),
     };
-    validate_brush_size(&b, cmd)?;
+    validate_brush(&b, cmd)?;
     Ok(b)
 }
 
@@ -616,7 +630,7 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "name": name, "width": tw, "height": th }))
 }
 
-fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "tools.setBrush";
     let mut b = s.tools.brush.clone();
     if let Some(name) = p.get("preset").and_then(Value::as_str) {
@@ -632,11 +646,14 @@ fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(inner) = o.remove("brush") {
             let tmp = merge_brush(&b, &inner, cmd)?;
+            // Before the second merge: a non-finite value would serialise as `null` there and be
+            // reported as a type error instead of naming the value (#977).
+            validate_brush(&tmp, cmd)?;
             b = tmp;
         }
     }
     b = merge_brush(&b, &patch, cmd)?;
-    validate_brush_size(&b, cmd)?;
+    validate_brush(&b, cmd)?;
     let before = std::mem::replace(&mut s.tools.brush, b);
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());

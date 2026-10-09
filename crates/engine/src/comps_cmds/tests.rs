@@ -207,3 +207,51 @@ fn export_comps_to_files_naming() {
     assert_eq!(r["files"].as_array().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn out_of_range_comp_ids_are_rejected_not_wrapped() {
+    // #914: 2^32 + id used to wrap to a real comp.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let c = s.execute("layerComp.new", json!({"name": "Start"})).unwrap()["comp"].as_u64().unwrap();
+    let wrapped = (1u64 << 32) + c;
+    assert!(s.execute("layerComp.delete", json!({"comp": wrapped})).is_err());
+    assert!(s.execute("layerComp.setOptions", json!({"comp": wrapped, "name": "renamed"})).is_err());
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(doc.layer_comps.len(), 1);
+    assert_eq!(doc.layer_comps[0].name, "Start");
+    let dir = std::env::temp_dir().join(format!("photocraft-comps-wrap-{}", std::process::id()));
+    let r = s.execute("file.export.layerCompsToFiles", json!({"dir": dir.to_string_lossy(), "comps": [wrapped]}));
+    assert!(r.is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn unreachable_comp_positions_leave_the_layer_in_place() {
+    // #1017: a recorded position whose distance from the layer's current one leaves i32 range
+    // (e.g. from a file) panicked on apply. The move is skipped; visibility still applies.
+    for target in [(i32::MIN, 4), (4, i32::MIN)] {
+        let (mut s, a, b) = session(8);
+        let comp = LayerComp {
+            id: 1,
+            name: "Far".into(),
+            comment: String::new(),
+            apply_visibility: true,
+            apply_position: true,
+            apply_appearance: false,
+            states: vec![
+                CompLayerState { layer: a, visible: Some(false), position: Some(target), appearance: None },
+                // Control: an ordinary position on another layer still moves it.
+                CompLayerState { layer: b, visible: None, position: Some((31, 22)), appearance: None },
+            ],
+        };
+        s.edit("far", |d, _| {
+            apply_comp(d, &comp, false);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(pos(&s, a), Some((4, 4)), "{target:?}");
+        assert!(!doc(&s).layer(a).unwrap().visible);
+        assert_eq!(pos(&s, b), Some((31, 22)));
+    }
+}

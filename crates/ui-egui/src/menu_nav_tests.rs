@@ -409,6 +409,15 @@ fn level_room_keeps_every_level_below_the_bar() {
     assert_eq!(level_room(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 40.0)), bar, 1, None, frame), 4.0 * ARROW);
     assert_eq!(level_room(screen, Some(f32::NAN), 1, None, frame), level_room(screen, None, 1, None, frame));
     assert_eq!(level_room(egui::Rect::NOTHING, bar, 2, Some(row), frame), 4.0 * ARROW);
+    // A window running under the taskbar: a top-level menu leaves a scrolling submenu's room above
+    // it, so the submenu of its last row (which egui opens downward) stays above the taskbar too.
+    let visible = egui::Rect::from_min_max(screen.min, egui::pos2(screen.right(), 600.0));
+    let top = level_room_in(screen, visible, bar, 1, None, None, frame);
+    assert_eq!(top, 600.0 - EDGE - (30.0 + EDGE) - (4.0 * ARROW + frame) - frame);
+    let last_row = egui::Rect::from_min_size(egui::pos2(100.0, 30.0 + EDGE + top - 24.0), egui::vec2(200.0, 24.0));
+    // A 200 pt submenu fits the window downward, so egui opens it that way: it scrolls in what is left.
+    let room = level_room_in(screen, visible, bar, 2, Some(last_row), Some(200.0), frame);
+    assert!(room >= 4.0 * ARROW && last_row.top() - (frame - 2.0) / 2.0 + room + frame <= 600.0 - EDGE + 0.5, "room {room}");
 }
 
 /// #315: a 1366 × 768 pt display with a Windows taskbar. `window` is the window's content size and

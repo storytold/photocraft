@@ -50,23 +50,23 @@ note = "doc lib.rs:312 SmartObject.transform is an Affine"
 [[item]]
 id = "FILE-215-7"
 target = "Layered TIFF read and write (tag 37724), honouring the ask-before-saving pref"
-status = "done"
+status = "partial"
 issue = 215
-note = "psd tiff.rs (ImageSourceData, both byte orders), io tiff_layers.rs, ui tiff_options_ui.rs (Discard Layers and Save a Copy); extra alpha channels are not written (one transparency sample)"
+note = "psd tiff.rs (ImageSourceData, both byte orders), io tiff_layers.rs, ui tiff_options_ui.rs (Discard Layers and Save a Copy); extra alpha channels and a Quick Mask are not written (the TIFF codec holds one transparency sample)"
 
 [[item]]
 id = "FILE-215-8"
 target = "Large and BigTIFF import with banded decode across all IFDs"
-status = "missing"
+status = "done"
 issue = 215
-note = "codecs tiff.rs:3 'Only the first IFD is read'"
+note = "codecs tiff_ifd.rs (bounds-checked IFD chain + SubIFD walk, classic and BigTIFF, cycle-safe; tiff_info / decode_tiff_page), tiff.rs banded parallel strip/tile decode, planar 1 and 2, BigTIFF write (tiff_bigtiff or > 4 GiB); io import_tiff_page; 30 MP RGB8 Deflate 345 -> 32 ms; no page picker in the UI yet"
 
 [[item]]
 id = "FILE-215-9"
 target = "SVG opens and places as shape layers or a vector Smart Object"
-status = "missing"
+status = "done"
 issue = 215
-note = "No SVG codec or import"
+note = "io svg.rs: paths, groups, text outlines as shape layers (gradients approximated; clip/mask/filter/pattern/image subtrees rasterised); smart_cmds.rs renders an SVG source at its placement scale"
 
 [[item]]
 id = "FILE-215-10"
@@ -99,9 +99,9 @@ note = "format convert.rs:89 + tests/roundtrip.rs:282 persist frames; no PSD vid
 [[item]]
 id = "FILE-215-14"
 target = "User swatch model with ACO/ASE import and export"
-status = "missing"
+status = "done"
 issue = 215
-note = "panels.rs:954 const SWATCHES: [[u8; 3]; 40]"
+note = "engine presets/swatches.rs (RGB/HSB/CMYK/Lab/Gray + verbatim colour books, persisted in prefs) + swatch_cmds.rs (swatches.*); psd aco.rs (v1/v2) and ase.rs (groups, spot/global) read+write; ui swatches_ui.rs, Color Picker Add to Swatches"
 
 [[item]]
 id = "FILE-215-15"
@@ -113,9 +113,9 @@ note = "doc effects.rs:57 Contour model only"
 [[item]]
 id = "FILE-215-16"
 target = "Advanced Blending (knockout, blend as group, mask hides effects) end to end"
-status = "missing"
+status = "partial"
 issue = 215
-note = "No knockout / blend_interior / transparency_shapes in doc, compose or io"
+note = "doc advanced.rs + .pcraft + PSD/layered TIFF (knko infx clbl tsly lmgm vmgm), CPU compose advanced.rs (GPU falls back), blendingOptions command + dialog; 7 psd-tools knockout oracles now pass; knockout-isolated-groups (0.45 % AA edges), advanced-blending, blend-and-clipping still differ"
 
 [[item]]
 id = "FILE-215-17"
@@ -169,9 +169,9 @@ note = "4-5 GB PSB fixtures: psd example big_psb writes them (raw and RLE, plane
 [[item]]
 id = "FILE-216-3"
 target = "TIFF, RAW and EXR corpora read by tests; per-camera RAW coverage reported"
-status = "missing"
+status = "partial"
 issue = 216
-note = "corpus/tiff, raw and exr only listed by xtask corpus; no test reads them"
+note = "EXR: corpus/exr (the OpenEXR deep test images, pinned) is read by codecs tests/deep_exr.rs in the CI corpus job, against the ID manifests of the upstream sidecars. corpus/tiff and corpus/raw are still copied in by hand and no test reads them; no per-camera RAW report"
 
 [[item]]
 id = "FILE-216-4"

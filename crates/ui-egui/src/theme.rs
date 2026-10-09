@@ -112,6 +112,11 @@ pub struct Tokens {
     pub histogram_bg: Color32,
     /// Channel intensity of scope outlines and hue markers.
     pub histogram_level: u8,
+    /// The custom title bar's Close button while hovered (Windows' red), and its glyph.
+    pub caption_close: Color32,
+    pub caption_close_text: Color32,
+    /// Dims the main window behind a modal that takes all input (Camera Raw).
+    pub scrim: Color32,
 }
 
 impl Tokens {
@@ -173,6 +178,9 @@ impl Tokens {
                 row_selected: Color32::from_rgb(82, 82, 82),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
                 histogram_level: 225,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
             ThemeKind::Studio => Tokens {
                 kind,
@@ -209,6 +217,9 @@ impl Tokens {
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
                 histogram_level: 225,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
             ThemeKind::StudioLight => Tokens {
                 kind,
@@ -245,6 +256,9 @@ impl Tokens {
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
                 histogram_level: 240,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
             ThemeKind::Classic => Tokens {
                 kind,
@@ -281,6 +295,9 @@ impl Tokens {
                 row_selected: Color32::from_rgb(10, 36, 106),
                 histogram_bg: Color32::from_gray(40),
                 histogram_level: 240,
+                caption_close: Color32::from_rgb(196, 43, 28),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
             },
         }
     }
@@ -298,6 +315,31 @@ impl Tokens {
 
     pub fn histogram_fill(&self, mask: u8) -> Color32 {
         self.histogram_color(mask).gamma_multiply(0.3)
+    }
+
+    /// Semantic label hues stay recognisable across themes; None keeps the normal row surface.
+    pub fn layer_label_colors(&self, label: photocraft_doc::LabelColor) -> Option<(Color32, Color32)> {
+        use photocraft_doc::LabelColor;
+        let (swatch, eye) = match label {
+            LabelColor::None => return None,
+            LabelColor::Red => ([0xFC, 0x5D, 0x5B], [0x9F, 0x2F, 0x30]),
+            LabelColor::Orange => ([0xF7, 0x97, 0x44], [0x93, 0x4F, 0x0C]),
+            LabelColor::Yellow => ([0xDC, 0xD6, 0x4B], [0x99, 0x78, 0x0C]),
+            LabelColor::Green => ([0x85, 0xDC, 0x6A], [0x4E, 0x71, 0x2E]),
+            LabelColor::Seafoam => ([0x1C, 0x84, 0x88], [0x0B, 0x54, 0x4F]),
+            LabelColor::Blue => ([0x78, 0xAD, 0xF6], [0x41, 0x5B, 0x87]),
+            LabelColor::Indigo => ([0x54, 0x4B, 0xE7], [0x36, 0x34, 0x8E]),
+            LabelColor::Magenta => ([0xCC, 0x1A, 0x7E], [0x98, 0x1B, 0x51]),
+            LabelColor::Fuchsia => ([0xB0, 0x14, 0xC0], [0x71, 0x0F, 0x74]),
+            LabelColor::Violet => ([0x91, 0x76, 0xD5], [0x5D, 0x3F, 0x8E]),
+            LabelColor::Gray => ([0x9C, 0x9C, 0x9C], [0x57, 0x57, 0x57]),
+        };
+        let rgb = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
+        Some((rgb(swatch), rgb(eye)))
+    }
+
+    pub fn layer_label_icon(&self, label: photocraft_doc::LabelColor) -> Color32 {
+        if label == photocraft_doc::LabelColor::None { self.icon } else { Color32::from_gray(226) }
     }
 
     /// Analysis colours are semantic hues, independent of the application accent palette.
@@ -348,10 +390,27 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
         size_ui_font(ctx, name, Arc::make_mut(data));
     }
     ctx.set_fonts(fonts);
-    ctx.add_plugin(UiFontSizePlugin { applied: size });
+    // egui keeps the first plugin of a type, so a re-install (language change) resets the
+    // existing one. The new definitions land next pass: the plugin must not rescale before then.
+    if ctx
+        .with_plugin::<UiFontSizePlugin, _>(|plugin| {
+            plugin.applied = size;
+            plugin.defer_after_install = true;
+        })
+        .is_none()
+    {
+        ctx.add_plugin(UiFontSizePlugin { applied: size, defer_after_install: true });
+    }
     // Japanese / Chinese / Korean fallback fonts (craft-fonts' Japanese ones if built in, then
     // the system's) are registered on demand (cjk_fonts.rs).
     crate::cjk_fonts::install_with(ctx, cjk);
+}
+
+/// Has [`install_fonts`]'s stack reached the active fonts? Before that (the first pass, when
+/// the desktop app installs fonts and loads preferences in the same frame) the active fonts
+/// are egui's defaults, and rescaling a copy of those would overwrite the queued stack.
+fn ui_fonts_active(ctx: &egui::Context) -> bool {
+    ctx.fonts(|f| f.definitions().families.contains_key(&FontFamily::Name("medium".into())))
 }
 
 fn ui_fonts_id() -> egui::Id {
@@ -392,6 +451,9 @@ pub(crate) fn set_ui_font_size(ctx: &egui::Context, size: UiFontSize) {
 /// Keep only the original multipliers, not a second copy of large system font files.
 struct UiFontSizePlugin {
     applied: UiFontSize,
+    /// `set_fonts` takes effect next pass: skip one hook so the rescale starts from that stack
+    /// and not from the one it replaces.
+    defer_after_install: bool,
 }
 
 impl egui::Plugin for UiFontSizePlugin {
@@ -401,7 +463,14 @@ impl egui::Plugin for UiFontSizePlugin {
 
     fn output_hook(&mut self, ctx: &egui::Context, _output: &mut egui::FullOutput) {
         let size = ui_font_size(ctx);
+        let deferred = std::mem::take(&mut self.defer_after_install);
         if size == self.applied {
+            return;
+        }
+        if deferred || !ui_fonts_active(ctx) {
+            // Cloning the active definitions now would discard the queued stack (the desktop
+            // app installs fonts and loads the saved size in its first frame).
+            ctx.request_repaint();
             return;
         }
         // Start from the current stack so lazily registered fallback faces are retained.
@@ -552,6 +621,53 @@ mod tests {
         assert_eq!(ctx.zoom_factor(), 1.0);
     }
 
+    /// The desktop app installs fonts and loads the saved UI Font Size in its first frame, while
+    /// egui's default fonts are still active. Any size but Small then panicked on the next pass
+    /// ("FontFamily::Name("medium") is not bound to any fonts") because the plugin rescaled a
+    /// copy of the defaults and that replaced the queued Inter stack.
+    #[test]
+    fn saved_ui_font_size_survives_first_frame_install() {
+        let ctx = egui::Context::default();
+        let medium_bound = |ctx: &egui::Context| ctx.fonts(|f| f.families().contains(&FontFamily::Name("medium".into())));
+        ctx.run_ui(Default::default(), |ui| {
+            assert!(!medium_bound(ui.ctx()), "egui's defaults are active in the first frame");
+            install_fonts(ui.ctx());
+            apply(ui.ctx(), ThemeKind::Pro);
+            set_ui_font_size(ui.ctx(), UiFontSize::Medium);
+        })
+        .textures_delta
+        .clear();
+        let mut width = 0.0;
+        ctx.run_ui(Default::default(), |ui| {
+            assert!(medium_bound(ui.ctx()), "the installed stack reaches the second pass");
+            width = ui.painter().layout_no_wrap("PhotoCraft".into(), medium(13.0), Color32::WHITE).size().x;
+        })
+        .textures_delta
+        .clear();
+        assert!(width > 0.0);
+        // The saved size applies one pass later, from the installed stack.
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let mut scaled = 0.0;
+        ctx.run_ui(Default::default(), |ui| {
+            assert!(medium_bound(ui.ctx()));
+            scaled = ui.painter().layout_no_wrap("PhotoCraft".into(), medium(13.0), Color32::WHITE).size().x;
+        })
+        .textures_delta
+        .clear();
+        assert!((scaled - width * font_scale(UiFontSize::Medium)).abs() < 1.0, "{scaled} vs {width} × 14/12");
+        // Re-installing (a language change) keeps the size and the named families.
+        ctx.run_ui(Default::default(), |ui| install_fonts(ui.ctx())).textures_delta.clear();
+        for _ in 0..2 {
+            ctx.run_ui(Default::default(), |ui| {
+                assert!(medium_bound(ui.ctx()));
+                let w = ui.painter().layout_no_wrap("PhotoCraft".into(), medium(13.0), Color32::WHITE).size().x;
+                assert!((w - scaled).abs() < 1.0, "{w} vs {scaled}");
+            })
+            .textures_delta
+            .clear();
+        }
+    }
+
     #[test]
     fn theme_names_parse() {
         assert_eq!(ThemeKind::from_name("Classic"), Some(ThemeKind::Classic));
@@ -661,6 +777,8 @@ pub mod live {
                 };
             }
             c!(
+                caption_close,
+                caption_close_text,
                 chrome,
                 canvas,
                 canvas_dot,
@@ -686,7 +804,8 @@ pub mod live {
                 danger,
                 warning,
                 tab_strip,
-                row_selected
+                row_selected,
+                scrim
             );
         }
         unknown

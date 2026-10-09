@@ -60,7 +60,7 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
 
 /// After a structural edit, make `ids` the selection (dropping any that no longer exist), which
 /// is also what the edit's history state targets.
-fn reselect(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>) {
+pub(crate) fn reselect(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>) {
     if let Some(st) = s.active_mut() {
         st.selected_layers = ids;
         if let Some(a) = active {
@@ -258,6 +258,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let moves: Vec<_> = ids.iter().map(|&id| (id, dx, dy)).collect();
         move_layers(doc, &moves)?;
+        // A board moved past the right or bottom edge grows the canvas, as a new one does (#1531).
+        if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
+            crate::artboard_cmds::fit_canvas(doc);
+        }
         Ok(ids)
     })?;
     note_damage(s, &before, &ids);
@@ -290,12 +294,7 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
 /// `photocraft_algo::resample::translate_surface` with the content scan cached per tile (a Move
 /// drag shifts the same layers every frame; scanning them each time cost more than the copy).
 pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) -> photocraft_raster::Surface {
-    let mut out = photocraft_raster::Surface::with_default(s.format(), &s.default_pixel());
-    let r = photocraft_compose::bounds::content_bounds(s);
-    if !r.is_empty() {
-        out.write_interleaved(r.translate(dx, dy), &s.to_interleaved(r));
-    }
-    out
+    s.translated(dx, dy, photocraft_compose::bounds::content_bounds(s))
 }
 
 /// [`crate::commands::translate_layer`] plus the vector side, without re-rendering anything.
@@ -368,6 +367,254 @@ pub(crate) fn note_damage(s: &mut Session, before: &Document, ids: &[LayerId]) {
         return;
     }
     st.last_damage = layers_damage(before, &st.doc, ids);
+}
+
+/// Whether two surfaces hold identical pixels: same format and default pixel, and the same
+/// copy-on-write tile pointers at the same coordinates. Both documents stay alive during the
+/// comparison, so tile addresses cannot be reused under it.
+fn surfaces_equal(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface) -> bool {
+    a.format() == b.format()
+        && a.default_pixel() == b.default_pixel()
+        && a.tile_count() == b.tile_count()
+        && a.tiles().zip(b.tiles()).all(|((ca, ta), (cb, tb))| ca == cb && std::sync::Arc::ptr_eq(ta, tb))
+}
+
+/// Byte blobs kept in `Arc`s (PSD raw blocks, embedded smart-object sources): pointer-identical
+/// or content-equal (they are small compared to pixels, and undo steps rarely re-parse them).
+fn blob_equal(x: &std::sync::Arc<Vec<u8>>, y: &std::sync::Arc<Vec<u8>>) -> bool {
+    std::sync::Arc::ptr_eq(x, y) || (x.len() == y.len() && x.as_slice() == y.as_slice())
+}
+
+fn blobs_equal(a: &Option<std::sync::Arc<Vec<u8>>>, b: &Option<std::sync::Arc<Vec<u8>>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => blob_equal(x, y),
+        _ => false,
+    }
+}
+
+/// Layer masks (also the smart-filter mask): scalars plus tile-pointer surface identity.
+fn masks_equal(a: &Option<photocraft_doc::LayerMask>, b: &Option<photocraft_doc::LayerMask>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            x.enabled == y.enabled && x.linked == y.linked && x.density == y.density && x.feather == y.feather && surfaces_equal(&x.surface, &y.surface)
+        }
+        _ => false,
+    }
+}
+
+fn texts_equal(a: &photocraft_doc::TextLayer, b: &photocraft_doc::TextLayer) -> bool {
+    a.text == b.text
+        && a.font_family == b.font_family
+        && a.size_pt == b.size_pt
+        && a.color == b.color
+        && a.transform == b.transform
+        && a.runs == b.runs
+        && a.paragraphs == b.paragraphs
+        && a.shape == b.shape
+        && a.orientation == b.orientation
+        && a.antialias == b.antialias
+        && a.warp == b.warp
+        && match (&a.cache, &b.cache) {
+            (None, None) => true,
+            (Some(x), Some(y)) => surfaces_equal(x, y),
+            _ => false,
+        }
+        && blobs_equal(&a.psd_raw, &b.psd_raw)
+}
+
+fn smarts_equal(a: &photocraft_doc::SmartObject, b: &photocraft_doc::SmartObject) -> bool {
+    a.filters_enabled == b.filters_enabled
+        && a.transform == b.transform
+        && a.smart_filters == b.smart_filters
+        && a.stack_mode == b.stack_mode
+        && a.perspective == b.perspective
+        && a.warp == b.warp
+        && match (&a.source, &b.source) {
+            (photocraft_doc::SmartSource::Embedded { file_name: x, bytes: xb }, photocraft_doc::SmartSource::Embedded { file_name: y, bytes: yb }) => {
+                x == y && blob_equal(xb, yb)
+            }
+            (photocraft_doc::SmartSource::Linked { path: x }, photocraft_doc::SmartSource::Linked { path: y }) => x == y,
+            _ => false,
+        }
+        && match (&a.cache, &b.cache) {
+            (None, None) => true,
+            (Some(x), Some(y)) => surfaces_equal(x, y),
+            _ => false,
+        }
+        && blobs_equal(&a.psd_raw, &b.psd_raw)
+        && masks_equal(&a.filter_mask, &b.filter_mask)
+}
+
+/// Extra alpha/spot channels (the image itself in Multichannel mode).
+fn alpha_channels_equal(a: &photocraft_doc::AlphaChannel, b: &photocraft_doc::AlphaChannel) -> bool {
+    a.name == b.name && a.spot == b.spot && a.color == b.color && a.opacity == b.opacity && a.indicates == b.indicates && surfaces_equal(&a.surface, &b.surface)
+}
+
+/// Whether two layers render to identical pixels in place. Everything the compositor reads is
+/// compared structurally — no hashing, a hash collision would under-report damage; pixels are
+/// identified by their copy-on-write tile pointers. Group children are deliberately *not*
+/// compared here: the caller walks into them, so an edit inside a group damages only the
+/// edited child's extent, not the whole group's. The destructure is exhaustive, so a new
+/// `Layer` field fails to compile until it is classified: compared, or explicitly ignored
+/// (name, locks, label, `psd_blocks`, `psd_id`, link group — none of them composite; video
+/// bails out earlier in the walk).
+fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
+    let Layer {
+        id,
+        name: _,
+        visible,
+        locks: _,
+        blend,
+        opacity,
+        fill_opacity,
+        clipped,
+        mask,
+        vector_mask,
+        effects,
+        label: _,
+        content,
+        psd_blocks: _,
+        psd_id: _,
+        fill_cache,
+        link_group: _,
+        excluded_channels,
+        blend_if,
+        advanced,
+        video: _,
+    } = a;
+    *id == b.id
+        && *visible == b.visible
+        && *blend == b.blend
+        && *opacity == b.opacity
+        && *fill_opacity == b.fill_opacity
+        && *clipped == b.clipped
+        && masks_equal(mask, &b.mask)
+        && *vector_mask == b.vector_mask
+        && *effects == b.effects
+        && *excluded_channels == b.excluded_channels
+        && *blend_if == b.blend_if
+        && *advanced == b.advanced
+        && match (content, &b.content) {
+            (LayerContent::Raster(x), LayerContent::Raster(y)) => surfaces_equal(x, y),
+            // Children are walked separately; only the group's own clipping frame counts.
+            (LayerContent::Group(x), LayerContent::Group(y)) => x.artboard == y.artboard,
+            (LayerContent::Fill(x), LayerContent::Fill(y)) => x == y,
+            (LayerContent::Adjustment(x), LayerContent::Adjustment(y)) => x == y,
+            (LayerContent::Text(x), LayerContent::Text(y)) => texts_equal(x, y),
+            (LayerContent::Shape(x), LayerContent::Shape(y)) => x == y,
+            (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_equal(x, y),
+            _ => false,
+        }
+        && match (fill_cache, &b.fill_cache) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.fill == y.fill && surfaces_equal(&x.surface, &y.surface),
+            _ => false,
+        }
+}
+
+/// Document-level fields the compositor reads: all must match for a bounded damage claim. The
+/// destructure is exhaustive, so a new `Document` field fails to compile until it is classified
+/// here — compared when it composites, or explicitly ignored (the pixel-irrelevant allowlist:
+/// identity, name, selection, guides, paths, layer comps, annotations, automation state).
+fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
+    let Document {
+        id: _,
+        name: _,
+        size,
+        resolution_dpi,
+        mode,
+        depth,
+        icc_profile,
+        layers: _,
+        channels,
+        guides: _,
+        selection: _,
+        metadata: _,
+        global_light,
+        paths: _,
+        work_path: _,
+        clipping_path: _,
+        quick_mask,
+        patterns,
+        color_table,
+        duotone,
+        layer_comps: _,
+        last_applied_comp: _,
+        last_document_state: _,
+        measurement: _,
+        notes: _,
+        text_styles: _,
+        slices: _,
+        variables: _,
+        timeline: _,
+    } = a;
+    *size == b.size
+        && resolution_dpi.to_bits() == b.resolution_dpi.to_bits()
+        && *mode == b.mode
+        && *depth == b.depth
+        && icc_profile.as_deref() == b.icc_profile.as_deref()
+        && channels.len() == b.channels.len()
+        && channels.iter().zip(&b.channels).all(|(x, y)| alpha_channels_equal(x, y))
+        && *global_light == b.global_light
+        && match (quick_mask, &b.quick_mask) {
+            (None, None) => true,
+            (Some(x), Some(y)) => alpha_channels_equal(x, y),
+            _ => false,
+        }
+        && *patterns == b.patterns
+        && *color_table == b.color_table
+        && *duotone == b.duotone
+}
+
+/// Pixels a single history step can have changed between `a` and `b` (the documents on either
+/// side of an undo or redo): the union of the change bounds of every layer whose pixels
+/// differ, so undoing a local edit recomposites only that area instead of the whole canvas.
+/// `None` (composite everything, as before) when the step touched anything the layer walk
+/// cannot bound: document-level fields the compositor reads (canvas size, mode, depth,
+/// profile, global light, patterns, channels, palettes), the layer structure (order,
+/// additions, removals, kind changes), layer properties that reach outside their own bounds
+/// (clipping, excluded channels — what `layer.setProps` already reports as unbounded), and
+/// video layers.
+pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
+    if !doc_pixels_equal(a, b) {
+        return None;
+    }
+    fn walk(xs: &[Layer], ys: &[Layer], a: &Document, b: &Document, out: &mut Rect) -> bool {
+        if xs.len() != ys.len() {
+            return false;
+        }
+        for (x, y) in xs.iter().zip(ys) {
+            if x.id != y.id || x.video.is_some() || y.video.is_some() {
+                return false;
+            }
+            // Clipping and channel exclusion change how *other* layers render, outside this
+            // layer's own bounds; they have no bounded damage.
+            if x.clipped != y.clipped || x.excluded_channels != y.excluded_channels {
+                return false;
+            }
+            if !layer_pixels_equal(x, y) {
+                // Both sides' extents: a move changes pixels where it left and where it landed.
+                let (Some(bx), Some(by)) = (photocraft_compose::change_bounds(x, a.bounds()), photocraft_compose::change_bounds(y, b.bounds())) else {
+                    return false;
+                };
+                *out = if out.is_empty() { bx.union(&by) } else { out.union(&bx).union(&by) };
+            }
+            match (x.children(), y.children()) {
+                (Some(xc), Some(yc)) => {
+                    if !walk(xc, yc, a, b, out) {
+                        return false;
+                    }
+                }
+                (None, None) => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+    let mut out = Rect::EMPTY;
+    if walk(&a.layers, &b.layers, a, b, &mut out) { Some(out) } else { None }
 }
 
 /// Content bounds used by Align/Distribute: the layer's pixels (type and shape layers use their
@@ -528,6 +775,115 @@ fn distribute(s: &mut Session, kind: &str) -> Result<Value> {
     Ok(json!({"moved": moved}))
 }
 
+/// Reorder one or multiple layers to a single destination in one undoable edit.
+///
+/// Explicit `layers` are ordered according to the source document, not caller ordering.
+/// Selected descendants of a moved group remain inside their parent; only top-level
+/// selected nodes are detached, and every reference is validated before editing.
+pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.moveTo";
+    let target = LayerId(p.get("target").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "missing `target`"))?);
+    let pos = p.get("position").and_then(Value::as_str).unwrap_or("above");
+    if !matches!(pos, "above" | "below" | "into") {
+        return Err(bad(CMD, "position must be above, below, or into"));
+    }
+    // ⌥-drag in the Layers panel: duplicates land at the target and the layers stay put.
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+
+    let batch = p.get("layers");
+    if batch.is_some() && p.get("layer").is_some() {
+        return Err(bad(CMD, "give either `layer` or `layers`, not both"));
+    }
+    let requested = if let Some(raw) = batch {
+        let arr = raw.as_array().filter(|a| !a.is_empty()).ok_or_else(|| bad(CMD, "`layers` must be a nonempty array of ids"))?;
+        let mut ids = Vec::with_capacity(arr.len());
+        for item in arr {
+            let id = LayerId(item.as_u64().ok_or_else(|| bad(CMD, "every layer id must be an unsigned integer"))?);
+            if ids.contains(&id) {
+                return Err(bad(CMD, "duplicate layer id"));
+            }
+            ids.push(id);
+        }
+        ids
+    } else {
+        vec![crate::commands::layer_param(s, p)?]
+    };
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let doc = &st.doc;
+    let target_path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
+    for &id in &requested {
+        if doc.layer(id).is_none() {
+            return Err(EngineError::NoLayer(id));
+        }
+    }
+    let moved_ids = top_level(doc, &requested);
+    if moved_ids.len() == 1 && moved_ids[0] == target && batch.is_none() && !copy {
+        // Preserve single-layer drag-to-self semantics.
+        return Ok(Value::Null);
+    }
+    // Also rejects dragging a selected group onto any of its descendants.
+    for id in &moved_ids {
+        let path = doc.path_of(*id).ok_or(EngineError::NoLayer(*id))?;
+        // A copy may land beside its own source (not inside it).
+        let beside_itself = copy && *id == target && pos != "into";
+        if target_path.starts_with(&path) && !beside_itself {
+            return Err(bad(CMD, "target cannot be one of the moved layers or its descendant"));
+        }
+    }
+    if pos == "into" && doc.layer(target).is_none_or(|l| !l.is_group()) {
+        return Err(bad(CMD, "target is not a group"));
+    }
+
+    let original_active = st.active_layer;
+    let (count, copies) = s.edit(if copy { "Duplicate Layer" } else { "Reorder Layers" }, |doc, active| {
+        let mut moved = Vec::with_capacity(moved_ids.len());
+        for &id in &moved_ids {
+            moved.push(if copy { crate::commands::layer_copy(doc, id)? } else { doc.remove(id).ok_or(EngineError::NoLayer(id))? });
+        }
+        let copies: Vec<LayerId> = if copy { moved.iter().map(|l| l.id).collect() } else { Vec::new() };
+        // Look up the destination AFTER removing every source: its indices may have shifted.
+        let path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
+        if pos == "into" {
+            let children = doc.layer_at_mut(&path).and_then(Layer::children_mut).ok_or_else(|| bad(CMD, "target is not a group"))?;
+            children.extend(moved);
+        } else {
+            let (&idx, parent) = path.split_last().ok_or(EngineError::NoLayer(target))?;
+            let siblings = if parent.is_empty() {
+                &mut doc.layers
+            } else {
+                doc.layer_at_mut(parent).and_then(Layer::children_mut).ok_or_else(|| bad(CMD, "target's parent is not a group"))?
+            };
+            let at = if pos == "below" { idx } else { idx + 1 };
+            siblings.splice(at..at, moved);
+        }
+        check_group_depth(doc, "Reorder Layer")?;
+        *active = if copy {
+            copies.last().copied()
+        } else if batch.is_some() {
+            original_active.filter(|id| requested.contains(id)).or_else(|| requested.last().copied())
+        } else {
+            moved_ids.first().copied()
+        };
+        Ok((moved_ids.len(), copies))
+    })?;
+    if copy {
+        let ids: Vec<u64> = copies.iter().map(|id| id.0).collect();
+        if batch.is_some() {
+            let active = copies.last().copied();
+            reselect(s, copies, active);
+            return Ok(json!({"moved": count, "layers": ids}));
+        }
+        return Ok(json!({"layer": ids.first()}));
+    }
+    if batch.is_some() {
+        let active = original_active.filter(|id| requested.contains(id)).or_else(|| requested.last().copied());
+        reselect(s, requested, active);
+        Ok(json!({"moved": count}))
+    } else {
+        Ok(Value::Null)
+    }
+}
+
 // ---------- structural commands ----------
 
 fn link_layers(s: &mut Session) -> Result<Value> {
@@ -535,11 +891,14 @@ fn link_layers(s: &mut Session) -> Result<Value> {
     let linked = s.edit("Link Layers", |doc, _| {
         let groups: Vec<Option<u64>> = sel.iter().map(|id| doc.layer(*id).and_then(|l| l.link_group)).collect();
         // Already one link group (or a single linked layer): unlink, like Photoshop's toggle.
-        let unlink = groups[0].is_some() && groups.iter().all(|g| *g == groups[0]);
-        let next = doc.walk().iter().filter_map(|(_, _, l)| l.link_group).max().unwrap_or(0) + 1;
+        let first = groups.first().copied().flatten();
+        let unlink = first.is_some() && groups.iter().all(|g| *g == first);
+        // A loaded file can store any id up to u64::MAX, so the new id must not be a bare
+        // max + 1 (#961). Unlinking needs no new id at all.
+        let next = if unlink { None } else { Some(doc.unused_link_group().ok_or_else(|| bad("layer.linkLayers", "no free link group id is left"))?) };
         for id in &sel {
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
-            l.link_group = if unlink { None } else { Some(next) };
+            l.link_group = next;
         }
         // A group left with a single member is no longer a link.
         let mut counts = std::collections::HashMap::<u64, usize>::new();
@@ -548,7 +907,8 @@ fn link_layers(s: &mut Session) -> Result<Value> {
                 *counts.entry(g).or_default() += 1;
             }
         }
-        let lonely: Vec<LayerId> = doc.walk().iter().filter(|(_, _, l)| l.link_group.is_some_and(|g| counts[&g] < 2)).map(|(_, _, l)| l.id).collect();
+        let lonely: Vec<LayerId> =
+            doc.walk().iter().filter(|(_, _, l)| l.link_group.is_some_and(|g| counts.get(&g).is_some_and(|&c| c < 2))).map(|(_, _, l)| l.id).collect();
         for id in lonely {
             if let Some(l) = doc.layer_mut(id) {
                 l.link_group = None;
@@ -712,8 +1072,9 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
 }
 
 /// Duplicate Layer with several layers selected: each copy goes above its original and the
-/// copies become the selection.
-pub fn duplicate_selected(s: &mut Session) -> Result<Value> {
+/// copies become the selection. Artboard copies go beside their boards unless `in_place`
+/// ([`crate::artboard_cmds::place_copy`]).
+pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
     let sel = selected(s);
     let old_active = s.active().and_then(|d| d.active_layer);
     let (copies, active) = s.edit("Duplicate Layers", |doc, active| {
@@ -721,8 +1082,11 @@ pub fn duplicate_selected(s: &mut Session) -> Result<Value> {
         let mut new_active = None;
         for id in top_level(doc, &sel) {
             let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-            dup.name = format!("{} copy", dup.name);
+            dup.name = doc.copy_name(&dup.name);
             let nid = doc.insert_above(Some(id), dup);
+            if !in_place {
+                crate::artboard_cmds::place_copy(doc, nid)?;
+            }
             if Some(id) == old_active {
                 new_active = Some(nid);
             }
@@ -828,6 +1192,29 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicates_are_numbered_not_stacked() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Layer 1"})).unwrap();
+        let name = |s: &Session| {
+            let st = s.active().unwrap();
+            st.doc.layer(st.active_layer.unwrap()).unwrap().name.clone()
+        };
+        s.execute("layer.duplicate", json!({})).unwrap();
+        assert_eq!(name(&s), "Layer 1 copy");
+        // Duplicating the copy (the active layer) numbers it rather than adding "copy" again.
+        s.execute("layer.duplicate", json!({})).unwrap();
+        assert_eq!(name(&s), "Layer 1 copy 2");
+        s.execute("layer.duplicate", json!({})).unwrap();
+        assert_eq!(name(&s), "Layer 1 copy 3");
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.copy_name("Layer 1"), "Layer 1 copy 4");
+        // Names that merely contain "copy" keep it.
+        assert_eq!(doc.copy_name("Copywriting"), "Copywriting copy");
+        assert_eq!(doc.copy_name("A copyedit"), "A copyedit copy");
+    }
 
     fn session(depth: u32) -> Session {
         let mut s = Session::new();
@@ -1114,8 +1501,9 @@ mod tests {
             assert_eq!(sel(&s), vec![m]);
             s.undo();
             assert_eq!(doc(&s).layer_count(), before);
-            assert_eq!(sel(&s), vec![c], "undo leaves a valid selection");
+            assert_eq!(sel(&s), vec![a, c], "undo selects the layers that were merged");
             // One layer selected: Merge Down.
+            s.execute("layer.select", json!({"layer": c.0})).unwrap();
             s.execute("layer.mergeLayers", json!({})).unwrap();
             assert_eq!(doc(&s).layer_count(), before - 1);
         }
@@ -1291,6 +1679,97 @@ mod tests {
     }
 
     #[test]
+    fn link_layers_never_reuses_a_group_when_the_largest_id_is_u64_max() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 10, 10));
+        let b = rect_layer(&mut s, Rect::new(20, 20, 30, 30));
+        let c = rect_layer(&mut s, Rect::new(50, 50, 60, 60));
+        let d = rect_layer(&mut s, Rect::new(70, 70, 80, 80));
+        // A stored document can carry any id; `max + 1` once overflowed here.
+        let st = s.active_mut().unwrap();
+        for id in [c, d] {
+            std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().link_group = Some(u64::MAX);
+        }
+        select_all(&mut s, &[a, b]);
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+        let g = doc(&s).layer(a).unwrap().link_group;
+        assert_eq!(g, Some(1));
+        assert_eq!(doc(&s).layer(b).unwrap().link_group, g);
+        for id in [c, d] {
+            assert_eq!(doc(&s).layer(id).unwrap().link_group, Some(u64::MAX), "the existing group is untouched");
+        }
+    }
+
+    #[test]
+    fn undo_and_redo_report_only_the_edited_area() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+        select_all(&mut s, &[a]);
+        // A pixel edit on one layer is bounded by that layer's extent on both sides.
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(a).unwrap().surface_mut().unwrap().fill_rect(Rect::new(12, 12, 14, 14), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.undo();
+        assert_eq!(damage(&s), Some(Rect::new(10, 10, 20, 20)));
+        s.redo();
+        assert_eq!(damage(&s), Some(Rect::new(10, 10, 20, 20)));
+        // A move reports where the layer was and where it landed.
+        s.execute("layer.translate", json!({"dx": 5, "dy": 0})).unwrap();
+        s.undo();
+        assert_eq!(damage(&s), Some(Rect::new(10, 10, 25, 20)), "union of where the layer was and is");
+        s.redo();
+        assert_eq!(damage(&s), Some(Rect::new(10, 10, 25, 20)));
+    }
+
+    #[test]
+    fn undo_of_document_wide_steps_still_composites_everything() {
+        let mut s = session(8);
+        let _ = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+        // A canvas change has no bounded damage.
+        s.execute("image.crop", json!({"x": 0, "y": 0, "width": 30, "height": 25})).unwrap();
+        assert_ne!(doc(&s).size, photocraft_doc::Size::new(100, 80));
+        s.undo();
+        assert_eq!(damage(&s), None, "a size change recomposites the whole canvas");
+        // A structural change (a layer removed and restored) neither.
+        let b = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        select_all(&mut s, &[b]);
+        s.execute("layer.delete", json!({})).unwrap();
+        s.undo();
+        assert_eq!(damage(&s), None);
+    }
+
+    #[test]
+    fn undo_of_compositor_read_document_fields_composites_everything() {
+        let mut s = session(8);
+        let _ = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+        // Global Light changes every effect's angle across the document.
+        s.execute("layer.layerStyle.globalLight", json!({"angle": 90.0})).unwrap();
+        s.undo();
+        assert_eq!(damage(&s), None, "a global-light change recomposites everything");
+        // A mode change that keeps the pixel format (RGB → Indexed maps to RGB) neither.
+        s.execute("image.mode.indexedColor", json!({})).unwrap();
+        s.undo();
+        assert_eq!(damage(&s), None, "a mode change recomposites everything");
+    }
+
+    #[test]
+    fn undo_of_clipping_or_channel_exclusion_composites_everything() {
+        let mut s = session(8);
+        let _ = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+        let b = rect_layer(&mut s, Rect::new(12, 12, 30, 30));
+        select_all(&mut s, &[b]);
+        // Clipping reaches the layers clipped above, outside this layer's bounds.
+        s.execute("layer.setProps", json!({"clipped": true})).unwrap();
+        s.undo();
+        assert_eq!(damage(&s), None, "a clipping change recomposites everything");
+        s.execute("layer.setProps", json!({"channels": [true, false, true]})).unwrap();
+        s.undo();
+        assert_eq!(damage(&s), None, "an excluded-channel change recomposites everything");
+    }
+
+    #[test]
     fn linked_layers_move_together_and_undo() {
         for depth in [8, 16, 32] {
             let mut s = session(depth);
@@ -1324,6 +1803,111 @@ mod tests {
             assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], false);
             assert!(doc(&s).layer(a).unwrap().link_group.is_none());
         }
+    }
+
+    /// Plain layers carrying stored link groups, as a loaded `.pcraft` or PSD can hold (#961).
+    fn stored_groups(s: &mut Session, groups: &[Option<u64>]) -> Vec<LayerId> {
+        let ids: Vec<LayerId> = groups.iter().map(|_| rect_layer(s, Rect::new(0, 0, 4, 4))).collect();
+        s.edit("load groups", |doc, _| {
+            for (id, g) in ids.iter().zip(groups) {
+                doc.layer_mut(*id).unwrap().link_group = *g;
+            }
+            Ok(())
+        })
+        .unwrap();
+        ids
+    }
+
+    fn group(s: &Session, id: LayerId) -> Option<u64> {
+        doc(s).layer(id).unwrap().link_group
+    }
+
+    /// Links `ids`, then checks they share one group no other layer uses (#961).
+    fn link_fresh(s: &mut Session, ids: &[LayerId]) -> u64 {
+        select_all(s, ids);
+        let past = s.active().unwrap().history.past_len();
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+        let g = group(s, ids[0]).expect("linked");
+        assert!(ids.iter().all(|id| group(s, *id) == Some(g)));
+        let members = doc(s).walk().iter().filter(|(_, _, l)| l.link_group == Some(g)).count();
+        assert_eq!(members, ids.len(), "group {g} is shared with unselected layers");
+        g
+    }
+
+    #[test]
+    fn link_layers_beside_a_maximal_stored_group() {
+        // The issue's repro: one layer stored at u64::MAX, link it with an unlinked one.
+        let mut s = session(8);
+        let ids = stored_groups(&mut s, &[Some(u64::MAX), None]);
+        assert_ne!(link_fresh(&mut s, &ids), u64::MAX);
+        // Unlink and relink the pair: with no groups left, numbering starts over at 1.
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], false);
+        assert!(ids.iter().all(|id| group(&s, *id).is_none()));
+        assert_eq!(link_fresh(&mut s, &ids), 1);
+
+        // Two other layers linked beside an untouched maximal pair.
+        let mut s = session(8);
+        let ids = stored_groups(&mut s, &[Some(u64::MAX), Some(u64::MAX), None, None]);
+        let g = link_fresh(&mut s, &ids[2..]);
+        assert_ne!(g, u64::MAX);
+        assert_eq!((group(&s, ids[0]), group(&s, ids[1])), (Some(u64::MAX), Some(u64::MAX)));
+    }
+
+    #[test]
+    fn unlink_a_maximal_stored_group() {
+        let mut s = session(8);
+        let ids = stored_groups(&mut s, &[Some(u64::MAX), Some(u64::MAX), None]);
+        select_all(&mut s, &ids[..2]);
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], false);
+        assert!(ids.iter().all(|id| group(&s, *id).is_none()));
+        s.undo();
+        assert_eq!((group(&s, ids[0]), group(&s, ids[1])), (Some(u64::MAX), Some(u64::MAX)));
+        // Relinking all three gets a working group.
+        link_fresh(&mut s, &ids);
+    }
+
+    #[test]
+    fn link_layers_when_every_group_is_huge() {
+        // Unselected groups at the top of the range, including the 0 a wrapped id would join.
+        let top = [u64::MAX, u64::MAX - 1, u64::MAX - 2, 0, 1, 2];
+        let stored: Vec<Option<u64>> = top.iter().flat_map(|g| [Some(*g), Some(*g)]).chain([None, None, None, None]).collect();
+        let mut s = session(8);
+        let ids = stored_groups(&mut s, &stored);
+        let n = top.len() * 2;
+        let g = link_fresh(&mut s, &ids[n..n + 2]);
+        assert!(!top.contains(&g), "{g} collides with a stored group");
+        // A second link gets yet another group, and existing groups never change.
+        let h = link_fresh(&mut s, &ids[n + 2..]);
+        assert!(!top.contains(&h) && h != g);
+        for (i, t) in top.iter().enumerate() {
+            assert_eq!((group(&s, ids[2 * i]), group(&s, ids[2 * i + 1])), (Some(*t), Some(*t)));
+        }
+        // Moving a newly linked layer leaves the group-0 pair alone.
+        assert_eq!(with_links(doc(&s), &[ids[n]]), vec![ids[n], ids[n + 1]]);
+    }
+
+    #[test]
+    fn link_layers_near_the_maximum() {
+        // max + 1 still fits: the new group is u64::MAX itself.
+        let mut s = session(8);
+        let ids = stored_groups(&mut s, &[Some(u64::MAX - 1), Some(u64::MAX - 1), None, None, None, None]);
+        assert_eq!(link_fresh(&mut s, &ids[2..4]), u64::MAX);
+        // The next link no longer fits above the maximum and takes a free id instead.
+        let g = link_fresh(&mut s, &ids[4..]);
+        assert!(g != u64::MAX && g != u64::MAX - 1);
+    }
+
+    #[test]
+    fn link_layers_assigns_working_groups() {
+        // Control: ordinary documents keep getting max + 1, starting at 1.
+        let mut s = session(8);
+        let ids = stored_groups(&mut s, &[None, None, None, None]);
+        assert_eq!(link_fresh(&mut s, &ids[..2]), 1);
+        assert_eq!(link_fresh(&mut s, &ids[2..]), 2);
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], false);
+        assert_eq!((group(&s, ids[2]), group(&s, ids[3])), (None, None));
+        assert_eq!((group(&s, ids[0]), group(&s, ids[1])), (Some(1), Some(1)));
     }
 
     #[test]

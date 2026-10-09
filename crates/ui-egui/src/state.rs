@@ -90,7 +90,9 @@ pub enum Tool {
     Healing,
     Patch,
     ContentAwareMove,
+    RedEye,
     CloneStamp,
+    PatternStamp,
     HistoryBrush,
     Blur,
     Sharpen,
@@ -102,6 +104,7 @@ pub enum Tool {
     ObjectSelection,
     Pen,
     PathSelection,
+    DirectSelection,
     Rectangle,
     EllipseShape,
     Triangle,
@@ -113,7 +116,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 48] = [
+    pub const ALL: [Tool; 51] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
@@ -142,7 +145,9 @@ impl Tool {
         Tool::Healing,
         Tool::Patch,
         Tool::ContentAwareMove,
+        Tool::RedEye,
         Tool::CloneStamp,
+        Tool::PatternStamp,
         Tool::HistoryBrush,
         Tool::Blur,
         Tool::Sharpen,
@@ -154,6 +159,7 @@ impl Tool {
         Tool::ObjectSelection,
         Tool::Pen,
         Tool::PathSelection,
+        Tool::DirectSelection,
         Tool::Rectangle,
         Tool::EllipseShape,
         Tool::Triangle,
@@ -196,7 +202,9 @@ impl Tool {
             Tool::Healing => "Healing Brush Tool",
             Tool::Patch => "Patch Tool",
             Tool::ContentAwareMove => "Content-Aware Move Tool",
+            Tool::RedEye => "Red Eye Tool",
             Tool::CloneStamp => "Clone Stamp Tool",
+            Tool::PatternStamp => "Pattern Stamp Tool",
             Tool::HistoryBrush => "History Brush Tool",
             Tool::Blur => "Blur Tool",
             Tool::Sharpen => "Sharpen Tool",
@@ -208,6 +216,7 @@ impl Tool {
             Tool::ObjectSelection => "Object Selection Tool",
             Tool::Pen => "Pen Tool",
             Tool::PathSelection => "Path Selection Tool",
+            Tool::DirectSelection => "Direct Selection Tool",
             Tool::Rectangle => "Rectangle Tool",
             Tool::EllipseShape => "Ellipse Tool",
             Tool::Triangle => "Triangle Tool",
@@ -232,6 +241,7 @@ impl Tool {
                 | Tool::SpotHealing
                 | Tool::Healing
                 | Tool::CloneStamp
+                | Tool::PatternStamp
                 | Tool::HistoryBrush
                 | Tool::Blur
                 | Tool::Sharpen
@@ -256,14 +266,14 @@ impl Tool {
             Tool::Type | Tool::VerticalType => 'T',
             Tool::Hand => 'H',
             Tool::Zoom => 'Z',
-            Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove => 'J',
-            Tool::CloneStamp => 'S',
+            Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
+            Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen => 'P',
-            Tool::PathSelection => 'A',
+            Tool::PathSelection | Tool::DirectSelection => 'A',
             Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
         }
     }
@@ -312,6 +322,15 @@ pub struct Panels {
     /// Window › Character / Paragraph: the Character | Paragraph dock group (#150).
     #[serde(default)]
     pub character: bool,
+    /// The toolbar's header chevron: two columns even when one fits (#1197).
+    #[serde(default)]
+    pub toolbar_double: bool,
+    /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).
+    #[serde(default = "yes")]
+    pub dock: bool,
+    /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_by_tab: Option<[bool; 3]>,
 }
 
 impl Default for Panels {
@@ -327,6 +346,9 @@ impl Default for Panels {
             status_bar: true,
             brush_settings: false,
             character: false,
+            toolbar_double: false,
+            dock: true,
+            hidden_by_tab: None,
         }
     }
 }
@@ -360,6 +382,9 @@ pub struct View {
     pub center: [f32; 2],
     /// Recompute fit-to-screen on next frame.
     pub fit_pending: bool,
+    /// Recompute fill-screen on next frame. Unlike fit, this may crop an edge of the document.
+    #[serde(default)]
+    pub fill_pending: bool,
     /// Document size this view last showed; a change (Image/Canvas Size, crop) re-centres it.
     #[serde(default)]
     pub doc_size: [u32; 2],
@@ -367,7 +392,7 @@ pub struct View {
 
 impl Default for View {
     fn default() -> Self {
-        Self { zoom: 1.0, center: [0.0, 0.0], fit_pending: true, doc_size: [0, 0] }
+        Self { zoom: 1.0, center: [0.0, 0.0], fit_pending: true, fill_pending: false, doc_size: [0, 0] }
     }
 }
 
@@ -410,6 +435,14 @@ pub struct ToolOptions {
     pub type_align: String,
     /// Clone Stamp / Healing Brush.
     pub clone_aligned: bool,
+    /// Pattern Stamp: lock the tile origin in document space across strokes.
+    pub pattern_stamp_aligned: bool,
+    /// Pattern Stamp: jitter each dab's phase (seeded, replayable).
+    pub pattern_stamp_impressionist: bool,
+    /// Pattern Stamp scale %, 1..1000 (100 = the tile's native size).
+    pub pattern_stamp_scale: f32,
+    /// Pattern Stamp rotation in degrees (counter-clockwise).
+    pub pattern_stamp_angle: f32,
     /// current | currentAndBelow | all
     pub clone_sample: String,
     /// Spot Healing: contentAware | createTexture | proximityMatch
@@ -484,6 +517,11 @@ pub struct ToolOptions {
     pub magnetic_contrast: f32,
     pub magnetic_frequency: f32,
     pub magnetic_pressure: bool,
+    /// Red Eye: pupil search size (1–100) and how far corrected pixels darken (0–100).
+    #[serde(default = "fifty")]
+    pub red_eye_pupil_size: f32,
+    #[serde(default = "fifty")]
+    pub red_eye_darken: f32,
 }
 
 fn yes() -> bool {
@@ -500,6 +538,10 @@ fn default_marquee_style() -> String {
 
 fn one() -> f32 {
     1.0
+}
+
+fn fifty() -> f32 {
+    50.0
 }
 
 impl Default for ToolOptions {
@@ -523,6 +565,10 @@ impl Default for ToolOptions {
             type_aa: "sharp".into(),
             type_align: "left".into(),
             clone_aligned: true,
+            pattern_stamp_aligned: true,
+            pattern_stamp_impressionist: false,
+            pattern_stamp_scale: 100.0,
+            pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
@@ -563,6 +609,8 @@ impl Default for ToolOptions {
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,
             magnetic_pressure: false,
+            red_eye_pupil_size: 50.0,
+            red_eye_darken: 50.0,
         }
     }
 }
@@ -656,6 +704,16 @@ pub struct TextEdit {
     pub preedit: Option<(usize, usize)>,
 }
 
+/// Temporary Type-tool drag. The document is unchanged until release; this frame is view state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TypeTransform {
+    pub document: u64,
+    pub revision: u64,
+    pub original: photocraft_geom::Affine,
+    pub frame: TransformSession,
+    pub(crate) gesture: crate::transform_tool::Gesture,
+}
+
 /// View-menu overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -705,6 +763,12 @@ pub struct UiState {
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
+    /// Ctrl/Cmd Type-tool gesture, exposed to automation but never restored as a held pointer.
+    #[serde(default, skip_deserializing)]
+    pub type_transform: Option<TypeTransform>,
+    /// Reference point for the current type editing session (document coordinates).
+    #[serde(skip)]
+    pub type_transform_pivot: Option<[f64; 2]>,
     /// Free Transform session, if any.
     #[serde(default)]
     pub transform: Option<TransformSession>,
@@ -713,6 +777,9 @@ pub struct UiState {
     pub clone_source: Option<[f64; 2]>,
     #[serde(default)]
     pub clone_offset: Option<[f64; 2]>,
+    /// Pattern Stamp aligned origin in document pixels, kept across strokes.
+    #[serde(default)]
+    pub pattern_stamp_phase: Option<[f32; 2]>,
     /// Painting targets the active layer's mask instead of its pixels.
     #[serde(default)]
     pub mask_target: bool,
@@ -720,9 +787,13 @@ pub struct UiState {
     /// tools edit it (#196). Never set together with `mask_target`.
     #[serde(default)]
     pub vector_mask_target: bool,
-    /// Brush Preset picker opened by a right-click on the canvas: its screen position (points).
+    /// Brush Preset picker opened by a right-click on the canvas or the options-bar brush chip:
+    /// its screen position (points).
     #[serde(default)]
     pub brush_picker: Option<[f32; 2]>,
+    /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
+    #[serde(default = "crate::brush_picker::list_state")]
+    pub brush_picker_list: crate::brush_panel::BrushesPanelState,
     /// Layers under the pointer, listed by a right-click on the canvas with the Move tool or
     /// ⌘/Ctrl+right-click with any tool (`layer_pick_ui`, #307).
     #[serde(default)]
@@ -739,6 +810,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// Direct Selection tool: selected anchors and the drag in progress (#790).
+    #[serde(default)]
+    pub direct_selection: crate::direct_select::DirectSelection,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -826,6 +900,9 @@ pub struct UiState {
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
+    /// Documents (ids) whose slow full refresh on the CPU compositor has had its notice.
+    #[serde(default)]
+    pub slow_refresh_noticed: Vec<u64>,
     /// Status bar info field, Home screen (see `chrome_ui`).
     #[serde(default)]
     pub chrome: crate::chrome_ui::ChromeState,
@@ -841,16 +918,20 @@ impl Default for UiState {
             tool: Tool::Brush,
             recent_files: Vec::new(),
             text_edit: None,
+            type_transform: None,
+            type_transform_pivot: None,
             transform: None,
             mask_target: false,
             vector_mask_target: false,
             brush_picker: None,
+            brush_picker_list: crate::brush_picker::list_state(),
             layer_menu: None,
             canvas_tool_menu: None,
             smoothing_tool: None,
             tool_smoothing: Vec::new(),
             clone_source: None,
             clone_offset: None,
+            pattern_stamp_phase: None,
             extras: Extras::default(),
             view: Default::default(),
             actions: Default::default(),
@@ -863,6 +944,7 @@ impl Default for UiState {
             shell: Default::default(),
             layer_filter: Vec::new(),
             pen: None,
+            direct_selection: Default::default(),
             selected_path: None,
             panels: Panels::default(),
             views: Vec::new(),
@@ -888,6 +970,7 @@ impl Default for UiState {
             status_error: false,
             notices: Vec::new(),
             gpu_fallback_notice: None,
+            slow_refresh_noticed: Vec::new(),
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
             camera_raw_preview: Default::default(),
@@ -935,6 +1018,13 @@ mod tests {
         assert_eq!(Tool::from_name("Eraser Tool"), Some(Tool::Eraser));
         assert_eq!(Tool::from_name("mixerBrush"), Some(Tool::MixerBrush));
         assert_eq!(Tool::from_name("Mixer Brush Tool"), Some(Tool::MixerBrush));
+        assert_eq!(Tool::from_name("redEye"), Some(Tool::RedEye));
+        assert_eq!(Tool::from_name("Red Eye Tool"), Some(Tool::RedEye));
+        assert_eq!(Tool::RedEye.key(), 'J');
+        assert!(!Tool::RedEye.is_brushlike());
+        assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
+        assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
+        assert_eq!(Tool::ALL.len(), 51);
         assert_eq!(Tool::from_name("nope"), None);
     }
 

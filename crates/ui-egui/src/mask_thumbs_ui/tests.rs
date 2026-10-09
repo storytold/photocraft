@@ -336,7 +336,12 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
     let k = layer(&h, masked).vector_mask.unwrap().path.subpaths[0].knots[0].anchor;
     assert_eq!((k.x, k.y), (25.0, 12.0));
     // The Pen adds a subpath to it.
-    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[150.0, 10.0]; 3], [[190.0, 10.0]; 3], [[190.0, 40.0]; 3]], dragging: false });
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath {
+        knots: vec![[[150.0, 10.0]; 3], [[190.0, 10.0]; 3], [[190.0, 40.0]; 3]],
+        unlinked: Vec::new(),
+        dragging: false,
+        adjusting_last: false,
+    });
     crate::vector_ui::pen_commit(h.state_mut(), true);
     assert_eq!(layer(&h, masked).vector_mask.unwrap().path.subpaths.len(), 2);
     assert!(h.state().session.active().unwrap().doc.work_path.is_none(), "not a work path");
@@ -383,4 +388,34 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null);
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
+}
+
+/// #780: clicking the mask thumbnail targets the mask, and ⌘I (Image › Adjustments › Invert)
+/// then inverts the mask instead of the layer; on an adjustment layer the menu item is live.
+#[test]
+fn command_i_inverts_the_targeted_mask() {
+    let (s, masked, _) = dotted();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let pixels = layer(&h, masked).content;
+    let r = mask_rect(&h, masked, MaskKind::Pixel);
+    click_with(&mut h, r.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::I);
+    h.run_steps(2);
+    let l = layer(&h, masked);
+    let mask = &l.mask.as_ref().unwrap().surface;
+    assert_eq!((mask.sample_channel(50, 50, 0), mask.sample_channel(150, 10, 0)), (1.0, 0.0), "the mask inverted");
+    assert!(l.content == pixels, "the layer's pixels are untouched");
+    // An adjustment layer's mask: Invert is enabled only through the mask target.
+    let app = h.state_mut();
+    app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = false;
+    assert!(!crate::menus::is_enabled(app, "image.adjustments.invert"));
+    app.ui.mask_target = true;
+    assert!(crate::menus::is_enabled(app, "image.adjustments.invert"));
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
+    assert_eq!(mask.sample_channel(10, 10, 0), 0.0, "reveal all → hide all");
 }

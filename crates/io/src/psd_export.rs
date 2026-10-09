@@ -248,7 +248,11 @@ impl Ex {
 
     fn encode(&self, id: i16, plane: &[u8], w: usize, h: usize) -> ChannelData {
         let depth = psd_depth(self.fmt.sample);
-        ChannelData::encode(id, self.compression(), plane, w, h, depth, self.version)
+        // Photoshop writes empty layer/mask channels as just the raw compression code.
+        // A ZIP stream for a zero-sized channel makes readers try to decompress an
+        // invalid image extent (notably psd-tools for 32-bit adjustment layers).
+        let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
+        ChannelData::encode(id, compression, plane, w, h, depth, self.version)
             .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
             .unwrap_or(ChannelData { id, compression: Some(Compression::Raw), data: plane.to_vec() })
     }
@@ -453,12 +457,26 @@ impl Ex {
                     _ => adjust_map::Channels::Other,
                 };
                 let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
-                let keep = raw.iter().any(|(k, d)| adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a);
+                let keep = raw.iter().any(|(k, d)| {
+                    // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
+                    // It parses here, but Photoshop requires four-byte alignment, so repair
+                    // that legacy record on re-save rather than preserving the broken bytes.
+                    let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
+                    !legacy_phfl && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
+                });
                 if !keep {
                     raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd");
                     let w = adjust_map::write(a);
                     if w.is_empty() {
                         self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
+                    }
+                    // Photoshop's `clrL` descriptor has no interpolation setting, so the
+                    // reopened layer renders trilinear.
+                    if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
+                        self.warnings.push(format!(
+                            "layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)",
+                            l.name
+                        ));
                     }
                     regenerated.extend(w);
                 }
@@ -513,6 +531,8 @@ impl Ex {
             },
             None => raw.retain(|(k, _)| k != b"brst"),
         }
+        // Advanced Blending: written from the field (in place when the block was imported).
+        crate::blocks::put_advanced(&l.advanced, &mut raw);
         if !matches!(l.content, LayerContent::Shape(_)) {
             self.vector_mask_block(l, &mut raw);
         }
@@ -1399,6 +1419,45 @@ mod tests {
 
     fn document(width: u32, height: u32) -> Document {
         Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
+    }
+
+    #[test]
+    fn photo_filter_psd_is_four_byte_aligned_and_round_trips() {
+        let color = [60000u16, 30000, 0].map(|x| x as f32 / 65535.0);
+        let adjustment = photocraft_doc::Adjustment::PhotoFilter { color, density: 0.14, preserve_luminosity: true };
+        let mut doc =
+            Document::with_background("Photo Filter PSD", photocraft_geom::Size::new(32, 24), ColorMode::Rgb, SampleType::U8, photocraft_doc::Color::WHITE);
+        let mut layer = Layer::new("Warming Filter", LayerContent::Adjustment(adjustment.clone()));
+        doc.layers.push(layer.clone());
+
+        let assert_phfl = |file: &PsdFile| {
+            let records = &file.layer_info.as_ref().unwrap().layers;
+            let data =
+                records.iter().flat_map(|r| r.blocks.iter()).find(|b| b.key == *b"phfl").map(|b| b.data.as_slice()).expect("Photo Filter adjustment data");
+            assert_eq!(data.len(), 20, "PSD layer block length includes four-byte padding");
+            assert_eq!(&data[0..2], &[0, 2], "version 2 RGB Photo Filter");
+            assert_eq!(&data[17..], &[0, 0, 0], "three padding bytes after the 17-byte payload");
+        };
+
+        let exported = document_to_psd(&doc);
+        assert_phfl(&exported);
+        let encoded = exported.to_bytes().unwrap();
+        let parsed = PsdFile::from_bytes(&encoded).unwrap();
+        assert_phfl(&parsed);
+        let (restored, _) = crate::psd_import::psd_to_document(&parsed);
+        assert!(restored.layers.iter().any(|l| l.content == LayerContent::Adjustment(adjustment.clone())));
+
+        // Importing a legacy 18-byte block must still work; saving it again should repair it
+        // even when the adjustment values have not changed (normally raw blocks are reused).
+        let mut legacy = crate::adjust_map::write(&adjustment)[0].1.clone();
+        legacy.truncate(18);
+        layer.psd_blocks = vec![(*b"phfl", std::sync::Arc::new(legacy))];
+        doc.layers.pop();
+        doc.layers.push(layer);
+        let repaired = document_to_psd(&doc);
+        assert_phfl(&repaired);
+        let repaired_bytes = repaired.to_bytes().unwrap();
+        assert_phfl(&PsdFile::from_bytes(&repaired_bytes).unwrap());
     }
 
     #[test]

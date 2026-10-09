@@ -551,6 +551,12 @@ impl PcraftWriter {
             thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),
             composite: opts.composite.as_ref().map(|_| COMPOSITE.to_owned()),
         };
+        // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
+        // refuse on load (issue #1101): refuse the save instead, naming the value.
+        crate::finite::check(&manifest).map_err(|e| match e {
+            crate::finite::Problem::NonFinite { path } => FormatError::NonFinite { path },
+            crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
+        })?;
         let manifest = serde_json::to_vec_pretty(&manifest)?;
         check_manifest_depth(&manifest)?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };

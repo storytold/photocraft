@@ -214,11 +214,31 @@ impl LayerMask {
 
     /// Whether `d` (a whole mask record with mask parameters) stores the real-mask fields before
     /// the parameters, as Photoshop does. The spec's order wins when it reads as parameters
-    /// followed by padding alone (no real mask), the one layout the two orders can share.
+    /// followed by padding alone (no real mask), the one layout the two orders can share. When
+    /// both orders fit the record's length, Photoshop's is taken unless its reading is
+    /// implausible (a real-mask background that is neither 0 nor 255, or parameter flag bits
+    /// the spec does not define) while the spec's reading with a real mask is sound.
     pub(crate) fn real_before_parameters(d: &[u8]) -> bool {
+        // Parameters at `pf_at`, then 0..=3 bytes of padding, and nothing else.
         let fits =
             |pf_at: usize| d.get(pf_at).is_some_and(|&pf| (pf_at + 1 + mask_parameter_bytes(pf)..=pf_at + 4 + mask_parameter_bytes(pf)).contains(&d.len()));
-        !fits(18) && fits(36)
+        if fits(18) {
+            return false;
+        }
+        let photoshop = fits(36);
+        if !photoshop {
+            return false;
+        }
+        let known_flags = |pf: u8| pf & 0xF0 == 0;
+        let real_background_ok = |at: usize| d.get(at + 1).is_some_and(|&bg| bg == 0 || bg == 255);
+        // Photoshop's reading: real-mask fields at 18, parameters at 36.
+        let photoshop_plausible = real_background_ok(18) && d.get(36).is_some_and(|&pf| known_flags(pf));
+        // The spec's reading: parameters at 18, then the 18 real-mask bytes, then padding.
+        let spec_plausible = d.get(18).is_some_and(|&pf| {
+            let real_at = 19 + mask_parameter_bytes(pf);
+            known_flags(pf) && (real_at + 18..=real_at + 21).contains(&d.len()) && real_background_ok(real_at)
+        });
+        photoshop_plausible || !spec_plausible
     }
 
     fn parse(d: &[u8]) -> Result<Self> {
@@ -840,6 +860,45 @@ mod tests {
         assert_eq!((p.user_density, p.vector_density), (Some(64), Some(64)));
         assert_eq!(m.trailing, vec![0]);
         assert!(m.real_first);
+        let mut out = Vec::new();
+        m.write(&mut out);
+        assert_eq!(out, d);
+    }
+
+    /// A density-only record in the spec's order (#949): the parameter flags byte at 18 says one
+    /// value byte, so the spec's reading excludes the 38-byte length only if the real mask is
+    /// ignored, while byte 36 (inside the real rectangle's `right`) is 0 and makes Photoshop's
+    /// reading fit too. Photoshop's reading puts the density (64) where a 0-or-255 background
+    /// belongs, so the spec's order wins and the density survives.
+    #[test]
+    fn density_only_spec_layout_is_not_read_as_photoshop_order() {
+        for (density, right) in [(64u8, 1u32), (200, 1), (64, 300), (1, 7)] {
+            let mut d = Vec::new();
+            Rect::from_xywh(0, 0, 1, 1).write(&mut d);
+            d.extend([255, LayerMask::FLAG_PARAMETERS]);
+            d.extend([0b0001, density]);
+            d.extend([0, 0]);
+            Rect::from_xywh(0, 0, right, 1).write(&mut d);
+            let m = LayerMask::parse(&d).unwrap();
+            assert!(!m.real_first, "density {density}, right {right}: {m:?}");
+            assert_eq!(m.parameters.unwrap().user_density, Some(density));
+            assert_eq!(m.real, Some(RealMask { flags: 0, background: 0, rect: Rect::from_xywh(0, 0, right, 1) }));
+            assert!(m.trailing.is_empty());
+            let mut out = Vec::new();
+            m.write(&mut out);
+            assert_eq!(out, d);
+        }
+        // Photoshop's order with the same lengths still reads as Photoshop's order.
+        let mut d = Vec::new();
+        Rect::from_xywh(0, 0, 1, 1).write(&mut d);
+        d.extend([255, LayerMask::FLAG_PARAMETERS]);
+        d.extend([0, 255]);
+        Rect::from_xywh(0, 0, 1, 1).write(&mut d);
+        d.extend([0b0001, 64]);
+        let m = LayerMask::parse(&d).unwrap();
+        assert!(m.real_first, "{m:?}");
+        assert_eq!(m.parameters.unwrap().user_density, Some(64));
+        assert_eq!(m.real.map(|r| r.background), Some(255));
         let mut out = Vec::new();
         m.write(&mut out);
         assert_eq!(out, d);

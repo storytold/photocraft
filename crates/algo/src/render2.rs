@@ -629,12 +629,17 @@ pub fn flame(spec: &FlameSpec, paths: &[Vec<(f32, f32)>]) -> Vec<Prim> {
                     (a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0
                 };
                 let count = if spec.adjust_interval_for_loops && closed {
-                    (total / interval).round().max(1.0) as usize
+                    let c = (total / interval).round();
+                    if c.is_finite() && c > 1.0 { (c as usize).min(2048) } else { 1 }
                 } else {
-                    (total / interval).floor() as usize + 1
+                    let c = (total / interval).floor();
+                    if c.is_finite() && c >= 0.0 { (c as usize).saturating_add(1).min(2048) } else { 1 }
                 };
                 let step = if spec.adjust_interval_for_loops && closed { total / count as f32 } else { interval };
                 for k in 0..count {
+                    if out.len() >= 65536 {
+                        break;
+                    }
                     let s = k as f32 * step;
                     let ((x, y), (dx, dy)) = spine.at(s);
                     let dir = match spec.flame_type {

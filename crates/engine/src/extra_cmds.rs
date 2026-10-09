@@ -298,35 +298,50 @@ fn can_reselect(s: &Session) -> std::result::Result<(), String> {
 fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let selection = d.doc.selection.clone().ok_or(EngineError::Other("Paste Into needs a selection".into()))?;
+    let canvas = d.doc.bounds();
     let b = selection.content_bounds();
-    let key = step_key(s, "pasteInto");
-    let mut params = json!({"center": [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0], "coalesce": key});
+    // Where the paste shows: the selection, or everything but it (default reveal, the
+    // selection's area inverted).
+    let limit = if outside {
+        let area = b.intersect(&canvas);
+        let inv: Vec<f32> = sel::mask_from_surface(Some(&selection), area).iter().map(|v| 1.0 - v).collect();
+        let mut m = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
+        m.write_region(area, &inv);
+        m
+    } else {
+        selection
+    };
+    let label = if outside { "Paste Outside" } else { "Paste Into" };
+    let mut params = json!({"center": [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0]});
     if let Some(c) = p.get("center") {
         params["center"] = c.clone();
     }
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        // A targeted mask or channel (#1035): the paste goes into it, only where `limit` allows.
+        params["target"] = p.get("target").cloned().unwrap_or_default();
+        return crate::edit_cmds::paste_to_target(s, &params, false, Some(&limit), label);
+    }
+    let key = step_key(s, "pasteInto");
+    params["coalesce"] = json!(key);
+    params["target"] = json!("pixels");
     let r = s.execute("edit.paste", params)?;
     let id = layer_param(s, &Value::Null)?;
     s.execute("layer.layerMask.revealAll", json!({"layer": id.0, "coalesce": key}))?;
     s.coalesce_request = Some(key);
-    let r2 = s.edit(if outside { "Paste Outside" } else { "Paste Into" }, |doc, _| {
-        let canvas = doc.bounds();
+    let r2 = s.edit(label, |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let surface = if outside {
-            // Everything but the selection: default reveal, the selection's area inverted.
-            let area = b.intersect(&canvas);
-            let inv: Vec<f32> = sel::mask_from_surface(Some(&selection), area).iter().map(|v| 1.0 - v).collect();
-            let mut m = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
-            m.write_region(area, &inv);
-            m
-        } else {
-            selection
-        };
-        l.mask = Some(LayerMask { surface, linked: false, ..LayerMask::reveal_all() });
+        l.mask = Some(LayerMask { surface: limit, linked: false, ..LayerMask::reveal_all() });
         Ok(())
     });
     s.coalesce_request = None;
     r2?;
     Ok(r)
+}
+
+/// The canvas grown to every layer's pixels: Image › Reveal All's new canvas, and what the Crop
+/// tool shows while a frame is edited.
+pub fn reveal_all_bounds(doc: &Document) -> Rect {
+    doc.walk().into_iter().filter_map(|(_, _, l)| l.surface().map(|s| s.content_bounds())).fold(doc.bounds(), |a, b| a.union(&b))
 }
 
 // ---------- layers ----------
@@ -619,13 +634,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Into",
             &["Edit", "Paste Special"],
             Some("Cmd+Alt+Shift+V"),
-            r##"{"center":[x,y]?}"##,
+            concat!(r#"{"center":[x,y]?,"#, crate::edit_cmds::paste_target!(), "}"),
             has_clip_and_selection,
             |s, p| paste_into(s, p, false)
         ),
-        spec!("edit.pasteSpecial.pasteOutside", "Paste Outside", &["Edit", "Paste Special"], None, r##"{"center":[x,y]?}"##, has_clip_and_selection, |s, p| {
-            paste_into(s, p, true)
-        }),
+        spec!(
+            "edit.pasteSpecial.pasteOutside",
+            "Paste Outside",
+            &["Edit", "Paste Special"],
+            None,
+            concat!(r#"{"center":[x,y]?,"#, crate::edit_cmds::paste_target!(), "}"),
+            has_clip_and_selection,
+            |s, p| paste_into(s, p, true)
+        ),
         spec!("select.reselect", "Reselect", &["Select"], Some("Cmd+Shift+D"), "{}", can_reselect, |s, _| {
             let m = reselect_target(s).ok_or(EngineError::Other("there is no selection to restore".into()))?;
             s.edit("Reselect", |doc, _| {
@@ -637,9 +658,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, |s, _| equalize(s)),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            let canvas = d.doc.bounds();
-            let all = d.doc.walk().into_iter().filter_map(|(_, _, l)| l.surface().map(|s| s.content_bounds())).fold(canvas, |a, b| a.union(&b));
-            if all == canvas {
+            let all = reveal_all_bounds(&d.doc);
+            if all == d.doc.bounds() {
                 return Ok(json!({"changed": false}));
             }
             s.execute("image.crop", json!({"x": all.x0, "y": all.y0, "width": all.width(), "height": all.height(), "deleteCroppedPixels": false}))?;
@@ -649,7 +669,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.layerStyle.copyLayerStyle", "Copy Layer Style", &["Layer", "Layer Style"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             let l = s.active().and_then(|d| d.doc.layer(id)).ok_or(EngineError::NoLayer(id))?;
-            let style = (l.effects.clone(), l.blend, l.fill_opacity);
+            let style = (l.effects.clone(), l.blend, l.fill_opacity, l.advanced);
             s.style_clipboard = Some(style);
             Ok(Value::Null)
         }),
@@ -665,12 +685,13 @@ pub fn specs() -> Vec<CommandSpec> {
             },
             |s, p| {
                 let id = layer_param(s, p)?;
-                let (fx, blend, fill) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
+                let (fx, blend, fill, advanced) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 s.edit("Paste Layer Style", |doc, _| {
                     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                     l.effects = fx;
                     l.blend = blend;
                     l.fill_opacity = fill;
+                    l.advanced = advanced;
                     Ok(())
                 })?;
                 Ok(Value::Null)
@@ -1021,6 +1042,7 @@ mod tests {
         let mut s = session(8);
         s.execute("layer.translate", json!({"dx": 0, "dy": 0})).ok();
         paint_square(&mut s, Rect::new(-5, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(reveal_all_bounds(doc(&s)), Rect::new(-5, 0, 40, 30));
         s.execute("image.revealAll", json!({})).unwrap();
         assert_eq!((doc(&s).size.width, doc(&s).size.height), (45, 30));
         assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], false);

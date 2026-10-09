@@ -125,3 +125,58 @@ fn shift_click_adds_the_layer_under_the_pointer() {
     assert!(st.is_layer_selected(a) && st.is_layer_selected(b));
     assert_eq!(bounds(&app, a), Rect::new(8, 8, 24, 24));
 }
+
+#[test]
+fn every_theme_shows_the_auto_select_toggle() {
+    // #1275: the Studio themes' options bar had only a hint for the Move tool, so Auto-Select
+    // could not be turned off there.
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio] {
+        let (app, _, _) = app();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, theme);
+        h.run_steps(4);
+        assert!(h.state().ui.tool_options.move_auto_select);
+        h.get_by_label("Auto-Select:").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.tool_options.move_auto_select, "{theme:?}: the toggle turns Auto-Select off");
+    }
+}
+
+#[test]
+fn every_theme_shows_the_type_options() {
+    // #1387: outside the Pro themes the Type tool's options bar was only the hint "Click to add
+    // text", so there was no font, style or size control while typing.
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    for theme in crate::theme::ThemeKind::ALL {
+        let (mut app, _, _) = app();
+        app.ui.tool = Tool::Type;
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, theme);
+        h.run_steps(4);
+        let combos: Vec<String> = h
+            .query_all_by_role(egui::accesskit::Role::ComboBox)
+            .map(|n| format!("{:?} {:?}", n.accesskit_node().label(), n.accesskit_node().value()))
+            .collect();
+        let font = h.state().ui.tool_options.type_font.clone();
+        assert!(combos.iter().any(|c| c.contains(&font)), "{theme:?}: the font picker shows {font:?}; combo boxes: {combos:?}");
+    }
+}

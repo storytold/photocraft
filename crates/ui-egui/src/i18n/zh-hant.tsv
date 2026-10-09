@@ -25,6 +25,10 @@
 	Layer	圖層
 	Type	文字
 	Select	選取
+	Top Left	左上
+	Top Right	右上
+	Bottom Left	左下
+	Bottom Right	右下
 	Filter	濾鏡
 	View	檢視
 	Window	視窗
@@ -37,6 +41,9 @@
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
 	Close	關閉
+	Minimize	最小化
+	Maximize	最大化
+	Restore	向下還原
 	Close All	全部關閉
 	Close Others	關閉其他
 	Save	儲存
@@ -104,6 +111,7 @@
 	Fill…	填滿…
 	Stroke…	筆畫…
 	Content-Aware Fill…	內容感知填滿…
+	Delete and Fill Selection	刪除並填滿選取範圍
 	Content-Aware Scale	內容感知縮放
 	Puppet Warp	操控彎曲
 	Perspective Warp	透視彎曲
@@ -315,6 +323,7 @@
 	Smart Object	智慧型物件
 	Convert to Smart Object	轉換為智慧型物件
 	Convert to Embedded	轉換為嵌入
+	Convert to Layers	轉換為圖層
 	Convert to Linked…	轉換為連結…
 	Edit Contents	編輯內容
 	Replace Contents…	取代內容…
@@ -972,14 +981,17 @@
 	Drag a rectangle around the object	在物件周圍拖曳出矩形
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	在影像上拖曳以新增限制線；按住 Shift 可限制水平/垂直；按右鍵可刪除。
 	Drag to move the active shape's path or the Work Path	拖曳以移動作用中形狀的路徑或工作路徑
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	按一下：選取錨點 · 拖曳：移動錨點、把手或線段 · {shift}-按一下：增加 · {alt}-按一下：整個子路徑
 	Draw with the Pen tool (P) or make a work path from a selection.	使用筆型工具 (P) 繪製，或從選取範圍建立工作路徑。
 	Drop an image or PSD anywhere to open it.	將影像或 PSD 拖放到任何位置即可開啟。
 	Native file drag-and-drop is unavailable	Wayland 不支援原生檔案拖放
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland 尚未支援原生檔案拖放。請使用「檔案 › 開啟」，或透過 `WAYLAND_DISPLAY= photocraft` 在 XWayland 下執行 PhotoCraft。
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland 尚未支援原生檔案拖放。請使用「檔案 › 開啟」，或在檔案管理員中複製影像後使用 {paste} 貼上。
+	To drop files, start PhotoCraft under XWayland: `{command}`	若要拖放檔案，請在 XWayland 下啟動 PhotoCraft：`{command}`
+	Edit › Paste	「編輯 › 貼上」
 	Duplicate Layers…	複製圖層…
 	Duplicate style	複製樣式
 	Edit Toolbar…	編輯工具列…
-	Use File › Open to open an image.	使用「檔案 › 開啟」開啟影像。
+	Use File › Open, or paste a copied image with {paste}.	請使用「檔案 › 開啟」，或使用 {paste} 貼上複製的影像。
 	Edit in Quick Mask Mode  (Q)	在快速遮色片模式下編輯 (Q)
 	Edit in Standard Mode  (Q)	在標準模式下編輯 (Q)
 	Effects	效果
@@ -1014,6 +1026,7 @@
 	Fisheye	魚眼
 	Fit	符合
 	Fit Screen	符合螢幕
+	Fill Screen	填滿螢幕
 	Fit in View	符合檢視
 	Fixed	固定
 	Fixed Ratio	固定比例
@@ -1342,6 +1355,7 @@
 	Set background color	設定背景色
 	Set foreground color	設定前景色
 	Set painting symmetry options	設定繪畫對稱選項
+	Symmetry Off	關閉對稱
 	Set shape fill type	設定形狀填滿類型
 	Set shape stroke type	設定形狀筆畫類型
 	Set the text color	設定文字顏色
@@ -1599,6 +1613,7 @@
 	Paint Bucket Tool	油漆桶工具
 	Paints from the document's opening state	從文件開啟時的狀態繪製
 	Path Selection Tool	路徑選取工具
+	Direct Selection Tool	直接選取工具
 	Pattern Overlay	圖樣覆蓋
 	Pen Pressure	筆壓
 	Pen Tilt	筆傾斜
@@ -1796,12 +1811,14 @@
 	Memory usage mb	記憶體使用量 (MB)
 	GPU memory mb	GPU 記憶體 (MB)
 	Memory usage percent	記憶體使用比例 (%)
+	Low resolution previews	低解析度預覽
 	Missing glyph protection	缺少字符保護
 	Modern	現代
 	Nearest neighbor	最接近像素
 	Never	永不
 	Normal tip	一般筆尖
 	Open as smart object	以智慧型物件開啟
+	Open in camera raw	在 Camera Raw 中開啟
 	Open documents as tabs	以索引標籤開啟文件
 	Overscroll	超出捲動
 	Performance	效能
@@ -1839,6 +1856,7 @@
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
 	Show bounding box when dragging layer	拖曳圖層時顯示邊界框
+	System title bar	系統標題列
 	Show transformation values	顯示變形數值
 	Slice color	切片顏色
 	Smart guide color	智慧型參考線顏色
@@ -1918,6 +1936,7 @@
 	System Info…	系統資訊…
 	System Info	系統資訊
 	More panels	更多面板
+	More documents	更多文件
 	These settings aren't available in PhotoCraft yet.	這些設定在 PhotoCraft 中尚未提供。
 	Graphics	圖形
 	Reset GPU Backend	重設 GPU 後端
@@ -1946,6 +1965,8 @@
 	Brush Settings…  (F5): every option of this brush	筆刷設定… (F5)：此筆刷的所有選項
 	Rename Brush…	重新命名筆刷…
 	Delete Brush	刪除筆刷
+	New Brush Preset…	新增筆刷預設集…
+	Brush Preset Options	筆刷預設集選項
 	Group name	群組名稱
 	Brush name	筆刷名稱
 	Grid view	格狀檢視
@@ -1995,6 +2016,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	沒有可用來建立選取範圍的路徑：請使用鋼筆工具繪製，或在路徑面板中選取一個路徑。
 	Cancel opening	取消開啟
 	Cancelled opening {name}	已取消開啟 {name}
+	Developing {name}	正在處理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opening {name}	正在開啟 {name}
@@ -2033,6 +2055,7 @@
 cameraRaw	Light	光線
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 濾鏡（{layer}）
+	Camera Raw ({name})	Camera Raw（{name}）
 cameraRaw	Lights	亮調
 cameraRaw	Darks	暗調
 cameraRaw	Blacks	黑色色階
@@ -2074,6 +2097,7 @@ cameraRaw	Blending	混合
 	Frequency	頻率
 	Use tablet pressure to change pen width	使用繪圖板壓力以變更鋼筆寬度
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	關於
 	Contributors	貢獻者
@@ -2106,3 +2130,81 @@ cameraRaw	Blending	混合
 	% of all commits	佔全部提交的 %
 	Lines +/−	行數 +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 個 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二進位檔 +{binAdded} / −{binDeleted}，{first} – {last}
+
+# Swatches panel
+	Create new swatch	建立新色票
+	New Swatch…	新增色票…
+	New Swatch Group…	新增色票群組…
+	Import Swatches…	匯入色票…
+	Replace Swatches…	取代色票…
+	Export Swatches…	匯出色票…
+	Export Swatches for Exchange…	匯出色票以供交換…
+	Reset Swatches	重設色票
+	Add to Swatches	加入色票
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	混合範圍:
+	Channels:	色版:
+	Knockout	去底色
+	Apply At Canvas Bounds	套用效果至版面邊界
+	Show/Hide All Panels	顯示/隱藏所有面板
+	Show/Hide Panels	顯示/隱藏面板
+	Could not open	無法開啟
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}：路徑不是有效的 Unicode；請重新命名檔案後再開啟。
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	內容：
+	Custom Pattern:	自訂圖樣：
+	Foreground Color	前景色
+	Color…	顏色…
+	50% Gray	50% 灰色
+	Color Adaptation	顏色適應
+	{size} (was {old})	{size}（原為 {old}）
+	Cone	錐形
+	Cone (Inverted)	錐形（反轉）
+	Domed	圓頂
+	Domed (Inverted)	圓頂（反轉）
+	Diagonal (Descending)	對角線（下降）
+
+	Red Eye Tool	紅眼工具
+	Red Eye	紅眼
+	Pupil Size	瞳孔大小
+	Darken Amount	變暗程度
+	Click a red pupil to neutralize it	按一下紅色瞳孔以消除反光
+	open source	開源
+	…and {n} more	…以及另外 {n} 項
+
+	Eyedroppers:	滴管：
+	Set Black Point	設定黑點
+	Set Neutral Gray Point	設定中性灰點
+	Set White Point	設定白點
+	Unavailable in this color mode	此色彩模式無法使用
+	Selection Preview:	選取範圍預視：
+	Black Matte	黑色背景
+	White Matte	白色背景
+
+# Layer colour labels.
+	Seafoam	海沫色
+	Indigo	靛藍色
+	Fuchsia	紫紅色
+	Violet	紫羅蘭色
+	Reset	重設
+	Large document: redrawing on the CPU	大型文件：正在以 CPU 重繪
+	This redraw took {seconds} s on the CPU.	此次 CPU 重繪耗時 {seconds} 秒。
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	變更整份文件的編輯（例如圖層的混合模式、不透明度或可見度）會重繪整份文件。
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	圖層超出 GPU 記憶體預算。在 偏好設定 › 效能 中提高記憶體使用量可增加預算，最多為本機記憶體的四分之一。
+	The GPU compositor wasn't used: {reason}	未使用 GPU 合成器：{reason}
+fontWeight	Thin	極細
+fontWeight	ExtraLight	特細
+fontWeight	Light	細體
+fontWeight	Regular	常規
+fontWeight	Medium	中等
+fontWeight	SemiBold	半粗
+fontWeight	Bold	粗體
+fontWeight	ExtraBold	特粗
+fontWeight	Black	黑體
+fontWeight	Italic	斜體
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	圖案圖章工具
+	Pattern Stamp	圖案圖章
+	Impressionist	印象派

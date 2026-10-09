@@ -319,6 +319,9 @@ fn format_real(r: f64) -> String {
     while s.ends_with('0') {
         s.pop();
     }
+    if matches!(s.as_str(), "0." | "-0.") {
+        return "0.0".into();
+    }
     if let Some(rest) = s.strip_prefix("0.") {
         s = format!(".{rest}");
     } else if let Some(rest) = s.strip_prefix("-0.") {
@@ -359,6 +362,26 @@ mod tests {
         assert_eq!(format_real(0.5), ".5");
         assert_eq!(format_real(-0.25), "-.25");
         assert_eq!(format_real(12.125), "12.125");
+    }
+
+    #[test]
+    fn tiny_reals_round_trip_as_numbers() {
+        for value in [0.000004, -0.000004] {
+            assert_eq!(format_real(value), "0.0");
+            let source = Value::Dict(vec![(
+                "EngineDict".into(),
+                Value::Dict(vec![("StyleRun".into(), Value::Array(vec![Value::Dict(vec![("BaselineShift".into(), Value::Real(value))])]))]),
+            )]);
+            let encoded = write(&source);
+            let parsed = parse(&encoded).expect("formatted tiny real should parse");
+            let baseline_shift = parsed
+                .path(&["EngineDict", "StyleRun"])
+                .and_then(Value::as_array)
+                .and_then(|runs| runs.first())
+                .and_then(|run| run.get("BaselineShift"))
+                .and_then(Value::as_f64);
+            assert_eq!(baseline_shift, Some(0.0));
+        }
     }
 
     #[test]

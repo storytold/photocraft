@@ -2,7 +2,7 @@
 //! smart objects, locks and label colors.
 
 use photocraft_color::{Color, ColorMode};
-use photocraft_doc::{BlendIf, BlendRange, Fill, GradientStyle, LabelColor, Locks};
+use photocraft_doc::{AdvancedBlending, BlendIf, BlendRange, Fill, GradientStyle, Knockout, LabelColor, Locks};
 use photocraft_geom::Affine;
 use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value, VersionedDescriptor};
 use photocraft_psd::layer::BlendingRanges;
@@ -16,6 +16,60 @@ pub fn parse_brst(data: &[u8]) -> u32 {
 /// Inverse of [`parse_brst`]; `None` when every channel blends (no block).
 pub fn brst_data(mask: u32) -> Option<Vec<u8>> {
     (mask != 0).then(|| (0..32u32).filter(|i| mask & 1 << i != 0).flat_map(u32::to_be_bytes).collect())
+}
+
+/// The Advanced Blending blocks, as (key, value for `a`, Photoshop's default value): `knko`
+/// (0 none, 1 shallow, 2 deep), `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`. Each is stored as one
+/// byte followed by three bytes of padding (Adobe PSD spec, "Additional Layer Information").
+pub fn advanced_flags(a: &AdvancedBlending) -> [([u8; 4], u8, u8); 6] {
+    [
+        (*b"knko", a.knockout.to_psd(), 0),
+        (*b"infx", u8::from(a.blend_interior), 0),
+        (*b"clbl", u8::from(a.blend_clipped), 1),
+        (*b"tsly", u8::from(a.transparency_shapes), 1),
+        (*b"lmgm", u8::from(a.layer_mask_hides_effects), 0),
+        (*b"vmgm", u8::from(a.vector_mask_hides_effects), 0),
+    ]
+}
+
+/// Advanced Blending from a layer record's blocks (`block(key)` gives a block's data). A missing
+/// or empty block keeps Photoshop's default.
+pub fn advanced_from_blocks<'a>(block: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> AdvancedBlending {
+    let mut a = AdvancedBlending::default();
+    let flag = |k: &[u8; 4]| block(k).and_then(|d| d.first().copied());
+    if let Some(v) = flag(b"knko") {
+        a.knockout = Knockout::from_psd(v);
+    }
+    let set = |k: &[u8; 4], f: &mut bool| {
+        if let Some(v) = flag(k) {
+            *f = v != 0;
+        }
+    };
+    set(b"infx", &mut a.blend_interior);
+    set(b"clbl", &mut a.blend_clipped);
+    set(b"tsly", &mut a.transparency_shapes);
+    set(b"lmgm", &mut a.layer_mask_hides_effects);
+    set(b"vmgm", &mut a.vector_mask_hides_effects);
+    a
+}
+
+/// Writes the Advanced Blending blocks into an exported layer's preserved block list: a block
+/// already there is rewritten in place (keeping Photoshop's block order); a missing one is added
+/// only when its value differs from the default, so plain layers gain no blocks.
+pub fn put_advanced(a: &AdvancedBlending, raw: &mut Vec<([u8; 4], Vec<u8>)>) {
+    for (key, v, default) in advanced_flags(a) {
+        match raw.iter_mut().find(|(k, _)| *k == key) {
+            Some(e) => {
+                // Keep any extra bytes a reader wrote; the flag is the first byte.
+                if e.1.len() < 4 {
+                    e.1.resize(4, 0);
+                }
+                e.1[0] = v;
+            }
+            None if v != default => raw.push((key, vec![v, 0, 0, 0])),
+            None => {}
+        }
+    }
 }
 
 /// Layer-record blending ranges (Adobe PSD spec, "Layer blending ranges data": the composite
@@ -68,6 +122,11 @@ pub fn label_from_index(v: u16) -> LabelColor {
         5 => LabelColor::Blue,
         6 => LabelColor::Violet,
         7 => LabelColor::Gray,
+        // Photoshop 2024 added these without renumbering the original labels.
+        8 => LabelColor::Seafoam,
+        9 => LabelColor::Indigo,
+        10 => LabelColor::Magenta,
+        11 => LabelColor::Fuchsia,
         _ => LabelColor::None,
     }
 }
@@ -83,6 +142,10 @@ pub fn label_index(l: LabelColor) -> u16 {
         LabelColor::Blue => 5,
         LabelColor::Violet => 6,
         LabelColor::Gray => 7,
+        LabelColor::Seafoam => 8,
+        LabelColor::Indigo => 9,
+        LabelColor::Magenta => 10,
+        LabelColor::Fuchsia => 11,
     }
 }
 
@@ -635,6 +698,37 @@ mod tests {
         assert_eq!(r.data.len(), 4 * 8);
         assert_eq!(&r.data[..8], &[5, 5, 255, 255, 0, 0, 255, 255]);
         assert_eq!(&r.data[8..], &BlendingRanges::full(2).data[..]);
+    }
+
+    #[test]
+    fn advanced_blending_blocks_round_trip() {
+        use photocraft_doc::{AdvancedBlending, Knockout};
+        let a = AdvancedBlending {
+            knockout: Knockout::Deep,
+            blend_interior: true,
+            blend_clipped: false,
+            transparency_shapes: false,
+            layer_mask_hides_effects: true,
+            vector_mask_hides_effects: true,
+        };
+        let mut raw = Vec::new();
+        super::put_advanced(&a, &mut raw);
+        assert_eq!(raw.len(), 6);
+        assert!(raw.contains(&(*b"knko", vec![2, 0, 0, 0])));
+        assert!(raw.contains(&(*b"clbl", vec![0, 0, 0, 0])));
+        let get = |k: &[u8; 4]| raw.iter().find(|(bk, _)| bk == k).map(|(_, d)| d.as_slice());
+        assert_eq!(super::advanced_from_blocks(get), a);
+        // Defaults: nothing added to a plain layer; existing blocks rewritten in place, in order.
+        let mut plain = Vec::new();
+        super::put_advanced(&AdvancedBlending::default(), &mut plain);
+        assert!(plain.is_empty());
+        let mut kept = vec![(*b"luni", vec![0; 4]), (*b"knko", vec![1, 0, 0, 0]), (*b"clbl", vec![1])];
+        super::put_advanced(&AdvancedBlending::default(), &mut kept);
+        assert_eq!(kept, vec![(*b"luni", vec![0; 4]), (*b"knko", vec![0, 0, 0, 0]), (*b"clbl", vec![1, 0, 0, 0])]);
+        // Missing and empty blocks read as Photoshop's defaults.
+        assert!(super::advanced_from_blocks(|_| None).is_default());
+        assert!(super::advanced_from_blocks(|_| Some(&[][..])).is_default());
+        assert_eq!(super::advanced_from_blocks(|k| (k == b"knko").then_some(&[1u8][..])).knockout, Knockout::Shallow);
     }
 
     #[test]

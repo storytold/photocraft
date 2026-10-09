@@ -3,7 +3,9 @@
 //!
 //! - Mouse down/up/dragged/moved events whose `subtype` is `NSEventSubtypeTabletPoint` come from
 //!   a pen: `pressure` (0..1), `tilt` (-1..1 per axis) and `rotation` (degrees) are valid.
-//!   A mouse event with any other subtype is a mouse or trackpad: back to `None`.
+//!   A mouse event with any other subtype is a mouse or trackpad: back to `None`. The pen's
+//!   button-up reports pressure 0 and keeps the sample instead: it reaches the UI in the same
+//!   frame as the stroke's last moves, which must keep the pressure they were drawn with.
 //! - `NSEventTypeTabletPoint` events carry the same fields without a mouse event.
 //! - `NSEventTypeTabletProximity` events (and mouse events with the proximity subtype) say a
 //!   tool entered or left proximity and which one (`pointingDeviceType`: pen, eraser, cursor).
@@ -113,6 +115,10 @@ impl State {
             return self.proximity(e);
         }
         if e.kind == TABLET_POINT || (mouse && e.subtype == subtype::TABLET_POINT) {
+            // Lifting the tip reports pressure 0 (the next hover move says so too).
+            if matches!(e.kind, LEFT_MOUSE_UP | RIGHT_MOUSE_UP | OTHER_MOUSE_UP) {
+                return Update::Keep;
+            }
             return Update::Set(Some(self.sample(e)));
         }
         if mouse { Update::Set(None) } else { Update::Keep }
@@ -169,6 +175,23 @@ mod tests {
         assert_eq!(s, Sample { pressure: 0.5, tilt_x: 30.0, tilt_y: 15.0, rotation: 30.0, eraser: false });
         let s = set(st.handle(&pen(event_type::TABLET_POINT, 0.8, (-1.0, 1.0), 0.0))).unwrap();
         assert_eq!((s.pressure, s.tilt_x, s.tilt_y), (0.8, -60.0, -60.0));
+    }
+
+    /// The UI paints a frame's moves at the sample current when it runs, after AppKit dispatched
+    /// all of the frame's events: a lift's pressure 0 must not thin the stroke's last moves.
+    #[test]
+    fn lifting_the_pen_keeps_the_strokes_pressure() {
+        let mut st = State::default();
+        assert!(set(st.handle(&pen(event_type::LEFT_MOUSE_DRAGGED, 0.7, (0.0, 0.0), 0.0))).is_some());
+        for kind in [event_type::LEFT_MOUSE_UP, event_type::RIGHT_MOUSE_UP, event_type::OTHER_MOUSE_UP] {
+            assert_eq!(st.handle(&pen(kind, 0.0, (0.0, 0.0), 0.0)), Update::Keep, "type {kind}");
+        }
+        // Hovering afterwards reports the pen with no pressure.
+        let s = set(st.handle(&pen(event_type::MOUSE_MOVED, 0.0, (0.0, 0.0), 0.0))).unwrap();
+        assert_eq!(s.pressure, 0.0);
+        // A mouse's button-up is still a mouse.
+        let e = RawEvent { kind: event_type::LEFT_MOUSE_UP, subtype: subtype::MOUSE, ..Default::default() };
+        assert_eq!(st.handle(&e), Update::Set(None));
     }
 
     #[test]

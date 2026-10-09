@@ -289,7 +289,7 @@ pub fn clone_stroke(scene: &Scene, surf: &mut Surface, source: [f64; 2], points:
             let (x, y) = hd.apply(u, v);
             bb = [bb[0].min(x), bb[1].min(y), bb[2].max(x), bb[3].max(y)];
         }
-        let area = Rect::new(bb[0].floor() as i32, bb[1].floor() as i32, bb[2].ceil() as i32 + 1, bb[3].ceil() as i32 + 1);
+        let area = Rect::new(bb[0].floor() as i32, bb[1].floor() as i32, (bb[2].ceil() as i32).saturating_add(1), (bb[3].ceil() as i32).saturating_add(1));
         if area.is_empty() || area.width() > 4096 || area.height() > 4096 {
             continue;
         }

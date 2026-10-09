@@ -63,6 +63,9 @@ pub fn effect_from_json(filter: GalleryFilter, p: &Value, fallback: &Value) -> G
 /// `filter`); hidden entries are skipped.
 pub fn effects_from_json(p: &Value) -> std::result::Result<Vec<GalleryEffect>, String> {
     let Some(list) = p.get("effects").and_then(Value::as_array) else { return Ok(Vec::new()) };
+    if list.len() > 32 {
+        return Err("too many effects in filterGallery stack (max 32)".into());
+    }
     let mut out = Vec::new();
     for (k, item) in list.iter().enumerate() {
         if item.get("visible").and_then(Value::as_bool) == Some(false) {

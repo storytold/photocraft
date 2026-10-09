@@ -2,11 +2,14 @@
 //!
 //! Usage: `photocraft [--control <port>] [--control-token <64-hex> |
 //! --control-token-file <path>] [--automation-read-root <dir>]
-//! [--automation-write-root <dir>] [--safe-gpu] [files…]`
+//! [--automation-write-root <dir>] [--safe-gpu] [--in-window-menus] [files…]`
 //!
 //! `--safe-gpu` starts with the CPU renderer (no GPU canvas; a software adapter for the window
 //! where the platform has one) for this launch, e.g. after a graphics driver crash. A start that
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
+//!
+//! `--in-window-menus` (or `PHOTOCRAFT_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
+//! macOS instead of the macOS menu bar (`mac_menu`).
 //!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
@@ -26,10 +29,13 @@ mod crash_guard;
 mod cursor;
 mod gpu_startup;
 #[cfg(target_os = "macos")]
+mod mac_menu;
+#[cfg(target_os = "macos")]
 mod mac_window;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(any(target_os = "linux", test))]
 mod linux_libs;
+mod logging;
 mod monitor_profile;
 mod services;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
@@ -43,11 +49,25 @@ use photocraft_ui_egui::PhotocraftApp;
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
+/// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
+/// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
+/// keeps its traffic lights over the integrated title strip.
+const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
+
+/// Whether this start draws its own title bar: Windows and Linux do, unless Preferences ›
+/// Interface › System Title Bar asks for the system's (#1271, #1316). Read from the saved
+/// preferences before the window opens; a missing or unreadable file keeps the default.
+fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
+    let prefs: photocraft_engine::prefs::Preferences =
+        prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    CUSTOM_TITLEBAR && !prefs.interface.system_title_bar
+}
+
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
 /// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
 /// different offset every launch (#419). Wayland compositors place windows themselves.
-fn native_options() -> eframe::NativeOptions {
+fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(app_icon::window_icon())
@@ -56,6 +76,7 @@ fn native_options() -> eframe::NativeOptions {
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
+            .with_decorations(!custom_titlebar)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false),
@@ -110,6 +131,8 @@ mod control_port_tests {
 }
 
 fn main() -> eframe::Result {
+    // First, so the panic hook and every start-up warning are recorded (`logging`).
+    let logger = logging::install();
     crash_guard::install_hook();
     let mut control_port: Option<u16> = None;
     let mut control_arg_errors: Vec<String> = Vec::new();
@@ -124,29 +147,40 @@ fn main() -> eframe::Result {
     let mut automation_read_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_READ_ROOT").map(std::path::PathBuf::from);
     let mut automation_write_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_WRITE_ROOT").map(std::path::PathBuf::from);
     let mut files = Vec::new();
+    // Arguments that are not valid Unicode (issue #1108): a file manager can hand over a Latin-1
+    // file name on Linux, and `std::env::args()` would panic before any window opened. Paths are
+    // reported in a notice once the app is up; a control token is a usage error like a bad port.
+    let mut unreadable_paths: Vec<String> = Vec::new();
     let mut safe_gpu = false;
-    let mut args = std::env::args().skip(1);
+    let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
+    let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
-        match a.as_str() {
-            "--control" => match args.next() {
-                Some(value) => match parse_control_port(&value, "--control") {
+        match a.to_str() {
+            Some("--control") => match args.next() {
+                Some(value) => match parse_control_port(&value.to_string_lossy(), "--control") {
                     Ok(port) => control_port = Some(port),
                     Err(error) => control_arg_errors.push(error),
                 },
                 None => control_arg_errors.push("--control: missing port value (expected `--control <port>`)".to_string()),
             },
-            "--control-token" => control_token = args.next(),
-            "--control-token-file" => control_token_file = args.next().map(std::path::PathBuf::from),
-            "--automation-read-root" => automation_read_root = args.next().map(std::path::PathBuf::from),
-            "--automation-write-root" => automation_write_root = args.next().map(std::path::PathBuf::from),
-            "--safe-gpu" => safe_gpu = true,
-            "--version" => {
+            Some("--control-token") => match args.next().map(std::ffi::OsString::into_string) {
+                Some(Ok(token)) => control_token = Some(token),
+                Some(Err(raw)) => control_arg_errors.push(format!("--control-token: value is not valid Unicode (`{}`)", raw.to_string_lossy())),
+                None => control_token = None,
+            },
+            Some("--control-token-file") => control_token_file = args.next().map(std::path::PathBuf::from),
+            Some("--automation-read-root") => automation_read_root = args.next().map(std::path::PathBuf::from),
+            Some("--automation-write-root") => automation_write_root = args.next().map(std::path::PathBuf::from),
+            Some("--safe-gpu") => safe_gpu = true,
+            Some("--in-window-menus") => in_window_menus = true,
+            Some("--version") => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
             }
             // Old macOS passes a process serial number when launched from Finder.
-            _ if a.starts_with("-psn_") => {}
-            _ => files.push(a),
+            Some(s) if s.starts_with("-psn_") => {}
+            Some(s) => files.push(s.to_owned()),
+            None => unreadable_paths.push(a.to_string_lossy().into_owned()),
         }
     }
 
@@ -160,10 +194,25 @@ fn main() -> eframe::Result {
         std::process::exit(code);
     }
 
+    // The log file lives under the settings directory; opened after the arguments, so `--version`
+    // and usage errors leave no file behind. Records logged until now are written to it first.
+    if let (Some(logger), Some(dir)) = (logger, services::config_dir()) {
+        match logger.attach_dir(&dir.join("logs")) {
+            Ok(path) => log::info!("PhotoCraft {}, log file {}", photocraft_engine::build_info::long_version(), path.display()),
+            // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
+            Err(e) => log::warn!("no log file: {e}"),
+        }
+    }
+
+    // The display server to open the window on: Xwayland for a pen on Wayland, which gives this
+    // app no pen input (#639).
+    #[cfg(target_os = "linux")]
+    let session = tablet::display_session();
+
     // winit and wgpu dlopen the windowing and GPU libraries, and some of those crates panic when
     // one is missing (issue #201). Name the package to install and exit instead.
     #[cfg(target_os = "linux")]
-    if let Err(message) = linux_libs::preflight() {
+    if let Err(message) = linux_libs::preflight(session) {
         eprint!("{message}");
         std::process::exit(1);
     }
@@ -202,19 +251,28 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
 
-    // Pen tablet samples on macOS (AppKit event monitor, before winit sees each event) and X11
-    // (started once eframe says which display server it is on). The monitor lives until the event
-    // loop returns.
-    let stylus_feed = photocraft_ui_egui::stylus::StylusFeed::default();
+    // The macOS pen tablet monitor (installed once eframe created the app, see below); it lives
+    // until the event loop returns.
     #[cfg(target_os = "macos")]
-    let _tablet = tablet::install_macos(&stylus_feed);
+    let tablet_monitor = std::cell::OnceCell::new();
+    #[cfg(target_os = "macos")]
+    let tablet_monitor = &tablet_monitor;
 
     // Read the displays' ICC profiles while the window opens (colour-managed canvas; `None`
     // where the platform has no reader).
     let monitor = monitor_profile::detect_async();
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
-    let mut options = native_options();
+    let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
+    let mut options = native_options(custom_titlebar);
+    // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
+    #[cfg(target_os = "linux")]
+    if session == linux_libs::DisplaySession::X11 {
+        use winit::platform::x11::EventLoopBuilderExtX11 as _;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
+    }
     // eframe restores the saved window layout before our code runs; drop values that would crash it.
     ui_state::sanitize(options.persistence_path.as_deref());
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
@@ -248,6 +306,7 @@ fn main() -> eframe::Result {
     let sentinel_ms = t_sentinel.elapsed().as_secs_f64() * 1000.0;
     log::info!("GPU startup: {:?} ({sentinel_ms:.2} ms)", plan);
     let retry_cpu = !safe_gpu && plan.backend != photocraft_engine::prefs::GpuBackend::Cpu;
+    let keep_marker = gpu_startup::keep_marker_after_error(&plan, os);
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
@@ -264,9 +323,15 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
+                if services.is_wayland {
+                    let var = |name| std::env::var(name).ok();
+                    services.xwayland_command =
+                        services::xwayland_command(var("FLATPAK_ID").as_deref(), var("APPIMAGE").as_deref(), std::env::var_os("DISPLAY").is_some());
+                }
             }
             let mut app = PhotocraftApp::new(Session::new(), services);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            app.custom_titlebar = custom_titlebar;
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
             #[cfg(target_os = "macos")]
             mac_window::disable_native_title_drag();
@@ -353,16 +418,32 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                // The macOS menu bar, installed now so winit's default menu doesn't stay up.
+                if !in_window_menus {
+                    app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
+                }
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
-            // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor installed above
-            // and the X11 reader write into this feed.
-            app.stylus.feed = stylus_feed;
+            // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
+            // write into the stylus feed. The monitor goes in here, not before the event loop:
+            // AppKit's shared application only exists once winit created it (#759).
+            #[cfg(target_os = "macos")]
+            if let Some(monitor) = tablet::install_macos(&app.stylus.feed) {
+                let _ = tablet_monitor.set(monitor);
+            }
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
+            if !unreadable_paths.is_empty() {
+                use photocraft_ui_egui::i18n;
+                let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");
+                let lines = unreadable_paths.iter().map(|p| i18n::fmt(line, &[("path", p.as_str())])).collect();
+                photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, true, None);
+            }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], false, None);
@@ -370,12 +451,25 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     );
-    // Closed before the first frames rendered: not a driver crash. (A start that failed to
-    // create its device keeps the marker, so the next one tries a safer backend.)
-    if result.is_ok()
-        && let Some(s) = sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    // Closed or failed outside graphics initialization: not a driver crash. A renderer error
+    // keeps the marker, so the next start tries a safer backend, unless there is no safer one:
+    // a failed CPU start would otherwise pin every later start to CPU.
+    let renderer_error = gpu_startup::keep_marker_after_run(&result);
+    if !(renderer_error && keep_marker)
+        && let Some(mut s) = sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
     {
-        s.finish();
+        if result.is_err()
+            && !renderer_error
+            && let Some(marker) = previous.crashed()
+        {
+            // This failure supplies no new graphics-crash evidence: retain the previous
+            // marker, rather than recording this attempt's fallback backend.
+            if let Err(error) = s.write(marker.clone()) {
+                log::warn!("couldn't restore previous GPU startup marker: {error}");
+            }
+        } else {
+            s.finish();
+        }
     }
     // Retry in a fresh process: winit event loops cannot be recreated reliably in-process.
     // Only renderer initialization failures qualify; never restart after editing has begun.
@@ -404,7 +498,7 @@ fn main() -> eframe::Result {
 mod tests {
     #[test]
     fn window_and_panel_geometry_survive_a_restart() {
-        let options = super::native_options();
+        let options = super::native_options(super::CUSTOM_TITLEBAR);
         assert!(options.persist_window);
         assert_eq!(options.persistence_path, super::services::config_dir().map(|dir| dir.join("ui.ron")));
 
@@ -442,10 +536,31 @@ mod tests {
 
     #[test]
     fn the_window_opens_centred_at_its_default_size() {
-        let o = super::native_options();
+        let o = super::native_options(super::CUSTOM_TITLEBAR);
         assert!(o.centered, "#419: centred, not cascaded from the top-left corner");
         assert_eq!(o.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)));
         // eframe shrinks the start size to the monitor, so the centred position is on-screen.
         assert_ne!(o.viewport.clamp_size_to_monitor_size, Some(false));
+    }
+
+    #[test]
+    fn the_system_title_bar_preference_keeps_the_window_decorations() {
+        // #1271, #1316: Preferences › Interface › System Title Bar gives the window back its
+        // system decorations on Windows and Linux; macOS always has them.
+        let dir = std::env::temp_dir().join(format!("pc-titlebar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prefs.json");
+        assert_eq!(super::custom_titlebar(None), super::CUSTOM_TITLEBAR, "no preferences file: the default");
+        std::fs::write(&file, "not json").unwrap();
+        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR, "an unreadable file: the default");
+        std::fs::write(&file, r#"{"interface":{"systemTitleBar":true}}"#).unwrap();
+        assert!(!super::custom_titlebar(Some(&file)));
+        assert_eq!(super::native_options(false).viewport.decorations, Some(true));
+        std::fs::write(&file, r#"{"interface":{"systemTitleBar":false}}"#).unwrap();
+        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR);
+        if super::CUSTOM_TITLEBAR {
+            assert_eq!(super::native_options(true).viewport.decorations, Some(false));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

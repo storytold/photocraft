@@ -52,15 +52,30 @@ fmv-macos-events = "=0.1.0"
 objc2 = "=0.6.4"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
+# The macOS menu bar (mac_menu.rs): Tauri's menu crate, AppKit menus behind a safe API (no GTK
+# with default features off). Pinned exactly: review the diff before bumping.
+muda = { version = "=0.21.1", default-features = false }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "=0.13.2", default-features = false }
+# Open the window through Xwayland for a pen on Wayland (`tablet.rs`, #639): eframe doesn't
+# re-export winit's `EventLoopBuilderExtX11`. Already in Cargo.lock (eframe); pinned exactly.
+winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 
 # Drop position on Windows (`cursor.rs`): safe Win32 wrappers (GetCursorPos), no dependencies of
 # its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
+
+# tests/mac_menu_appkit.rs: reads AppKit's menu bar back and sends it real key events.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSResponder"] }
+
+[[test]]
+name = "mac_menu_appkit"
+harness = false
 
 [build-dependencies]
 # Icon + VERSIONINFO for photocraft.exe; build.rs only uses it when targeting Windows.

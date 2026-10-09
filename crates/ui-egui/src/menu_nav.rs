@@ -292,6 +292,10 @@ pub fn level_room_in(screen: Rect, visible: Rect, bar_bottom: Option<f32>, depth
             let want = rows.unwrap_or(f32::INFINITY);
             if want > down && up > down && opens_up(want.min(up)) { up } else { down }.min(below_bar)
         }
+        // A window running under the taskbar: egui opens a submenu downward whenever it fits the
+        // window, so a top-level menu ends a scrolling submenu's height above the taskbar, leaving
+        // room for the submenu of its last row.
+        None if visible.bottom() < screen.bottom() - 0.5 => below_bar - (4.0 * ARROW + frame),
         None => below_bar,
     } - frame;
     if room.is_finite() { room.max(4.0 * ARROW) } else { 4.0 * ARROW }

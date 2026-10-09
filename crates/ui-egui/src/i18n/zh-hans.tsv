@@ -17,6 +17,10 @@
 	Layer	图层
 	Type	文字
 	Select	选择
+	Top Left	左上
+	Top Right	右上
+	Bottom Left	左下
+	Bottom Right	右下
 	Filter	滤镜
 	View	视图
 	Window	窗口
@@ -29,6 +33,9 @@
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
 	Close	关闭
+	Minimize	最小化
+	Maximize	最大化
+	Restore	向下还原
 	Close All	关闭全部
 	Close Others	关闭其他
 	Save	保存
@@ -96,6 +103,7 @@
 	Fill…	填充…
 	Stroke…	描边…
 	Content-Aware Fill…	内容识别填充…
+	Delete and Fill Selection	删除并填充选区
 	Content-Aware Scale	内容识别缩放
 	Puppet Warp	操控变形
 	Perspective Warp	透视变形
@@ -311,6 +319,7 @@
 	Smart Object	智能对象
 	Convert to Smart Object	转换为智能对象
 	Convert to Embedded	转换为嵌入对象
+	Convert to Layers	转换为图层
 	Convert to Linked…	转换为链接对象…
 	Edit Contents	编辑内容
 	Replace Contents…	替换内容…
@@ -971,14 +980,17 @@
 	Drag a rectangle around the object	围绕对象拖出矩形
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	在图像上拖动以添加约束；按 Shift 保持水平或垂直；右键单击删除。
 	Drag to move the active shape's path or the Work Path	拖动以移动当前形状的路径或工作路径
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	单击：选择锚点 · 拖动：移动锚点、手柄或线段 · {shift}-单击：添加 · {alt}-单击：整个子路径
 	Draw with the Pen tool (P) or make a work path from a selection.	使用钢笔工具（P）绘制，或从选区创建工作路径。
 	Drop an image or PSD anywhere to open it.	将图像或 PSD 拖放到任意位置即可打开。
 	Native file drag-and-drop is unavailable	Wayland 上不支持原生文件拖放
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland 尚不支持原生文件拖放。请使用“文件 › 打开”，或通过 `WAYLAND_DISPLAY= photocraft` 在 XWayland 下运行 PhotoCraft。
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland 尚不支持原生文件拖放。请使用“文件 › 打开”，或在文件管理器中复制图像后使用 {paste} 粘贴。
+	To drop files, start PhotoCraft under XWayland: `{command}`	要拖放文件，请在 XWayland 下启动 PhotoCraft：`{command}`
+	Edit › Paste	“编辑 › 粘贴”
 	Duplicate Layers…	复制图层…
 	Duplicate style	复制样式
 	Edit Toolbar…	编辑工具栏…
-	Use File › Open to open an image.	使用“文件 › 打开”打开图像。
+	Use File › Open, or paste a copied image with {paste}.	请使用“文件 › 打开”，或使用 {paste} 粘贴复制的图像。
 	Edit in Quick Mask Mode  (Q)	在快速蒙版模式下编辑  （Q）
 	Edit in Standard Mode  (Q)	在标准模式下编辑  （Q）
 	Effects	效果
@@ -1013,6 +1025,7 @@
 	Fisheye	鱼眼
 	Fit	适合
 	Fit Screen	适合屏幕
+	Fill Screen	填充屏幕
 	Fit in View	适合视图
 	Fixed	固定
 	Fixed Ratio	固定比例
@@ -1346,6 +1359,7 @@
 	Set background color	设置背景色
 	Set foreground color	设置前景色
 	Set painting symmetry options	设置绘画对称选项
+	Symmetry Off	关闭对称
 	Set shape fill type	设置形状填充类型
 	Set shape stroke type	设置形状描边类型
 	Set the text color	设置文字颜色
@@ -1606,6 +1620,7 @@
 	Paint Bucket Tool	油漆桶工具
 	Paints from the document's opening state	从文档打开时的状态绘制
 	Path Selection Tool	路径选择工具
+	Direct Selection Tool	直接选择工具
 	Pattern Overlay	图案叠加
 	Pen Pressure	钢笔压力
 	Pen Tilt	钢笔倾斜
@@ -1803,12 +1818,14 @@
 	Memory usage mb	内存使用量 (MB)
 	GPU memory mb	GPU 内存 (MB)
 	Memory usage percent	内存使用比例 (%)
+	Low resolution previews	低分辨率预览
 	Missing glyph protection	缺失字形保护
 	Modern	现代
 	Nearest neighbor	邻近
 	Never	从不
 	Normal tip	正常笔尖
 	Open as smart object	作为智能对象打开
+	Open in camera raw	在 Camera Raw 中打开
 	Open documents as tabs	以标签页打开文档
 	Overscroll	过度滚动
 	Performance	性能
@@ -1846,6 +1863,7 @@
 	Show slice numbers	显示切片编号
 	Show tooltips	显示工具提示
 	Show bounding box when dragging layer	拖动图层时显示边界框
+	System title bar	系统标题栏
 	Show transformation values	显示变换值
 	Slice color	切片颜色
 	Smart guide color	智能参考线颜色
@@ -1938,6 +1956,7 @@
 cameraRaw	Light	光线
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 滤镜（{layer}）
+	Camera Raw ({name})	Camera Raw（{name}）
 cameraRaw	Lights	亮调
 cameraRaw	Darks	暗调
 cameraRaw	Blacks	黑色色阶
@@ -1977,6 +1996,7 @@ cameraRaw	Blending	混合
 	System Info…	系统信息…
 	System Info	系统信息
 	More panels	更多面板
+	More documents	更多文档
 	These settings aren't available in PhotoCraft yet.	PhotoCraft 暂不支持这些设置。
 	Graphics	图形
 	Reset GPU Backend	重置 GPU 后端
@@ -2005,6 +2025,8 @@ cameraRaw	Blending	混合
 	Brush Settings…  (F5): every option of this brush	画笔设置…  （F5）：此画笔的全部选项
 	Rename Brush…	重命名画笔…
 	Delete Brush	删除画笔
+	New Brush Preset…	新建画笔预设…
+	Brush Preset Options	画笔预设选项
 	Group name	组名称
 	Brush name	画笔名称
 	Grid view	网格视图
@@ -2053,6 +2075,7 @@ cameraRaw	Blending	混合
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
 	Cancel opening	取消打开
 	Cancelled opening {name}	已取消打开 {name}
+	Developing {name}	正在处理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opening {name}	正在打开 {name}
@@ -2105,6 +2128,7 @@ cameraRaw	Blending	混合
 	Frequency	频率
 	Use tablet pressure to change pen width	使用绘图板压力以更改钢笔宽度
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	关于
 	Contributors	贡献者
@@ -2137,3 +2161,81 @@ cameraRaw	Blending	混合
 	% of all commits	占全部提交的 %
 	Lines +/−	行数 +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二进制文件 +{binAdded} / −{binDeleted}，{first} – {last}
+
+# Swatches panel
+	Create new swatch	创建新色板
+	New Swatch…	新建色板…
+	New Swatch Group…	新建色板组…
+	Import Swatches…	导入色板…
+	Replace Swatches…	替换色板…
+	Export Swatches…	导出色板…
+	Export Swatches for Exchange…	导出色板以供交换…
+	Reset Swatches	复位色板
+	Add to Swatches	添加到色板
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	混合颜色带:
+	Channels:	通道:
+	Knockout	挖空
+	Apply At Canvas Bounds	应用画布边界的效果
+	Show/Hide All Panels	显示/隐藏所有面板
+	Show/Hide Panels	显示/隐藏面板
+	Could not open	无法打开
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}：路径不是有效的 Unicode；请重命名文件后再打开。
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	内容：
+	Custom Pattern:	自定义图案：
+	Foreground Color	前景色
+	Color…	颜色…
+	50% Gray	50% 灰色
+	Color Adaptation	颜色自适应
+	{size} (was {old})	{size}（原为 {old}）
+	Cone	锥形
+	Cone (Inverted)	锥形（反转）
+	Domed	圆顶
+	Domed (Inverted)	圆顶（反转）
+	Diagonal (Descending)	对角线（下降）
+
+	Red Eye Tool	红眼工具
+	Red Eye	红眼
+	Pupil Size	瞳孔大小
+	Darken Amount	变暗程度
+	Click a red pupil to neutralize it	单击红色瞳孔以消除反光
+	open source	开源
+	…and {n} more	…以及另外 {n} 项
+
+	Eyedroppers:	吸管：
+	Set Black Point	设置黑场
+	Set Neutral Gray Point	设置中性灰场
+	Set White Point	设置白场
+	Unavailable in this color mode	此颜色模式下不可用
+	Selection Preview:	选区预览：
+	Black Matte	黑色背景
+	White Matte	白色背景
+
+# Layer colour labels.
+	Seafoam	海沫色
+	Indigo	靛蓝色
+	Fuchsia	紫红色
+	Violet	紫罗兰色
+	Reset	复位
+	Large document: redrawing on the CPU	大型文档：正在用 CPU 重绘
+	This redraw took {seconds} s on the CPU.	此次 CPU 重绘耗时 {seconds} 秒。
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	更改整个文档的编辑（如图层的混合模式、不透明度或可见性）会重绘整个文档。
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	图层超出 GPU 内存预算。在 首选项 › 性能 中提高内存使用量可增加预算，最多为本机内存的四分之一。
+	The GPU compositor wasn't used: {reason}	未使用 GPU 合成器：{reason}
+fontWeight	Thin	极细
+fontWeight	ExtraLight	特细
+fontWeight	Light	细体
+fontWeight	Regular	常规
+fontWeight	Medium	中等
+fontWeight	SemiBold	半粗
+fontWeight	Bold	粗体
+fontWeight	ExtraBold	特粗
+fontWeight	Black	黑体
+fontWeight	Italic	斜体
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	图案图章工具
+	Pattern Stamp	图案图章
+	Impressionist	印象派

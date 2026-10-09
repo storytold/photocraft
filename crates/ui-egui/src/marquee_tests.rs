@@ -276,7 +276,7 @@ fn cmd_drag_floats_the_selected_pixels() {
     assert!(d.selection.is_none() && offset(&app).is_none());
     assert!(alpha(&d, 12, 12) == 0.0 && alpha(&d, 26, 21) == 1.0 && alpha(&d, 44, 39) == 1.0);
     let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
-    assert_eq!(labels.first().map(String::as_str), Some("Move Selected Pixels"), "{labels:?}");
+    assert_eq!(labels.first().map(String::as_str), Some("Move"), "{labels:?}");
 }
 
 /// Through the real canvas (mouse events): a drag inside the ants moves the selection.
@@ -289,4 +289,97 @@ fn mouse_drag_inside_the_selection_moves_it() {
     press_at(&mut h, 150.0, 120.0, Modifiers::NONE);
     release_at(&mut h, 170.0, 130.0, Modifiers::NONE);
     assert_eq!(selection(&h), Rect::new(120, 90, 220, 170), "moved by (20, 10)");
+}
+
+/// #1428: hovering inside the ants with a marquee shows the move cursor (a press there drags the
+/// outline); outside it is the marquee's own cursor.
+#[test]
+fn hovering_inside_the_selection_shows_the_move_cursor() {
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        let mut h = harness(tool);
+        press_at(&mut h, 100.0, 80.0, Modifiers::NONE);
+        release_at(&mut h, 200.0, 160.0, Modifiers::NONE);
+        move_to(&mut h, 150.0, 120.0);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "{tool:?} inside");
+        move_to(&mut h, 300.0, 250.0);
+        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "{tool:?} outside");
+    }
+}
+
+/// #1428: with a marquee, the arrow keys nudge the selection outline 1 px, ⇧ 10 px (Photoshop);
+/// each press is one undoable step.
+#[test]
+fn arrow_keys_nudge_the_selection_outline() {
+    use egui::Key;
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        let mut h = harness(tool);
+        press_at(&mut h, 100.0, 80.0, Modifiers::NONE);
+        release_at(&mut h, 200.0, 160.0, Modifiers::NONE);
+        let drawn = selection(&h);
+        assert!(!drawn.is_empty(), "{tool:?} drew");
+        let shifted = |dx: i32, dy: i32| Rect::new(drawn.x0 + dx, drawn.y0 + dy, drawn.x1 + dx, drawn.y1 + dy);
+        let steps = h.state().session.active().unwrap().history.past_len();
+        h.key_press(Key::ArrowRight);
+        h.run_steps(1);
+        assert_eq!(selection(&h), shifted(1, 0), "{tool:?} right 1 px");
+        h.key_press(Key::ArrowUp);
+        h.run_steps(1);
+        assert_eq!(selection(&h), shifted(1, -1), "{tool:?} up 1 px");
+        h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowDown);
+        h.run_steps(1);
+        assert_eq!(selection(&h), shifted(1, 9), "{tool:?} shift-down 10 px");
+        h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
+        h.run_steps(1);
+        assert_eq!(selection(&h), shifted(-9, 9), "{tool:?} shift-left 10 px");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 4, "one step per press");
+        h.state_mut().session.undo();
+        assert_eq!(selection(&h), shifted(1, 9), "{tool:?} undo takes back one nudge");
+    }
+}
+
+/// Arrow keys with a marquee but no selection change nothing and report no error.
+#[test]
+fn arrow_keys_without_a_selection_do_nothing() {
+    let mut h = harness(Tool::RectMarquee);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(1);
+    assert_eq!(selection(&h), Rect::EMPTY);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+    assert!(!h.state().ui.status_error);
+}
+
+/// ⌘⌥-drag copies the selected pixels instead of cutting them: the original stays.
+#[test]
+fn cmd_alt_drag_floats_a_copy() {
+    let (mut app, layer) = painted();
+    let alpha = |d: &photocraft_doc::Document, x, y| d.layer(layer).unwrap().surface().unwrap().rgba(x, y)[3];
+    let cmd_alt = Modifiers { alt: true, ..Modifiers::COMMAND };
+    drag(&mut app, [20.0, 20.0], [45.0, 20.0], cmd_alt);
+    app.run("select.drop", json!({})).unwrap();
+    let d = app.session.active().unwrap().doc.clone();
+    assert!(alpha(&d, 12, 20) == 1.0, "the original stays");
+    assert!(alpha(&d, 50, 20) == 1.0, "the copy dropped 25 px right");
+}
+
+#[test]
+fn alt_with_nothing_selected_draws_a_new_selection() {
+    // #1106: with no selection, ⌥ has nothing to subtract from, so a marquee drawn with it held
+    // still selects (Photoshop: ⌥ then only draws from the centre). With a selection it subtracts.
+    let mut h = harness(Tool::RectMarquee);
+    mods(&mut h, Modifiers::ALT);
+    press_at(&mut h, 100.0, 100.0, Modifiers::ALT);
+    move_to(&mut h, 140.0, 130.0);
+    release_at(&mut h, 140.0, 130.0, Modifiers::ALT);
+    mods(&mut h, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.selection.as_ref().is_some_and(|s| !s.content_bounds().is_empty()), "a selection was made");
+    // Now ⌥ subtracts from it.
+    let before = selection(&h);
+    mods(&mut h, Modifiers::ALT);
+    press_at(&mut h, 0.0, 0.0, Modifiers::ALT);
+    move_to(&mut h, 400.0, 400.0);
+    release_at(&mut h, 400.0, 400.0, Modifiers::ALT);
+    mods(&mut h, Modifiers::NONE);
+    let after = h.state().session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
+    assert!(after.is_none_or(|r| r.is_empty() || r != before), "⌥ subtracted: {before:?} -> {after:?}");
 }

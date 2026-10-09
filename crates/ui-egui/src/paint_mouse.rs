@@ -117,14 +117,18 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, down: bool, mods: egui::Modifi
     false
 }
 
-/// The Brush Preset picker a right-click opened, at the pointer. It edits the session brush like
-/// the options-bar chip's; a click outside, Escape or Enter closes it.
+/// The Brush Preset picker a right-click or the options-bar brush chip opened, at the pointer. It
+/// edits the session brush like the Brushes panel; a press outside, Escape, Enter or a
+/// double-click on a preset closes it.
 pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some([x, y]) = app.ui.brush_picker else { return };
-    if !has_brush_picker(app.ui.tool) || ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
+    if !has_brush_picker(app.ui.tool) {
         app.ui.brush_picker = None;
         return;
     }
+    // Escape and Enter close it once this frame's edits are in (a typed size applies), unless they
+    // end a rename in its rename bar.
+    let key_close = app.ui.brush_picker_list.renaming.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
     let screen = ctx.content_rect();
     // Keep the whole picker on screen: its last size, or about 320 × 480 points before it shows.
     let id = egui::Id::new("canvas-brush-picker");
@@ -133,16 +137,19 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
-        let pick = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets)).inner;
+        let list = &mut app.ui.brush_picker_list;
+        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, list)).inner;
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
-        if pick == Some(crate::brush_picker::Pick::OpenSettings) {
-            app.ui.brush_picker = None;
-        }
-        crate::brush_picker::apply(app, ui.ctx(), pick);
+        let closes = picks.iter().any(crate::brush_picker::Pick::closes);
+        crate::brush_picker::apply(app, ui.ctx(), picks);
+        closes
     });
-    let outside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
-    if outside {
-        app.ui.brush_picker = None;
+    // Not a press on a menu the picker opened (the gear, a preset's context menu), nor on the
+    // options-bar chip, whose click toggles the picker.
+    let press = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
+    let outside = press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !egui::Popup::is_any_open(ctx);
+    if outside || key_close || area.inner {
+        crate::brush_picker::close(&mut app.ui);
     }
 }
 
@@ -166,7 +173,7 @@ mod tests {
         }
         app.ui.tool = Tool::Brush;
         app.sync_views();
-        let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 let ctx = ui.ctx().clone();
                 if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -303,6 +310,109 @@ mod tests {
         press(&mut h, far, PointerButton::Primary, true);
         press(&mut h, far, PointerButton::Primary, false);
         assert_eq!(h.state().ui.brush_picker, None);
+    }
+
+    /// #1031: the right-click picker picks brushes, not just the size. A click picks a preset and
+    /// keeps the picker open, a double-click picks one and closes it, and Enter applies a typed
+    /// size before it closes the picker.
+    #[test]
+    fn picker_click_picks_a_preset_and_double_click_closes_it() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(None);
+        let c = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(1);
+        press(&mut h, c, PointerButton::Secondary, true);
+        press(&mut h, c, PointerButton::Secondary, false);
+        h.run_steps(2);
+        let names: Vec<String> = h.state().session.tools.presets.iter().skip(1).take(2).map(|p| p.name.clone()).collect();
+        let picks = |h: &Harness<'static, PhotocraftApp>, name: &str| {
+            h.state().session.journal.iter().filter(|(id, p)| id == "tools.setBrush" && *p == json!({ "preset": name })).count()
+        };
+        h.get_by_label(&names[0]).click();
+        h.run_steps(3);
+        assert_eq!(picks(&h, &names[0]), 1);
+        assert!(h.state().ui.brush_picker.is_some(), "a click keeps the picker open");
+        let at = h.get_by_label(&names[1]).rect().center();
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(1);
+        // Two clicks 2 frames apart; well after the first click, so not a triple click.
+        h.run_steps(40);
+        for pressed in [true, false, true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(2);
+        assert_eq!(picks(&h, &names[1]), 1, "picked once: the second click only closes");
+        assert_eq!(h.state().ui.brush_picker, None, "a double-click closes the picker");
+        assert!(strokes(&h).is_empty(), "nothing painted under the picker");
+        // Enter applies the typed size, then closes the picker.
+        h.state_mut().ui.brush_picker = Some([c.x, c.y]);
+        h.run_steps(2);
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("the Size field").click();
+        h.run_steps(1);
+        h.event(egui::Event::Text("30*2".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!((h.state().session.tools.brush.size, h.state().ui.brush_picker), (60.0, None));
+    }
+
+    /// A sampled tip has no hardness: the picker shows only its size (Photoshop).
+    #[test]
+    fn picker_shows_hardness_only_for_round_tips() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(None);
+        let c = h.state().last_canvas_rect.center();
+        h.state_mut().ui.brush_picker = Some([c.x, c.y]);
+        h.run_steps(2);
+        assert!(h.query_by_label("Hardness").is_some());
+        let sampled = h.state().session.tools.presets.iter().find(|p| p.brush.tip != photocraft_engine::paint::TipShape::Round).map(|p| p.name.clone());
+        h.state_mut().run("tools.setBrush", json!({ "preset": sampled.expect("a sampled preset") })).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Hardness").is_none());
+        assert!(h.state().ui.brush_picker.is_some());
+    }
+
+    /// The gear menu's New Brush Preset… saves the brush and asks for its name in the picker's
+    /// rename bar; Enter there renames it and leaves the picker open (Enter closes it otherwise).
+    #[test]
+    fn picker_gear_menu_saves_and_names_a_new_preset() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(None);
+        let c = h.state().last_canvas_rect.center();
+        h.state_mut().ui.brush_picker = Some([c.x, c.y]);
+        h.run_steps(2);
+        h.get_by_label("Brush Preset Options").click();
+        h.run_steps(2);
+        h.get_by_label("New Brush Preset…").click();
+        h.run_steps(3);
+        let saved = h.state().ui.brush_picker_list.renaming.clone().expect("the rename bar asks for a name");
+        assert!(h.state().session.tools.presets.iter().any(|p| p.name == saved.name));
+        assert!(h.state().ui.brush_picker.is_some(), "the menu's click didn't close the picker");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("Inky".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert!(h.state().session.tools.presets.iter().any(|p| p.name == "Inky"), "renamed");
+        assert!(h.state().ui.brush_picker_list.renaming.is_none());
+        assert!(h.state().ui.brush_picker.is_some(), "Enter ended the rename, not the picker");
+        // The gear's view items switch the list between tips and names.
+        h.get_by_label("Brush Preset Options").click();
+        h.run_steps(2);
+        h.get_by_label("List view").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.brush_picker_list.view, crate::brush_panel::BrushesView::List);
+        assert!(h.state().ui.brush_picker.is_some());
+        // A rename left open goes with the picker.
+        h.state_mut().ui.brush_picker_list.renaming = Some(crate::brush_panel::Renaming { group: false, name: "Inky".into(), text: String::new() });
+        h.run_steps(2);
+        let far = c - vec2(300.0, 200.0);
+        h.event(egui::Event::PointerMoved(far));
+        press(&mut h, far, PointerButton::Primary, true);
+        press(&mut h, far, PointerButton::Primary, false);
+        assert!(h.state().ui.brush_picker.is_none() && h.state().ui.brush_picker_list.renaming.is_none());
     }
 
     #[test]

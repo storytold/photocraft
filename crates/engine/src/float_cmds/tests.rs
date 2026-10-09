@@ -71,9 +71,48 @@ fn needs_a_selection_and_an_unlocked_pixel_layer() {
     s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
     assert!(!s.is_enabled("select.float"), "no selection");
     s.execute("select.all", json!({})).unwrap();
-    assert!(!s.is_enabled("select.float"), "the Background is locked");
+    assert!(s.is_enabled("select.float"), "the Background's selected pixels move");
     s.execute("layer.new.layer", json!({})).unwrap();
     assert!(s.is_enabled("select.float"));
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
+    assert!(!s.is_enabled("select.float"), "a position-locked layer");
+}
+
+/// On the Background, which can't hold transparency, the hole takes the background colour.
+#[test]
+fn on_the_background_the_hole_takes_the_background_colour() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s.tools.background = [0.0, 0.0, 1.0, 1.0];
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let px = |x, y| s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().rgba(x, y);
+    assert_eq!(px(12, 12), [0.0, 0.0, 1.0, 1.0], "the hole");
+    assert_eq!(px(27, 12), [1.0, 1.0, 1.0, 1.0], "the moved pixels");
+    assert_eq!(px(5, 5), [1.0, 1.0, 1.0, 1.0], "the rest");
+}
+
+/// Copying leaves the original pixels, at every depth; the move is one undo step.
+#[test]
+fn a_copy_leaves_the_original_at_every_depth_in_one_undo_step() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 80, "height": 60, "background": "transparent", "depth": depth})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("select.float", json!({"dx": 30, "dy": 0, "copy": true})).unwrap();
+        s.execute("select.drop", json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert!(alpha(&st.doc, id, 12, 12) == 1.0 && alpha(&st.doc, id, 42, 12) == 1.0, "{depth}-bit: both");
+        assert_eq!((st.history.past_len(), st.history.undo_label()), (steps + 1, Some("Move")), "{depth}-bit");
+        s.undo();
+        let st = s.active().unwrap();
+        assert!(alpha(&st.doc, id, 12, 12) == 1.0 && alpha(&st.doc, id, 42, 12) == 0.0, "{depth}-bit: undone");
+    }
 }
 
 /// `cargo test --release -p photocraft-engine float_drag_bench -- --ignored --nocapture`
@@ -97,4 +136,15 @@ fn float_drag_bench() {
         displayed(s.active().unwrap(), (i * 7, i * 3)).unwrap();
     }
     eprintln!("6000×4000 layer, 500×400 piece: cut {cut:?}, then {:?} per pointer move", t.elapsed() / 20);
+}
+
+#[test]
+fn copy_floats_a_duplicate_and_leaves_the_original() {
+    let (mut s, id) = session();
+    s.execute("select.float", json!({"dx": 30, "dy": 0, "copy": true})).unwrap();
+    let shown = displayed(s.active().unwrap(), (0, 0)).unwrap();
+    assert!(alpha(&shown, id, 12, 12) == 1.0 && alpha(&shown, id, 42, 12) == 1.0, "original kept, copy shown");
+    s.execute("select.drop", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert!(alpha(doc, id, 12, 12) == 1.0 && alpha(doc, id, 42, 12) == 1.0, "dropped: both");
 }

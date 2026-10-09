@@ -1,9 +1,10 @@
 //! Floating selection: the selected pixels of a layer cut out and moved as a piece, without
 //! touching the document until the piece is dropped.
 //!
-//! - `select.float {"dx","dy"}` cuts the selected pixels of the active layer into a floating piece
-//!   (the first time) and moves it by whole pixels. Further calls move the same piece; nothing new
-//!   is cut.
+//! - `select.float {"dx","dy","copy"}` cuts the selected pixels of the active layer into a floating
+//!   piece (the first time; `copy` leaves them and floats a duplicate) and moves it by whole
+//!   pixels. Further calls move the same piece; nothing new is cut. The Move tool, the marquee and
+//!   lasso ⌘-drags and the Move tool's arrow keys all move selected pixels this way.
 //! - `select.drop` drops the piece into its layer and moves the selection with it, as one history
 //!   step.
 //! - Any other command drops the piece first (so it lands exactly where it was shown), except Undo,
@@ -33,8 +34,11 @@ pub struct CutParts {
 }
 
 impl CutParts {
-    /// Split `layer` of `doc` by its selection. Errors without a selection or pixels.
-    pub fn new(doc: &Document, layer: LayerId) -> Result<Self> {
+    /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
+    /// too (the piece is a duplicate). Without, they leave a transparent hole, or on the Background,
+    /// which can't hold transparency, one filled with `background` (Photoshop). Errors without a
+    /// selection or pixels.
+    pub fn new(doc: &Document, layer: LayerId, copy: bool, background: [f32; 4]) -> Result<Self> {
         let sel = doc.selection.as_ref().ok_or_else(|| EngineError::Other("no selection".into()))?;
         let l = doc.layer(layer).ok_or(EngineError::NoLayer(layer))?;
         let LayerContent::Raster(surf) = &l.content else {
@@ -44,6 +48,7 @@ impl CutParts {
         let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
         let mut rest = if fmt == with_alpha { surf.clone() } else { surf.convert(with_alpha) };
         let mut piece = Surface::new(with_alpha);
+        let fill = !copy && crate::extra_cmds::is_background(l);
         let b = sel.content_bounds().intersect(&surf.content_bounds());
         if !b.is_empty() {
             let n = with_alpha.channels();
@@ -58,9 +63,14 @@ impl CutParts {
                 } else {
                     p[a] *= k;
                 }
-                r[a] *= 1.0 - k;
+                if !copy && !fill {
+                    r[a] *= 1.0 - k;
+                }
             }
             rest.write_region(b, &rp);
+            if fill {
+                crate::pixels::fill_surface(&mut rest, b, background, Some(sel), true);
+            }
             rest.prune();
             piece.write_region(b, &pp);
             piece.prune();
@@ -121,7 +131,8 @@ fn can_float(s: &Session) -> std::result::Result<(), String> {
         return Err("the active layer has no pixels to move".into());
     }
     let locks = st.doc.effective_locks(l.id);
-    if locks.all || locks.position {
+    // The Background is position-locked, but its selected pixels move (Photoshop).
+    if locks.all || (locks.position && !crate::extra_cmds::is_background(l)) {
         return Err(format!("layer \"{}\" is locked", l.name));
     }
     Ok(())
@@ -129,10 +140,12 @@ fn can_float(s: &Session) -> std::result::Result<(), String> {
 
 fn float(s: &mut Session, p: &Value) -> Result<Value> {
     let (dx, dy) = (int_param(p, "dx"), int_param(p, "dy"));
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let background = s.tools.background;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if floating(st).is_none() {
         let layer = st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-        let parts = CutParts::new(&st.doc, layer)?;
+        let parts = CutParts::new(&st.doc, layer, copy, background)?;
         st.floating = Some(Floating { layer, offset: (0, 0), revision: st.revision, parts: Arc::new(parts) });
     }
     let f = st.floating.as_mut().ok_or(EngineError::NoDocument)?;
@@ -152,7 +165,7 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
     if (dx, dy) == (0, 0) {
         return Ok(json!({"dropped": true, "offset": [0, 0]}));
     }
-    s.edit("Move Selected Pixels", |doc, _| {
+    s.edit("Move", |doc, _| {
         let moved = f.parts.moved(doc, dx, dy)?;
         let surf = moved.layer(f.layer).and_then(|l| l.surface()).cloned().ok_or(EngineError::NoLayer(f.layer))?;
         *doc.layer_mut(f.layer).ok_or(EngineError::NoLayer(f.layer))?.surface_mut().ok_or(EngineError::NoLayer(f.layer))? = surf;
@@ -192,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Float Selection",
             menu: &[],
             shortcut: None,
-            params: r##"{"dx":px=0,"dy":px=0} → {layer, offset} (cuts the selected pixels of the active layer into a floating piece the first time, then moves it by whole pixels; dropped by select.drop or any other command, put back by edit.undo)"##,
+            params: r##"{"dx":px=0,"dy":px=0,"copy":bool=false} → {layer, offset} (cuts the selected pixels of the active layer into a floating piece the first time, or with copy leaves them and floats a duplicate; on the Background the hole takes the background colour; then moves it by whole pixels; dropped by select.drop or any other command, put back by edit.undo)"##,
             enabled: can_float,
             journal: true,
             run: float,

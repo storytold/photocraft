@@ -4,6 +4,7 @@
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use photocraft_doc::Document;
+use photocraft_engine::prefs::Unit;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -45,6 +46,45 @@ fn nice_step(min: f64, whole: bool) -> f64 {
         }
         step *= 10.0;
     }
+}
+
+/// English display name for a length unit, as shown in Preferences › Units & Rulers.
+fn unit_label(u: Unit) -> &'static str {
+    match u {
+        Unit::Pixels => "Pixels",
+        Unit::Inches => "Inches",
+        Unit::Centimeters => "Centimeters",
+        Unit::Millimeters => "Millimeters",
+        Unit::Points => "Points",
+        Unit::Picas => "Picas",
+        Unit::Percent => "Percent",
+    }
+}
+
+/// Every length unit, in the Preferences › Units & Rulers order.
+const UNITS: [Unit; 7] = [Unit::Pixels, Unit::Inches, Unit::Centimeters, Unit::Millimeters, Unit::Points, Unit::Picas, Unit::Percent];
+
+/// The ruler right-click menu: every length unit with its (translated) label and whether it's the
+/// one in effect. Picking one changes the ruler unit exactly as the preference pane does.
+fn unit_menu_items(current: Unit) -> Vec<(String, &'static str, bool)> {
+    UNITS.iter().map(|&u| (tl!(unit_label(u)).to_string(), u.name(), u == current)).collect()
+}
+
+/// Right-clicking a ruler offers the length units; the chosen one's name is returned (`None` if the
+/// menu is dismissed without a pick).
+fn ruler_unit_menu(ui: &mut egui::Ui, current: Unit) -> Option<&'static str> {
+    crate::widgets::menu_scroll(ui, |ui| {
+        ui.set_min_width(150.0);
+        let mut chosen = None;
+        for (label, name, checked) in unit_menu_items(current) {
+            let label = if checked { format!("✓ {label}") } else { label };
+            if ui.button(label).clicked() {
+                ui.close();
+                chosen = Some(name);
+            }
+        }
+        chosen
+    })
 }
 
 /// A guide being dragged: from a ruler (new) or an existing one (index).
@@ -124,7 +164,9 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
 
 /// Existing guide under a document point (within 4 screen px).
 pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
-    if !app.ui.extras.guides || app.ui.extras.lock_guides {
+    // Hidden canvas guides are not interactive: the Move tool must reach the layer below.
+    // Keep hit testing consistent with the visibility gate in canvas::draw.
+    if !app.ui.extras.guides || !app.ui.view.shows(app.ui.view.show.canvas_guides) || app.ui.extras.lock_guides {
         return None;
     }
     let doc = &app.session.active()?.doc;
@@ -227,10 +269,14 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
         p.line_segment([pos2(h.x, top.top()), pos2(h.x, top.bottom())], m);
         p.line_segment([pos2(left.left(), h.y), pos2(left.right(), h.y)], m);
     }
-    // Drag a new guide out of a ruler.
-    for (r, vertical, salt) in [(top, false, "ruler-top"), (left, true, "ruler-left")] {
-        let resp = ui.interact(r, ui.id().with(salt), Sense::drag());
-        if resp.hovered() {
+    // Drag a new guide out of a ruler; right-click to switch the ruler unit.
+    let mut chosen_unit: Option<&'static str> = None;
+    for (r, vertical, salt) in [(top, false, "ruler-top"), (left, true, "ruler-left"), (corner, false, "ruler-corner")] {
+        // Guides drag out of the top/left rulers; all three sense clicks so the right-click unit
+        // menu opens anywhere on the ruler (the corner only needs the menu).
+        let sense = if salt == "ruler-corner" { Sense::click() } else { Sense::click_and_drag() };
+        let resp = ui.interact(r, ui.id().with(salt), sense);
+        if resp.hovered() && salt != "ruler-corner" {
             ui.ctx().set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
         }
         if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.drag_started()) {
@@ -243,6 +289,14 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
         {
             finish_drag(app, d);
         }
+        resp.context_menu(|ui| {
+            if let Some(name) = ruler_unit_menu(ui, unit) {
+                chosen_unit = Some(name);
+            }
+        });
+    }
+    if let Some(name) = chosen_unit {
+        let _ = app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": name}));
     }
     let _ = Pos2::ZERO;
 }
@@ -267,6 +321,66 @@ mod tests {
         assert_eq!(tick_step(4.0), 20.0);
         assert_eq!(tick_step(64.0), 1.0);
         assert_eq!(tick_step(0.25), 500.0);
+    }
+
+    #[test]
+    fn hidden_guides_are_not_hit_tested() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        app.sync_views();
+        app.session.execute("view.newGuide", json!({"orientation": "vertical", "position": 50})).unwrap();
+        app.session.execute("view.newGuide", json!({"orientation": "horizontal", "position": 25})).unwrap();
+        let positions = app.session.active().unwrap().doc.guides.clone();
+
+        // Visible, unlocked guides remain interactive in either orientation.
+        assert_eq!(guide_at(&app, 50.0, 10.0), Some((true, 0)));
+        assert_eq!(guide_at(&app, 10.0, 25.0), Some((false, 0)));
+
+        // All ways to hide the canvas guides must also disable hit testing.
+        app.ui.extras.guides = false;
+        assert_eq!(guide_at(&app, 50.0, 10.0), None);
+        assert_eq!(guide_at(&app, 10.0, 25.0), None);
+        app.ui.extras.guides = true;
+
+        app.ui.view.show.canvas_guides = false;
+        assert_eq!(guide_at(&app, 50.0, 10.0), None);
+        assert_eq!(guide_at(&app, 10.0, 25.0), None);
+        app.ui.view.show.canvas_guides = true;
+
+        app.ui.view.extras = false;
+        assert_eq!(guide_at(&app, 50.0, 10.0), None);
+        assert_eq!(guide_at(&app, 10.0, 25.0), None);
+        app.ui.view.extras = true;
+
+        // Hiding/showing must not change the stored guide positions.
+        assert_eq!(app.session.active().unwrap().doc.guides, positions);
+        assert_eq!(guide_at(&app, 50.0, 10.0), Some((true, 0)));
+        assert_eq!(guide_at(&app, 10.0, 25.0), Some((false, 0)));
+
+        app.ui.extras.lock_guides = true;
+        assert_eq!(guide_at(&app, 50.0, 10.0), None);
+        assert_eq!(guide_at(&app, 10.0, 25.0), None);
+    }
+
+    #[test]
+    fn unit_menu_lists_every_unit_with_the_current_one_checked() {
+        let items = unit_menu_items(Unit::Inches);
+        assert_eq!(items.len(), Unit::NAMES.len());
+        // Every unit is offered, labelled, and in the preference's order.
+        assert_eq!(items[0], ("Pixels".to_string(), "pixels", false));
+        assert_eq!(items.iter().find(|(_, name, _)| *name == "cm").unwrap().0, "Centimeters");
+        // Exactly the current unit is checked.
+        let checked: Vec<_> = items.iter().filter(|(_, _, c)| *c).map(|(_, name, _)| *name).collect();
+        assert_eq!(checked, vec!["inches"]);
+    }
+
+    #[test]
+    fn picking_a_ruler_unit_changes_the_preference() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert_eq!(app.session.prefs().units_and_rulers.rulers, Unit::Pixels);
+        // The context menu applies its pick exactly as the preference pane does.
+        app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "cm"})).unwrap();
+        assert_eq!(app.session.prefs().units_and_rulers.rulers, Unit::Centimeters);
     }
 
     #[test]

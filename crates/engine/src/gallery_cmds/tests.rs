@@ -103,6 +103,8 @@ fn gallery_validates_and_lists() {
     let mut s = session(8, "rgb");
     assert!(s.execute("filter.filterGallery", json!({})).is_err());
     assert!(s.execute("filter.filterGallery", json!({"effects": [{"filter": "nope"}]})).is_err());
+    let too_many: Vec<_> = (0..33).map(|_| json!({"filter": "coloredPencil"})).collect();
+    assert!(s.execute("filter.filterGallery", json!({"effects": too_many})).is_err());
     let list = s.execute("filter.filterGallery", json!({"list": true})).unwrap();
     assert_eq!(list["filters"].as_array().unwrap().len(), 47);
     assert_eq!(list["categories"].as_array().unwrap().len(), 6);

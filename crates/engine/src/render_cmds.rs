@@ -104,8 +104,7 @@ fn draw(s: &mut Session, label: &str, p: &Value, prims: Vec<Prim>, extra: Value)
         if let Some(sel) = &selection {
             clip = clip.intersect(&sel.content_bounds());
         }
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let LayerContent::Raster(surf) = &mut l.content else { return Err(EngineError::Other("not a pixel layer".into())) };
+        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let used = render2::composite(surf, &prims, clip, selection.as_ref());
         surf.prune();
         Ok((id, created, used))

@@ -26,6 +26,17 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
         if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
             continue;
         }
+        // An artboard clips its layers to the board (#1531): pixels past its edge aren't shown,
+        // so they can't be picked. The board itself is hit anywhere on it, below its layers
+        // (the walk lists them first), as a Photoshop click on an empty spot selects the board.
+        let board = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard());
+        if board.is_some_and(|a| !a.rect.contains(x, y)) {
+            continue;
+        }
+        if l.artboard().is_some() {
+            out.push(l.id);
+            continue;
+        }
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
             continue;
         }
@@ -53,9 +64,12 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
     out
 }
 
-/// The outermost group containing `id` (the layer itself when it isn't in a group).
+/// The outermost group containing `id` (the layer itself when it isn't in a group). An artboard
+/// is not a group here: Group mode stops at the outermost group on the board.
 fn top_group(doc: &Document, id: LayerId) -> LayerId {
-    doc.walk().iter().find(|(_, _, l)| l.id == id).and_then(|(path, _, _)| doc.layer_at(&path[..1])).map_or(id, |l| l.id)
+    let Some((path, _, _)) = doc.walk().into_iter().find(|(_, _, l)| l.id == id) else { return id };
+    let depth = if path.get(..1).and_then(|p| doc.layer_at(p)).is_some_and(|t| t.artboard().is_some()) { 2 } else { 1 };
+    path.get(..depth).and_then(|p| doc.layer_at(p)).map_or(id, |l| l.id)
 }
 
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
@@ -171,6 +185,41 @@ mod tests {
         s.execute("layer.pickAt", json!({"x": 25, "y": 25, "mode": "add"})).unwrap();
         let st = s.active().unwrap();
         assert!(st.is_layer_selected(a) && st.is_layer_selected(b));
+    }
+
+    #[test]
+    fn a_click_on_an_artboard_picks_the_board_or_the_layers_on_it() {
+        // #1531: an empty spot on a board picked the Background under it, so a Move-tool drag
+        // there never moved the board.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let a = s.active().unwrap().active_layer.unwrap();
+        let board = s.execute("layer.new.artboardFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.artboard.set", json!({"width": 30, "height": 30})).unwrap();
+        // A's pixels past the board's edge are clipped away, so they can't be picked either.
+        s.edit("paint outside", |doc, _| {
+            doc.layer_mut(a).unwrap().surface_mut().unwrap().fill_rect(Rect::new(32, 32, 36, 36), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let pick =
+            |s: &mut Session, x: i32, y: i32, target: &str| s.execute("layer.pickAt", json!({"x": x, "y": y, "target": target})).unwrap()["layer"].clone();
+        assert_eq!(pick(&mut s, 5, 5, "layer"), a.0, "the layer on the board");
+        assert_eq!(pick(&mut s, 5, 5, "group"), a.0, "Group mode stops inside the board");
+        assert_eq!(pick(&mut s, 20, 20, "layer"), board, "an empty spot on the board picks the board");
+        assert_eq!(s.active().unwrap().active_layer, Some(LayerId(board)));
+        assert_eq!(pick(&mut s, 33, 33, "layer"), bg.0, "off the board: the Background, not A's clipped pixels");
+        let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
+        let ids: Vec<u64> = list["layers"].as_array().unwrap().iter().map(|l| l["layer"].as_u64().unwrap()).collect();
+        assert_eq!(ids, vec![a.0, board, bg.0]);
+        // A hidden board is skipped with its layers.
+        s.execute("layer.setProps", json!({"layer": board, "visible": false})).unwrap();
+        assert_eq!(pick(&mut s, 5, 5, "layer"), bg.0);
     }
 
     #[test]

@@ -1,5 +1,9 @@
-//! One lasso outline can alternate between freehand strokes and Alt-held straight segments.
-//! Selection intent is latched at the first press; Alt pressed later changes drawing mode.
+//! One lasso outline can alternate between freehand strokes and Alt-held straight segments:
+//! with Alt held, each click adds a straight segment and a drag draws freehand. Releasing Alt
+//! while the button is up closes the outline and makes the selection.
+//! Selection intent is latched at the first press: Alt held then subtracts from an existing
+//! selection; with no selection there is nothing to subtract, so it starts straight segments.
+//! Alt pressed later changes drawing mode.
 
 use crate::{
     PhotocraftApp,
@@ -18,6 +22,29 @@ pub struct Lasso {
 
 pub fn active(app: &PhotocraftApp) -> bool {
     app.drag.as_ref().is_some_and(|d| d.tool == Tool::Lasso && d.lasso.is_some())
+}
+
+/// Between polygonal clicks, Backspace/right-click retracts the last fixed vertex.
+/// Do not affect a freehand stroke whose primary button is still held.
+pub fn waiting_for_vertex(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::Lasso
+        && app
+            .drag
+            .as_ref()
+            .is_some_and(|d| d.tool == Tool::Lasso && d.lasso.as_ref().is_some_and(|l| !l.down && l.document == app.session.active().map(|st| st.doc.id)))
+}
+
+pub fn undo_last_vertex(app: &mut PhotocraftApp) -> bool {
+    cancel_stale(app);
+    if !waiting_for_vertex(app) {
+        return false;
+    }
+    if app.drag.as_ref().is_some_and(|d| d.points.len() <= 1) {
+        app.drag = None;
+    } else if let Some(d) = app.drag.as_mut() {
+        d.points.pop();
+    }
+    true
 }
 
 /// A lasso drag that moves the selection (started inside it, `canvas::selection_drag_kind`):
@@ -48,14 +75,17 @@ fn modifiers(app: &mut PhotocraftApp, mods: Modifiers) {
     d.track(mods);
     // Alt held before the initial press still means subtract, until released and pressed again.
     let polygonal = mods.alt && (!d.modifiers.alt || d.released.alt);
-    if let Some(lasso) = &d.lasso {
-        let anchor = (lasso.polygonal && !polygonal && lasso.down).then_some(lasso.cursor);
-        if let Some(p) = anchor {
-            append(d, p);
-        }
+    // Alt released between straight segments (button up): the outline is done.
+    let close = d.lasso.as_ref().is_some_and(|l| l.polygonal && !polygonal && !l.down);
+    let anchor = d.lasso.as_ref().and_then(|l| (l.polygonal && !polygonal && l.down).then_some(l.cursor));
+    if let Some(p) = anchor {
+        append(d, p);
     }
     if let Some(lasso) = &mut d.lasso {
         lasso.polygonal = polygonal;
+    }
+    if close {
+        commit(app);
     }
 }
 
@@ -91,10 +121,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     match ev {
         ToolEvent::Down { .. } => {
             if active(app) {
-                let close = app
-                    .drag
-                    .as_ref()
-                    .is_some_and(|d| d.points.len() >= 3 && (d.start[0] - p[0]).hypot(d.start[1] - p[1]) < 8.0 / app.current_zoom().max(0.01) as f64);
+                // A click on the first point, or on the last one again, closes the outline.
+                let reach = 8.0 / app.current_zoom().max(0.01) as f64;
+                let near = |q: [f64; 2]| (q[0] - p[0]).hypot(q[1] - p[1]) < reach;
+                let close = app.drag.as_ref().is_some_and(|d| d.points.len() >= 3 && (near(d.start) || d.points.last().is_some_and(|l| near([l[0], l[1]]))));
                 if close {
                     commit(app);
                     return true;
@@ -107,8 +137,13 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                     }
                 }
             } else {
-                let mut d = Drag::new(Tool::Lasso, p, vec![[p[0], p[1], 1.0]], mods, false);
-                d.lasso = Some(Lasso { cursor: p, down: true, polygonal: false, document: app.session.active().map(|st| st.doc.id) });
+                // Alt with no selection has nothing to subtract from: the outline starts with
+                // straight segments, as a new selection.
+                let nothing_selected = app.session.active().is_none_or(|st| st.doc.selection.is_none());
+                let polygonal = mods.alt && nothing_selected;
+                let intent = if polygonal { Modifiers { alt: false, ..mods } } else { mods };
+                let mut d = Drag::new(Tool::Lasso, p, vec![[p[0], p[1], 1.0]], intent, false);
+                d.lasso = Some(Lasso { cursor: p, down: true, polygonal, document: app.session.active().map(|st| st.doc.id) });
                 app.drag = Some(d);
             }
         }
@@ -121,7 +156,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 // Move relative to the rubber-band endpoint, not the last fixed vertex.
                 let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
                 d.shift_to([last[0] + p[0] - previous[0], last[1] + p[1] - previous[1]]);
-            } else if down && (!polygonal || up) {
+            } else if down {
+                // While the button is down the outline follows the pointer (freehand), Alt or
+                // not; between Alt clicks only the rubber band moves.
                 append(d, p);
             }
             if let Some(lasso) = &mut d.lasso {

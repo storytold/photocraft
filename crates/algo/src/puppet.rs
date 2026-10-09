@@ -470,7 +470,9 @@ impl PuppetSolver {
                 [0.5 * cot(a, b, c), 0.5 * cot(b, c, a), 0.5 * cot(c, a, b)]
             })
             .collect();
-        let bound: Vec<Bound> = pin_src.iter().map(|p| locate(&mesh, *p)).collect();
+        // Without vertices there is nothing to bind a pin to (`locate` would fall back to a vertex 0
+        // that doesn't exist, #951); every pin loop zips `bound`, so the pins are then ignored.
+        let bound: Vec<Bound> = if nv == 0 { Vec::new() } else { pin_src.iter().map(|p| locate(&mesh, *p)).collect() };
         // Connected components (union-find over triangle edges).
         let mut parent: Vec<usize> = (0..nv).collect();
         fn find(p: &mut [usize], mut i: usize) -> usize {
@@ -764,10 +766,29 @@ pub fn render(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: &[[f64; 
     crate::warp::warp_triangles(src, bounds, &verts, &tris, interp)
 }
 
-/// Applies a puppet warp to `src` (content inside `bounds`).
-pub fn puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) -> Surface {
+/// The largest area (px) a puppet warp's result may span: 2³⁰, about 16000 tiles. A pin dragged
+/// absurdly far stretches the mesh over far more, and the renderer allocates bookkeeping for
+/// every tile of it before drawing (#1019).
+pub const MAX_WARP_PIXELS: f64 = (1u64 << 30) as f64;
+
+/// Applies a puppet warp to `src` (content inside `bounds`). `None` when the deformed mesh would
+/// span more than [`MAX_WARP_PIXELS`].
+pub fn puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) -> Option<Surface> {
     let (solver, v, order) = deform(src, bounds, w, ITERATIONS);
-    render(src, bounds, &solver.mesh, &v, &order, interp)
+    // No triangles (an expansion that shrinks every pixel away): nothing to warp. Rendering the
+    // empty mesh would drop every pixel of the layer.
+    if solver.mesh.tris.is_empty() {
+        return Some(src.clone());
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in &v {
+        (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+    }
+    let area = (x1 - x0 + 1.0) * (y1 - y0 + 1.0);
+    if area.is_nan() || area > MAX_WARP_PIXELS {
+        return None;
+    }
+    Some(render(src, bounds, &solver.mesh, &v, &order, interp))
 }
 
 #[cfg(test)]
@@ -825,11 +846,52 @@ mod tests {
                 ],
             ] {
                 let w = PuppetWarp { pins, mode: PuppetMode::Normal, density: PuppetDensity::Normal, expansion: 2.0 };
-                let out = puppet_warp(&s, b, &w, Interp::Bicubic);
+                let out = puppet_warp(&s, b, &w, Interp::Bicubic).unwrap();
                 let worst = s.read_region(b).iter().zip(out.read_region(b)).map(|(a, c)| (a - c).abs()).fold(0.0f32, f32::max);
                 assert!(worst <= 1.0 / 255.0 + 1e-6, "{st:?}: {worst}");
             }
         }
+    }
+
+    #[test]
+    fn an_expansion_that_empties_the_mesh_warps_nothing() {
+        // #951: with pins and no vertices, `locate` fell back to vertex 0 and the solver indexed
+        // its empty union-find.
+        let solver = PuppetSolver::new(PuppetMesh::default(), &[[10.0, 10.0]], &[true]);
+        assert!(solver.mesh.verts.is_empty());
+        let s = blob(SampleType::U8);
+        let b = s.content_bounds();
+        let w = PuppetWarp {
+            pins: vec![PuppetPin { src: [28.0, 30.0], dst: [38.0, 25.0], rotate: None, depth: 0 }],
+            mode: PuppetMode::Normal,
+            density: PuppetDensity::Normal,
+            expansion: -200.0,
+        };
+        assert!(build_mesh(&s, b, w.density, w.expansion).tris.is_empty());
+        // Nothing to warp: the pixels stay, rather than being dropped outside an empty mesh.
+        let out = puppet_warp(&s, b, &w, Interp::Bilinear).unwrap();
+        assert_eq!(out.read_region(b), s.read_region(b));
+    }
+
+    #[test]
+    fn a_pin_dragged_absurdly_far_is_refused_before_rendering() {
+        // #1019: the renderer sized its tile bookkeeping by the deformed mesh, so one far pin
+        // allocated hundreds of MB before drawing a pixel.
+        let s = blob(SampleType::U8);
+        let b = s.content_bounds();
+        let pin = |dst: [f64; 2]| PuppetWarp {
+            pins: vec![
+                PuppetPin { src: [28.0, 20.0], dst: [28.0, 20.0], rotate: None, depth: 0 },
+                PuppetPin { src: [60.0, 62.0], dst, rotate: None, depth: 0 },
+            ],
+            mode: PuppetMode::Normal,
+            density: PuppetDensity::Normal,
+            expansion: 2.0,
+        };
+        assert!(puppet_warp(&s, b, &pin([1048576.0, 1048576.0]), Interp::Bilinear).is_none());
+        assert!(puppet_warp(&s, b, &pin([-1e7, 62.0]), Interp::Bilinear).is_none());
+        let near = puppet_warp(&s, b, &pin([70.0, 66.0]), Interp::Bilinear).expect("a near pin warps");
+        assert!(!near.content_bounds().is_empty());
     }
 
     #[test]
@@ -846,7 +908,7 @@ mod tests {
         for (d, x) in v.iter().zip(&solver.mesh.verts) {
             assert!((d[0] - x[0] - 10.0).abs() < 1e-3 && (d[1] - x[1] + 5.0).abs() < 1e-3, "{d:?} {x:?}");
         }
-        let out = puppet_warp(&s, b, &w, Interp::Bilinear);
+        let out = puppet_warp(&s, b, &w, Interp::Bilinear).unwrap();
         assert_eq!(out.content_bounds(), b.translate(10, -5));
         assert_eq!(out.pixel(30, 20), s.pixel(20, 25));
         // A fixed rotation turns the whole mesh about the pin.

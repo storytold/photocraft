@@ -219,6 +219,10 @@ pub struct Interface {
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
+    /// Windows and Linux: use the system's title bar and window buttons instead of PhotoCraft's
+    /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
+    /// #1271, #1316). Read when the app starts. macOS always uses the system's.
+    pub system_title_bar: bool,
 }
 
 impl Default for Interface {
@@ -236,6 +240,7 @@ impl Default for Interface {
             show_menu_colors: true,
             show_tooltips: true,
             show_bounding_box_when_dragging_layer: false,
+            system_title_bar: false,
         }
     }
 }
@@ -364,6 +369,9 @@ pub struct Export {
     pub quick_export_format: QuickExportFormat,
     pub quick_export_location: ExportLocation,
     pub jpeg_quality: u32,
+    /// Keep the existing lossless Quick Export default until the user opts into lossy WebP.
+    pub webp_lossless: bool,
+    pub webp_quality: u32,
     pub metadata: ExportMetadata,
     pub convert_to_srgb: bool,
 }
@@ -374,6 +382,8 @@ impl Default for Export {
             quick_export_format: QuickExportFormat::Png,
             quick_export_location: ExportLocation::Ask,
             jpeg_quality: 85,
+            webp_lossless: true,
+            webp_quality: 85,
             metadata: ExportMetadata::Copyright,
             convert_to_srgb: true,
         }
@@ -403,6 +413,10 @@ pub struct Performance {
     pub rendering_mode: Option<RenderingMode>,
     /// Graphics backend (applies at next launch; see [`GpuBackend`]).
     pub gpu_backend: GpuBackend,
+    /// Live previews of large documents (adjustment and filter dialogs, an adjustment layer's
+    /// sliders while they drag) render on a reduced copy: fast, but blocky when zoomed in. Off:
+    /// they render at full resolution.
+    pub low_resolution_previews: bool,
     /// Memory budget of the layer-effect cache, in MB.
     pub effect_cache_mb: u32,
     pub legacy_compositing: bool,
@@ -449,6 +463,7 @@ impl Default for Performance {
             use_gpu: true,
             rendering_mode: None,
             gpu_backend: GpuBackend::Auto,
+            low_resolution_previews: true,
             effect_cache_mb: 768,
             legacy_compositing: false,
         }
@@ -699,6 +714,10 @@ pub struct RawDefaults {
     pub sharpen_for: RawSharpen,
     pub open_as_smart_object: bool,
     pub apply_auto_tone: bool,
+    /// Opening a raw file interactively shows the Camera Raw dialog first (Open / Cancel), as
+    /// Photoshop does; off develops it with the defaults straight away. Automation opens never
+    /// show the dialog.
+    pub open_in_camera_raw: bool,
 }
 
 impl Default for RawDefaults {
@@ -710,6 +729,7 @@ impl Default for RawDefaults {
             sharpen_for: RawSharpen::None,
             open_as_smart_object: false,
             apply_auto_tone: false,
+            open_in_camera_raw: true,
         }
     }
 }
@@ -835,7 +855,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.enableFloatingDocumentWindowDocking",
     "workspace.largeTabs",
     "workspace.enableNarrowOptionsBar",
-    "tools.zoomClickedPointToCenter",
     "tools.enableFlickPanning",
     "tools.varyRoundBrushHardnessOnHud",
     "tools.showTransformationValues",
@@ -926,7 +945,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
     Some(match path {
         "fileHandling.autosaveMinutes" => (1.0, 240.0),
         "fileHandling.recentFileCount" => (0.0, 100.0),
-        "export.jpegQuality" => (1.0, 100.0),
+        "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
         "performance.memoryUsagePercent" => (1.0, 95.0),
         "performance.gpuMemoryMb" => (64.0, 65536.0),
@@ -1093,6 +1112,18 @@ impl Preferences {
             *self = Preferences::default();
             return Ok(());
         };
+        // These maps have no stored defaults; removing an override restores the fallback.
+        match keyed(path) {
+            Some(("shortcuts", id)) => {
+                self.shortcuts.remove(id);
+                return Ok(());
+            }
+            Some(("menus.colors", id)) => {
+                self.menus.colors.remove(id);
+                return Ok(());
+            }
+            _ => {}
+        }
         let def = Preferences::default().get(path).ok_or_else(|| format!("unknown preference `{path}`"))?;
         if path == "shortcuts" {
             self.shortcuts.clear();
@@ -1418,7 +1449,12 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.prefs.edit(|_| ());
     s.apply_prefs();
-    prefs_get(s, &json!({"path": path.unwrap_or("")}))
+    if path.is_some_and(|path| keyed(path).is_some()) {
+        // The removed override is absent, so reading its old path would report an error.
+        Ok(Value::Null)
+    } else {
+        prefs_get(s, &json!({"path": path.unwrap_or("")}))
+    }
 }
 
 /// `edit.preferences.<section>`: the section's values (the GUI opens the dialog on it instead).

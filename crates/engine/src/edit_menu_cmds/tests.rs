@@ -116,6 +116,65 @@ fn content_aware_fill_huge_area_neither_panics_nor_wraps() {
     }
 }
 
+/// `blob_session` with the canvas declared as `size` and a sparse selection of `rects`, as a
+/// loaded `.pcraft` can hold (#963). Nothing here allocates more than a few tiles.
+fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
+    let mut s = blob_session(8);
+    let st = s.active_mut().unwrap();
+    let doc = std::sync::Arc::make_mut(&mut st.doc);
+    doc.size = photocraft_geom::Size::new(size.0, size.1);
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    for r in rects {
+        sel.fill_rect(*r, &[1.0]);
+    }
+    doc.selection = Some(sel);
+    s
+}
+
+/// A sampling window too large to read, or whose margin overflows, is the size error: no panic,
+/// no huge allocation, the document and history untouched (#963).
+#[test]
+fn content_aware_fill_huge_window_is_an_error() {
+    // Largest extent whose `ext * 3` still fits in i32.
+    const EDGE: i32 = i32::MAX / 3;
+    let max = i32::MAX;
+    let big = (2_000_000_000, 2_000_000_000);
+    let dot = Rect::new(0, 0, 1, 1);
+    let cases = [
+        ("auto, wide, just above", big, vec![dot, Rect::new(EDGE, 0, EDGE + 1, 1)], json!({})),
+        ("auto, tall, just above", big, vec![dot, Rect::new(0, EDGE, 1, EDGE + 1)], json!({})),
+        ("auto, wide, just below", big, vec![dot, Rect::new(EDGE - 1, 0, EDGE, 1)], json!({})),
+        (
+            "auto, extreme coordinates",
+            (max as u32, max as u32),
+            vec![Rect::new(i32::MIN, i32::MIN, i32::MIN + 1, i32::MIN + 1), dot, Rect::new(max - 2, max - 2, max - 1, max - 1)],
+            json!({}),
+        ),
+        (
+            "rectangular, small selection",
+            (300_000, 300_000),
+            vec![Rect::new(150_000, 150_000, 150_001, 150_001)],
+            json!({"sampling": "rectangular", "margin": 100_000}),
+        ),
+        ("rectangular, huge extent", big, vec![dot, Rect::new(EDGE + 1, 0, EDGE + 2, 1)], json!({"sampling": "rectangular"})),
+        ("custom, whole canvas", big, vec![dot], json!({"sampling": "custom", "area": [0, 0, 2_000_000_000, 2_000_000_000]})),
+    ];
+    for (name, size, rects, p) in cases {
+        let mut s = huge_selection(size, &rects);
+        let before = s.active().unwrap().doc.clone();
+        let past = s.active().unwrap().history.past_len();
+        let err = s.execute("edit.contentAwareFill", p).expect_err(name).to_string();
+        assert!(err.contains("too large for Content-Aware fill"), "{name}: {err}");
+        let st = s.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &st.doc), "{name}: the document changed");
+        assert_eq!(st.history.past_len(), past, "{name}: a history step was recorded");
+    }
+    // Control: an ordinary selection still fills.
+    let mut s = huge_selection((64, 48), &[Rect::new(26, 16, 38, 30)]);
+    let r = s.execute("edit.contentAwareFill", json!({"colorAdaptation": "none"})).unwrap();
+    assert!(r["filled"].as_u64().unwrap() > 100);
+}
+
 #[test]
 fn content_aware_fill_removes_object_at_all_depths() {
     for depth in [8, 16, 32] {
@@ -133,6 +192,30 @@ fn content_aware_fill_removes_object_at_all_depths() {
         s.undo();
         assert_eq!(px(&s, 30, 20)[1], 0.0, "undo restores the blob");
     }
+}
+
+#[test]
+fn delete_and_fill_selection_removes_the_object_in_one_step() {
+    // #1286: Content-Aware Fill's defaults, no dialog, one history step named for the command.
+    for depth in [8, 16, 32] {
+        let mut s = blob_session(depth);
+        let base = s.active().unwrap().active_layer.unwrap();
+        assert!(s.is_enabled("edit.deleteAndFillSelection"));
+        let r = s.execute("edit.deleteAndFillSelection", json!({})).unwrap();
+        assert_eq!(r["layer"].as_u64(), Some(base.0), "fills the layer itself");
+        assert!(r["filled"].as_u64().unwrap() > 100);
+        let v = px(&s, 30, 20);
+        assert!(!(v[0] > 0.9 && v[1] < 0.1), "depth {depth}: red left: {v:?}");
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete and Fill Selection"));
+        s.undo();
+        assert_eq!(px(&s, 30, 20)[1], 0.0, "undo restores the blob");
+    }
+    // Parameters are ignored, never a crash; nothing selected greys it out and refuses.
+    let mut s = blob_session(8);
+    assert!(s.execute("edit.deleteAndFillSelection", json!({"output": 7, "sampling": [1]})).is_ok());
+    s.execute("select.deselect", json!({})).unwrap();
+    assert!(!s.is_enabled("edit.deleteAndFillSelection"));
+    assert!(s.execute("edit.deleteAndFillSelection", json!({})).is_err());
 }
 
 #[test]

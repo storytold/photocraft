@@ -305,6 +305,17 @@ fn two_regions(w: usize, h: usize) -> RgbImage {
 }
 
 #[test]
+fn quick_select_with_points_far_off_canvas_selects_nothing() {
+    // A cast saturates to i32::MAX; adding one to it once overflowed.
+    let img = two_regions(140, 100);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let canvas = Rect::new(0, 0, 140, 100);
+    for p in [(3e9, 0.0), (0.0, 3e9), (f32::MAX, f32::MAX)] {
+        assert!(quick::quick_select(&s, canvas, &[p], 8.0, quick::WORK_PX).is_none(), "{p:?}");
+    }
+}
+
+#[test]
 fn quick_select_grows_without_leaking() {
     let img = two_regions(140, 100);
     let s = ImageSampler { img: &img, origin: (0, 0) };

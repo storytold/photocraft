@@ -114,12 +114,13 @@ pub(crate) fn tilt_shift(src: &Image, out: Rect, ctx: &Ctx, blur: f32, centre: (
 fn pin_distance(x: f32, y: f32, b: Rect, px: f32, py: f32, rx: f32, ry: f32, angle: f32, m: f32) -> (f32, f32, f32) {
     let ss = short_side(b);
     let (cx, cy) = (b.x0 as f32 + px * b.width() as f32, b.y0 as f32 + py * b.height() as f32);
-    let (s, c) = angle.to_radians().sin_cos();
+    let angle_deg = if angle.is_finite() { angle } else { 0.0 };
+    let (s, c) = angle_deg.to_radians().sin_cos();
     let (dx, dy) = (x - cx, y - cy);
     let (u, v) = (dx * c + dy * s, -dx * s + dy * c);
     let (u, v) = (u / (rx.max(1e-3) * ss), v / (ry.max(1e-3) * ss));
     let e = if (m - 2.0).abs() < 1e-3 { (u * u + v * v).sqrt() } else { (u.abs().powf(m) + v.abs().powf(m)).powf(1.0 / m) };
-    (e, u, v)
+    if !e.is_finite() { (f32::INFINITY, 0.0, 0.0) } else { (e, u, v) }
 }
 
 /// Iris Blur: everything outside each pin's ellipse is blurred; the sharp
@@ -178,15 +179,16 @@ pub(crate) fn spin(src: &Image, out: Rect, ctx: &Ctx, pins: &[SpinPin]) -> Vec<f
         let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
         for p in pins {
             let (e, u, v) = pin_distance(fx, fy, b, p.x, p.y, p.radius_x, p.radius_y, p.angle, 2.0);
-            if e >= 1.0 {
+            if !e.is_finite() || e >= 1.0 {
                 continue;
             }
             let theta = p.blur_angle.clamp(0.0, 360.0).to_radians();
-            let rpx = e * p.radius_x.max(p.radius_y) * ss;
+            let rpx = (e * p.radius_x.max(p.radius_y) * ss).max(0.0);
             // ~2 px between samples along the arc is smooth enough for a blur and halves the cost.
-            let m = ((theta * rpx / 2.0).ceil() as usize).clamp(2, 64);
+            let m = if rpx.is_finite() && theta.is_finite() { ((theta * rpx / 2.0).ceil() as usize).clamp(2, 64) } else { 2 };
             let (cx, cy) = (b.x0 as f32 + p.x * b.width() as f32, b.y0 as f32 + p.y * b.height() as f32);
-            let (sa, ca) = p.angle.to_radians().sin_cos();
+            let angle_deg = if p.angle.is_finite() { p.angle } else { 0.0 };
+            let (sa, ca) = angle_deg.to_radians().sin_cos();
             acc[..n].fill(0.0);
             for j in 0..m {
                 let phi = theta * (j as f32 / (m - 1) as f32 - 0.5);

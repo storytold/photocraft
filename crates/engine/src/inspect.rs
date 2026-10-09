@@ -74,6 +74,7 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId]) -> Value {
         "name": l.name,
         "kind": l.content.kind_name(),
         "visible": l.visible,
+        "labelColor": l.label.id(),
         "opacity": l.opacity,
         "fill": l.fill_opacity,
         "blend": l.blend.label(),
@@ -111,6 +112,10 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId]) -> Value {
     // Advanced Blending › Channels (only when some channel is left out).
     if l.excluded_channels != 0 {
         v["channels"] = json!((0..4).map(|i| l.excluded_channels & (1 << i) == 0).collect::<Vec<_>>());
+    }
+    // Blending Options › Advanced Blending switches (only when one differs from Photoshop's default).
+    if !l.advanced.is_default() {
+        v["advancedBlending"] = serde_json::to_value(l.advanced).unwrap_or(Value::Null);
     }
     // Blending Options › Blend If (only when set): range index (0 = Gray, then the mode's
     // channels) with This Layer / Underlying Layer as [blackLo, blackHi, whiteLo, whiteHi].

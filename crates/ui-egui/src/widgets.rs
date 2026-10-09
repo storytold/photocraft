@@ -144,7 +144,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub.
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    let (rect, slot) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
     surface(ui, rect, t.field, false);
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -153,9 +153,11 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     let field = Rect::from_min_max(rect.min + vec2(4.0, 2.0), rect.max - vec2(4.0 + suffix_w, 2.0));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
+    let (lo, hi) = (*range.start(), *range.end());
+    let (step, grid) = arrow_step(ui, slot.id, if fine { 0.01 } else { 1.0 });
     // new_child (not scope_builder): a scope would move the parent cursor back to the child rect.
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
-    let resp = {
+    let mut resp = {
         let ui = &mut child;
         {
             ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
@@ -171,8 +173,19 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
             .inner
         }
     };
+    ui.data_mut(|d| d.insert_temp(slot.id, resp.id));
     if !suffix.is_empty() {
         ui.painter().text(pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, suffix, theme::mono(11.0), t.text_faint);
+    }
+    if step != 0.0 {
+        // Round to the step before adding it, so whole-number fields drop decimals (55.4 + 1 = 56).
+        let v = (*value / grid).round() * grid + step;
+        // Round to 4 decimal places, so repeated 0.1 steps don't leave float errors.
+        let v = (v * 1e4).round() / 1e4;
+        // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
+        *value = if lo <= hi { v.clamp(lo, hi) } else { v };
+        ui.memory_mut(|m| m.request_focus(resp.id));
+        resp.mark_changed();
     }
     resp
 }
@@ -207,8 +220,119 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     resp
 }
 
+/// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
+/// Returns the amount to add, and what to round the value to first.
+fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
+    use egui::{Key, Modifiers};
+    // The field's id is only known once it's drawn, so `value_field` saves it under `slot` for the next frame.
+    let Some(id) = ui.data(|d| d.get_temp::<egui::Id>(slot)).filter(|id| ui.memory(|m| m.has_focus(*id))) else {
+        return (0.0, step);
+    };
+    let (n, grid) = ui.input_mut(|i| {
+        let (mut n, mut grid) = (0.0, step);
+        // egui ignores an extra shift when matching, so shift is checked before the plain arrows to get its larger step.
+        for (mods, k) in [(Modifiers::COMMAND, (step / 10.0).max(0.01)), (Modifiers::SHIFT, 10.0 * step), (Modifiers::NONE, step)] {
+            let presses = i.count_and_consume_key(mods, Key::ArrowUp) as f32 - i.count_and_consume_key(mods, Key::ArrowDown) as f32;
+            if presses != 0.0 && mods == Modifiers::COMMAND {
+                grid = k;
+            }
+            n += k * presses;
+        }
+        (n, grid)
+    });
+    // If a sum like 5+5 has been typed, unfocus the field so it calculates it (as Enter would) before we step.
+    if n != 0.0 && ui.data(|d| d.get_temp(id.with("arithmetic"))).unwrap_or(false) {
+        ui.memory_mut(|m| m.surrender_focus(id));
+    }
+    (n, grid)
+}
+
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
 pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
+    slider_with(ui, value, range, gradient, RowGestures::default())
+}
+
+/// Photoshop's gestures on a slider row beyond click and drag, as measured on Color Balance in
+/// Photoshop 25.4 (Image › Adjustments dialog and the adjustment layer's Properties). Shift, Ctrl
+/// and Alt change nothing about clicks, double-clicks or drags; the wheel takes ten steps with
+/// Shift. (Up/Down in the field are every value field's, see [`value_field`].)
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowGestures {
+    /// A double-click on the slider (knob or track; not the label or field) sets this value.
+    pub reset: Option<f32>,
+    /// Each wheel notch over the slider moves the value by this step (up = higher; ×10 with
+    /// Shift). Photoshop does this in dialogs, not in the Properties panel.
+    pub wheel_step: Option<f32>,
+}
+
+/// Wheel notches this frame while the pointer is over `resp` (Shift ×10). Wheel lines add up in
+/// egui memory until they make whole notches (high-resolution wheels report fractions of one);
+/// smooth (point) deltas count `line_scroll_speed` points per notch, like the canvas wheel.
+fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
+    if !resp.hovered() {
+        return 0.0;
+    }
+    let acc_id = resp.id.with("wheel-acc");
+    let mut acc: f32 = ui.data(|d| d.get_temp(acc_id)).unwrap_or(0.0);
+    let per_line = ui.ctx().options(|o| o.input_options.line_scroll_speed);
+    let per_line = if per_line.is_finite() && per_line > 0.0 { per_line } else { 40.0 };
+    let mut notches = 0.0;
+    let wheel: Vec<(egui::MouseWheelUnit, Vec2, bool)> = ui.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, modifiers.shift)),
+                _ => None,
+            })
+            .collect()
+    });
+    for (unit, delta, shift) in wheel {
+        // Some systems turn Shift+wheel into a horizontal scroll.
+        let d = if delta.y != 0.0 { delta.y } else { delta.x };
+        acc += match unit {
+            egui::MouseWheelUnit::Point => d / per_line,
+            _ => d,
+        };
+        let whole = acc.trunc();
+        acc -= whole;
+        notches += if shift { whole * 10.0 } else { whole };
+    }
+    if !acc.is_finite() {
+        acc = 0.0;
+    }
+    ui.data_mut(|d| d.insert_temp(acc_id, acc));
+    if notches.is_finite() { notches } else { 0.0 }
+}
+
+/// Windows' default double-click time (Photoshop's; egui's own default is 0.3 s).
+const DOUBLE_CLICK_S: f64 = 0.5;
+
+/// Whether this click on `resp` completes a double-click, counted the Windows way (Photoshop):
+/// a click soon after a lone click at the same spot; the click after a double-click starts over.
+/// (egui would call a third quick click a triple-click even when the first two weren't a double.)
+fn second_click(ui: &Ui, resp: &Response) -> bool {
+    if !resp.clicked() {
+        return false;
+    }
+    let key = resp.id.with("pc-last-click");
+    let (time, pos) = ui.input(|i| (i.time, i.pointer.interact_pos()));
+    let dist = ui.ctx().options(|o| o.input_options.max_click_dist);
+    let last: Option<(f64, Pos2)> = ui.data(|d| d.get_temp(key));
+    let double = match (last, pos) {
+        (Some((t, p)), Some(q)) => time - t < DOUBLE_CLICK_S && p.distance(q) < dist,
+        _ => false,
+    };
+    ui.data_mut(|d| {
+        if let (false, Some(q)) = (double, pos) {
+            d.insert_temp(key, (time, q));
+        } else {
+            d.remove::<(f64, Pos2)>(key);
+        }
+    });
+    double
+}
+
+fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
@@ -222,6 +346,23 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
         if (nv - *value).abs() > f32::EPSILON {
             *value = nv;
             resp.mark_changed();
+        }
+    }
+    // The double-click's first click has moved the knob to the pointer; the second resets.
+    if let Some(reset) = g.reset
+        && second_click(ui, &resp)
+    {
+        *value = reset;
+        resp.mark_changed();
+    }
+    if let Some(step) = g.wheel_step {
+        let n = wheel_notches(ui, &resp);
+        if n != 0.0 {
+            let nv = (*value + n * step).clamp(lo, hi);
+            if nv != *value {
+                *value = nv;
+                resp.mark_changed();
+            }
         }
     }
     let f = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
@@ -270,6 +411,19 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
 
 /// Labelled slider row: `Label ........ [value field]` above a full-width thin slider.
 pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: Option<&[Color32]>) -> Response {
+    slider_row_with(ui, label, value, range, suffix, gradient, RowGestures::default())
+}
+
+/// [`slider_row`] with Photoshop's extra gestures ([`RowGestures`]).
+pub fn slider_row_with(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut changed_resp = None;
     ui.horizontal(|ui| {
@@ -278,7 +432,7 @@ pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Ra
             changed_resp = Some(value_field(ui, value, range.clone(), suffix, 74.0));
         });
     });
-    let s = slider(ui, value, range, gradient);
+    let s = slider_with(ui, value, range, gradient, g);
     let mut r = s.clone();
     if let Some(v) = changed_resp
         && v.changed()
@@ -510,18 +664,76 @@ pub fn hue_stops() -> Vec<Color32> {
 
 /// A compact labelled dropdown in the studio style.
 pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
+    dropdown_hovered(ui, id, current, options, width).0
+}
+
+/// [`dropdown`], also returning the option under the pointer in its open list (live previews).
+pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| tl!(l)).unwrap_or("—");
-    let mut changed = false;
-    egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+    let (mut changed, mut hovered) = (false, None);
+    let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
         for (v, l) in options {
-            if ui.selectable_label(v == current, tl!(l)).clicked() {
+            let item = ui.selectable_label(v == current, tl!(l));
+            if item.hovered() {
+                hovered = Some(v.clone());
+            }
+            if item.clicked() {
                 *current = v.clone();
                 changed = true;
             }
         }
     });
-    changed
+    let stepped = combo_box_arrow_keys(ui, &response.response, current, options);
+    (changed || stepped, hovered)
 }
+
+/// Give a dropdown keyboard focus when it opens, then use the arrow keys to move through its
+/// choices. `egui::ComboBox` opens a popup but leaves focus on the canvas by default, which makes
+/// controls such as the Layers panel's Blend Mode dropdown unreachable from the keyboard.
+fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)]) -> bool {
+    if response.clicked() {
+        response.request_focus();
+    }
+    // The popup, rather than its button, becomes the focused egui layer after it opens. While it
+    // is open it owns its navigation keys, even though `response.has_focus()` is then false.
+    if !egui::ComboBox::is_open(ui.ctx(), response.id) || options.is_empty() {
+        return false;
+    }
+    let step = if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+        1
+    } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+        -1
+    } else {
+        return false;
+    };
+    let index = options.iter().position(|(value, _)| value == current).unwrap_or(0);
+    let next = if step > 0 { (index + 1).min(options.len() - 1) } else { index.saturating_sub(1) };
+    match options.get(next) {
+        Some((value, _)) if next != index => {
+            *current = value.clone();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The body of a right-click menu: as tall as its items up to the part of the window that can be
+/// seen (clear of a taskbar a too-tall window runs under, #315), scrolling past that, so long
+/// context menus (a layer's, the canvas tools') stay reachable on small windows instead of running
+/// off the bottom. egui moves a popup up to keep it in the window, so a menu opened low on the
+/// screen first shifts up and only scrolls when it is taller than the window.
+pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    // The popup frame's margin and stroke, and a small gap to the window's edges.
+    let frame = ui.spacing().menu_margin.sum().y + 2.0 + 2.0 * MENU_EDGE;
+    let room = (crate::work_area::visible_rect(ui.ctx()).height() - frame).max(MENU_MIN_HEIGHT);
+    // A popup's Ui is only as tall as the popup was last frame (400 pt on the first), so ask for
+    // the whole room: the area still shrinks to its rows when they need less.
+    egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).show(ui, add_contents).inner
+}
+
+/// Gap kept between a context menu and the window's edges, and the shortest it gets.
+const MENU_EDGE: f32 = 4.0;
+const MENU_MIN_HEIGHT: f32 = 120.0;
 
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
 /// closes it. While open, its left edge stays where it first showed (at the swatch, or further
@@ -679,6 +891,94 @@ fn product(s: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    use egui::{Key, Modifiers};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Sets up a test with one value field. Its state is its value and how many times it changed.
+    fn field(value: f32, range: std::ops::RangeInclusive<f32>) -> Harness<'static, (f32, u32)> {
+        let mut h = Harness::new_ui_state(
+            move |ui, s: &mut (f32, u32)| {
+                if super::value_field(ui, &mut s.0, range.clone(), "px", 80.0).changed() {
+                    s.1 += 1;
+                }
+            },
+            (value, 0),
+        );
+        h.run();
+        h
+    }
+
+    fn press(h: &mut Harness<'static, (f32, u32)>, mods: Modifiers, key: Key) -> f32 {
+        h.key_press_modifiers(mods, key);
+        h.run();
+        h.state().0
+    }
+
+    fn focused(value: f32, range: std::ops::RangeInclusive<f32>) -> Harness<'static, (f32, u32)> {
+        let mut h = field(value, range);
+        h.get_by_role(egui::accesskit::Role::SpinButton).click();
+        h.run();
+        h
+    }
+
+    #[test]
+    fn arrow_keys_step_a_focused_field_by_one_and_shift_by_ten() {
+        let mut h = focused(100.0, 0.0..=1000.0);
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 101.0);
+        assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 111.0);
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowDown), 110.0);
+        assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowDown), 100.0);
+        assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowUp), 100.1);
+        assert_eq!(press(&mut h, Modifiers::COMMAND | Modifiers::SHIFT, Key::ArrowDown), 100.0);
+        assert_eq!(h.state().1, 6, "every step reports a change, so callers apply it");
+    }
+
+    #[test]
+    fn arrow_keys_on_a_field_with_a_reversed_range_do_not_panic() {
+        let mut h = focused(5.0, 10.0..=0.0);
+        let _ = press(&mut h, Modifiers::NONE, Key::ArrowUp);
+        let mut h = focused(5.0, f32::NAN..=10.0);
+        let _ = press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+
+    #[test]
+    fn arrow_keys_round_decimals_step_fine_fields_and_clamp() {
+        for (start, mods, key, want) in [
+            (55.4, Modifiers::NONE, Key::ArrowUp, 56.0),
+            (55.6, Modifiers::NONE, Key::ArrowUp, 57.0),
+            (55.4, Modifiers::NONE, Key::ArrowDown, 54.0),
+            (55.5, Modifiers::NONE, Key::ArrowUp, 57.0),
+            (55.5, Modifiers::NONE, Key::ArrowDown, 55.0),
+            (55.4, Modifiers::SHIFT, Key::ArrowUp, 65.0),
+            (55.47, Modifiers::COMMAND, Key::ArrowUp, 55.6),
+        ] {
+            assert_eq!(press(&mut focused(start, 0.0..=1000.0), mods, key), want, "{start} {mods:?} {key:?}");
+        }
+        let mut h = focused(0.5, 0.0..=1.0);
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 0.51);
+        assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 0.61);
+        assert_eq!(press(&mut h, Modifiers::COMMAND, Key::ArrowUp), 0.62);
+        let mut h = focused(995.0, 0.0..=1000.0);
+        assert_eq!(press(&mut h, Modifiers::SHIFT, Key::ArrowUp), 1000.0);
+    }
+
+    #[test]
+    fn arrow_keys_work_out_a_typed_sum_then_step_it() {
+        let mut h = focused(100.0, 0.0..=1000.0);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.event(egui::Event::Text("5+5".into()));
+        h.run();
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 11.0);
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowDown), 10.0, "the field keeps focus");
+    }
+
+    #[test]
+    fn arrow_keys_leave_an_unfocused_field_alone() {
+        let mut h = field(100.0, 0.0..=1000.0);
+        assert_eq!(press(&mut h, Modifiers::NONE, Key::ArrowUp), 100.0);
+        assert_eq!(h.state().1, 0);
+    }
+
     /// A right-aligned OK / Cancel / Apply row as `os` draws it: labels left to right, and the
     /// row's right edge with the window's.
     fn button_row(os: egui::os::OperatingSystem) -> (Vec<String>, f32, f32) {
@@ -821,5 +1121,27 @@ mod tests {
         assert_eq!(super::fmt_num(100.0), "100");
         assert_eq!(super::fmt_num(12.46), "12.5");
         assert_eq!(super::fmt_num(-3.0), "-3");
+    }
+
+    #[test]
+    fn dropdown_opens_with_focus_and_arrow_keys_change_the_value() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+            |ui, selected: &mut usize| {
+                let options = [(0, "Normal"), (1, "Multiply"), (2, "Screen")];
+                super::dropdown(ui, "blend-mode", selected, &options, 120.0);
+            },
+            0,
+        );
+        h.get_by_role(Role::ComboBox).click();
+        h.run();
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        assert_eq!(*h.state(), 1);
+        h.key_press(egui::Key::ArrowUp);
+        h.run();
+        assert_eq!(*h.state(), 0);
     }
 }

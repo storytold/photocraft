@@ -53,6 +53,7 @@ pub mod poisson;
 pub mod puppet;
 pub mod pyramid;
 pub mod quantize;
+pub mod redeye;
 mod relight;
 mod render;
 pub mod render2;
@@ -103,6 +104,19 @@ pub enum RadialMethod {
     #[default]
     Spin,
     Zoom,
+}
+
+/// Sampling quality for radial blur. Higher quality improves large-radius detail at greater cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RadialQuality {
+    /// Up to 64 intervals per pixel for a faster, coarser result.
+    Draft,
+    /// Up to 256 intervals per pixel; the default.
+    #[default]
+    Good,
+    /// Up to 4096 intervals per pixel.
+    Best,
 }
 
 /// Noise distribution.
@@ -195,6 +209,8 @@ pub enum FilterParams {
     RadialBlur {
         amount: f32,
         method: RadialMethod,
+        #[serde(default)]
+        quality: RadialQuality,
         center_x: f32,
         center_y: f32,
     },
@@ -546,6 +562,15 @@ impl FilterParams {
         }
     }
 
+    /// [`Self::halo`] using the document/selection bounds so filters whose reach
+    /// depends on size (Relight's shading blur) request the neighbourhood they actually read.
+    pub fn halo_for(&self, bounds: Rect) -> Halo {
+        match self {
+            FilterParams::Relight { intensity, softness, .. } if *intensity != 0.0 => Halo::Radius(relight::halo_radius(*softness, bounds)),
+            _ => self.halo(),
+        }
+    }
+
     /// Whether the filter moves pixels around the reference bounds (its
     /// output area is the bounds, not the layer's content grown by the halo).
     pub fn is_global(&self) -> bool {
@@ -642,7 +667,7 @@ fn halo_ext(p: &FilterParams) -> Halo {
         FilterParams::Fibers { .. } | FilterParams::LensFlare { .. } => Halo::Radius(0),
         FilterParams::LightingEffects { .. } => r(1.0),
         FilterParams::Relight { intensity, .. } if *intensity == 0.0 => Halo::Radius(0),
-        FilterParams::Relight { .. } => Halo::Radius(relight::HALO_RADIUS),
+        FilterParams::Relight { .. } => Halo::Radius(relight::halo_radius_max()),
         FilterParams::ReduceNoise { .. } => r(denoise::reach()),
         FilterParams::SmartBlur { radius, .. } => r(*radius),
         FilterParams::LensBlur { radius, .. } => r(*radius),
@@ -677,7 +702,9 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::GaussianBlur { radius } => blur::gaussian(src, out, ctx, *radius),
         FilterParams::BoxBlur { radius } => blur::boxed(src, out, ctx, *radius),
         FilterParams::MotionBlur { angle, distance } => blur::motion(src, out, ctx, *angle, *distance),
-        FilterParams::RadialBlur { amount, method, center_x, center_y } => blur::radial(src, out, ctx, *amount, *method, (*center_x, *center_y)),
+        FilterParams::RadialBlur { amount, method, quality, center_x, center_y } => {
+            blur::radial(src, out, ctx, *amount, *method, *quality, (*center_x, *center_y))
+        }
         FilterParams::SurfaceBlur { radius, threshold } => blur::surface(src, out, ctx, *radius, *threshold),
         FilterParams::UnsharpMask { amount, radius, threshold } => sharpen::unsharp(src, out, ctx, *amount, *radius, *threshold),
         FilterParams::SmartSharpen { amount, radius, reduce_noise } => sharpen::smart(src, out, ctx, *amount, *radius, *reduce_noise),
@@ -855,7 +882,7 @@ pub const TILE: i32 = 256;
 /// the halo (blurs spread into transparent areas). Clipped to the
 /// selection's bounds when there is one.
 pub fn output_area(params: &FilterParams, content: Rect, bounds: Rect, selection_bounds: Option<Rect>) -> Rect {
-    let mut area = match params.halo() {
+    let mut area = match params.halo_for(bounds) {
         Halo::Bounds => bounds,
         Halo::Radius(r) => {
             if content.is_empty() {
@@ -874,14 +901,14 @@ pub fn output_area(params: &FilterParams, content: Rect, bounds: Rect, selection
 /// Applies a filter to `area` of `surface`, mixing with the original by the
 /// selection coverage (channel 0 of `selection`). Returns the new surface.
 pub fn apply(surface: &Surface, params: &FilterParams, area: Rect, bounds: Rect, selection: Option<&Surface>) -> Surface {
-    apply_tiled(surface, params, area, bounds, selection, auto_tile(params), None)
+    apply_tiled(surface, params, area, bounds, selection, auto_tile(params, bounds), None)
 }
 
 /// [`apply`] for a layer in a document: neighbourhood filters repeat the edge pixels of `extent`
 /// (the canvas plus any off-canvas pixels the layer has) instead of reading transparency beyond
 /// it, and the output is clipped to `extent`, as Photoshop does at the canvas edge.
 pub fn apply_in(surface: &Surface, params: &FilterParams, area: Rect, bounds: Rect, selection: Option<&Surface>, extent: Rect) -> Surface {
-    apply_tiled(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params), Some(extent))
+    apply_tiled(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent))
 }
 
 /// [`apply_in`] that can be cancelled (checked before each tile) and reports progress per tile
@@ -895,13 +922,13 @@ pub fn apply_in_with(
     extent: Rect,
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
-    apply_tiled_with(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params), Some(extent), ctl)
+    apply_tiled_with(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent), ctl)
 }
 
 /// Results do not depend on the tiling, so wide-halo filters use bigger tiles to keep the
 /// re-read margin (and its cost) below ~2× the tile area.
-fn auto_tile(params: &FilterParams) -> i32 {
-    match params.halo() {
+fn auto_tile(params: &FilterParams, bounds: Rect) -> i32 {
+    match params.halo_for(bounds) {
         Halo::Radius(r) => TILE.max((2 * r + 63) / 64 * 64).min(2048),
         Halo::Bounds => TILE,
     }
@@ -917,10 +944,10 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
     let threads = rayon::current_num_threads().max(1) as u64;
     #[cfg(target_arch = "wasm32")]
     let threads = 1u64;
-    let tile = auto_tile(params).max(1) as u64;
+    let tile = auto_tile(params, bounds).max(1) as u64;
     let floats = (channels as u64).saturating_mul(4);
     let base = (RESULT_BUDGET as u64).saturating_mul(3);
-    match params.halo() {
+    match params.halo_for(bounds) {
         Halo::Bounds => base.saturating_add(bounds.union(&area).size().area().saturating_mul(floats)),
         Halo::Radius(r) => {
             let side = tile.saturating_add((r.max(0) as u64).saturating_mul(2));
@@ -965,9 +992,12 @@ pub fn apply_tiled_with(
     if let Some(boxes) = blur::box_widths(params) {
         return apply_box_blur(out, surface, area, extent, selection, &boxes, ctl);
     }
+    if let Some(result) = blur::motion_apply::apply(surface, params, area, bounds, selection, extent, tile, ctl) {
+        return result;
+    }
     let fmt = surface.format();
     let ctx = Ctx { bounds, mode: fmt.mode, alpha: fmt.alpha };
-    let halo = params.halo();
+    let halo = params.halo_for(bounds);
     let shared = (halo == Halo::Bounds).then(|| Image::read(surface, bounds.union(&area)));
     let mut tiles = Vec::new();
     let mut y = area.y0;
@@ -1135,3 +1165,6 @@ const RESULT_BUDGET: usize = 256 << 20;
 mod tests;
 #[cfg(test)]
 mod tests_ext;
+
+#[cfg(test)]
+mod tests_mosaic;

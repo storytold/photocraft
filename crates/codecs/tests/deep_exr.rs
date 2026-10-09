@@ -1,8 +1,8 @@
 //! Deep EXR: a synthetic generator builds deep chunks per the OpenEXR file layout
 //! specification (NONE, RLE and ZIPS × scanline and tile), the oracle tests check the
 //! compositing math against hand-computed values, and malformed inputs must error, never
-//! panic. Real files from `corpus/exr/` (copied in by hand, not pinned) are checked when
-//! they exist.
+//! panic. With the `corpus` feature, the OpenEXR project's deep test images (`corpus/exr/`,
+//! pinned) are checked against the ID manifests their sidecars list.
 
 use photocraft_codecs::CodecError;
 use photocraft_codecs::f16;
@@ -496,6 +496,41 @@ fn without_alpha_front_sample_is_opaque() {
     assert!((px[0] - 0.4).abs() < 1e-6 && (px[1] - 0.2).abs() < 1e-6 && (px[2] - 0.9).abs() < 1e-6);
 }
 
+/// Grayscale deep files (Y + Z) flatten to opaque gray, Y + A + Z keeps its alpha: the alpha
+/// must land in the GrayA alpha slot, not a luminance copy (that was the bug).
+#[test]
+fn grayscale_deep_keeps_its_alpha() {
+    let channels = [Chan { name: "A", ty: 2 }, Chan { name: "Y", ty: 2 }, Chan { name: "Z", ty: 2 }];
+    let bytes = gen_deep(4, 4, &channels, 0, None, COUNTS_ONE, &|p, ci| {
+        match ci {
+            0 => vec![0.5],      // A
+            1 => vec![0.5],      // Y, premultiplied: straight 1.0 × 0.5
+            _ => vec![p as f32], // Z
+        }
+    });
+    let img = decode(&bytes).expect("decodes");
+    assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::GrayA);
+    let px = img.to_f32_samples().expect("f32");
+    for (p, s) in px.chunks(2).enumerate() {
+        let (y, a) = (s[0], s[1]);
+        assert!((a - 0.5).abs() < 1e-6, "pixel {p}: alpha {a}, want 0.5");
+        assert!((y - 1.0).abs() < 1e-6, "pixel {p}: luminance {y}, want the un-premultiplied 1.0");
+    }
+
+    // Without an alpha channel the same file is opaque gray.
+    let channels = [Chan { name: "Y", ty: 2 }, Chan { name: "Z", ty: 2 }];
+    let bytes = gen_deep(4, 4, &channels, 0, None, COUNTS_ONE, &|p, ci| match ci {
+        0 => vec![0.4],
+        _ => vec![p as f32],
+    });
+    let img = decode(&bytes).expect("decodes");
+    assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Gray);
+    let px = img.to_f32_samples().expect("f32");
+    for (p, v) in px.iter().enumerate() {
+        assert!((v - 0.4).abs() < 1e-6, "pixel {p}: {v}, want 0.4");
+    }
+}
+
 /// decode_deep returns the counts and channels in file order.
 #[test]
 fn decode_deep_structure() {
@@ -602,26 +637,75 @@ fn inconsistent_count_table_errors() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Real reference files (corpus/exr, copied in by hand from the OpenEXR repository's test
-// images; not pinned by xtask). Skipped with a message when the folder is absent.
+// Real reference files: the deep test images of the OpenEXR repository, pinned in
+// `xtask/src/corpus_pins.rs` and fetched into `corpus/exr/` by `cargo xtask corpus --exr`
+// (cargo feature `corpus`; `cargo xtask test-corpus`). Their `.txt` sidecars upstream list the
+// ID manifest of each file, an independent oracle for the u32 ID channels.
 
+/// One pinned file: name, total samples, most samples in one pixel, and per ID channel the
+/// manifest IDs its sidecar lists.
+#[cfg(feature = "corpus")]
+type RealFile = (&'static str, u64, u64, &'static [(&'static str, &'static [u32])]);
+
+#[cfg(feature = "corpus")]
+const MULTIVARIATE_IDS: &[u32] = &[
+    127035619, 147085119, 319332210, 409096490, 523461226, 678492822, 683859976, 1058109025, 1193275200, 1503246798, 1552124883, 1613501244, 1672208113,
+    1687665471, 1741895317, 1841370478, 1863854195, 1865183722, 2056745377, 2202049807, 2303547305, 2369798380, 2433329986, 2439705590, 2505186565, 2698909330,
+    2862333315, 2898564507, 2979371527, 3007860936, 3182339638, 3236172513, 3497437340, 3626859046, 3656820528, 3693645783, 3739501011, 3936563811, 4048943790,
+];
+
+#[cfg(feature = "corpus")]
+const REAL_FILES: &[RealFile] = &[
+    (
+        "11.deep.exr",
+        6056,
+        2,
+        &[("id", &[523461226, 683859976, 1552124883, 2202049807, 2303547305, 2433329986, 2698909330, 3182339638, 3236172513, 3626859046, 3739501011])],
+    ),
+    (
+        "42.deep.exr",
+        67605,
+        8,
+        &[
+            ("modelid", &[147148503, 1252544961, 1917926828, 3170049167, 3338960663, 3411631724]),
+            ("materialid", &[489905694, 507819813, 2340321182, 3683581971, 3905155331, 3947898621, 4179825792]),
+        ],
+    ),
+    // 64-bit IDs split over `.id0`/`.id1`: only the sample counts are checked.
+    ("64.deep.exr", 64543, 6, &[]),
+    ("multivariate.deep.exr", 64543, 6, &[("id", MULTIVARIATE_IDS)]),
+    // The same samples as multivariate; its sidecar has no manifest.
+    ("objectid.deep.exr", 64543, 6, &[]),
+];
+
+#[cfg(feature = "corpus")]
 #[test]
 fn real_deep_files_decode() {
-    let dir = std::path::Path::new("../../corpus/exr");
-    let entries: Vec<_> =
-        std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "exr")).collect();
-    if entries.is_empty() {
-        eprintln!("skipped: no files in corpus/exr (copy the *.deep.exr test images there)");
-        return;
-    }
-    for path in entries {
-        let bytes = std::fs::read(&path).expect("read");
-        let deep = decode_deep_exr(&bytes, &Limits::none()).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let img = decode(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        assert_eq!((deep.width, deep.height), (img.width(), img.height()));
-        assert!(deep.total_samples() > 0, "{}: no samples", path.display());
-        let flat = img.to_f32_samples().expect("f32");
-        assert_eq!(flat.len(), deep.width as usize * deep.height as usize * 4);
-        assert!(img.warnings.iter().any(|w| matches!(w, photocraft_codecs::DecodeWarning::DeepFlattened { .. })));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/exr");
+    for &(name, total, max_per_pixel, ids) in REAL_FILES {
+        let path = dir.join(name);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e} (run `cargo xtask corpus --exr`)", path.display()));
+        let deep = decode_deep_exr(&bytes, &Limits::none()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!((deep.width, deep.height), (256, 256), "{name}");
+        assert_eq!(deep.total_samples(), total, "{name}");
+        assert_eq!(deep.counts.len(), 256 * 256 + 1, "{name}");
+        assert!(deep.counts.windows(2).all(|w| w[0] <= w[1]), "{name}: counts must be cumulative");
+        assert_eq!(deep.counts.windows(2).map(|w| w[1] - w[0]).max(), Some(max_per_pixel), "{name}");
+        for c in &deep.channels {
+            assert_eq!(c.samples.len() as u64, total, "{name}: channel {}", c.name);
+        }
+        // Every decoded ID is one the sidecar lists, and every listed ID occurs. Samples hold
+        // u32 IDs as f32 (exact only to 2^24), so compare at f32 precision.
+        for &(channel, manifest) in ids {
+            let c = deep.channel(channel).unwrap_or_else(|| panic!("{name}: no channel {channel}"));
+            let want: std::collections::BTreeSet<u32> = manifest.iter().map(|&id| (id as f32).to_bits()).collect();
+            let got: std::collections::BTreeSet<u32> = c.samples.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(got, want, "{name}: channel {channel}");
+        }
+        // The flat decode composites the same samples.
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!((img.width(), img.height()), (deep.width, deep.height), "{name}");
+        assert_eq!(img.to_f32_samples().expect("f32").len(), 256 * 256 * 4, "{name}");
+        assert!(img.warnings.iter().any(|w| matches!(w, photocraft_codecs::DecodeWarning::DeepFlattened { .. })), "{name}");
     }
 }

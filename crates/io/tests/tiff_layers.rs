@@ -228,6 +228,54 @@ fn psdtags_fixtures_open_with_their_layers() {
     }
 }
 
+/// Advanced Blending (`knko`, `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`), fill opacity (`iOpa`),
+/// channel restrictions (`brst`) and Blend If (the records' blending ranges) survive a layered
+/// TIFF with its layer data in either byte order: the encoder's own, and the other one made by
+/// transcoding the tag (the same length, spliced in place).
+#[test]
+fn advanced_blending_survives_layered_tiff_in_both_byte_orders() {
+    use photocraft_doc::{AdvancedBlending, BlendRange, Knockout};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = gen_doc(ColorMode::Rgb, depth, Features::PIXELS);
+        let adv = AdvancedBlending {
+            knockout: Knockout::Deep,
+            blend_interior: true,
+            blend_clipped: false,
+            transparency_shapes: false,
+            layer_mask_hides_effects: true,
+            vector_mask_hides_effects: true,
+        };
+        d.layers[1].advanced = adv;
+        d.layers[1].fill_opacity = 64.0 / 255.0;
+        d.layers[1].excluded_channels = 0b010;
+        d.layers[1].blend_if.set(0, [BlendRange { black: [10, 40], white: [200, 250] }, BlendRange { black: [0, 0], white: [128, 128] }]);
+        d.layers[2].advanced.knockout = Knockout::Shallow;
+        let r = tiff(&d, true);
+        let (_, layers) = tags(&r.bytes);
+        let layers = layers.expect("layer data");
+        let (isd, w) = ImageSourceData::from_bytes(&layers).expect("parse");
+        assert!(w.is_empty(), "{w:?}");
+        let native = isd.byte_order;
+        let other = if native == ByteOrder::Little { ByteOrder::Big } else { ByteOrder::Little };
+        let (swapped, w) = isd.to_bytes(other).expect("transcode");
+        assert!(w.is_empty(), "{depth:?}: blocks dropped while transcoding: {w:?}");
+        assert_eq!(swapped.len(), layers.len());
+        let at = r.bytes.windows(layers.len()).position(|x| x == &layers[..]).expect("tag data in the file");
+        let mut flipped = r.bytes.clone();
+        flipped[at..at + layers.len()].copy_from_slice(&swapped);
+        for (order, bytes) in [(native, &r.bytes), (other, &flipped)] {
+            let back = import("x.tif", bytes).unwrap_or_else(|e| panic!("{depth:?} {order:?}: {e}")).document;
+            let l = &back.layers[1];
+            assert_eq!(l.advanced, adv, "{depth:?} {order:?}");
+            assert_eq!(l.fill_opacity, 64.0 / 255.0, "{depth:?} {order:?}");
+            assert_eq!(l.excluded_channels, 0b010, "{depth:?} {order:?}");
+            assert_eq!(l.blend_if, d.layers[1].blend_if, "{depth:?} {order:?}");
+            assert_eq!(back.layers[2].advanced.knockout, Knockout::Shallow, "{depth:?} {order:?}");
+            assert_docs_eq(&expected(&d), &back);
+        }
+    }
+}
+
 #[test]
 fn damaged_layer_data_opens_flattened() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);

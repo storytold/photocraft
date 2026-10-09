@@ -541,3 +541,16 @@ fn every_blend_mode_maps_both_ways() {
         assert_eq!(photocraft_color::BlendMode::from_psd_key(k.key()), Some(m));
     }
 }
+
+#[test]
+fn layer_bounds_without_channel_data_allocate_nothing() {
+    // A record can declare a 300000x300000 rectangle in a few bytes. With no channel data to
+    // back it, import used to interleave a ~360 GB buffer and abort on the allocation (#755).
+    use photocraft_psd::LayerRecord;
+    let mut f = testgen::small(Version::Psd, Compression::Raw);
+    f.layers_mut().push(LayerRecord { rect: photocraft_psd::Rect::from_xywh(0, 0, 300_000, 300_000), name: b"huge".to_vec(), ..Default::default() });
+    let (d, warnings) = psd_to_document(&f);
+    let l = d.layers.last().unwrap();
+    assert!(matches!(&l.content, LayerContent::Raster(s) if s.tile_count() == 0));
+    assert!(warnings.iter().any(|w| w.contains("\"huge\"")), "{warnings:?}");
+}

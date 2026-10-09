@@ -136,3 +136,41 @@ fn inspect_reports_video_layer() {
     assert_eq!(vid["frames"], 2);
     assert_eq!(vid["source"]["file"].as_str(), Some(dir.as_str()));
 }
+
+fn layer_px(s: &Session, id: LayerId) -> Vec<f32> {
+    match &s.active().unwrap().doc.layer(id).unwrap().content {
+        LayerContent::Raster(r) => r.pixel(2, 2),
+        _ => panic!("not a raster"),
+    }
+}
+
+/// #1288: a fill on a video frame survives scrubbing away and back, and reaches Render Video.
+#[test]
+fn edits_to_a_frame_survive_scrubbing_and_render() {
+    let mut s = session();
+    let r = s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    s.execute("layer.videoLayers.insertBlankFrame", json!({})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 0})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+    assert!(layer_px(&s, id)[3] < 0.01, "frame 1 stays blank");
+    s.execute("timeline.setFrame", json!({"frame": 0})).unwrap();
+    let p = layer_px(&s, id);
+    assert!(p[0] > 0.99 && p[3] > 0.99, "frame 0 keeps its fill: {p:?}");
+    // Duplicate Frame copies the edited frame.
+    s.execute("layer.videoLayers.duplicateFrame", json!({})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+    assert!(layer_px(&s, id)[0] > 0.99);
+
+    // Render Video picks up an edit made at the playhead without scrubbing first.
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    let out = tmpdir("edited");
+    s.execute("file.export.renderVideo", json!({"dir": out, "format": "png"})).unwrap();
+    let stem = s.active().unwrap().doc.name.rsplit_once('.').map_or(s.active().unwrap().doc.name.clone(), |(a, _)| a.to_string());
+    let f1 = std::fs::read(format!("{out}/{stem}_0001.png")).unwrap();
+    let doc = photocraft_io::import("f1.png", &f1).unwrap().document;
+    let flat = crate::file_cmds::flattened(&doc, doc.pixel_format());
+    let q = flat.pixel(2, 2);
+    assert!(q[2] > 0.99 && q[0] < 0.01, "rendered frame 1 is blue: {q:?}");
+}

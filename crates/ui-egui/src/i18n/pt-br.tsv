@@ -21,6 +21,10 @@
 	Layer	Camada
 	Type	Tipo
 	Select	Selecionar
+	Top Left	Superior esquerdo
+	Top Right	Superior direito
+	Bottom Left	Inferior esquerdo
+	Bottom Right	Inferior direito
 	Filter	Filtro
 	View	Visualizar
 	Window	Janela
@@ -32,6 +36,9 @@
 	Open Recent	Abrir recentes
 	Clear Recent Files	Limpar arquivos recentes
 	Close	Fechar
+	Minimize	Minimizar
+	Maximize	Maximizar
+	Restore	Restaurar
 	Close All	Fechar tudo
 	Close Others	Fechar outros
 	Save	Salvar
@@ -99,6 +106,7 @@
 	Fill…	Preencher…
 	Stroke…	Traçado…
 	Content-Aware Fill…	Preenchimento sensível ao conteúdo…
+	Delete and Fill Selection	Excluir e preencher seleção
 	Content-Aware Scale	Escala sensível ao conteúdo
 	Puppet Warp	Distorção de marionete
 	Perspective Warp	Distorção de perspectiva
@@ -302,6 +310,7 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Converter em objeto inteligente
 	Convert to Embedded	Converter em incorporado
+	Convert to Layers	Converter em camadas
 	Convert to Linked…	Converter em vinculado…
 	Edit Contents	Editar conteúdo
 	Replace Contents…	Substituir conteúdo…
@@ -463,7 +472,7 @@
 	Filter Gallery…	Galeria de filtros…
 	Adaptive Wide Angle…	Grande angular adaptável…
 	Camera Raw Filter…	Filtro Camera Raw…
-	Liquify…	Dissolver…
+	Liquify…	Liquefazer…
 	Vanishing Point…	Ponto de fuga…
 	Blur	Desfoque
 	Blur Gallery	Galeria de desfoque
@@ -522,7 +531,7 @@
 	Unsharp Mask…	Máscara de nitidez…
 	High Pass…	Passa-alta…
 	Stylize	Estilização
-	Diffuse…	Difusão…
+	Diffuse…	Difundir…
 	Emboss…	Entalhe…
 	Extrude…	Extrusão…
 	Find Edges	Indicação de arestas
@@ -955,6 +964,7 @@
 	Drag a rectangle around the object	Arraste um retângulo ao redor do objeto
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Arraste sobre a imagem para adicionar uma restrição; Shift para horizontal/vertical; clique direito para excluir.
 	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clique: selecionar ponto · Arrastar: mover ponto, alça ou segmento · {shift}-clique: adicionar · {alt}-clique: subdemarcador inteiro
 	Draw with the Pen tool (P) or make a work path from a selection.	Desenhe com a ferramenta Caneta (P) ou crie um demarcador de trabalho a partir de uma seleção.
 	Drop an image or PSD anywhere to open it.	Solte uma imagem ou um PSD em qualquer lugar para abri-lo.
 	Duplicate Layers…	Duplicar camadas…
@@ -994,6 +1004,7 @@
 	Fisheye	Olho de peixe
 	Fit	Ajustar
 	Fit Screen	Ajustar à tela
+	Fill Screen	Preencher tela
 	Fit in View	Ajustar à visualização
 	Fixed	Fixo
 	Fixed Ratio	Proporção fixa
@@ -1094,7 +1105,7 @@
 	Linear Gradient	Degradê linear
 	Link layers	Vincular camadas
 	Link width and height	Vincular largura e altura
-	Liquify is not open	Dissolver não está aberto
+	Liquify is not open	Liquefazer não está aberto
 	Load	Carregar
 	Load 3D LUT…	Carregar LUT 3D…
 	Load Photoshop brushes (.abr)	Carregar pincéis do Photoshop (.abr)
@@ -1322,6 +1333,7 @@
 	Set background color	Definir cor de fundo
 	Set foreground color	Definir cor de primeiro plano
 	Set painting symmetry options	Definir opções de simetria de pintura
+	Symmetry Off	Simetria desativada
 	Set shape fill type	Definir tipo de preenchimento da forma
 	Set shape stroke type	Definir tipo de traçado da forma
 	Set the text color	Definir a cor do texto
@@ -1578,6 +1590,7 @@
 	Paint Bucket Tool	Ferramenta Lata de tinta
 	Paints from the document's opening state	Pinta a partir do estado de abertura do documento
 	Path Selection Tool	Ferramenta Seleção de demarcador
+	Direct Selection Tool	Ferramenta Seleção direta
 	Pattern Overlay	Sobreposição de padrão
 	Pen Pressure	Pressão da caneta
 	Pen Tilt	Inclinação da caneta
@@ -1773,12 +1786,14 @@
 	Memory usage mb	Uso de memória (MB)
 	GPU memory mb	Memória da GPU (MB)
 	Memory usage percent	Uso de memória (%)
+	Low resolution previews	Visualizações em baixa resolução
 	Missing glyph protection	Proteção de glifos ausentes
 	Modern	Moderno
 	Nearest neighbor	Vizinho mais próximo
 	Never	Nunca
 	Normal tip	Ponta normal
 	Open as smart object	Abrir como objeto inteligente
+	Open in camera raw	Abrir no Camera Raw
 	Open documents as tabs	Abrir documentos como guias
 	Overscroll	Rolagem além dos limites
 	Performance	Desempenho
@@ -1894,6 +1909,7 @@
 	System Info…	Informações do sistema…
 	System Info	Informações do sistema
 	More panels	Mais painéis
+	More documents	Mais documentos
 	These settings aren't available in PhotoCraft yet.	Estas configurações ainda não estão disponíveis no PhotoCraft.
 	Graphics	Gráficos
 	Reset GPU Backend	Redefinir backend da GPU
@@ -1922,6 +1938,8 @@
 	Brush Settings…  (F5): every option of this brush	Configurações do pincel…  (F5): todas as opções deste pincel
 	Rename Brush…	Renomear pincel…
 	Delete Brush	Excluir pincel
+	New Brush Preset…	Nova predefinição de pincel…
+	Brush Preset Options	Opções de predefinições de pincel
 	Group name	Nome do grupo
 	Brush name	Nome do pincel
 	Grid view	Visualização em grade
@@ -1970,6 +1988,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nenhum demarcador para criar a seleção: desenhe um com a ferramenta Caneta ou selecione um no painel Demarcadores.
 	Cancel opening	Cancelar abertura
 	Cancelled opening {name}	Abertura de {name} cancelada
+	Developing {name}	Revelando {name}
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
 	Opening {name}	Abrindo {name}
@@ -2447,12 +2466,15 @@
 	Floating point	Ponto flutuante
 	Use Global Light	Usar luz global
 	Native file drag-and-drop is unavailable	Arrastar e soltar arquivos nativo indisponível
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Arrastar e soltar arquivos nativo ainda não é compatível com Wayland. Use Arquivo › Abrir ou execute o PhotoCraft no XWayland com `WAYLAND_DISPLAY= photocraft`.
-	Use File › Open to open an image.	Use Arquivo › Abrir para abrir uma imagem.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Arrastar e soltar arquivos nativo ainda não é compatível com Wayland. Use Arquivo › Abrir ou copie a imagem no gerenciador de arquivos e cole-a com {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Para soltar arquivos, execute o PhotoCraft no XWayland: `{command}`
+	Edit › Paste	Editar › Colar
+	Use File › Open, or paste a copied image with {paste}.	Use Arquivo › Abrir ou cole uma imagem copiada com {paste}.
 	Mixer Brush Tool	Ferramenta Pincel misturador
 	Invalid {mode} profile	Perfil {mode} inválido
 	Unnamed {mode} profile	Perfil {mode} sem nome
 	Show bounding box when dragging layer	Mostrar caixa delimitadora ao arrastar a camada
+	System title bar	Barra de título do sistema
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Laço de congelamento: arraste para congelar uma área, Alt-arraste para descongelá-la (L)
 	Rendering Mode	Modo de renderização
 	Automatic (recommended)	Automático (recomendado)
@@ -2477,6 +2499,7 @@
 	Show Selected Region	Mostrar região selecionada
 cameraRaw	Light	Luz
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Claros
 cameraRaw	Darks	Escuros
 cameraRaw	Blacks	Pretos
@@ -2536,6 +2559,7 @@ cameraRaw	Whites	Brancos
 	Magnetic Lasso Tool	Ferramenta Laço magnético
 	Frequency	Frequência
 	Use tablet pressure to change pen width	Usar a pressão da mesa digitalizadora para alterar a largura da caneta
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	Sobre
 	Contributors	Colaboradores
@@ -2567,3 +2591,77 @@ cameraRaw	Whites	Brancos
 	% of all commits	% de todos os commits
 	Lines +/−	Linhas +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{binAdded} / −{binDeleted} arquivos binários, {first} – {last}
+
+# Swatches panel
+	Create new swatch	Criar nova amostra
+	New Swatch…	Nova amostra…
+	New Swatch Group…	Novo grupo de amostras…
+	Import Swatches…	Importar amostras…
+	Replace Swatches…	Substituir amostras…
+	Export Swatches…	Exportar amostras…
+	Export Swatches for Exchange…	Exportar amostras para troca…
+	Reset Swatches	Redefinir amostras
+	Add to Swatches	Adicionar às amostras
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	Mesclar se:
+	Channels:	Canais:
+	Knockout	Vazado
+	Apply At Canvas Bounds	Aplicar efeito nos limites da tela
+	Show/Hide All Panels	Mostrar/ocultar todos os painéis
+	Show/Hide Panels	Mostrar/ocultar painéis
+	Could not open	Não foi possível abrir
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: o caminho não é Unicode válido; renomeie o arquivo e abra-o novamente.
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	Conteúdo:
+	Custom Pattern:	Padrão personalizado:
+	Foreground Color	Cor de primeiro plano
+	Color…	Cor…
+	50% Gray	Cinza 50%
+	{size} (was {old})	{size} (antes {old})
+	Cone	Cone
+	Cone (Inverted)	Cone (invertido)
+	Domed	Abaulado
+	Domed (Inverted)	Abaulado (invertido)
+	Diagonal (Descending)	Diagonal (descendente)
+
+	Red Eye Tool	Ferramenta Olhos vermelhos
+	Pupil Size	Tamanho da pupila
+	Darken Amount	Quantidade de escurecimento
+	Click a red pupil to neutralize it	Clique em uma pupila vermelha para corrigi-la
+	open source	código aberto
+	…and {n} more	…e mais {n}
+
+	Eyedroppers:	Conta-gotas:
+	Set Black Point	Definir ponto preto
+	Set Neutral Gray Point	Definir ponto cinza neutro
+	Set White Point	Definir ponto branco
+	Unavailable in this color mode	Indisponível neste modo de cor
+	Selection Preview:	Visualização da seleção:
+	Black Matte	Fundo preto
+	White Matte	Fundo branco
+
+# Layer colour labels.
+	Seafoam	Espuma do mar
+	Indigo	Índigo
+	Fuchsia	Fúcsia
+	Violet	Violeta
+	Large document: redrawing on the CPU	Documento grande: redesenhando na CPU
+	This redraw took {seconds} s on the CPU.	Este redesenho na CPU levou {seconds} s.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Edições que mudam o documento inteiro, como modo de mesclagem, opacidade ou visibilidade de uma camada, redesenham tudo.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	As camadas não cabem no orçamento de memória da GPU. Aumentar Uso de memória em Preferências › Desempenho eleva o orçamento, até um quarto da memória deste computador.
+	The GPU compositor wasn't used: {reason}	O compositor de GPU não foi usado: {reason}
+fontWeight	Thin	Fina
+fontWeight	ExtraLight	Extrafina
+fontWeight	Light	Leve
+fontWeight	Regular	Normal
+fontWeight	Medium	Médio
+fontWeight	SemiBold	Seminegrito
+fontWeight	Bold	Negrito
+fontWeight	ExtraBold	Extranegrito
+fontWeight	Black	Ultraniegra
+fontWeight	Italic	Itálico
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	Ferramenta Carimbo de padrão
+	Impressionist	Impressionista

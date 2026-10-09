@@ -19,8 +19,8 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("__export".into(), json!(true));
     f.insert("__label".into(), json!("Export As"));
     f.insert("format".into(), json!("png"));
-    f.insert("quality".into(), json!(85));
-    f.insert("lossless".into(), json!(false));
+    f.insert("quality".into(), json!(app.session.prefs().export.jpeg_quality));
+    f.insert("lossless".into(), json!(app.session.prefs().export.webp_lossless));
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
     f.insert("metadata".into(), json!("none"));
@@ -74,22 +74,47 @@ fn n(f: &Map<String, Value>, k: &str, d: f64) -> f64 {
 fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {
     let mut s = photocraft_engine::Session::new();
     s.add_document(doc.clone(), None);
-    let scale = n(f, "scale", 100.0) / 100.0;
-    let mut w = (doc.size.width as f64 * scale).round().max(1.0);
+    let mut scale = n(f, "scale", 100.0) / 100.0;
     if let Some(m) = max_side {
         let long = doc.size.width.max(doc.size.height) as f64 * scale;
         if long > m as f64 {
-            w = (w * m as f64 / long).round().max(1.0);
+            scale *= m as f64 / long;
         }
     }
-    if (w - doc.size.width as f64).abs() >= 1.0 {
-        s.execute("image.imageSize", json!({"width": w, "resample": if max_side.is_some() { "bilinear" } else { "bicubic" }})).map_err(|e| e.to_string())?;
+    // Both dimensions are sent: a scale can leave a 1 px width unchanged while halving the
+    // height, and the engine would otherwise keep the aspect ratio from the width alone.
+    let (w, h) = scaled_size(doc.size.width as f64, doc.size.height as f64, scale);
+    if (w - doc.size.width as f64).abs() >= 1.0 || (h - doc.size.height as f64).abs() >= 1.0 {
+        s.execute("image.imageSize", json!({"width": w, "height": h, "resample": if max_side.is_some() { "bilinear" } else { "bicubic" }}))
+            .map_err(|e| e.to_string())?;
     }
     let fmt = s_fmt(f);
     if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
         s.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
     s.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
+}
+
+/// The exported pixel size: each side scaled and rounded on its own, never below 1 px. The
+/// dialog's size label and `export_document` share it so the label names the file's real size.
+fn scaled_size(w: f64, h: f64, scale: f64) -> (f64, f64) {
+    ((w * scale).round().max(1.0), (h * scale).round().max(1.0))
+}
+
+/// Export As already supports lossy WebP; reuse the Quick Export defaults when
+/// choosing that format so both flows expose the same quality and lossless options.
+fn set_format_defaults(f: &mut Map<String, Value>, fmt: &str, prefs: &photocraft_engine::prefs::Export) {
+    f.insert("format".into(), json!(fmt));
+    match fmt {
+        "jpg" => {
+            f.insert("quality".into(), json!(prefs.jpeg_quality));
+        }
+        "webp" => {
+            f.insert("quality".into(), json!(prefs.webp_quality));
+            f.insert("lossless".into(), json!(prefs.webp_lossless));
+        }
+        _ => {}
+    }
 }
 
 fn s_fmt(f: &Map<String, Value>) -> String {
@@ -137,7 +162,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 let mut fmt = s_fmt(f);
                 let opts: Vec<(String, &str)> = FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
                 if crate::widgets::dropdown(ui, "export-format", &mut fmt, &opts, 130.0) {
-                    f.insert("format".into(), json!(fmt));
+                    set_format_defaults(f, &fmt, &app.session.prefs().export);
                 }
             });
             let fmt = s_fmt(f);
@@ -172,8 +197,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::value_field(ui, &mut sc, 1.0..=1000.0, "%", 70.0);
             });
             f.insert("scale".into(), json!(sc.round()));
-            let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)) as f32, n(f, "__h", f64::from(doc.size.height)) as f32);
-            let (w, h) = ((bw * sc / 100.0).round(), (bh * sc / 100.0).round());
+            let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
+            let (w, h) = scaled_size(bw, bh, f64::from(sc) / 100.0);
             ui.label(egui::RichText::new(format!("{w} × {h} px")).color(t.text_dim).size(11.5));
         });
         ui.add_space(12.0);
@@ -223,16 +248,18 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
-    let path = app.services.pick_save.as_mut().and_then(|p| p(&suggested)).ok_or("cancelled")?;
-    let out = export_document(&doc, f, None)?;
-    let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-    let (bytes, warnings) = export(&out, &path, &settings(f))?;
-    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(&path, &bytes)?;
-    app.ui.status = format!("Exported {path} ({})", crate::sizing::human_bytes(bytes.len() as f64));
-    app.ui.status_error = false;
-    crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
-    Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
+    let (f, settings) = (f.clone(), settings(f));
+    app.pick_save(&suggested, move |app, path| {
+        let out = export_document(&doc, &f, None)?;
+        let export = app.services.export.as_ref().ok_or("no exporter configured")?;
+        let (bytes, warnings) = export(&out, &path, &settings)?;
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status = format!("Exported {path} ({})", crate::sizing::human_bytes(bytes.len() as f64));
+        app.ui.status_error = false;
+        crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
+        Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
+    })
 }
 
 /// File › Export › Quick Export as PNG: the format, quality, metadata, colour space and location
@@ -244,17 +271,16 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         let fmt = serde_json::to_value(prefs.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
         let same = serde_json::to_value(prefs.quick_export_location).ok().is_some_and(|v| v == "sameFolder");
         let saved = app.session.active().is_some_and(|d| d.path.is_some());
-        let p = if same && saved {
-            json!({})
-        } else {
-            let st = app.session.active().ok_or("no document")?;
-            let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a).to_string();
-            let path = app.services.pick_save.as_mut().and_then(|p| p(&format!("{stem}.{fmt}"))).ok_or("cancelled")?;
-            json!({"path": path})
-        };
-        let r = app.run("file.export.quickExport", p)?;
-        app.ui.status = format!("Exported {}", r["path"].as_str().unwrap_or_default());
-        return Ok(r);
+        if same && saved {
+            return quick_export(app, json!({}));
+        }
+        let st = app.session.active().ok_or("no document")?;
+        let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
+        let (suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
+        return app.pick_save(&suggested, move |app, path| {
+            app.refocus(doc)?;
+            quick_export(app, json!({"path": path}))
+        });
     }
     let mut f = Map::new();
     f.insert("format".into(), json!("png"));
@@ -263,9 +289,61 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     confirm(app, &f)
 }
 
+/// Runs Quick Export with `p` (an explicit `path`, or none for the document's folder).
+fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
+    let r = app.run("file.export.quickExport", p)?;
+    app.ui.status = format!("Exported {}", r["path"].as_str().unwrap_or_default());
+    Ok(r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_document_scales_height_when_rounded_width_is_unchanged() {
+        use photocraft_doc::{Color, ColorMode, SampleType, Size};
+
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for (width, height, scale, expected) in [
+                (1, 100, 50, (1, 50)),
+                (1, 200, 50, (1, 100)),
+                (10, 100, 99, (10, 99)),
+                (10, 100, 101, (10, 101)),
+                (400, 300, 50, (200, 150)),
+                (400, 300, 100, (400, 300)),
+            ] {
+                let doc = Document::with_background("x", Size::new(width, height), ColorMode::Rgb, depth, Color::WHITE);
+                let before = doc.clone();
+                let mut f = Map::new();
+                f.insert("format".into(), json!("png"));
+                f.insert("scale".into(), json!(scale));
+                let out = export_document(&doc, &f, None).unwrap();
+                assert_eq!((out.size.width, out.size.height), expected, "{width} × {height} at {scale}%, {depth:?}");
+                assert_eq!(out.depth, depth, "export preserves the document's depth");
+                assert_eq!(doc, before, "export leaves the source document unchanged");
+            }
+        }
+    }
+
+    #[test]
+    fn export_document_proxy_limits_both_dimensions_before_rounding() {
+        use photocraft_doc::{Color, ColorMode, SampleType, Size};
+
+        for (width, height, scale, max_side, expected) in
+            [(1, 1000, 100, 360, (1, 360)), (1, 1000, 50, 360, (1, 360)), (1, 1000, 25, 360, (1, 250)), (13, 20, 50, 8, (5, 8)), (20, 13, 50, 8, (8, 5))]
+        {
+            let doc = Document::with_background("x", Size::new(width, height), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let before = doc.clone();
+            let mut f = Map::new();
+            f.insert("format".into(), json!("png"));
+            f.insert("scale".into(), json!(scale));
+            let out = export_document(&doc, &f, Some(max_side)).unwrap();
+            assert_eq!((out.size.width, out.size.height), expected, "{width} × {height} at {scale}%, proxy limit {max_side}");
+            assert!(out.size.width.max(out.size.height) <= max_side, "proxy respects its longest-side limit");
+            assert_eq!(doc, before, "preview leaves the source document unchanged");
+        }
+    }
 
     #[test]
     fn export_document_scales_and_flattens() {
@@ -285,6 +363,55 @@ mod tests {
         let proxy = export_document(&doc, &f, Some(40)).unwrap();
         assert_eq!(proxy.size.width, 40);
         assert_eq!(settings(&f).jpeg_quality, Some(85));
+    }
+
+    /// #1353: a scale that changes only the height (the width rounds back to the original)
+    /// used to be skipped, so the exported file kept the original size while the dialog
+    /// labelled it as scaled.
+    #[test]
+    fn export_document_scales_when_only_the_height_changes() {
+        let mut f = Map::new();
+        f.insert("format".into(), json!("png"));
+        f.insert("scale".into(), json!(50));
+        for (src_h, want_h) in [(100u32, 50u32), (200, 100)] {
+            let doc = Document::with_background(
+                "x",
+                photocraft_doc::Size::new(1, src_h),
+                photocraft_doc::ColorMode::Rgb,
+                photocraft_doc::SampleType::U8,
+                photocraft_doc::Color::WHITE,
+            );
+            let out = export_document(&doc, &f, None).unwrap();
+            assert_eq!((out.size.width, out.size.height), (1, want_h), "1 × {src_h} at 50%");
+            // The preview proxy takes the same path.
+            let proxy = export_document(&doc, &f, Some(40)).unwrap();
+            assert_eq!((proxy.size.width, proxy.size.height), (1, 40), "proxy of 1 × {src_h}");
+        }
+        // The label and the export agree, and neither side drops below 1 px.
+        assert_eq!(scaled_size(1.0, 100.0, 0.5), (1.0, 50.0));
+        assert_eq!(scaled_size(10.0, 300.0, 0.01), (1.0, 3.0));
+    }
+
+    #[test]
+    fn switching_export_formats_uses_independent_quality_preferences() {
+        let prefs = photocraft_engine::prefs::Export { jpeg_quality: 43, webp_quality: 72, webp_lossless: false, ..Default::default() };
+        let mut fields = Map::new();
+        set_format_defaults(&mut fields, "webp", &prefs);
+        assert_eq!(fields["quality"], 72);
+        assert_eq!(fields["lossless"], false);
+        let s = settings(&fields);
+        assert!(!s.webp_lossless);
+        assert_eq!(s.webp_quality, Some(72));
+        assert_eq!(s.jpeg_quality, None);
+
+        set_format_defaults(&mut fields, "jpg", &prefs);
+        assert_eq!(fields["quality"], 43);
+        assert_eq!(settings(&fields).jpeg_quality, Some(43));
+        assert_eq!(settings(&fields).webp_quality, None);
+
+        set_format_defaults(&mut fields, "webp", &photocraft_engine::prefs::Export::default());
+        assert!(settings(&fields).webp_lossless, "default WebP Quick Export mode is lossless");
+        assert_eq!(settings(&fields).webp_quality, None);
     }
 
     #[test]

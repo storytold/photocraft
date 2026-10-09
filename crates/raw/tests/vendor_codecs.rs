@@ -177,6 +177,33 @@ fn orf_uncompressed_round_trip() {
     assert_eq!((p.width, p.height), (16, 8));
 }
 
+/// A file cut short inside IFD0 keeps its width, height and compression entries but loses the
+/// strip byte counts; their empty sum used to read as "fewer than 16 bits per sample" and the
+/// damaged file was reported as the undecoded compressed variant. Damage is `Malformed`,
+/// whichever byte it lands on.
+#[test]
+fn orf_truncated_in_ifd0_is_malformed_not_the_compressed_variant() {
+    let (w, h) = (40, 24);
+    let data = mosaic(&scene(w, h), w, [1, 0, 2, 1], 64, 4095);
+    let b = orf(w, h, &data);
+    assert!(decode(&b, &Limits::default()).is_ok());
+    let ifd = u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize;
+    let n = u16::from_le_bytes([b[ifd], b[ifd + 1]]) as usize;
+    let entries: Vec<u16> = (0..n).map(|i| u16::from_le_bytes([b[ifd + 2 + 12 * i], b[ifd + 3 + 12 * i]])).collect();
+    let at = |tag: u16| ifd + 2 + 12 * entries.iter().position(|&t| t == tag).unwrap();
+    // Cut right before the StripByteCounts entry: width, height and compression survive.
+    let cut = at(279);
+    assert!(cut > at(259), "compression precedes the byte counts");
+    assert!(matches!(decode(&b[..cut], &Limits::default()), Err(RawError::Malformed(_))), "{:?}", decode(&b[..cut], &Limits::default()).err());
+    // No prefix of the file reads as the compressed variant: the compression declaration is
+    // intact or gone, never "compressed".
+    for cut in 0..b.len() {
+        if let Err(RawError::Unsupported(m)) = decode(&b[..cut], &Limits::default()) {
+            assert!(!m.contains("compressed"), "prefix {cut}: {m}");
+        }
+    }
+}
+
 #[test]
 fn orf_packed_or_compressed_falls_back() {
     let (w, h) = (40, 24);

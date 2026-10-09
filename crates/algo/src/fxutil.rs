@@ -221,6 +221,9 @@ pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// average many samples; unpremultiply the sum once at the end.
 #[inline]
 pub(crate) fn add_sample_premul(src: &Image, x: f32, y: f32, clip: Rect, alpha: bool, acc: &mut [f32]) {
+    if !x.is_finite() || !y.is_finite() || clip.is_empty() {
+        return;
+    }
     let n = src.ch;
     let fx = (x - 0.5).clamp(clip.x0 as f32, (clip.x1 - 1) as f32);
     let fy = (y - 0.5).clamp(clip.y0 as f32, (clip.y1 - 1) as f32);

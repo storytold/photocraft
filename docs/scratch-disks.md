@@ -74,6 +74,10 @@ larger than a compressed source. Background saves capture a snapshot; later edit
 and Save-before-close waits for publication. Whole-buffer formats and global filters that exceed
 their admitted working memory fail gracefully rather than changing resolution.
 
+Upstream's Image Size command also caps the destination raster of a resample at 8 GiB on
+64-bit systems (2 GiB on 32-bit systems). This fixed operation limit still applies with scratch
+enabled; opening and viewing larger streamed documents does not use that resampling limit.
+
 Lazy `.pcraft` packs, streaming every codec and arbitrarily large smart-object blobs are still
 open. Scratch files are temporary storage, not durable crash recovery; autosave is separate.
 

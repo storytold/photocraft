@@ -21,6 +21,10 @@
 	Layer	Ebene
 	Type	Text
 	Select	Auswahl
+	Top Left	Oben links
+	Top Right	Oben rechts
+	Bottom Left	Unten links
+	Bottom Right	Unten rechts
 	Filter	Filter
 	View	Ansicht
 	Window	Fenster
@@ -33,6 +37,9 @@
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
 	Close	Schließen
+	Minimize	Minimieren
+	Maximize	Maximieren
+	Restore	Wiederherstellen
 	Close All	Alle schließen
 	Close Others	Andere schließen
 	Save	Speichern
@@ -100,6 +107,7 @@
 	Fill…	Füllen…
 	Stroke…	Nachziehen…
 	Content-Aware Fill…	Inhaltsbasiert füllen…
+	Delete and Fill Selection	Auswahl löschen und füllen
 	Content-Aware Scale	Inhaltsbasiert skalieren
 	Puppet Warp	Marionetten-Verkrümmung
 	Perspective Warp	Perspektivisch verkrümmen
@@ -311,6 +319,7 @@
 	Smart Object	Smart-Objekt
 	Convert to Smart Object	In Smart-Objekt konvertieren
 	Convert to Embedded	In eingebettetes Smart-Objekt konvertieren
+	Convert to Layers	In Ebenen konvertieren
 	Convert to Linked…	In verknüpftes Smart-Objekt konvertieren…
 	Edit Contents	Inhalt bearbeiten
 	Replace Contents…	Inhalt ersetzen…
@@ -802,6 +811,7 @@
 	Cache Level:	Cache-Stufe:
 	Camera Raw isn't open	Camera Raw ist nicht geöffnet
 	Cancel	Abbrechen
+	Reset	Zurücksetzen
 	Cancel (Esc)	Abbrechen (Esc)
 	Cancel any current edits (Esc)	Aktuelle Bearbeitungen abbrechen (Esc)
 	Cancel current crop operation  (Esc)	Aktuelle Freistellung abbrechen  (Esc)
@@ -964,14 +974,17 @@
 	Drag a rectangle around the object	Ziehe ein Rechteck um das Objekt
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Ziehe auf dem Bild, um eine Zwangsbedingung hinzuzufügen; Shift für horizontal/vertikal; Rechtsklick löscht.
 	Drag to move the active shape's path or the Work Path	Ziehen, um den Pfad der aktiven Form oder den Arbeitspfad zu verschieben
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klick: Ankerpunkt auswählen · Ziehen: Ankerpunkt, Griff oder Segment verschieben · {shift}-Klick: hinzufügen · {alt}-Klick: ganzer Teilpfad
 	Draw with the Pen tool (P) or make a work path from a selection.	Zeichne mit dem Stift-Werkzeug (P) oder erzeuge einen Arbeitspfad aus einer Auswahl.
 	Drop an image or PSD anywhere to open it.	Ziehe ein Bild oder PSD an eine beliebige Stelle, um es zu öffnen.
 	Native file drag-and-drop is unavailable	Natives Ziehen und Ablegen von Dateien ist nicht verfügbar
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Natives Ziehen und Ablegen von Dateien wird unter Wayland noch nicht unterstützt. Nutze Datei › Öffnen oder starte PhotoCraft unter XWayland mit `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Natives Ziehen und Ablegen von Dateien wird unter Wayland noch nicht unterstützt. Nutze Datei › Öffnen oder kopiere das Bild im Dateimanager und füge es mit {paste} ein.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Um Dateien abzulegen, starte PhotoCraft unter XWayland: `{command}`
+	Edit › Paste	Bearbeiten › Einfügen
 	Duplicate Layers…	Ebenen duplizieren…
 	Duplicate style	Stil duplizieren
 	Edit Toolbar…	Werkzeugleiste bearbeiten…
-	Use File › Open to open an image.	Nutze Datei › Öffnen, um ein Bild zu öffnen.
+	Use File › Open, or paste a copied image with {paste}.	Nutze Datei › Öffnen oder füge ein kopiertes Bild mit {paste} ein.
 	Edit in Quick Mask Mode  (Q)	Im Schnellmaskenmodus bearbeiten  (Q)
 	Edit in Standard Mode  (Q)	Im Standardmodus bearbeiten  (Q)
 	Effects	Effekte
@@ -1006,6 +1019,7 @@
 	Fisheye	Fischauge
 	Fit	Einpassen
 	Fit Screen	Auf Bildschirm einpassen
+	Fill Screen	Bildschirm ausfüllen
 	Fit in View	In Ansicht einpassen
 	Fixed	Fest
 	Fixed Ratio	Festes Verhältnis
@@ -1334,6 +1348,7 @@
 	Set background color	Hintergrundfarbe festlegen
 	Set foreground color	Vordergrundfarbe festlegen
 	Set painting symmetry options	Symmetrieoptionen für das Malen festlegen
+	Symmetry Off	Symmetrie aus
 	Set shape fill type	Fülltyp der Form festlegen
 	Set shape stroke type	Konturtyp der Form festlegen
 	Set the text color	Textfarbe festlegen
@@ -1590,6 +1605,7 @@
 	Paint Bucket Tool	Fülleimer-Werkzeug
 	Paints from the document's opening state	Malt aus dem Zustand beim Öffnen des Dokuments
 	Path Selection Tool	Pfadauswahl-Werkzeug
+	Direct Selection Tool	Direktauswahl-Werkzeug
 	Pattern Overlay	Musterüberlagerung
 	Pen Pressure	Stiftdruck
 	Pen Tilt	Stiftneigung
@@ -1787,12 +1803,14 @@
 	Memory usage mb	Speichernutzung (MB)
 	GPU memory mb	GPU-Speicher (MB)
 	Memory usage percent	Speichernutzung (%)
+	Low resolution previews	Vorschau in niedriger Auflösung
 	Missing glyph protection	Schutz vor fehlenden Glyphen
 	Modern	Modern
 	Nearest neighbor	Nächster Nachbar
 	Never	Nie
 	Normal tip	Normale Spitze
 	Open as smart object	Als Smart-Objekt öffnen
+	Open in camera raw	In Camera Raw öffnen
 	Open documents as tabs	Dokumente als Registerkarten öffnen
 	Overscroll	Überscrollen
 	Performance	Leistung
@@ -1830,6 +1848,7 @@
 	Show slice numbers	Slice-Nummern anzeigen
 	Show tooltips	Tooltips anzeigen
 	Show bounding box when dragging layer	Begrenzungsrahmen beim Ziehen einer Ebene anzeigen
+	System title bar	System-Titelleiste
 	Show transformation values	Transformationswerte anzeigen
 	Slice color	Slice-Farbe
 	Smart guide color	Smart-Hilfslinienfarbe
@@ -1909,6 +1928,7 @@
 	System Info…	Systeminformationen…
 	System Info	Systeminformationen
 	More panels	Weitere Bedienfelder
+	More documents	Weitere Dokumente
 	These settings aren't available in PhotoCraft yet.	Diese Einstellungen gibt es in PhotoCraft noch nicht.
 	Graphics	Grafik
 	Reset GPU Backend	GPU-Backend zurücksetzen
@@ -1937,6 +1957,8 @@
 	Brush Settings…  (F5): every option of this brush	Pinseleinstellungen…  (F5): jede Option dieses Pinsels
 	Rename Brush…	Pinsel umbenennen…
 	Delete Brush	Pinsel löschen
+	New Brush Preset…	Neue Pinselvorgabe…
+	Brush Preset Options	Pinselvorgaben-Optionen
 	Group name	Gruppenname
 	Brush name	Pinselname
 	Grid view	Rasteransicht
@@ -1986,6 +2008,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Kein Pfad für eine Auswahl vorhanden: zeichne einen mit dem Stift-Werkzeug oder wähle einen im Pfade-Bedienfeld.
 	Cancel opening	Öffnen abbrechen
 	Cancelled opening {name}	Öffnen von {name} abgebrochen
+	Developing {name}	{name} wird entwickelt
 	Cancelled {label}	{label} abgebrochen
 	Esc to cancel	Esc zum Abbrechen
 	Opening {name}	Öffne {name}
@@ -2096,6 +2119,7 @@
 	4 x 4	4 x 4
 	5 x 5	5 x 5
 	Camera Raw Filter ({layer})	Camera-Raw-Filter ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 	Edit Type	Text bearbeiten
 	Grid:	Raster:
 	Highlight Clipping Warning (O)	Lichter-Abschneidewarnung (O)
@@ -2137,6 +2161,7 @@
 	Magnetic Lasso Tool	Magnetisches-Lasso-Werkzeug
 	Frequency	Frequenz
 	Use tablet pressure to change pen width	Tablettdruck zum Ändern der Stiftbreite verwenden
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	Über
 	Contributors	Mitwirkende
@@ -2168,3 +2193,81 @@
 	% of all commits	% aller Commits
 	Lines +/−	Zeilen +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} Commits, +{added} / −{deleted} Zeilen (Δ {delta}), +{binAdded} / −{binDeleted} Binärdateien, {first} – {last}
+
+# Swatches panel
+	Create new swatch	Neues Farbfeld erstellen
+	New Swatch…	Neues Farbfeld…
+	New Swatch Group…	Neue Farbfeldgruppe…
+	Import Swatches…	Farbfelder importieren…
+	Replace Swatches…	Farbfelder ersetzen…
+	Export Swatches…	Farbfelder exportieren…
+	Export Swatches for Exchange…	Farbfelder für Austausch exportieren…
+	Reset Swatches	Farbfelder zurücksetzen
+	Add to Swatches	Zu Farbfeldern hinzufügen
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	Farbbereich:
+	Channels:	Kanäle:
+	Knockout	Aussparung
+	Apply At Canvas Bounds	Effekt an Arbeitsflächenbegrenzungen anwenden
+	Show/Hide All Panels	Alle Bedienfelder ein-/ausblenden
+	Show/Hide Panels	Bedienfelder ein-/ausblenden
+	Could not open	Öffnen nicht möglich
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: Der Pfad ist kein gültiges Unicode; benennen Sie die Datei um und öffnen Sie sie erneut.
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	Inhalt:
+	Custom Pattern:	Eigenes Muster:
+	Foreground Color	Vordergrundfarbe
+	Color…	Farbe…
+	50% Gray	50 % Grau
+	{size} (was {old})	{size} (vorher {old})
+	Cone	Kegel
+	Cone (Inverted)	Kegel (umgekehrt)
+	Domed	Gewölbt
+	Domed (Inverted)	Gewölbt (umgekehrt)
+	Diagonal (Descending)	Diagonal (absteigend)
+
+	Red Eye Tool	Rote-Augen-Werkzeug
+	Red Eye	Rote Augen
+	Pupil Size	Pupillengröße
+	Darken Amount	Abdunklungsgrad
+	Click a red pupil to neutralize it	Klicken Sie auf eine rote Pupille
+	open source	Open Source
+	…and {n} more	…und {n} weitere
+
+	Eyedroppers:	Pipetten:
+	Set Black Point	Schwarzpunkt festlegen
+	Set Neutral Gray Point	Neutralen Graupunkt festlegen
+	Set White Point	Weißpunkt festlegen
+	Unavailable in this color mode	In diesem Farbmodus nicht verfügbar
+	Selection Preview:	Auswahlvorschau:
+	Black Matte	Schwarzer Hintergrund
+	White Matte	Weißer Hintergrund
+
+# Layer colour labels.
+layerLabel	No Color	Keine Farbe
+	Seafoam	Meeresschaum
+	Indigo	Indigo
+	Fuchsia	Fuchsia
+	Violet	Violett
+	Large document: redrawing on the CPU	Großes Dokument: Neuzeichnen auf der CPU
+	This redraw took {seconds} s on the CPU.	Dieses Neuzeichnen auf der CPU dauerte {seconds} s.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Änderungen, die das ganze Dokument betreffen, etwa Füllmethode, Deckkraft oder Sichtbarkeit einer Ebene, zeichnen es vollständig neu.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Die Ebenen passen nicht in das GPU-Speicherbudget. Eine höhere Speichernutzung unter Voreinstellungen › Leistung erhöht das Budget, bis zu einem Viertel des Arbeitsspeichers dieses Computers.
+	The GPU compositor wasn't used: {reason}	Der GPU-Compositor wurde nicht verwendet: {reason}
+cameraRaw	Light	Licht
+fontWeight	Thin	Haarfein
+fontWeight	ExtraLight	Extraleicht
+fontWeight	Light	Leicht
+fontWeight	Regular	Normal
+fontWeight	Medium	Medium
+fontWeight	SemiBold	Halbfett
+fontWeight	Bold	Fett
+fontWeight	ExtraBold	Extrafett
+fontWeight	Black	Schwarz
+fontWeight	Italic	Kursiv
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	Musterstempel-Werkzeug
+	Pattern Stamp	Musterstempel
+	Impressionist	Impressionistisch

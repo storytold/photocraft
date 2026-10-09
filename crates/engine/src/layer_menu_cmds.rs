@@ -5,7 +5,7 @@
 
 use photocraft_algo::selection::Region;
 use photocraft_color::{BlendMode, ColorMode};
-use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
+use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Knockout, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -396,6 +396,7 @@ fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
         Some(v) => Some(blend_if_entries(v, mode)?),
     };
+    let adv = advanced_params(p, mode)?;
     s.edit("Blending Options", |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if let Some(b) = blend {
@@ -421,9 +422,90 @@ fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
             }
             None => {}
         }
+        adv.apply(l);
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// The Advanced Blending parameters of `layer.layerStyle.blendingOptions`; `None` = keep.
+#[derive(Default)]
+struct AdvancedParams {
+    knockout: Option<Knockout>,
+    blend_interior: Option<bool>,
+    blend_clipped: Option<bool>,
+    transparency_shapes: Option<bool>,
+    layer_mask_hides: Option<bool>,
+    vector_mask_hides: Option<bool>,
+    /// Excluded-channel bit mask (from `channels`).
+    excluded: Option<u32>,
+}
+
+impl AdvancedParams {
+    fn apply(&self, l: &mut Layer) {
+        let a = &mut l.advanced;
+        if let Some(k) = self.knockout {
+            a.knockout = k;
+        }
+        let set = |dst: &mut bool, v: Option<bool>| {
+            if let Some(v) = v {
+                *dst = v;
+            }
+        };
+        set(&mut a.blend_interior, self.blend_interior);
+        set(&mut a.blend_clipped, self.blend_clipped);
+        set(&mut a.transparency_shapes, self.transparency_shapes);
+        set(&mut a.layer_mask_hides_effects, self.layer_mask_hides);
+        set(&mut a.vector_mask_hides_effects, self.vector_mask_hides);
+        if let Some(x) = self.excluded {
+            l.excluded_channels = x;
+        }
+    }
+}
+
+/// Parse and validate the Advanced Blending keys (wrong types and unknown values are errors).
+fn advanced_params(p: &Value, mode: ColorMode) -> Result<AdvancedParams> {
+    const CMD: &str = "layer.layerStyle.blendingOptions";
+    let flag = |key: &str| -> Result<Option<bool>> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            Some(v) => Err(bad(CMD, format!("{key}: expected true or false (got {v})"))),
+        }
+    };
+    let knockout = match p.get("knockout") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(Knockout::from_name(s).ok_or_else(|| bad(CMD, format!("knockout: expected none, shallow or deep (got `{s}`)")))?),
+        Some(v) => return Err(bad(CMD, format!("knockout: expected \"none\", \"shallow\" or \"deep\" (got {v})"))),
+    };
+    let excluded = match p.get("channels") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => {
+            let n = mode.color_channels().max(1);
+            if a.len() > n {
+                return Err(bad(CMD, format!("channels: a {mode:?} document has {n} colour channel(s), got {}", a.len())));
+            }
+            let mut mask = 0u32;
+            for (i, v) in a.iter().enumerate() {
+                match v {
+                    Value::Bool(true) => {}
+                    Value::Bool(false) => mask |= 1 << i,
+                    other => return Err(bad(CMD, format!("channels[{i}]: expected true or false (got {other})"))),
+                }
+            }
+            Some(mask)
+        }
+        Some(v) => return Err(bad(CMD, format!("channels: expected a list of true/false per colour channel (got {v})"))),
+    };
+    Ok(AdvancedParams {
+        knockout,
+        blend_interior: flag("blendInteriorEffectsAsGroup")?,
+        blend_clipped: flag("blendClippedLayersAsGroup")?,
+        transparency_shapes: flag("transparencyShapesLayer")?,
+        layer_mask_hides: flag("layerMaskHidesEffects")?,
+        vector_mask_hides: flag("vectorMaskHidesEffects")?,
+        excluded,
+    })
 }
 
 /// One `blendIf` entry: (range index, This Layer, Underlying Layer); `None` = keep.
@@ -761,7 +843,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.layerStyle.blendingOptions",
             "Blending Options…",
             ["Layer", "Layer Style"],
-            r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?} (Blend If values 0..255; split points fade; null resets)"##,
+            r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?,"channels":[bool,…]?,"knockout":"none|shallow|deep"?,"blendInteriorEffectsAsGroup":bool?,"blendClippedLayersAsGroup":bool?,"transparencyShapesLayer":bool?,"layerMaskHidesEffects":bool?,"vectorMaskHidesEffects":bool?} (Blend If values 0..255; split points fade; null resets. Advanced Blending: channels = which colour channels blend (R G B / C M Y K / L a b); Photoshop's defaults are knockout none, interior effects off, clipped layers as group on, transparency shapes on, masks hide effects off)"##,
             has_layer,
             blending_options
         ),

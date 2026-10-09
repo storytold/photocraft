@@ -50,41 +50,61 @@ pub(crate) fn desaturate(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
 /// (premultiplied) average over the part inside the bounds.
 pub(crate) fn mosaic(src: &Image, out: Rect, ctx: &Ctx, cell: f32) -> Vec<f32> {
     let n = src.ch;
+    let width = out.width() as usize;
+    let height = out.height() as usize;
+    if width == 0 || height == 0 || n == 0 {
+        return Vec::new();
+    }
     let cs = cell.max(1.0).round() as i32;
     let b = ctx.bounds;
-    let mut res = Vec::with_capacity(out.width() as usize * out.height() as usize * n);
-    let mut cache: Option<(i32, i32, Vec<f32>)> = None;
-    for y in out.y0..out.y1 {
-        for x in out.x0..out.x1 {
-            let (cx, cy) = ((x - b.x0).div_euclid(cs), (y - b.y0).div_euclid(cs));
-            if cache.as_ref().is_none_or(|(a, bb, _)| (*a, *bb) != (cx, cy)) {
-                let r = Rect::new(b.x0 + cx * cs, b.y0 + cy * cs, b.x0 + (cx + 1) * cs, b.y0 + (cy + 1) * cs).intersect(&b);
-                let mut acc = vec![0.0f32; n];
-                let mut count = 0.0;
-                for yy in r.y0..r.y1 {
-                    for xx in r.x0..r.x1 {
-                        let a = if ctx.alpha { src.get(xx, yy, n - 1) } else { 1.0 };
-                        for (c, v) in acc.iter_mut().enumerate() {
-                            let s = src.get(xx, yy, c);
-                            *v += if ctx.alpha && c < n - 1 { s * a } else { s };
-                        }
-                        count += 1.0;
+    let Some(row_stride) = width.checked_mul(n) else { return Vec::new() };
+    let Some(len) = row_stride.checked_mul(height) else { return Vec::new() };
+    let mut res = vec![0.0f32; len];
+    let mut acc = vec![0.0f32; n];
+    let cx0 = (out.x0 - b.x0).div_euclid(cs);
+    let cx1 = (out.x1 - 1 - b.x0).div_euclid(cs);
+    let cy0 = (out.y0 - b.y0).div_euclid(cs);
+    let cy1 = (out.y1 - 1 - b.y0).div_euclid(cs);
+
+    // Average each cell once per tile, rather than once per output scanline.
+    for cy in cy0..=cy1 {
+        for cx in cx0..=cx1 {
+            let cell_rect = Rect::new(b.x0 + cx * cs, b.y0 + cy * cs, b.x0 + (cx + 1) * cs, b.y0 + (cy + 1) * cs);
+            let r = cell_rect.intersect(&b);
+            acc.fill(0.0);
+            let mut count = 0.0;
+            for yy in r.y0..r.y1 {
+                for xx in r.x0..r.x1 {
+                    let a = if ctx.alpha { src.get(xx, yy, n - 1) } else { 1.0 };
+                    for (c, v) in acc.iter_mut().enumerate() {
+                        let s = src.get(xx, yy, c);
+                        *v += if ctx.alpha && c < n - 1 { s * a } else { s };
                     }
+                    count += 1.0;
                 }
-                if count > 0.0 {
-                    for v in acc.iter_mut() {
-                        *v /= count;
-                    }
-                }
-                if ctx.alpha {
-                    let a = acc[n - 1];
-                    for v in acc.iter_mut().take(n - 1) {
-                        *v = if a > 1e-7 { *v / a } else { 0.0 };
-                    }
-                }
-                cache = Some((cx, cy, acc));
             }
-            res.extend_from_slice(&cache.as_ref().map(|c| c.2.clone()).unwrap_or_default());
+            if count > 0.0 {
+                for v in acc.iter_mut() {
+                    *v /= count;
+                }
+            }
+            if ctx.alpha {
+                let a = acc[n - 1];
+                for v in acc.iter_mut().take(n - 1) {
+                    *v = if a > 1e-7 { *v / a } else { 0.0 };
+                }
+            }
+
+            // Use the full cell for output clipping, preserving partial cells
+            // when the requested output extends beyond the averaging bounds.
+            let write = cell_rect.intersect(&out);
+            let first_row = write.y0.abs_diff(out.y0) as usize;
+            let first_pixel = write.x0.abs_diff(out.x0) as usize;
+            for row in res.chunks_exact_mut(row_stride).skip(first_row).take(write.height() as usize) {
+                for px in row.chunks_exact_mut(n).skip(first_pixel).take(write.width() as usize) {
+                    px.copy_from_slice(&acc);
+                }
+            }
         }
     }
     res

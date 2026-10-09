@@ -150,8 +150,7 @@ fn erode(w: usize, h: usize, m: &[bool], r: usize) -> Vec<bool> {
 /// Where a fill samples from around `r`: as Edit › Content-Aware Fill's automatic sampling area,
 /// three quarters of the extent around it (at least 32, at most [`MAX_MARGIN`] pixels).
 fn window(r: Rect, canvas: Rect) -> Rect {
-    let ext = r.width().max(r.height()) as i32;
-    r.inflate((ext * 3 / 4).clamp(32, MAX_MARGIN)).intersect(&canvas)
+    r.inflate(crate::fill_cmds::sampling_margin(r).min(MAX_MARGIN)).intersect(&canvas)
 }
 
 /// The pixels a step works on: the targeted surface, or with Sample All Layers the visible

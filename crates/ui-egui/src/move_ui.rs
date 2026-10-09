@@ -2,14 +2,49 @@
 //! the moving layers already at the pointer, exactly as `layer.translate` will leave them, and
 //! recomposites only where they were and where they are. Releasing commits one `layer.translate`
 //! (one history step) whose damage rect refreshes the same area.
+//!
+//! With a selection, the Move tool drags the selected pixels instead (#578): they float
+//! (`select.float`, the canvas shows the piece at the pointer) until ↩, Deselect or any other
+//! command drops them, as one "Move" history step.
 
 use std::sync::Arc;
 
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
+use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::state::Tool;
+
+/// Does the Move tool drag (and do the arrow keys nudge) the selected pixels of the active layer
+/// rather than the whole layer? With a selection, as in Photoshop; a layer whose pixels can't
+/// float (type, shape, Smart Object, group, position-locked), a hidden layer or several selected
+/// layers still move whole, as without one.
+pub(crate) fn moves_selected_pixels(app: &PhotocraftApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    app.ui.tool == Tool::Move
+        && app.ui.transform.is_none()
+        && st.doc.selection.is_some()
+        && st.selected_layers().len() <= 1
+        && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.visible)
+        && app.session.is_enabled("select.float")
+}
+
+/// Floats the selected pixels and moves them by (dx, dy) (`select.float`): cuts them the first
+/// time, or with `copy` (⌥) floats a duplicate and leaves them; `copy` on a piece already floating
+/// drops it where it is and floats a copy of it. False when it failed (reported in the status bar).
+pub(crate) fn float_selected(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64) -> bool {
+    let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
+    let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
+    match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy}))) {
+        Ok(_) => true,
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+            false
+        }
+    }
+}
 
 /// Preview keys of move drags: `BASE + n`, one per offset shown (see `canvas::display_doc`).
 const BASE: u64 = 1 << 39;
@@ -185,7 +220,7 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    if app.run("layer.translate", serde_json::json!({"dx": dx, "dy": dy})).is_err() {
+    if app.run("layer.translate", json!({"dx": dx, "dy": dy})).is_err() {
         return;
     }
     let Some(p) = shown else { return };
@@ -252,5 +287,127 @@ mod tests {
     fn bounding_box_preference_turns_the_live_drag_off() {
         assert!(live(false), "by default the layer follows the pointer");
         assert!(!live(true), "with the preference on, only the outline and arrow move");
+    }
+
+    /// A `depth`-bit transparent document whose layer holds a red square (8..24)² and a blue one
+    /// (40..56)×(8..24), the red one selected; the Move tool with Auto-Select on.
+    fn selected_pixels(depth: u32) -> (PhotocraftApp, photocraft_doc::LayerId) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64, "background": "transparent", "depth": depth})).unwrap();
+        app.sync_views();
+        for (x, color) in [(40, "#0000ff"), (8, "#ff0000")] {
+            app.session.execute("select.rect", json!({"x": x, "y": 8, "width": 16, "height": 16})).unwrap();
+            app.session.execute("edit.fill", json!({"color": color})).unwrap();
+        }
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_auto_select = true;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        (app, id)
+    }
+
+    fn alpha(app: &PhotocraftApp, id: photocraft_doc::LayerId, x: i32, y: i32) -> f32 {
+        app.session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().rgba(x, y)[3]
+    }
+
+    fn offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
+        photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| f.offset)
+    }
+
+    fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], m: egui::Modifiers) {
+        crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
+        crate::canvas::tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, m);
+        crate::canvas::tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, m);
+    }
+
+    /// ↩ through the app's key handling.
+    fn enter(app: &mut PhotocraftApp) {
+        let ctx = egui::Context::default();
+        let key = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let input = egui::RawInput { events: vec![key], ..Default::default() };
+        ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    }
+
+    /// #578: with a selection the Move tool drags the selected pixels (from anywhere, without an
+    /// Auto-Select pick), not the layer; ↩ drops them as one "Move" step that one undo takes back.
+    #[test]
+    fn with_a_selection_the_move_tool_moves_only_the_selected_pixels() {
+        for depth in [8, 16, 32] {
+            let (mut app, id) = selected_pixels(depth);
+            let steps = app.session.active().unwrap().history.past_len();
+            drag(&mut app, [50.0, 40.0], [60.0, 45.0], egui::Modifiers::NONE);
+            assert_eq!(offset(&app), Some((10, 5)), "{depth}-bit: floating");
+            let shown = super::display_doc(&mut app, 0).unwrap().0;
+            let shown_alpha = |x, y| shown.layer(id).unwrap().surface().unwrap().rgba(x, y)[3];
+            assert!(shown_alpha(10, 10) == 0.0 && shown_alpha(30, 25) == 1.0, "{depth}-bit: shown moved");
+            enter(&mut app);
+            assert_eq!(offset(&app), None, "{depth}-bit: ↩ dropped it");
+            assert_eq!(alpha(&app, id, 10, 10), 0.0, "{depth}-bit: the hole is transparent");
+            assert_eq!(alpha(&app, id, 30, 25), 1.0, "{depth}-bit: the red square moved");
+            assert_eq!(alpha(&app, id, 48, 16), 1.0, "{depth}-bit: the unselected blue one stayed");
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(18, 13, 34, 29), "{depth}-bit");
+            assert_eq!((st.history.past_len(), st.history.undo_label()), (steps + 1, Some("Move")), "{depth}-bit");
+            assert!(app.session.undo());
+            assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 30, 25) == 0.0, "{depth}-bit: undone");
+        }
+    }
+
+    /// ⌥ copies the selected pixels (no layer copy), ⇧ locks the drag to multiples of 45°.
+    #[test]
+    fn alt_copies_and_shift_constrains_the_selected_pixels() {
+        for depth in [8, 16, 32] {
+            let (mut app, id) = selected_pixels(depth);
+            let layers = app.session.active().unwrap().doc.layers.len();
+            drag(&mut app, [16.0, 16.0], [30.0, 28.0], egui::Modifiers::ALT | egui::Modifiers::SHIFT);
+            assert_eq!(offset(&app), Some((13, 13)), "{depth}-bit: 45°");
+            app.run("select.drop", json!({})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "{depth}-bit: no layer copy");
+            assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 35, 35) == 1.0, "{depth}-bit: original and copy");
+            assert!(app.session.undo());
+            assert_eq!(alpha(&app, id, 35, 35), 0.0, "{depth}-bit: undone");
+        }
+    }
+
+    /// A click moves nothing and leaves nothing floating (Undo isn't spent putting it back).
+    #[test]
+    fn a_click_with_a_selection_moves_nothing() {
+        let (mut app, id) = selected_pixels(8);
+        let steps = app.session.active().unwrap().history.past_len();
+        drag(&mut app, [16.0, 16.0], [16.0, 16.0], egui::Modifiers::NONE);
+        assert_eq!(offset(&app), None);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 48, 16) == 1.0);
+    }
+
+    #[test]
+    fn arrow_keys_nudge_the_selected_pixels() {
+        let (mut app, id) = selected_pixels(16);
+        crate::move_mods::nudge(&mut app, 10.0, 0.0, false);
+        crate::move_mods::nudge(&mut app, 0.0, 1.0, false);
+        assert_eq!(offset(&app), Some((10, 1)));
+        // ⌥ leaves the piece where it is and nudges a copy of it.
+        crate::move_mods::nudge(&mut app, 1.0, 0.0, true);
+        assert_eq!(offset(&app), Some((1, 0)));
+        app.run("select.drop", json!({})).unwrap();
+        assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 18, 20) == 1.0 && alpha(&app, id, 34, 20) == 1.0);
+        assert_eq!(alpha(&app, id, 48, 16), 1.0, "the layer itself didn't move");
+    }
+
+    /// Without floatable pixels (a position-locked layer) the Move tool behaves as without a
+    /// selection: it moves the layer, which the lock refuses.
+    #[test]
+    fn a_layer_that_cannot_float_moves_whole_as_before() {
+        let (mut app, id) = selected_pixels(8);
+        app.session.execute("layer.lockLayers", json!({"position": true})).unwrap();
+        drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
+        assert_eq!(offset(&app), None);
+        assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 30, 16) == 0.0, "nothing moved");
+        // Without a selection the layer moves whole.
+        app.session.execute("layer.lockLayers", json!({"position": false})).unwrap();
+        app.session.execute("select.deselect", json!({})).unwrap();
+        drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
+        assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 58, 16) == 1.0, "the whole layer moved");
     }
 }

@@ -343,6 +343,10 @@ fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
             true
         }
     });
+    // Camera Raw's open-time re-develop and its final step.
+    if crate::camera_raw_ui::on_redevelop_event(app, &e) {
+        return;
+    }
     if e.command == OPEN_JOB {
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
@@ -404,7 +408,13 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     app.sync_views();
     app.ui.status = format!("Opened {name}");
     app.ui.status_error = false;
-    notices::io_warnings(app, &format!("Opened {name}"), &warnings);
+    // A raw opens in Camera Raw first; the dialog says how it was developed.
+    if crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
+        crate::camera_raw_ui::queue_open_dialog(app, name, path, None);
+        notices::io_warnings(app, &format!("Opened {name}"), &crate::camera_raw_ui::without_develop_note(&warnings));
+    } else {
+        notices::io_warnings(app, &format!("Opened {name}"), &warnings);
+    }
     // Script events bound to "Open Document".
     if v.get("automation").and_then(Value::as_bool) != Some(true) {
         photocraft_engine::automate_cmds::document_opened(&mut app.session);

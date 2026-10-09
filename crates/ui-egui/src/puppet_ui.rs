@@ -58,6 +58,20 @@ impl PuppetSession {
         self.rebind();
     }
 
+    /// Remeshes for a new density or expansion. One that leaves no pixels is refused, as `begin`
+    /// refuses a layer without any: the previous `density` and `expansion` and their mesh come
+    /// back (#951).
+    fn remesh_or_restore(&mut self, density: PuppetDensity, expansion: f64) -> Result<(), String> {
+        self.rebuild_mesh();
+        if self.mesh.tris.is_empty() {
+            self.warp.density = density;
+            self.warp.expansion = expansion;
+            self.rebuild_mesh();
+            return Err("Could not use Puppet Warp: no opaque pixels at this density and expansion".into());
+        }
+        Ok(())
+    }
+
     /// New solver for the current pin set (pins added/removed, rotation fixed or freed).
     fn rebind(&mut self) {
         let src: Vec<[f64; 2]> = self.warp.pins.iter().map(|p| p.src).collect();
@@ -179,6 +193,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     }
     let s = app.distort.puppet.as_mut().ok_or(tl!("Puppet Warp is not active"))?;
     let mut remesh = false;
+    let (density, expansion) = (s.warp.density, s.warp.expansion);
     if let Some(m) = ui.get("mode").and_then(Value::as_str) {
         s.warp.mode = PuppetMode::parse(m).ok_or("mode: rigid|normal|distort")?;
     }
@@ -194,7 +209,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         s.show_mesh = v;
     }
     if remesh {
-        s.rebuild_mesh();
+        s.remesh_or_restore(density, expansion)?;
     } else {
         s.solve(true);
     }
@@ -314,6 +329,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
     remesh |= density != s.warp.density;
     ui.label(tl!("Expansion:"));
+    let expansion = s.warp.expansion;
     let mut e = s.warp.expansion as f32;
     if crate::widgets::value_field(ui, &mut e, -50.0..=100.0, "px", 56.0).changed() {
         s.warp.expansion = f64::from(e);
@@ -354,7 +370,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         rebind = true;
     }
     if remesh {
-        s.rebuild_mesh();
+        // A refused value snaps the fields back to the previous settings.
+        let _ = s.remesh_or_restore(density, expansion);
     } else if rebind {
         s.rebind();
     } else if resolve {
@@ -417,5 +434,34 @@ mod tests {
         let st = app.session.active().unwrap();
         let b = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
         assert!(b.y0 < 25, "the right end went up: {b:?}");
+    }
+
+    #[test]
+    fn an_expansion_that_empties_the_mesh_is_refused() {
+        // #951: remeshing to no vertices rebound the pins to a vertex that doesn't exist and
+        // panicked. -50 is the options bar's minimum and also empties this 20 px tall bar.
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 30, 80, 50), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        crate::distort_ui::menu(&mut app, &ctx, "edit.puppetWarp", &json!({})).unwrap().unwrap();
+        crate::distort_ui::pointer(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        crate::distort_ui::pointer(&mut app, ToolEvent::Up { x: 50.0, y: 40.0 }, egui::Modifiers::NONE);
+        let before = app.distort.puppet.as_ref().unwrap().describe();
+        for e in [-200, -50] {
+            assert!(control(&mut app, &json!({"expansion": e})).is_err(), "{e}");
+            assert_eq!(app.distort.puppet.as_ref().unwrap().describe(), before, "{e}: the previous settings and mesh stay");
+        }
+        // A smaller shrink still remeshes.
+        let v = control(&mut app, &json!({"expansion": -2})).unwrap();
+        assert_eq!(v["expansion"], -2.0);
+        assert!(v["triangles"].as_u64().unwrap() > 0);
     }
 }

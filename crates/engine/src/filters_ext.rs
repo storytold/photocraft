@@ -329,16 +329,25 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             pins: list::<FieldPin>(p, "pins").unwrap_or_else(|| vec![FieldPin { x: f(p, "centerX", 0.5), y: f(p, "centerY", 0.5), blur: blur(15.0) }]),
         },
         "filter.blurGallery.spinBlur" => FilterParams::SpinBlur {
-            pins: list::<SpinPin>(p, "pins").unwrap_or_else(|| {
-                vec![SpinPin {
-                    x: f(p, "centerX", 0.5),
-                    y: f(p, "centerY", 0.5),
-                    radius_x: f(p, "radiusX", 0.3).max(0.001),
-                    radius_y: f(p, "radiusY", 0.3).max(0.001),
-                    angle: f(p, "angle", 0.0),
-                    blur_angle: f(p, "blurAngle", 15.0).clamp(0.0, 360.0),
-                }]
-            }),
+            pins: list::<SpinPin>(p, "pins")
+                .map(|mut v| {
+                    for pin in &mut v {
+                        pin.angle = if pin.angle.is_finite() { pin.angle.clamp(-360.0, 360.0) } else { 0.0 };
+                        pin.blur_angle = if pin.blur_angle.is_finite() { pin.blur_angle.clamp(0.0, 360.0) } else { 0.0 };
+                    }
+                    v
+                })
+                .unwrap_or_else(|| {
+                    let a = f(p, "angle", 0.0);
+                    vec![SpinPin {
+                        x: f(p, "centerX", 0.5),
+                        y: f(p, "centerY", 0.5),
+                        radius_x: f(p, "radiusX", 0.3).max(0.001),
+                        radius_y: f(p, "radiusY", 0.3).max(0.001),
+                        angle: if a.is_finite() { a.clamp(-360.0, 360.0) } else { 0.0 },
+                        blur_angle: f(p, "blurAngle", 15.0).clamp(0.0, 360.0),
+                    }]
+                }),
         },
         "filter.blurGallery.pathBlur" => FilterParams::PathBlur {
             paths: list::<BlurPath>(p, "paths")

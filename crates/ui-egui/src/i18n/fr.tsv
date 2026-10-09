@@ -24,6 +24,10 @@
 	Layer	Calque
 	Type	Texte
 	Select	Sélection
+	Top Left	En haut à gauche
+	Top Right	En haut à droite
+	Bottom Left	En bas à gauche
+	Bottom Right	En bas à droite
 	Filter	Filtre
 	View	Affichage
 	Window	Fenêtre
@@ -35,6 +39,9 @@
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
 	Close	Fermer
+	Minimize	Réduire
+	Maximize	Agrandir
+	Restore	Restaurer
 	Close All	Tout fermer
 	Close Others	Fermer les autres
 	Save	Enregistrer
@@ -102,6 +109,7 @@
 	Fill…	Remplir…
 	Stroke…	Contourner…
 	Content-Aware Fill…	Remplissage d'après le contenu…
+	Delete and Fill Selection	Supprimer et remplir la sélection
 	Content-Aware Scale	Mise à l'échelle d'après le contenu
 	Puppet Warp	Déformation par épingles
 	Perspective Warp	Déformation de la perspective
@@ -305,6 +313,7 @@
 	Smart Object	Objet intelligent
 	Convert to Smart Object	Convertir en objet intelligent
 	Convert to Embedded	Convertir en objet incorporé
+	Convert to Layers	Convertir en calques
 	Convert to Linked…	Convertir en objet lié…
 	Edit Contents	Modifier le contenu
 	Replace Contents…	Remplacer le contenu…
@@ -956,6 +965,7 @@
 	Drag a rectangle around the object	Tracez un rectangle autour de l'objet
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Faites glisser sur l'image pour ajouter une contrainte ; Maj pour horizontal/vertical ; clic droit pour supprimer.
 	Drag to move the active shape's path or the Work Path	Faites glisser pour déplacer le tracé de la forme active ou le tracé de travail
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic : sélectionner le point · Glisser : déplacer point, poignée ou segment · {shift}-clic : ajouter · {alt}-clic : sous-tracé entier
 	Draw with the Pen tool (P) or make a work path from a selection.	Dessinez avec l'outil Plume (P) ou créez un tracé de travail à partir d'une sélection.
 	Drop an image or PSD anywhere to open it.	Déposez une image ou un PSD n'importe où pour l'ouvrir.
 	Duplicate Layers…	Dupliquer les calques…
@@ -995,6 +1005,7 @@
 	Fisheye	Fisheye
 	Fit	Adapter
 	Fit Screen	Adapter à l'écran
+	Fill Screen	Remplir l’écran
 	Fit in View	Adapter à la vue
 	Fixed	Fixe
 	Fixed Ratio	Proportions fixes
@@ -1323,6 +1334,7 @@
 	Set background color	Définir la couleur d'arrière-plan
 	Set foreground color	Définir la couleur de premier plan
 	Set painting symmetry options	Définir les options de symétrie de peinture
+	Symmetry Off	Symétrie désactivée
 	Set shape fill type	Définir le type de remplissage de la forme
 	Set shape stroke type	Définir le type de contour de la forme
 	Set the text color	Définir la couleur du texte
@@ -1579,6 +1591,7 @@
 	Paint Bucket Tool	Outil Pot de peinture
 	Paints from the document's opening state	Peint à partir de l'état d'ouverture du document
 	Path Selection Tool	Outil Sélection de tracé
+	Direct Selection Tool	Outil Sélection directe
 	Pattern Overlay	Superposition de motif
 	Pen Pressure	Pression du stylet
 	Pen Tilt	Inclinaison du stylet
@@ -1774,12 +1787,14 @@
 	Memory usage mb	Utilisation de la mémoire (Mo)
 	GPU memory mb	Mémoire GPU (Mo)
 	Memory usage percent	Utilisation de la mémoire (%)
+	Low resolution previews	Aperçus en basse résolution
 	Missing glyph protection	Protection contre les glyphes manquants
 	Modern	Moderne
 	Nearest neighbor	Au plus proche
 	Never	Jamais
 	Normal tip	Pointe normale
 	Open as smart object	Ouvrir en tant qu'objet intelligent
+	Open in camera raw	Ouvrir dans Camera Raw
 	Open documents as tabs	Ouvrir les documents dans des onglets
 	Overscroll	Défilement au-delà des bords
 	Performance	Performances
@@ -1895,6 +1910,7 @@
 	System Info…	Informations système…
 	System Info	Informations système
 	More panels	Autres panneaux
+	More documents	Autres documents
 	These settings aren't available in PhotoCraft yet.	Ces paramètres ne sont pas encore disponibles dans PhotoCraft.
 	Graphics	Graphismes
 	Reset GPU Backend	Réinitialiser le moteur GPU
@@ -1923,6 +1939,8 @@
 	Brush Settings…  (F5): every option of this brush	Paramètres du pinceau…  (F5) : toutes les options de ce pinceau
 	Rename Brush…	Renommer le pinceau…
 	Delete Brush	Supprimer le pinceau
+	New Brush Preset…	Nouveau préréglage de pinceau…
+	Brush Preset Options	Options des préréglages de pinceau
 	Group name	Nom du groupe
 	Brush name	Nom du pinceau
 	Grid view	Vue en grille
@@ -1971,6 +1989,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Aucun tracé à partir duquel créer une sélection : dessinez-en un avec l'outil Plume ou sélectionnez-en un dans le panneau Tracés.
 	Cancel opening	Annuler l'ouverture
 	Cancelled opening {name}	Ouverture de {name} annulée
+	Developing {name}	Développement de {name}
 	Cancelled {label}	{label} : annulé
 	Esc to cancel	Échap pour annuler
 	Opening {name}	Ouverture de {name}
@@ -2451,12 +2470,15 @@
 	Floating point	Virgule flottante
 	Use Global Light	Utiliser la lumière globale
 	Native file drag-and-drop is unavailable	Le glisser-déposer natif de fichiers n'est pas disponible
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Le glisser-déposer natif de fichiers n'est pas encore pris en charge sous Wayland. Utilisez Fichier › Ouvrir, ou lancez PhotoCraft sous XWayland avec `WAYLAND_DISPLAY= photocraft`.
-	Use File › Open to open an image.	Utilisez Fichier › Ouvrir pour ouvrir une image.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Le glisser-déposer natif de fichiers n'est pas encore pris en charge sous Wayland. Utilisez Fichier › Ouvrir, ou copiez l'image dans votre gestionnaire de fichiers et collez-la avec {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Pour déposer des fichiers, lancez PhotoCraft sous XWayland : `{command}`
+	Edit › Paste	Édition › Coller
+	Use File › Open, or paste a copied image with {paste}.	Utilisez Fichier › Ouvrir, ou collez une image copiée avec {paste}.
 	Mixer Brush Tool	Outil Pinceau mélangeur
 	Invalid {mode} profile	Profil {mode} non valide
 	Unnamed {mode} profile	Profil {mode} sans nom
 	Show bounding box when dragging layer	Afficher le cadre de sélection lors du déplacement du calque
+	System title bar	Barre de titre du système
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Lasso de figeage : faites glisser pour figer une zone, Alt+glisser pour la libérer (L)
 	Rendering Mode	Mode de rendu
 	Automatic (recommended)	Automatique (recommandé)
@@ -2483,6 +2505,7 @@
 	Show Selected Region	Afficher la zone sélectionnée
 cameraRaw	Light	Lumière
 	Camera Raw Filter ({layer})	Filtre Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Tons clairs
 cameraRaw	Darks	Tons sombres
 cameraRaw	Blacks	Noirs
@@ -2529,6 +2552,7 @@ cameraRaw	Blending	Fusion
 	Frequency	Fréquence
 	Use tablet pressure to change pen width	Utiliser la pression de la tablette pour modifier la largeur de la plume
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	À propos
 	Contributors	Contributeurs
@@ -2560,3 +2584,77 @@ cameraRaw	Blending	Fusion
 	% of all commits	% de tous les commits
 	Lines +/−	Lignes +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login} : {prs} PR, {commits} commits, +{added} / −{deleted} lignes (Δ {delta}), +{binAdded} / −{binDeleted} fichiers binaires, {first} – {last}
+
+# Swatches panel
+	Create new swatch	Créer une nouvelle nuance
+	New Swatch…	Nouvelle nuance…
+	New Swatch Group…	Nouveau groupe de nuances…
+	Import Swatches…	Importer des nuances…
+	Replace Swatches…	Remplacer les nuances…
+	Export Swatches…	Exporter les nuances…
+	Export Swatches for Exchange…	Exporter les nuances pour l'échange…
+	Reset Swatches	Réinitialiser les nuances
+	Add to Swatches	Ajouter au nuancier
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	Fusion si :
+	Channels:	Couches :
+	Knockout	Masquage
+	Apply At Canvas Bounds	Appliquer l’effet aux limites de la zone de travail
+	Show/Hide All Panels	Afficher/masquer tous les panneaux
+	Show/Hide Panels	Afficher/masquer les panneaux
+	Could not open	Impossible d’ouvrir
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path} : le chemin n’est pas un Unicode valide ; renommez le fichier puis rouvrez-le.
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	Contenu :
+	Custom Pattern:	Motif personnalisé :
+	Foreground Color	Couleur de premier plan
+	Color…	Couleur…
+	50% Gray	Gris 50 %
+	{size} (was {old})	{size} (auparavant {old})
+	Cone	Cône
+	Cone (Inverted)	Cône (inversé)
+	Domed	Bombé
+	Domed (Inverted)	Bombé (inversé)
+	Diagonal (Descending)	Diagonale (descendante)
+
+	Red Eye Tool	Outil Yeux rouges
+	Pupil Size	Taille de la pupille
+	Darken Amount	Quantité d'assombrissement
+	Click a red pupil to neutralize it	Cliquez sur une pupille rouge pour la corriger
+	open source	code source ouvert
+	…and {n} more	…et {n} de plus
+
+	Eyedroppers:	Pipettes :
+	Set Black Point	Définir le point noir
+	Set Neutral Gray Point	Définir le point gris neutre
+	Set White Point	Définir le point blanc
+	Unavailable in this color mode	Indisponible dans ce mode colorimétrique
+	Selection Preview:	Aperçu de la sélection :
+	Black Matte	Fond noir
+	White Matte	Fond blanc
+
+# Layer colour labels.
+	Seafoam	Écume de mer
+	Indigo	Indigo
+	Fuchsia	Fuchsia
+	Violet	Violet
+	Large document: redrawing on the CPU	Document volumineux : redessin sur le CPU
+	This redraw took {seconds} s on the CPU.	Ce redessin sur le CPU a pris {seconds} s.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Les modifications qui touchent tout le document, comme le mode de fusion, l'opacité ou la visibilité d'un calque, le redessinent entièrement.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Les calques dépassent le budget de mémoire GPU. Augmenter Utilisation de la mémoire dans Préférences › Performances relève ce budget, jusqu'au quart de la mémoire de cet ordinateur.
+	The GPU compositor wasn't used: {reason}	Le compositeur GPU n'a pas été utilisé : {reason}
+fontWeight	Thin	Ultrafin
+fontWeight	ExtraLight	Extrafin
+fontWeight	Light	Maigre
+fontWeight	Regular	Normal
+fontWeight	Medium	Moyen
+fontWeight	SemiBold	Demi-gras
+fontWeight	Bold	Gras
+fontWeight	ExtraBold	Extra-gras
+fontWeight	Black	Noir
+fontWeight	Italic	Italique
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	Outil Tampon de motif
+	Impressionist	Impressionniste

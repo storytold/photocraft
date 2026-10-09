@@ -1,6 +1,6 @@
 //! Paint helpers: Paint Bucket and Gradient tool.
 
-use photocraft_algo::paint::{GradientShape, bucket_fill, bucket_fill_src, paint_gradient};
+use photocraft_algo::paint::{GradientShape, bucket_fill, bucket_fill_region_src, bucket_fill_src, paint_gradient};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, blend_from_str};
@@ -40,6 +40,16 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let c = color(p.get("color"), fg);
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
     let (tol, contiguous, aa, opacity) = (f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true), f(p, "opacity", 100.0) / 100.0);
+    let all = b(p, "sampleAllLayers", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
+    // Other visible layers can define the region, but the fill still writes only to the target.
+    let region = if all {
+        let (area, img) = crate::selection_cmds::sample_rgba8(s, true)?;
+        let region = photocraft_algo::selection::wand_region(&img, area, (x, y), tol, contiguous, aa);
+        drop(img);
+        region
+    } else {
+        None
+    };
     // Fill source: foreground colour (default) or a pattern (the Paint Bucket "Fill" dropdown).
     let source = p.get("contents").or_else(|| p.get("source")).and_then(Value::as_str).unwrap_or("foreground");
     let pattern = if source == "pattern" {
@@ -54,17 +64,26 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let filled = s.edit("Paint Bucket", |doc, active| {
         let area = doc.bounds();
         let sel = doc.selection.clone();
-        let (surf, _) = crate::channel_cmds::target_surface(doc, *active, p)?;
-        let ok = if let Some((tile, scale, angle, phase)) = &pattern {
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, *active, p)?;
+        let ok = if all && region.is_none() {
+            false
+        } else if let Some((tile, scale, angle, phase)) = &pattern {
             // Render the pattern over the canvas once, then sample it at each filled pixel.
             let place = photocraft_compose::pattern::Placement::new(photocraft_geom::Rect::EMPTY, false, *phase, *scale, *angle);
             let rendered = photocraft_compose::pattern::render(tile, &place, area);
             let w = area.width() as usize;
-            bucket_fill_src(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), |px, py| {
-                rendered[(py - area.y0) as usize * w + (px - area.x0) as usize]
-            })
+            let src = |px: i32, py: i32| rendered[(py - area.y0) as usize * w + (px - area.x0) as usize];
+            if let Some(region) = &region {
+                bucket_fill_region_src(surf, region, opacity, sel.as_ref(), lock, src);
+                true
+            } else {
+                bucket_fill_src(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, src)
+            }
+        } else if let Some(region) = &region {
+            bucket_fill_region_src(surf, region, opacity, sel.as_ref(), lock, |_, _| c);
+            true
         } else {
-            bucket_fill(surf, area, (x, y), tol, contiguous, aa, c, opacity, sel.as_ref())
+            bucket_fill(surf, area, (x, y), tol, contiguous, aa, c, opacity, sel.as_ref(), lock)
         };
         surf.prune();
         Ok(ok)
@@ -102,8 +121,8 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Gradient", |doc, active| {
         let sel = doc.selection.clone();
         let area = sel.as_ref().map(|m| m.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()).intersect(&doc.bounds());
-        let (surf, _) = crate::channel_cmds::target_surface(doc, *active, p)?;
-        paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, blend, dither, sel.as_ref());
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, *active, p)?;
+        paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, blend, dither, sel.as_ref(), lock);
         Ok(())
     })?;
     Ok(Value::Null)
@@ -117,7 +136,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Paint Bucket",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"contents":"foreground|pattern"="foreground","color":"#rrggbb"=foreground,"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"opacity":1..100=100,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"contents":"foreground|pattern"="foreground","color":"#rrggbb"=foreground,"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"opacity":1..100=100,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             enabled: crate::commands::has_paintable,
             run: bucket,
             journal: true,
@@ -149,6 +168,151 @@ mod tests {
     fn px(s: &Session, x: i32, y: i32) -> Vec<f32> {
         let d = s.active().unwrap();
         d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
+    }
+
+    /// A visible wall on the Background with an empty, active layer above it.
+    fn bucket_layers(depth: u32) -> (Session, photocraft_doc::LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 10, "depth": depth, "background": "white"})).unwrap();
+        let bottom = s.active().unwrap().active_layer.unwrap();
+        s.edit("wall", |doc, _| {
+            doc.layer_mut(bottom).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 0, 11, 10), &[0.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        (s, bottom)
+    }
+
+    #[test]
+    fn bucket_sample_all_layers_uses_visible_boundaries_at_all_depths() {
+        for depth in [8, 16, 32] {
+            for all in [None, Some(false), Some(true)] {
+                let (mut s, bottom) = bucket_layers(depth);
+                let before = s.active().unwrap().doc.layer(bottom).unwrap().clone();
+                let mut p = json!({"x": 2, "y": 2, "color": "#ff0000", "antiAlias": false, "tolerance": 0});
+                if let Some(all) = all {
+                    p["sampleAllLayers"] = json!(all);
+                }
+                assert_eq!(s.execute("paint.bucket", p.clone()).unwrap()["filled"], true);
+                assert_eq!(px(&s, 5, 5), vec![1.0, 0.0, 0.0, 1.0], "depth {depth}, all {all:?}");
+                let beyond = if all == Some(true) { vec![0.0; 4] } else { vec![1.0, 0.0, 0.0, 1.0] };
+                assert_eq!(px(&s, 15, 5), beyond, "depth {depth}, all {all:?}: sample flag controls the boundary");
+                assert_eq!(s.active().unwrap().doc.layer(bottom).unwrap(), &before, "only the active layer is written");
+                if all == Some(true) {
+                    assert_eq!(px(&s, 10, 5), vec![0.0; 4], "wall itself is untouched");
+                    assert!(s.undo());
+                    p["contiguous"] = json!(false);
+                    s.execute("paint.bucket", p).unwrap();
+                    assert_eq!(px(&s, 15, 5), vec![1.0, 0.0, 0.0, 1.0], "noncontiguous finds both white regions");
+                    assert_eq!(px(&s, 10, 5), vec![0.0; 4]);
+                    assert!(s.undo());
+                    assert_eq!(s.execute("paint.bucket", json!({"x": -1, "y": 2, "sampleAllLayers": true})).unwrap()["filled"], false);
+                    assert_eq!(px(&s, 5, 5), vec![0.0; 4], "an off-canvas sample does not fill the layer");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bucket_sample_all_layers_ignores_hidden_layers() {
+        let (mut s, _) = bucket_layers(8);
+        s.edit("hidden wall", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            l.surface_mut().unwrap().fill_rect(Rect::new(4, 0, 5, 10), &[0.0, 0.0, 0.0, 1.0]);
+            l.visible = false;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "antiAlias": false, "tolerance": 0, "sampleAllLayers": true})).unwrap();
+        assert_eq!(px(&s, 4, 5), vec![1.0, 0.0, 0.0, 1.0], "hidden wall does not bound the fill");
+        assert_eq!(px(&s, 8, 5), vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(px(&s, 15, 5), vec![0.0; 4], "visible wall still bounds the fill");
+    }
+
+    #[test]
+    fn bucket_sample_all_layers_keeps_selection_opacity_and_history() {
+        for depth in [8, 16, 32] {
+            let (mut s, _) = bucket_layers(depth);
+            s.execute("select.rect", json!({"x": 0, "y": 2, "width": 20, "height": 6})).unwrap();
+            s.edit("feather", |doc, _| {
+                doc.selection.as_mut().unwrap().fill_rect(Rect::new(0, 2, 4, 8), &[0.5]);
+                Ok(())
+            })
+            .unwrap();
+            let selection = s.active().unwrap().doc.selection.clone();
+            s.execute("paint.bucket", json!({"x": 2, "y": 5, "color": "#ff0000", "antiAlias": false, "tolerance": 0, "opacity": 50, "sampleAllLayers": true}))
+                .unwrap();
+            let (feathered, full) = (px(&s, 2, 5), px(&s, 6, 5));
+            assert!((feathered[3] - 0.25).abs() < 0.005 && (full[3] - 0.5).abs() < 0.005, "depth {depth}: selection coverage multiplies opacity");
+            assert_eq!(full[..3], [1.0, 0.0, 0.0]);
+            assert_eq!(px(&s, 6, 1), vec![0.0; 4], "outside selection");
+            assert_eq!(px(&s, 15, 5), vec![0.0; 4], "outside sampled region");
+            assert_eq!(s.active().unwrap().history.undo_label(), Some("Paint Bucket"));
+            assert!(s.undo());
+            assert_eq!(px(&s, 2, 5), vec![0.0; 4]);
+            assert_eq!(s.active().unwrap().doc.selection, selection);
+            assert!(s.redo());
+            assert_eq!(px(&s, 2, 5), feathered);
+            assert_eq!(px(&s, 6, 5), full);
+            assert_eq!(s.active().unwrap().doc.selection, selection);
+        }
+    }
+
+    #[test]
+    fn bucket_sample_all_layers_pattern_uses_the_same_region() {
+        let (mut s, _) = bucket_layers(8);
+        s.execute(
+            "paint.bucket",
+            json!({"x": 2, "y": 2, "contents": "pattern", "pattern": "Diagonal Lines", "antiAlias": false, "tolerance": 0, "sampleAllLayers": true}),
+        )
+        .unwrap();
+        let left: Vec<f32> = (0..10).map(|x| px(&s, x, 0)[0]).collect();
+        assert!(left.iter().any(|&r| r < 0.3) && left.iter().any(|&r| r > 0.9), "pattern varies inside the region: {left:?}");
+        assert_eq!(px(&s, 10, 5), vec![0.0; 4], "wall untouched");
+        assert_eq!(px(&s, 15, 5), vec![0.0; 4], "region past the wall untouched");
+    }
+
+    #[test]
+    fn bucket_sample_all_layers_mask_and_channel_targets_keep_their_own_boundaries() {
+        for target in [json!("mask"), json!({"channel": 0}), json!("quickMask")] {
+            for all in [false, true] {
+                let (mut s, _) = bucket_layers(8);
+                match crate::channel_cmds::target_of(&json!({"target": target})) {
+                    crate::channel_cmds::Target::Mask => {
+                        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                    }
+                    crate::channel_cmds::Target::Alpha(_) => {
+                        s.execute("channel.new", json!({"fill": "white"})).unwrap();
+                    }
+                    crate::channel_cmds::Target::QuickMask => {
+                        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+                    }
+                    _ => panic!("expected a grayscale target"),
+                }
+                let p = json!({"x": 2, "y": 2, "color": "#000000", "antiAlias": false, "tolerance": 0, "target": target, "sampleAllLayers": all});
+                s.edit("target wall", |doc, active| {
+                    let area = doc.bounds();
+                    let (surf, _) = crate::channel_cmds::target_surface(doc, *active, &p).unwrap();
+                    surf.fill_rect(area, &[1.0]);
+                    surf.fill_rect(Rect::new(5, 0, 6, 10), &[0.0]);
+                    Ok(())
+                })
+                .unwrap();
+                s.execute("paint.bucket", p.clone()).unwrap();
+                let d = &s.active().unwrap().doc;
+                let surf = match crate::channel_cmds::target_of(&p) {
+                    crate::channel_cmds::Target::Mask => &d.layer(s.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface,
+                    crate::channel_cmds::Target::Alpha(i) => &d.channels[i].surface,
+                    crate::channel_cmds::Target::QuickMask => &d.quick_mask.as_ref().unwrap().surface,
+                    _ => panic!("expected a grayscale target"),
+                };
+                assert_eq!(surf.sample_channel(2, 5, 0), 0.0, "{target}, all {all}: filled target");
+                assert_eq!(surf.sample_channel(7, 5, 0), 1.0, "{target}, all {all}: stopped at target wall");
+                assert_eq!(px(&s, 2, 5), vec![0.0; 4], "layer pixels remain untouched");
+            }
+        }
     }
 
     #[test]

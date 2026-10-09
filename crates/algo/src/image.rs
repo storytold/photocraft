@@ -91,6 +91,9 @@ impl Image {
     /// Sample with an edge policy relative to `area`.
     #[inline]
     pub fn get_edge(&self, x: i32, y: i32, c: usize, edge: Edge, area: Rect) -> f32 {
+        if area.is_empty() {
+            return 0.0;
+        }
         if area.contains(x, y) {
             return self.get(x, y, c);
         }

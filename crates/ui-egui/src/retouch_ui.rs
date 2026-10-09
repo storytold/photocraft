@@ -10,37 +10,40 @@ use crate::canvas::ViewXform;
 use crate::state::Tool;
 use crate::theme::Tokens;
 
-/// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
-pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
-    let o = app.ui.tool_options.clone();
-    let pts = json!(points);
-    let (cmd, mut p): (&str, Value) = match tool {
-        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all_layers})),
-        Tool::MixerBrush => ("paint.mixerBrush", json!({})),
-        Tool::Healing | Tool::CloneStamp => {
-            let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample});
-            // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine
-            // keeps the aligned pairing and applies the slot's scale/rotation/flip.
-            let slot = app.session.presets.clone.active().source.is_some();
-            match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
-                _ if slot => {}
-                (Some(off), _) => p["offset"] = json!(off),
-                (None, Some(src)) => p["source"] = json!(src),
-                (None, None) => {
-                    // Photoshop says Option-click on the Mac and Alt-click on Windows.
-                    app.ui.status = if cfg!(target_os = "macos") {
-                        tl!("Option-click to define a source point to clone from")
-                    } else {
-                        tl!("Alt-click to define a source point to clone from")
-                    }
-                    .into();
-                    app.ui.status_error = true;
-                    return true;
-                }
-            }
-            (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
-        }
-        Tool::HistoryBrush => ("paint.historyBrush", json!({})),
+/// The tool a stroke uses with ⌥ held: Dodge and Burn swap, as do Blur and Sharpen.
+pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
+    match (tool, alt) {
+        (Tool::Dodge, true) => Tool::Burn,
+        (Tool::Burn, true) => Tool::Dodge,
+        (Tool::Blur, true) => Tool::Sharpen,
+        (Tool::Sharpen, true) => Tool::Blur,
+        _ => tool,
+    }
+}
+
+/// Clone Stamp / Healing Brush params for the options bar and the clone source (without
+/// `points` and `target`): shared by the live preview and the commit. `None` when no source
+/// point is set yet.
+pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
+    let o = &app.ui.tool_options;
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample});
+    // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
+    // the aligned pairing and applies the slot's scale/rotation/flip.
+    let slot = app.session.presets.clone.active().source.is_some();
+    match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
+        _ if slot => {}
+        (Some(off), _) => p["offset"] = json!(off),
+        (None, Some(src)) => p["source"] = json!(src),
+        (None, None) => return None,
+    }
+    Some(p)
+}
+
+/// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
+/// Blur, Sharpen, Smudge, Dodge, Burn, Sponge. Shared by the live preview and the commit.
+pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static str, Value)> {
+    let o = &app.ui.tool_options;
+    Some(match tool {
         Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all_layers})),
         Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all_layers})),
         Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all_layers})),
@@ -49,6 +52,53 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
         ),
         Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
+        _ => return None,
+    })
+}
+
+/// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
+pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
+    let o = app.ui.tool_options.clone();
+    let pts = json!(points);
+    let (cmd, mut p): (&str, Value) = match tool {
+        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all_layers})),
+        Tool::MixerBrush => ("paint.mixerBrush", json!({})),
+        Tool::PatternStamp => {
+            let mut p = json!({
+                "aligned": o.pattern_stamp_aligned,
+                "impressionist": o.pattern_stamp_impressionist,
+                "scale": o.pattern_stamp_scale,
+                "angle": o.pattern_stamp_angle,
+            });
+            if o.pattern_stamp_aligned
+                && let Some(ph) = app.ui.pattern_stamp_phase
+            {
+                p["phase"] = json!(ph);
+            }
+            if let Some(id) = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|x| x.id.clone()) {
+                p["pattern"] = json!(id);
+            }
+            ("paint.patternStamp", p)
+        }
+        Tool::Healing | Tool::CloneStamp => {
+            let Some(p) = clone_params(app) else {
+                // Option-click on the Mac, Alt-click on Windows.
+                app.ui.status = if cfg!(target_os = "macos") {
+                    tl!("Option-click to define a source point to clone from")
+                } else {
+                    tl!("Alt-click to define a source point to clone from")
+                }
+                .into();
+                app.ui.status_error = true;
+                return true;
+            };
+            (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
+        }
+        Tool::HistoryBrush => ("paint.historyBrush", json!({})),
+        Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
+            Some(cp) => cp,
+            None => return false,
+        },
         Tool::QuickSelection => {
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
@@ -66,6 +116,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         Ok(r) if matches!(tool, Tool::Healing | Tool::CloneStamp) => {
             // Aligned: keep the offset for later strokes; non-aligned: every stroke restarts at the source.
             app.ui.clone_offset = r.get("offset").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.clone_aligned);
+        }
+        Ok(r) if tool == Tool::PatternStamp => {
+            app.ui.pattern_stamp_phase = r.get("phase").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.pattern_stamp_aligned);
         }
         Ok(_) => {}
         Err(e) => {
@@ -169,20 +222,23 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
     app.ui.status_error = false;
 }
 
-/// Crosshair where the clone source is sampled from for the current pointer position.
-pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+/// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
+/// is painted, as in Photoshop: setting the source (⌥-click) leaves nothing on the canvas (#668).
+pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
-        return;
+        return None;
     }
-    let at =
-        app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]])).or(app.hover_doc);
-    let src = match (crate::preset_panels::clone_sample_point(app, at), app.ui.clone_offset, at, app.ui.clone_source) {
+    let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
+    match (crate::preset_panels::clone_sample_point(app, Some(at)), app.ui.clone_offset, app.ui.clone_source) {
         (Some(p), ..) => Some(p),
-        (None, Some(off), Some(h), _) => Some([h[0] + off[0], h[1] + off[1]]),
-        (None, None, _, Some(s)) => Some(s),
-        _ => None,
-    };
-    let Some(s) = src else { return };
+        (None, Some(off), _) => Some([at[0] + off[0], at[1] + off[1]]),
+        (None, None, s) => s,
+    }
+}
+
+/// Crosshair at [`source_marker_point`].
+pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    let Some(s) = source_marker_point(app) else { return };
     let c = xf.to_screen(s[0] as f32, s[1] as f32);
     for (w, col) in [(3.0, Color32::from_black_alpha(160)), (1.0, Color32::WHITE)] {
         painter.line_segment([c - vec2(7.0, 0.0), c + vec2(7.0, 0.0)], Stroke::new(w, col));
@@ -202,7 +258,7 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
 
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove)
+    if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
         || matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)
     {
         return false;
@@ -242,6 +298,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
             crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Lasso around an area, then drag the selection"));
+        }
+        Tool::PatternStamp => {
+            pattern_stamp_options(app, ui);
         }
         Tool::Healing | Tool::CloneStamp => {
             crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
@@ -298,9 +357,41 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let _ = app.run("select.subject", json!({}));
             }
         }
+        Tool::RedEye => {
+            opt(ui, tl!("Pupil Size"));
+            crate::widgets::value_field(ui, &mut o.red_eye_pupil_size, 1.0..=100.0, "", 50.0);
+            opt(ui, tl!("Darken Amount"));
+            crate::widgets::value_field(ui, &mut o.red_eye_darken, 0.0..=100.0, "", 50.0);
+            crate::widgets::vline(ui, 22.0);
+            opt(ui, tl!("Click a red pupil to neutralize it"));
+        }
         _ => {}
     }
     true
+}
+
+fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let opts: Vec<(String, String)> = app.session.patterns.items.iter().map(|p| (p.id.clone(), p.display_name().to_string())).collect();
+    let mut pat = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone()).unwrap_or_default();
+    let o = &mut app.ui.tool_options;
+    crate::widgets::checkbox(ui, &mut o.pattern_stamp_aligned, tl!("Aligned"));
+    crate::widgets::checkbox(ui, &mut o.pattern_stamp_impressionist, tl!("Impressionist"));
+    crate::widgets::vline(ui, 22.0);
+    opt(ui, tl!("Pattern"));
+    let opts_ref: Vec<(String, &str)> = opts.iter().map(|(id, n)| (id.clone(), n.as_str())).collect();
+    let picked = if opts_ref.is_empty() {
+        ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
+        false
+    } else {
+        crate::widgets::dropdown(ui, "pattern-stamp-pat", &mut pat, &opts_ref, 140.0)
+    };
+    opt(ui, tl!("Scale"));
+    crate::widgets::value_field(ui, &mut o.pattern_stamp_scale, 1.0..=1000.0, "%", 58.0);
+    opt(ui, tl!("Angle:"));
+    crate::widgets::value_field(ui, &mut o.pattern_stamp_angle, -180.0..=180.0, "°", 58.0);
+    if picked {
+        let _ = app.run("pattern.presets.select", json!({"pattern": pat}));
+    }
 }
 
 #[cfg(test)]
@@ -332,6 +423,32 @@ mod tests {
     fn stripes(app: &mut PhotocraftApp, step: usize, target: &str) {
         for x in (0..100).step_by(step) {
             app.run("paint.pencil", json!({"points": [[x, 0], [x, 60]], "size": 2, "color": "#606060", "target": target})).unwrap();
+        }
+    }
+
+    #[test]
+    fn alt_flips_dodge_burn_and_blur_sharpen() {
+        for (tool, flipped) in [(Tool::Dodge, Tool::Burn), (Tool::Burn, Tool::Dodge), (Tool::Blur, Tool::Sharpen), (Tool::Sharpen, Tool::Blur)] {
+            assert_eq!(alt_flipped(tool, true), flipped);
+            assert_eq!(alt_flipped(tool, false), tool);
+        }
+        for tool in [Tool::Sponge, Tool::Smudge, Tool::Brush] {
+            assert_eq!(alt_flipped(tool, true), tool, "{tool:?} has no ⌥ counterpart");
+        }
+    }
+
+    #[test]
+    fn alt_stroke_runs_the_opposite_tool() {
+        // ⌥ held as the stroke starts: Dodge burns, Burn dodges, Blur sharpens, Sharpen blurs.
+        for (tool, cmd) in [(Tool::Dodge, "paint.burn"), (Tool::Burn, "paint.dodge"), (Tool::Blur, "paint.sharpen"), (Tool::Sharpen, "paint.blur")] {
+            let mut app = app();
+            app.ui.tool = tool;
+            let m = egui::Modifiers::ALT;
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
+            assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some(cmd), "{tool:?} with ⌥");
+            assert_eq!(app.ui.tool, tool, "the selected tool stays {tool:?}");
         }
     }
 
@@ -484,5 +601,90 @@ mod tests {
             let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap();
             assert!(sel.sample_channel(72, 30, 0) > 0.0 && sel.sample_channel(22, 30, 0) == 0.0, "{mode}: the selection follows");
         }
+    }
+
+    #[test]
+    fn red_eye_click_corrects_a_pupil_and_errors_on_a_miss() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[50, 30]], "size": 18, "hardness": 100, "color": "#f21818"})).unwrap();
+        let before = active(&app).surface().unwrap().rgba(50, 30);
+        assert!(before[0] > before[1] + 0.4, "{before:?}");
+        app.ui.tool = Tool::RedEye;
+        // Pupil Size 15 → search radius 22 px, so a click at (8,8) cannot reach the blob at (50,30).
+        app.ui.tool_options.red_eye_pupil_size = 15.0;
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, egui::Modifiers::NONE);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.redEye"));
+        let after = active(&app).surface().unwrap().rgba(50, 30);
+        assert!(after[0] < before[0] - 0.15, "before {before:?} after {after:?}");
+        tool_event(&mut app, ToolEvent::Down { x: 8.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 8.0, y: 8.0 }, egui::Modifiers::NONE);
+        assert!(app.ui.status_error);
+        assert!(app.ui.status.contains("no red-eye pixels"), "{}", app.ui.status);
+    }
+
+    #[test]
+    fn red_eye_options_bar_shows_pupil_size_and_darken() {
+        use crate::theme::ThemeKind;
+        use egui::vec2;
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        app.ui.tool = Tool::RedEye;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Pupil Size");
+        h.get_by_label("Darken Amount");
+        assert_eq!(h.state().ui.tool_options.red_eye_pupil_size, 50.0);
+        assert_eq!(h.state().ui.tool_options.red_eye_darken, 50.0);
+    }
+
+    #[test]
+    fn red_eye_is_in_the_j_flyout() {
+        let j = [Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye];
+        assert!(j.contains(&Tool::RedEye));
+        assert!(j.iter().all(|t| t.key() == 'J'));
+    }
+
+    #[test]
+    fn s_group_is_clone_stamp_then_pattern_stamp() {
+        assert_eq!(Tool::CloneStamp.key(), 'S');
+        assert_eq!(Tool::PatternStamp.key(), 'S');
+        let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|t| t.key() == 'S').collect();
+        assert_eq!(group, vec![Tool::CloneStamp, Tool::PatternStamp]);
+        assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
+    }
+
+    #[test]
+    fn pattern_stamp_stroke_paints_pixels_and_keeps_phase_when_aligned() {
+        let mut app = app();
+        assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[20.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.patternStamp"));
+        assert!(app.ui.pattern_stamp_phase.is_some());
+        let px = active(&app).surface().unwrap().rgba(30, 30);
+        assert!(px[3] > 0.5, "the stamp paints through the brush: {px:?}");
+        app.ui.tool_options.pattern_stamp_aligned = false;
+        app.ui.pattern_stamp_phase = None;
+        assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[70.0, 30.0, 1.0]], egui::Modifiers::NONE));
+        assert!(app.ui.pattern_stamp_phase.is_none(), "unaligned strokes do not keep phase");
+    }
+
+    #[test]
+    fn pattern_stamp_does_not_require_a_clone_source() {
+        let mut app = app();
+        assert!(app.ui.clone_source.is_none());
+        assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE));
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert!(app.ui.clone_source.is_none());
     }
 }

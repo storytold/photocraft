@@ -25,6 +25,10 @@
 	Layer	Vrstva
 	Type	Text
 	Select	Výběr
+	Top Left	Vlevo nahoře
+	Top Right	Vpravo nahoře
+	Bottom Left	Vlevo dole
+	Bottom Right	Vpravo dole
 	Filter	Filtr
 	View	Zobrazení
 	Window	Okno
@@ -37,6 +41,9 @@
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
 	Close	Zavřít
+	Minimize	Minimalizovat
+	Maximize	Maximalizovat
+	Restore	Obnovit
 	Close All	Zavřít vše
 	Close Others	Zavřít ostatní
 	Save	Uložit
@@ -104,6 +111,7 @@
 	Fill…	Vyplnit…
 	Stroke…	Tah…
 	Content-Aware Fill…	Výplň s ohledem na obsah…
+	Delete and Fill Selection	Odstranit a vyplnit výběr
 	Content-Aware Scale	Změna velikosti s ohledem na obsah
 	Puppet Warp	Loutková deformace
 	Perspective Warp	Perspektivní deformace
@@ -315,6 +323,7 @@
 	Smart Object	Chytrý objekt
 	Convert to Smart Object	Převést na chytrý objekt
 	Convert to Embedded	Převést na vložený
+	Convert to Layers	Převést na vrstvy
 	Convert to Linked…	Převést na propojený…
 	Edit Contents	Upravit obsah
 	Replace Contents…	Nahradit obsah…
@@ -981,14 +990,17 @@
 	Drag a rectangle around the object	Táhněte obdélník kolem objektu
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Tažením v obraze přidáte omezení; Shift pro vodorovné/svislé; pravým kliknutím odstraníte.
 	Drag to move the active shape's path or the Work Path	Tažením přesunete cestu aktivního tvaru nebo pracovní cestu
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klik: vybrat bod · Tažení: přesunout bod, úchyt nebo segment · {shift}+klik: přidat · {alt}+klik: celá podcesta
 	Draw with the Pen tool (P) or make a work path from a selection.	Kreslete nástrojem pero (P) nebo vytvořte pracovní cestu z výběru.
 	Drop an image or PSD anywhere to open it.	Přetáhněte sem obrázek nebo PSD a otevře se.
 	Native file drag-and-drop is unavailable	Nativní přetahování souborů ve Waylandu není dostupné
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Nativní přetahování souborů ve Waylandu zatím není podporováno. Použijte Soubor › Otevřít nebo spusťte PhotoCraft v XWayland s `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Nativní přetahování souborů ve Waylandu zatím není podporováno. Použijte Soubor › Otevřít, nebo obrázek zkopírujte ve správci souborů a vložte ho pomocí {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Chcete-li soubory přetahovat, spusťte PhotoCraft v XWayland: `{command}`
+	Edit › Paste	Úpravy › Vložit
 	Duplicate Layers…	Duplikovat vrstvy…
 	Duplicate style	Duplikovat styl
 	Edit Toolbar…	Upravit panel nástrojů…
-	Use File › Open to open an image.	Obrázek otevřete přes Soubor › Otevřít.
+	Use File › Open, or paste a copied image with {paste}.	Použijte Soubor › Otevřít, nebo vložte zkopírovaný obrázek pomocí {paste}.
 	Edit in Quick Mask Mode  (Q)	Upravit v režimu rychlé masky  (Q)
 	Edit in Standard Mode  (Q)	Upravit ve standardním režimu  (Q)
 	Effects	Efekty
@@ -1023,6 +1035,7 @@
 	Fisheye	Rybí oko
 	Fit	Přizpůsobit
 	Fit Screen	Přizpůsobit obrazovce
+	Fill Screen	Vyplnit obrazovku
 	Fit in View	Přizpůsobit zobrazení
 	Fixed	Pevný
 	Fixed Ratio	Pevný poměr
@@ -1351,6 +1364,7 @@
 	Set background color	Nastavit barvu pozadí
 	Set foreground color	Nastavit barvu popředí
 	Set painting symmetry options	Nastavit možnosti symetrie malby
+	Symmetry Off	Symetrie vypnuta
 	Set shape fill type	Nastavit typ výplně tvaru
 	Set shape stroke type	Nastavit typ tahu tvaru
 	Set the text color	Nastavit barvu textu
@@ -1609,6 +1623,7 @@
 	Paint Bucket Tool	Nástroj plechovka barvy
 	Paints from the document's opening state	Maluje ze stavu dokumentu při otevření
 	Path Selection Tool	Nástroj výběr cesty
+	Direct Selection Tool	Nástroj přímý výběr
 	Pattern Overlay	Překrytí vzorkem
 	Pen Pressure	Přítlak pera
 	Pen Tilt	Náklon pera
@@ -1708,6 +1723,7 @@
 	Constraints ({n})	Omezení ({n})
 	Align {what}	Zarovnat: {what}
 @plural	{n} Layer|{n} Layers	{n} vrstva|{n} vrstvy|{n} vrstev
+@plural	{n} layer|{n} layers	{n} vrstva|{n} vrstvy|{n} vrstev
 @plural	Group · {n} layer|Group · {n} layers	Skupina · {n} vrstva|Skupina · {n} vrstvy|Skupina · {n} vrstev
 
 # Preferences (labels are generated from the setting names)
@@ -1809,12 +1825,14 @@
 	Memory usage mb	Využití paměti (MB)
 	GPU memory mb	Paměť GPU (MB)
 	Memory usage percent	Využití paměti (%)
+	Low resolution previews	Náhledy v nízkém rozlišení
 	Missing glyph protection	Ochrana proti chybějícím glyfům
 	Modern	Moderní
 	Nearest neighbor	Nejbližší soused
 	Never	Nikdy
 	Normal tip	Normální hrot
 	Open as smart object	Otevřít jako chytrý objekt
+	Open in camera raw	Otevírat v Camera Raw
 	Open documents as tabs	Otevírat dokumenty jako záložky
 	Overscroll	Posouvání za okraj
 	Performance	Výkon
@@ -1852,6 +1870,7 @@
 	Show slice numbers	Zobrazit čísla řezů
 	Show tooltips	Zobrazit popisky nástrojů
 	Show bounding box when dragging layer	Při přetahování vrstvy zobrazit ohraničovací rámeček
+	System title bar	Systémové záhlaví okna
 	Show transformation values	Zobrazit hodnoty transformace
 	Slice color	Barva řezů
 	Smart guide color	Barva chytrých vodítek
@@ -1935,6 +1954,7 @@
 	System Info…	Informace o systému…
 	System Info	Informace o systému
 	More panels	Další panely
+	More documents	Další dokumenty
 	These settings aren't available in PhotoCraft yet.	Tato nastavení zatím v aplikaci PhotoCraft nejsou k dispozici.
 	Graphics	Grafika
 	Reset GPU Backend	Obnovit grafický backend
@@ -1963,6 +1983,8 @@
 	Brush Settings…  (F5): every option of this brush	Nastavení štětce…  (F5): všechny možnosti tohoto štětce
 	Rename Brush…	Přejmenovat štětec…
 	Delete Brush	Odstranit štětec
+	New Brush Preset…	Nová předvolba štětce…
+	Brush Preset Options	Možnosti přednastavení štětců
 	Group name	Název skupiny
 	Brush name	Název štětce
 	Grid view	Zobrazení mřížky
@@ -2012,6 +2034,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Není k dispozici žádná cesta, ze které by šlo vytvořit výběr: nakreslete ji nástrojem Pero nebo ji vyberte na panelu Cesty.
 	Cancel opening	Zrušit otevírání
 	Cancelled opening {name}	Otevírání {name} zrušeno
+	Developing {name}	Vyvolávání {name}
 	Cancelled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
 	Opening {name}	Otevírání {name}
@@ -2050,6 +2073,7 @@
 cameraRaw	Light	Světlo
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtr Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Red	Červené
 cameraRaw	Orange	Oranžové
 cameraRaw	Yellow	Žluté
@@ -2096,6 +2120,7 @@ cameraRaw	Color	Barvy
 	Frequency	Frekvence
 	Use tablet pressure to change pen width	Měnit šířku pera přítlakem tabletu
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	O aplikaci
 	Contributors	Přispěvatelé
@@ -2128,3 +2153,81 @@ cameraRaw	Color	Barvy
 	% of all commits	% všech commitů
 	Lines +/−	Řádky +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, commity: {commits}, řádky +{added} / −{deleted} (Δ {delta}), binární soubory +{binAdded} / −{binDeleted}, {first} – {last}
+
+# Swatches panel
+	Create new swatch	Vytvořit nový vzorek
+	New Swatch…	Nový vzorek…
+	New Swatch Group…	Nová skupina vzorků…
+	Import Swatches…	Importovat vzorky…
+	Replace Swatches…	Nahradit vzorky…
+	Export Swatches…	Exportovat vzorky…
+	Export Swatches for Exchange…	Exportovat vzorky pro výměnu…
+	Reset Swatches	Obnovit vzorky
+	Add to Swatches	Přidat do vzorníku
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	Prolnout, pokud:
+	Channels:	Kanály:
+	Knockout	Vyřazení
+	Apply At Canvas Bounds	Použít efekt na hranicích plátna
+	Show/Hide All Panels	Zobrazit/skrýt všechny panely
+	Show/Hide Panels	Zobrazit/skrýt panely
+	Could not open	Nelze otevřít
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: cesta není platný Unicode; přejmenujte soubor a otevřete jej znovu.
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	Obsah:
+	Custom Pattern:	Vlastní vzorek:
+	Foreground Color	Barva popředí
+	Color…	Barva…
+	50% Gray	50% šedá
+	Color Adaptation	Přizpůsobení barev
+	{size} (was {old})	{size} (dříve {old})
+	Cone	Kužel
+	Cone (Inverted)	Kužel (obrácený)
+	Domed	Kopule
+	Domed (Inverted)	Kopule (obrácená)
+	Diagonal (Descending)	Diagonála (sestupná)
+
+	Red Eye Tool	Nástroj červené oči
+	Red Eye	Červené oči
+	Pupil Size	Velikost zornice
+	Darken Amount	Míra ztmavení
+	Click a red pupil to neutralize it	Klepněte na červenou zornici
+	open source	otevřený zdrojový kód
+	…and {n} more	…a dalších {n}
+
+	Eyedroppers:	Kapátka:
+	Set Black Point	Nastavit černý bod
+	Set Neutral Gray Point	Nastavit neutrální šedý bod
+	Set White Point	Nastavit bílý bod
+	Unavailable in this color mode	V tomto barevném režimu není k dispozici
+	Selection Preview:	Náhled výběru:
+	Black Matte	Černý podklad
+	White Matte	Bílý podklad
+
+# Layer colour labels.
+	Seafoam	Mořská pěna
+	Indigo	Indigová
+	Fuchsia	Fuchsiová
+	Violet	Fialová
+	Reset	Obnovit
+	Large document: redrawing on the CPU	Velký dokument: překreslování na CPU
+	This redraw took {seconds} s on the CPU.	Toto překreslení na CPU trvalo {seconds} s.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Úpravy, které mění celý dokument, například režim prolnutí, krytí nebo viditelnost vrstvy, jej překreslí celý.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Vrstvy se nevejdou do rozpočtu paměti GPU. Zvýšením hodnoty Využití paměti v Předvolbách › Výkon se rozpočet zvětší, nejvýše na čtvrtinu paměti tohoto počítače.
+	The GPU compositor wasn't used: {reason}	Kompozitor GPU nebyl použit: {reason}
+fontWeight	Thin	Jemná
+fontWeight	ExtraLight	Extrajemná
+fontWeight	Light	Světlá
+fontWeight	Regular	Normální
+fontWeight	Medium	Střední
+fontWeight	SemiBold	Polotučná
+fontWeight	Bold	Tučná
+fontWeight	ExtraBold	Extratučná
+fontWeight	Black	Černá
+fontWeight	Italic	Kurzíva
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	Nástroj razítko vzorku
+	Pattern Stamp	Razítko vzorku
+	Impressionist	Impresionista

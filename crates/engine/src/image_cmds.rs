@@ -48,7 +48,15 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
     }
 }
 
-fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)) {
+/// Converts every pixel surface of a layer tree (masks included) to `depth`.
+pub(crate) fn convert_layers_depth(layers: &mut [Layer], depth: SampleType) {
+    for_each_surface(layers, true, &mut |surf, _| {
+        let f = surf.format().with_sample(depth);
+        *surf = surf.convert(f);
+    });
+}
+
+pub(crate) fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)) {
     for l in layers {
         f(l);
         if let Some(ch) = l.children_mut() {
@@ -100,6 +108,9 @@ fn parse_resample(s: &str) -> Option<Resample> {
     })
 }
 
+/// The largest raster Image Size resamples to: the decoders' default allocation budget.
+const MAX_RESAMPLE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 } else { 2 << 30 };
+
 /// Image → Image Size.
 fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -115,6 +126,20 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         (None, None) => (ow as f64, oh as f64),
     };
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
+    // Each side may reach 300000 px, but resampling writes real pixels: refuse a canvas whose
+    // raster alone would pass the budget, before allocating any of it (#1544).
+    let bytes = u64::from(nw).saturating_mul(u64::from(nh)).saturating_mul(d.doc.pixel_format().bytes_per_pixel() as u64);
+    if resample.is_some() && (nw, nh) != (ow, oh) && bytes > MAX_RESAMPLE_BYTES {
+        let mp = |w: u32, h: u32| u64::from(w) * u64::from(h) / 1_000_000;
+        let max_mp = MAX_RESAMPLE_BYTES / d.doc.pixel_format().bytes_per_pixel().max(1) as u64 / 1_000_000;
+        return Err(bad(
+            "image.imageSize",
+            format!(
+                "{nw} x {nh} px is {} megapixels; resampling at this bit depth is limited to {max_mp} megapixels. Choose a smaller size, or turn Resample off to change only the resolution",
+                mp(nw, nh)
+            ),
+        ));
+    }
     let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
     s.edit("Image Size", |doc, _| {
         if let Some(r) = dpi {
@@ -147,10 +172,29 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "width": nw, "height": nh }))
 }
 
+fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
+    EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
+}
+
 /// Moves every surface, channel, selection and guide by `(dx, dy)`.
-fn translate_doc(doc: &mut Document, dx: i32, dy: i32) {
+///
+/// Fails, before moving anything, when some pixels would land outside the i32 coordinate
+/// range: the surface copy saturates its target rectangle there, which no longer matches
+/// the pixel data and panics (#959).
+fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> Result<()> {
     if dx == 0 && dy == 0 {
-        return;
+        return Ok(());
+    }
+    let fits = |r: Rect| {
+        r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
+    };
+    let mut ok = true;
+    for_each_surface(&mut doc.layers, true, &mut |surf, _| ok = ok && fits(surf.content_bounds()));
+    ok = ok
+        && doc.channels.iter().chain(doc.quick_mask.as_ref()).all(|ch| fits(ch.surface.content_bounds()))
+        && doc.selection.as_ref().is_none_or(|sel| fits(sel.content_bounds()));
+    if !ok {
+        return Err(bad(cmd, format!("moving the document by ({dx}, {dy}) would push its pixels outside the 32-bit coordinate range")));
     }
     for_each_surface(&mut doc.layers, true, &mut |surf, _| *surf = translate_surface(surf, dx, dy));
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
@@ -162,16 +206,22 @@ fn translate_doc(doc: &mut Document, dx: i32, dy: i32) {
     // Type, shapes, smart objects, vector masks, paths, guides, slices, notes… (caches above
     // are already translated exactly, so nothing needs re-rendering for the move itself).
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
+    Ok(())
 }
 
 /// Crops the document to `r` (in current document coordinates).
-fn crop_doc(doc: &mut Document, r: Rect, delete_pixels: bool) {
+fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool) -> Result<()> {
+    // The origin moves to (0, 0); `-i32::MIN` has no i32 value (#959).
+    let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
+        return Err(bad(cmd, format!("the crop origin ({}, {}) can't be moved to (0, 0) within the 32-bit coordinate range", r.x0, r.y0)));
+    };
     if delete_pixels {
         for_each_surface(&mut doc.layers, false, &mut |surf, _| *surf = crop_surface(surf, r));
     }
-    translate_doc(doc, -r.x0, -r.y0);
+    translate_doc(doc, cmd, dx, dy)?;
     doc.size = Size::new(r.width(), r.height());
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+    Ok(())
 }
 
 fn anchor_factors(a: &str) -> (f64, f64) {
@@ -221,7 +271,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let dy = ((nh as f64 - oh) * ay).round() as i32;
     let ext = extension_color(s, p);
     s.edit("Canvas Size", |doc, _| {
-        translate_doc(doc, dx, dy);
+        translate_doc(doc, "image.canvasSize", dx, dy)?;
         doc.size = Size::new(nw, nh);
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
         let canvas = doc.bounds();
@@ -247,6 +297,9 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "width": nw, "height": nh, "offset": [dx, dy] }))
 }
 
+/// The largest side an explicit crop may give the canvas (the `file.new` and Canvas Size limit).
+const MAX_CROP_SIDE: i32 = 300_000;
+
 /// Image → Crop (to the selection bounds).
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
@@ -258,7 +311,20 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         crate::commands::int_i32("image.crop", p, "width")?,
         crate::commands::int_i32("image.crop", p, "height")?,
     ) {
-        (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => Some(Rect::new(x, y, x.saturating_add(w), y.saturating_add(h))),
+        (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => {
+            // The new canvas size: refuse what File › New, Image Size and Canvas Size won't make,
+            // before anything changes. Unbounded, a following full-canvas flatten (Trim, Duplicate
+            // Merged) aborted on allocation (#960).
+            if w > MAX_CROP_SIDE || h > MAX_CROP_SIDE {
+                return Err(bad("image.crop", format!("{w} x {h} exceeds the {MAX_CROP_SIDE} px limit per side")));
+            }
+            // A far edge past i32::MAX used to saturate, silently cropping less than asked (#959).
+            let end = |o: i32, len: i32, ko: &str, kl: &str| {
+                o.checked_add(len)
+                    .ok_or_else(|| bad("image.crop", format!("`{ko}` + `{kl}` = {} is outside the 32-bit coordinate range", i64::from(o) + i64::from(len))))
+            };
+            Some(Rect::new(x, y, end(x, w, "x", "width")?, end(y, h, "y", "height")?))
+        }
         _ => None,
     };
     // An explicit rectangle (the Crop tool) may extend past the canvas; a selection crop is clamped.
@@ -269,7 +335,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("nothing to crop: pass x/y/width/height or make a selection".into()));
     }
     s.edit("Crop", |doc, _| {
-        crop_doc(doc, r, delete);
+        crop_doc(doc, "image.crop", r, delete)?;
         doc.selection = None;
         Ok(())
     })?;
@@ -309,10 +375,7 @@ fn trim(s: &mut Session, p: &Value) -> Result<Value> {
         if side("right") { b.x1 } else { canvas.x1 },
         if side("bottom") { b.y1 } else { canvas.y1 },
     );
-    s.edit("Trim", |doc, _| {
-        crop_doc(doc, r, true);
-        Ok(())
-    })?;
+    s.edit("Trim", |doc, _| crop_doc(doc, "image.trim", r, true))?;
     Ok(json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height() }))
 }
 
@@ -329,10 +392,7 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
         return Ok(Value::Null);
     }
     s.edit("Bit Depth", |doc, _| {
-        for_each_surface(&mut doc.layers, true, &mut |surf, _| {
-            let f = surf.format().with_sample(depth);
-            *surf = surf.convert(f);
-        });
+        convert_layers_depth(&mut doc.layers, depth);
         for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
             let f = ch.surface.format().with_sample(depth);
             ch.surface = ch.surface.convert(f);
@@ -452,6 +512,48 @@ mod tests {
         s.execute("image.crop", json!({"x": -10, "y": -10, "width": 1000, "height": 1000})).unwrap();
     }
 
+    /// A crop whose translation to the origin can't be represented in i32 is rejected before
+    /// anything changes (#959): `-i32::MIN` overflowed the negation in `crop_doc`, `x + width`
+    /// past i32::MAX silently shortened the crop, and an origin one past i32::MIN moved the
+    /// layer pixels beyond i32::MAX (a length-mismatch panic while translating surfaces).
+    #[test]
+    fn crop_rejects_origins_that_cannot_move_to_zero() {
+        const MIN: i64 = i32::MIN as i64;
+        const MAX: i64 = i32::MAX as i64;
+        let cases = [
+            json!({"x": MIN, "y": 0, "width": 1, "height": 1}),
+            json!({"x": 0, "y": MIN, "width": 1, "height": 1}),
+            json!({"x": MIN, "y": MIN, "width": 1, "height": 1}),
+            json!({"x": MIN, "y": 0, "width": 1, "height": 1, "deleteCroppedPixels": false}),
+            json!({"x": MAX - 5, "y": 0, "width": 10, "height": 1}),
+            json!({"x": 0, "y": MAX - 5, "width": 1, "height": 10}),
+            json!({"x": MIN + 1, "y": 0, "width": 1, "height": 1, "deleteCroppedPixels": false}),
+            json!({"x": 0, "y": MIN + 1, "width": 1, "height": 1, "deleteCroppedPixels": false}),
+        ];
+        for p in cases {
+            let mut s = session();
+            let before = s.active().unwrap().doc.clone();
+            let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.entries().len());
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p}: {err}");
+            assert!(err.to_string().contains("32-bit"), "{p}: {err}");
+            let st = s.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&st.doc, &before), "{p}: document changed");
+            assert_eq!(st.doc.size, Size::new(40, 20), "{p}");
+            assert_eq!(st.doc.layers[1].surface().unwrap().content_bounds(), Rect::new(10, 5, 20, 15), "{p}");
+            assert_eq!((st.revision, st.history.entries().len()), (rev, steps), "{p}: history step recorded");
+        }
+        // Control: a legal negative origin past the canvas still crops (and extends) the canvas.
+        let mut s = session();
+        s.execute("image.crop", json!({"x": -10, "y": -5, "width": 60, "height": 30})).unwrap();
+        assert_eq!(doc(&s).size, Size::new(60, 30));
+        assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 10), vec![1.0, 0.0, 0.0, 1.0]);
+        // A far-off crop that deletes the (non-overlapping) pixels has nothing left to move.
+        let mut s = session();
+        s.execute("image.crop", json!({"x": MIN + 1, "y": 0, "width": 1, "height": 1})).unwrap();
+        assert_eq!(doc(&s).size, Size::new(1, 1));
+    }
+
     fn session() -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
@@ -489,6 +591,22 @@ mod tests {
 
     /// The canvas border stays opaque after Image Size (it used to fade into transparency, so a
     /// Background or a 200 % export got a translucent frame), and a full selection stays full.
+    /// #1544: 64 x 48 to 300000 x 300000 (90 billion pixels) started allocating resampled bands
+    /// without a budget. It is refused before any allocation and the document is untouched; a
+    /// change of resolution only, and an ordinary resize, still work.
+    #[test]
+    fn image_size_refuses_a_raster_past_the_budget() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let before = (doc(&s).size, s.active().unwrap().history.past_len());
+        let err = s.execute("image.imageSize", json!({"width": 300_000, "height": 300_000})).unwrap_err().to_string();
+        assert!(err.contains("megapixels"), "{err}");
+        assert_eq!((doc(&s).size, s.active().unwrap().history.past_len()), before);
+        s.execute("image.imageSize", json!({"width": 300_000, "height": 300_000, "resample": "none", "resolution": 300})).unwrap();
+        s.execute("image.imageSize", json!({"width": 128, "height": 96})).unwrap();
+        assert_eq!(doc(&s).size, Size::new(128, 96));
+    }
+
     #[test]
     fn image_size_keeps_canvas_edges_opaque() {
         for depth in [8, 16, 32] {
@@ -521,6 +639,33 @@ mod tests {
         s.execute("image.imageSize", json!({"resolution": 300, "resample": "none", "width": 999})).unwrap();
         assert_eq!(doc(&s).size, Size::new(40, 20));
         assert_eq!(doc(&s).resolution_dpi, 300.0);
+    }
+
+    /// #1114: nearest neighbor reduction keeps source values without averaging.
+    #[test]
+    fn nearest_neighbor_reduction_keeps_source_values() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();
+        for y in 0..8 {
+            for x in 0..8 {
+                if (x + y) % 2 == 0 {
+                    s.execute("select.rect", json!({"x": x, "y": y, "width": 1, "height": 1})).unwrap();
+                    s.execute("edit.fill", json!({"contents": "foreground"})).unwrap();
+                }
+            }
+        }
+        s.execute("select.deselect", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let before = st.doc.layers[0].surface().unwrap().rgba(0, 0);
+        assert!(before[0] < 0.01, "setup: (0,0) should be black, got {before:?}");
+        s.execute("image.imageSize", json!({"width": 4, "height": 4, "resample": "nearest"})).unwrap();
+        let st = s.active().unwrap();
+        let surf = st.doc.layers[0].surface().unwrap();
+        for (x, y) in [(0, 0), (1, 1), (2, 3)] {
+            let v = surf.rgba(x, y)[0];
+            assert!(v < 0.01 || v > 0.99, "nearest produced an averaged value {v} at ({x},{y})");
+        }
     }
 
     #[test]
@@ -567,6 +712,23 @@ mod tests {
         s.execute("image.crop", json!({"x": -10, "y": 0, "width": 60, "height": 20})).unwrap();
         assert_eq!(doc(&s).size, Size::new(60, 20));
         assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 5), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn crop_refuses_a_canvas_side_past_the_new_document_limit() {
+        // #960: an unbounded explicit crop left a canvas that a later Trim or Duplicate Merged
+        // could only abort on allocating.
+        for (w, h) in [(100_000_000, 100_000_000), (300_001, 10), (10, 300_001)] {
+            let mut s = session();
+            let (size, past) = (doc(&s).size, s.active().unwrap().history.past_len());
+            let err = s.execute("image.crop", json!({"x": 0, "y": 0, "width": w, "height": h})).unwrap_err();
+            assert!(err.to_string().contains("300000 px limit"), "{w} x {h}: {err}");
+            assert_eq!((doc(&s).size, s.active().unwrap().history.past_len()), (size, past), "{w} x {h}: nothing changed");
+        }
+        // At the limit it still extends the canvas (the tiles stay lazy).
+        let mut s = session();
+        s.execute("image.crop", json!({"x": 0, "y": 0, "width": 300_000, "height": 2})).unwrap();
+        assert_eq!(doc(&s).size, Size::new(300_000, 2));
     }
 
     #[test]

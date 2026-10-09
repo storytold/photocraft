@@ -31,8 +31,13 @@ const ALL_KINDS: [&str; 16] = [
 ];
 
 fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, PhotocraftApp> {
+    app_harness_stepped(kind, mode, depth, 0.25)
+}
+
+/// [`app_harness`] advancing `step_dt` seconds per frame (double-clicks need real frame times).
+fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harness<'static, PhotocraftApp> {
     let (kind, mode) = (kind.to_string(), mode.to_string());
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).with_step_dt(step_dt).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 96, "height": 64, "mode": mode, "depth": depth})).unwrap();
@@ -234,4 +239,160 @@ fn curves_fast_release_commits_one_edit_and_undo_restores_the_curve() {
     assert!(h.state().live_adjust.is_none());
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(layer(&h).1, before);
+}
+
+/// Real pointer input: `n` clicks at `at` with `mods` held (2 = a double-click).
+fn clicks_with(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, n: usize, mods: egui::Modifiers) {
+    // Well past the double-click time since the last gesture.
+    h.run_steps(40);
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.hover_at(at);
+    h.run_steps(1);
+    for _ in 0..n {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: mods });
+            h.run_steps(1);
+        }
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+}
+
+fn wheel_at(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, notches: f32, mods: egui::Modifiers) {
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, notches), phase: egui::TouchPhase::Move, modifiers: mods });
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+}
+
+fn key_with(h: &mut Harness<'_, PhotocraftApp>, key: egui::Key, mods: egui::Modifiers) {
+    h.event(egui::Event::ModifiersChanged(mods));
+    for pressed in [true, false] {
+        h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+}
+
+fn color_balance_of(a: &Adjustment) -> ([f32; 3], [f32; 3], [f32; 3], bool) {
+    match a {
+        Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity } => (*shadows, *midtones, *highlights, *preserve_luminosity),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Photoshop 25.4, Color Balance in the Properties panel (measured on the real application by
+/// scripted clicks and reading the layer back): a double-click on a slider's knob or track sets that
+/// slider of the shown tone to 0, whatever modifier is held; the label doesn't; a click jumps; the
+/// wheel does nothing; Up/Down in a field step 1, with Shift 10.
+#[test]
+fn color_balance_sliders_reset_and_step_like_photoshop() {
+    let mut h = app_harness_stepped("colorBalance", "rgb", 8, 1.0 / 60.0);
+    let (id, _) = layer(&h);
+    let start = json!({"layer": id.0, "shadows": [10, 0, 0], "midtones": [40, -30, 20], "highlights": [0, 0, -15], "preserveLuminosity": false});
+    h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
+    h.run_steps(4);
+    let label = label_rect(&h, "Cyan  ·  Red").expect("Cyan · Red row");
+    let on_track = Pos2::new(label.left() + 60.0, label.bottom() + 14.0);
+    let cb = |h: &Harness<'_, PhotocraftApp>| color_balance_of(&layer(h).1);
+
+    // A click jumps to the pointer, with or without modifiers.
+    clicks_with(&mut h, on_track, 1, egui::Modifiers::NONE);
+    let jumped = cb(&h).1[0];
+    assert!(jumped < 0.0 && jumped > -100.0, "click jumps to the pointer: {jumped}");
+    for mods in [egui::Modifiers::SHIFT, egui::Modifiers::CTRL, egui::Modifiers::ALT] {
+        h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
+        h.run_steps(3);
+        clicks_with(&mut h, on_track, 1, mods);
+        assert_eq!(cb(&h).1[0], jumped, "{mods:?}-click is a plain click");
+    }
+    // A double-click anywhere on the slider zeroes it, with any modifier; nothing else changes.
+    for mods in [egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::CTRL, egui::Modifiers::ALT] {
+        h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
+        h.run_steps(3);
+        clicks_with(&mut h, on_track, 2, mods);
+        assert_eq!(cb(&h), ([10.0, 0.0, 0.0], [0.0, -30.0, 20.0], [0.0, 0.0, -15.0], false), "{mods:?} double-click");
+    }
+    // The label is not a reset target.
+    h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
+    h.run_steps(3);
+    clicks_with(&mut h, label.center(), 2, egui::Modifiers::NONE);
+    assert_eq!(cb(&h).1, [40.0, -30.0, 20.0], "double-click on the label");
+    // The panel's sliders ignore the wheel.
+    wheel_at(&mut h, on_track, 3.0, egui::Modifiers::NONE);
+    wheel_at(&mut h, on_track, 3.0, egui::Modifiers::SHIFT);
+    assert_eq!(cb(&h).1, [40.0, -30.0, 20.0], "wheel over a Properties slider");
+    // Up/Down in the field: 1, Shift: 10 (also below zero, where a half step used to round away).
+    let field = h
+        .query_all_by_role(egui::accesskit::Role::SpinButton)
+        .map(|n| n.rect())
+        .find(|r| (r.center().y - label.center().y).abs() < 8.0)
+        .expect("Cyan · Red field");
+    clicks_with(&mut h, field.center(), 1, egui::Modifiers::NONE);
+    key_with(&mut h, egui::Key::ArrowUp, egui::Modifiers::NONE);
+    assert_eq!(cb(&h).1[0], 41.0, "Up");
+    key_with(&mut h, egui::Key::ArrowUp, egui::Modifiers::SHIFT);
+    assert_eq!(cb(&h).1[0], 51.0, "Shift+Up");
+    for _ in 0..8 {
+        key_with(&mut h, egui::Key::ArrowDown, egui::Modifiers::SHIFT);
+    }
+    key_with(&mut h, egui::Key::ArrowDown, egui::Modifiers::NONE);
+    assert_eq!(cb(&h).1[0], -30.0, "Shift+Down ×8, Down");
+    key_with(&mut h, egui::Key::ArrowUp, egui::Modifiers::NONE);
+    assert_eq!(cb(&h).1[0], -29.0, "Up below zero");
+}
+
+/// Photoshop 25.4, Color Balance in the Properties panel: edits that follow each other make one
+/// history step (a double-click, whose first click moved the knob, undoes in one go); Reset first
+/// returns to the settings the layer had when the panel started showing it (Tone choice kept),
+/// then to the defaults (every tone 0, Midtones, Preserve Luminosity kept), within that step.
+#[test]
+fn color_balance_properties_history_and_reset_like_photoshop() {
+    let mut h = app_harness_stepped("colorBalance", "rgb", 8, 1.0 / 60.0);
+    let (id, _) = layer(&h);
+    let start = ([10.0, 0.0, 0.0], [40.0, -30.0, 20.0], [0.0, 0.0, -15.0], false);
+    h.state_mut()
+        .run(
+            "layer.setAdjustment",
+            json!({"layer": id.0, "shadows": [10, 0, 0], "midtones": [40, -30, 20], "highlights": [0, 0, -15], "preserveLuminosity": false}),
+        )
+        .unwrap();
+    // Show another layer, then this one again: the panel starts showing it with these settings.
+    let bg = h.state().session.active().unwrap().doc.layers[0].id;
+    h.state_mut().session.select_layer(bg).unwrap();
+    h.run_steps(4);
+    h.state_mut().session.select_layer(id).unwrap();
+    h.run_steps(4);
+    let cb = |h: &Harness<'_, PhotocraftApp>| color_balance_of(&layer(h).1);
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let label = label_rect(&h, "Cyan  ·  Red").expect("Cyan · Red row");
+    let on_track = Pos2::new(label.left() + 60.0, label.bottom() + 14.0);
+    let before = steps(&h);
+    clicks_with(&mut h, on_track, 1, egui::Modifiers::NONE);
+    clicks_with(&mut h, Pos2::new(label.left() + 90.0, on_track.y), 2, egui::Modifiers::NONE);
+    assert_eq!(cb(&h).1, [0.0, -30.0, 20.0]);
+    assert_eq!(steps(&h), before + 1, "a click and a double-click: one history step");
+    assert!(h.state_mut().session.undo());
+    h.run_steps(3);
+    assert_eq!(cb(&h), start, "one Undo returns to the settings before them");
+    // Edit with Highlights shown; Reset returns to the settings the panel started with.
+    let hl = label_rect(&h, "Highlights").expect("Highlights radio");
+    clicks_with(&mut h, hl.center(), 1, egui::Modifiers::NONE);
+    clicks_with(&mut h, on_track, 1, egui::Modifiers::NONE);
+    assert_ne!(cb(&h), start);
+    let tone = crate::adjust_editors::layer_mem(id).with("cb-tone");
+    let reset = h.get_by_label("Reset to defaults").rect();
+    let before = steps(&h);
+    clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
+    assert_eq!(cb(&h), start, "first Reset: the settings the panel started with");
+    assert_eq!(h.ctx.data(|d| d.get_temp::<usize>(tone)), Some(2), "Tone choice kept");
+    clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
+    assert_eq!(cb(&h), ([0.0; 3], [0.0; 3], [0.0; 3], false), "second Reset: defaults, Preserve Luminosity kept");
+    assert_eq!(h.ctx.data(|d| d.get_temp::<usize>(tone)), Some(1), "defaults show Midtones");
+    clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
+    assert_eq!(cb(&h), ([0.0; 3], [0.0; 3], [0.0; 3], false), "third Reset: still the defaults");
+    assert_eq!(steps(&h), before, "the edit and the Resets share one history step");
 }

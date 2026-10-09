@@ -5,12 +5,17 @@
 //! into another group (onto a preset, or onto a group's header to append), drag a group's header
 //! to reorder groups, and right-click for Rename and Delete. Every change is a `brush.presets.*`
 //! command, so it is journaled, drivable, and persisted by the preset store.
+//!
+//! The list itself ([`preset_list`]) is shared with the Brush Preset picker (`brush_picker`), so
+//! both show, pick and organise presets the same way; each keeps its own view state.
 
 use egui::{Color32, RichText, Sense, Stroke, pos2, vec2};
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
 use serde_json::json;
 
-use crate::brush_panel::{BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, full_uv, grouped_presets, is_current, new_preset_name, run_or_status};
+use crate::brush_panel::{
+    BrushesPanelState, BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, full_uv, grouped_presets, is_current, new_preset_name, run_or_status,
+};
 use crate::brush_preview;
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
@@ -22,17 +27,46 @@ pub enum BrushDrag {
     Group(String),
 }
 
-/// What the tab does after drawing (the presets are borrowed while it draws).
+/// What a preset list does after drawing (the presets are borrowed while it draws).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    /// A click: make the preset current.
     Select(String),
+    /// A double-click: make the preset current and dismiss the picker showing it (Photoshop).
+    Choose(String),
+    /// View only: open or close a group ([`preset_list`] applies it to its view state).
     ToggleGroup(String),
-    Move { name: String, group: String, index: Option<usize> },
-    MoveGroup { group: String, before: Option<String> },
+    Move {
+        name: String,
+        group: String,
+        index: Option<usize>,
+    },
+    MoveGroup {
+        group: String,
+        before: Option<String>,
+    },
+    /// View only: show the rename bar for a preset or group ([`preset_list`] applies it).
+    BeginRename(Renaming),
+    /// Commit a rename typed in the rename bar.
     Rename(Renaming),
     Delete(String),
     DeleteGroup(String),
 }
+
+/// How a preset list is laid out: the Brushes tab's, or the Brush Preset picker's (narrower,
+/// denser).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListLayout {
+    /// The scroll area's id and its height limit.
+    pub id: &'static str,
+    pub max_height: f32,
+    /// Width of a grid cell (its height is 6 points more) and the grid's left indent.
+    pub cell: f32,
+    pub indent: f32,
+}
+
+/// The Brushes tab's list.
+pub const PANEL_LIST: ListLayout = ListLayout { id: "brush-presets", max_height: 400.0, cell: 52.0, indent: 20.0 };
 
 /// The group key (`BrushPreset::group`) behind a panel label: ungrouped presets show as
 /// [`UNGROUPED`].
@@ -55,18 +89,41 @@ pub fn drop_target(presets: &[BrushPreset], dragged: &str, target: &str, after: 
     Some((t.group.clone(), idx))
 }
 
-/// Turn the tab's actions into commands.
-pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
-    for a in acts {
-        match a {
-            Action::Select(name) => run_or_status(app, "tools.setBrush", json!({ "preset": name })),
+/// Apply the view-only actions to `st`; returns the rest, the commands for [`apply`].
+fn view_actions(st: &mut BrushesPanelState, acts: Vec<Action>) -> Vec<Action> {
+    acts.into_iter()
+        .filter_map(|a| match a {
             Action::ToggleGroup(g) => {
-                let c = &mut app.ui.brushes_panel.collapsed;
+                let c = &mut st.collapsed;
                 match c.iter().position(|x| *x == g) {
                     Some(i) => drop(c.remove(i)),
                     None => c.push(g),
                 }
+                None
             }
+            Action::BeginRename(r) => {
+                st.renaming = Some(r);
+                None
+            }
+            a => Some(a),
+        })
+        .collect()
+}
+
+/// Turn a preset list's actions into commands.
+pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
+    for a in acts {
+        match a {
+            Action::Select(name) => run_or_status(app, "tools.setBrush", json!({ "preset": name })),
+            Action::Choose(name) => {
+                // The double-click's first click already picked it.
+                let picked =
+                    photocraft_engine::paint::presets::find(&app.session.tools.presets, &name).is_some_and(|p| is_current(&p.brush, &app.session.tools.brush));
+                if !picked {
+                    run_or_status(app, "tools.setBrush", json!({ "preset": name }));
+                }
+            }
+            Action::ToggleGroup(_) | Action::BeginRename(_) => {}
             Action::Move { name, group, index } => {
                 let mut p = json!({ "name": name, "group": group });
                 if let Some(i) = index {
@@ -84,7 +141,6 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
                         run_or_status(app, "brush.presets.rename", json!({ "name": r.name, "newName": text }));
                     }
                 }
-                app.ui.brushes_panel.renaming = None;
             }
             Action::Delete(name) => run_or_status(app, "brush.presets.delete", json!({ "name": name })),
             Action::DeleteGroup(g) => run_or_status(app, "brush.presets.deleteGroup", json!({ "group": g })),
@@ -113,12 +169,14 @@ fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &
     {
         acts.push(Action::Move { name: n.clone(), group, index: Some(index) });
     }
-    if resp.clicked() {
+    if resp.double_clicked() {
+        acts.push(Action::Choose(p.name.clone()));
+    } else if resp.clicked() {
         acts.push(Action::Select(p.name.clone()));
     }
     resp.context_menu(|ui| {
         if ui.button(tl!("Rename Brush…")).clicked() {
-            acts.push(Action::Rename(Renaming { group: false, name: p.name.clone(), text: String::new() }));
+            acts.push(Action::BeginRename(Renaming { group: false, name: p.name.clone(), text: String::new() }));
             ui.close();
         }
         if ui.button(tl!("Delete Brush")).clicked() {
@@ -128,9 +186,13 @@ fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &
     });
 }
 
+/// Width a list row keeps for the gaps around its stroke preview and the preset name.
+const STROKE_NAME_ROOM: f32 = 140.0;
+
 fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, &p.name));
     if !ui.is_rect_visible(r) {
         return;
     }
@@ -151,16 +213,20 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
         egui::FontId::proportional(9.0),
         t.text_faint,
     );
-    let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke:{}", p.name), pb, 170, 36, t.text);
-    let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0), vec2(170.0, 36.0));
+    // The stroke preview gives up width so a narrow list (the picker) still shows the name; its
+    // texture slot carries the width, so lists of different widths don't re-render each other's.
+    let w = (r.width() - (cell.right() - r.left()) - STROKE_NAME_ROOM).clamp(60.0, 170.0).round();
+    let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke-{w}:{}", p.name), pb, w as u32, 36, t.text);
+    let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0), vec2(w, 36.0));
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
-    ui.painter().text(pos2(sr.right() + 12.0, r.center().y), egui::Align2::LEFT_CENTER, &p.name, egui::FontId::proportional(12.0), t.text_dim);
+    crate::layer_row_ui::label(ui.painter(), sr.right() + 12.0, r.center().y, r.right() - 4.0, &p.name, egui::FontId::proportional(12.0), t.text_dim);
     preset_interactions(ui, &resp, r, p, presets, false, acts);
 }
 
-fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], acts: &mut Vec<Action>) {
+fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], cell: f32, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(52.0, 58.0), Sense::click_and_drag());
+    let (r, resp) = ui.allocate_exact_size(vec2(cell, cell + 6.0), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, &p.name));
     if !ui.is_rect_visible(r) {
         return;
     }
@@ -172,7 +238,8 @@ fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[Brush
     }
     let pb = &p.brush;
     let tip = brush_preview::tip_texture(ui.ctx(), &format!("brushes-tip:{}", p.name), &pb.tip, (pb.hardness, pb.angle, pb.roundness), 36, t.text);
-    let ir = egui::Rect::from_center_size(pos2(r.center().x, r.top() + 23.0), vec2(38.0, 38.0) * crate::brush_sections::thumb_scale(pb.size));
+    let side = cell - 14.0;
+    let ir = egui::Rect::from_center_size(pos2(r.center().x, r.top() + side / 2.0 + 4.0), vec2(side, side) * crate::brush_sections::thumb_scale(pb.size));
     ui.painter().image(tip.id(), ir, full_uv(), Color32::WHITE);
     ui.painter().text(
         pos2(r.center().x, r.bottom() - 7.0),
@@ -210,6 +277,7 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, open: bool, count: us
     );
     ui.painter().text(pos2(x + 40.0, r.center().y), egui::Align2::LEFT_CENTER, label, theme::semibold(12.0), t.text);
     ui.painter().text(pos2(r.right() - 8.0, r.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), theme::medium(11.0), t.text_faint);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, label));
     resp.dnd_set_drag_payload(BrushDrag::Group(key.to_string()));
     if let Some(d) = resp.dnd_hover_payload::<BrushDrag>() {
         match &*d {
@@ -232,7 +300,7 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, open: bool, count: us
     }
     resp.context_menu(|ui| {
         if ui.button(tl!("Rename Group…")).clicked() {
-            acts.push(Action::Rename(Renaming { group: true, name: key.to_string(), text: String::new() }));
+            acts.push(Action::BeginRename(Renaming { group: true, name: key.to_string(), text: String::new() }));
             ui.close();
         }
         if ui.button(tl!("Delete Group")).clicked() {
@@ -244,16 +312,16 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, open: bool, count: us
 
 /// The rename bar shown while a preset or group is being renamed. Enter or OK renames, Escape or
 /// Cancel stops.
-fn rename_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, acts: &mut Vec<Action>) {
-    let Some(r) = app.ui.brushes_panel.renaming.as_mut() else { return };
+fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Action>) {
+    let Some(r) = st.renaming.as_mut() else { return };
     let t = Tokens::get(ui.ctx());
     if r.text.is_empty() {
         r.text = r.name.clone();
     }
-    let mut cancel = false;
+    let mut done = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(if r.group { tl!("Group name") } else { tl!("Brush name") }).color(t.text_dim));
-        let resp = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width(WIDTH - 230.0).id_salt("brush-rename"));
+        let resp = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width((ui.available_width() - 140.0).max(60.0)).id_salt("brush-rename"));
         if !resp.has_focus() && !resp.lost_focus() {
             resp.request_focus();
         }
@@ -267,15 +335,89 @@ fn rename_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, acts: &mut Vec<Action>
         );
         if clicked == Some(widgets::ButtonRole::Default) || enter {
             acts.push(Action::Rename(r.clone()));
+            done = true;
         }
         if clicked == Some(widgets::ButtonRole::Cancel) || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
+            done = true;
         }
     });
-    if cancel {
-        app.ui.brushes_panel.renaming = None;
+    if done {
+        st.renaming = None;
     }
     ui.add_space(4.0);
+}
+
+/// The presets in their groups, filtered by `st.filter`, as rows or tip cells (`st.view`), with
+/// the rename bar above them while a rename is open. Group toggles and renames update `st`; the
+/// returned actions are commands for [`apply`].
+pub fn preset_list(
+    ui: &mut egui::Ui,
+    presets: &[BrushPreset],
+    brush: &photocraft_engine::BrushSettings,
+    st: &mut BrushesPanelState,
+    layout: ListLayout,
+) -> Vec<Action> {
+    let mut acts = Vec::new();
+    rename_bar(ui, st, &mut acts);
+    let filter = st.filter.trim().to_lowercase();
+    let grid = st.view == BrushesView::Grid;
+    let collapsed = &st.collapsed;
+    egui::ScrollArea::vertical().id_salt(layout.id).max_height(layout.max_height).auto_shrink([false, true]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        for (label, items) in grouped_presets(presets) {
+            let items: Vec<&BrushPreset> =
+                items.into_iter().filter_map(|i| presets.get(i)).filter(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter)).collect();
+            if items.is_empty() {
+                continue;
+            }
+            let key = group_key(presets, &label);
+            let open = !filter.is_empty() || !collapsed.contains(&label);
+            group_header(ui, &label, &key, open, items.len(), &mut acts);
+            if !open {
+                continue;
+            }
+            if grid {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+                    ui.add_space(layout.indent);
+                    for p in items {
+                        grid_cell(ui, p, is_current(&p.brush, brush), presets, layout.cell, &mut acts);
+                    }
+                });
+            } else {
+                for p in items {
+                    list_row(ui, p, is_current(&p.brush, brush), presets, &mut acts);
+                }
+            }
+            ui.add_space(2.0);
+        }
+        if presets.is_empty() {
+            ui.label(RichText::new(tl!("No brush presets")).color(Tokens::get(ui.ctx()).text_faint));
+        }
+    });
+    // The dragged preset or group follows the pointer.
+    if let Some(d) = egui::DragAndDrop::payload::<BrushDrag>(ui.ctx())
+        && let Some(p) = ui.ctx().pointer_interact_pos()
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let name = match &*d {
+            BrushDrag::Preset(n) => n.clone(),
+            BrushDrag::Group(g) => {
+                if g.is_empty() {
+                    UNGROUPED.to_string()
+                } else {
+                    g.clone()
+                }
+            }
+        };
+        egui::Area::new(egui::Id::new(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
+            ui.ctx(),
+            |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+            },
+        );
+    }
+    view_actions(st, acts)
 }
 
 /// The Brushes tab.
@@ -316,70 +458,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    let mut acts = Vec::new();
-    rename_bar(app, ui, &mut acts);
-    let filter = app.ui.brushes_panel.filter.trim().to_lowercase();
-    let grid = app.ui.brushes_panel.view == BrushesView::Grid;
-    let presets = &app.session.tools.presets;
-    let groups = grouped_presets(presets);
-    let brush = &app.session.tools.brush;
-    let collapsed = &app.ui.brushes_panel.collapsed;
-    egui::ScrollArea::vertical().id_salt("brush-presets").max_height(400.0).auto_shrink([false, true]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        for (label, items) in groups {
-            let items: Vec<usize> =
-                items.into_iter().filter(|i| filter.is_empty() || presets.get(*i).is_some_and(|p| p.name.to_lowercase().contains(&filter))).collect();
-            if items.is_empty() {
-                continue;
-            }
-            let key = group_key(presets, &label);
-            let open = !filter.is_empty() || !collapsed.contains(&label);
-            group_header(ui, &label, &key, open, items.len(), &mut acts);
-            if !open {
-                continue;
-            }
-            if grid {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-                    ui.add_space(20.0);
-                    for i in items {
-                        if let Some(p) = presets.get(i) {
-                            grid_cell(ui, p, is_current(&p.brush, brush), presets, &mut acts);
-                        }
-                    }
-                });
-            } else {
-                for i in items {
-                    if let Some(p) = presets.get(i) {
-                        list_row(ui, p, is_current(&p.brush, brush), presets, &mut acts);
-                    }
-                }
-            }
-            ui.add_space(2.0);
-        }
-    });
-    // The dragged preset or group follows the pointer.
-    if let Some(d) = egui::DragAndDrop::payload::<BrushDrag>(ui.ctx())
-        && let Some(p) = ui.ctx().pointer_interact_pos()
-    {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        let name = match &*d {
-            BrushDrag::Preset(n) => n.clone(),
-            BrushDrag::Group(g) => {
-                if g.is_empty() {
-                    UNGROUPED.to_string()
-                } else {
-                    g.clone()
-                }
-            }
-        };
-        egui::Area::new(egui::Id::new("brush-drag-label")).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
-            ui.ctx(),
-            |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
-            },
-        );
-    }
+    let acts = preset_list(ui, &app.session.tools.presets, &app.session.tools.brush, &mut app.ui.brushes_panel, PANEL_LIST);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);
@@ -398,7 +477,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run_or_status(app, "brush.presets.save", json!({ "name": name }));
             }
             if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr)").clicked() {
-                app.open_dialog_file();
+                let _ = app.open_dialog_file();
             }
         });
     });

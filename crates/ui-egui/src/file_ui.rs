@@ -86,15 +86,13 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             form(app, id, "Image Statistics", json!({"mode": "median", "input": dir, "align": false}), json!({"mode": modes}))
         }
         "file.scripts.browse" => {
-            let (name, bytes) = match app.pick_file_bytes()? {
-                Ok(picked) => picked,
-                Err(e) => return Some(Err(e)),
-            };
-            let r = app.run(id, json!({"script": String::from_utf8_lossy(&bytes)}));
-            if r.is_ok() {
-                app.ui.status = format!("Ran script {name}");
-            }
-            return Some(r);
+            return Some(app.pick_file_bytes(|app, name, bytes| {
+                let r = app.run("file.scripts.browse", json!({"script": String::from_utf8_lossy(&bytes)}));
+                if r.is_ok() {
+                    app.ui.status = format!("Ran script {name}");
+                }
+                r
+            }));
         }
         "file.scripts.scriptEventsManager" => {
             let enabled = app.session.prefs().script_events.enabled;
@@ -496,21 +494,30 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let mut p = params(f);
+    if p.get("path").is_some() || p.get("dir").is_some() {
+        return save_for_web(app, p);
+    }
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let has_slices = !doc.slices.is_empty();
-    if p.get("path").is_none() && p.get("dir").is_none() {
-        let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
-        let base = photocraft_doc::slices::base_name(&doc);
-        let suggested = if has_slices && b(f, "html", true) { format!("{base}.html") } else { format!("{base}.{}", st.format.ext()) };
-        let path = app.services.pick_save.as_mut().and_then(|pick| pick(&suggested)).ok_or("cancelled")?;
+    let html = b(f, "html", true);
+    let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
+    let base = photocraft_doc::slices::base_name(&doc);
+    let suggested = if has_slices && html { format!("{base}.html") } else { format!("{base}.{}", st.format.ext()) };
+    app.pick_save(&suggested, move |app, path| {
+        app.refocus(doc.id)?;
         if has_slices {
             let dir = path.rfind(['/', '\\']).map(|i| path[..i].to_string()).unwrap_or_else(|| ".".into());
             p["dir"] = json!(dir);
-            p["html"] = json!(b(f, "html", true));
+            p["html"] = json!(html);
         } else {
             p["path"] = json!(path);
         }
-    }
+        save_for_web(app, p)
+    })
+}
+
+/// Runs Save for Web with `p`, which says where to write.
+fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     let r = app.run("file.export.saveForWebLegacy", p)?;
     app.ui.status = format!("Saved for Web: {} file(s)", r["files"].as_array().map_or(0, Vec::len));
     Ok(r)

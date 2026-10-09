@@ -66,6 +66,15 @@ struct Rd<'a> {
     p: usize,
 }
 
+struct PatternChannel<'a> {
+    data: &'a [u8],
+    compression: Compression,
+    source: PlaneLayout,
+    destination: PlaneLayout,
+    x: usize,
+    y: usize,
+}
+
 impl<'a> Rd<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.p.checked_add(n).ok_or(PsdError::LimitExceeded("pattern length overflow"))?;
@@ -139,7 +148,10 @@ fn read_pattern(r: &mut Rd) -> Result<PsdPattern> {
     if count > 64 {
         return Err(PsdError::LimitExceeded("pattern channel count"));
     }
-    let mut planes = Vec::new();
+    // Validate every channel and the total padded size before decoding any plane.
+    // Otherwise a later channel can exceed the existing pattern budget only after
+    // earlier channels have already allocated several gigabytes of zero padding.
+    let mut channels = Vec::new();
     let mut depth = 8u16;
     let mut decoded_bytes = 0u64;
     for _ in 0..count + 2 {
@@ -203,23 +215,27 @@ fn read_pattern(r: &mut Rd) -> Result<PsdPattern> {
                 return Err(PsdError::LimitExceeded("pattern channel exceeds its input-derived size limit"));
             }
         }
-        let plane = decode_planes(compression, data, &channel_layout)?;
         let x = usize::try_from(cl.checked_sub(left).ok_or(PsdError::LimitExceeded("pattern channel x offset overflow"))?)
             .map_err(|_| PsdError::invalid("negative pattern channel x offset"))?;
         let y = usize::try_from(ct.checked_sub(top).ok_or(PsdError::LimitExceeded("pattern channel y offset overflow"))?)
             .map_err(|_| PsdError::invalid("negative pattern channel y offset"))?;
-        planes.push(place_channel_plane(&plane, &channel_layout, x, y, &layout)?);
+        channels.push(PatternChannel { data, compression, source: channel_layout, destination: layout, x, y });
     }
     let nc = mode_channels(mode);
-    if planes.len() < nc {
+    if channels.len() < nc {
         return Err(PsdError::invalid("pattern has fewer channels than its colour mode"));
+    }
+    let mut planes = Vec::new();
+    for channel in channels {
+        let plane = decode_planes(channel.compression, channel.data, &channel.source)?;
+        planes.push(place_channel_plane(plane, &channel.source, channel.x, channel.y, &channel.destination)?);
     }
     let alpha = (planes.len() > nc).then(|| planes.remove(nc));
     planes.truncate(nc);
     Ok(PsdPattern { mode, width: w, height: h, name, id, palette, depth, channels: planes, alpha })
 }
 
-fn place_channel_plane(plane: &[u8], source: &PlaneLayout, x: usize, y: usize, destination: &PlaneLayout) -> Result<Vec<u8>> {
+fn place_channel_plane(mut plane: Vec<u8>, source: &PlaneLayout, x: usize, y: usize, destination: &PlaneLayout) -> Result<Vec<u8>> {
     if source.planes != 1 || destination.planes != 1 || source.depth != destination.depth {
         return Err(PsdError::invalid("incompatible pattern channel layouts"));
     }
@@ -232,7 +248,21 @@ fn place_channel_plane(plane: &[u8], source: &PlaneLayout, x: usize, y: usize, d
     if plane.len() != source_len {
         return Err(PsdError::invalid("pattern channel payload does not match its rectangle"));
     }
-    let mut out = vec![0; destination.decoded_len()?];
+    let destination_len = destination.decoded_len()?;
+    if x == 0 && y == 0 && source.width == destination.width && source.height == destination.height {
+        // Preserve the old placement's zeroed unused bits without copying a full
+        // bitmap plane. Only the last byte of each non-byte-aligned row changes.
+        if source.depth == 1 && !source.width.is_multiple_of(8) {
+            let mask = u8::MAX << (8 - source.width % 8);
+            for row in plane.chunks_exact_mut(source.row_bytes()) {
+                if let Some(last) = row.last_mut() {
+                    *last &= mask;
+                }
+            }
+        }
+        return Ok(plane);
+    }
+    let mut out = zeroed_pattern_plane(destination_len)?;
     if source.depth == 1 {
         let source_row_bytes = source.row_bytes();
         let destination_row_bytes = destination.row_bytes();
@@ -277,6 +307,13 @@ fn place_channel_plane(plane: &[u8], source: &PlaneLayout, x: usize, y: usize, d
             destination_row.copy_from_slice(source_row);
         }
     }
+    Ok(out)
+}
+
+fn zeroed_pattern_plane(len: usize) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|_| PsdError::LimitExceeded("not enough memory for the padded pattern channel"))?;
+    out.resize(len, 0);
     Ok(out)
 }
 
@@ -478,7 +515,7 @@ mod tests {
         assert!(parse_pattern_block(&global).is_err());
 
         let mut standalone = write_pat_file(std::slice::from_ref(&p)).unwrap();
-        let vma = pattern_vma_rect_offset(8, &p);
+        let vma = pattern_vma_rect_offset(10, &p);
         set_i32(&mut standalone, vma + 4, i32::MIN);
         set_i32(&mut standalone, vma + 12, i32::MAX);
         assert!(parse_pat_file(&standalone).is_err());
@@ -502,18 +539,28 @@ mod tests {
 
     #[test]
     fn huge_pattern_rect_with_tiny_channel_payload_is_rejected() {
-        let p = pat(32, false);
+        // RGB32 needs 10.8 GB; CMYK16 plus alpha needs 9 GB. Both exceed the
+        // existing pattern budget, but their first plane fits on 64-bit targets.
+        // The complete metadata must be checked before allocating that first plane.
+        huge_pattern_rect_is_rejected(pat(32, false));
+        let mut cmyk = pat(16, true);
+        cmyk.mode = 4;
+        cmyk.channels.push(vec![0; 5 * 3 * 2]);
+        huge_pattern_rect_is_rejected(cmyk);
+    }
+
+    fn huge_pattern_rect_is_rejected(p: PsdPattern) {
         let mut global = write_pattern_block(std::slice::from_ref(&p)).unwrap();
         let vma = pattern_vma_rect_offset(4, &p);
         set_i32(&mut global, vma + 8, 30_000);
         set_i32(&mut global, vma + 12, 30_000);
-        assert!(parse_pattern_block(&global).is_err());
+        assert!(matches!(parse_pattern_block(&global), Err(PsdError::LimitExceeded("pattern data exceeds MAX_DECODED_BYTES"))));
 
         let mut standalone = write_pat_file(std::slice::from_ref(&p)).unwrap();
-        let vma = pattern_vma_rect_offset(8, &p);
+        let vma = pattern_vma_rect_offset(10, &p);
         set_i32(&mut standalone, vma + 8, 30_000);
         set_i32(&mut standalone, vma + 12, 30_000);
-        assert!(parse_pat_file(&standalone).is_err());
+        assert!(matches!(parse_pat_file(&standalone), Err(PsdError::LimitExceeded("pattern data exceeds MAX_DECODED_BYTES"))));
 
         let mut abr = crate::abr::write_v6(
             1,
@@ -568,8 +615,47 @@ mod tests {
     fn one_bit_offset_channel_placement_preserves_msb_first_pixels() {
         let source = PlaneLayout { planes: 1, width: 5, height: 2, depth: 1, version: Version::Psd };
         let destination = PlaneLayout { planes: 1, width: 8, height: 4, depth: 1, version: Version::Psd };
-        let placed = place_channel_plane(&[0b1010_1000, 0b0101_0000], &source, 2, 1, &destination).unwrap();
+        let placed = place_channel_plane(vec![0b1010_1000, 0b0101_0000], &source, 2, 1, &destination).unwrap();
         assert_eq!(placed, [0, 0b0010_1010, 0b0001_0100, 0]);
+    }
+
+    #[test]
+    fn full_size_channels_reuse_the_decoded_allocation() {
+        for depth in [1, 8, 16, 32] {
+            let layout = PlaneLayout { planes: 1, width: 5, height: 3, depth, version: Version::Psd };
+            let plane = vec![0x55; layout.decoded_len().unwrap()];
+            let original = plane.as_ptr();
+            let placed = place_channel_plane(plane, &layout, 0, 0, &layout).unwrap();
+            assert_eq!(placed.as_ptr(), original);
+            let expected = if depth == 1 { 0x50 } else { 0x55 };
+            assert!(placed.iter().all(|&byte| byte == expected));
+        }
+    }
+
+    #[test]
+    fn large_channel_padding_within_the_existing_budget_is_allowed() {
+        let mut p = pat(8, false);
+        p.mode = 1;
+        let mut block = write_pattern_block(std::slice::from_ref(&p)).unwrap();
+        let vma = pattern_vma_rect_offset(4, &p);
+        // More than 64 MiB of implicit padding is valid: the fix must not introduce
+        // a smaller, padding-specific format limit to avoid the oversized RGB case.
+        set_i32(&mut block, vma + 8, 8193);
+        set_i32(&mut block, vma + 12, 8193);
+        let parsed = parse_pattern_block(&block).unwrap();
+        let plane = &parsed[0].channels[0];
+        assert_eq!(plane.len(), 8193 * 8193);
+        for y in 0..3 {
+            assert_eq!(&plane[y * 8193..y * 8193 + 5], &p.channels[0][y * 5..y * 5 + 5]);
+        }
+        assert_eq!(plane[5], 0);
+        assert_eq!(plane[plane.len() - 1], 0);
+    }
+
+    #[test]
+    fn padded_plane_allocation_failure_is_an_error() {
+        // Capacity overflow is deterministic and never asks the OS for huge memory.
+        assert!(matches!(zeroed_pattern_plane(usize::MAX), Err(PsdError::LimitExceeded("not enough memory for the padded pattern channel"))));
     }
 
     #[test]

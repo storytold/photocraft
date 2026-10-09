@@ -41,26 +41,38 @@ fn invert_sample(bytes: &mut [u8], s: SampleType) {
 pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: SampleType, invert: &[bool]) -> Vec<u8> {
     let bps = s.bytes();
     let ch = planes.len();
-    let mut out = vec![0u8; n * ch * bps];
-    for (c, plane) in planes.iter().enumerate() {
-        for i in 0..n {
-            let dst = &mut out[(i * ch + c) * bps..(i * ch + c + 1) * bps];
-            match plane {
-                Some(p) if p.len() >= (i + 1) * bps => {
-                    let src = &p[i * bps..(i + 1) * bps];
-                    for k in 0..bps {
-                        dst[k] = src[bps - 1 - k];
+    let row = ch * bps;
+    let mut out = vec![0u8; n * row];
+    // One band of rows per core, written straight into its slice of the shared output: the
+    // per-pixel channel loop stays, but a band holds ~1/cores of a 20 MP image's iterations
+    // instead of all of them.
+    let bs = bands(n);
+    let parts: Vec<Vec<u8>> = par_map(bs.clone(), |band| {
+        let mut part = vec![0u8; band.len() * row];
+        for (i, p) in band.clone().enumerate() {
+            for (c, plane) in planes.iter().enumerate() {
+                let dst = &mut part[(i * ch + c) * bps..(i * ch + c + 1) * bps];
+                match plane {
+                    Some(pl) if pl.len() >= (p + 1) * bps => {
+                        let src = &pl[p * bps..(p + 1) * bps];
+                        for k in 0..bps {
+                            dst[k] = src[bps - 1 - k];
+                        }
+                        if cfg!(target_endian = "big") {
+                            dst.copy_from_slice(src);
+                        }
+                        if invert[c] {
+                            invert_sample(dst, s);
+                        }
                     }
-                    if cfg!(target_endian = "big") {
-                        dst.copy_from_slice(src);
-                    }
-                    if invert[c] {
-                        invert_sample(dst, s);
-                    }
+                    _ => dst.copy_from_slice(&fill[c]),
                 }
-                _ => dst.copy_from_slice(&fill[c]),
             }
         }
+        part
+    });
+    for (band, part) in bs.into_iter().zip(parts) {
+        out[band.start * row..band.end * row].copy_from_slice(&part);
     }
     out
 }
@@ -76,20 +88,32 @@ pub fn deinterleave(bytes: &[u8], ch: usize, s: SampleType, invert: &[bool]) -> 
             if invert[c] { it.map(|v| 255 - v).collect() } else { it.copied().collect() }
         });
     }
-    let mut planes = vec![Vec::with_capacity(n * bps); ch];
-    let mut tmp = [0u8; 4];
-    for i in 0..n {
+    // One band of rows per core, appended in band order into pre-grown planes.
+    let row = ch * bps;
+    let bs = bands(n);
+    let parts: Vec<Vec<Vec<u8>>> = par_map(bs.clone(), |band| {
+        let mut planes = vec![Vec::with_capacity(band.len() * bps); ch];
+        let mut tmp = [0u8; 4];
+        for p in band {
+            for (c, plane) in planes.iter_mut().enumerate() {
+                let src = &bytes[p * row + c * bps..p * row + (c + 1) * bps];
+                tmp[..bps].copy_from_slice(src);
+                if invert[c] {
+                    invert_sample(&mut tmp[..bps], s);
+                }
+                if cfg!(target_endian = "big") {
+                    plane.extend_from_slice(&tmp[..bps]);
+                } else {
+                    plane.extend(tmp[..bps].iter().rev());
+                }
+            }
+        }
+        planes
+    });
+    let mut planes: Vec<Vec<u8>> = (0..ch).map(|_| Vec::with_capacity(n * bps)).collect();
+    for part in parts {
         for (c, plane) in planes.iter_mut().enumerate() {
-            let src = &bytes[(i * ch + c) * bps..(i * ch + c + 1) * bps];
-            tmp[..bps].copy_from_slice(src);
-            if invert[c] {
-                invert_sample(&mut tmp[..bps], s);
-            }
-            if cfg!(target_endian = "big") {
-                plane.extend_from_slice(&tmp[..bps]);
-            } else {
-                plane.extend(tmp[..bps].iter().rev());
-            }
+            plane.extend_from_slice(&part[c]);
         }
     }
     planes
@@ -192,6 +216,67 @@ pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn banded_shuffles_match_a_sequential_reference() {
+        fn seq_interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: SampleType, invert: &[bool]) -> Vec<u8> {
+            let bps = s.bytes();
+            let ch = planes.len();
+            let mut out = vec![0u8; n * ch * bps];
+            for (c, plane) in planes.iter().enumerate() {
+                for i in 0..n {
+                    let dst = &mut out[(i * ch + c) * bps..(i * ch + c + 1) * bps];
+                    match plane {
+                        Some(p) if p.len() >= (i + 1) * bps => {
+                            let src = &p[i * bps..(i + 1) * bps];
+                            for k in 0..bps {
+                                dst[k] = src[bps - 1 - k];
+                            }
+                            if invert[c] {
+                                invert_sample(dst, s);
+                            }
+                        }
+                        _ => dst.copy_from_slice(&fill[c]),
+                    }
+                }
+            }
+            out
+        }
+        fn seq_deinterleave(bytes: &[u8], ch: usize, s: SampleType, invert: &[bool]) -> Vec<Vec<u8>> {
+            let bps = s.bytes();
+            let n = bytes.len() / (ch * bps).max(1);
+            let mut planes = vec![Vec::with_capacity(n * bps); ch];
+            let mut tmp = [0u8; 4];
+            for i in 0..n {
+                for (c, plane) in planes.iter_mut().enumerate() {
+                    let src = &bytes[(i * ch + c) * bps..(i * ch + c + 1) * bps];
+                    tmp[..bps].copy_from_slice(src);
+                    if invert[c] {
+                        invert_sample(&mut tmp[..bps], s);
+                    }
+                    plane.extend(tmp[..bps].iter().rev());
+                }
+            }
+            planes
+        }
+        // Odd pixel counts cross band boundaries; a missing plane exercises the fill path.
+        for n in [1usize, 7, 64, 1000] {
+            for s in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let bps = s.bytes();
+                let planes: Vec<Vec<u8>> = (0..4).map(|c| (0..n * bps).map(|i| (i * 13 + c * 5) as u8).collect()).collect();
+                let mut refs: Vec<Option<&[u8]>> = planes.iter().map(|p| Some(&p[..])).collect();
+                refs[2] = None;
+                let fill: Vec<Vec<u8>> = (0..4).map(|c| vec![c as u8 * 40; bps]).collect();
+                let invert = [false, true, false, true];
+                let got = interleave(&refs, &fill, n, s, &invert);
+                let want = seq_interleave(&refs, &fill, n, s, &invert);
+                assert_eq!(got, want, "interleave n={n}");
+                let planes_back = deinterleave(&got, 4, s, &invert);
+                let want_back = seq_deinterleave(&got, 4, s, &invert);
+                assert_eq!(planes_back, want_back, "deinterleave n={n}");
+            }
+        }
+    }
 
     #[test]
     fn interleave_roundtrip_all_depths() {

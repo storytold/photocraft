@@ -153,6 +153,10 @@ pub struct Sensor {
     pub baseline_exposure: f64,
     /// DNG OpcodeList2 gain maps (lens shading), applied to the normalized data.
     pub gain_maps: Vec<crate::opcodes::GainMap>,
+    /// The camera profile's default tone curve (like DNG ProfileToneCurve): increasing `[input,
+    /// output]` pairs in linear ProPhoto, applied per channel after the colour conversion and
+    /// exposure. Below the first point the curve is a line through 0; empty: no curve.
+    pub tone_curve: Vec<[f32; 2]>,
     pub warnings: Vec<String>,
 }
 

@@ -72,7 +72,14 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let raw = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("ORF has no IFD0"))?;
     let width = u64::from(t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0));
     let height = u64::from(t.tag_uint(&raw, tag::IMAGE_LENGTH).unwrap_or(0));
-    let stored: u64 = t.tag_uints(&raw, tag::STRIP_BYTE_COUNTS).iter().map(|&c| u64::from(c)).sum();
+    // Every ORF, compressed or not, declares its strip byte counts. Missing or unreadable counts
+    // mean IFD0 is cut short (a partial download or a damaged file), not the compressed variant:
+    // an empty sum must not be mistaken for "fewer than 16 bits per sample".
+    let counts = t.tag_uints(&raw, tag::STRIP_BYTE_COUNTS);
+    if counts.is_empty() {
+        return Err(RawError::malformed("ORF IFD0 has no readable strip byte counts"));
+    }
+    let stored: u64 = counts.iter().map(|&c| u64::from(c)).sum();
     if t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1) != 1 || stored < width.saturating_mul(height).saturating_mul(2) {
         return Err(RawError::unsupported("Olympus compressed (or packed) ORF is not decoded"));
     }
@@ -142,6 +149,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         orientation: t.tag_uint(&raw, tag::ORIENTATION).map(|o| o as u16).filter(|o| (1..=8).contains(o)).unwrap_or(1),
         baseline_exposure: 0.0,
         gain_maps: Vec::new(),
+        tone_curve: Vec::new(),
         warnings,
     })
 }

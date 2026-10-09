@@ -17,7 +17,7 @@ use photocraft_psd::resources::ids;
 use photocraft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
 use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 
-use crate::flat::{csample, image_to_document, layout_for, single_layer, try_buffer};
+use crate::flat::{csample, encode_image, image_to_document, layout_for, single_layer, try_buffer};
 use crate::psd_export::{PsdExportOptions, document_to_psd_with};
 use crate::psd_import::psd_to_document;
 use crate::{ExportOptions, ExportResult, ImportResult, IoError};
@@ -70,8 +70,10 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     // The profile, resolution, XMP and EXIF are the TIFF's own tags; they win over any copy
     // in the resources.
     set_resource(&mut resources, ids::ICC_PROFILE, img.icc.clone());
-    if let Some((x, _)) = img.meta.dpi.filter(|d| d.0 > 0.0) {
-        set_resource(&mut resources, ids::RESOLUTION_INFO, Some(ResolutionInfo::from_dpi(f64::from(x)).to_bytes()));
+    if let Some((x, y)) = img.meta.dpi.filter(|d| d.0 > 0.0) {
+        // Both axes, so the PSD import notes a vertical resolution the document can't keep.
+        let ri = ResolutionInfo { v_res_fixed: ResolutionInfo::from_dpi(f64::from(y)).v_res_fixed, ..ResolutionInfo::from_dpi(f64::from(x)) };
+        set_resource(&mut resources, ids::RESOLUTION_INFO, Some(ri.to_bytes()));
     }
     if let Some(xmp) = &img.meta.xmp {
         set_resource(&mut resources, ids::XMP, Some(xmp.as_bytes().to_vec()));
@@ -225,12 +227,34 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions) -> Result<Exp
         photoshop_layers: Some(layers),
         ..Default::default()
     };
-    for w in codecs::fidelity_warnings_with(&img, Format::Tiff, &opts.encode) {
-        if w.is_fatal() {
-            return Err(IoError::Unsupported(w.to_string()));
+    encode_image(&img, Format::Tiff, opts, warnings)
+}
+
+/// Removes the blocks a document kept verbatim from a little-endian TIFF because their layout
+/// is unknown ([`photocraft_psd::TaggedBlock::is_foreign_order`]) before `file` is written as a
+/// PSD: their bytes are in the wrong order for a PSD and cannot be converted. Returns a warning
+/// per block dropped. A save back to TIFF keeps them (see [`photocraft_psd::tiff`]).
+pub fn strip_foreign_order_blocks(file: &mut photocraft_psd::PsdFile) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mut strip = |blocks: &mut Vec<photocraft_psd::TaggedBlock>, owner: &str| {
+        blocks.retain(|b| {
+            let keep = !b.is_foreign_order();
+            if !keep {
+                warnings.push(format!(
+                    "{owner}: {} block ({} bytes) kept from a little-endian TIFF cannot be written to PSD and was dropped",
+                    b.key_str(),
+                    b.data.len()
+                ));
+            }
+            keep
+        });
+    };
+    if let Some(info) = &mut file.layer_info {
+        for l in &mut info.layers {
+            let name = l.name();
+            strip(&mut l.blocks, &format!("layer \"{name}\""));
         }
-        warnings.push(w.to_string());
     }
-    let bytes = codecs::encode(&img, Format::Tiff, &opts.encode)?;
-    Ok(ExportResult { bytes, warnings })
+    strip(&mut file.global_blocks, "document");
+    warnings
 }

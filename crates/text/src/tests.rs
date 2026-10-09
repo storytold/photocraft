@@ -545,6 +545,75 @@ fn txt2_carries_optical_kerning() {
     assert!(l.char_runs().iter().all(|r| r.style.kerning == Kerning::Optical));
 }
 
+/// Photopea needs an enabled fill, not just FillColor, to paint text after an edit. Inspect the
+/// serialized TySh rather than our renderer, which does not consume the PSD fill flag.
+#[test]
+fn psd_text_fill_is_enabled_in_runs_and_new_default_styles() {
+    let mut t = point("AB", 100.0);
+    t.runs = vec![
+        TextRun { len: 1, style: CharStyle { color: Color::rgb(0.2, 0.4, 0.6), ..Default::default() } },
+        TextRun { len: 1, style: CharStyle { faux_bold: true, size_pt: 100.0, ..Default::default() } },
+    ];
+    for shape in [TextShape::Point, TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 200.0 }] {
+        t.shape = shape;
+        let tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(&t, 72.0, None)).unwrap();
+        let data = crate::psd::engine_data(&tysh.text).unwrap();
+        let runs = data.path(&["EngineDict", "StyleRun", "RunArray"]).unwrap().as_array().unwrap();
+        assert_eq!(runs.len(), 2);
+        for run in runs {
+            assert_eq!(run.path(&["StyleSheet", "StyleSheetData", "FillFlag"]).and_then(crate::engine_data::Value::as_bool), Some(true));
+        }
+        for key in ["ResourceDict", "DocumentResources"] {
+            let sheets = data.path(&[key, "StyleSheetSet"]).unwrap().as_array().unwrap();
+            assert_eq!(sheets[0].path(&["StyleSheetData", "FillFlag"]).and_then(crate::engine_data::Value::as_bool), Some(true));
+        }
+        let back = crate::psd::text_layer_from_tysh(&crate::psd::write_tysh(&tysh), 72.0).unwrap();
+        assert_eq!(back.text, t.text);
+        assert_eq!(back.runs.len(), t.runs.len());
+        for (actual, expected) in back.runs.iter().zip(&t.runs) {
+            assert_eq!(actual.style.color, expected.style.color);
+            assert_eq!(actual.style.size_pt, expected.style.size_pt);
+            assert_eq!(actual.style.faux_bold, expected.style.faux_bold);
+        }
+    }
+}
+
+#[test]
+fn psd_text_fill_is_enabled_after_editing_a_legacy_export() {
+    use crate::engine_data::Value as E;
+    // A legacy PhotoCraft export has a normal style and character runs without FillFlag.
+    let mut t = point("Before", 40.0);
+    let mut legacy = crate::psd::parse_tysh(&crate::psd::build_tysh(&t, 72.0, None)).unwrap();
+    fn remove_fill_flags(value: &mut E) {
+        match value {
+            E::Dict(items) => {
+                items.retain(|(key, _)| key != "FillFlag");
+                for (_, value) in items {
+                    remove_fill_flags(value);
+                }
+            }
+            E::Array(items) => items.iter_mut().for_each(remove_fill_flags),
+            _ => {}
+        }
+    }
+    let mut data = crate::psd::engine_data(&legacy.text).unwrap();
+    remove_fill_flags(&mut data);
+    for (key, value) in &mut legacy.text.items {
+        if key.as_bytes() == b"EngineData" {
+            *value = photocraft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
+        }
+    }
+    t.psd_raw = Some(crate::psd::write_tysh(&legacy).into());
+    t.text = "After".into();
+    let tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(&t, 72.0, None)).unwrap();
+    let data = crate::psd::engine_data(&tysh.text).unwrap();
+    let runs = data.path(&["EngineDict", "StyleRun", "RunArray"]).unwrap().as_array().unwrap();
+    assert!(!runs.is_empty());
+    for run in runs {
+        assert_eq!(run.path(&["StyleSheet", "StyleSheetData", "FillFlag"]).and_then(E::as_bool), Some(true));
+    }
+}
+
 /// EngineData pair fields: manual kerning and "no automatic kerning" round-trip exactly, in
 /// Photoshop's form (see `psd::pair_runs`).
 #[test]

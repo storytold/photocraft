@@ -326,9 +326,11 @@ pub(crate) fn trace_contour(src: &Image, out: Rect, ctx: &Ctx, level: f32, upper
     let n = src.ch;
     let cc = ncol(ctx, n);
     let sub = subtractive(ctx);
+    let bounds = ctx.bounds.intersect(&src.rect);
+    let area = if bounds.is_empty() { src.rect } else { bounds };
     let t = level.clamp(0.0, 255.0) / 255.0;
     let bright = |x: i32, y: i32, c: usize| {
-        let v = src.get_edge(x, y, c, crate::image::Edge::Repeat, ctx.bounds.intersect(&src.rect));
+        let v = src.get_edge(x, y, c, crate::image::Edge::Repeat, area);
         if sub { 1.0 - v } else { v }
     };
     let mut res = src.crop(out);

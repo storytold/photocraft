@@ -125,6 +125,52 @@ fn puppet_identity_translation_and_undo() {
 }
 
 #[test]
+fn puppet_with_an_expansion_that_empties_the_mesh_keeps_the_layer() {
+    // #951: a pinned warp over an empty mesh panicked in the solver; it must not erase the layer
+    // either (the rasterizer keeps only pixels inside the mesh).
+    let mut s = session(8);
+    let before = active_surface(&s);
+    s.execute(PUPPET, json!({"pins": [{"src": [30, 25], "dst": [36, 29]}], "expansion": -200})).unwrap();
+    assert_eq!(active_surface(&s).read_region(Rect::new(0, 0, 80, 60)), before.read_region(Rect::new(0, 0, 80, 60)));
+}
+
+#[test]
+fn puppet_refuses_pins_that_stretch_the_content_too_far() {
+    // #1019: a pin dragged to (2^20, 2^20) stretched the mesh over ~17.6 million tiles, and the
+    // renderer allocated bookkeeping for every one before drawing anything.
+    let far = json!({"pins": [{"src": [20, 20], "dst": [20, 20]}, {"src": [50, 30], "dst": [1048576, 1048576]}]});
+    let full = Rect::new(0, 0, 80, 60);
+    for depth in [8u64, 16, 32] {
+        for selected in [false, true] {
+            let mut s = session(depth);
+            if selected {
+                s.execute("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 30})).unwrap();
+            }
+            let (before, past) = (active_surface(&s), s.active().unwrap().history.past_len());
+            let err = s.execute(PUPPET, far.clone()).unwrap_err();
+            assert!(err.to_string().contains("too far"), "{depth} {selected}: {err}");
+            assert_eq!(active_surface(&s).read_region(full), before.read_region(full), "{depth} {selected}: layer unchanged");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{depth} {selected}: no history step");
+        }
+        // Controls: a rigid move still moves the content, and a pin 4000 px out (well inside the
+        // budget) still warps.
+        let mut s = session(depth);
+        s.execute(PUPPET, json!({"pins": [{"src": [20, 20], "dst": [30, 25]}, {"src": [50, 30], "dst": [60, 35]}], "mode": "rigid"})).unwrap();
+        assert_eq!(active_surface(&s).content_bounds(), Rect::new(20, 15, 70, 45), "{depth}");
+        let mut s = session(depth);
+        s.execute(PUPPET, json!({"pins": [{"src": [20, 20], "dst": [20, 20]}, {"src": [50, 30], "dst": [4050, 4030]}]})).unwrap();
+        assert!(active_surface(&s).content_bounds().x1 > 1000, "{depth}");
+    }
+    // A smart object stores the filter; a warp too far to render leaves its pixels as they were.
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let before = active_surface(&s);
+    s.execute(PUPPET_SMART, far).unwrap();
+    assert_eq!(smart(&s).smart_filters.len(), 1);
+    assert_eq!(active_surface(&s), before);
+}
+
+#[test]
 fn puppet_two_pins_bend_the_block() {
     let mut s = session(8);
     // Hold the left end, lift the right end: the right side rises, the left stays.

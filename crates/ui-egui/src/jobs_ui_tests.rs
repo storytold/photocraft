@@ -170,6 +170,31 @@ fn control_requests_wait_for_jobs_unless_asked_not_to() {
     assert_eq!(v["ok"], false);
 }
 
+#[test]
+fn accepted_control_job_applies_after_its_dispatch_deadline() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let (mut req, reply) = crate::ControlRequest::new("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 2}}));
+    req.deadline = Some(deadline);
+    let (tx, rx) = std::sync::mpsc::channel();
+    h.state_mut().control_rx = Some(rx);
+    tx.send(req).unwrap();
+    h.state_mut().drain_control(&ctx);
+    let job = h.state().jobs.waiters.first().expect("the accepted request waits for its job").0;
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "the job has not been applied yet");
+    assert!(reply.try_recv().is_err());
+    // No frames poll the worker until the transport's deadline has elapsed.
+    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+    assert!(Instant::now() >= deadline);
+    drop(reply);
+    let result = job_reply(&mut h, job);
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(result["result"]["filter"].is_object(), "{result}");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+}
+
 /// The control reply for `job`, once the app's frame loop has applied it.
 fn job_reply(h: &mut Harness<'static, PhotocraftApp>, job: JobId) -> Value {
     let (tx, rx) = std::sync::mpsc::channel();

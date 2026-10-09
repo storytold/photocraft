@@ -12,6 +12,22 @@ fn d(s: &Session) -> Arc<Document> {
 }
 
 #[test]
+fn record_measurements_refuses_an_area_too_large_to_measure() {
+    // #933: with no selection the whole document is measured, and `width * height` overflowed
+    // u32 on a legal 65536×65536 document, panicking inside `run`.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 65536, "height": 65536, "background": "transparent"})).unwrap();
+    let err = s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap_err();
+    assert!(err.to_string().contains("too large to measure"), "{err}");
+    assert!(s.analysis.log.is_empty());
+    // A failed measurement does not use up a label: the next one is still "Measurement 1".
+    s.execute("file.new", json!({"width": 20, "height": 20, "background": "white"})).unwrap();
+    let r = s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    assert_eq!(r["rows"][0]["values"]["label"], "Measurement 1");
+    assert_eq!(r["rows"][0]["values"]["area"], 400.0);
+}
+
+#[test]
 fn measurement_scale_set_query_default_and_undo() {
     let mut s = session(50, 40, 8);
     let r = s.execute("image.analysis.setMeasurementScale", json!({})).unwrap();
@@ -274,6 +290,44 @@ fn place_scale_marker_builds_one_group_in_one_step() {
     assert!(s.undo());
     assert!(s.undo());
     assert!(d(&s).layers.iter().all(|l| l.name != "Measurement Scale Marker"));
+}
+
+#[test]
+fn place_scale_marker_on_a_short_document_errors_without_panicking() {
+    // A document under 8 px tall inverted the bar-height clamp and panicked (#932). Call `run`
+    // directly too: dispatch would catch the panic and hide it behind a generic error.
+    for (w, h, p) in [
+        (100, 4, json!({})),
+        (100, 1, json!({})),
+        (100, 7, json!({"displayText": false, "textPosition": "top"})),
+        (300_000, 3, json!({"fontSize": 1000})),
+        (2, 7, json!({"length": 1})),
+        (7, 7, json!({"length": 7, "fontSize": 1})),
+    ] {
+        for h in [h, 1, 2, 3, 5, 6] {
+            let mut s = session(w, h, 8);
+            let before = s.active().unwrap().history.past_len();
+            let e = place_scale_marker(&mut s, &p).unwrap_err().to_string();
+            assert!(e.contains("tall"), "{w}x{h}: {e}");
+            let e = s.execute("image.analysis.placeScaleMarker", p.clone()).unwrap_err().to_string();
+            assert!(!e.contains("internal error"), "{w}x{h}: {e}");
+            assert_eq!(s.active().unwrap().history.past_len(), before, "{w}x{h}: nothing added");
+            assert!(d(&s).layers.iter().all(|l| l.name != "Measurement Scale Marker"));
+        }
+    }
+    // Control: 8 px is the shortest that fits, and tall, narrow or roomy documents still get a
+    // marker that lies on the canvas.
+    for (w, h, p) in [(100, 8, json!({})), (100, 100, json!({})), (20, 4000, json!({})), (2, 8, json!({"length": 2}))] {
+        let mut s = session(w, h, 8);
+        let r = place_scale_marker(&mut s, &p).unwrap();
+        let b: Vec<i64> = r["barRect"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+        assert!(0 <= b[0] && b[0] < b[2] && b[2] <= i64::from(w), "{w}x{h}: bar on the canvas: {r}");
+        assert!(0 <= b[1] && b[1] < b[3] && b[3] <= i64::from(h), "{w}x{h}: bar on the canvas: {r}");
+        assert_eq!(s.active().unwrap().history.past_len(), 1);
+        let doc = d(&s);
+        let bar = doc.layers.last().unwrap().children().unwrap().iter().find(|l| l.name == "Scale Bar").unwrap();
+        assert_eq!(f64::from(bar.surface().unwrap().content_bounds().width()), r["pixels"].as_f64().unwrap(), "{w}x{h}");
+    }
 }
 
 #[test]

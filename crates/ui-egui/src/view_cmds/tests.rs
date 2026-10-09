@@ -172,3 +172,43 @@ fn engine_commands_open_their_dialogs() {
     crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
     assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
 }
+
+#[test]
+fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
+    let (mut app, ctx) = app_with(1);
+    let first = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["columns"], 8);
+    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], 20);
+    for (key, value) in [("columns", json!(2)), ("gutter", json!(0)), ("rows", json!(2)), ("rowGutter", json!(0))] {
+        app.ui.dialog_mut(first).unwrap().fields.insert(key.into(), value);
+    }
+    crate::dialogs::confirm(&mut app, first).unwrap();
+
+    let second = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(second).unwrap().fields;
+    assert_eq!(fields["columns"], 2);
+    assert_eq!(fields["gutter"], 0);
+    assert_eq!(fields["rows"], 2);
+    assert_eq!(fields["rowGutter"], 0);
+    assert_eq!(fields["clearExisting"], false);
+    // A cancelled edit must not replace the last successfully used values.
+    app.ui.dialog_mut(second).unwrap().fields.insert("columns".into(), json!(9));
+    app.ui.close_dialog(second);
+    let third = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    assert_eq!(app.ui.dialog_mut(third).unwrap().fields["columns"], 2);
+
+    // The remembered state is part of the serializable UI state.
+    let json_state = serde_json::to_value(&app.ui).unwrap();
+    assert_eq!(json_state["view"]["guide_layout"]["columns"], 2);
+    let restored: crate::state::UiState = serde_json::from_value(json_state).unwrap();
+    assert_eq!(restored.view.guide_layout["rows"], 2);
+}
+
+#[test]
+fn new_guide_layout_does_not_remember_a_failed_command() {
+    let (mut app, _) = app_with(0);
+    let id = front(&mut app, "view.newGuideLayout", &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(3));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!(app.ui.view.guide_layout["columns"], 8);
+}

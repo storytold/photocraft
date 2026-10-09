@@ -106,9 +106,9 @@ note = "panels.rs:1108 plain dropdown; trash is click-only (panels.rs:1213)"
 [[item]]
 id = "UI-217-15"
 target = "Curves: smoothing / pencil mode, black/grey/white eyedroppers, tooltips"
-status = "missing"
+status = "partial"
 issue = 217
-note = "adjust_editors.rs:397 has none of them"
+note = "adjust_dialog.rs adds black/gray/white eyedroppers; smoothing and pencil modes remain missing"
 
 [[item]]
 id = "UI-217-16"

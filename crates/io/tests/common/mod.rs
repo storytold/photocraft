@@ -89,6 +89,9 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
     neg.fill_opacity = g(128);
     neg.blend = BlendMode::Multiply;
     neg.label = LabelColor::Blue;
+    // Advanced Blending switches round-trip as `infx` / `tsly` (and the rest below).
+    neg.advanced.blend_interior = true;
+    neg.advanced.transparency_shapes = false;
     d.layers.push(neg);
 
     let mut hidden = raster("Hidden", fmt, Rect::new(3, 3, 9, 9), 3, true);
@@ -105,6 +108,8 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
     if f.masks {
         let mut m = raster("Masked", fmt, Rect::new(2, 2, 14, 12), 5, true);
         m.mask = Some(LayerMask { surface: mask_surface(depth, Rect::new(4, 4, 10, 9), 1.0, 1), enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        m.advanced.layer_mask_hides_effects = true;
+        m.advanced.vector_mask_hides_effects = true;
         d.layers.push(m);
         let mut m2 = raster("Masked2", fmt, Rect::new(-2, 1, 6, 5), 6, true);
         m2.mask =
@@ -120,10 +125,13 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
         if let LayerContent::Group(gr) = &mut inner.content {
             gr.expanded = false;
         }
+        inner.advanced.knockout = photocraft_doc::Knockout::Shallow;
         let a = raster("Outer child", fmt, Rect::new(6, 2, 12, 8), 8, true);
         let mut outer = Layer::group("Outer", vec![a, inner]);
         outer.locks.position = true;
         outer.label = LabelColor::Red;
+        outer.advanced.knockout = photocraft_doc::Knockout::Deep;
+        outer.advanced.blend_clipped = false;
         d.layers.push(outer);
         d.layers.push(Layer::group("Empty group", vec![]));
     }
@@ -235,6 +243,9 @@ pub fn assert_layers_eq(a: &Layer, b: &Layer, path: &str) {
     assert_eq!(a.fill_opacity, b.fill_opacity, "{ctx}: fill");
     assert_eq!(a.clipped, b.clipped, "{ctx}: clipped");
     assert_eq!(a.label, b.label, "{ctx}: label");
+    assert_eq!(a.advanced, b.advanced, "{ctx}: advanced blending");
+    assert_eq!(a.excluded_channels, b.excluded_channels, "{ctx}: channel restrictions");
+    assert_eq!(a.blend_if, b.blend_if, "{ctx}: blend if");
     assert_eq!(a.effects.psd_raw, b.effects.psd_raw, "{ctx}: effects raw");
     assert_eq!(a.effects.enabled, b.effects.enabled, "{ctx}: effects enabled");
     if a.psd_id.is_some() {

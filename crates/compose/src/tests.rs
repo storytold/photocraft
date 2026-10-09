@@ -423,6 +423,29 @@ fn outside_stroke_width() {
 }
 
 #[test]
+fn outside_stroke_at_zero_fill_leaves_the_interior_clear() {
+    // Fill 0 % + an Outside stroke is the classic "outline only" look: the stroke lies outside
+    // the layer's pixels, so the interior shows the backdrop, not the stroke colour.
+    for (depth, fmt) in [(SampleType::U8, PixelFormat::RGBA8), (SampleType::U16, PixelFormat::RGBA16), (SampleType::F32, PixelFormat::RGBA32F)] {
+        let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, depth, Color::WHITE);
+        let mut l = Layer::raster("sq", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 1.0]);
+        l.effects.items = vec![stroke(3.0, StrokePosition::Outside)];
+        l.fill_opacity = 0.0;
+        d.layers.push(l);
+        assert!(close4(px(&d, 20, 20), [1.0; 4]), "{depth:?}: interior shows the white backdrop: {:?}", px(&d, 20, 20));
+        assert!(close4(px(&d, 11, 20), [1.0; 4]), "{depth:?}: just inside the edge too: {:?}", px(&d, 11, 20));
+        assert!(close4(px(&d, 8, 20), [0.0, 0.0, 1.0, 1.0]), "{depth:?}: the stroke itself stays: {:?}", px(&d, 8, 20));
+        // Partial fill: the interior is the layer at that fill over the backdrop, still no stroke.
+        d.layers[1].fill_opacity = 0.5;
+        assert!(close4(px(&d, 20, 20), [1.0, 0.5, 0.5, 1.0]), "{depth:?}: {:?}", px(&d, 20, 20));
+        // 100 % fill is unchanged.
+        d.layers[1].fill_opacity = 1.0;
+        assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]), "{depth:?}: {:?}", px(&d, 20, 20));
+    }
+}
+
+#[test]
 fn inside_and_center_strokes() {
     let d = fx_doc(vec![stroke(2.0, StrokePosition::Inside)]);
     assert!(close4(px(&d, 10, 20), [0.0, 0.0, 1.0, 1.0]));
@@ -545,6 +568,27 @@ fn outer_and_inner_glow_regions() {
     assert!(edge[1] > 0.3, "{edge:?}");
     assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]));
     assert!(close4(px(&d, 5, 20), [1.0; 4]));
+}
+
+// A glow gradient runs along the glow, not across the canvas: the first stop hugs the shape on
+// every side and later stops lie further out, opaque until the glow fades (#443).
+#[test]
+fn glow_gradient_follows_the_shape() {
+    let red_to_blue = Gradient { stops: vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))], ..Gradient::default() };
+    let g = Glow { paint: FxPaint::Gradient(red_to_blue), technique: GlowTechnique::Softer, size: 8.0, ..glow(GlowTechnique::Softer, GlowSource::Edge) };
+    let d = fx_doc(vec![Effect::OuterGlow(g.clone())]);
+    let near = px(&d, 9, 20);
+    for p in [px(&d, 30, 20), px(&d, 20, 9), px(&d, 20, 30)] {
+        assert!((0..4).all(|c| (p[c] - near[c]).abs() < 1.0 / 255.0), "{p:?} vs {near:?}");
+    }
+    assert!(near[0] > 0.8 && near[2] < 0.2 && near[1] < 0.1, "red at the edge: {near:?}");
+    let out = px(&d, 5, 20);
+    assert!(out[2] > out[0] && out[1] < 0.9, "bluer and fading further out: {out:?}");
+    // An inner glow's gradient also starts at the edge.
+    let d = fx_doc(vec![Effect::InnerGlow(g)]);
+    let (edge, top) = (px(&d, 10, 20), px(&d, 20, 10));
+    assert!((0..4).all(|c| (edge[c] - top[c]).abs() < 1.0 / 255.0), "{edge:?} vs {top:?}");
+    assert!(edge[0] > 0.8 && edge[2] < 0.2, "{edge:?}");
 }
 
 #[test]
@@ -1219,6 +1263,61 @@ fn small_gradient_fill_matches_photoshop_at_all_depths() {
     }
 }
 
+/// A shape layer's gradient fill must render the same pixels as the compositor's gradient
+/// fill layers, for every non-default gradient field (midpoints, opacity stops, centre offset,
+/// dither, unsorted stops) and all five styles, in both frames: "Align with layer" on lays the
+/// gradient out over the shape's bounds, off over the canvas. `photocraft-vector` cannot
+/// depend on this crate, so it carries a copy of this ramp and geometry — this test is what
+/// keeps the two in step (only interior pixels, where the shape's coverage is exactly 1).
+#[test]
+fn shape_layer_gradients_match_fill_layers() {
+    use photocraft_doc::GradientStyle;
+    let canvas = Rect::new(0, 0, 64, 48);
+    // rect(x, y, w, h): the shape spans (16, 8)–(64, 48), so its whole-pixel bounds sit strictly
+    // inside the canvas — "Align with layer" then picks a different frame than the canvas.
+    let path = photocraft_vector::shapes::rect(16.0, 8.0, 48.0, 40.0);
+    let layer_frame = Rect::new(16, 8, 64, 48);
+    let grad = |style: GradientStyle, midpoints: Vec<f32>, opacity_stops: Vec<(f32, f32)>, offset: (f32, f32), dither: bool, unsorted: bool, align: bool| {
+        let mut stops = vec![(0.0, Color::BLACK), (0.5, Color::rgb(1.0, 0.25, 0.5)), (1.0, Color::WHITE)];
+        if unsorted {
+            stops.reverse();
+        }
+        Fill::Gradient { stops, angle: 30.0, scale: 1.7, style, reverse: false, opacity_stops, midpoints, offset, dither, align }
+    };
+    let styles = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];
+    // (name, midpoints, opacity stops, centre offset, dither, unsorted stops) per case.
+    type Case = (&'static str, Vec<f32>, Vec<(f32, f32)>, (f32, f32), bool, bool);
+    let cases: Vec<Case> = vec![
+        ("plain", vec![], vec![], (0.0, 0.0), false, false),
+        ("midpoints", vec![0.25, 0.9], vec![], (0.0, 0.0), false, false),
+        ("opacity stops", vec![], vec![(0.0, 1.0), (0.5, 0.2), (1.0, 0.9)], (0.0, 0.0), false, false),
+        ("offset", vec![], vec![], (0.3, -0.2), false, false),
+        ("dither", vec![], vec![], (0.0, 0.0), true, false),
+        ("all of them", vec![0.75], vec![(0.0, 1.0), (1.0, 0.4)], (0.1, 0.1), true, true),
+    ];
+    for style in styles {
+        for (name, mids, opac, offset, dither, unsorted) in &cases {
+            for align in [true, false] {
+                let f = grad(style, mids.clone(), opac.clone(), *offset, *dither, *unsorted, align);
+                let frame = if align { layer_frame } else { canvas };
+                let want = gradient_fill::render(&f, canvas, frame);
+                let sh = photocraft_doc::vector::ShapeLayer { path: path.clone(), fill: Some(f), ..Default::default() };
+                let s = photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, canvas);
+                let mut worst = 0.0f32;
+                for y in 9..47 {
+                    for x in 17..63 {
+                        let p = want[(y as usize) * canvas.width() as usize + x as usize];
+                        for (got, want_ch) in (0..4usize).map(|ch| (s.sample_channel(x, y, ch), p[ch])) {
+                            worst = worst.max((got - want_ch).abs());
+                        }
+                    }
+                }
+                assert!(worst <= 1.5 / 255.0, "{style:?} {name} align={align}: worst delta {worst}");
+            }
+        }
+    }
+}
+
 /// A tall document with soft content, a translucent region and an adjustment.
 fn tall_doc(w: u32, h: u32) -> Document {
     let mut d = doc_white(w, h);
@@ -1306,7 +1405,7 @@ fn reference_reduce(doc: &Document, w: usize, h: usize) -> Vec<[f32; 4]> {
 fn reduced_render_matches_the_full_composite_averaged() {
     let d = tall_doc(53, 1000);
     for (w, h, band) in [(10, 190, 0), (7, 33, 256), (53, 999, 512), (1, 1, 256)] {
-        let got = render_reduced_in_bands(&d, w, h, None, band);
+        let got = render_reduced_in_bands(&d, d.bounds(), w, h, None, band);
         assert_eq!((got.rect.width(), got.rect.height()), (w, h));
         assert_eq!(got.px, reference_reduce(&d, w as usize, h as usize), "{w}x{h} band {band}");
     }
@@ -1322,9 +1421,9 @@ fn reduced_damage_matches_the_whole_reduction() {
     // whole reduction's, for uneven factors, damage on span edges and bands smaller than the area.
     let d = tall_doc(53, 1000);
     for (w, h, band) in [(10, 190, 0), (7, 33, 256), (53, 999, 64), (53, 1000, 0), (1, 1, 256)] {
-        let all = render_reduced_in_bands(&d, w, h, None, band);
+        let all = render_reduced_in_bands(&d, d.bounds(), w, h, None, band);
         for dmg in [Rect::new(0, 0, 1, 1), Rect::new(5, 17, 6, 18), Rect::new(12, 300, 40, 701), Rect::new(-9, 990, 80, 2000), Rect::new(0, 0, 53, 1000)] {
-            let part = render_reduced_in_bands(&d, w, h, Some(dmg), band);
+            let part = render_reduced_in_bands(&d, d.bounds(), w, h, Some(dmg), band);
             let r = part.rect;
             assert!(!r.is_empty() && r.x0 >= 0 && r.y0 >= 0 && r.x1 as u32 <= w && r.y1 as u32 <= h, "{w}x{h} {dmg:?} -> {r:?}");
             for y in r.y0..r.y1 {
@@ -1343,8 +1442,38 @@ fn reduced_damage_matches_the_whole_reduction() {
                 }
             }
         }
-        assert!(render_reduced_in_bands(&d, w, h, Some(Rect::new(60, 0, 70, 10)), band).rect.is_empty());
+        assert!(render_reduced_in_bands(&d, d.bounds(), w, h, Some(Rect::new(60, 0, 70, 10)), band).rect.is_empty());
     }
+}
+
+#[test]
+fn reduced_render_of_an_area_past_the_canvas() {
+    // The Crop tool shows layer pixels beyond the canvas: rendered in place, they must equal the
+    // same pixels on a canvas that holds them (adjustment layers apply out there too).
+    let paint = |d: &mut Document, dx: i32, dy: i32| {
+        let mut l = Layer::raster("big", PixelFormat::RGBA8);
+        let s = l.surface_mut().unwrap();
+        for y in -10..40 {
+            for x in -20..60 {
+                let a = if x < 0 || y >= 30 { 0.6 } else { 1.0 };
+                s.fill_rect(Rect::new(x + dx, y + dy, x + dx + 1, y + dy + 1), &[(x + 20) as f32 / 80.0, (y + 10) as f32 / 50.0, 0.5, a]);
+            }
+        }
+        d.layers.push(l);
+        d.layers.push(Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert)));
+    };
+    let mut d = Document::new("d", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+    paint(&mut d, 0, 0);
+    let mut whole = Document::new("w", Size::new(80, 50), ColorMode::Rgb, SampleType::U8);
+    paint(&mut whole, 20, 10);
+    let area = Rect::new(-20, -10, 60, 40);
+    for (w, h) in [(80, 50), (8, 5), (27, 13), (1, 1)] {
+        let got = render_reduced_rect(&d, area, w, h);
+        assert_eq!(got.rect, Rect::new(0, 0, w as i32, h as i32));
+        assert_eq!(got.px, render_reduced(&whole, w, h).px, "{w}x{h}");
+    }
+    // Past every layer there is nothing to show.
+    assert!(render_reduced_rect(&d, Rect::new(100, 100, 120, 110), 20, 10).px.iter().all(|p| p[3] == 0.0));
 }
 
 #[test]
@@ -1428,4 +1557,126 @@ fn effect_maps_with_nested_rayon_work_do_not_deadlock() {
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("effect-map rendering deadlocked (#276)"),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("render thread panicked"),
     }
+}
+
+// Photo Filter multiplies D50 XYZ (relative to white) by the filter colour's, then restores the
+// encoded luminosity like the Luminosity blend mode; 32-bit documents keep luminance Y instead.
+// Samples from the photoshop corpus photo-filter.psd (Warming Filter (85), density 40 %, Preserve
+// Luminosity): pure blue gains red, and white stays white (#442).
+#[test]
+fn photo_filter_matches_photoshop() {
+    let filter = |color: [f32; 3], depth, v: [f32; 3]| {
+        let adj = Adjustment::PhotoFilter { color, density: 0.4, preserve_luminosity: true };
+        let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), [v[0], v[1], v[2], 1.0]);
+        adjust::apply_depth(&adj, &mut b, adjust::Transfer::for_document(ColorMode::Rgb, depth), Some(depth));
+        [b.px[0][0], b.px[0][1], b.px[0][2]].map(|c| c * 255.0)
+    };
+    let warming = [236.0 / 255.0, 138.0 / 255.0, 0.0];
+    for depth in [SampleType::U8, SampleType::U16] {
+        for (v, ps) in [
+            ([1.0, 0.0, 0.0], [239.0, 7.0, 7.0]),
+            ([0.0, 1.0, 0.0], [69.0, 220.0, 0.0]),
+            ([0.0, 0.0, 1.0], [46.0, 0.0, 130.0]),
+            ([1.0, 1.0, 0.0], [255.0, 240.0, 80.0]),
+            ([0.5019, 0.5019, 0.5019], [140.0, 124.0, 116.0]),
+            ([0.949, 0.949, 0.949], [255.0, 238.0, 229.0]),
+            ([1.0, 1.0, 1.0], [255.0, 255.0, 255.0]),
+            ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+        ] {
+            let got = filter(warming, depth, v);
+            assert!(got.iter().zip(ps).all(|(g, p)| (g - p).abs() <= 1.0), "{depth:?} {v:?}: got {got:?} want {ps:?}");
+        }
+    }
+    // The 32-bit file picks the same numbers as linear values (Lab 81.5, 9.41, 82.19). Its fit is
+    // looser (mean 0.9/255 over the file, 6.9/255 with a plain RGB multiply).
+    let warming32 = [0.966_445_6, 0.761_806_3, 0.0];
+    for (v, ps) in [([0.2159, 0.2159, 0.2159], [66.0, 53.0, 40.0]), ([1.0, 1.0, 0.0], [255.0, 251.0, 0.0]), ([1.0, 0.0, 0.0], [255.0, 0.0, 0.0])] {
+        let got = filter(warming32, SampleType::F32, v);
+        assert!(got.iter().zip(ps).all(|(g, p)| (g - p).abs() <= 2.5), "F32 {v:?}: got {got:?} want {ps:?}");
+    }
+}
+
+/// Vibrance of an 8-bit sRGB colour (0–255 in and out).
+fn vibrance_255(c: [f32; 3], vibrance: f32, saturation: f32) -> [f32; 3] {
+    let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0]);
+    adjust::apply(&Adjustment::Vibrance { vibrance, saturation }, &mut buf);
+    let p = buf.px[0];
+    [p[0] * 255.0, p[1] * 255.0, p[2] * 255.0]
+}
+
+fn assert_near_255(got: [f32; 3], want: [f32; 3], tol: f32, what: &str) {
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol), "{what}: got {got:?}, Photoshop {want:?}");
+}
+
+// Photoshop 25.4 references (16-bit runs of 8-bit colours in an sRGB document).
+
+#[test]
+fn vibrance_saturation_matches_photoshop() {
+    // −100 greys to 0.288 R + 0.712 G in linear light: blue has no weight, yellow stays bright.
+    for (c, g) in [([251.0, 201.0, 0.0], 217.0), ([255.0, 0.0, 0.0], 146.0), ([0.0, 255.0, 0.0], 219.4), ([0.0, 0.0, 255.0], 0.0), ([255.0, 255.0, 0.0], 255.0)]
+    {
+        assert_near_255(vibrance_255(c, 0.0, -100.0), [g; 3], 0.5, "saturation -100");
+    }
+    for (c, s, want) in [
+        ([255.0, 128.0, 0.0], -50.0, [220.7, 155.2, 129.4]),
+        ([224.0, 176.0, 144.0], -50.0, [208.6, 183.9, 169.9]),
+        ([64.0, 128.0, 192.0], 50.0, [0.0, 134.3, 218.7]),
+        ([224.0, 176.0, 144.0], 100.0, [251.3, 158.5, 51.7]),
+        ([32.0, 96.0, 64.0], 100.0, [0.0, 106.8, 32.8]),
+    ] {
+        assert_near_255(vibrance_255(c, 0.0, s), want, 0.5, "saturation");
+    }
+}
+
+#[test]
+fn negative_vibrance_matches_photoshop() {
+    for (c, v, want) in [
+        ([255.0, 0.0, 0.0], -100.0, [255.0, 137.0, 137.0]),
+        ([128.0, 0.0, 0.0], -100.0, [128.0, 65.7, 65.7]),
+        ([224.0, 176.0, 144.0], -100.0, [213.2, 197.4, 188.8]),
+        ([64.0, 128.0, 192.0], -100.0, [124.4, 149.0, 185.0]),
+        ([255.0, 128.0, 0.0], -50.0, [255.0, 152.0, 99.1]),
+        ([251.0, 201.0, 0.0], -50.0, [251.0, 208.1, 97.4]),
+        ([32.0, 96.0, 64.0], -50.0, [50.1, 91.7, 68.6]),
+    ] {
+        assert_near_255(vibrance_255(c, v, 0.0), want, 0.6, "vibrance");
+    }
+    // Vibrance applies first, then Saturation.
+    assert_near_255(vibrance_255([64.0, 128.0, 192.0], 50.0, -50.0), [86.5, 117.8, 158.4], 3.0, "vibrance then saturation");
+}
+
+#[test]
+fn positive_vibrance_follows_photoshop_closely() {
+    // A fit, not exact: within a few levels, saturated colours untouched, skin damped.
+    for (c, v, want, tol) in [
+        ([255.0, 128.0, 0.0], 50.0, [255.0, 128.0, 0.0], 0.5),
+        ([144.0, 160.0, 176.0], 100.0, [121.2, 152.6, 180.5], 1.5),
+        ([64.0, 128.0, 192.0], 50.0, [50.6, 125.1, 192.8], 4.0),
+        ([224.0, 176.0, 144.0], 50.0, [224.9, 173.4, 138.0], 3.0),
+        ([224.0, 176.0, 144.0], 100.0, [226.6, 166.8, 122.4], 5.0),
+    ] {
+        assert_near_255(vibrance_255(c, v, 0.0), want, tol, "vibrance");
+    }
+}
+
+#[test]
+fn clipped_brightness_and_desaturation_whiten_a_lighter_color_logo() {
+    // постер.psd: a yellow logo in Lighter Color over the same yellow, with Brightness/Contrast +150
+    // and Vibrance › Saturation −100 clipped to it. Photoshop shows it white (254); 0.5.0 left it
+    // yellow (its Saturation −100 greyed (255, 255, 0) to 128, darker than the yellow beneath).
+    let yellow = [251.0 / 255.0, 201.0 / 255.0, 0.0, 1.0];
+    let mut d = doc_white(2, 1);
+    d.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &yellow);
+    let mut logo = solid_layer("logo", Rect::new(0, 0, 1, 1), yellow);
+    logo.blend = BlendMode::LighterColor;
+    d.layers.push(logo);
+    for adj in [Adjustment::BrightnessContrast { brightness: 150.0, contrast: 0.0, legacy: false }, Adjustment::Vibrance { vibrance: 0.0, saturation: -100.0 }]
+    {
+        let mut l = Layer::new("adj", LayerContent::Adjustment(adj));
+        l.clipped = true;
+        d.layers.push(l);
+    }
+    let p = px(&d, 0, 0);
+    assert!(p[..3].iter().all(|v| *v * 255.0 >= 252.0), "logo whitened: {p:?}");
+    assert!(close4(px(&d, 1, 0), yellow), "the yellow beside it is untouched");
 }

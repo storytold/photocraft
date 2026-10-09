@@ -5,7 +5,19 @@ use photocraft_raster::Interrupt;
 
 use crate::image::{Edge, Image, premultiply, unpremultiply};
 use crate::photo_util::{par_map, par_rows};
-use crate::{Ctx, FilterParams, RadialMethod};
+use crate::{Ctx, FilterParams, RadialMethod, RadialQuality};
+
+#[cfg(test)]
+use self::motion as motion_rows;
+
+pub(crate) mod motion_apply;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod motion_bench;
+mod motion_fft;
+#[cfg(test)]
+mod motion_fft_tests;
+#[cfg(test)]
+mod motion_tests;
 
 /// Normalized Gaussian kernel with standard deviation `sigma` (radius 3σ).
 pub(crate) fn gaussian_kernel(sigma: f32) -> Vec<f32> {
@@ -310,13 +322,17 @@ pub(crate) fn boxed(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> 
     }
 }
 
-fn average_samples(src: &Image, out: Rect, ctx: &Ctx, mut offsets: impl FnMut(f32, f32, &mut Vec<(f32, f32)>)) -> Vec<f32> {
+fn average_samples(src: &Image, out: Rect, ctx: &Ctx, offsets: impl Fn(f32, f32, &mut Vec<(f32, f32)>) + Sync) -> Vec<f32> {
     let n = src.ch;
-    let mut res = Vec::with_capacity(out.width() as usize * out.height() as usize * n);
-    let mut pts = Vec::new();
-    let mut tmp = vec![0.0f32; n];
-    let mut acc = vec![0.0f32; n];
-    for y in out.y0..out.y1 {
+    let (ow, oh) = (out.width() as usize, out.height() as usize);
+    let mut res = vec![0.0; ow * oh * n];
+    if ow == 0 || oh == 0 || n == 0 {
+        return res;
+    }
+    let process_row = |y: i32, row: &mut [f32]| {
+        let mut pts = Vec::new();
+        let mut tmp = vec![0.0f32; n];
+        let mut acc = vec![0.0f32; n];
         for x in out.x0..out.x1 {
             let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
             pts.clear();
@@ -333,37 +349,123 @@ fn average_samples(src: &Image, out: Rect, ctx: &Ctx, mut offsets: impl FnMut(f3
                 }
             }
             let k = 1.0 / pts.len().max(1) as f32;
-            for a in acc.iter_mut() {
-                *a *= k;
+            for (dst, value) in row[(x - out.x0) as usize * n..][..n].iter_mut().zip(&acc) {
+                *dst = *value * k;
             }
             if ctx.alpha {
-                let a = acc[n - 1];
-                for v in acc.iter_mut().take(n - 1) {
+                let alpha = acc[n - 1] * k;
+                let dst = &mut row[(x - out.x0) as usize * n..][..n];
+                for value in dst.iter_mut().take(n - 1) {
+                    *value = if alpha > 1e-7 { *value / alpha } else { 0.0 };
+                }
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        res.par_chunks_mut(ow * n).enumerate().for_each(|(row, data)| process_row(out.y0 + row as i32, data));
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        res.chunks_mut(ow * n).enumerate().for_each(|(row, data)| process_row(out.y0 + row as i32, data));
+    }
+    res
+}
+
+/// Sample offsets of a motion blur of `distance` at `angle`, relative to the pixel centre.
+fn motion_offsets(angle: f32, distance: f32) -> Vec<(f32, f32)> {
+    let d = distance.abs();
+    let (s, c) = angle.to_radians().sin_cos();
+    let steps = d.ceil() as i32;
+    (0..=steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32 - 0.5;
+            (c * d * t, -s * d * t)
+        })
+        .collect()
+}
+
+/// Motion blur: the mean of bilinear samples along a line centred on the pixel. The offsets are the
+/// same for every pixel, so their bilinear taps are merged once into a fixed kernel, which is
+/// applied tap by tap to whole rows of a premultiplied window (the same premultiplied mean the
+/// per-sample loop takes, summed in another order).
+pub(crate) fn motion(src: &Image, out: Rect, ctx: &Ctx, angle: f32, distance: f32) -> Vec<f32> {
+    if distance.abs() < 0.5 {
+        return src.crop(out);
+    }
+    let offs = motion_offsets(angle, distance);
+    let k = 1.0 / offs.len() as f32;
+    // Merged taps (dx, dy, weight), in the order first seen.
+    let mut taps: Vec<(i32, i32, f32)> = Vec::new();
+    let mut slot = std::collections::HashMap::new();
+    for &(ox, oy) in &offs {
+        let (x0, y0) = (ox.floor(), oy.floor());
+        let (ax, ay) = (ox - x0, oy - y0);
+        let (x0, y0) = (x0 as i32, y0 as i32);
+        for (dx, dy, w) in [(0, 0, (1.0 - ax) * (1.0 - ay)), (1, 0, ax * (1.0 - ay)), (0, 1, (1.0 - ax) * ay), (1, 1, ax * ay)] {
+            if w <= 0.0 {
+                continue;
+            }
+            let i = *slot.entry((x0 + dx, y0 + dy)).or_insert_with(|| {
+                taps.push((x0 + dx, y0 + dy, 0.0));
+                taps.len() - 1
+            });
+            taps[i].2 += w * k;
+        }
+    }
+    let reach = taps.iter().map(|t| t.0.abs().max(t.1.abs())).max().unwrap_or(0);
+    let n = src.ch;
+    let win = out.inflate(reach);
+    let ww = win.width() as usize;
+    // Premultiplied window; outside the source reads as transparent, as the sampler does.
+    let mut pw = vec![0.0f32; ww * win.height() as usize * n];
+    for y in win.y0..win.y1 {
+        for x in win.x0..win.x1 {
+            let i = ((y - win.y0) as usize * ww + (x - win.x0) as usize) * n;
+            let a = if ctx.alpha { src.get(x, y, n - 1) } else { 1.0 };
+            for c in 0..n {
+                let v = src.get(x, y, c);
+                pw[i + c] = if ctx.alpha && c < n - 1 { v * a } else { v };
+            }
+        }
+    }
+    let (ow, oh) = (out.width() as usize, out.height() as usize);
+    let mut res = vec![0.0f32; ow * oh * n];
+    let r = reach as usize;
+    for (oy, row) in res.chunks_exact_mut(ow * n).enumerate() {
+        for &(dx, dy, w) in &taps {
+            let start = ((oy + r).wrapping_add_signed(dy as isize) * ww + r.wrapping_add_signed(dx as isize)) * n;
+            for (o, v) in row.iter_mut().zip(&pw[start..start + ow * n]) {
+                *o += w * v;
+            }
+        }
+        if ctx.alpha {
+            for px in row.chunks_exact_mut(n) {
+                let a = px[n - 1];
+                for v in px.iter_mut().take(n - 1) {
                     *v = if a > 1e-7 { *v / a } else { 0.0 };
                 }
             }
-            res.extend_from_slice(&acc);
         }
     }
     res
 }
 
-pub(crate) fn motion(src: &Image, out: Rect, ctx: &Ctx, angle: f32, distance: f32) -> Vec<f32> {
-    let d = distance.abs();
-    if d < 0.5 {
-        return src.crop(out);
+fn radial_intervals(path_length: f32, quality: RadialQuality) -> usize {
+    let max = match quality {
+        RadialQuality::Draft => 64,
+        RadialQuality::Good => 256,
+        RadialQuality::Best => 4096,
+    };
+
+    if path_length.is_nan() {
+        return 1;
     }
-    let (s, c) = angle.to_radians().sin_cos();
-    let steps = d.ceil() as i32;
-    average_samples(src, out, ctx, |x, y, pts| {
-        for i in 0..=steps {
-            let t = i as f32 / steps as f32 - 0.5;
-            pts.push((x + c * d * t, y - s * d * t));
-        }
-    })
+    path_length.ceil().clamp(1.0, max as f32) as usize
 }
 
-pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: RadialMethod, center: (f32, f32)) -> Vec<f32> {
+pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: RadialMethod, quality: RadialQuality, center: (f32, f32)) -> Vec<f32> {
     let b = ctx.bounds;
     let (cx, cy) = (b.x0 as f32 + b.width() as f32 * center.0, b.y0 as f32 + b.height() as f32 * center.1);
     let amount = amount.clamp(0.0, 100.0);
@@ -374,7 +476,7 @@ pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: Rad
             RadialMethod::Spin => {
                 // Arc of `amount` degrees centred on the pixel.
                 let arc = amount.to_radians();
-                let n = ((arc * r).ceil() as i32).clamp(1, 64);
+                let n = radial_intervals(arc * r, quality);
                 for i in 0..=n {
                     let t = (i as f32 / n as f32 - 0.5) * arc;
                     let (s, c) = t.sin_cos();
@@ -384,7 +486,7 @@ pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: Rad
             RadialMethod::Zoom => {
                 // Samples along the ray, up to amount/2 % closer to the centre.
                 let span = amount / 200.0;
-                let n = ((span * r).ceil() as i32).clamp(1, 64);
+                let n = radial_intervals(span * r, quality);
                 for i in 0..=n {
                     let k = 1.0 - span * i as f32 / n as f32;
                     pts.push((cx + dx * k, cy + dy * k));
@@ -483,7 +585,138 @@ pub(crate) fn surface(src: &Image, out: Rect, ctx: &Ctx, radius: f32, threshold:
     {
         return res;
     }
+    // 16-bit and float (and 8-bit where the histogram declined): the ranked sums overtake the
+    // direct sum near radius 8 on a 256 px tile and are about 10x faster at radius 100.
+    if r >= RANKED_MIN_RADIUS
+        && let Some(res) = surface_ranked(src, out, ctx, r, t)
+    {
+        return res;
+    }
     surface_direct(src, out, ctx, r, t)
+}
+
+/// Radius from which [`surface_ranked`] beats [`surface_direct`] (measured by `surface_timing`).
+const RANKED_MIN_RADIUS: i32 = 10;
+
+/// Fenwick tree over value ranks, each node holding (count, Σv, Σv²) of its range.
+struct RankSums(Vec<[f64; 3]>);
+
+impl RankSums {
+    fn add(&mut self, rank: usize, sign: f64, v: f64) {
+        let mut i = rank + 1;
+        while let Some(node) = self.0.get_mut(i) {
+            node[0] += sign;
+            node[1] += sign * v;
+            node[2] += sign * v * v;
+            i += i & i.wrapping_neg();
+        }
+    }
+
+    /// Sums over the ranks `0..end`.
+    fn prefix(&self, end: usize) -> [f64; 3] {
+        let mut acc = [0.0; 3];
+        let mut i = end.min(self.0.len().saturating_sub(1));
+        while i > 0 {
+            if let Some(node) = self.0.get(i) {
+                acc[0] += node[0];
+                acc[1] += node[1];
+                acc[2] += node[2];
+            }
+            i -= i & i.wrapping_neg();
+        }
+        acc
+    }
+
+    /// Sums over the ranks `start..end`.
+    fn range(&self, start: usize, end: usize) -> [f64; 3] {
+        let (a, b) = (self.prefix(start), self.prefix(end));
+        [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+    }
+}
+
+/// [`surface`] at any bit depth. The weight `1 - |v - v0| / t` is linear in `v` on each side of
+/// the centre value, so over the samples within the threshold below it `Σw = ((t - v0)·n + Σv) / t`
+/// and `Σv·w = ((t - v0)·Σv + Σv²) / t`, and symmetrically above it. A Fenwick tree over the
+/// window's distinct values holds the count, Σv and Σv² and slides along the row (one column out
+/// and one in per step), so a pixel costs O(radius · log n) instead of O(radius^2). `None` when a
+/// sample isn't finite; the direct sum handles those.
+fn surface_ranked(src: &Image, out: Rect, ctx: &Ctx, r: i32, t: f32) -> Option<Vec<f32>> {
+    let n = src.ch;
+    let cc = if ctx.alpha { n - 1 } else { n };
+    let win = out.inflate(r);
+    let (ww, wh) = (win.width() as usize, win.height() as usize);
+    // Every colour sample of the window (outside the source reads as 0, as `Image::get` does),
+    // and whether its pixel counts (the direct sum skips transparent ones).
+    let mut vals = Vec::with_capacity(ww * wh * cc);
+    let mut opaque = Vec::with_capacity(ww * wh);
+    for y in win.y0..win.y1 {
+        for x in win.x0..win.x1 {
+            opaque.push(!(ctx.alpha && src.get(x, y, n - 1) <= 0.0));
+            for c in 0..cc {
+                let v = src.get(x, y, c);
+                if !v.is_finite() {
+                    return None;
+                }
+                // `+ 0.0` turns -0.0 into 0.0, so equal values share a rank.
+                vals.push(v + 0.0);
+            }
+        }
+    }
+    let mut levels = vals.clone();
+    levels.sort_unstable_by(f32::total_cmp);
+    levels.dedup();
+    let rank: Vec<usize> = vals.iter().map(|v| levels.partition_point(|l| l < v)).collect();
+    let mut tree = RankSums(vec![[0.0; 3]; levels.len() + 1]);
+    let (ow, oh) = (out.width() as usize, out.height() as usize);
+    if ow == 0 || oh == 0 {
+        return Some(Vec::new());
+    }
+    let side = (2 * r + 1) as usize;
+    let t64 = f64::from(t);
+    let mut res = vec![0.0f32; ow * oh * n];
+    for oy in 0..oh {
+        for c in 0..cc {
+            let column = |tree: &mut RankSums, wx: usize, sign: f64| {
+                for wy in oy..oy + side {
+                    let p = wy * ww + wx;
+                    if opaque.get(p) == Some(&true)
+                        && let (Some(&k), Some(&v)) = (rank.get(p * cc + c), vals.get(p * cc + c))
+                    {
+                        tree.add(k, sign, f64::from(v));
+                    }
+                }
+            };
+            for wx in 0..side {
+                column(&mut tree, wx, 1.0);
+            }
+            for ox in 0..ow {
+                let v0 = src.px(out.x0 + ox as i32, out.y0 + oy as i32)[c];
+                // Ranks strictly within the threshold below v0 (and v0 itself), then above it.
+                let lo = levels.partition_point(|&l| 1.0 - (l - v0).abs() / t <= 0.0 && l < v0);
+                let mid = levels.partition_point(|&l| l <= v0);
+                let hi = levels.partition_point(|&l| l <= v0 || 1.0 - (l - v0).abs() / t > 0.0);
+                let (below, above) = (tree.range(lo, mid), tree.range(mid, hi));
+                let v0d = f64::from(v0);
+                let wsum = ((t64 - v0d) * below[0] + below[1] + (t64 + v0d) * above[0] - above[1]) / t64;
+                let acc = ((t64 - v0d) * below[1] + below[2] + (t64 + v0d) * above[1] - above[2]) / t64;
+                res[(oy * ow + ox) * n + c] = if below[0] + above[0] > 0.0 && wsum > 0.0 { (acc / wsum) as f32 } else { v0 };
+                if ox + 1 < ow {
+                    column(&mut tree, ox, -1.0);
+                    column(&mut tree, ox + side, 1.0);
+                }
+            }
+            // Empty the tree for the next row and channel.
+            for wx in ow - 1..ow - 1 + side {
+                column(&mut tree, wx, -1.0);
+            }
+        }
+        if ctx.alpha {
+            for ox in 0..ow {
+                res[(oy * ow + ox) * n + n - 1] = src.px(out.x0 + ox as i32, out.y0 + oy as i32)[n - 1];
+            }
+        }
+    }
+    Some(res)
 }
 
 /// [`surface`] by summing the whole (2r + 1)^2 window of every pixel.
@@ -522,6 +755,53 @@ mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use photocraft_raster::Surface;
+
+    #[test]
+    fn radial_blur_samples_large_arcs_beyond_64_intervals() {
+        let bounds = Rect::new(0, 0, 1000, 1000);
+        let out = Rect::new(999, 500, 1000, 501);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Grayscale, alpha: false };
+        let mut img = Image::new(bounds, 1);
+        let (cx, cy) = (500.0f32, 500.0f32);
+        let (x, y) = (999.5f32, 500.5f32);
+        let (dx, dy) = (x - cx, y - cy);
+        let arc = 100.0f32.to_radians();
+        let count = radial_intervals(arc * dx.hypot(dy), RadialQuality::Good);
+        assert_eq!(count, 256);
+        assert_eq!(radial_intervals(f32::INFINITY, RadialQuality::Draft), 64);
+        assert_eq!(radial_intervals(f32::INFINITY, RadialQuality::Good), 256);
+        assert_eq!(radial_intervals(f32::INFINITY, RadialQuality::Best), 4096);
+        assert_eq!(radial_intervals(f32::NAN, RadialQuality::Best), 1);
+
+        // Put a small bright patch halfway between two samples from the former 64-interval
+        // limit. Dense sampling should pick it up; the coarse path misses it entirely.
+        let sparse_midpoint = (31.5 / 64.0 - 0.5) * arc;
+        let (s, c) = sparse_midpoint.sin_cos();
+        let px = (cx + dx * c - dy * s - 0.5).round() as i32;
+        let py = (cy + dx * s + dy * c - 0.5).round() as i32;
+        for yy in py - 1..=py + 1 {
+            for xx in px - 1..=px + 1 {
+                let index = (yy - bounds.y0) as usize * bounds.width() as usize + (xx - bounds.x0) as usize;
+                img.data[index] = 1.0;
+            }
+        }
+
+        let sample_path = |x: f32, y: f32, pts: &mut Vec<(f32, f32)>, intervals: usize| {
+            let (dx, dy) = (x - cx, y - cy);
+            for i in 0..=intervals {
+                let t = (i as f32 / intervals as f32 - 0.5) * arc;
+                let (s, c) = t.sin_cos();
+                pts.push((cx + dx * c - dy * s, cy + dx * s + dy * c));
+            }
+        };
+        let actual = radial(&img, out, &ctx, 100.0, RadialMethod::Spin, RadialQuality::Good, (0.5, 0.5))[0];
+        let expected = average_samples(&img, out, &ctx, |x, y, pts| sample_path(x, y, pts, 8192))[0];
+        let coarse = average_samples(&img, out, &ctx, |x, y, pts| sample_path(x, y, pts, 64))[0];
+
+        assert!(actual > 0.001, "dense radial samples should resolve the bright patch, got {actual}");
+        assert!((actual - expected).abs() < 0.0015, "radial result {actual} differs from dense reference {expected}");
+        assert!(coarse < expected * 0.1, "former 64-interval sampling unexpectedly resolved the patch: {coarse} vs {expected}");
+    }
 
     #[test]
     fn box_gaussian_matches_exact_kernel() {
@@ -701,5 +981,149 @@ mod tests {
         let i = (14 * src_rect.width() as usize + 14) * 4;
         img.data[i] = 0.5 / 255.0;
         assert!(surface_8bit(&img, out, &ctx, 4, 0.1, 26).is_none());
+    }
+
+    #[test]
+    fn motion_kernel_matches_the_per_pixel_samples() {
+        // Noisy RGBA with some transparent pixels; the output reaches the source edge.
+        let src_rect = Rect::new(-30, -30, 50, 40);
+        let mut img = Image::new(src_rect, 4);
+        let mut s = 0x1b87_3593u32;
+        for px in img.data.as_chunks_mut::<4>().0 {
+            for v in px.iter_mut() {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                *v = (s % 1000) as f32 / 999.0;
+            }
+            if s.is_multiple_of(5) {
+                px[3] = 0.0;
+            }
+        }
+        let out = Rect::new(-12, -6, 30, 22);
+        for alpha in [true, false] {
+            let ctx = Ctx { bounds: src_rect, mode: crate::ColorMode::Rgb, alpha };
+            for (angle, distance) in [(0.0, 1.0), (0.0, 9.0), (30.0, 7.0), (90.0, 12.0), (-45.0, 20.0), (137.0, 33.5), (200.0, 40.0)] {
+                let fast = motion(&img, out, &ctx, angle, distance);
+                let offs = motion_offsets(angle, distance);
+                let slow = average_samples(&img, out, &ctx, |x, y, pts| pts.extend(offs.iter().map(|&(dx, dy)| (x + dx, y + dy))));
+                let err = slow.iter().zip(&fast).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(err < 1e-5, "alpha {alpha} angle {angle} distance {distance}: max error {err}");
+            }
+        }
+    }
+
+    /// The direct sum with f64 accumulators: the reference both fast paths are held to.
+    fn surface_reference(src: &Image, out: Rect, ctx: &Ctx, r: i32, t: f32) -> Vec<f32> {
+        let n = src.ch;
+        let cc = if ctx.alpha { n - 1 } else { n };
+        let mut res = Vec::new();
+        for y in out.y0..out.y1 {
+            for x in out.x0..out.x1 {
+                let p = src.px(x, y);
+                for &v0 in p.iter().take(cc) {
+                    let c = res.len() % n;
+                    let (mut acc, mut wsum) = (0.0f64, 0.0f64);
+                    for yy in y - r..=y + r {
+                        for xx in x - r..=x + r {
+                            if ctx.alpha && src.get(xx, yy, n - 1) <= 0.0 {
+                                continue;
+                            }
+                            let v = src.get(xx, yy, c);
+                            let w = (1.0 - (v - v0).abs() / t).max(0.0);
+                            acc += f64::from(v) * f64::from(w);
+                            wsum += f64::from(w);
+                        }
+                    }
+                    res.push(if wsum > 0.0 { (acc / wsum) as f32 } else { v0 });
+                }
+                if ctx.alpha {
+                    res.push(p[n - 1]);
+                }
+            }
+        }
+        res
+    }
+
+    #[test]
+    fn surface_blur_ranked_sums_match_the_weighted_window_at_any_depth() {
+        // 16-bit levels and arbitrary floats (including negatives and values above 1), with some
+        // fully transparent pixels, which the sum skips.
+        for (quant, channels, alpha) in [(Some(65535.0f32), 4, true), (None, 4, true), (None, 1, false)] {
+            let src_rect = Rect::new(-20, -20, 48, 40);
+            let mut img = Image::new(src_rect, channels);
+            let mut s = 0x1b87_3593u32;
+            for px in img.data.chunks_mut(channels) {
+                for v in px.iter_mut() {
+                    s ^= s << 13;
+                    s ^= s >> 17;
+                    s ^= s << 5;
+                    let raw = (s % 10_000) as f32 / 10_000.0;
+                    *v = quant.map_or(raw * 1.5 - 0.25, |q| (raw * q).round() / q);
+                }
+                if alpha && s.is_multiple_of(7) {
+                    px[channels - 1] = 0.0;
+                }
+            }
+            let ctx = Ctx { bounds: src_rect, mode: crate::ColorMode::Rgb, alpha };
+            // The output reaches the source edge, where samples read as 0.
+            let out = Rect::new(-6, 0, 30, 22);
+            for (r, threshold) in [(1, 2.0), (4, 15.0), (12, 60.0), (16, 255.0)] {
+                let t = (threshold / 255.0) * 2.5;
+                let ranked = surface_ranked(&img, out, &ctx, r, t).expect("finite input");
+                let reference = surface_reference(&img, out, &ctx, r, t);
+                assert_eq!(ranked.len(), reference.len());
+                let err = reference.iter().zip(&ranked).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(err < 1e-6, "{quant:?} r {r} threshold {threshold}: max error {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn surface_blur_ranked_declines_non_finite_samples_and_handles_empty_output() {
+        let src_rect = Rect::new(0, 0, 8, 8);
+        let mut img = Image::new(src_rect, 1);
+        img.data.fill(0.5);
+        let ctx = Ctx { bounds: src_rect, mode: crate::ColorMode::Grayscale, alpha: false };
+        assert_eq!(surface_ranked(&img, Rect::new(2, 2, 2, 6), &ctx, 2, 0.1), Some(Vec::new()));
+        img.data[9] = f32::NAN;
+        assert!(surface_ranked(&img, Rect::new(0, 0, 8, 8), &ctx, 2, 0.1).is_none());
+        // The public entry still answers, through the direct sum.
+        assert_eq!(surface(&img, Rect::new(0, 0, 8, 8), &ctx, 12.0, 15.0).len(), 64);
+    }
+
+    /// Release-mode timings of the direct sum and the ranked path on one 256 px tile of
+    /// 16-bit-like and float noise (`cargo test -p photocraft-algo --release -- --ignored --nocapture surface_timing`).
+    #[test]
+    #[ignore]
+    fn surface_timing() {
+        for (label, quant) in [("16-bit", Some(65535.0f32)), ("float", None)] {
+            for r in [2, 4, 8, 16, 32, 64, 100] {
+                let out = Rect::new(0, 0, 256, 256);
+                let src_rect = out.inflate(r);
+                let mut img = Image::new(src_rect, 4);
+                let mut s = 0x2545_f491u32;
+                let len = img.data.len();
+                for (i, v) in img.data.iter_mut().enumerate() {
+                    s ^= s << 13;
+                    s ^= s >> 17;
+                    s ^= s << 5;
+                    // Smooth gradient plus noise, so the threshold keeps a realistic share.
+                    let x = (i / 4) as f32 / len as f32 * 4.0;
+                    let raw = (0.5 + 0.4 * (x * 6.0).sin() + (s % 1000) as f32 / 20000.0).clamp(0.0, 1.0);
+                    *v = quant.map_or(raw, |q| (raw * q).round() / q);
+                }
+                let ctx = Ctx { bounds: src_rect, mode: crate::ColorMode::Rgb, alpha: true };
+                let t = (15.0 / 255.0) * 2.5;
+                let a = std::time::Instant::now();
+                let direct = surface_direct(&img, out, &ctx, r, t);
+                let td = a.elapsed();
+                let a = std::time::Instant::now();
+                let ranked = surface_ranked(&img, out, &ctx, r, t).expect("finite");
+                let tr = a.elapsed();
+                let err = direct.iter().zip(&ranked).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                println!("{label} r {r:3}: direct {td:>10.2?}  ranked {tr:>10.2?}  max err {err:.2e}");
+            }
+        }
     }
 }

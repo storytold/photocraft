@@ -151,11 +151,12 @@ pub fn liquify_surface(surf: &Surface, strokes: &[LiquifyStroke], cell: f64, can
     apply_liquify(surf, &field)
 }
 
-/// Puppet-warps a surface's content.
-pub fn puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Surface {
+/// Puppet-warps a surface's content; `None` when the result would span more than
+/// [`photocraft_algo::puppet::MAX_WARP_PIXELS`].
+pub fn puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Option<Surface> {
     let b = surf.content_bounds();
     if w.is_identity() || b.is_empty() {
-        return surf.clone();
+        return Some(surf.clone());
     }
     puppet_warp(surf, b, w, interp)
 }
@@ -178,7 +179,8 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
             let (strokes, cell) = liquify_params(id, params, canvas).ok()?;
             Some(liquify_surface(surf, &strokes, cell, canvas))
         }
-        PUPPET | PUPPET_SMART => Some(puppet_surface(surf, &puppet_params(id, params).ok()?, interp(params))),
+        // A stored warp too far to render leaves the smart object as it is (#1019).
+        PUPPET | PUPPET_SMART => Some(puppet_surface(surf, &puppet_params(id, params).ok()?, interp(params)).unwrap_or_else(|| surf.clone())),
         PERSPECTIVE | PERSPECTIVE_SMART => Some(perspective_surface(surf, &perspective_params(id, params).ok()?, interp(params))),
         _ => None,
     }
@@ -231,16 +233,10 @@ fn check_locks(l: &Layer, group: Locks, position: bool) -> Result<()> {
 /// Shared driver: a smart object records `cmd` as a smart filter; a pixel layer is edited in
 /// place by `f(surface, selection)`.
 type MaskFn<'a> = Option<&'a dyn Fn(&Surface) -> Surface>;
+/// Deforms a layer's pixels (with the selection and canvas); an `Err` leaves the layer as it was.
+type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
-fn run_on_layer(
-    s: &mut Session,
-    cmd: &str,
-    label: &str,
-    p: &Value,
-    moves: bool,
-    f: &dyn Fn(&Surface, Option<&Surface>, Rect) -> Surface,
-    mask: MaskFn,
-) -> Result<Value> {
+fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool, f: LayerFn, mask: MaskFn) -> Result<Value> {
     let id = target(s, p)?;
     let mut params = p.clone();
     if let Value::Object(m) = &mut params {
@@ -262,7 +258,7 @@ fn run_on_layer(
         let LayerContent::Raster(surf) = &mut l.content else {
             return Err(EngineError::Other(format!("{label} needs a pixel layer (rasterize it first)")));
         };
-        *surf = f(surf, selection.as_ref(), canvas);
+        *surf = f(surf, selection.as_ref(), canvas)?;
         // A linked layer mask follows a geometric warp.
         if let (Some(mf), Some(m)) = (mask, l.mask.as_mut())
             && m.linked
@@ -295,10 +291,10 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
         false,
         &|surf, sel, _| {
             let out = apply_liquify(surf, &field);
-            match sel {
+            Ok(match sel {
                 Some(sel) => mix_by_selection(surf, &out, sel),
                 None => out,
-            }
+            })
         },
         None,
     )?;
@@ -310,14 +306,14 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Lifts the selected pixels (when there is a selection), deforms them with `f` and puts them
 /// back over the rest; without a selection deforms the whole surface.
-fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -> Surface) -> Surface {
+fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -> Result<Surface>) -> Result<Surface> {
     match sel {
         Some(sel) => {
             let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel);
-            let moved = f(&lifted);
+            let moved = f(&lifted)?;
             crate::transform_cmds::composite_over(&mut rest, &moved);
             rest.prune();
-            rest
+            Ok(rest)
         }
         None => {
             let fmt = surf.format();
@@ -335,7 +331,8 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
     let it = interp(p);
-    run_on_layer(s, cmd, "Puppet Warp", p, true, &|surf, sel, _| deform_selected(surf, sel, &|x| puppet_surface(x, &w, it)), None)
+    let too_far = || bad(cmd, "the pins stretch the content too far: the result would cover more than 2^30 pixels");
+    run_on_layer(s, cmd, "Puppet Warp", p, true, &|surf, sel, _| deform_selected(surf, sel, &|x| puppet_surface(x, &w, it).ok_or_else(too_far)), None)
 }
 
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -357,7 +354,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         "Perspective Warp",
         p,
         true,
-        &|surf, sel, _| deform_selected(surf, sel, &|x| perspective_surface(x, &planes, it)),
+        &|surf, sel, _| deform_selected(surf, sel, &|x| Ok(perspective_surface(x, &planes, it))),
         Some(&mask_fn),
     )?;
     r["planes"] = json!(planes);

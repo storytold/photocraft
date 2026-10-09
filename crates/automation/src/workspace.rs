@@ -210,7 +210,6 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
                 | "layer.videoLayers.newVideoLayerFromFile"
                 | "layer.videoLayers.replaceFootage"
                 | "layer.videoLayers.reloadFrame"
-                | "image.applyDataSet"
         )
         || command_uses_ambient_path(id, params)
         || profile_command_may_read_ambient(id, params)
@@ -249,7 +248,7 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
     let keys: &[&str] = match id {
         "image.adjustments.colorLookup" | "layer.newAdjustmentLayer.colorLookup" | "layer.setAdjustment" => &["file"],
         "filter.distort.displace" => &["mapPath"],
-        "layer.quickExportAsPng" | "layer.exportAs" => &["path"],
+        "layer.quickExportAsPng" | "layer.exportAs" | "image.applyDataSet" => &["path"],
         "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" => &["profile"],
         "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo" | "view.proofSetup" | "view.gamutWarning" => &["profile"],
         "edit.colorSettings" => &["workingRgb", "workingCmyk", "workingGray"],
@@ -291,10 +290,12 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
-        "brush.presets.importAbr" | "gradient.presets.importGrd" | "plugin.install" => {
+        "brush.presets.importAbr" | "gradient.presets.importGrd" | "plugin.install" | "swatches.import" => {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
+        // With a `path` the file is written there; without one the bytes come back as `data`.
+        "swatches.export" => params.get("path").is_some(),
         "plugin.reload" => true,
         _ => false,
     }
@@ -538,7 +539,6 @@ mod tests {
             "layer.smartObjects.exportContents",
             "measurementLog.export",
             "layer.videoLayers.reloadFrame",
-            "image.applyDataSet",
             "edit.colorSettings",
         ] {
             assert!(authorize_engine_command(id, &serde_json::json!({})).is_err());
@@ -557,7 +557,41 @@ mod tests {
         assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "colorSettings.workingRgb", "value": "outside.icc"})).is_err());
         assert!(authorize_engine_step("file.open", &serde_json::json!({})).is_err());
         assert!(authorize_engine_step("actions.play", &serde_json::json!({})).is_ok());
+        // An allowed command can't reach a denied one by running it on its own behalf.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();
+        session.authorize = Some(authorize_desktop_engine_step);
+        let params = serde_json::json!({"to": "grayscale"});
+        assert!(authorize_desktop_engine_command("file.automate.conditionalModeChange", &params).is_ok());
+        assert!(session.execute("file.automate.conditionalModeChange", params).is_err());
+        assert_eq!(session.active().unwrap().doc.mode, photocraft_engine::doc::ColorMode::Rgb);
         assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn apply_data_set_is_judged_by_the_values_it_applies() {
+        let mut headless = crate::Headless::new();
+        headless.command_run("file.new", serde_json::json!({"width": 8, "height": 8})).unwrap();
+        let layer = headless.command_run("layer.new.layer", serde_json::json!({})).unwrap()["layer"].clone();
+        let defs = [
+            serde_json::json!({"name": "shown", "layer": layer, "type": "visibility"}),
+            serde_json::json!({"name": "photo", "layer": layer, "type": "pixelReplacement"}),
+        ];
+        headless.command_run("image.variables.define", serde_json::json!({"defs": defs})).unwrap();
+        let sets = serde_json::json!({"dataSets": [
+            {"name": "hidden", "values": [{"variable": "shown", "kind": "visibility", "value": false}]},
+            {"name": "swap", "values": [
+                {"variable": "shown", "kind": "visibility", "value": false},
+                {"variable": "photo", "kind": "pixels", "value": "/outside/photo.png"},
+            ]},
+        ]});
+        headless.command_run("image.variables.dataSets", sets).unwrap();
+        let visible = |headless: &crate::Headless| headless.session.active().unwrap().doc.layers.iter().all(|l| l.visible);
+        let refused = headless.command_run("image.applyDataSet", serde_json::json!({"name": "swap"})).unwrap_err();
+        assert!(refused.to_string().contains("ambient filesystem paths"), "{refused}");
+        assert!(visible(&headless), "a refused data set applies none of its values");
+        assert!(headless.command_run("image.applyDataSet", serde_json::json!({"name": "hidden"})).is_ok());
+        assert!(!visible(&headless));
     }
 
     #[test]
@@ -569,6 +603,8 @@ mod tests {
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
             ("plugin.reload", serde_json::json!({})),
             ("plugin.install", serde_json::json!({"path": " "})),
+            ("swatches.import", serde_json::json!({"path": "/outside/set.aco"})),
+            ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
         ] {
             assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
         }
@@ -576,6 +612,8 @@ mod tests {
             ("brush.presets.importAbr", serde_json::json!({"data": "QUJD"})),
             ("gradient.presets.importGrd", serde_json::json!({"data": "QUJD"})),
             ("plugin.install", serde_json::json!({"data": "QUJD"})),
+            ("swatches.import", serde_json::json!({"data": "QUJD"})),
+            ("swatches.export", serde_json::json!({"format": "ase"})),
         ] {
             assert!(authorize_engine_command(id, &params).is_ok(), "{id}: {params}");
         }
@@ -647,6 +685,10 @@ mod tests {
                 | "path.info"
                 | "path.set"
                 | "path.transform"
+                | "path.moveAnchors"
+                | "path.moveHandle"
+                | "path.bendSegment"
+                | "path.convertPoint"
                 | "path.clippingPath.set"
                 | "path.rename"
                 | "select.toWorkPath"
@@ -660,7 +702,10 @@ mod tests {
                 | "layer.combineShapes.intersectShapeAreas"
                 | "layer.combineShapes.excludeOverlappingShapes"
                 | "layer.combineShapes.mergeShapeComponents"
-        ) {
+        ) || id.starts_with("layer.newFillLayer.")
+            || id.starts_with("layer.newAdjustmentLayer.")
+        {
+            // New fill and adjustment layers take a vector path as their vector mask (#1419).
             return false;
         }
         params.to_ascii_lowercase().contains("path")

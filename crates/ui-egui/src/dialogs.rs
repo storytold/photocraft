@@ -88,8 +88,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Some(offset) => egui::Modal::default_area(id).anchor(egui::Align2::LEFT_TOP, offset),
             None => egui::Modal::default_area(id),
         };
+        let color_picker = crate::color_picker_ui::owns(&fields);
+        let mut modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
+        if color_picker {
+            modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
+        }
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
-        let modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT).show(ctx, |ui| {
+        let modal = modal.show(ctx, |ui| {
             sizing = ui.is_sizing_pass();
             ui.set_min_width(380.0);
             let wide = crate::prefs_ui::width(&d.fields);
@@ -117,7 +122,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
             }
-            let t = ui.add(egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false)).rect;
+            if color_picker {
+                ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
+            }
+            let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
+            let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
             let bar = egui::Rect::from_min_max(t.min, egui::pos2(ui.max_rect().right(), t.bottom()));
             drag = ui.interact(bar, id.with("title"), egui::Sense::drag()).drag_delta();
             ui.add_space(4.0);
@@ -172,7 +181,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
-                DialogKind::Command if crate::color_picker_ui::owns(&fields) => crate::color_picker_ui::body(ui, &mut fields),
+                DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
+                    outcome = crate::color_picker_ui::body(ui, &mut fields);
+                    crate::color_picker_ui::take_add_swatch(app, &mut fields);
+                }
                 DialogKind::Command if crate::color_range_ui::owns(&fields) => crate::color_range_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::prefs_ui::owns(&fields) => crate::prefs_ui::body(app, ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
@@ -192,44 +204,61 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                 }
             }
-            ui.add_space(8.0);
-            // Align::Min, not Center: a centred row fills the height left over from last frame's
-            // (larger) size, so a dialog whose body gets shorter would never shrink back.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                if matches!(d.kind, DialogKind::About | DialogKind::Error) {
-                    if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)]).is_some() {
-                        outcome = Some(false);
-                    }
-                } else {
-                    let ok_label = if d.kind == DialogKind::NewDocument {
-                        tl!("Create")
-                    } else if d.fields.contains_key("__export") {
-                        tl!("Export")
-                    } else {
-                        crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
-                    };
-                    let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
-                    let cancel = DialogButton::new(ButtonRole::Cancel, if d.kind == DialogKind::NewDocument { tl!("Close") } else { tl!("Cancel") }, 84.0);
-                    let clicked = if d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&fields) {
-                        let changed = crate::prefs_ui::preferences_changed(app, &fields);
-                        dialog_buttons(ui, &[ok, cancel, DialogButton::new(ButtonRole::Apply, tl!("Apply"), 84.0).enabled(changed)])
-                    } else {
-                        dialog_buttons(ui, &[ok, cancel])
-                    };
-                    match clicked {
-                        Some(ButtonRole::Cancel) => outcome = Some(false),
-                        Some(ButtonRole::Apply) => apply_requested = true,
-                        Some(_) => outcome = Some(true),
-                        None if ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
-                        None => {}
-                    }
+            if crate::color_picker_ui::owns(&fields) {
+                if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    outcome = Some(true);
                 }
-            });
+            } else {
+                ui.add_space(8.0);
+                // Align::Min, not Center: a centred row fills the height left over from last frame's
+                // (larger) size, so a dialog whose body gets shorter would never shrink back.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+                        if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0)]).is_some() {
+                            outcome = Some(false);
+                        }
+                    } else {
+                        let ok_label = if d.kind == DialogKind::NewDocument {
+                            tl!("Create")
+                        } else if d.fields.contains_key("__export") {
+                            tl!("Export")
+                        } else {
+                            crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
+                        };
+                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
+                        // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
+                        let reset = ui.input(|i| i.modifiers.alt) && crate::adjust_dialog::resets(&fields);
+                        let cancel_label = if reset {
+                            tl!("Reset")
+                        } else if d.kind == DialogKind::NewDocument {
+                            tl!("Close")
+                        } else {
+                            tl!("Cancel")
+                        };
+                        let cancel = DialogButton::new(ButtonRole::Cancel, cancel_label, 84.0);
+                        let clicked = if d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&fields) {
+                            let changed = crate::prefs_ui::preferences_changed(app, &fields);
+                            dialog_buttons(ui, &[ok, cancel, DialogButton::new(ButtonRole::Apply, tl!("Apply"), 84.0).enabled(changed)])
+                        } else {
+                            dialog_buttons(ui, &[ok, cancel])
+                        };
+                        match clicked {
+                            Some(ButtonRole::Cancel) if reset => crate::adjust_dialog::reset(ui.ctx(), &mut fields),
+                            Some(ButtonRole::Cancel) => outcome = Some(false),
+                            Some(ButtonRole::Apply) => apply_requested = true,
+                            Some(_) => outcome = Some(true),
+                            None if ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+                            None => {}
+                        }
+                    }
+                });
+            }
             // The frame around the content (Frame::popup's margin and stroke).
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
-        shown.push(modal.inner);
+        // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
+        shown.push(if color_picker { modal.response.rect } else { modal.inner });
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
         if !sizing && (pinned.is_none() || drag != egui::Vec2::ZERO) {
             let screen = ctx.content_rect();
@@ -324,7 +353,11 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
             app.filter_preview = None;
             let cmd = d.fields.get("__command").and_then(|v| v.as_str().map(str::to_string)).ok_or("dialog has no command")?;
             let (cmd, params) = crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields));
-            app.run(&cmd, params)
+            let result = app.run(&cmd, params.clone());
+            if result.is_ok() && cmd == "view.newGuideLayout" {
+                app.ui.view.guide_layout = params;
+            }
+            result
         }
         DialogKind::LayerStyle => crate::layer_style::confirm(app, &d.fields),
         DialogKind::About | DialogKind::Error => Ok(Value::Null),
@@ -355,6 +388,36 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_picker_has_inset_content_and_actions_at_the_right_edge() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for size in [egui::vec2(760.0, 480.0), egui::vec2(960.0, 640.0)] {
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = Harness::builder().with_size(size).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            crate::color_picker_ui::open(h.state_mut(), "foreground");
+            h.run_steps(4);
+            let frame = rects(&h.ctx)[0];
+            let title = h.get_by_label("Color Picker (Foreground Color)").rect();
+            let ok = h.get_by_label("OK").rect();
+            let cancel = h.get_by_label("Cancel").rect();
+            let web = h.get_by_label("Only Web Colors").rect();
+            assert!((ok.right() - title.right()).abs() < 1.0, "OK aligns with the right content edge: {ok:?} vs {title:?}");
+            assert!((cancel.right() - ok.right()).abs() < 1.0);
+            assert!(frame.right() - ok.right() >= 16.0, "buttons retain the window's padding");
+            assert!(web.left() - frame.left() >= 16.0, "checkbox has comfortable left padding");
+            assert!(frame.bottom() - web.bottom() >= 16.0, "checkbox has comfortable bottom padding");
+            assert!(title.top() - frame.top() >= 16.0, "title has top padding");
+            assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(frame), "padded picker fits {size:?}: {frame:?}");
+            // A click anywhere inside the added margin must stay out of the canvas eyedropper.
+            let margin = egui::pos2(frame.left() + 8.0, web.center().y);
+            h.hover_at(margin);
+            h.run_steps(1);
+            assert!(free_pointer_over(&h.ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, size)).is_none());
+        }
+    }
 
     #[test]
     fn dragging_the_title_bar_moves_the_dialog() {

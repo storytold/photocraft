@@ -154,6 +154,54 @@ fn export_preferences_drive_quick_export() {
 }
 
 #[test]
+fn webp_export_preferences_select_lossless_or_lossy_output() {
+    let dir = tmp("quick_webp_quality");
+    let mut s = session(8);
+    let defaults = s.prefs().export.clone();
+    assert!(defaults.webp_lossless, "existing Quick Export defaults to lossless WebP");
+    assert_eq!(defaults.webp_quality, 85);
+
+    // Simulate an older stored preference section without the newly added WebP keys.
+    let mut old = s.prefs().to_json();
+    old["export"].as_object_mut().unwrap().remove("webpLossless");
+    old["export"].as_object_mut().unwrap().remove("webpQuality");
+    let restored: crate::prefs::Preferences = serde_json::from_value(old).unwrap();
+    assert!(restored.export.webp_lossless);
+    assert_eq!(restored.export.webp_quality, 85);
+
+    let r = s.execute("file.export.exportPreferences", json!({"quickExportFormat": "webp", "webpLossless": true, "webpQuality": 40})).unwrap();
+    assert_eq!(r["values"]["webpLossless"], true);
+    assert_eq!(r["values"]["webpQuality"], 40);
+    let lossless_path = format!("{dir}/lossless.webp");
+    s.execute("file.export.quickExport", json!({"path": lossless_path})).unwrap();
+    let lossless = std::fs::read(&lossless_path).unwrap();
+    assert!(lossless.starts_with(b"RIFF") && &lossless[8..12] == b"WEBP");
+    assert!(lossless.windows(4).any(|w| w == b"VP8L"), "lossless WebP should use VP8L");
+    assert_eq!(decode(&lossless_path).dimensions(), (64, 48));
+
+    s.execute("file.export.exportPreferences", json!({"webpLossless": false})).unwrap();
+    let low_path = format!("{dir}/lossy40.webp");
+    s.execute("file.export.quickExport", json!({"path": low_path})).unwrap();
+    let low = std::fs::read(&low_path).unwrap();
+    assert!(low.windows(4).any(|w| w == b"VP8 "), "lossy WebP should contain a VP8 frame");
+    assert_eq!(decode(&low_path).dimensions(), (64, 48));
+
+    s.execute("file.export.exportPreferences", json!({"webpQuality": 90})).unwrap();
+    let high_path = format!("{dir}/lossy90.webp");
+    s.execute("file.export.quickExport", json!({"path": high_path})).unwrap();
+    let high = std::fs::read(&high_path).unwrap();
+    assert!(high.windows(4).any(|w| w == b"VP8 "));
+    assert_eq!(decode(&high_path).dimensions(), (64, 48));
+    assert_ne!(low, high, "changing WebP quality should change the encoded image");
+
+    let before = s.prefs().export.webp_quality;
+    for quality in [0, 101] {
+        assert!(s.execute("file.export.exportPreferences", json!({"webpQuality": quality})).is_err());
+        assert_eq!(s.prefs().export.webp_quality, before);
+    }
+}
+
+#[test]
 fn generator_naming_grammar() {
     let a = parse_asset_name("200% foo@2x.png, 48x48 icons/bar.png8 + photo.jpg8", 72.0);
     assert_eq!(a.len(), 3);
@@ -265,4 +313,49 @@ fn jpeg_preview_at_odd_sizes() {
             }
         }
     }
+}
+
+#[test]
+fn slices_with_the_same_name_get_distinct_files() {
+    // #908: two slices named `tile` (and names that sanitize alike) used to overwrite each other.
+    let dir = tmp("dupes");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 10, 10], "name": "tile"})).unwrap();
+    s.execute("slice.new", json!({"rect": [20, 0, 10, 10], "name": "tile"})).unwrap();
+    s.execute("slice.new", json!({"rect": [40, 0, 10, 10], "name": "a/b"})).unwrap();
+    s.execute("slice.new", json!({"rect": [0, 20, 10, 10], "name": "a?b"})).unwrap();
+    s.execute("slice.new", json!({"rect": [20, 20, 10, 10], "name": "spacer"})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "gif", "dir": dir, "slices": "user", "html": true})).unwrap();
+    let mut files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect();
+    files.sort();
+    assert_eq!(files, ["a_b.gif", "a_b_2.gif", "spacer_2.gif", "tile.gif", "tile_2.gif"]);
+    let html = std::fs::read_to_string(r["html"].as_str().unwrap()).unwrap();
+    assert!(html.contains("images/tile.gif") && html.contains("images/tile_2.gif"));
+}
+
+#[test]
+fn overlapping_slices_keep_the_later_slice_in_html() {
+    // #909: the later slice is on top; the earlier one shows only where it isn't covered.
+    let dir = tmp("overlap");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 40, 30], "name": "under", "url": "https://example.org/under"})).unwrap();
+    s.execute("slice.new", json!({"rect": [20, 15, 40, 30], "name": "over", "url": "https://example.org/over"})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "html": true})).unwrap();
+    let html = std::fs::read_to_string(r["html"].as_str().unwrap()).unwrap();
+    assert!(html.contains("https://example.org/over"), "the later slice's cell is in the table");
+    assert!(html.contains("https://example.org/under"));
+    let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    let over = files.iter().find(|f| f.ends_with("images/over.png")).unwrap();
+    assert_eq!(decode(over).dimensions(), (40, 30));
+    // The visible pieces of every image tile the canvas exactly once.
+    let area: u64 = files
+        .iter()
+        .filter(|f| !f.ends_with("spacer.gif"))
+        .map(|f| {
+            let (w, h) = decode(f).dimensions();
+            u64::from(w) * u64::from(h)
+        })
+        .sum();
+    assert_eq!(area, 64 * 48);
+    assert!(files.iter().any(|f| f.ends_with("images/under_01.png")), "the covered slice is cut into pieces: {files:?}");
 }

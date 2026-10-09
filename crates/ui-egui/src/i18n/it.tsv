@@ -17,6 +17,10 @@
 	Layer	Livello
 	Type	Testo
 	Select	Selezione
+	Top Left	In alto a sinistra
+	Top Right	In alto a destra
+	Bottom Left	In basso a sinistra
+	Bottom Right	In basso a destra
 	Filter	Filtro
 	View	Vista
 	Window	Finestra
@@ -29,6 +33,9 @@
 	Open Recent	Apri recenti
 	Clear Recent Files	Cancella file recenti
 	Close	Chiudi
+	Minimize	Riduci a icona
+	Maximize	Ingrandisci
+	Restore	Ripristina
 	Close All	Chiudi tutto
 	Close Others	Chiudi altri
 	Save	Salva
@@ -96,6 +103,7 @@
 	Fill…	Riempi…
 	Stroke…	Traccia…
 	Content-Aware Fill…	Riempimento in base al contenuto…
+	Delete and Fill Selection	Elimina e riempi selezione
 	Content-Aware Scale	Scala in base al contenuto
 	Puppet Warp	Altera marionetta
 	Perspective Warp	Altera prospettiva
@@ -805,6 +813,7 @@
 	Cache Level:	Livello cache:
 	Camera Raw isn't open	Camera Raw non è aperto
 	Cancel	Annulla
+	Reset	Ripristina
 	Cancel (Esc)	Annulla (Esc)
 	Cancel any current edits (Esc)	Annulla modifiche correnti (Esc)
 	Cancel current crop operation  (Esc)	Annulla operazione ritaglio corrente (Esc)
@@ -965,14 +974,17 @@
 	Drag a rectangle around the object	Trascina un rettangolo attorno all'oggetto
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Trascina sull'immagine per aggiungere un vincolo; Maiusc per orizz/vert; click destro per eliminare.
 	Drag to move the active shape's path or the Work Path	Trascina per spostare il tracciato forma attiva o il Tracciato di lavoro
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic: seleziona punto · Trascina: sposta punto, maniglia o segmento · {shift}-clic: aggiungi · {alt}-clic: intero sottotracciato
 	Draw with the Pen tool (P) or make a work path from a selection.	Disegna con Penna (P) o crea un tracciato di lavoro da una selezione.
 	Drop an image or PSD anywhere to open it.	Trascina un'immagine o PSD ovunque per aprirlo.
 	Native file drag-and-drop is unavailable	Il drag-and-drop nativo file non è disponibile su Wayland
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Il drag-and-drop nativo non è ancora supportato su Wayland. Usa File › Apri, o avvia PhotoCraft sotto XWayland con `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Il drag-and-drop nativo non è ancora supportato su Wayland. Usa File › Apri, oppure copia l'immagine nel file manager e incollala con {paste}.
+	To drop files, start PhotoCraft under XWayland: `{command}`	Per trascinare file, avvia PhotoCraft sotto XWayland: `{command}`
+	Edit › Paste	Modifica › Incolla
 	Duplicate Layers…	Duplica livelli…
 	Duplicate style	Duplica stile
 	Edit Toolbar…	Modifica barra strumenti…
-	Use File › Open to open an image.	Usa File › Apri per aprire un'immagine.
+	Use File › Open, or paste a copied image with {paste}.	Usa File › Apri, oppure incolla un'immagine copiata con {paste}.
 	Edit in Quick Mask Mode  (Q)	Modifica in maschera veloce (Q)
 	Edit in Standard Mode  (Q)	Modifica in modalità standard (Q)
 	Effects	Effetti
@@ -1007,6 +1019,7 @@
 	Fisheye	Fisheye
 	Fit	Adatta
 	Fit Screen	Adatta a schermo
+	Fill Screen	Riempi schermo
 	Fit in View	Adatta in vista
 	Fixed	Fisso
 	Fixed Ratio	Proporzione fissa
@@ -1335,6 +1348,7 @@
 	Set background color	Imposta colore sfondo
 	Set foreground color	Imposta colore primo piano
 	Set painting symmetry options	Imposta opzioni simmetria pittura
+	Symmetry Off	Simmetria disattivata
 	Set shape fill type	Imposta tipo riempimento forma
 	Set shape stroke type	Imposta tipo traccia forma
 	Set the text color	Imposta colore testo
@@ -1593,6 +1607,7 @@
 	Paint Bucket Tool	Strumento Secchiello
 	Paints from the document's opening state	Dipinge dallo stato di apertura del documento
 	Path Selection Tool	Strumento Selezione tracciato
+	Direct Selection Tool	Strumento Selezione diretta
 	Pattern Overlay	Sovrapposizione pattern
 	Pen Pressure	Pressione penna
 	Pen Tilt	Inclinazione penna
@@ -1794,12 +1809,14 @@
 	Memory usage mb	Uso memoria MB
 	GPU memory mb	Memoria GPU (MB)
 	Memory usage percent	Uso memoria (%)
+	Low resolution previews	Anteprime a bassa risoluzione
 	Missing glyph protection	Protezione glifi mancanti
 	Modern	Moderno
 	Nearest neighbor	Vicino più prossimo
 	Never	Mai
 	Normal tip	Punta normale
 	Open as smart object	Apri come oggetto avanzato
+	Open in camera raw	Apri in Camera Raw
 	Open documents as tabs	Apri documenti come schede
 	Overscroll	Overscroll
 	Performance	Prestazioni
@@ -1837,6 +1854,7 @@
 	Show slice numbers	Mostra numeri sezioni
 	Show tooltips	Mostra tooltip
 	Show bounding box when dragging layer	Mostra riquadro selezione al trascinamento livello
+	System title bar	Barra del titolo di sistema
 	Show transformation values	Mostra valori trasformazione
 	Slice color	Colore sezioni
 	Smart guide color	Colore guide intelligenti
@@ -1920,6 +1938,7 @@
 	System Info…	Info sistema…
 	System Info	Info sistema
 	More panels	Altri pannelli
+	More documents	Altri documenti
 	These settings aren't available in PhotoCraft yet.	Queste impostazioni non sono ancora disponibili in PhotoCraft.
 	Graphics	Grafica
 	Reset GPU Backend	Reimposta backend GPU
@@ -1948,6 +1967,8 @@
 	Brush Settings…  (F5): every option of this brush	Impostazioni pennello… (F5): ogni opzione di questo pennello
 	Rename Brush…	Rinomina pennello…
 	Delete Brush	Elimina pennello
+	New Brush Preset…	Nuovo predefinito pennello…
+	Brush Preset Options	Opzioni predefiniti pennello
 	Group name	Nome gruppo
 	Brush name	Nome pennello
 	Grid view	Vista griglia
@@ -1997,6 +2018,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nessun tracciato da cui creare selezione: disegnane uno con Penna o selezionane uno nel pannello Tracciati.
 	Cancel opening	Annulla apertura
 	Cancelled opening {name}	Apertura {name} annullata
+	Developing {name}	Sviluppo di {name}
 	Cancelled {label}	{label} annullato
 	Esc to cancel	Esc per annullare
 	Opening {name}	Apertura {name}
@@ -2129,6 +2151,7 @@ cameraRaw	Light	Luce
 
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Toni chiari
 cameraRaw	Darks	Toni scuri
 cameraRaw	Red	Rossi
@@ -2171,6 +2194,7 @@ cameraRaw	Amount	Quantità
 	Frequency	Frequenza
 	Use tablet pressure to change pen width	Usa pressione tavoletta per cambiare la larghezza della penna
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	Informazioni
 	Contributors	Collaboratori
@@ -2202,3 +2226,79 @@ cameraRaw	Amount	Quantità
 	% of all commits	% di tutti i commit
 	Lines +/−	Righe +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} righe (Δ {delta}), +{binAdded} / −{binDeleted} risorse binarie, {first} – {last}
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	Fondi se:
+	Channels:	Canali:
+	Knockout	Foratura
+
+# Swatches panel
+	Create new swatch	Crea nuovo campione
+	New Swatch…	Nuovo campione…
+	New Swatch Group…	Nuovo gruppo di campioni…
+	Import Swatches…	Importa campioni…
+	Replace Swatches…	Sostituisci campioni…
+	Export Swatches…	Esporta campioni…
+	Export Swatches for Exchange…	Esporta campioni per scambio…
+	Reset Swatches	Ripristina campioni
+	Add to Swatches	Aggiungi ai campioni
+	Convert to Layers	Converti in livelli
+	Apply At Canvas Bounds	Applica effetto ai limiti dell’area di lavoro
+	Show/Hide All Panels	Mostra/nascondi tutti i pannelli
+	Show/Hide Panels	Mostra/nascondi pannelli
+	Could not open	Impossibile aprire
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: il percorso non è Unicode valido; rinomina il file e riaprilo.
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	Contenuto:
+	Custom Pattern:	Pattern personalizzato:
+	Foreground Color	Colore primo piano
+	Color…	Colore…
+	50% Gray	Grigio 50%
+	{size} (was {old})	{size} (prima {old})
+	Cone	Cono
+	Cone (Inverted)	Cono (invertito)
+	Domed	Bombato
+	Domed (Inverted)	Bombato (invertito)
+	Diagonal (Descending)	Diagonale (discendente)
+	Red Eye Tool	Strumento Occhi rossi
+	Red Eye	Occhi rossi
+	Pupil Size	Dimensione pupilla
+	Darken Amount	Quantità di scurimento
+	Click a red pupil to neutralize it	Fai clic su una pupilla rossa per correggerla
+	open source	open source
+	…and {n} more	…e altri {n}
+
+	Eyedroppers:	Contagocce:
+	Set Black Point	Imposta punto nero
+	Set Neutral Gray Point	Imposta il punto grigio neutro
+	Set White Point	Imposta punto bianco
+	Unavailable in this color mode	Non disponibile in questa modalità colore
+	Selection Preview:	Anteprima selezione:
+	Black Matte	Sfondo nero
+	White Matte	Sfondo bianco
+
+# Layer colour labels.
+	Seafoam	Schiuma marina
+	Indigo	Indaco
+	Fuchsia	Fucsia
+	Violet	Viola
+	Large document: redrawing on the CPU	Documento grande: ridisegno sulla CPU
+	This redraw took {seconds} s on the CPU.	Questo ridisegno sulla CPU ha richiesto {seconds} s.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Le modifiche che cambiano tutto il documento, come metodo di fusione, opacità o visibilità di un livello, lo ridisegnano per intero.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	I livelli non rientrano nel budget di memoria della GPU. Aumentare Uso memoria in Preferenze › Prestazioni alza il budget, fino a un quarto della memoria di questo computer.
+	The GPU compositor wasn't used: {reason}	Il compositore GPU non è stato usato: {reason}
+fontWeight	Thin	Sottile
+fontWeight	ExtraLight	Extraleggero
+fontWeight	Light	Leggero
+fontWeight	Regular	Normale
+fontWeight	Medium	Medio
+fontWeight	SemiBold	Semigrassetto
+fontWeight	Bold	Grassetto
+fontWeight	ExtraBold	Extra-grassetto
+fontWeight	Black	Nero
+fontWeight	Italic	Corsivo
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	Strumento Timbro motivo
+	Pattern Stamp	Timbro motivo
+	Impressionist	Impressionista

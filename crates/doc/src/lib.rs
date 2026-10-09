@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod adjust;
+pub mod advanced;
 pub mod analysis;
 pub mod blend_if;
 pub mod comps;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use adjust::Adjustment;
+pub use advanced::{AdvancedBlending, Knockout};
 pub use analysis::{CountGroup, Measurement, MeasurementScale, Note, Ruler};
 pub use blend_if::{BlendIf, BlendRange};
 pub use comps::{Artboard, ArtboardBackground, CompAppearance, CompLayerState, LayerComp};
@@ -110,6 +112,97 @@ pub enum LabelColor {
     Blue,
     Violet,
     Gray,
+    Seafoam,
+    Indigo,
+    Magenta,
+    Fuchsia,
+}
+
+impl LabelColor {
+    /// Display order, independent of the PSD sheet-colour indices.
+    pub const ALL: [Self; 12] = [
+        Self::None,
+        Self::Red,
+        Self::Orange,
+        Self::Yellow,
+        Self::Green,
+        Self::Seafoam,
+        Self::Blue,
+        Self::Indigo,
+        Self::Magenta,
+        Self::Fuchsia,
+        Self::Violet,
+        Self::Gray,
+    ];
+
+    /// Stable, language-independent command and inspection value.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Red => "red",
+            Self::Orange => "orange",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Seafoam => "seafoam",
+            Self::Blue => "blue",
+            Self::Indigo => "indigo",
+            Self::Magenta => "magenta",
+            Self::Fuchsia => "fuchsia",
+            Self::Violet => "violet",
+            Self::Gray => "gray",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "No Color",
+            Self::Red => "Red",
+            Self::Orange => "Orange",
+            Self::Yellow => "Yellow",
+            Self::Green => "Green",
+            Self::Seafoam => "Seafoam",
+            Self::Blue => "Blue",
+            Self::Indigo => "Indigo",
+            Self::Magenta => "Magenta",
+            Self::Fuchsia => "Fuchsia",
+            Self::Violet => "Violet",
+            Self::Gray => "Gray",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.id() == id)
+    }
+}
+
+#[cfg(test)]
+mod label_color_tests {
+    use super::LabelColor;
+
+    #[test]
+    fn layer_color_ids_and_existing_serialized_names_stay_stable() {
+        for (name, color) in [
+            ("None", LabelColor::None),
+            ("Red", LabelColor::Red),
+            ("Orange", LabelColor::Orange),
+            ("Yellow", LabelColor::Yellow),
+            ("Green", LabelColor::Green),
+            ("Blue", LabelColor::Blue),
+            ("Violet", LabelColor::Violet),
+            ("Gray", LabelColor::Gray),
+        ] {
+            assert_eq!(serde_json::to_value(color).unwrap(), name);
+            assert_eq!(serde_json::from_value::<LabelColor>(serde_json::json!(name)).unwrap(), color);
+        }
+        for c in LabelColor::ALL {
+            assert_eq!(LabelColor::from_id(c.id()), Some(c));
+            assert_eq!(serde_json::from_value::<LabelColor>(serde_json::to_value(c).unwrap()).unwrap(), c);
+        }
+        for id in ["", "Red", "0", "unknown", "🔴"] {
+            assert_eq!(LabelColor::from_id(id), None);
+        }
+        assert!(serde_json::from_value::<LabelColor>(serde_json::json!("Unknown")).is_err());
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -495,6 +588,9 @@ pub struct Layer {
     /// outside which the layer's pixels are hidden. Default = everything blends. PSD layer-record
     /// blending ranges.
     pub blend_if: BlendIf,
+    /// Blending Options › Advanced Blending: knockout, blend interior effects / clipped layers as
+    /// group, transparency shapes layer, layer / vector mask hides effects. Default = Photoshop's.
+    pub advanced: AdvancedBlending,
     /// Layer › Video Layers frame stack (None for a normal layer).
     pub video: Option<VideoData>,
 }
@@ -521,6 +617,7 @@ impl Layer {
             link_group: None,
             excluded_channels: 0,
             blend_if: BlendIf::default(),
+            advanced: AdvancedBlending::default(),
             video: None,
         }
     }
@@ -830,6 +927,28 @@ impl Document {
         self.layer_at_mut(&path)
     }
 
+    /// A [`Layer::link_group`] id no layer uses yet: one above the highest stored id, or, when a
+    /// loaded file already holds `u64::MAX` (#961), the smallest free id from 1. Never wraps, so a
+    /// new link can't join an unrelated group. `None` only if every id is taken.
+    pub fn unused_link_group(&self) -> Option<u64> {
+        let mut used: Vec<u64> = self.walk().iter().filter_map(|(_, _, l)| l.link_group).collect();
+        used.sort_unstable();
+        used.dedup();
+        if let Some(next) = used.last().map_or(Some(1), |g| g.checked_add(1)) {
+            return Some(next);
+        }
+        let mut free = 1u64;
+        for g in used {
+            if g > free {
+                break;
+            }
+            if g == free {
+                free = free.checked_add(1)?;
+            }
+        }
+        Some(free)
+    }
+
     pub fn layer_at(&self, path: &[usize]) -> Option<&Layer> {
         let (first, rest) = path.split_first()?;
         let mut cur = self.layers.get(*first)?;
@@ -894,6 +1013,23 @@ impl Document {
         (1..=names.len() + 1).map(|n| format!("{base} {n}")).find(|n| !names.contains(n.as_str())).unwrap_or_else(|| base.to_string())
     }
 
+    /// Name for a copy of a layer named `name`, unique in the document: "Layer 1 copy", then
+    /// "Layer 1 copy 2", "Layer 1 copy 3"… A name that already ends in "copy" (or "copy N") is
+    /// numbered from its root rather than growing another "copy".
+    pub fn copy_name(&self, name: &str) -> String {
+        let root = match name.rsplit_once(" copy") {
+            Some((root, rest)) if rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => root,
+            _ => name,
+        };
+        let names: std::collections::HashSet<&str> = self.walk().into_iter().map(|(_, _, l)| l.name.as_str()).collect();
+        let first = format!("{root} copy");
+        if !names.contains(first.as_str()) {
+            return first;
+        }
+        // At most `names.len() + 1` candidates are needed, so the search always succeeds.
+        (2..=names.len() + 2).map(|n| format!("{root} copy {n}")).find(|n| !names.contains(n.as_str())).unwrap_or(first)
+    }
+
     /// Top-most layer id, useful as the default active layer.
     pub fn top_layer(&self) -> Option<LayerId> {
         self.layers.last().map(|l| l.id)
@@ -906,6 +1042,29 @@ mod tests {
 
     fn doc() -> Document {
         Document::with_background("t", Size::new(100, 50), ColorMode::Rgb, SampleType::U8, Color::WHITE)
+    }
+
+    #[test]
+    fn unused_link_group_never_wraps() {
+        let mut d = doc();
+        assert_eq!(d.unused_link_group(), Some(1));
+        let with = |d: &mut Document, groups: &[u64]| {
+            d.layers.truncate(1);
+            for g in groups {
+                let mut l = Layer::raster("l", PixelFormat::RGBA8);
+                l.link_group = Some(*g);
+                d.layers.push(l);
+            }
+        };
+        with(&mut d, &[3, 7]);
+        assert_eq!(d.unused_link_group(), Some(8));
+        with(&mut d, &[u64::MAX - 1]);
+        assert_eq!(d.unused_link_group(), Some(u64::MAX));
+        // A stored maximal id would wrap to 0 (#961): take the smallest free id instead.
+        with(&mut d, &[u64::MAX]);
+        assert_eq!(d.unused_link_group(), Some(1));
+        with(&mut d, &[0, 1, 2, 4, u64::MAX]);
+        assert_eq!(d.unused_link_group(), Some(3));
     }
 
     #[test]

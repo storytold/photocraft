@@ -391,6 +391,45 @@ fn blend_if_roundtrips() {
     assert!(back.layers.iter().skip(1).all(|l| l.blend_if.is_default()));
 }
 
+/// Advanced Blending (knockout, as-group switches, transparency shapes, masks hide effects)
+/// survives .pcraft at every depth; manifests written before the field existed load with
+/// Photoshop's defaults, and default layers don't write it.
+#[test]
+fn advanced_blending_roundtrips_and_defaults_when_absent() {
+    use photocraft_doc::{AdvancedBlending, Knockout};
+    for depth in SampleType::ALL {
+        let mut doc = rich_doc(ColorMode::Rgb, depth);
+        let a = AdvancedBlending {
+            knockout: Knockout::Deep,
+            blend_interior: true,
+            blend_clipped: false,
+            transparency_shapes: false,
+            layer_mask_hides_effects: true,
+            vector_mask_hides_effects: true,
+        };
+        doc.layers[0].advanced = a;
+        if let Some(l) = doc.layers.get_mut(1) {
+            l.advanced.knockout = Knockout::Shallow;
+        }
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let back = load_from_bytes(&bytes).unwrap();
+        assert_eq!(back, doc, "{depth:?}");
+        assert_eq!(back.layers[0].advanced, a);
+        // Only the non-default layers carry the field.
+        let m = read_manifest(&bytes).unwrap();
+        let v = serde_json::to_value(&m.document).unwrap();
+        let with = v["layers"].as_array().unwrap().iter().filter(|l| l.get("advanced").is_some()).count();
+        assert_eq!(with, if doc.layers.len() > 1 { 2 } else { 1 });
+        // An older manifest (no `advanced`) loads with the defaults.
+        let mut old = v.clone();
+        for l in old["layers"].as_array_mut().unwrap() {
+            l.as_object_mut().unwrap().remove("advanced");
+        }
+        let old: photocraft_format::manifest::DocM = serde_json::from_value(old).unwrap();
+        assert!(old.layers.iter().all(|l| l.advanced.is_default()));
+    }
+}
+
 #[test]
 fn video_layer_frames_survive_roundtrip() {
     use photocraft_doc::{Timeline, VideoData, VideoSource};
@@ -424,4 +463,48 @@ fn video_layer_frames_survive_roundtrip() {
     let mut px = [[0.0f32; 4]; 1];
     v.frames[2].read_rgba_into(Rect::from_xywh(1, 1, 1, 1), &mut px);
     assert!(px[0][0] > 0.9 && px[0][2] < 0.1, "frame 2 is reddish: {:?}", px[0]);
+}
+
+/// Issue #1101: serde_json writes NaN and the infinities as `null`, which the manifest's float
+/// fields refuse on load, so such a document saved "successfully" and never opened again. The
+/// save is refused instead, naming the value; finite documents are unaffected.
+#[test]
+fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load() {
+    use photocraft_doc::Adjustment;
+    type Mutate = Box<dyn Fn(&mut Document)>;
+    let base = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let cases: Vec<(&str, Mutate)> = vec![
+        (
+            "exposure",
+            Box::new(|d| {
+                d.insert_above(None, Layer::new("adj", LayerContent::Adjustment(Adjustment::Exposure { exposure: f32::NAN, offset: 0.0, gamma: 1.0 })));
+            }),
+        ),
+        (
+            "gamma",
+            Box::new(|d| {
+                d.insert_above(
+                    None,
+                    Layer::new("adj", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: f32::NEG_INFINITY })),
+                );
+            }),
+        ),
+        ("resolution_dpi", Box::new(|d| d.resolution_dpi = f32::INFINITY)),
+    ];
+    for (field, mutate) in cases {
+        let mut doc = base.clone();
+        mutate(&mut doc);
+        let err = save_to_bytes(&doc, &SaveOptions::default()).expect_err(field);
+        assert!(matches!(err, FormatError::NonFinite { .. }), "{field}: {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains(field) && msg.contains("NaN or infinite"), "{field}: {msg}");
+        // The incremental writer shares the check, for autosave and directory bundles.
+        let mut w = PcraftWriter::new();
+        assert!(matches!(w.save_zip(&doc, &SaveOptions::default()), Err(FormatError::NonFinite { .. })), "{field}: PcraftWriter");
+    }
+    // The same document with finite values round-trips as before.
+    let mut doc = base.clone();
+    doc.insert_above(None, Layer::new("adj", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 })));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back, doc);
 }

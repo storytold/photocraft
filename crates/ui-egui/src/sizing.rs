@@ -166,7 +166,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let resample = f.get("resample").and_then(Value::as_str).unwrap_or("bicubic").to_string();
     let resampling = resample != "none";
     let (w, h) = (num(f, "width").round(), num(f, "height").round());
-    info_row(ui, tl!("Image Size:"), format!("{} (was {})", human_bytes(w * h * bpp), human_bytes(ow * oh * bpp)));
+    info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
     info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
     ui.add_space(6.0);
     let mut constrain = f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);

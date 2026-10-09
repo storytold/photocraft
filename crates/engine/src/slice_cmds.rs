@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use photocraft_doc::slices::{self, ResolvedSlice, Slice, SliceKind, SliceOrigin};
-use photocraft_doc::{Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -88,7 +88,7 @@ fn layer_slice_rect(doc: &Document, s: &Slice) -> Option<Rect> {
     let l = doc.layer(s.layer?)?;
     let b = layer_bounds(l);
     let [t, le, bo, r] = s.outsets;
-    Some(if b.is_empty() { b } else { Rect::new(b.x0 - le, b.y0 - t, b.x1 + r, b.y1 + bo) })
+    Some(if b.is_empty() { b } else { Rect::new(b.x0.saturating_sub(le), b.y0.saturating_sub(t), b.x1.saturating_add(r), b.y1.saturating_add(bo)) })
 }
 
 /// Re-fits layer-based slices of the active document to their layers; drops slices whose layer
@@ -194,27 +194,46 @@ fn apply_options(sl: &mut Slice, p: &Value, cmd: &str) -> Result<()> {
     Ok(())
 }
 
-/// The stored slice addressed by `"slice"` (id) or `"number"`; an auto slice's number promotes
-/// it to a user slice first when `promote` is set.
-fn target(s: &mut Session, p: &Value, cmd: &str, promote: bool) -> Result<u32> {
-    if let Some(id) = crate::commands::int(p, "slice").filter(|v| *v >= 0).map(|v| v as u64) {
-        let d = s.active().ok_or(EngineError::NoDocument)?;
-        return d.doc.slices.get(id as u32).map(|sl| sl.id).ok_or_else(|| bad(cmd, format!("no slice with id {id}")));
+/// What `"slice"` (id) or `"number"` addresses: a stored slice, or an auto slice that isn't
+/// stored yet (its rectangle).
+#[derive(Clone, Copy)]
+enum Target {
+    Stored(u32),
+    Auto(Rect),
+}
+
+fn find(s: &Session, p: &Value, cmd: &str) -> Result<Target> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(id) = crate::commands::u32_id_param(cmd, p, "slice")? {
+        return d.doc.slices.get(id).map(|sl| Target::Stored(sl.id)).ok_or_else(|| bad(cmd, format!("no slice with id {id}")));
     }
     let n = crate::commands::int(p, "number").filter(|v| *v > 0).ok_or_else(|| bad(cmd, "give \"slice\" (id) or \"number\""))? as usize;
-    let d = s.active().ok_or(EngineError::NoDocument)?;
     let r = slices::resolve(&d.doc).into_iter().find(|r| r.number == n).ok_or_else(|| bad(cmd, format!("no slice number {n}")))?;
-    match r.id {
-        Some(id) => Ok(id),
-        None if promote => {
-            let rect = r.rect;
-            s.edit("Promote to User Slice", |doc, _| {
-                let id = doc.slices.next_id().ok_or_else(exhausted_id)?;
-                doc.slices.list.push(Slice { id, rect, ..Default::default() });
-                Ok(id)
-            })
+    Ok(match r.id {
+        Some(id) => Target::Stored(id),
+        None => Target::Auto(r.rect),
+    })
+}
+
+/// The stored slice's id; an auto slice is promoted to a user slice in `doc` first. Call it inside
+/// the command's own edit, so promoting and the rest of the command are one history step and a
+/// rejected command changes nothing.
+fn store(doc: &mut Document, t: Target) -> Result<u32> {
+    match t {
+        Target::Stored(id) => Ok(id),
+        Target::Auto(rect) => {
+            let id = doc.slices.next_id().ok_or_else(exhausted_id)?;
+            doc.slices.list.push(Slice { id, rect, ..Default::default() });
+            Ok(id)
         }
-        None => Err(bad(cmd, format!("slice {n} is an auto slice"))),
+    }
+}
+
+/// The stored slice addressed by `p`; an auto slice is an error.
+fn stored(s: &Session, p: &Value, cmd: &str) -> Result<u32> {
+    match find(s, p, cmd)? {
+        Target::Stored(id) => Ok(id),
+        Target::Auto(_) => Err(bad(cmd, "that is an auto slice")),
     }
 }
 
@@ -297,26 +316,18 @@ fn set_slice(s: &mut Session, p: &Value) -> Result<Value> {
     if ["rect", "x", "y", "width", "height"].iter().any(|key| p.get(key).is_some()) && rect_param(p).is_none() {
         return Err(bad(cmd, "give a finite rectangle with positive dimensions and representable corners"));
     }
-    let id = target(s, p, cmd, true)?;
-    let coalesce_into_promote = s.active().is_some_and(|d| d.history.undo_label() == Some("Promote to User Slice")) && p.get("number").is_some();
-    let label = "Slice Options";
-    let run = |doc: &mut Document, _: &mut Option<LayerId>| -> Result<()> {
+    let t = find(s, p, cmd)?;
+    // Promoting an auto slice and its options are one user action (one history step), and
+    // nothing is committed unless every option is valid and the slice stays on the canvas.
+    let id = s.edit("Slice Options", |doc, _| {
+        let id = store(doc, t)?;
         let sl = doc.slices.get_mut(id).ok_or_else(|| bad(cmd, "slice vanished"))?;
         apply_options(sl, p, cmd)?;
-        Ok(())
-    };
-    if coalesce_into_promote {
-        // Promote + options are one user action: fold the options into the promote step.
-        let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-        let mut doc = (*st.doc).clone();
-        let mut a = st.active_layer;
-        run(&mut doc, &mut a)?;
-        st.doc = Arc::new(doc);
-        st.revision += 1;
-        st.last_damage = None;
-    } else {
-        s.edit(label, run)?;
-    }
+        if !slices::resolve(doc).iter().any(|r| r.id == Some(id)) {
+            return Err(bad(cmd, "slice is off the canvas"));
+        }
+        Ok(id)
+    })?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let r = slices::resolve(&d.doc).into_iter().find(|r| r.id == Some(id)).ok_or_else(|| bad(cmd, "slice is off the canvas"))?;
     Ok(resolved_json(&d.doc, &r))
@@ -324,31 +335,37 @@ fn set_slice(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn promote(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "slice.promote";
-    let id = target(s, p, cmd, true)?;
+    let t = find(s, p, cmd)?;
     // Layer-based slices promote too: they stop following their layer.
-    let is_layer = s.active().and_then(|d| d.doc.slices.get(id)).is_some_and(|sl| sl.origin == SliceOrigin::Layer);
-    if is_layer {
-        s.edit("Promote to User Slice", |doc, _| {
+    let promotes = match t {
+        Target::Auto(_) => true,
+        Target::Stored(id) => s.active().and_then(|d| d.doc.slices.get(id)).is_some_and(|sl| sl.origin == SliceOrigin::Layer),
+    };
+    let id = match t {
+        Target::Stored(id) if !promotes => id,
+        _ => s.edit("Promote to User Slice", |doc, _| {
+            let id = store(doc, t)?;
             if let Some(sl) = doc.slices.get_mut(id) {
                 sl.origin = SliceOrigin::User;
                 sl.layer = None;
             }
-            Ok(())
-        })?;
-    }
+            Ok(id)
+        })?,
+    };
     Ok(json!({"slice": id}))
 }
 
 fn ids_param(s: &mut Session, p: &Value, cmd: &str) -> Result<Vec<u32>> {
     if let Some(a) = p.get("slices").and_then(Value::as_array) {
         let d = s.active().ok_or(EngineError::NoDocument)?;
-        let ids: Vec<u32> = a.iter().filter_map(Value::as_u64).map(|v| v as u32).filter(|id| d.doc.slices.get(*id).is_some()).collect();
+        let ids: Vec<u32> = a.iter().map(|v| crate::commands::u32_id(cmd, "slices", v)).collect::<Result<Vec<_>>>()?;
+        let ids: Vec<u32> = ids.into_iter().filter(|id| d.doc.slices.get(*id).is_some()).collect();
         if ids.is_empty() {
             return Err(bad(cmd, "none of the slices exist"));
         }
         return Ok(ids);
     }
-    Ok(vec![target(s, p, cmd, false)?])
+    Ok(vec![stored(s, p, cmd)?])
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -361,22 +378,34 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": n}))
 }
 
+/// The most parts one Divide Slice makes. Resolving the slice list is quadratic in the slice count
+/// (`slices::resolve`), so a 1000 x 1000 division, a million slices, left every later list or
+/// export with ~5e11 steps of work (#1020).
+const MAX_DIVIDE_PARTS: i32 = 10_000;
+
 fn divide(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "slice.divide";
-    let id = target(s, p, cmd, true)?;
+    let t = find(s, p, cmd)?;
     let down = crate::commands::int(p, "horizontal").unwrap_or(1).clamp(1, 1000) as i32;
     let across = crate::commands::int(p, "vertical").unwrap_or(1).clamp(1, 1000) as i32;
     if down == 1 && across == 1 {
         return Err(bad(cmd, "give \"horizontal\" (slices down) and/or \"vertical\" (slices across) > 1"));
     }
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let src = d.doc.slices.get(id).cloned().ok_or_else(|| bad(cmd, "no such slice"))?;
-    let r = src.rect;
-    if (r.width() as i32) < across || (r.height() as i32) < down {
+    if down * across > MAX_DIVIDE_PARTS {
+        return Err(bad(cmd, format!("{down} x {across} = {} parts is more than one division makes ({MAX_DIVIDE_PARTS})", down * across)));
+    }
+    let r = match t {
+        Target::Auto(r) => r,
+        Target::Stored(id) => s.active().and_then(|d| d.doc.slices.get(id)).map(|sl| sl.rect).ok_or_else(|| bad(cmd, "no such slice"))?,
+    };
+    if r.width() < across as u32 || r.height() < down as u32 {
         return Err(bad(cmd, "the slice is too small to divide that many times"));
     }
     let n = (down * across) as usize;
+    // An auto slice is promoted inside the same step: one undo restores it.
     let ids = s.edit("Divide Slice", |doc, _| {
+        let id = store(doc, t)?;
+        let src = doc.slices.get(id).cloned().ok_or_else(|| bad(cmd, "no such slice"))?;
         let pos = doc.slices.list.iter().position(|sl| sl.id == id).unwrap_or(0);
         doc.slices.list.retain(|sl| sl.id != id);
         let mut ids = Vec::new();
@@ -384,10 +413,11 @@ fn divide(s: &mut Session, p: &Value) -> Result<Value> {
         let mut next_id = doc.slices.next_id();
         for j in 0..down {
             for i in 0..across {
-                let x0 = r.x0 + (r.width() as i32 * i) / across;
-                let x1 = r.x0 + (r.width() as i32 * (i + 1)) / across;
-                let y0 = r.y0 + (r.height() as i32 * j) / down;
-                let y1 = r.y0 + (r.height() as i32 * (j + 1)) / down;
+                // Products can exceed i32 even when every interpolated edge fits the rect.
+                let x = |k: i32| (i64::from(r.x0) + i64::from(r.width()) * i64::from(k) / i64::from(across)) as i32;
+                let y = |k: i32| (i64::from(r.y0) + i64::from(r.height()) * i64::from(k) / i64::from(down)) as i32;
+                let (x0, x1) = (x(i), x(i + 1));
+                let (y0, y1) = (y(j), y(j + 1));
                 let nid = if ids.is_empty() {
                     id
                 } else {
@@ -495,7 +525,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "slice.divide",
             "Divide Slice…",
             &[],
-            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across)} → {slices}"##,
+            r##"{"slice":id | "number":n,"horizontal":n=1 (slices down),"vertical":n=1 (slices across); at most 10000 parts} → {slices}"##,
             unlocked,
             divide
         ),

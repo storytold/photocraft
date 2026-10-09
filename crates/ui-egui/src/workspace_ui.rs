@@ -275,6 +275,26 @@ fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
     Ok(json!({"pixelAspectRatio": c.ratio, "name": c.name}))
 }
 
+/// The Show Extras Options… checkboxes as (field, label). The fields are the serialized
+/// [`crate::view_cmds::Show`] names, the keys the dialog is seeded with and its command accepts.
+fn extras_options() -> [(&'static str, &'static str); 13] {
+    [
+        ("layer_edges", tl!("Layer Edges")),
+        ("selection_edges", tl!("Selection Edges")),
+        ("target_path", tl!("Target Path")),
+        ("notes", tl!("Notes")),
+        ("pixel_grid", tl!("Pixel Grid")),
+        ("slices", tl!("Slices")),
+        ("count", tl!("Count")),
+        ("smart_guides", tl!("Smart Guides")),
+        ("brush_preview", tl!("Brush Preview")),
+        ("mesh", tl!("Mesh")),
+        ("edit_pins", tl!("Edit Pins")),
+        ("canvas_guides", tl!("Canvas Guides")),
+        ("artboard_guides", tl!("Artboard Guides")),
+    ]
+}
+
 /// The open dialog's OK as (command id, params).
 pub fn dialog_command(kind: &str, f: &Map<String, Value>) -> Option<(&'static str, Value)> {
     Some(match kind {
@@ -396,21 +416,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     });
                 }
                 _ => {
-                    for (k, label) in [
-                        ("layerEdges", tl!("Layer Edges")),
-                        ("selectionEdges", tl!("Selection Edges")),
-                        ("targetPath", tl!("Target Path")),
-                        ("notes", tl!("Notes")),
-                        ("pixelGrid", tl!("Pixel Grid")),
-                        ("slices", tl!("Slices")),
-                        ("count", tl!("Count")),
-                        ("smartGuides", tl!("Smart Guides")),
-                        ("brushPreview", tl!("Brush Preview")),
-                        ("mesh", tl!("Mesh")),
-                        ("editPins", tl!("Edit Pins")),
-                        ("canvasGuides", tl!("Canvas Guides")),
-                        ("artboardGuides", tl!("Artboard Guides")),
-                    ] {
+                    for (k, label) in extras_options() {
                         check(ui, &mut f, k, label);
                     }
                 }
@@ -551,6 +557,31 @@ mod tests {
         assert!(!app.ui.view.show.count);
         assert!(inv(&mut app, "view.show.showExtrasOptions", json!({"bogus": true})).is_err());
         crate::analysis_ui::tests::render(&mut app, &ctx, windows);
+    }
+
+    #[test]
+    fn extras_options_checkboxes_show_and_change_every_flag() {
+        let (mut app, ctx) = app();
+        let before = serde_json::to_value(app.ui.view.show).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "view.show.showExtrasOptions", json!({})).unwrap();
+        let (kind, mut f) = app.ui.shell.dialog.clone().unwrap();
+        // Every checkbox reads the seeded value of its flag (Selection Edges is on by default).
+        assert_eq!(extras_options().len(), f.len());
+        for (k, _) in extras_options() {
+            assert!(before[k].is_boolean(), "{k} is not a Show field");
+            assert_eq!(f.get(k).and_then(Value::as_bool), before[k].as_bool(), "{k}");
+        }
+        // Ticking every box (one- and multi-word flags in one submission) applies them all on OK.
+        for (k, _) in extras_options() {
+            let on = !f.get(k).and_then(Value::as_bool).unwrap();
+            f.insert(k.into(), json!(on));
+        }
+        let (id, p) = dialog_command(&kind, &f).unwrap();
+        crate::menus::invoke(&mut app, &ctx, id, p).unwrap();
+        let after = serde_json::to_value(app.ui.view.show).unwrap();
+        for (k, _) in extras_options() {
+            assert_eq!(after[k].as_bool(), before[k].as_bool().map(|b| !b), "{k}");
+        }
     }
 
     #[test]

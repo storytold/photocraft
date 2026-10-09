@@ -30,13 +30,15 @@ pub fn detect_async() -> Option<Receiver<Detection>> {
 /// One line per screen, primary (menu-bar) screen first: id, frame (x, y, width, height in
 /// points, Cocoa's bottom-left origin), the profile as base64, the profile's name in System
 /// Settings and the display's name, tab-separated. Numbers as integers (text conversion of
-/// reals follows the user's locale, e.g. "0,0").
+/// reals follows the user's locale, e.g. "0,0"). The id goes through NSNumber's `stringValue`:
+/// a display id above AppleScript's integer range (2^29) is otherwise coerced to a real and
+/// printed as "2.077748985E+9" (#1371).
 #[cfg(target_os = "macos")]
 const SCRIPT: &str = r#"use framework "AppKit"
 set out to ""
 repeat with s in (current application's NSScreen's screens() as list)
   set f to s's frame()
-  set n to ((s's deviceDescription()'s objectForKey:"NSScreenNumber") as integer)
+  set n to (((s's deviceDescription()'s objectForKey:"NSScreenNumber")'s stringValue()) as text)
   set icc to ""
   set cs to s's colorSpace()
   set csName to ""
@@ -123,7 +125,7 @@ fn parse_reply(out: &str) -> Detection {
         let f: Vec<&str> = line.splitn(8, '\t').collect();
         let [id, x, y, w, h, b64, profile_name, name] = f.as_slice() else { continue };
         let num = |s: &str| s.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-        let (Some(id), Some(x), Some(y), Some(w), Some(h)) = (id.trim().parse::<u32>().ok(), num(x), num(y), num(w), num(h)) else { continue };
+        let (Some(id), Some(x), Some(y), Some(w), Some(h)) = (display_id(id), num(x), num(y), num(w), num(h)) else { continue };
         // Cocoa frames are relative to the primary screen's bottom-left corner, y up.
         let top = *primary_height.get_or_insert(h) - (y + h);
         let name = name.trim();
@@ -136,10 +138,27 @@ fn parse_reply(out: &str) -> Detection {
         displays.push(Display { id, name, frame: [x, top, w, h], profile_name, icc: icc.map(std::sync::Arc::new) });
     }
     if displays.is_empty() {
-        let first = out.lines().next().unwrap_or("").trim();
-        return Err(if first.is_empty() { "the display reader returned nothing".into() } else { format!("couldn't read the display list: {first}") });
+        // Only the start of the first field: a display line carries a whole base64 ICC profile,
+        // which must not end up in a notice (#1371).
+        let first = out.lines().next().unwrap_or("").split('\t').next().unwrap_or("").trim();
+        let mut shown: String = first.chars().take(80).collect();
+        if shown.len() < first.len() {
+            shown.push('…');
+        }
+        return Err(if shown.is_empty() { "the display reader returned nothing".into() } else { format!("couldn't read the display list: {shown}") });
     }
     Ok(displays)
+}
+
+/// A display id: a plain integer, or the scientific notation AppleScript printed for ids above
+/// its integer range before the helper asked for `stringValue` (#1371), when it is exact.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn display_id(s: &str) -> Option<u32> {
+    let s = s.trim();
+    s.parse::<u32>().ok().or_else(|| {
+        let v = s.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0 && v.fract() == 0.0 && *v <= f64::from(u32::MAX))?;
+        Some(v as u32)
+    })
 }
 
 /// Standard base64 (RFC 4648, with padding) → bytes; `None` on any invalid character.
@@ -211,6 +230,25 @@ mod tests {
         assert_eq!(parse_reply("junk\n5\t0\t0\t10\t10\t\t\tZ").unwrap().len(), 1);
         assert!(parse_reply("").is_err());
         assert!(parse_reply("execution error: -1728").unwrap_err().contains("-1728"));
+    }
+
+    #[test]
+    fn large_display_ids_and_short_errors() {
+        // #1371: a CGDirectDisplayID above AppleScript's integer range came back as a real.
+        assert_eq!(display_id("2077748985"), Some(2_077_748_985));
+        assert_eq!(display_id(" 2.077748985E+9 "), Some(2_077_748_985));
+        assert_eq!(display_id("4.294967295E+9"), Some(u32::MAX));
+        for bad in ["4.3E+9", "-1", "1.5", "NaN", "inf", "", "x"] {
+            assert_eq!(display_id(bad), None, "{bad}");
+        }
+        let d = parse_reply("2.077748985E+9\t0\t0\t1512\t982\t\tColor LCD\tBuilt-in Retina Display\n").unwrap();
+        assert_eq!(d[0].id, 2_077_748_985);
+        // A line that can't be read never puts its profile into the error.
+        let profile = "A".repeat(4000);
+        let e = parse_reply(&format!("bad id\t0\t0\t1\t1\t{profile}\tColor LCD\tX\n")).unwrap_err();
+        assert!(e.contains("bad id") && !e.contains("AAAA") && e.len() < 120, "{e}");
+        let e = parse_reply(&"Z".repeat(500)).unwrap_err();
+        assert!(e.chars().count() < 120 && e.ends_with('…'), "{e}");
     }
 
     // Drives `sleep` (found on PATH: NixOS and the Nix build sandbox have no /bin/sleep) and

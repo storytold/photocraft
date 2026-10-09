@@ -523,6 +523,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(Value::String(value)) if value == "vertical" => Orientation::Vertical,
                     _ => return Err(bad("type.create", "orientation must be horizontal or vertical")),
                 };
+                check_kerning(p).map_err(|m| bad("type.create", m))?;
                 check_size_tracking(p).map_err(|m| bad("type.create", m))?;
                 let text = norm_text(p.get("text").and_then(Value::as_str).unwrap_or(""));
                 // Type › Save Default Type Styles sets the starting styles; the colour is always
@@ -1114,6 +1115,17 @@ mod tests {
         }
         assert!(s.execute("type.setStyle", json!({"layer": id, "kerning": "tight"})).is_err());
         assert_eq!(text_layer(&s, id).runs, before.runs);
+        // type.create rejects the same values and creates no layer (#994).
+        let layers = s.active().unwrap().doc.layer_count();
+        for k in [json!("tight"), json!(1e9), json!(-5000), json!(true), json!([1])] {
+            let p = json!({"x": 0, "y": 10, "text": "AV", "kerning": k});
+            assert!(s.execute("type.create", p.clone()).is_err(), "{p}");
+        }
+        assert_eq!(s.active().unwrap().doc.layer_count(), layers);
+        let id = s.execute("type.create", json!({"x": 0, "y": 10, "text": "AV", "kerning": "optical"})).unwrap()["layer"].as_u64().unwrap();
+        assert!(kerning_of(&s, id).iter().all(|k| *k == (Kerning::Optical, 0.0)));
+        let id = s.execute("type.create", json!({"x": 0, "y": 10, "text": "AV", "kerning": -50})).unwrap()["layer"].as_u64().unwrap();
+        assert!(kerning_of(&s, id).iter().all(|k| *k == (Kerning::Off, -50.0)));
     }
 
     /// Cost of one Alt+←/→ press (`kernPair`: two measuring layouts + the edit's re-render) on

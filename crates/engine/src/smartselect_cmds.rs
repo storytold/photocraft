@@ -191,7 +191,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             let src = src_layer
                 .surface()
                 .ok_or_else(|| EngineError::Other(format!("the active layer is a {} layer without pixels", src_layer.content.kind_name())))?;
-            let name = format!("{} copy", src_layer.name);
+            let name = d.doc.copy_name(&src_layer.name);
             let empty = Region { bbox: Rect::EMPTY, mask: Vec::new() };
             let reg = region.as_ref().unwrap_or(&empty);
             let pixels = if decontaminate { matting::decontaminate(src, reg, params.radius, amount) } else { src.clone() };

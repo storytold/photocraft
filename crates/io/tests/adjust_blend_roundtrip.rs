@@ -200,6 +200,28 @@ fn every_adjustment_kind_round_trips_16bit() {
     }
 }
 
+/// Photoshop's `clrL` has no interpolation setting, so tetrahedral comes back trilinear: the
+/// save must say so (#1347). Trilinear saves without a warning.
+#[test]
+fn color_lookup_tetrahedral_warns_on_psd_save() {
+    let lut = photocraft_cms::lutfile::LutFile::from_fn("t", 2, |c| if c == [1.0; 3] { [1.0; 3] } else { [0.0; 3] });
+    for tetrahedral in [true, false] {
+        let adj = Adjustment::ColorLookup { name: "test.cube".into(), lut: Some(Arc::new(lut.data.clone())), size: 2, tetrahedral, dither: false };
+        let mut d = Document::new("lut", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let fmt = d.pixel_format();
+        d.layers.push(raster("Background", fmt, d.bounds(), 1, false));
+        d.layers.push(Layer::new("Look", LayerContent::Adjustment(adj)));
+        let (back, warnings, _) = export_import(&d);
+        let warned = warnings.iter().any(|w| w.contains("\"Look\"") && w.contains("tetrahedral") && w.contains("trilinear"));
+        assert_eq!(warned, tetrahedral, "tetrahedral={tetrahedral}: {warnings:?}");
+        let content = back.layers.get(1).map(|l| &l.content);
+        let Some(LayerContent::Adjustment(Adjustment::ColorLookup { tetrahedral: t, lut: Some(_), size: 2, .. })) = content else {
+            panic!("Color Lookup lost: {:?}", content.map(LayerContent::kind_name))
+        };
+        assert!(!t, "PSD reopens as trilinear");
+    }
+}
+
 /// One document per blend mode: the mode on a pixel layer (with fill opacity and a mask), on a
 /// clipped layer, on a group, inside a pass-through group, and on an adjustment layer.
 fn blend_doc(mode: BlendMode) -> Document {

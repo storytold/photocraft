@@ -40,8 +40,8 @@ fn export_comps(s: &Session) -> std::result::Result<(), String> {
 /// The comp a command acts on: `"comp"` as an id or a name, else the last applied comp.
 fn comp_param(doc: &Document, p: &Value, cmd: &str) -> Result<u32> {
     match p.get("comp") {
-        Some(Value::Number(n)) => {
-            let id = n.as_u64().ok_or_else(|| bad(cmd, "\"comp\" must be a comp id or name"))? as u32;
+        Some(v @ Value::Number(_)) => {
+            let id = crate::commands::u32_id(cmd, "comp", v)?;
             doc.comp(id).map(|c| c.id).ok_or_else(|| bad(cmd, format!("no layer comp with id {id}")))
         }
         Some(Value::String(name)) => {
@@ -78,11 +78,14 @@ pub fn apply_comp(doc: &mut Document, comp: &LayerComp, all: bool) {
             && let Some((x, y)) = st.position
             && let Some((cx, cy)) = doc.layer(id).and_then(layer_position)
             && (x, y) != (cx, cy)
+            // Recorded positions can come from files; a move that does not fit an `i32` is
+            // skipped rather than wrapped onto some other position (#1017).
+            && let (Some(dx), Some(dy)) = (x.checked_sub(cx), y.checked_sub(cy))
         {
             let snapshot = doc.clone();
             if let Some(l) = doc.layer_mut(id) {
-                crate::commands::translate_layer(&snapshot, l, x - cx, y - cy);
-                crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(x - cx), f64::from(y - cy));
+                crate::commands::translate_layer(&snapshot, l, dx, dy);
+                crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
             }
         }
         let Some(l) = doc.layer_mut(id) else { continue };
@@ -351,7 +354,7 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let chosen: Vec<u32> = match p.get("comps") {
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_u64).map(|v| v as u32).collect(),
+        Some(Value::Array(a)) => a.iter().map(|v| crate::commands::u32_id(cmd, "comps", v)).collect::<Result<Vec<_>>>()?,
         _ if flag(p, "selectedOnly", false) => vec![comp_param(&doc, &json!({}), cmd)?],
         _ => doc.layer_comps.iter().map(|c| c.id).collect(),
     };

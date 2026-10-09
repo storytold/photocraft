@@ -39,7 +39,7 @@ jobs:
   version:
     name: version
     runs-on: ubuntu-latest
-    environment: release
+    # No `environment: release`: this job reads no secrets, so a branch dry run can run it.
     outputs:
       version: ${{ steps.v.outputs.version }}
       date: ${{ steps.v.outputs.date }}
@@ -67,7 +67,7 @@ jobs:
   macos:
     name: macOS universal
     needs: version
-    runs-on: macos-15
+    runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
     environment: release
     env:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
@@ -186,7 +186,7 @@ jobs:
     # The oldest GitHub-hosted image, so the binaries only need glibc >= 2.35 (Ubuntu 22.04+,
     # Debian 12+, Fedora 36+, RHEL 10). See docs/releasing.md.
     runs-on: ${{ matrix.runner }}
-    environment: release
+    # No `environment: release`: this job reads no secrets, so a branch dry run can run it.
     strategy:
       fail-fast: false
       matrix:
@@ -339,7 +339,7 @@ jobs:
     name: Web (wasm)
     needs: version
     runs-on: ubuntu-latest
-    environment: release
+    # No `environment: release`: this job reads no secrets, so a branch dry run can run it.
     env:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}

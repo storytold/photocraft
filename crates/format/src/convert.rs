@@ -197,6 +197,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         link_group: l.link_group,
         excluded_channels: l.excluded_channels,
         blend_if: l.blend_if.clone(),
+        advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
     }
 }
@@ -309,7 +310,13 @@ impl Loader<'_> {
         swap_to_le(&mut dp, f.sample);
         let mut s = Surface::with_default(f, &decode_pixel(&f, &dp));
         let len = tile_len(&f);
+        // Both edges of a tile's rectangle must fit in i32 (`TileCoord::rect` multiplies by the
+        // tile size): -8388608 ..= 8388606. A damaged manifest can name any index (#938).
+        let fits = |i: i32| i.checked_mul(TILE_SIZE).is_some() && i.checked_add(1).and_then(|e| e.checked_mul(TILE_SIZE)).is_some();
         for t in &m.tiles {
+            if !fits(t.tx) || !fits(t.ty) {
+                return Err(FormatError::corrupt(format!("tile ({}, {}) is outside the coordinate range", t.tx, t.ty)));
+            }
             let c = TileCoord::new(t.tx, t.ty);
             if s.tile(c).is_some() {
                 return Err(FormatError::corrupt(format!("duplicate tile ({}, {})", t.tx, t.ty)));
@@ -488,6 +495,7 @@ impl Loader<'_> {
             link_group: m.link_group,
             excluded_channels: m.excluded_channels,
             blend_if: m.blend_if.clone(),
+            advanced: m.advanced,
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
         })
     }

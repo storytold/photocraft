@@ -566,3 +566,35 @@ fn dock_strips_fit_and_the_chevron_menu_switches_tabs() {
     h.run_steps(3);
     assert_eq!(*h.state(), 3, "Patterns chosen from the chevron menu");
 }
+
+#[test]
+fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
+    // #1313: Photoshop's Tab hides the Tools panel, the options bar and the panel dock (Tab again
+    // brings back what it hid); ⇧Tab hides and shows the dock alone.
+    let (mut app, _, _) = app_with_layers();
+    let ctx = egui::Context::default();
+    let run = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
+    app.ui.panels.options_bar = false;
+    run(&mut app, "window.togglePanels");
+    let p = &app.ui.panels;
+    assert!(!p.toolbar && !p.options_bar && !p.dock);
+    run(&mut app, "window.togglePanels");
+    let p = &app.ui.panels;
+    assert!(p.toolbar && !p.options_bar && p.dock, "Tab brings back only what it hid");
+    run(&mut app, "window.toggle.dock");
+    assert!(!app.ui.panels.dock && app.ui.panels.toolbar, "⇧Tab hides only the dock");
+    run(&mut app, "window.toggle.dock");
+    assert!(app.ui.panels.dock);
+    // Everything hidden by hand: Tab shows it all.
+    (app.ui.panels.toolbar, app.ui.panels.options_bar, app.ui.panels.dock) = (false, false, false);
+    run(&mut app, "window.togglePanels");
+    assert!(app.ui.panels.toolbar && app.ui.panels.options_bar && app.ui.panels.dock);
+    // The keys are Photoshop's.
+    let bound = |key: &str| crate::shortcut_dispatch::bindings(&app).into_iter().find(|(_, sc)| Some(*sc) == crate::shortcuts::parse(key)).map(|(id, _)| id);
+    assert_eq!(bound("Tab").as_deref(), Some("window.togglePanels"));
+    assert_eq!(bound("Shift+Tab").as_deref(), Some("window.toggle.dock"));
+    // An older saved UI state without the field shows the dock.
+    let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
+    v.as_object_mut().unwrap().remove("dock");
+    assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
+}

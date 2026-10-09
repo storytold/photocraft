@@ -368,6 +368,13 @@ fn trace_contour_draws_line_at_level_crossing() {
 }
 
 #[test]
+fn trace_contour_off_canvas_does_not_panic() {
+    let s = flat(SampleType::F32, Rect::new(100, 100, 120, 120), [0.8, 0.8, 0.8, 1.0]);
+    let p = FilterParams::TraceContour { level: 128.0, upper: true };
+    let _ = apply_tiled(&s, &p, s.content_bounds(), R, None, 64, None);
+}
+
+#[test]
 fn tiles_leave_gaps_with_fill() {
     let s = flat(SampleType::F32, R, [0.0, 0.0, 1.0, 1.0]);
     let out =

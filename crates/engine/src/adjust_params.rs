@@ -464,13 +464,254 @@ fn identity_curve() -> Vec<CurvePoint> {
     vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]
 }
 
+const CURVE_COORDINATE_PRECISION: f32 = 100.0;
+const CURVE_POINT_DUPLICATE_DISTANCE: f32 = 0.5 / 255.0;
+
 fn curve_arr(c: &[CurvePoint]) -> Value {
     let c = if c.len() >= 2 { c.to_vec() } else { identity_curve() };
-    json!(c.iter().map(|p| [(p.input * 255.0 * 100.0).round() / 100.0, (p.output * 255.0 * 100.0).round() / 100.0]).collect::<Vec<_>>())
+    json!(
+        c.iter()
+            .map(|p| {
+                [
+                    (p.input * 255.0 * CURVE_COORDINATE_PRECISION).round() / CURVE_COORDINATE_PRECISION,
+                    (p.output * 255.0 * CURVE_COORDINATE_PRECISION).round() / CURVE_COORDINATE_PRECISION,
+                ]
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 /// Most points a curve may have (Photoshop allows 16; the PSD record holds 19).
 pub const MAX_CURVE_POINTS: usize = 19;
+
+/// Fixed-target Curves eyedroppers. The UI keeps the sampled operation provisional; this helper
+/// only resolves a sample into an ordinary Curves adjustment that the existing command can apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurvesEyedropper {
+    Black,
+    NeutralGray,
+    White,
+}
+
+/// Verify that serializing and parsing `points` keeps every point and the requested anchor.
+fn curve_round_trip_keeps_anchor(points: &[CurvePoint], input: f32, output: f32) -> bool {
+    let Ok(parsed) = parse_curve("curves eyedropper", "curve", &curve_arr(points)) else { return false };
+    if parsed.len() != points.len() {
+        return false;
+    }
+    let serialized = |value: f32| ((value * 255.0 * CURVE_COORDINATE_PRECISION).round() / CURVE_COORDINATE_PRECISION) / 255.0;
+    let (input, output) = (serialized(input), serialized(output));
+    parsed.iter().any(|point| (point.input - input).abs() < 1e-6 && (point.output - output).abs() < 1e-6)
+}
+
+fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
+    let sample = sample.clamp(0.0, 1.0);
+    let mut candidate = points.to_vec();
+    if black {
+        for p in &mut candidate {
+            p.input = sample + p.input * (1.0 - sample);
+        }
+        if let Some(first) = candidate.first_mut() {
+            first.input = sample;
+            first.output = 0.0;
+        }
+    } else {
+        for p in &mut candidate {
+            p.input *= sample;
+        }
+        if let Some(last) = candidate.last_mut() {
+            last.input = sample;
+            last.output = 1.0;
+        }
+    }
+
+    // `curve_arr` stores hundredths of a 0..255 level, while `parse_curve` drops points
+    // separated by less than half a level. Scaling an endpoint toward the sample can collapse
+    // several edited points together even when the target endpoint itself survives. Check that
+    // the full curve survives the actual serializer and parser.
+    let target = if black { 0.0 } else { 1.0 };
+    if curve_round_trip_keeps_anchor(&candidate, sample, target) {
+        points.clone_from_slice(&candidate);
+        return;
+    }
+
+    // If scaling collapses any points, keep the user's point positions and edits, and make the
+    // two points nearest the selected endpoint a target plateau. Near an endpoint sample, those
+    // two points bracket the sample; the plateau is representable and leaves the rest of the
+    // curve intact.
+    if black {
+        for point in points.iter_mut().rev().take(2) {
+            point.output = 0.0;
+        }
+    } else {
+        for point in points.iter_mut().take(2) {
+            point.output = 1.0;
+        }
+    }
+}
+
+fn anchor_curve(points: &mut Vec<CurvePoint>, input: f32, output: f32) {
+    let (input, output) = (input.clamp(0.0, 1.0), output.clamp(0.0, 1.0));
+    let mut candidate = points.clone();
+    if let Some(point) = candidate.iter_mut().find(|p| (p.input - input).abs() < CURVE_POINT_DUPLICATE_DISTANCE) {
+        point.input = input;
+        point.output = output;
+    } else if candidate.len() < MAX_CURVE_POINTS {
+        candidate.push(CurvePoint { input, output });
+    } else if let Some((index, _)) = candidate
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index > 0 && *index + 1 < candidate.len())
+        .min_by(|(_, a), (_, b)| (a.input - input).abs().total_cmp(&(b.input - input).abs()))
+        && let Some(point) = candidate.get_mut(index)
+    {
+        *point = CurvePoint { input, output };
+    }
+    candidate.sort_by(|a, b| a.input.total_cmp(&b.input));
+    if curve_round_trip_keeps_anchor(&candidate, input, output) {
+        *points = candidate;
+        return;
+    }
+
+    // A channel sample can land between two points only half a level apart. Moving one point to
+    // the sample would then make the parser collapse the pair, so retain their positions and make
+    // the bracketing pair a deterministic neutral plateau instead.
+    let Some(last) = points.len().checked_sub(1) else { return };
+    let split = points.partition_point(|point| point.input < input);
+    let mut lower = split.saturating_sub(1).min(last);
+    let mut upper = split.min(last);
+    if lower == upper {
+        if upper < last {
+            upper += 1;
+        } else {
+            lower = lower.saturating_sub(1);
+        }
+    }
+    if let Some(point) = points.get_mut(lower) {
+        point.output = output;
+    }
+    if let Some(point) = points.get_mut(upper) {
+        point.output = output;
+    }
+}
+
+/// Rec. 709 luma in the sampled display-RGB values. This is the neutral level the gray picker
+/// should preserve when it removes a colour cast.
+fn rgb_luma(rgb: [f32; 3]) -> f32 {
+    rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722
+}
+
+/// Find the master-curve input whose output is closest to `target`. The master curve is kept
+/// intact by the gray picker, so channel curves must target its inverse to preserve final luma.
+/// A non-monotone or flat curve may not have an exact inverse; the first nearest LUT entry gives
+/// a deterministic best fit.
+fn inverse_master_target(master: &[CurvePoint], target: f32) -> f32 {
+    if photocraft_doc::adjust::is_identity_curve(master) {
+        return target;
+    }
+    let lut = photocraft_compose::adjust::curve_lut(master);
+    let Some(denominator) = lut.len().checked_sub(1).filter(|last| *last > 0) else { return target };
+    let mut best_input = target;
+    let mut best_error = f32::INFINITY;
+    for (index, value) in lut.iter().enumerate() {
+        let error = (*value - target).abs();
+        if error < best_error {
+            best_error = error;
+            best_input = index as f32 / denominator as f32;
+        }
+    }
+    best_input
+}
+
+/// Resolve a merged-composite colour sample into the black, luma-preserving neutral-gray or white target.
+/// RGB uses the three channel curves. Grayscale uses the composite curve and has no gray picker.
+/// Other colour models stay unsupported until their native channel semantics can be sampled.
+pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    if sample.iter().any(|v| !v.is_finite()) {
+        return Err(bad("curves eyedropper", "sample components must be finite"));
+    }
+    if !matches!(mode, ColorMode::Rgb | ColorMode::Grayscale) {
+        return Err(bad("curves eyedropper", "only RGB and Grayscale documents are supported"));
+    }
+    if mode == ColorMode::Grayscale && picker == CurvesEyedropper::NeutralGray {
+        return Err(bad("curves eyedropper", "Neutral Gray is unavailable for Grayscale documents"));
+    }
+    let mut adjustment = from_params("curves", base, None, mode)?;
+    let Adjustment::Curves { master, per_channel, .. } = &mut adjustment else {
+        return Err(bad("curves eyedropper", "expected a Curves adjustment"));
+    };
+    let sample = sample.map(|v| v.clamp(0.0, 1.0));
+    if mode == ColorMode::Grayscale {
+        let tone = (sample[0] + sample[1] + sample[2]) / 3.0;
+        move_curve_endpoint(master, tone, picker == CurvesEyedropper::Black);
+        return Ok(adjustment);
+    }
+    match picker {
+        CurvesEyedropper::Black | CurvesEyedropper::White => {
+            let black = picker == CurvesEyedropper::Black;
+            for (curve, value) in per_channel.iter_mut().zip(sample) {
+                move_curve_endpoint(curve, value, black);
+            }
+            if let Some(endpoint) = if black { master.first_mut() } else { master.last_mut() } {
+                endpoint.output = if black { 0.0 } else { 1.0 };
+            }
+        }
+        CurvesEyedropper::NeutralGray => {
+            // Use sampled luma instead of a fixed mid-gray so removing a cast keeps the sample's
+            // brightness. The per-channel curves precede the composite curve, so invert the
+            // existing master curve while preserving it.
+            let target = inverse_master_target(master, rgb_luma(sample));
+            for (curve, value) in per_channel.iter_mut().zip(sample) {
+                anchor_curve(curve, value, target);
+            }
+        }
+    }
+    Ok(adjustment)
+}
+
+/// The `eyedropper` param of the Curves commands, so agents and the CLI can drive the dialog's
+/// Set Black/Neutral Gray/White Point pickers: `{"point":"black"|"gray"|"white","at":[x,y]}`
+/// samples the merged composite at document pixel (x, y), or `"color":[r,g,b]` (0–1) gives the
+/// sample directly. The rest of `p` is the curve the picker edits. `None` without the key.
+pub fn curves_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Option<Adjustment>> {
+    const CMD: &str = "curves eyedropper";
+    let Some(e) = p.get("eyedropper") else { return Ok(None) };
+    let picker = match e.get("point").and_then(Value::as_str) {
+        Some("black") => CurvesEyedropper::Black,
+        Some("gray") => CurvesEyedropper::NeutralGray,
+        Some("white") => CurvesEyedropper::White,
+        _ => return Err(bad(CMD, "`eyedropper.point` must be \"black\", \"gray\" or \"white\"")),
+    };
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let triple = |v: &Value| -> Option<[f64; 3]> {
+        let a = v.as_array().filter(|a| a.len() == 3)?;
+        Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+    };
+    let sample = if let Some(c) = e.get("color") {
+        let c = triple(c).ok_or_else(|| bad(CMD, "`eyedropper.color` must be [r, g, b] in 0..1"))?;
+        c.map(|v| v as f32)
+    } else if let Some(at) = e.get("at") {
+        let xy = at.as_array().filter(|a| a.len() == 2).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
+        let [x, y] = xy.filter(|xy| xy.iter().all(|v| v.is_finite())).ok_or_else(|| bad(CMD, "`eyedropper.at` must be [x, y] in document pixels"))?;
+        let (w, h) = (f64::from(d.doc.size.width), f64::from(d.doc.size.height));
+        if x < 0.0 || y < 0.0 || x >= w || y >= h {
+            return Err(bad(CMD, "`eyedropper.at` is outside the image"));
+        }
+        let rect = photocraft_geom::Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1);
+        let [r, g, b, a] = photocraft_compose::render(&d.doc, rect).px.first().copied().unwrap_or_default();
+        if a <= 0.0 {
+            return Err(bad(CMD, "the sampled pixel is transparent"));
+        }
+        [r, g, b]
+    } else {
+        return Err(bad(CMD, "`eyedropper` needs `at` [x, y] or `color` [r, g, b]"));
+    };
+    let mut base = p.clone();
+    if let Some(o) = base.as_object_mut() {
+        o.remove("eyedropper");
+    }
+    curves_eyedropper(&base, picker, sample, d.doc.mode).map(Some)
+}
 
 /// `[[in, out], …]` in 0..255: sorted by input, duplicates collapsed, 2..=19 points.
 pub fn parse_curve(cmd: &str, key: &str, v: &Value) -> Result<Vec<CurvePoint>> {
@@ -487,7 +728,7 @@ pub fn parse_curve(cmd: &str, key: &str, v: &Value) -> Result<Vec<CurvePoint>> {
         pts.push(CurvePoint { input: (x as f32).clamp(0.0, 255.0) / 255.0, output: (y as f32).clamp(0.0, 255.0) / 255.0 });
     }
     pts.sort_by(|a, b| a.input.total_cmp(&b.input));
-    pts.dedup_by(|later, earlier| (later.input - earlier.input).abs() < 0.5 / 255.0);
+    pts.dedup_by(|later, earlier| (later.input - earlier.input).abs() < CURVE_POINT_DUPLICATE_DISTANCE);
     if pts.len() < 2 || pts.len() > MAX_CURVE_POINTS {
         return Err(err());
     }
@@ -678,6 +919,258 @@ mod tests {
         assert!(matches!(a, Adjustment::HueSaturation { hue: 180.0, saturation: -100.0, .. }));
         let a = from_params("levels", &json!({"inBlack": 250, "inWhite": 10}), None, ColorMode::Rgb).unwrap();
         assert!(matches!(a, Adjustment::Levels { master, .. } if master.in_white > master.in_black));
+    }
+
+    fn curves_parts(a: &Adjustment) -> (&[CurvePoint], &[Vec<CurvePoint>; 3]) {
+        match a {
+            Adjustment::Curves { master, per_channel, .. } => (master, per_channel),
+            _ => panic!("expected curves"),
+        }
+    }
+
+    fn tone_output(adjustment: &Adjustment, sample: [f32; 3]) -> [f32; 3] {
+        let luts = photocraft_compose::adjust::tone_luts(adjustment);
+        std::array::from_fn(|channel| {
+            let row = &luts[channel];
+            let position = sample[channel].clamp(0.0, 1.0) * (row.len().saturating_sub(1)) as f32;
+            let lower = position.floor() as usize;
+            let upper = lower.saturating_add(1).min(row.len().saturating_sub(1));
+            let fraction = position - lower as f32;
+            row.get(lower).copied().unwrap_or(0.0) * (1.0 - fraction) + row.get(upper).copied().unwrap_or(0.0) * fraction
+        })
+    }
+
+    #[test]
+    fn curves_black_and_white_eyedroppers_move_the_input_references() {
+        let base = json!({
+            "points": [[0, 8], [120, 150], [255, 245]],
+            "red": [[0, 0], [100, 130], [255, 255]],
+            "green": [[0, 0], [110, 125], [255, 255]],
+            "blue": [[0, 0], [90, 120], [255, 255]]
+        });
+        let black = curves_eyedropper(&base, CurvesEyedropper::Black, [0.2, 0.3, 0.4], ColorMode::Rgb).unwrap();
+        let (master, channels) = curves_parts(&black);
+        for (curve, sample) in channels.iter().zip([0.2, 0.3, 0.4]) {
+            assert!((curve[0].input - sample).abs() < 1e-6 && curve[0].output == 0.0, "{curve:?}");
+            assert_eq!(curve.len(), 3, "existing edit points are preserved");
+        }
+        assert_eq!(master[0].output, 0.0, "the composite cannot lift the sampled black");
+        assert!(tone_output(&black, [0.2, 0.3, 0.4]).iter().all(|value| *value < 1e-3));
+
+        let white = curves_eyedropper(&base, CurvesEyedropper::White, [0.6, 0.7, 0.8], ColorMode::Rgb).unwrap();
+        let (master, channels) = curves_parts(&white);
+        for (curve, sample) in channels.iter().zip([0.6, 0.7, 0.8]) {
+            let end = curve.last().unwrap();
+            assert!((end.input - sample).abs() < 1e-6 && end.output == 1.0, "{curve:?}");
+            assert_eq!(curve.len(), 3, "existing edit points are preserved");
+        }
+        assert_eq!(master.last().map(|p| p.output), Some(1.0), "the composite cannot lower the sampled white");
+        assert!(tone_output(&white, [0.6, 0.7, 0.8]).iter().all(|value| *value > 1.0 - 1e-3));
+
+        let edge_black = curves_eyedropper(&base, CurvesEyedropper::Black, [1.0, 0.3, 0.4], ColorMode::Rgb).unwrap();
+        let (_, edge_channels) = curves_parts(&edge_black);
+        assert_eq!(edge_channels[0].len(), 3, "edge samples preserve other curve points");
+        assert_eq!(edge_channels[0].last().map(|p| p.output), Some(0.0));
+        let edge_white = curves_eyedropper(&base, CurvesEyedropper::White, [0.0, 0.7, 0.8], ColorMode::Rgb).unwrap();
+        let (_, edge_channels) = curves_parts(&edge_white);
+        assert_eq!(edge_channels[0].len(), 3, "edge samples preserve other curve points");
+        assert_eq!(edge_channels[0].first().map(|p| p.output), Some(1.0));
+    }
+
+    #[test]
+    fn black_and_white_eyedroppers_round_trip_near_serialization_boundaries() {
+        let cases = [
+            (CurvesEyedropper::White, 0.0, 1.0),
+            (CurvesEyedropper::White, 0.001, 1.0),
+            (CurvesEyedropper::White, 0.494 / 255.0, 1.0),
+            // 0.496 level rounds to 0.50; the sample is just below that representable point.
+            (CurvesEyedropper::White, 0.496 / 255.0, 0.992),
+            (CurvesEyedropper::White, 0.2, 1.0),
+            (CurvesEyedropper::Black, 1.0, 0.0),
+            (CurvesEyedropper::Black, 0.999, 0.0),
+            (CurvesEyedropper::Black, 1.0 - 0.494 / 255.0, 0.0),
+            // 254.504 levels rounds to 254.50, leaving a representable 0.50-level gap.
+            (CurvesEyedropper::Black, 1.0 - 0.496 / 255.0, 0.008),
+            (CurvesEyedropper::Black, 0.8, 0.0),
+        ];
+        for (picker, sample, expected_output) in cases {
+            let resolved = curves_eyedropper(&json!({}), picker, [sample; 3], ColorMode::Rgb).unwrap();
+            let params = to_params(&resolved);
+            let parsed = from_params("curves", &params, None, ColorMode::Rgb).unwrap();
+            let (master, channels) = curves_parts(&parsed);
+            for curve in std::iter::once(master).chain(channels.iter().map(Vec::as_slice)) {
+                assert!(curve.len() >= 2, "{picker:?} sample={sample}: {curve:?}");
+                assert!(curve.len() <= MAX_CURVE_POINTS, "{picker:?} sample={sample}: {curve:?}");
+                assert!(curve.windows(2).all(|pair| pair[0].input < pair[1].input), "{picker:?} sample={sample}: {curve:?}");
+                assert!(curve.windows(2).all(|pair| pair[1].input - pair[0].input >= CURVE_POINT_DUPLICATE_DISTANCE), "{picker:?} sample={sample}: {curve:?}");
+            }
+            let output = tone_output(&parsed, [sample; 3]);
+            assert!(
+                output.iter().all(|value| (*value - expected_output).abs() < 1e-3),
+                "{picker:?} sample={sample} output={output:?} expected={expected_output}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_eyedroppers_fall_back_when_serialization_collapses_curve_points() {
+        let base = json!({
+            "points": [[0, 0], [64, 50], [128, 100], [192, 200], [255, 255]],
+            "red": [[0, 0], [64, 50], [128, 100], [192, 200], [255, 255]],
+            "green": [[0, 0], [64, 50], [128, 100], [192, 200], [255, 255]],
+            "blue": [[0, 0], [64, 50], [128, 100], [192, 200], [255, 255]]
+        });
+        let cases = [(CurvesEyedropper::Black, 0.995, 0.0, true), (CurvesEyedropper::White, 0.005, 1.0, false)];
+        for (picker, sample, target, black) in cases {
+            let resolved = curves_eyedropper(&base, picker, [sample; 3], ColorMode::Rgb).unwrap();
+            let parsed = from_params("curves", &to_params(&resolved), None, ColorMode::Rgb).unwrap();
+            let (master, channels) = curves_parts(&parsed);
+            for curve in std::iter::once(master).chain(channels.iter().map(Vec::as_slice)) {
+                assert_eq!(curve.len(), 5, "collapsed points use the deterministic fallback: {curve:?}");
+                for (point, input) in curve.iter().zip([0.0, 64.0, 128.0, 192.0, 255.0]) {
+                    assert!((point.input * 255.0 - input).abs() < 1e-3, "existing point position was retained: {curve:?}");
+                }
+            }
+            for curve in channels {
+                let plateau: Vec<_> = if black { curve.iter().rev().take(2).collect() } else { curve.iter().take(2).collect() };
+                assert!(plateau.into_iter().all(|point| (point.output - target).abs() < 1e-6), "{curve:?}");
+            }
+            let output = tone_output(&parsed, [sample; 3]);
+            assert!(output.iter().all(|value| (*value - target).abs() < 0.01), "{picker:?}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn black_and_white_round_trips_preserve_representable_curve_edits() {
+        let base = json!({
+            "points": [[0, 8], [120, 150], [255, 245]],
+            "red": [[0, 0], [100, 130], [255, 255]],
+            "green": [[0, 0], [110, 125], [255, 255]],
+            "blue": [[0, 0], [90, 120], [255, 255]]
+        });
+        let black = curves_eyedropper(&base, CurvesEyedropper::Black, [0.2, 0.3, 0.4], ColorMode::Rgb).unwrap();
+        let black = from_params("curves", &to_params(&black), None, ColorMode::Rgb).unwrap();
+        let (_, channels) = curves_parts(&black);
+        assert_eq!(channels[0].len(), 3);
+        assert!((channels[0][1].input * 255.0 - 131.0).abs() < 1e-3);
+        assert!((channels[0][1].output * 255.0 - 130.0).abs() < 1e-3);
+
+        let white = curves_eyedropper(&base, CurvesEyedropper::White, [0.6, 0.7, 0.8], ColorMode::Rgb).unwrap();
+        let white = from_params("curves", &to_params(&white), None, ColorMode::Rgb).unwrap();
+        let (_, channels) = curves_parts(&white);
+        assert_eq!(channels[0].len(), 3);
+        assert!((channels[0][1].input * 255.0 - 60.0).abs() < 1e-3);
+        assert!((channels[0][1].output * 255.0 - 130.0).abs() < 1e-3);
+    }
+
+    fn assert_gray_point_preserves_luma_and_existing_curve_edits(sample: [f32; 3]) {
+        let base = json!({
+            "points": [[0, 0], [128, 96], [255, 255]],
+            "red": [[0, 0], [80, 90], [255, 255]],
+            "green": [[0, 0], [90, 100], [255, 255]],
+            "blue": [[0, 0], [70, 80], [255, 255]]
+        });
+        let original = from_params("curves", &base, None, ColorMode::Rgb).unwrap();
+        let expected_luma = rgb_luma(sample);
+        let resolved = curves_eyedropper(&base, CurvesEyedropper::NeutralGray, sample, ColorMode::Rgb).unwrap();
+        let parsed = from_params("curves", &to_params(&resolved), None, ColorMode::Rgb).unwrap();
+        let (master, channels) = curves_parts(&parsed);
+        let (original_master, original_channels) = curves_parts(&original);
+        assert_eq!(master, original_master, "the existing master curve is retained");
+        for (curve, old_curve) in channels.iter().zip(original_channels) {
+            let old_edit = old_curve.get(1).expect("the test curve has an interior edit");
+            assert!(
+                curve.iter().any(|point| { (point.input - old_edit.input).abs() < 1e-6 && (point.output - old_edit.output).abs() < 1e-6 }),
+                "the existing channel edit is retained: {curve:?}"
+            );
+        }
+        let output = tone_output(&parsed, sample);
+        assert!((output[0] - output[1]).abs() < 0.002 && (output[1] - output[2]).abs() < 0.002, "sample must become neutral: {output:?}");
+        assert!((rgb_luma(output) - expected_luma).abs() < 0.003, "luma changed from {expected_luma} to {} ({output:?})", rgb_luma(output));
+    }
+
+    #[test]
+    fn curves_neutral_gray_preserves_luma_for_a_light_cast_sample() {
+        assert_gray_point_preserves_luma_and_existing_curve_edits([0.88, 0.76, 0.63]);
+    }
+
+    #[test]
+    fn curves_neutral_gray_preserves_luma_for_a_dark_cast_sample() {
+        assert_gray_point_preserves_luma_and_existing_curve_edits([0.17, 0.105, 0.075]);
+    }
+
+    #[test]
+    fn curves_neutral_gray_handles_near_black_and_near_white_samples() {
+        for sample in [[0.004, 0.006, 0.008], [0.992, 0.996, 0.999], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]] {
+            let resolved = curves_eyedropper(&json!({}), CurvesEyedropper::NeutralGray, sample, ColorMode::Rgb).unwrap();
+            let parsed = from_params("curves", &to_params(&resolved), None, ColorMode::Rgb).unwrap();
+            let (master, channels) = curves_parts(&parsed);
+            for curve in std::iter::once(master).chain(channels.iter().map(Vec::as_slice)) {
+                assert!(curve.len() >= 2, "{sample:?}: {curve:?}");
+                assert!(curve.windows(2).all(|pair| pair[0].input < pair[1].input), "{sample:?}: {curve:?}");
+                assert!(curve.windows(2).all(|pair| pair[1].input - pair[0].input >= CURVE_POINT_DUPLICATE_DISTANCE), "{sample:?}: {curve:?}");
+            }
+            let output = tone_output(&parsed, sample);
+            assert!((output[0] - output[1]).abs() < 0.002 && (output[1] - output[2]).abs() < 0.002, "{sample:?}: {output:?}");
+            assert!((rgb_luma(output) - rgb_luma(sample)).abs() < 0.003, "{sample:?}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn gray_point_fallback_keeps_tightly_spaced_points_round_trip_safe() {
+        let base = json!({
+            "red": [[0, 0], [100, 100], [100.51, 100], [255, 255]],
+            "green": [[0, 0], [100, 100], [100.51, 100], [255, 255]],
+            "blue": [[0, 0], [100, 100], [100.51, 100], [255, 255]]
+        });
+        let sample = [100.25 / 255.0, 100.1 / 255.0, 100.4 / 255.0];
+        let target = rgb_luma(sample);
+        let resolved = curves_eyedropper(&base, CurvesEyedropper::NeutralGray, sample, ColorMode::Rgb).unwrap();
+        let parsed = from_params("curves", &to_params(&resolved), None, ColorMode::Rgb).unwrap();
+        let (_, channels) = curves_parts(&parsed);
+        for (curve, input) in channels.iter().zip(sample) {
+            assert_eq!(curve.len(), 4, "the fallback keeps every serialized point: {curve:?}");
+            assert!(curve.windows(2).all(|pair| pair[1].input - pair[0].input >= CURVE_POINT_DUPLICATE_DISTANCE), "{curve:?}");
+            let sample_pair = curve.windows(2).find(|pair| pair[0].input <= input && input <= pair[1].input).unwrap();
+            assert!((sample_pair[0].output - sample_pair[1].output).abs() < 1e-6, "fallback forms a plateau around the sample: {curve:?}");
+            assert!((sample_pair[0].output - target).abs() < 0.001, "fallback uses the luma target: {curve:?}");
+        }
+    }
+
+    #[test]
+    fn curves_eyedropper_param_drives_the_command() {
+        let mut s = crate::Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.6, 0.5, 0.4]})).unwrap();
+        s.execute("image.adjustments.curves", json!({"eyedropper": {"point": "white", "at": [2, 2]}})).unwrap();
+        let px: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 2, "y": 2})).unwrap()).unwrap();
+        assert!(px.iter().take(3).all(|v| *v > 0.99), "the sample becomes white: {px:?}");
+        s.execute("image.adjustments.curves", json!({"eyedropper": {"point": "black", "color": [1.0, 1.0, 1.0]}})).unwrap();
+        let px: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 2, "y": 2})).unwrap()).unwrap();
+        assert!(px.iter().take(3).all(|v| *v < 0.01), "the given colour becomes black: {px:?}");
+        for bad in [
+            json!("black"),
+            json!({"point": "nope", "at": [1, 1]}),
+            json!({"point": "black"}),
+            json!({"point": "black", "at": [99, 1]}),
+            json!({"point": "black", "at": [-1, 1]}),
+            json!({"point": "black", "at": [1]}),
+            json!({"point": "gray", "at": [f64::MAX, 1]}),
+            json!({"point": "black", "color": "red"}),
+        ] {
+            assert!(s.execute("image.adjustments.curves", json!({"eyedropper": bad})).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn curves_eyedropper_support_is_explicit_and_bad_samples_fail() {
+        assert!(curves_eyedropper(&json!({}), CurvesEyedropper::Black, [0.4; 3], ColorMode::Grayscale).is_ok());
+        assert!(curves_eyedropper(&json!({}), CurvesEyedropper::White, [0.4; 3], ColorMode::Grayscale).is_ok());
+        assert!(curves_eyedropper(&json!({}), CurvesEyedropper::NeutralGray, [0.4; 3], ColorMode::Grayscale).is_err());
+        for mode in [ColorMode::Cmyk, ColorMode::Lab] {
+            assert!(curves_eyedropper(&json!({}), CurvesEyedropper::Black, [0.4; 3], mode).is_err());
+        }
+        assert!(curves_eyedropper(&json!({}), CurvesEyedropper::Black, [f32::NAN, 0.0, 0.0], ColorMode::Rgb).is_err());
     }
 
     #[test]

@@ -10,4 +10,4 @@ External bytes enter PhotoCraft through three main paths:
 
 Formats are a primary security boundary. File extension is not a trust signal, metadata can be attacker-controlled, and small compressed inputs can declare very large decoded outputs. Callers should use the bounded default APIs and preserve errors rather than retrying with unlimited limits.
 
-See [PSD and PSB](psd-psb.md), [Raster formats](raster-formats.md), and [The `.pcraft` format](pcraft.md). Cross-format hardening guidance is in [Parser hardening](../security/parser-hardening.md).
+See [PSD and PSB](psd-psb.md), [Raster formats](raster-formats.md), [SVG](svg.md), and [The `.pcraft` format](pcraft.md). Cross-format hardening guidance is in [Parser hardening](../security/parser-hardening.md).

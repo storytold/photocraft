@@ -5,7 +5,7 @@ use std::io::{BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use photocraft_automation::budgets::write_reply;
 use photocraft_automation::security::{
@@ -83,18 +83,20 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                 let id = msg.get("id").cloned().unwrap_or(Value::Null);
                 let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_string();
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
-                let (req, rrx) = ControlRequest::new(method, params);
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let (mut req, rrx) = ControlRequest::new(method, params);
+                req.deadline = Some(deadline);
                 if tx.send(req).is_err() {
                     break;
                 }
                 ctx.request_repaint();
-                let mut r = rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
+                let mut r = rrx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
                 if let Some(o) = r.as_object_mut() {
                     o.insert("id".into(), id);
                 }
                 r
             }
-            Err(e) => json!({"ok": false, "error": format!("bad JSON: {e}")}),
+            Err(e) => json!({"id": null, "ok": false, "error": format!("bad JSON: {e}")}),
         };
         if write_reply(&mut out, &reply).is_err() {
             break;
@@ -124,6 +126,7 @@ mod tests {
         let handler = std::thread::spawn(move || {
             let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
             assert_eq!(first.method, "test.large");
+            assert!(first.deadline.is_some_and(|deadline| deadline > std::time::Instant::now()), "native requests carry their reply deadline");
             first.reply.send(json!({"ok": true, "result": "x".repeat(MAX_RESPONSE_BYTES)})).unwrap();
             let second = rx.recv_timeout(Duration::from_secs(5)).unwrap();
             assert_eq!(second.method, "test.small");
@@ -149,6 +152,48 @@ mod tests {
         let accepted: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(accepted["id"], 3);
         assert_eq!(accepted["result"], "still serving");
+        drop(reader);
+        drop(stream);
+        handler.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn bad_json_reply_carries_a_null_id_and_the_connection_keeps_serving() {
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = channel::<ControlRequest>();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve(stream, TOKEN, tx, egui::Context::default());
+        });
+        let handler = std::thread::spawn(move || {
+            let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(req.method, "test.after");
+            req.reply.send(json!({"ok": true, "result": "still serving"})).unwrap();
+        });
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        writeln!(stream, "{}", json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}})).unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["ok"], true);
+        writeln!(stream, "{{not json}}").unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let bad: Value = serde_json::from_str(&line).unwrap();
+        let bad = bad.as_object().unwrap();
+        assert_eq!(bad.get("id"), Some(&Value::Null), "bad JSON reply must carry `id: null`: {line}");
+        assert_eq!(bad.get("ok"), Some(&Value::Bool(false)));
+        assert!(bad.get("error").and_then(Value::as_str).unwrap().starts_with("bad JSON: "));
+        writeln!(stream, "{}", json!({"id": 7, "method": "test.after"})).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let after: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(after["id"], 7);
+        assert_eq!(after["result"], "still serving");
         drop(reader);
         drop(stream);
         handler.join().unwrap();

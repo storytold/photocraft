@@ -2,7 +2,7 @@
 //! unavailable ones are greyed using the same enablement as the main menus. Items marked as menu
 //! invocations (`Value::Null` params) go through `menus::invoke`, so dialogs open like in the menu bar.
 
-use photocraft_doc::{Layer, LayerContent};
+use photocraft_doc::{LabelColor, Layer, LayerContent};
 use serde_json::{Value, json};
 
 /// One entry: label, command id. `None` = separator.
@@ -41,6 +41,7 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         LayerContent::Shape(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.shape"))),
         LayerContent::Smart(_) => {
             v.push(Some((tl!("Edit Contents"), "layer.smartObjects.editContents")));
+            v.push(Some((tl!("Convert to Layers"), "layer.smartObjects.convertToLayers")));
             v.push(Some(("Rasterize Layer", "layer.rasterize.smartObject")));
         }
         LayerContent::Fill(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.fillContent"))),
@@ -79,45 +80,117 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
 /// Render the menu. Pushes `(command, params)` actions; `Value::Null` params mean "invoke like the
 /// menu item" (opens the command's dialog when it has one).
 pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, actions: &mut Vec<(String, Value)>) -> bool {
-    ui.set_min_width(220.0);
-    let mut rename = false;
-    let mut last_sep = true;
-    let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
-    for e in entries(l, on_set, has_selection) {
-        match e {
-            None => {
-                if !last_sep {
-                    ui.separator();
-                }
-                last_sep = true;
-            }
-            Some((label, id)) => {
-                // Skip commands this build doesn't have rather than showing dead items.
-                if photocraft_engine::commands::find(id).is_none() && !crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) {
-                    continue;
-                }
-                last_sep = false;
-                // Enablement is exact for the active layer (or the selection); another row is
-                // selected first when clicked, so its items stay available.
-                let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
-                let enabled = if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
-                    if !on_set {
-                        actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+    crate::widgets::menu_scroll(ui, |ui| {
+        ui.set_min_width(220.0);
+        let mut rename = false;
+        let mut last_sep = true;
+        let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
+        for e in entries(l, on_set, has_selection) {
+            match e {
+                None => {
+                    if !last_sep {
+                        ui.separator();
                     }
-                    actions.push((id.into(), Value::Null));
-                    ui.close();
+                    last_sep = true;
+                }
+                Some((label, id)) => {
+                    // Skip commands this build doesn't have rather than showing dead items.
+                    if photocraft_engine::commands::find(id).is_none() && !crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) {
+                        continue;
+                    }
+                    last_sep = false;
+                    // Enablement is exact for the active layer (or the selection); another row is
+                    // selected first when clicked, so its items stay available.
+                    let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
+                    let enabled = if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
+                    if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
+                        if !on_set {
+                            actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+                        }
+                        actions.push((id.into(), Value::Null));
+                        ui.close();
+                    }
                 }
             }
         }
-    }
-    ui.separator();
-    if ui.button(tl!("Rename Layer…")).clicked() {
-        rename = true;
-        ui.close();
-    }
-    rename
+        ui.separator();
+        if ui.button(tl!("Rename Layer…")).clicked() {
+            rename = true;
+            ui.close();
+        }
+        color_menu(app, ui, l, on_set, actions);
+        rename
+    })
 }
+
+fn color_name(color: LabelColor) -> &'static str {
+    crate::i18n::tr_ctx(crate::i18n::current(), "layerLabel", color.label())
+}
+
+fn common_color(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> Option<LabelColor> {
+    if !on_set {
+        return Some(l.label);
+    }
+    let st = app.session.active()?;
+    let ids = st.selected_layers();
+    let mut labels = ids.iter().filter_map(|id| st.doc.layer(*id).map(|l| l.label));
+    let first = labels.next()?;
+    labels.all(|c| c == first).then_some(first)
+}
+
+fn color_menu(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, actions: &mut Vec<(String, Value)>) {
+    let current = common_color(app, l, on_set);
+    ui.menu_button(tl!("Color"), |ui| {
+        crate::widgets::menu_scroll(ui, |ui| {
+            ui.set_min_width(170.0);
+            for color in LabelColor::ALL {
+                if color == LabelColor::Red {
+                    ui.separator();
+                }
+                if color_button(ui, color, current == Some(color)).clicked() {
+                    let params = if on_set {
+                        json!({"color": color.id()})
+                    } else {
+                        actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+                        json!({"layer": l.id.0, "color": color.id()})
+                    };
+                    actions.push(("layer.setLabelColor".into(), params));
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
+fn color_button(ui: &mut egui::Ui, color: LabelColor, checked: bool) -> egui::Response {
+    use egui::{Atom, Rect, Stroke, StrokeKind, vec2};
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let check_id = ui.id().with(("label-check", color.id()));
+    let swatch_id = ui.id().with(("label-swatch", color.id()));
+    let name = color_name(color);
+    let button = egui::Button::new((Atom::custom(check_id, vec2(14.0, 16.0)), Atom::custom(swatch_id, vec2(16.0, 16.0)), name, Atom::grow())).atom_ui(ui);
+    if checked && let Some(rect) = button.rect(check_id) {
+        crate::icons::paint(ui, rect, "check", 14.0, t.icon);
+    }
+    if let Some(rect) = button.rect(swatch_id) {
+        let rect = Rect::from_center_size(rect.center(), vec2(16.0, 16.0));
+        let p = ui.painter();
+        if let Some((swatch, _)) = t.layer_label_colors(color) {
+            p.rect_filled(rect, t.radius_sm, swatch);
+        } else {
+            let stroke = Stroke::new(1.0, t.text_dim);
+            p.rect_stroke(rect, t.radius_sm, stroke, StrokeKind::Inside);
+            let r = rect.shrink(4.0);
+            p.line_segment([r.left_top(), r.right_bottom()], stroke);
+            p.line_segment([r.right_top(), r.left_bottom()], stroke);
+        }
+    }
+    button.response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), checked, name));
+    button.response
+}
+
+#[cfg(test)]
+mod color_tests;
 
 #[cfg(test)]
 mod tests {
@@ -171,6 +244,43 @@ mod tests {
     }
 
     #[test]
+    fn a_long_layer_menu_stays_inside_a_short_window_and_scrolls() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        let layer = {
+            let st = app.session.active().unwrap();
+            st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+        };
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0));
+        let id = egui::Id::new("layer-menu-probe");
+        let mut content = 0.0;
+        for _ in 0..4 {
+            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                // Opened low in the window, like a right-click on a bottom Layers row.
+                egui::Area::new(id).order(egui::Order::Foreground).default_pos(egui::pos2(300.0, 250.0)).show(ui.ctx(), |ui| {
+                    egui::Frame::menu(ui.style()).show(ui, |ui| {
+                        let start = ui.next_widget_position().y;
+                        show(&app, ui, &layer, false, &mut Vec::new());
+                        content = ui.min_rect().bottom() - start;
+                    });
+                });
+            });
+            out.textures_delta.clear();
+        }
+        let rect = ctx.memory(|m| m.area_rect(id)).expect("the menu was shown");
+        assert!(screen.contains_rect(rect), "the menu moves up and stays inside the window: {rect:?}");
+        assert!(rect.height() < screen.height(), "{rect:?}");
+        let rows = entries(&layer, false, false).iter().flatten().count();
+        assert!(rows >= 15, "Photoshop's layer menu is long: {rows} rows");
+        assert!(content < rect.height() + 1.0, "the rows scroll inside the menu instead of running off the window");
+    }
+
+    #[test]
     fn edit_contents_is_available_only_for_smart_objects() {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
@@ -184,7 +294,7 @@ mod tests {
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
         let edit = ids.iter().position(|id| *id == "layer.smartObjects.editContents").expect("Edit Contents entry");
-        assert_eq!(ids[edit + 1], "layer.rasterize.smartObject");
+        assert_eq!(ids[edit + 1..edit + 3], ["layer.smartObjects.convertToLayers", "layer.rasterize.smartObject"]);
     }
 
     #[test]

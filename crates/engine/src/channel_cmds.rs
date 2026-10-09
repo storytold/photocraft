@@ -520,16 +520,40 @@ pub(crate) fn target_surface<'a>(doc: &'a mut Document, layer: Option<LayerId>, 
     }
 }
 
-/// Channel surface for filters and adjustments (made explicit over the canvas), if the params
-/// target a channel.
-pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, p: &Value) -> Result<Option<&'a mut Surface>> {
-    if !is_channel_target(p) {
+/// The grayscale surface filters and adjustments edit instead of the layer's pixels (made explicit
+/// over the canvas), if the params target one: an alpha channel, the Quick Mask, or the mask of
+/// `layer`.
+pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Option<LayerId>, p: &Value) -> Result<Option<&'a mut Surface>> {
+    if target_of(p) == Target::Pixels {
         return Ok(None);
     }
     let b = doc.bounds();
-    let (surf, _) = target_surface(doc, None, p)?;
+    let (surf, _) = target_surface(doc, layer, p)?;
     materialize(surf, b);
     Ok(Some(surf))
+}
+
+/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table
+/// and the filters. A mask target enables them on any layer with a mask, so ⌘I inverts an
+/// adjustment layer's mask as in Photoshop (#780).
+fn edits_mask(id: &str) -> bool {
+    id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
+        || crate::filters::params_for(id, &Value::Null).is_some()
+}
+
+/// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
+/// layer needs a mask. None when another precondition applies.
+pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
+    if target_of(p) != Target::Mask || !edits_mask(id) {
+        return None;
+    }
+    Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
+}
+
+/// Whether command `id` edits the targeted channel or mask when its params name no `"target"`
+/// (filters, adjustments, paint and fill commands); the shell adds its mask target to these.
+pub fn follows_target(id: &str) -> bool {
+    routed(id)
 }
 
 /// Commands whose target follows the Channels panel.
@@ -539,9 +563,12 @@ fn routed(id: &str) -> bool {
         || id.starts_with("image.adjustments.")
         || matches!(id, "paint.stroke" | "paint.pencil" | "paint.bucket" | "paint.gradient" | "paint.mixerBrush" | "edit.fill" | "image.applyImage")
         || crate::fill_key_cmds::IDS.contains(&id)
+        // Pasting into a targeted mask or channel (#1035).
+        || matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside")
         || matches!(
             id,
             "paint.cloneStamp"
+                | "paint.patternStamp"
                 | "paint.healingBrush"
                 | "paint.spotHealing"
                 | "paint.dodge"
@@ -551,6 +578,7 @@ fn routed(id: &str) -> bool {
                 | "paint.sharpen"
                 | "paint.smudge"
                 | "paint.historyBrush"
+                | "paint.redEye"
         )
 }
 
@@ -1289,7 +1317,15 @@ fn merge(s: &mut Session, p: &Value) -> Result<Value> {
     if srcs.len() < mode.color_channels() {
         return Err(bad(cmd, format!("{mode:?} needs {} grayscale documents, got {}", mode.color_channels(), srcs.len())));
     }
-    let first = s.documents()[srcs[0]].doc.clone();
+    // Each source closes by its *current* index, so a repeated index would shift the later
+    // removals onto a document that was never named (#934). Refuse it rather than guess.
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = srcs.iter().find(|i| !seen.insert(**i)) {
+        return Err(bad(cmd, format!("document {dup} is listed more than once")));
+    }
+    let Some(first) = srcs.first().and_then(|&i| s.documents().get(i)).map(|d| d.doc.clone()) else {
+        return Err(bad(cmd, "bad document index"));
+    };
     let mut planes = Vec::new();
     for &i in &srcs {
         let d = &s.documents()[i].doc;

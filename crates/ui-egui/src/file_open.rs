@@ -99,7 +99,7 @@ impl PhotocraftApp {
         }
         let name = self.open_name(&display_name(path));
         let imported = photocraft_io::import_path_with(&name, std::path::Path::new(path), &photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())?;
-        let warnings = self.opened_document(&name, imported.document, imported.warnings);
+        let warnings = self.opened_document(&name, imported.document, imported.warnings, None);
         self.opened_from(path);
         Ok(warnings)
     }

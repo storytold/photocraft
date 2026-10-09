@@ -1,6 +1,7 @@
 //! Layer › Video Layers (and Rasterize › Video). A video layer holds a stack of frames; the
 //! layer's displayed raster content is the frame at the timeline playhead, kept in sync by [`sync`]
-//! after any edit or navigation. Headless and scriptable. Frame persistence in `.pcraft` is a
+//! after any edit or navigation. Paint, fills and filters edit that displayed content, so [`store`]
+//! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable. Frame persistence in `.pcraft` is a
 //! follow-up; a saved document keeps the current frame as the layer's content.
 
 use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData};
@@ -18,7 +19,7 @@ pub fn sync(doc: &mut Document) {
 
 fn sync_layers(layers: &mut [Layer], cur: usize) {
     for l in layers.iter_mut() {
-        let frame = l.video.as_ref().filter(|v| !v.frames.is_empty()).map(|v| v.frames[cur.min(v.frames.len() - 1)].clone());
+        let frame = l.video.as_ref().and_then(|v| v.frames.get(cur.min(v.frames.len().saturating_sub(1)))).cloned();
         if let Some(f) = frame
             && let LayerContent::Raster(s) = &mut l.content
         {
@@ -26,6 +27,27 @@ fn sync_layers(layers: &mut [Layer], cur: usize) {
         }
         if let Some(ch) = l.children_mut() {
             sync_layers(ch, cur);
+        }
+    }
+}
+
+/// Keep edits made to every video layer's displayed content (paint, fills, filters) by writing it
+/// back into its frame at the playhead. Call before moving the playhead or re-syncing.
+pub fn store(doc: &mut Document) {
+    let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
+    store_layers(&mut doc.layers, cur);
+}
+
+fn store_layers(layers: &mut [Layer], cur: usize) {
+    for l in layers.iter_mut() {
+        if let (Some(v), LayerContent::Raster(s)) = (&mut l.video, &l.content) {
+            let at = cur.min(v.frames.len().saturating_sub(1));
+            if let Some(f) = v.frames.get_mut(at) {
+                *f = s.clone();
+            }
+        }
+        if let Some(ch) = l.children_mut() {
+            store_layers(ch, cur);
         }
     }
 }
@@ -46,6 +68,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 /// Edit the active video layer's [`VideoData`] at the playhead, then re-sync the displayed frame.
 fn edit_video(s: &mut Session, label: &str, f: impl FnOnce(&mut VideoData, usize) -> Result<()>) -> Result<Value> {
     let count = s.edit(label, |doc, active| {
+        store(doc);
         let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
         let id = active.ok_or(EngineError::NoDocument)?;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -69,6 +92,7 @@ fn blank_of(fmt: photocraft_color::PixelFormat) -> Surface {
 
 fn new_blank(s: &mut Session, _p: &Value) -> Result<Value> {
     let id = s.edit("New Blank Video Layer", |doc, active| {
+        store(doc);
         let fmt = doc.pixel_format();
         if doc.timeline.is_none() {
             doc.timeline = Some(Timeline::new(1, 30.0));
@@ -200,6 +224,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
     let frames = load_frames(&path, fmt)?;
     let n = frames.len();
     let id = s.edit("New Video Layer from File", |doc, active| {
+        store(doc);
         if doc.timeline.is_none() {
             doc.timeline = Some(Timeline::new(n, fps));
         } else if let Some(t) = &mut doc.timeline {
@@ -298,7 +323,8 @@ fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
     std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let base = (*st.doc).clone();
+    let mut base = (*st.doc).clone();
+    store(&mut base);
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     let fps = base.timeline.as_ref().map_or(30.0, |t| t.fps).max(1.0);
     let stem = base.name.rsplit_once('.').map_or(base.name.as_str(), |(a, _)| a).to_string();

@@ -168,3 +168,220 @@ fn disabled_without_artboards() {
     let _ = s.execute("layer.new.artboard", json!({}));
     assert!(!s.is_enabled("layer.new.artboardFromLayers"));
 }
+
+/// Runs `cmd` and asserts it fails with a bad-params error that leaves the document, its
+/// revision, its active layer and its history exactly as they were (#931).
+fn assert_rejected(s: &mut Session, cmd: &str, p: Value) -> String {
+    let d = s.active().unwrap();
+    let (before, rev, active, past) = (d.doc.clone(), d.revision, d.active_layer, d.history.past_len());
+    let err = s.execute(cmd, p.clone()).expect_err(&format!("{cmd} {p} should fail"));
+    assert!(matches!(err, EngineError::BadParams { .. }), "{cmd} {p}: {err}");
+    let d = s.active().unwrap();
+    assert!(d.doc == before, "{cmd} {p} changed the document");
+    assert_eq!(d.revision, rev, "{cmd} {p}");
+    assert_eq!(d.active_layer, active, "{cmd} {p}");
+    assert_eq!(d.history.past_len(), past, "{cmd} {p} recorded a history step");
+    err.to_string()
+}
+
+fn board_rect(s: &Session, id: u64) -> Rect {
+    doc(s).layer(LayerId(id)).unwrap().artboard().unwrap().rect
+}
+
+#[test]
+fn new_artboard_rejects_coordinates_past_the_32_bit_range() {
+    let mut s = session(8);
+    // A board flush with the far right edge: x1 = i32::MAX.
+    let r = s.execute("layer.new.artboard", json!({"x": i32::MAX - 50, "y": 0, "width": 50, "height": 50})).unwrap();
+    assert_eq!(r["rect"], json!([i32::MAX - 50, 0, 50, 50]));
+    // Default placement right of it has no room: an error naming the edge, not a wrapped x.
+    let msg = assert_rejected(&mut s, "layer.new.artboard", json!({}));
+    assert!(msg.contains(&i32::MAX.to_string()), "{msg}");
+    assert_rejected(&mut s, "layer.new.artboard", json!({"preset": "iPhone 14"}));
+    // An explicit position still works beside it (the canvas grew to its 300000 px cap).
+    let r = s.execute("layer.new.artboard", json!({"x": 0})).unwrap();
+    assert_eq!(r["rect"], json!([0, 0, 300_000, 80]));
+    let r = s.execute("layer.new.artboard", json!({"preset": "A4", "x": 0, "y": 100})).unwrap();
+    assert_eq!(r["rect"], json!([0, 100, 595, 842]));
+    assert_eq!(doc(&s).artboards().len(), 3);
+
+    // Default placement whose x fits but whose canvas-sized width runs past the edge.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": i32::MAX - 250, "width": 50, "height": 50})).unwrap();
+    assert_rejected(&mut s, "layer.new.artboard", json!({}));
+
+    // Explicit rects that would end past i32::MAX (or start outside it) are rejected, not clamped.
+    let mut s = session(8);
+    for p in [
+        json!({"x": i32::MAX, "width": 50, "height": 50}),
+        json!({"x": i32::MAX - 10, "width": 50, "height": 50}),
+        json!({"y": i32::MAX - 10, "width": 50, "height": 50}),
+        json!({"rect": [i32::MAX - 10, 0, 50, 50]}),
+        json!({"rect": [0, i32::MAX, 50, 50]}),
+        json!({"rect": [3e9, 0, 50, 50]}),
+        json!({"rect": [-3e9, 0, 50, 50]}),
+        json!({"rect": [0, 0, 3e9, 50]}),
+        json!({"x": 0, "width": 3_000_000_000_i64, "height": 50}),
+    ] {
+        assert_rejected(&mut s, "layer.new.artboard", p);
+    }
+    // Representable extremes are fine: flush with either edge.
+    let r = s.execute("layer.new.artboard", json!({"x": i32::MIN, "y": i32::MIN, "width": 50, "height": 50})).unwrap();
+    assert_eq!(r["rect"], json!([i32::MIN, i32::MIN, 50, 50]));
+    let r = s.execute("layer.new.artboard", json!({"rect": [i32::MAX - 50, i32::MAX - 50, 50, 50]})).unwrap();
+    assert_eq!(r["rect"], json!([i32::MAX - 50, i32::MAX - 50, 50, 50]));
+}
+
+#[test]
+fn edit_artboard_rejects_moves_and_sizes_past_the_32_bit_range() {
+    let mut s = session(8);
+    let r = s.execute("layer.new.artboard", json!({"x": i32::MIN, "y": i32::MIN, "width": 50, "height": 50})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    // Moving the board with its contents from one edge to the other needs an offset of about
+    // 2^32, which no layer can be translated by.
+    let msg = assert_rejected(&mut s, "layer.artboard.set", json!({"x": i32::MAX - 50}));
+    assert!(msg.contains("4294967245"), "{msg}");
+    assert_rejected(&mut s, "layer.artboard.set", json!({"y": i32::MAX - 50}));
+    // A rect that would end past the edge is rejected with or without moving the contents.
+    assert_rejected(&mut s, "layer.artboard.set", json!({"x": i32::MAX, "moveContents": false}));
+    assert_rejected(&mut s, "layer.artboard.set", json!({"x": i32::MAX - 10}));
+    assert_rejected(&mut s, "layer.artboard.set", json!({"rect": [i32::MAX - 10, 0, 50, 50], "moveContents": false}));
+    // Without the contents only the board's own rect changes, so the far move is fine.
+    let r = s.execute("layer.artboard.set", json!({"x": i32::MAX - 50, "y": i32::MAX - 50, "moveContents": false})).unwrap();
+    assert_eq!(r["rect"], json!([i32::MAX - 50, i32::MAX - 50, 50, 50]));
+    assert_eq!(board_rect(&s, id), Rect::new(i32::MAX - 50, i32::MAX - 50, i32::MAX, i32::MAX));
+    // Resizing past the edge is rejected instead of shrinking the board to fit.
+    assert_rejected(&mut s, "layer.artboard.set", json!({"width": 51}));
+    assert_rejected(&mut s, "layer.artboard.set", json!({"height": 3_000_000_000_i64}));
+    assert_rejected(&mut s, "layer.artboard.set", json!({"preset": "iPhone 14"}));
+    // A board at the edge can still be shrunk or moved back in.
+    let r = s.execute("layer.artboard.set", json!({"width": 20})).unwrap();
+    assert_eq!(r["rect"], json!([i32::MAX - 50, i32::MAX - 50, 20, 50]));
+    let r = s.execute("layer.artboard.set", json!({"x": 0, "y": 0, "moveContents": false})).unwrap();
+    assert_eq!(r["rect"], json!([0, 0, 20, 50]));
+}
+
+#[test]
+fn artboards_at_ordinary_coordinates_still_place_and_edit() {
+    // Default placement leaves a 100 px gap right of the rightmost board.
+    let mut s = session(8);
+    let r = s.execute("layer.new.artboard", json!({"x": 10, "width": 50, "height": 50})).unwrap();
+    let first = r["layer"].as_u64().unwrap();
+    let r = s.execute("layer.new.artboard", json!({"width": 50})).unwrap();
+    assert_eq!(r["rect"], json!([160, 0, 50, 80]));
+    // Editing moves the board (and its contents) and resizes it.
+    let red = add_square(&mut s, Rect::new(20, 10, 30, 20), [1.0, 0.0, 0.0, 1.0]);
+    s.edit("into board", |doc, _| {
+        let l = doc.remove(red).unwrap();
+        let LayerContent::Group(g) = &mut doc.layer_mut(LayerId(first)).unwrap().content else { panic!("not a group") };
+        g.children.push(l);
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.artboard.set", json!({"layer": first, "x": 200})).unwrap();
+    assert_eq!(r["rect"], json!([200, 0, 50, 50]));
+    assert_eq!(doc(&s).layer(red).unwrap().surface().unwrap().content_bounds(), Rect::new(210, 10, 220, 20));
+    let r = s.execute("layer.artboard.set", json!({"layer": first, "width": 70, "height": 40})).unwrap();
+    assert_eq!(r["rect"], json!([200, 0, 70, 40]));
+}
+
+#[test]
+fn export_rejects_a_board_too_far_from_the_origin() {
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": i32::MIN, "width": 50, "height": 50, "name": "Far"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("photocraft-artboards-931-{}", std::process::id()));
+    let d = dir.to_string_lossy().into_owned();
+    // Moving the board to the origin needs dx = 2^31, one past i32::MAX: an error, not a panic.
+    let err = s.execute("file.export.artboardsToFiles", json!({"dir": d})).unwrap_err().to_string();
+    assert!(err.contains(&i32::MIN.to_string()), "{err}");
+    let pdf = join(&d, "boards.pdf");
+    assert!(s.execute("file.export.artboardsToPdf", json!({"path": pdf})).is_err());
+    assert!(!dir.exists(), "nothing was written");
+    // One pixel in from the edge is representable and still exports.
+    let one = artboard_document(doc(&s), doc(&s).artboards()[0].0);
+    assert!(one.is_err());
+    s.execute("layer.artboard.set", json!({"x": i32::MIN + 1, "moveContents": false})).unwrap();
+    let one = artboard_document(doc(&s), doc(&s).artboards()[0].0).unwrap().unwrap();
+    assert_eq!((one.size.width, one.size.height), (50, 50));
+    assert_eq!(one.artboards()[0].2.rect, Rect::new(0, 0, 50, 50));
+}
+
+/// #1531: a board 40×40 at (10, 10) holding a red square at (10..30)², the artboard active.
+fn board_with_square(s: &mut Session) -> LayerId {
+    add_square(s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let gid = LayerId(s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.artboard.set", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("layer.select", json!({"layer": gid.0})).unwrap();
+    gid
+}
+
+fn red_at(s: &Session, x: i32, y: i32) -> bool {
+    let px = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).px[0];
+    px[0] > 0.99 && px[1] < 0.01 && px[3] > 0.99
+}
+
+#[test]
+fn duplicate_artboard_lands_beside_the_original_with_its_contents() {
+    // #1531: the copy sat exactly on the original, so nothing visible happened.
+    let mut s = session(8);
+    let gid = board_with_square(&mut s);
+    let size = doc(&s).size;
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    let copy = r["layer"].as_u64().unwrap();
+    assert_eq!(board_rect(&s, gid.0), Rect::new(10, 10, 50, 50), "the original stays");
+    // Photoshop: right of the original with the artboard gap, the canvas growing to show it.
+    assert_eq!(board_rect(&s, copy), Rect::new(150, 10, 190, 50));
+    assert!(doc(&s).size.width >= 190, "{:?}", doc(&s).size);
+    assert!(red_at(&s, 155, 15), "the copy's contents moved with it");
+    assert!(red_at(&s, 15, 15), "the original's contents stay");
+    assert_eq!(doc(&s).layer(LayerId(copy)).unwrap().name, "Board copy");
+    // Again from the original: the spot beside it is taken, so the next free one.
+    s.execute("layer.select", json!({"layer": gid.0})).unwrap();
+    let copy2 = s.execute("layer.duplicate", json!({})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(board_rect(&s, copy2), Rect::new(290, 10, 330, 50));
+    // One undo step each: the copy and the canvas growth go together.
+    s.undo();
+    s.undo();
+    assert_eq!(doc(&s).artboards().len(), 1);
+    assert_eq!(doc(&s).size, size);
+    // `inPlace` (the Move tool's ⌥-drag) keeps the copy on the original.
+    s.execute("layer.select", json!({"layer": gid.0})).unwrap();
+    let copy3 = s.execute("layer.duplicate", json!({"inPlace": true})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(board_rect(&s, copy3), Rect::new(10, 10, 50, 50));
+}
+
+#[test]
+fn duplicating_several_artboards_places_each_copy_in_a_free_spot() {
+    let mut s = session(8);
+    let a = board_with_square(&mut s);
+    let b = s.execute("layer.new.artboard", json!({"rect": [10, 100, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    assert_eq!(r["layers"].as_array().unwrap().len(), 2);
+    let boards: Vec<Rect> = doc(&s).artboards().iter().map(|b| b.2.rect).collect();
+    assert_eq!(boards.len(), 4);
+    for (i, x) in boards.iter().enumerate() {
+        for y in &boards[i + 1..] {
+            assert!(x.intersect(y).is_empty(), "{x:?} overlaps {y:?}");
+        }
+    }
+    let canvas = doc(&s).bounds();
+    assert!(boards.iter().all(|r| r.intersect(&canvas) == *r), "{boards:?} in {canvas:?}");
+    // One undo step.
+    s.undo();
+    assert_eq!(doc(&s).artboards().len(), 2);
+}
+
+#[test]
+fn moving_an_artboard_past_the_canvas_grows_it() {
+    // #1531: a board dragged right of the canvas was cut off at the old edge.
+    let mut s = session(8);
+    let gid = board_with_square(&mut s);
+    s.execute("layer.translate", json!({"dx": 200, "dy": 60})).unwrap();
+    assert_eq!(board_rect(&s, gid.0), Rect::new(210, 70, 250, 110));
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (250, 110));
+    assert!(red_at(&s, 215, 75));
+    s.undo();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (100, 80));
+}

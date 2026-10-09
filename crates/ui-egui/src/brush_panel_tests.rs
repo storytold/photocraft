@@ -287,6 +287,56 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
 }
 
 #[test]
+fn airbrush_smoothing_options_and_symmetry_buttons_work() {
+    // #1177: in the default (Photoshop) theme these options-bar buttons did nothing.
+    use egui_kittest::kittest::Queryable;
+    let mut h = app_harness();
+    let brush = |h: &Harness<'static, PhotocraftApp>| h.state().session.tools.brush.clone();
+
+    // The airbrush toggles Build-up, one setBrush each click.
+    let was = brush(&h).build_up;
+    h.get_by_label("Enable airbrush-style build-up effects").click();
+    h.run_steps(3);
+    assert_eq!(brush(&h).build_up, !was);
+    let (id, p) = last_journal(h.state()).unwrap();
+    assert_eq!((id.as_str(), &p["brush"]), ("tools.setBrush", &json!({"buildUp": !was})));
+
+    // The gear opens Photoshop's four smoothing options, each editing the brush.
+    assert!(h.query_by_label("Pulled String Mode").is_none());
+    h.get_by_label("Set additional smoothing options").click();
+    h.run_steps(3);
+    let before = brush(&h).smoothing;
+    for label in ["Pulled String Mode", "Stroke Catch-up", "Catch-up on Stroke End", "Adjust for Zoom"] {
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    }
+    let after = brush(&h).smoothing;
+    assert_eq!(
+        (after.pulled_string, after.catch_up, after.catch_up_on_end, after.adjust_for_zoom),
+        (!before.pulled_string, !before.catch_up, !before.catch_up_on_end, !before.adjust_for_zoom)
+    );
+    assert_eq!(after.amount, before.amount);
+
+    // Symmetry: the menu lists the document's paths and turns symmetry on and off.
+    h.state_mut().run("file.new", json!({"width": 80, "height": 60})).unwrap();
+    h.state_mut().run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[40, 0], [40, 60]]}]}})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Set painting symmetry options").click();
+    h.run_steps(3);
+    h.get_by_label("Work Path").click();
+    h.run_steps(3);
+    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry_path.as_ref().map(|a| a.source.clone());
+    assert_eq!(source(&h).as_deref(), Some("work"));
+    assert_eq!(last_journal(h.state()).unwrap(), ("paint.symmetryFromPath".to_string(), json!({"name": "work"})));
+    h.get_by_label("Set painting symmetry options").click();
+    h.run_steps(3);
+    h.get_by_label("Symmetry Off").click();
+    h.run_steps(3);
+    assert_eq!(source(&h), None);
+    assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
+}
+
+#[test]
 fn mixer_brush_options_update_the_persisted_mixer_settings() {
     use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::MixerBrush);
@@ -463,6 +513,7 @@ fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, Photoc
             crate::shortcuts::handle(app, &ctx);
             crate::panels::options_bar(app, ui);
             window(app, &ctx);
+            crate::paint_mouse::show_picker(app, &ctx);
             crate::i18n::set_current(previous);
         },
         app,
@@ -552,9 +603,13 @@ fn options_bar_reaches_brush_settings_and_the_preset_library() {
     h.get_by_label("Toggle the Brush Settings panel").click();
     h.run_steps(3);
     assert!(!h.state().ui.panels.brush_settings);
-    // The chip's picker lists the session's presets in their groups, not a fixed set of tips.
+    // The chip opens the same picker a right-click on the canvas does, below the chip; it lists
+    // the session's presets in their groups, not a fixed set of tips.
     h.get_by_label("Brush Preset picker").click();
     h.run_steps(3);
+    let chip = h.get_by_label("Brush Preset picker").rect();
+    let at = h.state().ui.brush_picker.expect("the chip opened the picker");
+    assert!((at[0] - chip.left()).abs() < 1.0 && at[1] >= chip.bottom(), "{at:?} below {chip:?}");
     let presets = h.state().session.tools.presets.clone();
     for (group, _) in grouped_presets(&presets) {
         assert!(h.query_by_label(&group).is_some(), "group {group}");
@@ -565,8 +620,72 @@ fn options_bar_reaches_brush_settings_and_the_preset_library() {
     h.run_steps(3);
     assert_eq!(last_journal(h.state()).unwrap(), ("tools.setBrush".to_string(), json!({ "preset": target })));
     assert!(is_current(&paint::presets::find(&presets, &target).unwrap().brush, &h.state().session.tools.brush));
-    // Its Brush Settings button opens the full editor.
+    // A click picks and keeps the picker open; the chip's click closes it again.
+    assert!(h.state().ui.brush_picker.is_some());
+    h.get_by_label("Brush Preset picker").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.brush_picker, None, "the chip toggles the picker");
+    // Its Brush Settings button opens the full editor and closes the picker.
+    h.get_by_label("Brush Preset picker").click();
+    h.run_steps(3);
     h.get_by_label("Brush Settings…").click();
     h.run_steps(3);
     assert!(h.state().ui.panels.brush_settings && h.state().ui.brush_tab == 0);
+    assert_eq!(h.state().ui.brush_picker, None);
+}
+
+/// A preset's context menu (the Brushes tab's and the picker's) renames it in the rename bar.
+#[test]
+fn context_menu_renames_a_preset() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(1, 0);
+    let name = h.state().session.tools.presets[0].name.clone();
+    h.get_by_label(&name).click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Rename Brush…").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.brushes_panel.renaming.as_ref().map(|r| r.name.clone()), Some(name.clone()), "the rename bar opened");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Renamed".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(paint::presets::find(&h.state().session.tools.presets, "Renamed").is_some());
+    assert!(h.state().ui.brushes_panel.renaming.is_none());
+    assert_eq!(last_journal(h.state()).unwrap(), ("brush.presets.rename".to_string(), json!({ "name": name, "newName": "Renamed" })));
+}
+
+#[test]
+fn hand_tool_offers_scale_buttons_and_requests_the_right_view() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app();
+    app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Hand;
+    app.ui.views[0].zoom = 2.0;
+    let mut h = Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::panels::options_bar(app, ui);
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+
+    h.get_by_label("100%").click();
+    h.run_steps(1);
+    assert_eq!(h.state().ui.views[0].zoom, 1.0);
+
+    h.get_by_label("Fit Screen").click();
+    h.run_steps(1);
+    assert!(h.state().ui.views[0].fit_pending);
+    assert!(!h.state().ui.views[0].fill_pending);
+
+    h.get_by_label("Fill Screen").click();
+    h.run_steps(1);
+    assert!(h.state().ui.views[0].fill_pending);
+    assert!(!h.state().ui.views[0].fit_pending);
 }

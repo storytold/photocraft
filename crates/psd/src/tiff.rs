@@ -18,9 +18,12 @@
 //! as in a PSD, and RLE row-count tables follow the container. [`ImageSourceData::from_bytes`]
 //! normalizes either order to the big-endian PSD model, and [`ImageSourceData::to_bytes`] writes
 //! either order, by transcoding every structure it knows field by field ([`transcode`]).
-//! Blocks the transcoder does not know are kept verbatim when no byte swap is needed, and dropped
-//! with a warning otherwise (a byte-swapped block passed through unchanged would be read as
-//! garbage by every other application).
+//! A block the transcoder does not know is never dropped on the way in: its bytes are kept
+//! verbatim with the signature `MIB8` (`46B8` for `8B64`) marking that they are in little-endian
+//! layout ([`TaggedBlock::is_foreign_order`]), so a later save to a little-endian TIFF writes it
+//! back exactly. Only a save to the *other* byte order has to drop such a block, with a warning:
+//! a byte-swapped block passed through unchanged would be read as garbage by every other
+//! application (and would end the block list for readers that stop at a bad signature).
 
 use crate::descriptor::MAX_DEPTH;
 use crate::error::{PsdError, Result};
@@ -164,7 +167,8 @@ impl ImageSourceData {
         for b in &self.global_blocks {
             let mut b = b.clone();
             if b.padding.is_none() {
-                b = padded_block(b.key, b.data);
+                // Padded to 4 like the others; the signature stays (a foreign-order marker included).
+                b.padding = Some(vec![0; (4 - b.data.len() % 4) % 4]);
             }
             blocks.push(b);
         }
@@ -290,8 +294,14 @@ pub mod transcode {
         Ok(t.finish())
     }
 
+    /// A block signature as stored in `little` or big-endian data. Big-endian data (the model)
+    /// also carries the `MIB8` / `46B8` markers of blocks kept from a little-endian file.
     fn is_sig(b: &[u8], little: bool) -> bool {
-        if little { b.starts_with(b"MIB8") || b.starts_with(b"46B8") } else { b.starts_with(b"8BIM") || b.starts_with(b"8B64") }
+        if little {
+            b.starts_with(b"MIB8") || b.starts_with(b"46B8")
+        } else {
+            b.starts_with(b"8BIM") || b.starts_with(b"8B64") || TaggedBlock::is_foreign_order_signature(b)
+        }
     }
 
     fn height(top: i32, bottom: i32) -> usize {
@@ -654,7 +664,38 @@ pub mod transcode {
 
         fn block(&mut self) -> Result<()> {
             let before = self.out.len();
-            self.key()?;
+            // A `MIB8` / `46B8` marker in big-endian data: a block kept verbatim from a
+            // little-endian file. Written back as it was into little-endian output (its `8BIM`
+            // signature reversed, as every signature there), copied as is otherwise.
+            if !self.from.is_little() && TaggedBlock::is_foreign_order_signature(self.r.peek_rest()) {
+                let sig = self.r.array::<4>()?;
+                let mut key = self.r.array::<4>()?;
+                let long = uses_long_length(self.version, &{
+                    let mut k = key;
+                    if self.to.is_little() {
+                        k.reverse();
+                    }
+                    k
+                });
+                let len = self.r.len_field(long)?;
+                let data = self.r.bytes_u64(len)?;
+                if self.to.is_little() {
+                    key.reverse();
+                }
+                self.out.extend_from_slice(&sig);
+                self.out.extend_from_slice(&key);
+                let n = self.out.len();
+                self.out.extend_from_slice(if long { &[0u8; 8] } else { &[0u8; 4] });
+                self.patch_len(n, long, len)?;
+                self.out.extend_from_slice(data);
+                let rest = self.r.peek_rest();
+                let pad = (0..=3usize).find(|&k| k == rest.len() || (k < rest.len() && is_sig(&rest[k..], self.from.is_little()))).unwrap_or(0);
+                let pad_bytes = self.r.bytes(pad)?;
+                self.out.extend_from_slice(pad_bytes);
+                return Ok(());
+            }
+            let sig_at = self.out.len();
+            let sig = self.key()?;
             let key = self.key()?;
             let long = uses_long_length(self.version, &key);
             let len = self.r.len_field(long)?;
@@ -687,6 +728,14 @@ pub mod transcode {
                     self.out.extend_from_slice(data);
                     self.out.extend_from_slice(pad_bytes);
                 }
+                // Little-endian in, big-endian model: keep the bytes as they are, marked.
+                Ok(false) if self.from.is_little() => {
+                    let marker: &[u8; 4] = if &sig == b"8B64" { b"46B8" } else { b"MIB8" };
+                    self.out[sig_at..sig_at + 4].copy_from_slice(marker);
+                    self.patch_len(len_at, long, data.len() as u64)?;
+                    self.out.extend_from_slice(data);
+                    self.out.extend_from_slice(pad_bytes);
+                }
                 Ok(false) => {
                     self.out.truncate(before);
                     self.warnings.push(format!(
@@ -696,6 +745,14 @@ pub mod transcode {
                     ));
                 }
                 Err(e) if self.same_order() => return Err(PsdError::invalid(format!("{} block: {e}", String::from_utf8_lossy(&key)))),
+                Err(e) if self.from.is_little() => {
+                    let marker: &[u8; 4] = if &sig == b"8B64" { b"46B8" } else { b"MIB8" };
+                    self.out[sig_at..sig_at + 4].copy_from_slice(marker);
+                    self.patch_len(len_at, long, data.len() as u64)?;
+                    self.out.extend_from_slice(data);
+                    self.out.extend_from_slice(pad_bytes);
+                    self.warnings.push(format!("{} block ({} bytes) kept as stored, in little-endian layout: {e}", String::from_utf8_lossy(&key), data.len()));
+                }
                 Err(e) => {
                     self.out.truncate(before);
                     self.warnings.push(format!("{} block ({} bytes) dropped: {e}", String::from_utf8_lossy(&key), data.len()));
@@ -719,8 +776,8 @@ pub mod transcode {
                         self.u32()?;
                     }
                 }
-                // lyvr layer version, sn2P and vowv (shape and vector flags), lmgm.
-                b"lyid" | b"lspf" | b"lyvr" | b"sn2P" | b"vowv" | b"lmgm" => {
+                // lyvr layer version, sn2P and vowv (shape and vector flags).
+                b"lyid" | b"lspf" | b"lyvr" | b"sn2P" | b"vowv" => {
                     self.u32()?;
                 }
                 // Text-engine global data: a textual structure, no byte order.
@@ -728,7 +785,9 @@ pub mod transcode {
                 b"lnsr" => {
                     self.key()?;
                 }
-                b"clbl" | b"infx" | b"knko" | b"tsly" | b"iOpa" => {
+                // Advanced Blending flags and fill opacity: one byte, then padding (Adobe spec,
+                // "Additional Layer Information"; `lmgm`/`vmgm` = layer/vector mask hides effects).
+                b"clbl" | b"infx" | b"knko" | b"tsly" | b"lmgm" | b"vmgm" | b"iOpa" => {
                     self.u8()?;
                 }
                 b"lclr" => self.u16s_upto(4)?,
@@ -1838,6 +1897,13 @@ mod tests {
             (*b"lspf", vec![0, 0, 0, 5]),
             (*b"lnsr", b"layr".to_vec()),
             (*b"knko", vec![1, 0, 0, 0]),
+            (*b"knko", vec![2, 0, 0, 0]),
+            (*b"infx", vec![1, 0, 0, 0]),
+            (*b"clbl", vec![0, 0, 0, 0]),
+            (*b"tsly", vec![0, 0, 0, 0]),
+            (*b"lmgm", vec![1, 0, 0, 0]),
+            (*b"vmgm", vec![1, 0, 0, 0]),
+            (*b"iOpa", vec![128, 0, 0, 0]),
         ] {
             let (big, little) = block_rt(key, data.clone());
             if data.len() >= 2 && key != *b"nvrt" {
@@ -2082,21 +2148,46 @@ mod tests {
         let (back, w) = ImageSourceData::from_bytes(&big).unwrap();
         assert!(w.is_empty());
         assert_eq!(back.global_blocks, d.global_blocks);
+        // Big-endian data of unknown layout cannot go into a little-endian file.
         let (little, w) = d.to_bytes(ByteOrder::Little).unwrap();
         assert_eq!(w.iter().filter(|w| w.starts_with("Zzzz block (5 bytes) dropped")).count(), 1, "{w:?}");
         let (back, w) = ImageSourceData::from_bytes(&little).unwrap();
         assert!(w.is_empty());
         assert_eq!(back.global_blocks.iter().map(|b| b.key).collect::<Vec<_>>(), vec![*b"Patt", *b"FMsk"]);
         assert_eq!(known(&back).layer_info, known(&d).layer_info);
-        // A little-endian file with an unknown block: the block is dropped on read, with a warning.
+    }
+
+    #[test]
+    fn unknown_blocks_from_a_little_endian_file_are_kept_with_their_byte_order() {
+        let d = sample_layers();
+        let (little, _) = d.to_bytes(ByteOrder::Little).unwrap();
+        // A little-endian file with a block of unknown layout, among known ones.
         let mut raw = little.clone();
         raw.extend_from_slice(b"MIB8zzzZ");
+        raw.extend_from_slice(&6u32.to_le_bytes());
+        raw.extend_from_slice(&[9, 8, 7, 6, 5, 4, 0, 0]);
+        raw.extend_from_slice(b"MIB8diyl");
         raw.extend_from_slice(&4u32.to_le_bytes());
-        raw.extend_from_slice(&[9, 9, 9, 9]);
+        raw.extend_from_slice(&7u32.to_le_bytes());
         let (back, w) = ImageSourceData::from_bytes(&raw).unwrap();
-        assert_eq!(w.len(), 1);
-        assert!(w[0].starts_with("Zzzz block (4 bytes) dropped"), "{}", w[0]);
+        assert!(w.is_empty(), "{w:?}");
         assert_eq!(known(&back).layer_info, known(&d).layer_info);
+        let kept = back.global_blocks.iter().find(|b| &b.key == b"Zzzz").expect("kept");
+        assert!(kept.is_foreign_order());
+        assert_eq!(kept.signature, *b"MIB8");
+        assert_eq!(kept.data, [9, 8, 7, 6, 5, 4]);
+        // The known block after it was still converted.
+        assert_eq!(back.global_blocks.iter().find(|b| &b.key == b"lyid").unwrap().data, 7u32.to_be_bytes());
+        // Written back to a little-endian TIFF, the bytes are exactly what was read.
+        let (again, w) = back.to_bytes(ByteOrder::Little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let tail = &raw[raw.len() - 18 - 16..];
+        assert!(again.windows(tail.len()).any(|x| x == tail), "foreign-order block restored verbatim");
+        assert_eq!(ImageSourceData::from_bytes(&again).unwrap().0.global_blocks, back.global_blocks);
+        // The big-endian (PSD) model keeps the marker, so a PSD writer can tell it apart.
+        let (big, _) = back.to_bytes(ByteOrder::Big).unwrap();
+        assert!(big.windows(8).any(|x| x == b"MIB8Zzzz"));
+        assert_eq!(ImageSourceData::from_bytes(&big).unwrap().0.global_blocks, back.global_blocks);
     }
 
     #[test]

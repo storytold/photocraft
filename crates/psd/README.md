@@ -4,7 +4,7 @@ A standalone reader and writer for Adobe Photoshop **PSD** (version 1) and **PSB
 
 * Clean-room implementation from Adobe's public *Photoshop File Formats Specification*. Where the spec is silent, behavior follows MIT-licensed psd-tools / ag-psd documentation, and the code comments say so.
 * `#![forbid(unsafe_code)]`. Builds for `wasm32-unknown-unknown`. The core API works on byte slices; the file helpers only exist on native targets.
-* Parsing never panics on malformed input. Limits: dimensions ≤ 300 000; allocations are checked against the remaining input; a single decode produces at most `MAX_DECODED_BYTES` (2 GiB); descriptor nesting depth ≤ 64.
+* Parsing never panics on malformed input. Limits: dimensions ≤ 300 000; allocations are checked against the remaining input; a single decode produces at most `MAX_DECODED_BYTES` (8 GiB on 64-bit targets, 2 GiB on 32-bit targets); descriptor nesting depth ≤ 64.
 
 ## Guarantees
 
@@ -108,6 +108,12 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 | RGBA8 extraction | ✓ | – | – | RGB / gray / CMYK layers; merged image also supports indexed / bitmap / duotone |
 | Builder | – | ✓ | – | RGB / gray / CMYK at 8/16 bit, masks, groups, blend modes, opacity, fill, visibility, clipping |
 | Patterns | ✓ | ✓ | ✓ | `Patt` / `Pat2` / `Pat3`, `.pat`, and `.abr` embedded patterns; non-empty tiles allow in-bounds channel subrectangles, decoded size is capped and PackBits expansion is input-bounded |
+
+Pattern channel subrectangles are padded with zeroes to the tile rectangle. All channel
+metadata and the total padded size are checked against `MAX_DECODED_BYTES` before any
+plane is decoded. Fully populated channels reuse their decoded buffer without a second
+copy; allocations for padded channels return an error on failure. There is no additional
+padding-specific size limit.
 
 ### Preserved raw, not yet typed (parsers planned for M8)
 

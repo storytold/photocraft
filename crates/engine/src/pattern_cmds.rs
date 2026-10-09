@@ -307,7 +307,8 @@ fn new_fill_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("New Pattern Fill Layer", |doc, active| {
         ensure_in_doc(doc, &pat);
         let fill = Fill::Pattern { name: pat.name.clone(), scale, id: pat.id.clone(), angle, link, phase };
-        let l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
+        let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
+        crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern")?;
         let id = doc.insert_above(*active, l);
         *active = Some(id);
         Ok(id)
@@ -413,7 +414,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Pattern…",
             menu: &["Layer", "New Fill Layer"],
             shortcut: None,
-            params: r##"{"pattern":id|name?=first library pattern,"scale":1..1000=100,"angle":deg=0,"link":bool=true,"phase":[x,y]?}"##,
+            params: r##"{"pattern":id|name?=first library pattern,"scale":1..1000=100,"angle":deg=0,"link":bool=true,"phase":[x,y]?,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
             enabled: has_doc,
             journal: true,
             run: new_fill_layer,

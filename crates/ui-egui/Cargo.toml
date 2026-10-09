@@ -21,8 +21,12 @@ photocraft-plugins = { workspace = true }
 photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
+# Only MAX_BRUSH_SIZE: `ui.set brushSize` validates against the Brush Settings range up front.
+photocraft-paint = { workspace = true }
 # Reading files to open them (bounded reads, a clear error for files larger than memory).
 photocraft-format = { workspace = true }
+# Decoding the brand mark's PNG (`brand.rs`); already linked through photocraft-io.
+photocraft-codecs = { workspace = true }
 egui = { workspace = true }
 egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
@@ -37,10 +41,9 @@ rayon = { workspace = true }
 sys-locale = "=0.3.2"
 
 [dev-dependencies]
+# Synthetic raw files for the open-time Camera Raw dialog tests.
+photocraft-raw = { workspace = true, features = ["testgen"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
-# Only for examples/snapshot.rs (offscreen UI renders of real files).
-# Only for examples/interactive_bench.rs (JPEG encode, .pcraft saves).
-photocraft-codecs = { workspace = true }
 # Benchmark helpers for the `--json` benches `cargo xtask perf` runs (in-process RSS, percentiles).
 photocraft-testkit = { workspace = true }
 # Only for examples/perf_scenarios.rs (a 500-brush .abr for the #210 import row).

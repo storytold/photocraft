@@ -15,8 +15,8 @@
 use photocraft_color::BlendMode;
 use photocraft_compose::adjust::{self, Transfer};
 use photocraft_compose::effects::has_effects;
-use photocraft_doc::adjust::ToneSpace;
-use photocraft_doc::{Adjustment, Document, Effect, Fill, FxPaint, GlobalLight, Gradient, Layer, LayerContent, LayerId, Pattern, StrokePosition};
+use photocraft_doc::adjust::{ToneSpace, lut3d_len};
+use photocraft_doc::{Adjustment, Document, Effect, Fill, FxPaint, GlobalLight, Glow, Gradient, Layer, LayerContent, LayerId, Pattern, StrokePosition};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
@@ -342,7 +342,7 @@ enum Cov {
 /// Shader flags for effect passes (keep in sync with compose.wgsl). Coverage `m` of a paint, with
 /// `a` the layer's alpha and `inside` = `a > 0.5/255`:
 /// knockout `m × (1 − a × k)` (k in `p4.w`); gate `inside ? m : 0`; rel `inside ? min(m / a, 1) : 0`;
-/// stroke-out `inside ? (vector ? 0 : 1) : m`.
+/// stroke-out `inside ? (vector ? 0 : (1 − a) / (1 − layer alpha), 1 at an opaque layer) : m`.
 pub const F_KNOCKOUT: u32 = 16;
 /// Effect merge: A already holds the layer; only mix with the backdrop by the layer's opacity.
 pub const F_NO_LAYER: u32 = 32;
@@ -489,9 +489,21 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
+    /// Blending Options › Advanced Blending (knockout, clipped layers blended individually, blend
+    /// interior effects as group, transparency shapes off, masks hiding effects) has no GPU pass:
+    /// documents using it are composited on the CPU (`photocraft_compose::advanced`). Layers at
+    /// Photoshop's defaults pass this check for free.
+    fn check_advanced(&self, layer: &Layer, clipped: &[Layer]) -> Result<(), Unsupported> {
+        if photocraft_compose::advanced_active(layer, clipped) {
+            return Err(Unsupported(format!("Advanced Blending on `{}` (composited on the CPU)", layer.name)));
+        }
+        Ok(())
+    }
+
     /// composite_layer, honouring the layer's channel restrictions.
     fn layer(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot) -> Result<Slot, Unsupported> {
         self.check_blend_if(layer)?;
+        self.check_advanced(layer, clipped)?;
         match photocraft_compose::channel_weights(layer, self.cx.mode) {
             Some(w) => {
                 let before = self.retain(backdrop);
@@ -629,7 +641,7 @@ impl<'a> Planner<'a> {
 
         if let LayerContent::Shape(sh) = &layer.content
             && !visible_clipped.is_empty()
-            && let Some((fill, stroke)) = photocraft_compose::shape_split::split(sh, self.cx.canvas)
+            && let Some((fill, stroke)) = photocraft_compose::shape_split::split(sh, self.cx.canvas, self.cx.depth)
         {
             // The vector stroke goes above the clipped layers: the fill is the clipping base,
             // the stroke is laid over the clipped result, then the masks apply to both
@@ -665,6 +677,7 @@ impl<'a> Planner<'a> {
             // Nothing to draw (an empty layer, or a group of them).
             for c in &visible_clipped {
                 self.check_blend_if(c)?;
+                self.check_advanced(c, &[])?;
             }
             return Ok(backdrop);
         }
@@ -836,6 +849,7 @@ impl<'a> Planner<'a> {
     /// layer's channel restrictions.
     fn atop(&mut self, layer: &'a Layer, base: Slot) -> Result<Slot, Unsupported> {
         self.check_blend_if(layer)?;
+        self.check_advanced(layer, &[])?;
         match photocraft_compose::channel_weights(layer, self.cx.mode) {
             Some(w) => {
                 let before = self.retain(base);
@@ -898,7 +912,7 @@ impl<'a> Planner<'a> {
         // A stroked shape's vector stroke goes above its clipped layers and interior effects
         // (compose::split_parts): the fill and the stroke unmasked, the masks applied after.
         let split = match &layer.content {
-            LayerContent::Shape(sh) if sh.stroke.is_some() => photocraft_compose::shape_split::split(sh, canvas),
+            LayerContent::Shape(sh) if sh.stroke.is_some() => photocraft_compose::shape_split::split(sh, canvas, self.cx.depth),
             _ => None,
         };
         let (mut content, vstroke) = match split {
@@ -999,7 +1013,7 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::OuterGlow(g) = e {
-                let paint = self.fx_paint(&g.paint, anchor);
+                let paint = self.glow_paint(g, anchor);
                 w = self.paint(w, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, 0, clip, sb);
             }
         }
@@ -1037,7 +1051,7 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::InnerGlow(g) = e {
-                let paint = self.fx_paint(&g.paint, anchor);
+                let paint = self.glow_paint(g, anchor);
                 l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
             }
         }
@@ -1110,8 +1124,9 @@ impl<'a> Planner<'a> {
             .collect();
         if !outs.is_empty() {
             let (mut acc, mut cover): (Option<Slot>, Option<Slot>) = (None, None);
-            if outline {
-                // The layer's alpha rides along the coverage (`effects::outline_share`).
+            if outline || !vector_shape {
+                // The layer's alpha rides along the coverage: `effects::outline_share`, and for
+                // pixel layers the stroke's share beneath a partly covering layer (fill < 100 %).
                 let ll = self.retain(l);
                 cover = Some(init(self, ll, None, INIT_COVER, 1.0));
             }
@@ -1235,6 +1250,13 @@ impl<'a> Planner<'a> {
         }
     }
 
+    fn glow_paint(&self, g: &'a Glow, anchor: (f64, f64)) -> Paint<'a> {
+        match &g.paint {
+            FxPaint::Gradient(gradient) => Paint::GlowGradient(gradient, photocraft_compose::effects::glow_gradient_gain(g.range)),
+            p => self.fx_paint(p, anchor),
+        }
+    }
+
     /// An effect pass reading `dst` (A, retained) and the layer `content` (B, retained) with its
     /// paint set up.
     #[allow(clippy::too_many_arguments)]
@@ -1273,14 +1295,13 @@ impl<'a> Planner<'a> {
                 p.params[2][0] = offset.0;
                 p.params[2][1] = offset.1;
                 p.params[2][2] = 1.0;
-                let mut rows = vec![[0.0f32; 4096]; 4];
-                for k in 0..4096 {
-                    let v = photocraft_compose::effects::sample_gradient(g, k as f32 / 4095.0);
-                    for (ch, row) in rows.iter_mut().enumerate() {
-                        row[k] = v[ch];
-                    }
-                }
-                p.lut = Some(rows);
+                p.lut = Some(gradient_rows(g));
+            }
+            Paint::GlowGradient(g, gain) => {
+                // effects::paint_glow: the gradient at 1 - strength, opaque from 1 / gain.
+                p.params[0][0] = *gain;
+                p.params[2][2] = 4.0;
+                p.lut = Some(gradient_rows(g));
             }
             Paint::Pattern(pat, pl) => {
                 p.params[2][2] = 2.0;
@@ -1337,6 +1358,8 @@ enum Paint<'a> {
     None,
     Color([f32; 3]),
     Gradient(&'a Gradient),
+    /// A glow's gradient with its opacity gain (`effects::paint_glow`).
+    GlowGradient(&'a Gradient, f32),
     Pattern(&'a Pattern, Placement),
 }
 
@@ -1426,6 +1449,14 @@ pub fn adjustment_on_gpu(adj: &Adjustment) -> bool {
     !matches!(adj, Adjustment::Levels { space: ToneSpace::Cmyk | ToneSpace::Lab, .. } | Adjustment::Curves { space: ToneSpace::Cmyk | ToneSpace::Lab, .. })
 }
 
+/// A tone transfer as the shader's `t_decode`/`t_encode` exponent (0: the sRGB curve).
+fn transfer_exponent(t: Transfer) -> f32 {
+    match t {
+        Transfer::Srgb => 0.0,
+        Transfer::Gamma(g) => g,
+    }
+}
+
 /// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`.
 pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType) -> Program {
     let mut p = [[0.0f32; 4]; 4];
@@ -1452,11 +1483,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (5, p, None)
         }
         Adjustment::Exposure { exposure, offset, gamma } => {
-            let g = match transfer.for_exposure() {
-                Transfer::Srgb => 0.0,
-                Transfer::Gamma(g) => g,
-            };
-            p[0] = [2f32.powf(*exposure), *offset, gamma.max(0.01), g];
+            p[0] = [2f32.powf(*exposure), *offset, gamma.max(0.01), transfer_exponent(transfer.for_exposure())];
             (6, p, None)
         }
         // RGB space only (see `adjustment_on_gpu`); the rows are the CPU's channel∘master LUTs.
@@ -1474,7 +1501,12 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
         }
         Adjustment::Vibrance { vibrance, saturation } => {
-            p[0] = [vibrance / 100.0, saturation / 100.0, 0.0, 0.0];
+            // compose::adjust::vibrance_px; 32-bit samples aren't clipped at 1.
+            let hi = if depth == photocraft_color::SampleType::F32 { f32::MAX } else { 1.0 };
+            p[0] = [vibrance / 100.0, saturation / 100.0, transfer_exponent(transfer), hi];
+            let b = adjust::VIBRANCE_BOOST;
+            p[1] = [b[0], b[1], b[2], b[3]];
+            p[2] = [b[4], b[5], b[6], 0.0];
             (9, p, None)
         }
         Adjustment::ChannelMixer { matrix, monochrome } => {
@@ -1485,8 +1517,13 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (10, p, None)
         }
         Adjustment::PhotoFilter { color, density, preserve_luminosity } => {
-            p[0] = [color[0], color[1], color[2], *density];
-            p[1][0] = if *preserve_luminosity { 1.0 } else { 0.0 };
+            // compose::adjust: the linear-light matrix, then SetLum on the encoded values (8/16-bit).
+            let linear_doc = depth == photocraft_color::SampleType::F32;
+            let m = adjust::photo_filter_matrix(*color, *density, *preserve_luminosity && linear_doc);
+            for (row, m) in p.iter_mut().zip(m) {
+                *row = [m[0], m[1], m[2], 0.0];
+            }
+            p[3] = [if *preserve_luminosity && !linear_doc { 1.0 } else { 0.0 }, transfer_exponent(transfer), 0.0, 0.0];
             (11, p, None)
         }
         Adjustment::BlackWhite { weights, tint } => {
@@ -1520,11 +1557,12 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
             (15, p, Some(vec![row]))
         }
-        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if *size >= 2 && table.len() >= (*size as usize).pow(3) * 3 => {
+        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
             // The flattened table (n³ RGB triplets) spans as many 4096-wide rows as it needs.
             let n = *size as usize;
-            let len = n * n * n * 3;
-            let rows = table[..len]
+            let rows = lut3d_len(*size)
+                .and_then(|len| table.get(..len))
+                .unwrap_or_default()
                 .chunks(4096)
                 .map(|c| {
                     let mut row = [0.0f32; 4096];
@@ -1538,6 +1576,18 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         // Identity on the CPU too (not evaluated there).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => (0, p, None),
     }
+}
+
+/// A gradient's colour and alpha as four 4096-entry LUT rows (`lut_tex`).
+fn gradient_rows(g: &Gradient) -> Vec<[f32; 4096]> {
+    let mut rows = vec![[0.0f32; 4096]; 4];
+    for k in 0..4096 {
+        let v = photocraft_compose::effects::sample_gradient(g, k as f32 / 4095.0);
+        for (ch, row) in rows.iter_mut().enumerate() {
+            row[k] = v[ch];
+        }
+    }
+    rows
 }
 
 /// Mode index used by the shader (declaration order of [`BlendMode`]).
@@ -1579,6 +1629,15 @@ mod tests {
     use super::*;
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
+
+    #[test]
+    fn color_lookup_with_an_overflowing_stored_size_uploads_no_table() {
+        for size in [1 << 22, u32::MAX] {
+            let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
+            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
+            assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
+        }
+    }
 
     #[test]
     fn slots_are_recycled() {
@@ -1693,5 +1752,36 @@ mod tests {
         d.layers[1].blend_if = Default::default();
         d.layers.push(l);
         assert!(plan(&d).is_err());
+    }
+
+    #[test]
+    fn advanced_blending_falls_back_to_the_cpu() {
+        use photocraft_doc::Knockout;
+        let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut l = Layer::raster("ko", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+        d.layers.push(l.clone());
+        assert!(plan(&d).is_ok(), "defaults stay on the GPU");
+        // Switches with nothing to act on (no effects, no clipped layers) stay on the GPU too.
+        d.layers[1].advanced.blend_interior = true;
+        d.layers[1].advanced.blend_clipped = false;
+        assert!(plan(&d).is_ok());
+        d.layers[1].advanced.knockout = Knockout::Deep;
+        assert!(plan(&d).unwrap_err().0.contains("Advanced Blending"));
+        // Inside groups and clipping groups.
+        d.layers[1].advanced.knockout = Knockout::None;
+        let mut c = l.clone();
+        c.clipped = true;
+        d.layers.push(c.clone());
+        assert!(plan(&d).is_err(), "clipped layers blended individually");
+        d.layers[1].advanced.blend_clipped = true;
+        assert!(plan(&d).is_ok());
+        d.layers[2].advanced.knockout = Knockout::Shallow;
+        assert!(plan(&d).is_err(), "clipped knockout");
+        d.layers.truncate(1);
+        let mut inner = l;
+        inner.advanced.knockout = Knockout::Shallow;
+        d.layers.push(Layer::group("g", vec![inner]));
+        assert!(plan(&d).is_err(), "knockout inside a group");
     }
 }

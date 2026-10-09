@@ -25,6 +25,9 @@
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
 	Close	닫기
+	Minimize	최소화
+	Maximize	최대화
+	Restore	이전 크기로 복원
 	Close All	모두 닫기
 	Close Others	다른 문서 닫기
 	Save	저장
@@ -92,6 +95,7 @@
 	Fill…	채우기…
 	Stroke…	획…
 	Content-Aware Fill…	내용 인식 채우기…
+	Delete and Fill Selection	선택 영역 삭제 및 채우기
 	Content-Aware Scale	내용 인식 비율
 	Puppet Warp	퍼펫 뒤틀기
 	Perspective Warp	원근 뒤틀기
@@ -297,6 +301,7 @@
 	Smart Object	스마트 오브젝트
 	Convert to Smart Object	스마트 오브젝트로 변환
 	Convert to Embedded	포함된 오브젝트로 변환
+	Convert to Layers	레이어로 변환
 	Convert to Linked…	연결된 오브젝트로 변환…
 	Edit Contents	내용 편집
 	Replace Contents…	내용 대체…
@@ -789,6 +794,7 @@
 	Cache Level:	캐시 레벨:
 	Camera Raw isn't open	Camera Raw가 열려 있지 않습니다
 	Cancel	취소
+	Reset	재설정
 	Cancel (Esc)	취소 (Esc)
 	Cancel any current edits (Esc)	현재 편집 취소 (Esc)
 	Cancel current crop operation  (Esc)	현재 자르기 작업 취소  (Esc)
@@ -951,6 +957,7 @@
 	Drag a rectangle around the object	오브젝트를 둘러싸는 사각형을 드래그하세요
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	이미지 위에서 드래그하여 제약 조건 추가; Shift 키로 수평/수직 유지; 오른쪽 클릭하여 삭제.
 	Drag to move the active shape's path or the Work Path	드래그하여 활성 모양의 패스 또는 작업 패스 이동
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	클릭: 기준점 선택 · 드래그: 기준점, 핸들 또는 세그먼트 이동 · {shift}-클릭: 추가 · {alt}-클릭: 하위 패스 전체
 	Draw with the Pen tool (P) or make a work path from a selection.	펜 도구(P)로 그리거나 선택 영역에서 작업 패스를 만드세요.
 	Drop an image or PSD anywhere to open it.	이미지나 PSD를 아무 곳에나 놓아 여세요.
 	Duplicate Layers…	레이어 복제…
@@ -990,6 +997,7 @@
 	Fisheye	어안
 	Fit	맞추기
 	Fit Screen	화면에 맞추기
+	Fill Screen	화면 채우기
 	Fit in View	보기에 맞추기
 	Fixed	고정
 	Fixed Ratio	고정 비율
@@ -1318,6 +1326,7 @@
 	Set background color	배경색 설정
 	Set foreground color	전경색 설정
 	Set painting symmetry options	페인팅 대칭 옵션 설정
+	Symmetry Off	대칭 끔
 	Set shape fill type	모양 채우기 유형 설정
 	Set shape stroke type	모양 획 유형 설정
 	Set the text color	텍스트 색상 설정
@@ -1574,6 +1583,7 @@
 	Paint Bucket Tool	페인트 통 도구
 	Paints from the document's opening state	문서를 열었을 때의 상태로 칠하기
 	Path Selection Tool	패스 선택 도구
+	Direct Selection Tool	직접 선택 도구
 	Pattern Overlay	패턴 오버레이
 	Pen Pressure	펜 압력
 	Pen Tilt	펜 기울기
@@ -1769,12 +1779,14 @@
 	Memory usage mb	메모리 사용량(MB)
 	GPU memory mb	GPU 메모리(MB)
 	Memory usage percent	메모리 사용 비율(%)
+	Low resolution previews	저해상도 미리 보기
 	Missing glyph protection	누락된 글리프 보호
 	Modern	현대적
 	Nearest neighbor	최근접 이웃
 	Never	안 함
 	Normal tip	표준 브러시 끝
 	Open as smart object	스마트 오브젝트로 열기
+	Open in camera raw	Camera Raw에서 열기
 	Open documents as tabs	문서를 탭으로 열기
 	Overscroll	캔버스 밖으로 스크롤
 	Performance	성능
@@ -1890,6 +1902,7 @@
 	System Info…	시스템 정보…
 	System Info	시스템 정보
 	More panels	추가 패널
+	More documents	추가 문서
 	These settings aren't available in PhotoCraft yet.	이 설정은 아직 PhotoCraft에서 사용할 수 없습니다.
 	Graphics	그래픽
 	Reset GPU Backend	GPU 백엔드 초기화
@@ -1918,6 +1931,8 @@
 	Brush Settings…  (F5): every option of this brush	브러시 설정…  (F5): 이 브러시의 모든 옵션
 	Rename Brush…	브러시 이름 바꾸기…
 	Delete Brush	브러시 삭제
+	New Brush Preset…	새 브러시 사전 설정…
+	Brush Preset Options	브러시 사전 설정 옵션
 	Group name	그룹 이름
 	Brush name	브러시 이름
 	Grid view	격자 보기
@@ -1965,6 +1980,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	선택 영역으로 만들 패스가 없습니다: 펜 도구로 그리거나 패스 패널에서 선택하세요.
 	Cancel opening	열기 취소
 	Cancelled opening {name}	{name} 열기를 취소했습니다
+	Developing {name}	{name} 현상 중
 	Cancelled {label}	{label} 작업을 취소했습니다
 	Esc to cancel	Esc 키로 취소
 	Opening {name}	{name} 여는 중
@@ -1981,11 +1997,14 @@
 	Floating point	부동 소수점
 	Use Global Light	전체 조명 사용
 	Native file drag-and-drop is unavailable	파일 드래그 앤 드롭을 사용할 수 없습니다
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland에서는 아직 파일 드래그 앤 드롭을 지원하지 않습니다. 파일 › 열기를 사용하거나 `WAYLAND_DISPLAY= photocraft`로 XWayland에서 PhotoCraft를 실행하세요.
-	Use File › Open to open an image.	파일 › 열기에서 이미지를 여세요.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland에서는 아직 파일 드래그 앤 드롭을 지원하지 않습니다. 파일 › 열기를 사용하거나, 파일 관리자에서 이미지를 복사한 뒤 {paste}(으)로 붙여넣으세요.
+	To drop files, start PhotoCraft under XWayland: `{command}`	파일을 끌어다 놓으려면 XWayland에서 PhotoCraft를 실행하세요: `{command}`
+	Edit › Paste	편집 › 붙여넣기
+	Use File › Open, or paste a copied image with {paste}.	파일 › 열기를 사용하거나, 복사한 이미지를 {paste}(으)로 붙여넣으세요.
 	Invalid {mode} profile	유효하지 않은 {mode} 프로파일
 	Unnamed {mode} profile	이름 없는 {mode} 프로파일
 	Show bounding box when dragging layer	레이어를 드래그할 때 테두리 상자 표시
+	System title bar	시스템 제목 표시줄
 	Mixer Brush Tool	혼합 브러시 도구
 	Rendering Mode	렌더링 모드
 	Automatic (recommended)	자동(권장)
@@ -2012,6 +2031,7 @@
 	Show Selected Region	선택한 영역 표시
 cameraRaw	Light	밝게
 	Camera Raw Filter ({layer})	Camera Raw 필터 ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	밝은 중간 영역
 cameraRaw	Blending	혼합
 cameraRaw	Blacks	검정 계열
@@ -2029,6 +2049,11 @@ cameraRaw	Color	색상
 
 # Type layer thumbnails (#598)
 	Edit Type	문자 편집
+	Eyedroppers:	스포이드:
+	Set Black Point	검은점 설정
+	Set Neutral Gray Point	중성 회색점 설정
+	Set White Point	흰점 설정
+	Unavailable in this color mode	이 색상 모드에서는 사용할 수 없음
 
 # UI scale steps (#611)
 	75%	75%
@@ -2682,6 +2707,7 @@ cameraRaw	Color	색상
 	Frequency	빈도
 	Use tablet pressure to change pen width	태블릿 압력을 사용하여 펜 폭 변경
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	정보
 	Contributors	기여자
@@ -2713,3 +2739,74 @@ cameraRaw	Color	색상
 	% of all commits	전체 커밋 대비 %
 	Lines +/−	줄 +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR {prs}개, 커밋 {commits}개, 줄 +{added} / −{deleted} (Δ {delta}), 바이너리 +{binAdded} / −{binDeleted}, {first} – {last}
+
+# Swatches panel
+	Create new swatch	새 색상 견본 만들기
+	New Swatch…	새 색상 견본…
+	New Swatch Group…	새 색상 견본 그룹…
+	Import Swatches…	색상 견본 가져오기…
+	Replace Swatches…	색상 견본 바꾸기…
+	Export Swatches…	색상 견본 내보내기…
+	Export Swatches for Exchange…	교환용 색상 견본 내보내기…
+	Reset Swatches	색상 견본 재설정
+	Add to Swatches	색상 견본에 추가
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	혼합 조건:
+	Channels:	채널:
+	Knockout	녹아웃
+	Apply At Canvas Bounds	캔버스 경계에 효과 적용
+	Show/Hide All Panels	모든 패널 표시/숨기기
+	Show/Hide Panels	패널 표시/숨기기
+	Could not open	열 수 없음
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: 경로가 올바른 유니코드가 아닙니다. 파일 이름을 바꾼 뒤 다시 여세요.
+	Good	좋음
+	Best	최적
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	내용:
+	Custom Pattern:	사용자 정의 패턴:
+	Foreground Color	전경색
+	Color…	색상…
+	50% Gray	50% 회색
+	Color Adaptation	색상 적응
+	{size} (was {old})	{size} (이전 {old})
+	Cone (Inverted)	원뿔(반전)
+	Domed	돔
+	Domed (Inverted)	돔(반전)
+	Diagonal (Descending)	대각선(내림)
+
+	Red Eye Tool	적목 현상 도구
+	Red Eye	적목 현상
+	Pupil Size	동공 크기
+	Darken Amount	어둡게 하기 정도
+	Click a red pupil to neutralize it	빨간 동공을 클릭하여 보정합니다
+	open source	오픈 소스
+	…and {n} more	…외 {n}개
+	Selection Preview:	선택 영역 미리 보기:
+	Black Matte	검정 배경
+	White Matte	흰색 배경
+
+# Layer colour labels.
+	Seafoam	바다 거품색
+	Indigo	남색
+	Fuchsia	자홍색
+	Large document: redrawing on the CPU	큰 문서: CPU에서 다시 그리는 중
+	This redraw took {seconds} s on the CPU.	이번 다시 그리기는 CPU에서 {seconds}초 걸렸습니다.
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	레이어의 혼합 모드, 불투명도, 표시 여부처럼 문서 전체를 바꾸는 편집은 문서 전체를 다시 그립니다.
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	레이어가 GPU 메모리 예산에 맞지 않습니다. 환경 설정 › 성능에서 메모리 사용량을 늘리면 이 컴퓨터 메모리의 4분의 1까지 예산이 늘어납니다.
+	The GPU compositor wasn't used: {reason}	GPU 합성기를 사용하지 않았습니다: {reason}
+fontWeight	Thin	아주 가늘게
+fontWeight	ExtraLight	더 가늘게
+fontWeight	Light	가늘게
+fontWeight	Regular	보통
+fontWeight	Medium	중간
+fontWeight	SemiBold	반굵게
+fontWeight	Bold	굵게
+fontWeight	ExtraBold	더 굵게
+fontWeight	Black	아주 굵게
+fontWeight	Italic	기울임
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	패턴 스탬프 도구
+	Pattern Stamp	패턴 스탬프
+	Impressionist	인상파

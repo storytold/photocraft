@@ -178,7 +178,7 @@ impl PathWalker {
     }
 
     /// Space steps by stroke time instead of distance ([`SPEED_SPACING_MS`]): faster movement
-    /// spreads them out. Segments without timestamps get one step at their end point.
+    /// spreads them out. Segments without timestamps are spaced by distance.
     pub fn speed_spacing(mut self, interval_ms: f64) -> Self {
         self.speed = Some(interval_ms.max(0.1));
         self
@@ -209,7 +209,10 @@ impl PathWalker {
             self.emit(f, out);
         }
         if len > 1e-9 {
-            match self.speed {
+            // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
+            // line, or input that carries no times) the segment is spaced by distance instead.
+            let dt = p.time - a.time;
+            match self.speed.filter(|_| dt > 0.0 && dt.is_finite()) {
                 None => {
                     while self.next_at <= len + 1e-9 {
                         let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
@@ -219,23 +222,17 @@ impl PathWalker {
                     self.next_at -= len;
                 }
                 Some(iv) => {
-                    let dt = p.time - a.time;
-                    if dt > 0.0 && dt.is_finite() {
-                        self.speed_acc += dt;
-                        let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
-                        let mut n = 0;
-                        while self.speed_acc >= iv && n < max_n {
-                            self.speed_acc -= iv;
-                            let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
-                            self.emit(lerp_pt(&a, &p, f), out);
-                            n += 1;
-                        }
-                        if n == max_n {
-                            self.speed_acc = self.speed_acc.rem_euclid(iv);
-                        }
-                    } else {
-                        // No timestamps: one dab per input point.
-                        self.emit(p, out);
+                    self.speed_acc += dt;
+                    let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
+                    let mut n = 0;
+                    while self.speed_acc >= iv && n < max_n {
+                        self.speed_acc -= iv;
+                        let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
+                        self.emit(lerp_pt(&a, &p, f), out);
+                        n += 1;
+                    }
+                    if n == max_n {
+                        self.speed_acc = self.speed_acc.rem_euclid(iv);
                     }
                 }
             }

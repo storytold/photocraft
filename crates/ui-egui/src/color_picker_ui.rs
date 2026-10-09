@@ -235,76 +235,118 @@ fn grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) -> Mesh
     m
 }
 
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// Room for both component columns, including units, without overflowing the title's width.
+pub(crate) const CONTENT_WIDTH: f32 = 624.0;
+
+/// Draw the picker and its top-right actions. `Some(true)` confirms, `Some(false)` cancels.
+pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
+    ui.set_width(CONTENT_WIDTH);
+    let mut outcome = None;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
+        ui.vertical(|ui| {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                color_field(ui, f);
+            });
+            ui.add_space(10.0);
+            let mut web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
+            if widgets::checkbox(ui, &mut web, tl!("Only Web Colors")).changed() {
+                f.insert("__webOnly".into(), json!(web));
+                set_rgb(f, current(f).rgb, Keep::Nothing);
+            }
+        });
+        ui.vertical(|ui| {
+            ui.horizontal_top(|ui| {
+                swatches(ui, f);
+                let button_width = ui.available_width().max(168.0);
+                ui.vertical(|ui| {
+                    if widgets::primary_button(ui, tl!("OK"), button_width).clicked() {
+                        outcome = Some(true);
+                    }
+                    ui.add_space(6.0);
+                    if widgets::secondary_button(ui, tl!("Cancel"), button_width).clicked() {
+                        outcome = Some(false);
+                    }
+                    ui.add_space(6.0);
+                    // Handled by the dialog host, which has the app (`take_add_swatch`).
+                    if widgets::secondary_button(ui, tl!("Add to Swatches"), button_width).clicked() {
+                        f.insert("__addSwatch".into(), json!(true));
+                    }
+                });
+            });
+            ui.add_space(14.0);
+            let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
+            fields(ui, f, &mode, &current(f));
+        });
+    });
+    outcome
+}
+
+fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
     let now = current(f);
     let (rgb, hsv) = (now.rgb, now.hsv);
     let (fx, fy, fz) = locate(&mode, hsv, rgb);
-    ui.horizontal_top(|ui| {
-        // Colour field.
-        let (field, resp) = ui.allocate_exact_size(vec2(256.0, 256.0), Sense::click_and_drag());
-        ui.painter().add(grid_mesh(field, 32, |x, y| field_color(&mode, fz, x, y)));
-        ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-        let marker = pos2(field.left() + fx * field.width(), field.top() + fy * field.height());
-        ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
-        if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
-            let (x, y) = (((p.x - field.left()) / field.width()).clamp(0.0, 1.0), ((p.y - field.top()) / field.height()).clamp(0.0, 1.0));
-            let c = field_color(&mode, fz, x, y);
-            let keep = match mode.as_str() {
-                "h" => Keep::Hsv([fz * 360.0, x, 1.0 - y]),
-                "s" => Keep::Hsv([x * 360.0, fz, 1.0 - y]),
-                "v" => Keep::Hsv([x * 360.0, 1.0 - y, fz]),
-                _ => Keep::Nothing,
-            };
-            set_rgb(f, c, keep);
+    // Colour field.
+    let (field, resp) = ui.allocate_exact_size(vec2(280.0, 280.0), Sense::click_and_drag());
+    ui.painter().add(grid_mesh(field, 32, |x, y| field_color(&mode, fz, x, y)));
+    ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    let marker = pos2(field.left() + fx * field.width(), field.top() + fy * field.height());
+    ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+        let (x, y) = (((p.x - field.left()) / field.width()).clamp(0.0, 1.0), ((p.y - field.top()) / field.height()).clamp(0.0, 1.0));
+        let c = field_color(&mode, fz, x, y);
+        let keep = match mode.as_str() {
+            "h" => Keep::Hsv([fz * 360.0, x, 1.0 - y]),
+            "s" => Keep::Hsv([x * 360.0, fz, 1.0 - y]),
+            "v" => Keep::Hsv([x * 360.0, 1.0 - y, fz]),
+            _ => Keep::Nothing,
+        };
+        set_rgb(f, c, keep);
+    }
+    // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
+    let (strip, sresp) = ui.allocate_exact_size(vec2(20.0, 280.0), Sense::click_and_drag());
+    ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, hsv, rgb)));
+    let sy = strip.top() + (1.0 - fz) * strip.height();
+    for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
+        let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
+        ui.painter().add(egui::Shape::convex_polygon(tri, t.text, Stroke::NONE));
+    }
+    if let Some(p) = sresp.interact_pointer_pos().filter(|_| sresp.dragged() || sresp.clicked()) {
+        let z = 1.0 - ((p.y - strip.top()) / strip.height()).clamp(0.0, 1.0);
+        let h = match mode.as_str() {
+            "h" => Some([z * 360.0, hsv[1], hsv[2]]),
+            "s" => Some([hsv[0], z, hsv[2]]),
+            "v" => Some([hsv[0], hsv[1], z]),
+            _ => None,
+        };
+        match h {
+            Some(h) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
+            None => set_rgb(f, slider_color(&mode, z, hsv, rgb), Keep::Nothing),
         }
-        ui.add_space(6.0);
-        // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
-        let (strip, sresp) = ui.allocate_exact_size(vec2(20.0, 256.0), Sense::click_and_drag());
-        ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, hsv, rgb)));
-        let sy = strip.top() + (1.0 - fz) * strip.height();
-        for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
-            let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
-            ui.painter().add(egui::Shape::convex_polygon(tri, t.text, Stroke::NONE));
+    }
+}
+
+fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    let rgb = current(f).rgb;
+    ui.allocate_ui_with_layout(vec2(64.0, 104.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+        // new / current swatches.
+        ui.label(egui::RichText::new(tl!("new")).size(11.0).color(t.text_dim));
+        let (sw, _) = ui.allocate_exact_size(vec2(64.0, 72.0), Sense::hover());
+        let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
+        ui.painter().rect_filled(Rect::from_min_size(sw.min, vec2(64.0, 36.0)), 0.0, c32(rgb));
+        let cur = Rect::from_min_size(sw.min + vec2(0.0, 36.0), vec2(64.0, 36.0));
+        ui.painter().rect_filled(cur, 0.0, c32(orig));
+        ui.painter().rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+        let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
+        click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
+        if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
+            set_rgb(f, orig, Keep::Nothing);
         }
-        if let Some(p) = sresp.interact_pointer_pos().filter(|_| sresp.dragged() || sresp.clicked()) {
-            let z = 1.0 - ((p.y - strip.top()) / strip.height()).clamp(0.0, 1.0);
-            let h = match mode.as_str() {
-                "h" => Some([z * 360.0, hsv[1], hsv[2]]),
-                "s" => Some([hsv[0], z, hsv[2]]),
-                "v" => Some([hsv[0], hsv[1], z]),
-                _ => None,
-            };
-            match h {
-                Some(h) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
-                None => set_rgb(f, slider_color(&mode, z, hsv, rgb), Keep::Nothing),
-            }
-        }
-        ui.add_space(14.0);
-        ui.vertical(|ui| {
-            // new / current swatches.
-            ui.label(egui::RichText::new(tl!("new")).size(11.0).color(t.text_dim));
-            let (sw, _) = ui.allocate_exact_size(vec2(64.0, 72.0), Sense::hover());
-            let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
-            ui.painter().rect_filled(Rect::from_min_size(sw.min, vec2(64.0, 36.0)), 0.0, c32(rgb));
-            let cur = Rect::from_min_size(sw.min + vec2(0.0, 36.0), vec2(64.0, 36.0));
-            ui.painter().rect_filled(cur, 0.0, c32(orig));
-            ui.painter().rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-            let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
-            if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
-                set_rgb(f, orig, Keep::Nothing);
-            }
-            ui.label(egui::RichText::new(tl!("current")).size(11.0).color(t.text_dim));
-            ui.add_space(10.0);
-            let mut web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
-            if widgets::checkbox(ui, &mut web, tl!("Only Web Colors")).changed() {
-                f.insert("__webOnly".into(), json!(web));
-                set_rgb(f, rgb, Keep::Nothing);
-            }
-        });
-        ui.add_space(10.0);
-        ui.vertical(|ui| fields(ui, f, &mode, &now));
+        ui.label(egui::RichText::new(tl!("current")).size(11.0).color(t.text_dim));
     });
 }
 
@@ -314,86 +356,106 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
     let &Components { rgb, hsv, lab, cmyk } = now;
     let mut edit: Option<([f32; 3], Keep)> = None;
     let mut new_mode: Option<&str> = None;
-    egui::Grid::new("cp-fields").num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
-        let vals = [hsv[0], hsv[1] * 100.0, hsv[2] * 100.0, rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0];
-        let units = ["°", "%", "%", "", "", ""];
-        let ranges = [0.0..=360.0, 0.0..=100.0, 0.0..=100.0, 0.0..=255.0, 0.0..=255.0, 0.0..=255.0];
-        for i in 0..6 {
-            let (key, label) = MODES[i];
-            let on = mode == key;
-            let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
-            ui.painter().circle_stroke(r.center(), 5.5, Stroke::new(1.2, if on { t.accent } else { t.text_faint }));
-            if on {
-                ui.painter().circle_filled(r.center(), 3.0, t.accent);
-            }
-            if resp.clicked() {
-                new_mode = Some(key);
-            }
-            ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-            let mut v = vals[i].round();
-            if widgets::value_field(ui, &mut v, ranges[i].clone(), "", 54.0).changed() {
-                let (mut h, mut c) = (hsv, rgb);
-                if i < 3 {
-                    h[i] = if i == 0 { v } else { v / 100.0 };
-                    c = hsv_to_rgb(h[0], h[1], h[2]);
-                    edit = Some((c, Keep::Hsv(h)));
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 28.0;
+        ui.vertical(|ui| {
+            egui::Grid::new("cp-hsb-rgb").min_row_height(0.0).num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
+                let vals = [hsv[0], hsv[1] * 100.0, hsv[2] * 100.0, rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0];
+                let units = ["°", "%", "%", "", "", ""];
+                let ranges = [0.0..=360.0, 0.0..=100.0, 0.0..=100.0, 0.0..=255.0, 0.0..=255.0, 0.0..=255.0];
+                for i in 0..6 {
+                    let (key, label) = MODES[i];
+                    let on = mode == key;
+                    let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+                    ui.painter().circle_stroke(r.center(), 5.5, Stroke::new(1.2, if on { t.accent } else { t.text_faint }));
+                    if on {
+                        ui.painter().circle_filled(r.center(), 3.0, t.accent);
+                    }
+                    if resp.clicked() {
+                        new_mode = Some(key);
+                    }
+                    ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
+                    let mut v = vals[i].round();
+                    if widgets::value_field(ui, &mut v, ranges[i].clone(), "", 54.0).changed() {
+                        let (mut h, mut c) = (hsv, rgb);
+                        if i < 3 {
+                            h[i] = if i == 0 { v } else { v / 100.0 };
+                            c = hsv_to_rgb(h[0], h[1], h[2]);
+                            edit = Some((c, Keep::Hsv(h)));
+                        } else {
+                            c[i - 3] = v / 255.0;
+                            edit = Some((c, Keep::Nothing));
+                        }
+                    }
+                    ui.label(egui::RichText::new(units[i]).color(t.text_faint));
+                    ui.end_row();
+                    if i == 2 {
+                        ui.allocate_exact_size(vec2(0.0, 6.0), Sense::hover());
+                        ui.end_row();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(egui::RichText::new("#").color(t.text_dim));
+                // While the field has focus it shows what is being typed, not the colour: rebuilding it from
+                // the colour every frame would throw away every keystroke until six valid digits were in.
+                let id = ui.id().with("cp-hex");
+                let typing = if ui.memory(|m| m.has_focus(id)) { ui.data(|d| d.get_temp::<String>(id)) } else { None };
+                let mut h = typing.unwrap_or_else(|| hex(rgb).trim_start_matches('#').to_string());
+                let r = ui.add(egui::TextEdit::singleline(&mut h).id(id).char_limit(6).desired_width(80.0).font(crate::theme::mono(12.0)));
+                if r.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(id, h.clone()));
                 } else {
-                    c[i - 3] = v / 255.0;
+                    ui.data_mut(|d| d.remove::<String>(id));
+                }
+                if r.changed()
+                    && let Some(c) = parse_hex(&h)
+                {
                     edit = Some((c, Keep::Nothing));
                 }
+            });
+        });
+        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(3).spacing([6.0, 4.0]).show(ui, |ui| {
+            for (i, (label, v, range)) in [("L:", lab[0], 0.0..=100.0), ("a:", lab[1], -128.0..=127.0), ("b:", lab[2], -128.0..=127.0)].into_iter().enumerate()
+            {
+                ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
+                let mut x = v.round();
+                if widgets::value_field(ui, &mut x, range, "", 54.0).changed() {
+                    let mut l = lab;
+                    l[i] = x;
+                    edit = Some((photocraft_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
+                }
+                ui.label("");
+                ui.end_row();
             }
-            ui.label(egui::RichText::new(units[i]).color(t.text_faint));
+            ui.allocate_exact_size(vec2(0.0, 6.0), Sense::hover());
             ui.end_row();
-        }
-        for (i, (label, v, range)) in [("L:", lab[0], 0.0..=100.0), ("a:", lab[1], -128.0..=127.0), ("b:", lab[2], -128.0..=127.0)].into_iter().enumerate() {
-            ui.label("");
-            ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-            let mut x = v.round();
-            if widgets::value_field(ui, &mut x, range, "", 54.0).changed() {
-                let mut l = lab;
-                l[i] = x;
-                edit = Some((photocraft_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
+            for (i, label) in ["C:", "M:", "Y:", "K:"].into_iter().enumerate() {
+                ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
+                let mut x = (cmyk[i] * 100.0).round();
+                if widgets::value_field(ui, &mut x, 0.0..=100.0, "", 54.0).changed() {
+                    let mut k = cmyk;
+                    k[i] = x / 100.0;
+                    edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
+                }
+                ui.label(egui::RichText::new("%").color(t.text_faint));
+                ui.end_row();
             }
-            ui.label("");
-            ui.end_row();
-        }
-        for (i, label) in ["C:", "M:", "Y:", "K:"].into_iter().enumerate() {
-            ui.label("");
-            ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-            let mut x = (cmyk[i] * 100.0).round();
-            if widgets::value_field(ui, &mut x, 0.0..=100.0, "", 54.0).changed() {
-                let mut k = cmyk;
-                k[i] = x / 100.0;
-                edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
-            }
-            ui.label(egui::RichText::new("%").color(t.text_faint));
-            ui.end_row();
-        }
-        ui.label("");
-        ui.label(egui::RichText::new("#").color(t.text_dim));
-        // While the field has focus it shows what is being typed, not the colour: rebuilding it from
-        // the colour every frame would throw away every keystroke until six valid digits were in.
-        let id = ui.id().with("cp-hex");
-        let typing = if ui.memory(|m| m.has_focus(id)) { ui.data(|d| d.get_temp::<String>(id)) } else { None };
-        let mut h = typing.unwrap_or_else(|| hex(rgb).trim_start_matches('#').to_string());
-        let r = ui.add(egui::TextEdit::singleline(&mut h).id(id).char_limit(6).desired_width(54.0).font(crate::theme::mono(12.0)));
-        if r.has_focus() {
-            ui.data_mut(|d| d.insert_temp(id, h.clone()));
-        } else {
-            ui.data_mut(|d| d.remove::<String>(id));
-        }
-        if r.changed()
-            && let Some(c) = parse_hex(&h)
-        {
-            edit = Some((c, Keep::Nothing));
-        }
-        ui.end_row();
+        });
     });
     if let Some(m) = new_mode {
         f.insert("__mode".into(), json!(m));
     }
     if let Some((c, keep)) = edit {
         set_rgb(f, c, keep);
+    }
+}
+
+/// Add to Swatches was clicked: add the picked colour to the Swatches panel.
+pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
+    if f.remove("__addSwatch").and_then(|v| v.as_bool()) == Some(true) {
+        crate::swatches_ui::add_from_picker(app, f);
     }
 }
 
@@ -425,6 +487,7 @@ mod tests {
         let mut f = Map::new();
         f.insert("__colorPicker".into(), json!("foreground"));
         f.insert("color".into(), json!(color));
+        f.insert("__orig".into(), json!(color));
         let mut h = Harness::builder().with_size(vec2(700.0, 500.0)).build_ui_state(
             |ui, f: &mut Map<String, Value>| {
                 if ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -486,6 +549,84 @@ mod tests {
             h.key_press(egui::Key::Tab);
             h.run_steps(2);
             assert_eq!(color(&h), hex(want), "field {field} <- {typed}");
+        }
+    }
+
+    #[test]
+    fn picker_places_actions_above_two_columns_and_web_colors_under_the_field() {
+        let h = picker("#336699");
+        let inputs: Vec<_> = h.query_all_by_role(Role::SpinButton).map(|n| n.rect()).collect();
+        assert_eq!(inputs.len(), 13);
+        let (hue, red, lightness, cyan, black) = (inputs[0], inputs[3], inputs[6], inputs[9], inputs[12]);
+        assert!(lightness.left() > hue.right(), "Lab is beside HSB, not below RGB");
+        assert!((lightness.top() - hue.top()).abs() < 1.0);
+        assert!((cyan.top() - red.top()).abs() < 1.0, "CMYK and RGB start at the same height");
+        let ok = h.get_by_label("OK").rect();
+        let cancel = h.get_by_label("Cancel").rect();
+        assert!(ok.left() > hue.left() && ok.bottom() < hue.top(), "actions are above the values and beside the preview: {ok:?}, {hue:?}");
+        assert!((ok.left() - cancel.left()).abs() < 1.0 && cancel.top() > ok.bottom());
+        assert_eq!(h.query_all_by_label("OK").count(), 1);
+        let web = h.get_by_label("Only Web Colors").rect();
+        assert!(web.left() < hue.left() && web.top() > hue.bottom());
+        // The full dialog should fit even in PhotoCraft's minimum 760 x 480 window.
+        assert!(black.bottom() - ok.top() < 360.0);
+        assert!(black.right() - web.left() < 600.0);
+        let hex = h.get_by_role(Role::TextInput).rect();
+        assert!(hex.left() < lightness.left() && hex.top() > inputs[5].bottom());
+    }
+
+    #[test]
+    fn web_colors_and_current_swatch_still_update_the_picker() {
+        let mut h = picker("#123456");
+        h.get_by_label("Only Web Colors").click();
+        h.run_steps(2);
+        assert_eq!(color(&h), "#003366");
+        h.get_by_label("Only Web Colors").click();
+        h.run_steps(2);
+        h.get_by_label("Click to restore the current colour").click();
+        h.run_steps(2);
+        assert_eq!(color(&h), "#123456");
+    }
+
+    #[test]
+    fn side_buttons_and_keyboard_confirm_or_cancel_without_changing_the_other_color() {
+        for target in ["foreground", "background"] {
+            for action in ["OK", "Cancel", "Enter", "Escape"] {
+                let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+                PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+                let original_fg = h.state().session.tools.foreground;
+                let original_bg = h.state().session.tools.background;
+                let id = open(h.state_mut(), target);
+                h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#336699"));
+                h.run_steps(4);
+                let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(760.0, 480.0));
+                for node in h.query_all_by_role(Role::SpinButton) {
+                    assert!(screen.contains_rect(node.rect()), "numeric inputs fit the minimum window");
+                }
+                for label in ["OK", "Cancel", "Only Web Colors"] {
+                    assert!(screen.contains_rect(h.get_by_label(label).rect()), "{label} fits the minimum window");
+                }
+                match action {
+                    "Enter" => h.key_press(egui::Key::Enter),
+                    "Escape" => h.key_press(egui::Key::Escape),
+                    _ => h.get_by_label(action).click(),
+                }
+                h.run_steps(3);
+                assert!(h.state().ui.dialogs.is_empty(), "{target}: {action} closes the picker");
+                let confirm = matches!(action, "OK" | "Enter");
+                let tools = &h.state().session.tools;
+                if confirm && target == "foreground" {
+                    assert_eq!(hex([tools.foreground[0], tools.foreground[1], tools.foreground[2]]), "#336699");
+                } else {
+                    assert_eq!(tools.foreground, original_fg);
+                }
+                if confirm && target == "background" {
+                    assert_eq!(hex([tools.background[0], tools.background[1], tools.background[2]]), "#336699");
+                } else {
+                    assert_eq!(tools.background, original_bg);
+                }
+            }
         }
     }
 

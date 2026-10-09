@@ -16,6 +16,17 @@ pub fn factor(doc: &Document) -> u32 {
     ((px as f64 / PREVIEW_PIXELS as f64).sqrt().ceil() as u32).max(2)
 }
 
+/// Whether live previews may run on a reduced copy (Preferences › Performance › Low Resolution
+/// Previews, on by default). Off, every live preview renders at full resolution.
+pub fn reduced_previews(app: &crate::PhotocraftApp) -> bool {
+    app.session.prefs().performance.low_resolution_previews
+}
+
+/// Downscale factor of a live preview of `doc`: [`factor`], or 1 when reduced previews are off.
+pub fn preview_factor(doc: &Document, reduced: bool) -> u32 {
+    if reduced { factor(doc) } else { 1 }
+}
+
 pub use photocraft_compose::proxy::{downsample, proxy_document};
 
 #[cfg(test)]
@@ -32,6 +43,9 @@ mod tests {
         let k = factor(&big);
         assert!((3..=5).contains(&k), "{k}");
         assert!(big.size.area() / (k as u64 * k as u64) <= PREVIEW_PIXELS);
+        assert_eq!(preview_factor(&big, true), k);
+        assert_eq!(preview_factor(&big, false), 1);
+        assert_eq!(preview_factor(&small, true), 1);
     }
 
     #[test]

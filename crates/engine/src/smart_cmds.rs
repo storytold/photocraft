@@ -156,6 +156,33 @@ fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surf
     s
 }
 
+/// An SVG source rendered at `scale` times its own size (cached per scale), so a vector smart
+/// object stays sharp however it is placed.
+pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<SourceImage> {
+    let mut h = blake3::Hasher::new();
+    h.update(bytes);
+    h.update(&scale.to_bits().to_le_bytes());
+    let key = (*h.finalize().as_bytes(), fmt);
+    if let Some(img) = cache_get(&key) {
+        return Ok(img);
+    }
+    let buf = photocraft_io::svg::rasterize(bytes, scale as f32).map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+    let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: buf.rect };
+    cache_put(key, img.clone());
+    Ok(img)
+}
+
+/// The scale a vector source is rasterised at for its placement: the larger axis scale of the
+/// transform in 1/16 steps (so nudges reuse the cache), between 1/16 and 64.
+fn vector_scale(sm: &SmartObject) -> f64 {
+    let [a, b, c, d, ..] = sm.transform.m;
+    let k = (a * a + b * b).sqrt().max((c * c + d * d).sqrt());
+    if !k.is_finite() {
+        return 1.0;
+    }
+    ((k * 16.0).ceil() / 16.0).clamp(1.0 / 16.0, 64.0)
+}
+
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
     let key = cache_key(bytes, fmt);
@@ -295,6 +322,25 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
 /// linked file, or a PSD placed layer without embedded data): callers keep the existing cache.
 pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
+    // A vector source is rendered at the placement's scale, and the placement is divided by
+    // that scale so the rendered pixels land where the source units would.
+    if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(&bytes) {
+        let k = vector_scale(sm);
+        let img = svg_source_image(&bytes, doc.pixel_format(), k)?;
+        let placed = match &sm.perspective {
+            Some(p) => {
+                let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
+                let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
+                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)
+            }
+            None => {
+                let [a, b, c, d, e, f] = sm.transform.m;
+                let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
+                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)
+            }
+        };
+        return Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())));
+    }
     let img = match sm.stack_mode {
         Some(mode) => stack_image(&name, &bytes, doc.pixel_format(), mode)?,
         None => source_image(&name, &bytes, doc.pixel_format())?,
@@ -591,7 +637,7 @@ fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("New Smart Object via Copy", |doc, active| {
         let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
         let mut copy = src.duplicate();
-        copy.name = format!("{} copy", src.name);
+        copy.name = doc.copy_name(&src.name);
         if let LayerContent::Smart(sm) = &mut copy.content {
             // Independent contents: resolve to embedded bytes and drop the shared PSD uuid.
             if let Some((file_name, bytes)) = source_bytes(&doc.metadata, &sm.source) {
@@ -646,6 +692,12 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
+    // Already open for editing: switch to that document rather than opening another copy.
+    if let Some(index) = s.smart_links.iter().find(|l| l.parent == parent && l.layer == id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
+    {
+        s.set_active(index);
+        return Ok(json!({"document": index, "parentLayer": id.0}));
+    }
     let (name, bytes) = source_bytes(&st.doc.metadata, &smart(&st.doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
     let mut child = decode_source(&name, &bytes)?;
     // Bundles keep their document id; each open copy needs its own.
@@ -912,6 +964,14 @@ pub fn specs() -> Vec<CommandSpec> {
             |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
             |s, _| update_all(s)
         ),
+        spec!(
+            "layer.smartObjects.convertToLayers",
+            "Convert to Layers",
+            SO,
+            r##"{"layer":id?} (contents unpacked at the placement: one layer, or a group named after the smart object; smart filters are discarded)"##,
+            has_smart,
+            unpack::convert_to_layers
+        ),
         spec!("layer.smartObjects.convertToEmbedded", "Convert to Embedded", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
             set_source(s, p, "Convert to Embedded", true, |meta, src| {
                 let (file_name, bytes) = source_bytes(meta, src).ok_or_else(|| other("the linked file can't be read"))?;
@@ -1003,6 +1063,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.smartFilter.move", "Move Smart Filter", &[], r##"{"layer":id?,"index":u32?,"to":u32}"##, has_smart_filters, move_filter),
     ]
 }
+
+mod unpack;
 
 #[cfg(test)]
 mod tests;

@@ -15,6 +15,7 @@ pub mod analysis_cmds;
 pub mod artboard_cmds;
 pub mod automate_cmds;
 pub mod brush_cmds;
+pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
 pub mod build_info;
 mod canvas_geom;
@@ -40,9 +41,12 @@ pub mod fx_view_cmds;
 pub mod gallery_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
+pub mod hidden_target;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
+pub mod layer_copy_cmds;
+pub mod layer_label_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
@@ -55,6 +59,7 @@ pub mod mode_cmds;
 pub mod multichannel_cmds;
 pub mod notes_cmds;
 pub mod paint_cmds;
+mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod photo_cmds;
 pub mod pick_cmds;
@@ -66,6 +71,7 @@ pub mod preset_store;
 pub mod presets;
 pub mod print_cmds;
 pub mod proof_sim;
+pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
 mod scratch;
@@ -76,6 +82,7 @@ pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
 pub mod stamp_cmds;
+pub mod swatch_cmds;
 pub mod symmetry_cmds;
 mod timeline_cmds;
 pub mod transform_cmds;
@@ -148,7 +155,7 @@ pub struct DocState {
     pub active_layer: Option<LayerId>,
     /// Every selected layer in the Layers panel (⌘/⇧-click), in selection order. Like
     /// `active_layer`, selecting is not a history step, but undo and redo restore the layers each
-    /// state targeted when it was created; see [`DocState::selected_layers`].
+    /// state targeted when the next step was taken; see [`DocState::selected_layers`].
     pub selected_layers: Vec<LayerId>,
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
@@ -268,8 +275,9 @@ pub struct Session {
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
-    /// Layer › Layer Style › Copy Layer Style: effects, blend mode and fill opacity.
-    pub style_clipboard: Option<(photocraft_doc::Effects, photocraft_color::BlendMode, f32)>,
+    /// Layer › Layer Style › Copy Layer Style: effects, blend mode, fill opacity and the Advanced
+    /// Blending switches.
+    pub style_clipboard: Option<(photocraft_doc::Effects, photocraft_color::BlendMode, f32, photocraft_doc::AdvancedBlending)>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
@@ -301,8 +309,9 @@ pub struct Session {
     pub preset_store: Option<preset_store::PresetStore>,
     /// Window › Actions. The list persists with the preset store when one is attached.
     pub actions: actions_cmds::ActionState,
-    /// Per-step gate for `actions.play`. Untrusted sessions (MCP, the control channel) install
-    /// the same check a top-level command sees. `None` runs every step, which is what a local
+    /// Gate for every command the session runs, including the ones a command runs on its own
+    /// behalf and `actions.play` steps. Untrusted sessions (MCP, the control channel) install
+    /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// Background jobs (see [`jobs`]).
@@ -390,7 +399,15 @@ impl Session {
             self.cancel_jobs_on(id);
         }
         let d = self.docs.remove(index);
-        self.active = if self.docs.is_empty() { None } else { Some(index.min(self.docs.len() - 1)) };
+        self.active = if self.docs.is_empty() {
+            None
+        } else {
+            Some(match self.active {
+                Some(active) if active > index => active - 1,
+                Some(active) if active < index => active,
+                _ => index.min(self.docs.len() - 1),
+            })
+        };
         Some(d)
     }
 
@@ -412,14 +429,30 @@ impl Session {
 
     /// Is the command currently runnable? (drives menu enablement)
     pub fn is_enabled(&self, id: &str) -> bool {
-        commands::find(id).is_some_and(|s| (s.enabled)(self).is_ok() && self.job_conflict(id, s.journal).is_none())
+        self.is_enabled_with(id, &Value::Null)
+    }
+
+    /// [`Self::is_enabled`] for a call with `params`: their `"target"` can enable a command, as a
+    /// targeted layer mask enables Image › Adjustments › Invert on an adjustment layer (#780).
+    pub fn is_enabled_with(&self, id: &str, params: &Value) -> bool {
+        self.disabled_reason_with(id, params).is_none()
     }
 
     /// Why the command can't run now (None = it can): its own precondition, or a background job
     /// running on the active document.
     pub fn disabled_reason(&self, id: &str) -> Option<String> {
+        self.disabled_reason_with(id, &Value::Null)
+    }
+
+    /// [`Self::disabled_reason`] for a call with `params`.
+    pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
         let Some(s) = commands::find(id) else { return Some(format!("unknown command `{id}`")) };
-        (s.enabled)(self).err().or_else(|| self.job_conflict(id, s.journal))
+        self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
+    }
+
+    /// The command's own precondition for a call with `params` (their target filled in).
+    fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 
     /// Apply an undoable edit to the active document.
@@ -431,6 +464,9 @@ impl Session {
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
         let previous_active_layer = st.active_layer;
+        // Selecting layers is not a step, so the state this edit leaves behind targets what was
+        // selected just before it (#1356): undoing a stroke keeps the painted layer active.
+        let prior = st.layer_target();
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
@@ -449,6 +485,7 @@ impl Session {
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
         if key.is_none() || st.coalesce != key || !st.history.can_undo() {
+            st.history.set_current_layers(prior);
             st.history.record(label, before, layers);
             st.history.trim(&st.doc);
         } else {
@@ -488,10 +525,13 @@ impl Session {
         st.coalesce = None;
         match st.history.undo(st.doc.clone()) {
             Some((d, layers)) => {
+                // Pixels this step can have touched, so the canvas recomposites only that
+                // (it recomposited everything before).
+                let damage = layer_multi_cmds::step_damage(&d, &st.doc);
                 st.doc = d;
                 restore_target(st, layers);
                 st.revision += 1;
-                st.last_damage = None;
+                st.last_damage = damage;
                 true
             }
             None => false,
@@ -506,10 +546,11 @@ impl Session {
         st.coalesce = None;
         match st.history.redo(st.doc.clone()) {
             Some((d, layers)) => {
+                let damage = layer_multi_cmds::step_damage(&st.doc, &d);
                 st.doc = d;
                 restore_target(st, layers);
                 st.revision += 1;
-                st.last_damage = None;
+                st.last_damage = damage;
                 true
             }
             None => false,

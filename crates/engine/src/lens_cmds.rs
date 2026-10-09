@@ -12,7 +12,7 @@ use photocraft_algo::lens::{self, EdgeMode, LensCorrection};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::wideangle::{self, WideAngle};
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, LayerContent, LayerId, SmartFilter};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartFilter};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde_json::{Value, json};
@@ -152,21 +152,36 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
 
 // ---------- pixels ----------
 
-fn rgba_region(surf: &Surface, area: Rect) -> Vec<[f32; 4]> {
-    let mut v = vec![[0.0f32; 4]; (area.width() * area.height()) as usize];
+/// Largest area Camera Raw develops in one pass. The pipeline holds the whole region as RGBA
+/// f32 plus the source and result planes (≥ 48 bytes per pixel), so beyond this a document
+/// is refused with an error rather than attempted (#962).
+pub const MAX_RAW_PIXELS: u64 = 400_000_000;
+
+/// The number of pixels in `area` if Camera Raw can develop it in one pass.
+fn raw_pixels(area: Rect) -> Option<usize> {
+    let n = u64::from(area.width()) * u64::from(area.height());
+    (n <= MAX_RAW_PIXELS).then(|| usize::try_from(n).ok()).flatten()
+}
+
+fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
+    let mut v = vec![[0.0f32; 4]; len];
     surf.read_rgba_into(area, &mut v);
     v
 }
 
 /// Camera Raw on a surface over `area` (RGB / Gray via RGBA, at the surface's depth).
+///
+/// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
+/// error first, and this keeps the preview and Smart Filter paths from overflowing.
 pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
     let area = area.intersect(&surf.content_bounds().union(&area));
     if area.is_empty() || p.is_identity() {
         return surf.clone();
     }
+    let Some(len) = raw_pixels(area) else { return surf.clone() };
     let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut px = rgba_region(surf, area);
+    let mut px = rgba_region(surf, area, len);
     camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
     let n = fmt.channels();
     let orig = surf.read_region(area);
@@ -359,6 +374,19 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cr = raw_params(RAW, p)?;
     // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
     cr.validate().map_err(|e| bad(RAW, e))?;
+    // The pixel path works on the canvas plus the layer's content in one buffer; a legal
+    // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
+    if !cr.is_identity() {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let id = target(s, p)?;
+        let area = d.doc.layer(id).and_then(Layer::surface).map_or(d.doc.bounds(), |sf| d.doc.bounds().union(&sf.content_bounds()));
+        if raw_pixels(area).is_none() {
+            return Err(bad(
+                RAW,
+                format!("the image is too large for Camera Raw ({}×{} px; max {} megapixels)", area.width(), area.height(), MAX_RAW_PIXELS / 1_000_000),
+            ));
+        }
+    }
     let t0 = Stopwatch::start();
     let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
@@ -554,6 +582,27 @@ mod tests {
         s.execute(RAW, json!({"saturation": -100})).unwrap();
         let p = active_px(&s, 60, 40);
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn camera_raw_rejects_an_area_too_large_to_develop() {
+        // #962: `area.width() * area.height()` overflowed u32 on a legal 65536×65536 canvas,
+        // so `run` panicked and dispatch reported an internal error.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+        s.execute("image.canvasSize", json!({"width": 65536, "height": 65536, "extensionColor": "transparent"})).unwrap();
+        let err = s.execute(RAW, json!({"exposure": 1})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{err}");
+        assert!(err.to_string().contains("too large"), "{err}");
+        // The surface function itself never overflows either: an oversized area is left alone.
+        let d = s.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
+        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr);
+        assert_eq!(out.content_bounds(), surf.content_bounds());
+        // A normal document still develops.
+        let mut s = session(8);
+        s.execute(RAW, json!({"exposure": 1})).unwrap();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

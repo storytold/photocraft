@@ -106,30 +106,83 @@ fn background_param(p: &Value, cmd: &str) -> Result<Option<ArtboardBackground>> 
     })
 }
 
-/// `rect` as `[x, y, w, h]` or `x`/`y`/`width`/`height` keys over `base`.
-fn rect_param(p: &Value, base: Rect, cmd: &str) -> Result<Rect> {
-    if let Some(Value::Array(a)) = p.get("rect") {
-        let v: Vec<i32> = a.iter().filter_map(|x| x.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i32)).collect();
-        if v.len() != 4 || v[2] <= 0 || v[3] <= 0 {
-            return Err(bad(cmd, "\"rect\" must be [x, y, width, height] with a positive size"));
-        }
-        return Ok(Rect::from_xywh(v[0], v[1], v[2] as u32, v[3] as u32));
-    }
-    let x = int_i32(cmd, p, "x")?.unwrap_or(base.x0);
-    let y = int_i32(cmd, p, "y")?.unwrap_or(base.y0);
-    let w = int(p, "width").unwrap_or(i64::from(base.width()));
-    let h = int(p, "height").unwrap_or(i64::from(base.height()));
+/// A board rect from `x, y, width, height`, or a bad-params error naming them when an edge falls
+/// outside the 32-bit coordinate range. `Rect::from_xywh` would clamp the far edge to `i32::MAX`
+/// (silently shrinking the board) and wrap a width past `i32::MAX` negative (#931).
+fn board_rect(cmd: &str, [x, y, w, h]: [i64; 4]) -> Result<Rect> {
     if w <= 0 || h <= 0 {
-        return Err(bad(cmd, "the artboard size must be positive"));
+        return Err(bad(cmd, format!("the artboard size must be positive (width = {w}, height = {h})")));
     }
-    if w > i32::MAX as i64 || h > i32::MAX as i64 {
-        return Err(bad(cmd, "the artboard size is too large for a 32-bit canvas"));
+    let span = |a: i64, len: i64| Some((i32::try_from(a).ok()?, i32::try_from(a.checked_add(len)?).ok()?));
+    match (span(x, w), span(y, h)) {
+        (Some((x0, x1)), Some((y0, y1))) => Ok(Rect::new(x0, y0, x1, y1)),
+        _ => Err(bad(
+            cmd,
+            format!("the artboard [x, y, width, height] = [{x}, {y}, {w}, {h}] reaches outside the 32-bit coordinate range ({}..={})", i32::MIN, i32::MAX),
+        )),
     }
-    Ok(Rect::from_xywh(x, y, w as u32, h as u32))
+}
+
+/// `rect` as `[x, y, w, h]` or `x`/`y`/`width`/`height` keys over `base` (`[x, y, w, h]`, wide so
+/// a default position past the edge reaches [`board_rect`] instead of overflowing).
+fn rect_param(p: &Value, base: [i64; 4], cmd: &str) -> Result<Rect> {
+    if let Some(Value::Array(a)) = p.get("rect") {
+        let v: Vec<i64> = a.iter().filter_map(|x| x.as_i64().or_else(|| x.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))).collect();
+        let Ok(v) = <[i64; 4]>::try_from(v) else {
+            return Err(bad(cmd, "\"rect\" must be [x, y, width, height] with a positive size"));
+        };
+        return board_rect(cmd, v);
+    }
+    let x = int_i32(cmd, p, "x")?.map_or(base[0], i64::from);
+    let y = int_i32(cmd, p, "y")?.map_or(base[1], i64::from);
+    let w = int(p, "width").unwrap_or(base[2]);
+    let h = int(p, "height").unwrap_or(base[3]);
+    board_rect(cmd, [x, y, w, h])
+}
+
+/// `r` as `[x, y, w, h]` for [`rect_param`].
+fn xywh(r: Rect) -> [i64; 4] {
+    [i64::from(r.x0), i64::from(r.y0), i64::from(r.width()), i64::from(r.height())]
+}
+
+/// Layer › Duplicate on an artboard (#1531): Photoshop never stacks the copy on the original,
+/// it puts it right of the board, a [`GAP`] away, sliding further right past any board in the
+/// way. Moves the copy, layer `id` (just inserted on top of its original), there with its
+/// contents and grows the canvas to show it; anything that isn't an artboard is left alone.
+pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
+    let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(()) };
+    let name = l.name.clone();
+    let boards: Vec<Rect> = doc.artboards().iter().filter(|b| b.0 != id).map(|b| b.2.rect).collect();
+    let (y0, y1, w) = (i64::from(r.y0), i64::from(r.y1), i64::from(r.width()));
+    // In i64: `x1 + GAP` passes i32::MAX for a board at the far right edge (#931).
+    let mut x = i64::from(r.x1) + i64::from(GAP);
+    // Each round clears every board in the way, so one round per board settles it.
+    for _ in 0..=boards.len() {
+        let blocked =
+            boards.iter().filter(|b| i64::from(b.x0) < x + w && i64::from(b.x1) > x && i64::from(b.y0) < y1 && i64::from(b.y1) > y0).map(|b| b.x1).max();
+        match blocked {
+            Some(edge) => x = i64::from(edge) + i64::from(GAP),
+            None => break,
+        }
+    }
+    let fits = x.checked_add(w).is_some_and(|x1| x1 <= i64::from(i32::MAX));
+    let dx = i32::try_from(x - i64::from(r.x0)).ok().filter(|_| fits).ok_or_else(|| {
+        EngineError::Other(format!("no room for a copy of artboard \"{name}\" right of it; duplicate it in place (\"inPlace\": true) and move it"))
+    })?;
+    // Grow the canvas first, so shapes on the board re-render uncut where they land.
+    let x1 = i64::from(doc.size.width).max(x + w);
+    doc.size = Size::new(x1.clamp(1, 300_000) as u32, doc.size.height);
+    let snapshot = doc.clone();
+    let copy = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    crate::commands::translate_layer(&snapshot, copy, dx, 0);
+    crate::vector_cmds::translate_vectors(&snapshot, copy, f64::from(dx), 0.0);
+    fit_canvas(doc);
+    Ok(())
 }
 
 /// Grow the canvas (right/bottom) so every artboard fits.
-fn fit_canvas(doc: &mut Document) {
+pub(crate) fn fit_canvas(doc: &mut Document) {
     let (mut w, mut h) = (doc.size.width as i64, doc.size.height as i64);
     for (_, _, a) in doc.artboards() {
         w = w.max(i64::from(a.rect.x1));
@@ -164,10 +217,17 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     // Default placement: right of the rightmost artboard, else the canvas origin.
     let right = d.doc.artboards().iter().map(|b| b.2.rect.x1).max();
     let top = d.doc.artboards().iter().map(|b| b.2.rect.y0).min().unwrap_or(0);
+    // In i64: `x1 + GAP` passes i32::MAX for a board at the far right edge (#931).
     let base = match right {
-        Some(x) => Rect::from_xywh(x + GAP, top, pw, ph),
-        None => Rect::from_xywh(0, 0, pw, ph),
+        Some(x) => [i64::from(x) + i64::from(GAP), i64::from(top), i64::from(pw), i64::from(ph)],
+        None => [0, 0, i64::from(pw), i64::from(ph)],
     };
+    // With no room right of the rightmost board, ask for a position rather than pick another
+    // spot that may overlap a board; an explicit `x` (or `rect`) still works.
+    let explicit_x = p.get("rect").is_some() || p.get("x").is_some_and(|v| !v.is_null());
+    if let Some(edge) = right.filter(|_| !explicit_x && base[0] > i64::from(i32::MAX)) {
+        return Err(bad(cmd, format!("no room for a new artboard right of the rightmost one (its right edge is x = {edge}); pass \"x\" to place it")));
+    }
     // A preset decides the size (dialogs send the canvas size alongside it).
     let rect = if preset.is_empty() || p.get("rect").is_some() {
         rect_param(p, base, cmd)?
@@ -246,17 +306,30 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let old = d.doc.layer(id).and_then(Layer::artboard).cloned().ok_or_else(|| bad(cmd, "the layer is not an artboard"))?;
     let preset = p.get("preset").and_then(Value::as_str).map(str::to_string);
-    let mut base = old.rect;
+    let mut base = xywh(old.rect);
     if let Some(name) = preset.as_deref().filter(|n| !n.is_empty()) {
         let (w, h) = preset_size(name).ok_or_else(|| bad(cmd, format!("unknown preset `{name}`")))?;
-        base = Rect::from_xywh(base.x0, base.y0, w, h);
+        (base[2], base[3]) = (i64::from(w), i64::from(h));
     }
     let rect = rect_param(p, base, cmd)?;
     let background = background_param(p, cmd)?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let move_contents = p.get("moveContents").and_then(Value::as_bool).unwrap_or(true);
+    // The offset between two in-range edges can need 33 bits (#931); layers move by i32 only.
+    let (dx, dy) = (i64::from(rect.x0) - i64::from(old.rect.x0), i64::from(rect.y0) - i64::from(old.rect.y0));
+    let (dx, dy) = match (i32::try_from(dx), i32::try_from(dy)) {
+        (Ok(dx), Ok(dy)) => (dx, dy),
+        _ if !move_contents => (0, 0),
+        _ => {
+            return Err(bad(
+                cmd,
+                format!(
+                    "moving the artboard with its contents by ({dx}, {dy}) is outside the 32-bit range; move it in smaller steps or pass \"moveContents\": false"
+                ),
+            ));
+        }
+    };
     s.edit("Edit Artboard", |doc, _| {
-        let (dx, dy) = (rect.x0 - old.rect.x0, rect.y0 - old.rect.y0);
         if move_contents && (dx, dy) != (0, 0) {
             let snapshot = doc.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -302,14 +375,20 @@ fn clear_artboard_guides(s: &mut Session) -> Result<Value> {
     Ok(json!({"cleared": n}))
 }
 
-/// One artboard as its own document: the board's size, its group moved to the origin.
-pub fn artboard_document(doc: &Document, id: LayerId) -> Option<Document> {
-    let l = doc.layer(id)?;
-    let r = l.artboard()?.rect;
+/// One artboard as its own document: the board's size, its group moved to the origin. `None`
+/// when `id` is not an artboard; an error when the board is too far from the origin to move.
+pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>> {
+    let Some(l) = doc.layer(id) else { return Ok(None) };
+    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(None) };
+    // A board starting at i32::MIN needs an offset of 2^31 to reach the origin, one past
+    // i32::MAX (#931).
+    let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
+        return Err(EngineError::Other(format!("artboard `{}` at ({}, {}) is too far from the origin to export", l.name, r.x0, r.y0)));
+    };
     let mut group = l.clone();
     group.visible = true;
-    crate::commands::translate_layer(doc, &mut group, -r.x0, -r.y0);
-    crate::vector_cmds::translate_vectors(doc, &mut group, f64::from(-r.x0), f64::from(-r.y0));
+    crate::commands::translate_layer(doc, &mut group, dx, dy);
+    crate::vector_cmds::translate_vectors(doc, &mut group, f64::from(dx), f64::from(dy));
     let mut one = doc.clone();
     one.name = l.name.clone();
     one.size = Size::new(r.width(), r.height());
@@ -323,7 +402,13 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Option<Document> {
     let shift = |v: &[f32], o: i32, len: u32| v.iter().map(|g| g - o as f32).filter(|g| *g > 0.0 && *g < len as f32).collect::<Vec<_>>();
     one.guides.vertical = shift(&doc.guides.vertical, r.x0, r.width());
     one.guides.horizontal = shift(&doc.guides.horizontal, r.y0, r.height());
-    Some(one)
+    Ok(Some(one))
+}
+
+/// [`artboard_document`] for each chosen board, all built before any file is written so a
+/// board that can't be exported fails the export without leaving a partial set behind.
+fn chosen_documents(doc: &Document, p: &Value) -> Result<Vec<Document>> {
+    chosen_artboards(doc, p).into_iter().filter_map(|id| artboard_document(doc, id).transpose()).collect()
 }
 
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
@@ -347,8 +432,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut files = Vec::new();
-    for id in chosen_artboards(&doc, p) {
-        let Some(one) = artboard_document(&doc, id) else { continue };
+    for one in chosen_documents(&doc, p)? {
         let name = if prefix.is_empty() { sanitize(&one.name) } else { format!("{}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
         save_doc(&one, &path, SaveOpts::from_params(p))?;
@@ -414,8 +498,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
     let mut pages = Vec::new();
-    for id in chosen_artboards(&doc, p) {
-        let Some(one) = artboard_document(&doc, id) else { continue };
+    for one in chosen_documents(&doc, p)? {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);

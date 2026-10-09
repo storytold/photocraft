@@ -82,8 +82,9 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "image.analysis.countTool" => Some(app.ui.tool == Tool::Count),
         _ => {
             // View › Proof Setup simulations: checked while that proof is shown.
+            // A check item with no document too: an item's kind never changes (native menus).
             let kind = id.strip_prefix("view.proofSetup.").and_then(photocraft_engine::proof_sim::ProofKind::from_id)?;
-            let d = app.session.active()?;
+            let Some(d) = app.session.active() else { return Some(false) };
             let pv = app.session.color.proof(d.doc.id);
             Some(pv.enabled && pv.setup.kind == kind)
         }
@@ -158,18 +159,18 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             }
             r
         }
-        "file.import.notes" => {
-            let (name, bytes) = match app.pick_file_bytes()? {
-                Ok(picked) => picked,
-                Err(e) => return Some(Err(e)),
-            };
-            let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
-            if r.is_ok() {
-                app.ui.analysis.notes = true;
-                app.sync_views();
-            }
-            r
-        }
+        "file.import.notes" => match app.active_doc_id() {
+            Ok(doc) => app.pick_file_bytes(move |app, name, bytes| {
+                app.refocus(doc)?;
+                let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
+                if r.is_ok() {
+                    app.ui.analysis.notes = true;
+                    app.sync_views();
+                }
+                r
+            }),
+            Err(e) => Err(e),
+        },
         "measurementLog.export" => export_log(app, None),
         _ => return None,
     })
@@ -192,10 +193,11 @@ fn export_log(app: &mut PhotocraftApp, rows: Option<Vec<u64>>) -> Result<Value, 
     let p = rows.map_or(json!({}), |r| json!({"rows": r}));
     let csv = app.run("measurementLog.export", p)?;
     let text = csv["csv"].as_str().unwrap_or_default().to_string();
-    let path = app.services.pick_save.as_mut().and_then(|f| f("Measurements.csv")).ok_or("cancelled")?;
-    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(&path, text.as_bytes())?;
-    Ok(json!({"path": path, "rows": csv["rows"]}))
+    app.pick_save("Measurements.csv", move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, text.as_bytes())?;
+        Ok(json!({"path": path, "rows": csv["rows"]}))
+    })
 }
 
 // ------------------------------------------------------------------ tools

@@ -16,6 +16,11 @@ use crate::tile::GrayTile;
 /// Largest brush diameter accepted by the rasterizer and brush controls.
 pub const MAX_BRUSH_SIZE: f32 = 5000.0;
 
+/// Largest Scatter amount (primary and Dual Brush): 10 = 1000 %, the Brush Settings slider's top.
+/// Beyond it a dab could land arbitrarily far away, and an unbounded amount overflowed the dab
+/// centre to infinity (#977).
+pub const MAX_SCATTER: f32 = 10.0;
+
 /// What drives a dynamic parameter (Photoshop's "Control" pop-ups).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -362,7 +367,7 @@ pub struct BrushSettings {
     /// Spacing between dabs as a fraction of the diameter.
     pub spacing: f32,
     /// Photoshop's Spacing checkbox. Off: the pointer's speed sets the spacing (one dab every
-    /// [`crate::dynamics::SPEED_SPACING_MS`] of stroke time; without timestamps, one per input point).
+    /// [`crate::dynamics::SPEED_SPACING_MS`] of stroke time; without timestamps, by distance).
     pub spacing_enabled: bool,
     /// Maximum coverage for the whole stroke.
     pub opacity: f32,
@@ -461,17 +466,23 @@ impl Default for BrushSettings {
 }
 
 impl BrushSettings {
-    /// Copy the settings with the primary and dual diameters constrained for rasterization.
+    /// Copy the settings with the primary and dual diameters and Scatter amounts constrained for
+    /// rasterization.
     ///
     /// Engine commands reject out-of-range values; this is a final guard for direct users of the
-    /// infallible paint API, which must not turn malformed brush dimensions into giant allocations.
+    /// infallible paint API, which must not turn malformed brush dimensions into giant allocations,
+    /// nor a huge Scatter amount into non-finite dab centres (#977).
     pub fn bounded_for_render(&self) -> Self {
         let safe_size = |size: f32| {
             if size.is_finite() { size.clamp(0.5, MAX_BRUSH_SIZE) } else { 0.5 }
         };
+        // NaN scatters nothing (as before: it never passed the `> 0` check); infinity is the maximum.
+        let safe_scatter = |amount: f32| if amount.is_nan() { 0.0 } else { amount.clamp(0.0, MAX_SCATTER) };
         let mut brush = self.clone();
         brush.size = safe_size(brush.size);
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
+        brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
+        brush.dual_brush.scatter = safe_scatter(brush.dual_brush.scatter);
         brush
     }
 

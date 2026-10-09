@@ -322,8 +322,17 @@ fn rect_param(p: &Value, key: &str, cmd: &str) -> Result<Rect> {
 }
 
 fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
+    content_aware_fill_as(s, p, "edit.contentAwareFill", "Content-Aware Fill")
+}
+
+/// Delete and Fill Selection (#1286): Photoshop's one-click removal from the selection-tool
+/// context menu. Content-Aware Fill with its default settings into the layer, no dialog.
+fn delete_and_fill(s: &mut Session, _: &Value) -> Result<Value> {
+    content_aware_fill_as(s, &json!({}), "edit.deleteAndFillSelection", "Delete and Fill Selection")
+}
+
+fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
     use photocraft_algo::content_aware::{FillOptions, color_level, fill_with, rotation_level};
-    let cmd = "edit.contentAwareFill";
     let id = pixel_layer(s).map_err(EngineError::Other)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
@@ -332,12 +341,13 @@ fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
     if hb.is_empty() {
         return Err(bad(cmd, "the selection is outside the canvas"));
     }
-    let ext = hb.width().max(hb.height()) as i32;
+    // The canvas is at most i32 wide, so the extent fits; saturate anyway rather than wrap (#963).
+    let ext = i32::try_from(hb.width().max(hb.height())).unwrap_or(i32::MAX);
     let sampling = str_or(p, "sampling", "auto").to_string();
     let custom_mask: Option<Surface> = p.get("channel").and_then(|v| channel_mask(&doc, v)).cloned();
     let custom_rect = if p.get("area").is_some() { Some(rect_param(p, "area", cmd)?) } else { None };
     let window = match sampling.as_str() {
-        "auto" => hb.inflate((ext * 3 / 4).max(32)),
+        "auto" => hb.inflate(crate::fill_cmds::sampling_margin(hb)),
         "rectangular" => hb.inflate(int(p, "margin").map_or(ext.max(16), |m| m.clamp(0, 100_000) as i32)),
         "custom" => {
             let r = match (custom_rect, custom_mask.as_ref()) {
@@ -364,8 +374,8 @@ fn content_aware_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
     let fmt = surf.format();
     let n = fmt.channels();
-    let (w, h) = (window.width() as usize, window.height() as usize);
-    let label = "Content-Aware Fill";
+    // Refuse a window too large to read before allocating for it, whatever the sampling (#963).
+    let (w, h) = crate::fill_cmds::window_size(window)?;
     // A background job when started with `Session::start` (#210): reading the window and the
     // PatchMatch fill run on a worker against the document snapshot, cancellable per row band.
     crate::jobs::run(
@@ -449,7 +459,7 @@ fn apply_content_aware_fill(
             }
             "duplicate" => {
                 let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-                dup.name = format!("{} copy", dup.name);
+                dup.name = doc.copy_name(&dup.name);
                 let nid = doc.insert_above(Some(id), dup);
                 *active = Some(nid);
                 nid
@@ -957,6 +967,7 @@ pub fn specs() -> Vec<CommandSpec> {
             can_caf,
             content_aware_fill
         ),
+        spec!("edit.deleteAndFillSelection", "Delete and Fill Selection", [], None, "{}", can_caf, delete_and_fill),
         spec!(
             "edit.contentAwareScale",
             "Content-Aware Scale",

@@ -21,6 +21,10 @@
 	Layer	レイヤー
 	Type	文字
 	Select	選択
+	Top Left	左上
+	Top Right	右上
+	Bottom Left	左下
+	Bottom Right	右下
 	Filter	フィルター
 	View	表示
 	Window	ウィンドウ
@@ -33,6 +37,9 @@
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
 	Close	閉じる
+	Minimize	最小化
+	Maximize	最大化
+	Restore	元に戻す（縮小）
 	Close All	すべて閉じる
 	Close Others	ほかを閉じる
 	Save	保存
@@ -100,6 +107,7 @@
 	Fill…	塗りつぶし…
 	Stroke…	境界線を描く…
 	Content-Aware Fill…	コンテンツに応じた塗りつぶし…
+	Delete and Fill Selection	選択範囲を削除して塗りつぶし
 	Content-Aware Scale	コンテンツに応じた拡大・縮小
 	Puppet Warp	パペットワープ
 	Perspective Warp	遠近法ワープ
@@ -311,6 +319,7 @@
 	Smart Object	スマートオブジェクト
 	Convert to Smart Object	スマートオブジェクトに変換
 	Convert to Embedded	埋め込みに変換
+	Convert to Layers	レイヤーに変換
 	Convert to Linked…	リンクに変換…
 	Edit Contents	コンテンツを編集
 	Replace Contents…	コンテンツを置き換え…
@@ -971,14 +980,17 @@
 	Drag a rectangle around the object	オブジェクトを囲む矩形をドラッグ
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	画像上をドラッグして制約を追加。Shift で水平/垂直、右クリックで削除。
 	Drag to move the active shape's path or the Work Path	ドラッグして、アクティブなシェイプのパスまたは作業用パスを移動
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	クリック: アンカーポイントを選択 · ドラッグ: ポイント、ハンドル、セグメントを移動 · {shift}+クリック: 追加 · {alt}+クリック: サブパス全体
 	Draw with the Pen tool (P) or make a work path from a selection.	ペンツール(P)で描くか、選択範囲から作業用パスを作成します。
 	Drop an image or PSD anywhere to open it.	画像や PSD をここにドロップすると開きます。
 	Native file drag-and-drop is unavailable	Wayland ではネイティブのファイルドラッグ＆ドロップを利用できません
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland ではネイティブのファイルドラッグ＆ドロップはまだ利用できません。[ファイル › 開く] を使うか、`WAYLAND_DISPLAY= photocraft` を指定して PhotoCraft を XWayland 上で起動してください。
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland ではネイティブのファイルドラッグ＆ドロップはまだ利用できません。[ファイル › 開く] を使うか、ファイルマネージャーで画像をコピーして {paste} で貼り付けてください。
+	To drop files, start PhotoCraft under XWayland: `{command}`	ファイルをドロップするには、XWayland 上で PhotoCraft を起動してください: `{command}`
+	Edit › Paste	[編集 › 貼り付け]
 	Duplicate Layers…	レイヤーを複製…
 	Duplicate style	スタイルを複製
 	Edit Toolbar…	ツールバーを編集…
-	Use File › Open to open an image.	画像を開くには [ファイル › 開く] を使ってください。
+	Use File › Open, or paste a copied image with {paste}.	[ファイル › 開く] を使うか、コピーした画像を {paste} で貼り付けてください。
 	Edit in Quick Mask Mode  (Q)	クイックマスクモードで編集(Q)
 	Edit in Standard Mode  (Q)	標準モードで編集(Q)
 	Effects	効果
@@ -1013,6 +1025,7 @@
 	Fisheye	魚眼
 	Fit	合わせる
 	Fit Screen	画面に合わせる
+	Fill Screen	画面いっぱいに表示
 	Fit in View	表示に合わせる
 	Fixed	固定
 	Fixed Ratio	縦横比を固定
@@ -1341,6 +1354,7 @@
 	Set background color	背景色を設定
 	Set foreground color	描画色を設定
 	Set painting symmetry options	対称描画のオプションを設定
+	Symmetry Off	対称オフ
 	Set shape fill type	シェイプの塗りの種類を設定
 	Set shape stroke type	シェイプの線の種類を設定
 	Set the text color	文字色を設定
@@ -1600,6 +1614,7 @@
 	Paint Bucket Tool	塗りつぶしツール
 	Paints from the document's opening state	ドキュメントを開いた時点の状態から描画します
 	Path Selection Tool	パスコンポーネント選択ツール
+	Direct Selection Tool	パス選択ツール
 	Pattern Overlay	パターンオーバーレイ
 	Pen Pressure	ペンの筆圧
 	Pen Tilt	ペンの傾き
@@ -1801,12 +1816,14 @@
 	Memory usage mb	メモリ使用量 (MB)
 	GPU memory mb	GPU メモリ (MB)
 	Memory usage percent	メモリ使用率 (%)
+	Low resolution previews	低解像度プレビュー
 	Missing glyph protection	字形欠落の保護
 	Modern	モダン
 	Nearest neighbor	ニアレストネイバー
 	Never	しない
 	Normal tip	通常の先端
 	Open as smart object	スマートオブジェクトとして開く
+	Open in camera raw	Camera Raw で開く
 	Open documents as tabs	ドキュメントをタブで開く
 	Overscroll	オーバースクロール
 	Performance	パフォーマンス
@@ -1844,6 +1861,7 @@
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
 	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
+	System title bar	システムのタイトルバー
 	Show transformation values	変形値を表示
 	Slice color	スライスの色
 	Smart guide color	スマートガイドの色
@@ -1927,6 +1945,7 @@
 	System Info…	システム情報…
 	System Info	システム情報
 	More panels	その他のパネル
+	More documents	その他のドキュメント
 	These settings aren't available in PhotoCraft yet.	これらの設定は PhotoCraft ではまだ使用できません。
 	Graphics	グラフィックス
 	Reset GPU Backend	GPU バックエンドをリセット
@@ -1955,6 +1974,8 @@
 	Brush Settings…  (F5): every option of this brush	ブラシ設定…(F5): このブラシのすべてのオプション
 	Rename Brush…	ブラシの名前を変更…
 	Delete Brush	ブラシを削除
+	New Brush Preset…	新規ブラシプリセット…
+	Brush Preset Options	ブラシプリセットのオプション
 	Group name	グループ名
 	Brush name	ブラシ名
 	Grid view	グリッド表示
@@ -2003,6 +2024,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	選択範囲を作成するパスがありません。ペンツールで描くか、パスパネルでパスを選択してください。
 	Cancel opening	開くのをキャンセル
 	Cancelled opening {name}	{name} を開くのをキャンセルしました
+	Developing {name}	{name} を現像中
 	Cancelled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
 	Opening {name}	{name} を開いています
@@ -2041,6 +2063,7 @@
 cameraRaw	Light	ライト
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw フィルター ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	明部
 cameraRaw	Blending	ブレンド
 cameraRaw	Blacks	黒レベル
@@ -2080,6 +2103,7 @@ cameraRaw	Color	カラー
 	Frequency	頻度
 	Use tablet pressure to change pen width	タブレットの筆圧を使用してペンの幅を変更
 
+
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	バージョン情報
 	Contributors	コントリビューター
@@ -2112,3 +2136,81 @@ cameraRaw	Color	カラー
 	% of all commits	全コミットに占める割合 (%)
 	Lines +/−	行数 +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR {prs} 件、コミット {commits} 件、行 +{added} / −{deleted} (Δ {delta})、バイナリ +{binAdded} / −{binDeleted}、{first} – {last}
+
+# Swatches panel
+	Create new swatch	新規スウォッチを作成
+	New Swatch…	新規スウォッチ…
+	New Swatch Group…	新規スウォッチグループ…
+	Import Swatches…	スウォッチを読み込み…
+	Replace Swatches…	スウォッチを置き換え…
+	Export Swatches…	スウォッチを書き出し…
+	Export Swatches for Exchange…	交換用にスウォッチを書き出し…
+	Reset Swatches	スウォッチを初期化
+	Add to Swatches	スウォッチに追加
+# Layer Style > Blending Options (Advanced Blending)
+	Blend If:	条件付き合成:
+	Channels:	チャンネル:
+	Knockout	ノックアウト
+	Apply At Canvas Bounds	カンバスの境界に効果を適用
+	Show/Hide All Panels	すべてのパネルを表示/非表示
+	Show/Hide Panels	パネルを表示/非表示
+	Could not open	開けませんでした
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: パスが有効な Unicode ではありません。ファイル名を変更してから開き直してください。
+
+# Fill dialog, layer style contours and Image Size
+	Contents:	内容:
+	Custom Pattern:	カスタムパターン:
+	Foreground Color	描画色
+	Color…	カラー…
+	50% Gray	50% グレー
+	Color Adaptation	カラー適応
+	{size} (was {old})	{size}(変更前 {old})
+	Cone	円錐
+	Cone (Inverted)	円錐 (反転)
+	Domed	ドーム
+	Domed (Inverted)	ドーム (反転)
+	Diagonal (Descending)	斜め (下降)
+
+	Red Eye Tool	赤目ツール
+	Red Eye	赤目
+	Pupil Size	瞳のサイズ
+	Darken Amount	暗くする量
+	Click a red pupil to neutralize it	赤い瞳をクリックして補正します
+	open source	オープンソース
+	…and {n} more	…ほか {n} 件
+
+	Eyedroppers:	スポイト:
+	Set Black Point	黒点を設定
+	Set Neutral Gray Point	中間調のグレーポイントを設定
+	Set White Point	白色点を設定
+	Unavailable in this color mode	このカラーモードでは使用できません
+	Selection Preview:	選択範囲のプレビュー:
+	Black Matte	黒の背景
+	White Matte	白の背景
+
+# Layer colour labels.
+	Seafoam	シーフォーム
+	Indigo	インディゴ
+	Fuchsia	フクシア
+	Violet	紫
+	Reset	初期化
+	Large document: redrawing on the CPU	大きなドキュメント：CPUで再描画しています
+	This redraw took {seconds} s on the CPU.	この再描画はCPUで{seconds}秒かかりました。
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	レイヤーの描画モード、不透明度、表示/非表示など、ドキュメント全体に関わる編集では全体が再描画されます。
+	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	レイヤーがGPUメモリの予算に収まりません。環境設定 › パフォーマンスのメモリ使用量を増やすと、このコンピューターのメモリの4分の1まで予算が増えます。
+	The GPU compositor wasn't used: {reason}	GPUコンポジターは使用されませんでした：{reason}
+fontWeight	Thin	極細
+fontWeight	ExtraLight	特細
+fontWeight	Light	細字
+fontWeight	Regular	標準
+fontWeight	Medium	中間
+fontWeight	SemiBold	中太
+fontWeight	Bold	太字
+fontWeight	ExtraBold	特太
+fontWeight	Black	極太
+fontWeight	Italic	斜体
+
+# Pattern Stamp tool
+	Pattern Stamp Tool	パターンスタンプツール
+	Pattern Stamp	パターンスタンプ
+	Impressionist	印象派

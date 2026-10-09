@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use photocraft_doc::{Document, LayerId};
 
-/// The layers a state targeted when it was created: the active ("key") layer and every selected
-/// layer. Undo and redo bring them back with the state's document, as the reference app does;
-/// selecting layers is not a step of its own, so it doesn't change a state's target.
+/// The layers a state targeted: the active ("key") layer and every selected layer. Undo and redo
+/// bring them back with the state's document, as the reference app does. Selecting layers is not
+/// a step of its own, so the session updates the current state's target with
+/// [`History::set_current_layers`] just before recording the next step (#1356).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LayerTarget {
     pub active: Option<LayerId>,

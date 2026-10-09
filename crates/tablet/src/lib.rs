@@ -14,7 +14,9 @@
 //! - **Wayland**: not covered. The `zwp_tablet_v2` protocol has to be bound on winit's own
 //!   `wl_display` connection (the tablet events name winit's `wl_surface`), which needs
 //!   `unsafe` foreign-display interop, and binding it makes compositors stop emulating the
-//!   pointer for the pen, so pen motion would have to be re-injected into egui as well.
+//!   pointer for the pen, so pen motion would have to be re-injected into egui as well. Without
+//!   it, compositors give the window no pen input at all, so the desktop app opens its window
+//!   through Xwayland when a pen is attached, and the X11 reader applies.
 //!
 //! The platform glue only reads raw values and hands them to the pure mapping in [`appkit`] and
 //! [`xi`], which normalise, clamp and track pen state and are tested on every platform.

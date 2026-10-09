@@ -7,8 +7,13 @@ use crate::Ctx;
 use crate::fxutil::{MAXC, rgba, set_rgba, xy};
 use crate::image::Image;
 
-/// Neighbourhood the kernel reads: `3σ + 1` at `σ = 32` (the typical cap for parallel tiles).
-pub(crate) const HALO_RADIUS: i32 = 97;
+/// Softness maps onto this σ range; the halo is derived from the σ actually used.
+pub(crate) const SIGMA_MIN: f32 = 2.0;
+pub(crate) const SIGMA_MAX: f32 = 96.0;
+/// Finite-difference step is `σ`, but never more than this many pixels.
+const STEP_MAX: f32 = 32.0;
+/// Luma field allocated for one kernel call; larger `out` rects are split into overlapping bands.
+const MAX_LUMA_PIXELS: usize = 8_000_000;
 
 /// Dialog units (degrees / 0–100), matching the command params.
 #[derive(Clone, Copy, Debug)]
@@ -21,11 +26,35 @@ pub(crate) struct Params {
     pub softness: f32,
 }
 
-/// Blur σ from softness and the reference bounds, clamped to `[2, 96]`.
+/// Blur σ from softness and the reference bounds, clamped to `[SIGMA_MIN, SIGMA_MAX]`.
 pub(crate) fn sigma(softness: f32, bounds: Rect) -> f32 {
     let side = bounds.width().min(bounds.height()) as f32;
     let s = (softness.clamp(1.0, 100.0) / 100.0) * 0.08 * side.max(1.0);
-    s.clamp(2.0, 96.0)
+    s.clamp(SIGMA_MIN, SIGMA_MAX)
+}
+
+/// Finite-difference step (pixels) at this σ.
+pub(crate) fn step_for_sigma(sig: f32) -> i32 {
+    sig.round().clamp(1.0, STEP_MAX) as i32
+}
+
+/// Pixels read outside an output tile: `3σ + 1` of the shading blur plus the finite-difference step.
+pub(crate) fn read_radius(sig: f32) -> i32 {
+    let blur = (sig.max(0.0) * 3.0).ceil() as i32 + 1;
+    blur.saturating_add(step_for_sigma(sig))
+}
+
+/// Halo for a concrete document size (falls back to [`halo_radius_max`] when `bounds` is empty).
+pub(crate) fn halo_radius(softness: f32, bounds: Rect) -> i32 {
+    if bounds.is_empty() {
+        return halo_radius_max();
+    }
+    read_radius(sigma(softness, bounds))
+}
+
+/// Conservative halo when the document size is unknown: cover [`SIGMA_MAX`].
+pub(crate) fn halo_radius_max() -> i32 {
+    read_radius(SIGMA_MAX)
 }
 
 /// Infinite-light direction: 0° from the right, 90° from above (image space, y down).
@@ -72,49 +101,37 @@ fn sample_y(buf: &[f32], w: usize, h: usize, rect: Rect, x: i32, y: i32) -> f32 
     buf.get(oy.saturating_mul(w).saturating_add(ox)).copied().filter(|v| v.is_finite()).unwrap_or(0.04)
 }
 
-/// Separable Gaussian of a single-channel field. Non-finite samples are skipped (kernel
-/// renormalised) so a bad pixel does not poison its neighbours.
+/// Approximate Gaussian of a single-channel field (three box passes; cost independent of σ).
+/// Non-finite samples are held out via a parallel weight channel so they do not poison neighbours.
 fn blur_channel(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     let n = w.saturating_mul(h);
     if n == 0 || src.len() < n {
         return vec![0.04; n];
     }
-    let k = crate::blur::gaussian_kernel(sigma);
-    let r = (k.len() / 2) as i32;
-    let acc_at = |buf: &[f32], ww: usize, hh: usize, x: i32, y: i32, col: bool| -> f32 {
-        let mut acc = 0.0f64;
-        let mut wgt = 0.0f64;
-        for (i, kv) in k.iter().enumerate() {
-            let t = i as i32 - r;
-            let (sx, sy) = if col { (x, y + t) } else { (x + t, y) };
-            if sx < 0 || sy < 0 || (sx as usize) >= ww || (sy as usize) >= hh {
-                continue;
-            }
-            let Some(v) = buf.get((sy as usize).saturating_mul(ww).saturating_add(sx as usize)) else {
-                continue;
-            };
-            if !v.is_finite() {
-                continue;
-            }
-            acc += *v as f64 * *kv as f64;
-            wgt += *kv as f64;
-        }
-        if wgt > 1e-12 { (acc / wgt) as f32 } else { 0.5 }
+    let Some(pack_len) = n.checked_mul(2) else {
+        return vec![0.04; n];
     };
-    let mut tmp = vec![0.0f32; n];
-    for y in 0..h {
-        for x in 0..w {
-            if let Some(slot) = tmp.get_mut(y.saturating_mul(w).saturating_add(x)) {
-                *slot = acc_at(src, w, h, x as i32, y as i32, false);
-            }
+    let mut packed = vec![0.0f32; pack_len];
+    for (i, &v) in src.iter().take(n).enumerate() {
+        if !v.is_finite() {
+            continue;
+        }
+        let o = i.saturating_mul(2);
+        if let Some(slot) = packed.get_mut(o) {
+            *slot = v;
+        }
+        if let Some(slot) = packed.get_mut(o.saturating_add(1)) {
+            *slot = 1.0;
         }
     }
-    let mut out = vec![0.0f32; n];
-    for y in 0..h {
-        for x in 0..w {
-            if let Some(slot) = out.get_mut(y.saturating_mul(w).saturating_add(x)) {
-                *slot = acc_at(&tmp, w, h, x as i32, y as i32, true);
-            }
+    crate::fxutil::gauss_blur_n(&mut packed, w, h, 2, sigma);
+    let mut out = vec![0.5f32; n];
+    for i in 0..n {
+        let o = i.saturating_mul(2);
+        let Some(&acc) = packed.get(o) else { continue };
+        let Some(&wgt) = packed.get(o.saturating_add(1)) else { continue };
+        if let Some(slot) = out.get_mut(i) {
+            *slot = if wgt > 1e-6 && acc.is_finite() && wgt.is_finite() { acc / wgt } else { 0.5 };
         }
     }
     out
@@ -137,27 +154,93 @@ pub(crate) fn relight(src: &Image, out: Rect, ctx: &Ctx, p: Params) -> Vec<f32> 
     if out.is_empty() || n == 0 {
         return src.crop(out);
     }
-    let mut res = src.crop(out);
     if !p.intensity.is_finite() || p.intensity == 0.0 {
-        return res;
+        return src.crop(out);
     }
     let sig = sigma(p.softness, ctx.bounds);
-    let radius = (sig * 3.0).ceil() as i32;
+    let step = step_for_sigma(sig);
+    let reach = read_radius(sig);
+    if let Some(band_h) = luma_band_rows(out, reach) {
+        return relight_bands(src, out, ctx, p, sig, step, band_h);
+    }
+    relight_rect(src, out, ctx, p, sig, step)
+}
+
+/// Horizontal strip height so the inflated luma field stays within [`MAX_LUMA_PIXELS`].
+fn luma_band_rows(out: Rect, reach: i32) -> Option<i32> {
+    let margin = 2usize.saturating_mul(reach.max(0) as usize);
+    let yw = (out.width() as usize).saturating_add(margin);
+    let yh = (out.height() as usize).saturating_add(margin);
+    if yw == 0 {
+        return None;
+    }
+    let n = match yw.checked_mul(yh) {
+        Some(n) if n > 0 => n,
+        Some(_) => return None,
+        None => usize::MAX,
+    };
+    if n <= MAX_LUMA_PIXELS {
+        return None;
+    }
+    let max_yh = (MAX_LUMA_PIXELS / yw).max(1);
+    let inner = max_yh.saturating_sub(margin).max(1).min(i32::MAX as usize) as i32;
+    if inner >= out.height() as i32 { None } else { Some(inner.max(1)) }
+}
+
+fn relight_bands(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i32, band_h: i32) -> Vec<f32> {
+    let n = src.ch;
+    let mut res = src.crop(out);
+    let mut y = out.y0;
+    let mut guard = 0u32;
+    while y < out.y1 && guard < 1_000_000 {
+        guard = guard.saturating_add(1);
+        let y1 = y.saturating_add(band_h).min(out.y1);
+        let band = Rect::new(out.x0, y, out.x1, y1);
+        if band.is_empty() {
+            break;
+        }
+        let part = relight_rect(src, band, ctx, p, sig, step);
+        copy_band(&mut res, out, &part, band, n);
+        y = y1;
+    }
+    res
+}
+
+fn copy_band(dst: &mut [f32], dst_rect: Rect, src: &[f32], src_rect: Rect, n: usize) {
+    let dw = dst_rect.width() as usize;
+    let sw = src_rect.width() as usize;
+    if n == 0 || dw == 0 || sw == 0 {
+        return;
+    }
+    for y in src_rect.y0..src_rect.y1 {
+        let sy = (y - src_rect.y0) as usize;
+        let dy = (y - dst_rect.y0) as usize;
+        let so = sy.saturating_mul(sw).saturating_mul(n);
+        let d_off = dy.saturating_mul(dw).saturating_mul(n);
+        let len = sw.saturating_mul(n);
+        let Some(d) = dst.get_mut(d_off..d_off.saturating_add(len)) else { continue };
+        let Some(s) = src.get(so..so.saturating_add(len)) else { continue };
+        if d.len() == s.len() {
+            d.copy_from_slice(s);
+        }
+    }
+}
+
+fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i32) -> Vec<f32> {
+    let n = src.ch;
+    let mut res = src.crop(out);
     // Finite differences at the shading scale (`σ`), not 1 px: a 1 px step vanishes on
     // large documents and the lamp collapses to a flat multiply.
     const SCALE: f32 = 2.0;
-    let step = sig.round().clamp(1.0, 32.0) as i32;
-    let s_rect = out.inflate(step.max(1));
-    let y_rect = s_rect.inflate(radius.max(0));
+    let y_rect = out.inflate(read_radius(sig));
     if y_rect.is_empty() {
         return res;
     }
     let yw = y_rect.width() as usize;
     let yh = y_rect.height() as usize;
-    let n_px = yw.saturating_mul(yh);
-    if n_px == 0 || n_px > 8_000_000 {
+    let Some(n_px) = yw.checked_mul(yh).filter(|&count| count > 0) else {
         return res;
-    }
+    };
     let mut ybuf = vec![0.5f32; n_px];
     for y in y_rect.y0..y_rect.y1 {
         for x in y_rect.x0..y_rect.x1 {
@@ -322,9 +405,20 @@ mod tests {
     }
 
     #[test]
-    fn halo_is_zero_at_identity_and_97_otherwise() {
+    fn halo_is_zero_at_identity_and_covers_sigma_otherwise() {
         assert_eq!(params(0.0, 45.0, 0.0, 25.0).halo(), Halo::Radius(0));
-        assert_eq!(params(40.0, 45.0, 0.0, 25.0).halo(), Halo::Radius(HALO_RADIUS));
+        assert_eq!(params(40.0, 45.0, 0.0, 25.0).halo(), Halo::Radius(halo_radius_max()));
+        assert_eq!(halo_radius_max(), read_radius(SIGMA_MAX));
+        // Short side 1600 px, default softness 25: σ = 32, read 3σ+1+step = 129, which
+        // the old constant halo of 97 did not cover.
+        let wide = Rect::new(0, 0, 1600, 1600);
+        let sig = sigma(25.0, wide);
+        assert!((sig - 32.0).abs() < 1e-4, "σ {sig}");
+        let reach = read_radius(sig);
+        assert_eq!(reach, 96 + 1 + 32);
+        assert!(reach > 97);
+        assert_eq!(halo_radius(25.0, wide), reach);
+        assert_eq!(params(40.0, 45.0, 0.0, 25.0).halo_for(wide), Halo::Radius(reach));
     }
 
     #[test]
@@ -420,6 +514,51 @@ mod tests {
         let inner = Rect::new(0, 0, size, size);
         let d = max_diff(&full.read_region(inner), &tiled.read_region(inner));
         assert!(d <= 1e-4, "tile seam {d}");
+    }
+
+    #[test]
+    fn tiles_match_a_full_apply_past_the_old_halo() {
+        // Default softness on a 1600 px short side: σ = 32, reach 129 px. The previous
+        // 97 px halo left a gap, so 128 px tiles seamed. Tile 128 vs one full-frame tile.
+        let size = 1600;
+        let bounds = Rect::new(0, 0, size, size);
+        let s = shaded_sphere(SampleType::F32, size);
+        let p = relight_p(180.0, 40.0, 60.0, 40.0, 0.0, 25.0);
+        assert!(read_radius(sigma(25.0, bounds)) > 97);
+        let area = output_area(&p, s.content_bounds(), bounds, None);
+        let full = apply_tiled(&s, &p, area, bounds, None, 4096, None);
+        let tiled = apply_tiled(&s, &p, area, bounds, None, 128, None);
+        let inner = Rect::new(0, 0, size, size);
+        let d = max_diff(&full.read_region(inner), &tiled.read_region(inner));
+        assert!(d <= 1e-4, "tile seam {d}");
+    }
+
+    #[test]
+    fn layers_above_8mp_are_relit() {
+        // 4096×2048 = 8.39 MP. A single full-frame kernel call inflates past 8 MP of luma,
+        // which used to return the input unchanged. Force one tile so that path is taken.
+        let (w, h) = (4096, 2048);
+        let bounds = Rect::new(0, 0, w, h);
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        let bytes: Vec<u8> = (0..h)
+            .flat_map(|y| {
+                let v = ((y * 200) / h.max(1)) as u8;
+                (0..w).flat_map(move |x| {
+                    let u = ((x * 200) / w.max(1)) as u8;
+                    [80 + u / 4, 40 + v / 3, 90, 255]
+                })
+            })
+            .collect();
+        s.write_interleaved(bounds, &bytes);
+        let p = relight_p(180.0, 30.0, 90.0, 12.0, 0.0, 25.0);
+        let area = output_area(&p, s.content_bounds(), bounds, None);
+        let before = s.pixel(w / 2, h / 2);
+        let out = apply_tiled(&s, &p, area, bounds, None, 8192, None);
+        let after = out.pixel(w / 2, h / 2);
+        assert!(after.iter().all(|c| c.is_finite()), "{after:?}");
+        let d = max_diff(&before, &after);
+        assert!(d > 1e-4, "8 MP+ layer was left unchanged (max diff {d})");
+        assert!(max_diff(&s.pixel(8, 8), &out.pixel(8, 8)) > 1e-4);
     }
 
     #[test]

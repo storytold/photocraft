@@ -65,7 +65,9 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     let v = &mut app.ui.views[i];
     // Leave room for the name above the board.
     v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32).clamp(0.01, 64.0);
-    v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
+    // Widen before adding: a board near ±2^30, or one whose far edge saturated at i32::MAX,
+    // overflows an i32 sum (#981).
+    v.center = [((f64::from(b.x0) + f64::from(b.x1)) / 2.0) as f32, ((f64::from(b.y0) + f64::from(b.y1)) / 2.0) as f32];
     v.fit_pending = false;
     Ok(json!({"zoom": v.zoom, "artboard": id.0, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
@@ -116,7 +118,18 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let mut bg = a.background.name().to_string();
         let opts = [("white".to_string(), tl!("White")), ("black".to_string(), tl!("Black")), ("transparent".to_string(), tl!("Transparent")), ("custom".to_string(), tl!("Other…"))];
         if crate::widgets::dropdown(ui, &key("bg"), &mut bg, &opts, 120.0) {
-            edit = Some(json!({"layer": layer.id.0, "background": bg}));
+            let mut params = json!({"layer": layer.id.0, "background": bg});
+            if bg == "custom" {
+                let hex = match a.background {
+                    ArtboardBackground::Custom(c) => {
+                        let [r8, g8, b8, _] = c.to_rgba8();
+                        format!("#{:02x}{:02x}{:02x}", r8, g8, b8)
+                    }
+                    _ => "#ffffff".to_string(),
+                };
+                params["color"] = json!(hex);
+            }
+            edit = Some(params);
         }
         if let ArtboardBackground::Custom(c) = a.background {
             let [r8, g8, b8, _] = c.to_rgba8();
@@ -190,6 +203,64 @@ mod tests {
         menu(&mut app, &ctx, "window.panel.layerComps", json!({})).unwrap();
         assert!(app.ui.panels.history);
         assert_eq!(app.ui.dock_tabs.history, 2);
+    }
+
+    #[test]
+    fn fit_artboard_centres_a_board_with_large_coordinates() {
+        // #981: `(b.x0 + b.x1) as f32` overflowed i32 for boards near ±2^30 or the i32 edges,
+        // panicking outside any dispatch guard.
+        for (params, want) in [
+            (json!({"x": 2147483000, "y": 0, "width": 600, "height": 1000}), [(2147483000.0 + 2147483600.0) / 2.0, 500.0]),
+            (json!({"x": 1073741824, "width": 50, "height": 20}), [1073741849.0, 10.0]),
+            (json!({"y": -1073741840, "width": 50, "height": 20}), [25.0, -1073741830.0]),
+        ] {
+            let (mut app, ctx) = app();
+            let i = app.session.active_index().unwrap();
+            app.run("layer.new.artboard", params.clone()).unwrap();
+            app.sync_views();
+            menu(&mut app, &ctx, "view.fitArtboardOnScreen", json!({})).unwrap();
+            // The view centre is f32, so compare against the true midpoint rounded to f32.
+            let c = app.ui.views[i].center;
+            assert_eq!(c, [want[0] as f32, want[1] as f32], "{params}");
+        }
+    }
+
+    fn drag(app: &mut PhotocraftApp, from: [f64; 2], by: [f64; 2], mods: egui::Modifiers) {
+        use crate::canvas::{ToolEvent, tool_event};
+        tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
+        for t in [0.5, 1.0] {
+            tool_event(app, ToolEvent::Move { x: from[0] + by[0] * t, y: from[1] + by[1] * t, pressure: 1.0 }, mods);
+        }
+        tool_event(app, ToolEvent::Up { x: from[0] + by[0], y: from[1] + by[1] }, mods);
+    }
+
+    fn boards(app: &PhotocraftApp) -> Vec<photocraft_geom::Rect> {
+        app.session.active().unwrap().doc.artboards().iter().map(|b| b.2.rect).collect()
+    }
+
+    /// #1531: the Move tool drags a board by an empty spot on it (Auto-Select picks the board, not
+    /// the Background under it), and ⌥-drag drags a copy off the original.
+    #[test]
+    fn move_tool_drags_an_artboard_by_its_empty_area() {
+        let (mut app, _) = app();
+        app.run("layer.new.artboard", json!({"rect": [0, 0, 40, 40]})).unwrap();
+        let bg = app.session.active().unwrap().doc.layers[0].id.0;
+        app.run("layer.select", json!({"layer": bg})).unwrap();
+        app.ui.tool = crate::state::Tool::Move;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        drag(&mut app, [20.0, 20.0], [10.0, 5.0], egui::Modifiers::NONE);
+        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(10, 5, 50, 45)]);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.active_layer, Some(st.doc.artboards()[0].0));
+        // ⌥-drag: the copy follows the pointer, the original stays.
+        drag(&mut app, [20.0, 20.0], [50.0, 0.0], egui::Modifiers::ALT);
+        let mut got = boards(&app);
+        got.sort_by_key(|r| r.x0);
+        assert_eq!(got, vec![photocraft_geom::Rect::new(10, 5, 50, 45), photocraft_geom::Rect::new(60, 5, 100, 45)]);
+        // One undo step takes the copy back.
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(boards(&app).len(), 1);
     }
 
     #[test]

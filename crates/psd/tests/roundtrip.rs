@@ -285,3 +285,30 @@ fn save_and_open() {
     assert_eq!(g, f);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A density-only mask record written in the spec's order (parameters, then the real-mask
+/// fields) used to be read back in Photoshop's order, which moved the density into the real
+/// mask's background and dropped it from the parameters (#949). The model must survive the
+/// round trip, not only the bytes.
+#[test]
+fn spec_order_density_only_mask_round_trips_as_a_model() {
+    let mut f = testgen::small(Version::Psd, Compression::Raw);
+    let layer = &mut f.layers_mut()[0];
+    layer.mask = MaskData::Mask(LayerMask {
+        rect: Rect::from_xywh(0, 0, 1, 1),
+        default_color: 255,
+        flags: LayerMask::FLAG_PARAMETERS,
+        parameters: Some(MaskParameters { flags: 1, user_density: Some(64), ..Default::default() }),
+        real: Some(RealMask { flags: 0, background: 0, rect: Rect::from_xywh(0, 0, 1, 1) }),
+        trailing: vec![],
+        real_first: false,
+    });
+    // The generated 2 x 2 mask channel is replaced by one that matches the 1 x 1 rectangle.
+    let mask_channel = layer.channels.iter_mut().find(|c| c.id == -2).expect("the generated layer has a mask channel");
+    *mask_channel = ChannelData::encode(-2, Compression::Raw, &[64], 1, 1, 8, Version::Psd).unwrap();
+    let b = f.to_bytes().unwrap();
+    let g = PsdFile::from_bytes(&b).unwrap();
+    assert_eq!(g, f, "model round trip");
+    assert_eq!(g.layers()[0].decode_channel(-2, 8, Version::Psd).unwrap(), vec![64]);
+    assert_eq!(g.to_bytes().unwrap(), b, "byte stability");
+}

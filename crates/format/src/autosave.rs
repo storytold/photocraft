@@ -21,7 +21,7 @@ use photocraft_doc::Document;
 use serde::{Deserialize, Serialize};
 
 use crate::store::write_atomic;
-use crate::{PcraftWriter, Result, SaveOptions, SaveStats};
+use crate::{FormatError, PcraftWriter, Result, SaveOptions, SaveStats};
 
 /// Sidecar describing an autosave.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,7 +73,16 @@ impl Autosaver {
         let bundle = dir.join(format!("{key}.pcraft"));
         let sidecar = dir.join(format!("{key}.json"));
         let last2 = last.clone();
-        let handle = std::thread::Builder::new().name(format!("autosave-{key}")).spawn(move || worker(rx, bundle, sidecar, last2)).ok();
+        // A thread that never started must not look like a working autosave: record the
+        // failure where `last_result`/`flush` report it, so recovery health checks see it.
+        let spawned = std::thread::Builder::new().name(format!("autosave-{key}")).spawn(move || worker(rx, bundle, sidecar, last2));
+        let handle = match spawned {
+            Ok(h) => Some(h),
+            Err(e) => {
+                note(&last, Err(FormatError::Io(std::io::Error::other(format!("the autosave thread could not start: {e}")))));
+                None
+            }
+        };
         Autosaver { dir, key, tx: Some(tx), handle, last }
     }
 
@@ -249,4 +258,29 @@ fn remove_entry(dir: &Path, key: &str) -> Result<()> {
         std::fs::remove_file(sidecar)?;
     }
     Ok(())
+}
+
+/// Record the outcome of the last save attempt where `last_result`/`flush` report it. A
+/// poisoned lock keeps the previous result rather than panicking in a crash-recovery path.
+fn note(last: &Arc<Mutex<Option<Result<SaveStats>>>>, r: Result<SaveStats>) {
+    if let Ok(mut g) = last.lock() {
+        *g = Some(r);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_spawn_failure_is_reported_not_silent() {
+        // What the spawn-failure arm of `Autosaver::new` records: recovery health checks
+        // read this through `last_result`/`flush` instead of seeing a working autosave.
+        let last = Arc::new(Mutex::new(None));
+        note(&last, Err(FormatError::Io(std::io::Error::other("the autosave thread could not start: resources"))));
+        let g = last.lock().expect("lock");
+        let err = g.as_ref().and_then(|r| r.as_ref().err()).expect("the failure is recorded");
+        let msg = err.to_string();
+        assert!(msg.contains("could not start"), "{msg}");
+    }
 }

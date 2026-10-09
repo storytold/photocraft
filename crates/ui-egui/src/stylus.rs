@@ -15,9 +15,10 @@
 //!   the eraser end into the [`StylusFeed`] before winit handles each event.
 //! - **Linux X11**: the desktop app reads XInput2 raw valuator events on its own X connection
 //!   (`photocraft-tablet`, x11rb) and writes them into the [`StylusFeed`].
-//! - **Linux Wayland**: no tablet input yet (`zwp_tablet_v2` would have to share winit's
-//!   connection); pressure is 1. Launching with `WAYLAND_DISPLAY=` runs the app under Xwayland,
-//!   which reports tablet valuators.
+//! - **Linux Wayland**: compositors give a pen only to clients that bind `zwp_tablet_v2`, which
+//!   winit doesn't (it would have to share winit's connection), so with a pen attached the
+//!   desktop app opens its window through Xwayland, which reports tablet valuators to the X11
+//!   reader. `PHOTOCRAFT_NATIVE_WAYLAND=1` keeps native Wayland, where the pen has no input.
 //!
 //! Preferences › Tools › Use Tablet Pressure off makes a pen paint like a mouse. Flipping the pen
 //! to its eraser end selects the Eraser tool and flipping back restores the previous tool, as in

@@ -81,6 +81,14 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     true
 }
 
+impl PhotocraftApp {
+    /// Whether closing now would lose work: a document has unsaved changes and closing wasn't
+    /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
+    pub fn has_unsaved_work(&self) -> bool {
+        !self.allow_close && self.session.documents().iter().any(|d| d.is_dirty())
+    }
+}
+
 /// Called once per frame: holds back a window close request while there is unsaved work.
 pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
@@ -118,33 +126,58 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Saves `doc` in place; false when it is gone, the save failed or its file dialog was cancelled.
+/// Saves `doc`; true once it is saved. A document without a file to write back to asks where in
+/// the save dialog: the prompt then hides until it is answered, and moves on only if it saved.
 fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     let Some(i) = index_of(app, doc) else { return false };
     app.session.set_active(i);
     app.jobs.last_started = None;
-    match crate::menus::invoke_unguarded(app, ctx, "file.save", json!({})) {
-        Ok(_) => {
-            if let Some(job) = app.jobs.last_started.take() {
-                if let Some(prompt) = app.discard.as_mut() {
-                    prompt.saving = Some(job);
-                }
-                false
-            } else {
-                true
+    let saved = crate::menus::invoke_unguarded(app, ctx, "file.save", json!({}));
+    if saved.is_ok() && app.file_dialog_open() {
+        let ctx = ctx.clone();
+        app.after_file_dialog(move |app, saved| {
+            let saved = saved.map_err(couldnt_save)?;
+            // Still the prompt that asked (quitting may have replaced it meanwhile).
+            if app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc) && saved_or_waiting(app, doc) {
+                advance(app, &ctx);
             }
-        }
+            Ok(saved)
+        });
+        return false;
+    }
+    match saved {
+        Ok(_) => saved_or_waiting(app, doc),
         // Backing out of the file dialog is the user's choice, not an error.
-        Err(e) if e == "cancelled" => false,
+        Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
-            app.ui.status = format!("Couldn't save: {e}");
+            app.ui.status = couldnt_save(e);
             app.ui.status_error = true;
             false
         }
     }
 }
 
+/// A dialog answer can start a save worker; wait for its publication before discarding pixels.
+fn saved_or_waiting(app: &mut PhotocraftApp, doc: DocId) -> bool {
+    if let Some(job) = app.jobs.last_started.take() {
+        if let Some(prompt) = app.discard.as_mut() {
+            prompt.saving = Some(job);
+        }
+        return false;
+    }
+    index_of(app, doc).is_some_and(|i| !app.session.documents()[i].is_dirty())
+}
+
+/// A save failure as reported ("cancelled" stays as it is: it isn't reported).
+fn couldnt_save(e: String) -> String {
+    if e == crate::file_dialog::CANCELLED { e } else { format!("Couldn't save: {e}") }
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // Hidden while Save's file dialog is up; it's back if that is cancelled.
+    if app.file_dialog_open() {
+        return;
+    }
     if let Some(job) = app.discard.as_ref().and_then(|p| p.saving) {
         if app.session.jobs().iter().any(|j| j.id == job) {
             return;
@@ -245,6 +278,61 @@ fn mnemonic(label: &str, key: Key) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn async_save_dialog_waits_for_publication_and_keeps_failed_or_newer_work() {
+        for (fails, edited) in [(false, false), (true, false), (false, true)] {
+            let mut app = app_with_docs(1);
+            make_dirty(&mut app, 0);
+            let id = doc_id(&app, 0);
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let gate = std::sync::Mutex::new(rx);
+            app.services.export_path = Some(std::sync::Arc::new(move |_, _, _, _| {
+                gate.lock().unwrap().recv().unwrap();
+                if fails { Err("scratch write failed".into()) } else { Ok(Vec::new()) }
+            }));
+            let (dialog, _) = crate::file_dialog::fake(vec![Some(crate::FileDialogAnswer::SaveTo("kept.psb".into()))]);
+            app.services.file_dialog = Some(dialog);
+            app.background_jobs = true;
+            let ctx = egui::Context::default();
+            PhotocraftApp::setup_context(&ctx, Default::default());
+            assert!(intercept(&mut app, "file.close", &json!({})));
+            assert!(!save(&mut app, &ctx, id));
+            assert!(app.file_dialog_open());
+            // A job marker left by a command run while the dialog was open is unrelated.
+            app.jobs.last_started = Some(photocraft_engine::jobs::JobId(u64::MAX));
+            app.poll_file_dialog(&ctx, None);
+            assert!(!app.file_dialog_open());
+            assert!(app.discard.as_ref().unwrap().saving.is_some());
+            show(&mut app, &ctx);
+            assert_eq!(app.session.documents().len(), 1, "the dialog answer must not discard a pending save");
+            if edited {
+                app.session
+                    .edit("later edit", |doc, _| {
+                        doc.name = "newer work".into();
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            tx.send(()).unwrap();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while app.session.has_jobs() && std::time::Instant::now() < until {
+                crate::jobs_ui::tick(&mut app, &ctx);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(!app.session.has_jobs());
+            ctx.run_ui(egui::RawInput::default(), |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+            if fails || edited {
+                assert!(app.discard.is_some());
+                assert!(app.session.active().unwrap().is_dirty());
+                assert_eq!(app.session.documents().len(), 1);
+            } else {
+                assert!(app.discard.is_none());
+                assert!(app.session.documents().is_empty());
+            }
+        }
+    }
 
     #[test]
     fn save_before_close_waits_for_background_publication() {
@@ -391,17 +479,29 @@ mod tests {
 
     type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
 
+    /// The unsaved-changes prompt for `command` over `app`'s dirty documents, as `os` draws it (with
+    /// the file dialogs shown and answered at the end of each frame, as the app does).
+    fn prompt_for(app: PhotocraftApp, command: &str, os: egui::os::OperatingSystem) -> Prompted {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, app| {
+                show(app, ui.ctx());
+                app.poll_file_dialog(ui.ctx(), None);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.ctx.set_os(os);
+        assert!(intercept(h.state_mut(), command, &Value::Null));
+        h.run_steps(2);
+        h
+    }
+
     /// The unsaved-changes prompt for Close All over two dirty documents, as `os` draws it.
     fn prompt_on(os: egui::os::OperatingSystem) -> Prompted {
         let mut app = app_with_docs(2);
         make_dirty(&mut app, 0);
         make_dirty(&mut app, 1);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        h.ctx.set_os(os);
-        assert!(intercept(h.state_mut(), "file.closeAll", &Value::Null));
-        h.run_steps(2);
-        h
+        prompt_for(app, "file.closeAll", os)
     }
 
     /// The buttons named `labels`, sorted by where they are drawn, left to right.
@@ -468,29 +568,63 @@ mod tests {
 
     #[test]
     fn enter_takes_the_default_answer_or_the_focused_button() {
-        use std::{cell::Cell, rc::Rc};
         let mut h = prompt_on(egui::os::OperatingSystem::Windows);
-        let asked = Rc::new(Cell::new(false));
-        let seen = asked.clone();
         // Backing out of the save dialog keeps the prompt.
-        h.state_mut().services.pick_save = Some(Box::new(move |_| {
-            seen.set(true);
-            None
-        }));
+        let (show, asked) = crate::file_dialog::fake(vec![None]);
+        h.state_mut().services.file_dialog = Some(show);
         h.key_press(Key::Enter);
         h.run_steps(2);
-        assert!(asked.get(), "Enter answered Yes, which saves");
+        assert_eq!(asked.borrow().len(), 1, "Enter answered Yes, which saves");
         assert_eq!(docs_left(&h), Some(2));
         // Tab to No: Enter now presses it.
         for _ in 0..2 {
             h.key_press(Key::Tab);
             h.run_steps(2);
         }
-        asked.set(false);
         h.key_press(Key::Enter);
         h.run_steps(2);
-        assert!(!asked.get());
+        assert_eq!(asked.borrow().len(), 1, "no second dialog");
         assert_eq!(docs_left(&h), Some(1), "Enter pressed the focused No");
+    }
+
+    #[test]
+    fn saving_from_the_prompt_waits_for_the_save_dialog_then_closes() {
+        use crate::{FileDialogAnswer, FileDialogReply};
+        use egui_kittest::kittest::Queryable;
+        use std::{cell::RefCell, rc::Rc};
+        let written: Rc<RefCell<Vec<String>>> = Rc::default();
+        let (w, waiting): (_, Rc<RefCell<Option<FileDialogReply>>>) = (written.clone(), Rc::default());
+        let held = waiting.clone();
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+        app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+            w.borrow_mut().push(p.to_string());
+            Ok(())
+        }));
+        // A dialog the user takes their time with.
+        app.services.file_dialog = Some(Box::new(move |_, _, reply| *held.borrow_mut() = Some(reply)));
+        let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
+        let answer = |h: &mut Prompted, a: Option<FileDialogAnswer>| {
+            waiting.borrow_mut().take().expect("the save dialog is open").send(a);
+            h.run_steps(2);
+        };
+        // Cancelling the save dialog brings the prompt back.
+        h.key_press(Key::Y);
+        h.run_steps(3);
+        assert!(h.state().file_dialog_open());
+        assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the dialog");
+        answer(&mut h, None);
+        assert_eq!(docs_left(&h), Some(1));
+        assert!(h.query_by_label("(Y)es").is_some());
+        // Saving closes the document.
+        h.key_press(Key::Y);
+        h.run_steps(3);
+        assert_eq!(h.state().session.documents().len(), 1, "still open while the dialog is");
+        answer(&mut h, Some(FileDialogAnswer::SaveTo("/pics/kept.psd".into())));
+        assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty());
     }
 
     /// One frame with the window's close button pressed; whether the guard cancelled the close.
@@ -513,6 +647,16 @@ mod tests {
         make_dirty(&mut app, 0);
         assert!(press_window_close(&mut app));
         assert!(app.discard.is_some());
+    }
+
+    #[test]
+    fn unsaved_work_is_any_dirty_document_until_closing_is_confirmed() {
+        let mut app = app_with_docs(2);
+        assert!(!app.has_unsaved_work());
+        make_dirty(&mut app, 1);
+        assert!(app.has_unsaved_work(), "a dirty document that isn't the active one counts");
+        app.allow_close = true;
+        assert!(!app.has_unsaved_work());
     }
 
     #[test]

@@ -174,10 +174,15 @@ impl Headless {
             .map(|f| f.trim_start_matches('.').eq_ignore_ascii_case("pcraft"))
             .unwrap_or_else(|| target.extension().is_some_and(|e| e.eq_ignore_ascii_case("pcraft")));
         if is_native {
+            // Saving by index must not retarget the next automation command.
+            let previously_active = self.session.active_index();
             self.session.set_active(i);
             if let Some(st) = self.session.active_mut() {
                 st.saved_revision = st.revision;
                 st.path = Some(target.to_string_lossy().into_owned());
+            }
+            if let Some(active) = previously_active {
+                self.session.set_active(active);
             }
         }
         Ok(json!({ "path": target.to_string_lossy(), "warnings": warnings }))

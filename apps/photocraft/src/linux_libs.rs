@@ -13,7 +13,7 @@
 //! warn and start anyway. `PHOTOCRAFT_SKIP_LIB_CHECK=1` skips the check.
 //!
 //! The parsing and decision logic is pure and tested on every platform; only [`preflight`]
-//! touches the system, and it is only called on Linux.
+//! and [`available`] touch the system, and they are only called on Linux.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
@@ -257,18 +257,28 @@ fn read_ldconfig() -> Option<String> {
     None
 }
 
-/// Run the check against this system. `Err` carries the message to print before exiting with a
-/// non-zero status; a warning is printed here and the app starts.
-pub fn preflight() -> Result<(), String> {
+/// This system's linker cache and library directories.
+fn system_probe() -> Probe {
+    Probe { ldconfig: read_ldconfig(), dirs: search_dirs(std::env::var("LD_LIBRARY_PATH").ok().as_deref()) }
+}
+
+/// Are all the libraries `session` needs found on this system? (For choosing a display server:
+/// libraries the check can't find count as missing.)
+pub fn available(session: DisplaySession) -> bool {
+    check(session, &system_probe(), |p| p.exists()) == Verdict::Ok
+}
+
+/// Run the check for the display server the window opens on against this system. `Err` carries
+/// the message to print before exiting with a non-zero status; a warning is printed here and the
+/// app starts.
+pub fn preflight(session: DisplaySession) -> Result<(), String> {
     if std::env::var_os("PHOTOCRAFT_SKIP_LIB_CHECK").is_some_and(|v| !v.is_empty() && v != "0") {
         return Ok(());
     }
-    let session = session_from_env(|k| std::env::var(k).ok());
     if session == DisplaySession::None {
         return Ok(());
     }
-    let probe = Probe { ldconfig: read_ldconfig(), dirs: search_dirs(std::env::var("LD_LIBRARY_PATH").ok().as_deref()) };
-    match check(session, &probe, |p| p.exists()) {
+    match check(session, &system_probe(), |p| p.exists()) {
         Verdict::Ok => Ok(()),
         Verdict::Missing { missing, conclusive } => {
             let distro = std::fs::read_to_string("/etc/os-release").map(|t| distro_from_os_release(&t)).unwrap_or(Distro::Unknown);

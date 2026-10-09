@@ -174,12 +174,14 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 /// Run several commands as one history step labelled `label`.
 fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (before, history) = (st.doc.clone(), st.history.clone());
+    let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
     let r = f(s);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.history = history;
     match r {
         Ok(v) => {
+            // As in `Session::edit`: undo targets what was selected just before the step (#1356).
+            st.history.set_current_layers(prior);
             st.history.record(label, before, st.layer_target());
             st.history.trim(&st.doc);
             st.coalesce = None;
@@ -510,9 +512,12 @@ fn summary(feats: &[Feature], all_values_median: f64) -> Feature {
     }
 }
 
-/// Selection mask (coverage ≥ 0.5) over `r`, or every pixel when there is no selection.
-fn selection_mask(d: &Document, r: Rect) -> Vec<bool> {
-    let n = (r.width() * r.height()) as usize;
+/// Largest area Record Measurements handles in one pass: the gray render alone is 16 bytes per
+/// pixel, and the label buffer and mask come on top (#933).
+pub const MAX_MEASURE_PIXELS: u64 = 400_000_000;
+
+/// Selection mask (coverage ≥ 0.5) over `r` (`n` pixels), or every pixel when there is no selection.
+fn selection_mask(d: &Document, r: Rect, n: usize) -> Vec<bool> {
     match &d.selection {
         None => vec![true; n],
         Some(sel) => {
@@ -536,8 +541,19 @@ fn selection_rows(d: &Document) -> Result<(Feature, Vec<Feature>)> {
     if r.is_empty() {
         return Err(EngineError::Other("the selection is empty".into()));
     }
+    // A legal 65536×65536 document is 2^32 pixels: size everything from a checked count,
+    // and refuse what cannot be measured in one pass instead of overflowing (#933).
+    let n = u64::from(r.width()) * u64::from(r.height());
+    let Some(n) = (n <= MAX_MEASURE_PIXELS).then(|| usize::try_from(n).ok()).flatten() else {
+        return Err(EngineError::Other(format!(
+            "the area is too large to measure ({}×{} px; max {} megapixels): select a smaller region",
+            r.width(),
+            r.height(),
+            MAX_MEASURE_PIXELS / 1_000_000
+        )));
+    };
     let (w, h) = (r.width() as usize, r.height() as usize);
-    let mask = selection_mask(d, r);
+    let mask = selection_mask(d, r, n);
     let gray = gray_image(d, r);
     let range = gray_range(d.depth);
     let feats = measure_features(&mask, &gray, w, h, (r.x0, r.y0), range);
@@ -906,8 +922,8 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         x @ ("selection" | "ruler" | "count") => x,
         other => return Err(bad(CMD, format!("unknown source `{other}` (auto|selection|ruler|count)"))),
     };
-    s.analysis.next_measurement += 1;
-    let label = format!("Measurement {}", s.analysis.next_measurement);
+    // Numbered only once the rows exist, so a failed measurement does not use up a label.
+    let label = format!("Measurement {}", s.analysis.next_measurement + 1);
     let now = p.get("dateTime").and_then(Value::as_str).map(str::to_string).unwrap_or_else(now_iso);
     let factor = d.measurement.scale.factor();
     let mut rows: Vec<Map<String, Value>> = Vec::new();
@@ -939,6 +955,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             rows.push(m);
         }
     }
+    s.analysis.next_measurement += 1;
     let keep = s.analysis.data_points.of(source).to_vec();
     let mut ids = Vec::new();
     for mut m in rows {
@@ -1021,6 +1038,9 @@ fn nice_length(d: &Document) -> f64 {
     [5.0, 2.0, 1.0].into_iter().map(|m| m * e).find(|v| *v <= target).unwrap_or(e)
 }
 
+/// The shortest image a scale bar fits: four times its 2 px minimum height (#932).
+const MIN_SCALE_MARKER_HEIGHT: f64 = 8.0;
+
 fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.analysis.placeScaleMarker";
     let d = doc(s)?;
@@ -1033,6 +1053,11 @@ fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
     let (w, h) = (f64::from(d.size.width), f64::from(d.size.height));
     if px < 1.0 || px > w {
         return Err(bad(CMD, format!("a {length} {} bar is {px:.1} px; it must fit the {w} px wide image", sc.units)));
+    }
+    // The bar is at least 2 px tall and at most a quarter of the image, so a shorter image has no
+    // room for it (and would invert the height clamp below, which panics) (#932).
+    if h < MIN_SCALE_MARKER_HEIGHT {
+        return Err(bad(CMD, format!("the image is {h} px tall; a scale marker needs at least {MIN_SCALE_MARKER_HEIGHT} px")));
     }
     let font_size = p.get("fontSize").and_then(Value::as_f64).unwrap_or(12.0).clamp(1.0, 1000.0);
     let font = p.get("font").and_then(Value::as_str).map(str::to_string);
@@ -1051,8 +1076,11 @@ fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
     let margin = (w.min(h) * 0.03).round().max(2.0);
     let bar_h = (font_size / 4.0).round().clamp(2.0, h / 4.0);
     let text_h = if show_text { font_size * 1.25 } else { 0.0 };
-    let bar_y = if text_top { h - margin - bar_h } else { h - margin - bar_h - text_h };
-    let bar = Rect::new(margin as i32, bar_y.round() as i32, (margin + px).round() as i32, (bar_y + bar_h).round() as i32);
+    // Keep the bar on the canvas when the text under it doesn't fit; the label is clipped instead (#932).
+    let bar_y = if text_top { h - margin - bar_h } else { h - margin - bar_h - text_h }.max(0.0);
+    // Likewise pull a bar nearly as wide as the image in from the right edge (#932).
+    let bar_x = margin.min(w - px);
+    let bar = Rect::new(bar_x.round() as i32, bar_y.round() as i32, (bar_x + px).round() as i32, (bar_y + bar_h).round() as i32);
     let label = format!("{} {}", trim_num(length), sc.units);
     compound(s, "Place Scale Marker", |s| {
         let fmt = doc(s)?.pixel_format();

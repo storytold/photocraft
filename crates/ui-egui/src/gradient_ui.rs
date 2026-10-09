@@ -562,11 +562,13 @@ pub fn paint_thumbnail(ui: &egui::Ui, layer: LayerId, f: &Fill, rect: Rect) -> b
     true
 }
 
-/// Options-bar swatch of the current gradient (live mode uses the Gradients panel selection).
-pub fn preset_swatch(ui: &mut egui::Ui, stops: &[(f32, [f32; 4])]) {
+/// Options-bar swatch of the current gradient. Both modes paint the selected preset (classic
+/// drags no longer replace it with opaque foreground/background colours), so both show it.
+pub fn preset_swatch(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let stops = app.session.presets.gradient.resolve(app.session.tools.foreground, app.session.tools.background);
     let (r, resp) = ui.allocate_exact_size(vec2(96.0, 20.0), Sense::hover());
-    paint_ramp(ui.painter(), r, |u| photocraft_algo::paint::sample_stops(stops, u));
+    paint_ramp(ui.painter(), r, |u| photocraft_algo::paint::sample_stops(&stops, u));
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let _ = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
 }
@@ -947,6 +949,65 @@ mod tests {
         app.ui.tool_options.gradient_classic = true;
         drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
         assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "no fill layer in classic mode");
+    }
+
+    #[test]
+    fn classic_drag_preserves_preset_transparency_at_all_depths() {
+        for depth in [8, 16, 32] {
+            for reverse in [false, true] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.run("file.new", json!({"width": 200, "height": 120, "depth": depth, "background": "transparent"})).unwrap();
+                app.ui.tool = Tool::Gradient;
+                app.ui.tool_options.gradient_classic = true;
+                app.ui.tool_options.gradient_reverse = reverse;
+                app.ui.tool_options.gradient_dither = false;
+                app.ui.tool_options.fill_opacity = 50.0;
+                app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+                app.run("gradient.presets.select", json!({"preset": "Foreground to Transparent"})).unwrap();
+                let before = app.session.active().unwrap().history.past_len();
+                drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
+                let st = app.session.active().unwrap();
+                let surface = st.doc.layers[0].surface().unwrap();
+                for x in [0, 100, 199] {
+                    let u = ((x as f32 - 20.0) / 160.0).clamp(0.0, 1.0);
+                    let expected = 0.5 * if reverse { u } else { 1.0 - u };
+                    let px = surface.pixel(x, 60);
+                    assert!((px[3] - expected).abs() < 0.01, "depth {depth}, reverse {reverse}, x {x}: {px:?}");
+                    if expected > 0.01 {
+                        assert!(px[0] > 0.99 && px[1] < 0.01 && px[2] < 0.01, "preset colour: {px:?}");
+                    }
+                }
+                assert_eq!(st.history.past_len(), before + 1);
+                app.run("edit.undo", json!({})).unwrap();
+                assert_eq!(app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(100, 60)[3], 0.0);
+                app.run("gradient.presets.select", json!({"stops": [[0, "#00ff00"], [1, "#00ff00"]], "transparency": [[0, 60], [1, 20]]})).unwrap();
+                drag(&mut app, [20.0, 60.0], [180.0, 60.0]);
+                let px = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(100, 60);
+                assert!((px[3] - 0.2).abs() < 0.01 && px[1] > 0.99 && px[0] < 0.01, "custom semi-transparent colour: {px:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_transparent_preset_reaches_classic_canvas_over_existing_art() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = app_with_gradient("linear");
+        app.run("paint.gradient", json!({"from": [0, 0], "to": [199, 0], "colors": ["#ff0000", "#ff0000"]})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool_options.gradient_classic = true;
+        app.ui.tool_options.gradient_dither = false;
+        let mut h = Harness::builder().with_size(vec2(420.0, 600.0)).build_ui_state(|ui, app| crate::preset_panels::gradients_panel(app, ui), app);
+        h.get_by_label("Foreground to Transparent").click();
+        h.run();
+        assert_eq!(h.state().session.presets.gradient.name, "Foreground to Transparent");
+        drag(h.state_mut(), [20.0, 60.0], [180.0, 60.0]);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), 2);
+        let surface = st.doc.layers[1].surface().unwrap();
+        assert!(surface.pixel(0, 60)[3] > 0.99);
+        assert!((surface.pixel(100, 60)[3] - 0.5).abs() < 0.01);
+        assert!(surface.pixel(199, 60)[3] < 0.01, "transparent end reveals existing art");
+        assert_eq!(st.doc.layers[0].surface().unwrap().pixel(100, 60), vec![1.0, 0.0, 0.0, 1.0], "existing art is unchanged");
     }
 
     #[test]

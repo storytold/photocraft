@@ -51,6 +51,7 @@ fn main() {
             height: 50.0,
             white_is_high: true,
         },
+        FilterParams::Relight { angle: 45.0, elevation: 40.0, intensity: 40.0, ambient: 55.0, warmth: 0.0, softness: 25.0 },
     ];
     for p in cases {
         if only.as_deref().is_some_and(|o| !p.label().to_lowercase().contains(&o.to_lowercase())) {

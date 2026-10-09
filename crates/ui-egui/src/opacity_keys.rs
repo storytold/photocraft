@@ -63,10 +63,14 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut out = Vec::new();
         i.events.retain(|e| match e {
             // The physical key, so ⇧+digit is still a digit whatever symbol the layout puts there.
-            Event::Key { key, physical_key, pressed: true, modifiers, .. } if !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
+            Event::Key { key, physical_key, pressed: true, repeat, modifiers } if !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
                 match physical_key.and_then(digit).or_else(|| digit(*key)) {
                     Some(d) => {
-                        out.push((d, modifiers.shift));
+                        // A held key's auto-repeat is still one digit, not a second one typed
+                        // quickly (holding 4 set 44%, #953); it is consumed all the same.
+                        if !repeat {
+                            out.push((d, modifiers.shift));
+                        }
                         false
                     }
                     None => true,
@@ -203,6 +207,24 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!((a.session.tools.brush.opacity - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_held_digit_is_one_digit() {
+        // The press and its first auto-repeat in one frame used to read as "4 then 4" = 44% (#953).
+        let mut a = app(Tool::Brush);
+        let ctx = egui::Context::default();
+        let key = |repeat| Event::Key { key: Key::Num4, physical_key: Some(Key::Num4), pressed: true, repeat, modifiers: egui::Modifiers::NONE };
+        let input = egui::RawInput { events: vec![key(false), key(true)], ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            handle(&mut a, ui.ctx());
+            assert_eq!(ui.input(|i| i.events.len()), 0, "repeats are consumed, not passed on");
+        });
+        out.textures_delta.clear();
+        assert!((a.session.tools.brush.opacity - 0.4).abs() < 1e-6, "{}", a.session.tools.brush.opacity);
+        // A real second press of the same key still makes a two-digit value.
+        press(&mut a, 4, false, crate::gpu_canvas::now_ms());
+        assert!((a.session.tools.brush.opacity - 0.44).abs() < 1e-6, "{}", a.session.tools.brush.opacity);
     }
 
     /// Through the whole app: number keys and ⇧[ ⇧] from the canvas (no widget focused).

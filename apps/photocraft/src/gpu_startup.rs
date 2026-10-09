@@ -130,6 +130,14 @@ pub fn next_safer(tried: GpuBackend, os: Os) -> GpuBackend {
     }
 }
 
+/// Whether a start that returned an error (so it didn't crash in the driver) keeps its marker, so
+/// the next start tries a safer backend. Not when there is none: the CPU path is the end of every
+/// chain, and a marker left there pinned every later start to the same failing path. Not under
+/// `WGPU_BACKEND` either (no plan reads that marker).
+pub fn keep_marker_after_error(plan: &Plan, os: Os) -> bool {
+    plan.env.is_none() && next_safer(plan.backend, os) != plan.backend
+}
+
 /// Decide this launch's backend from the preference, a marker left by a start that crashed,
 /// `WGPU_BACKEND` and `--safe-gpu`.
 pub fn plan(pref: GpuBackend, crashed: Option<&Marker>, env: Option<&str>, safe_gpu: bool, os: Os) -> Plan {
@@ -340,6 +348,12 @@ pub struct Sentinel {
 
 /// The sentinel, shared with eframe's adapter hook and the app's started hook.
 pub type SharedSentinel = Arc<Mutex<Option<Sentinel>>>;
+
+/// Only renderer errors should affect the next launch's graphics backend. Windowing errors
+/// (such as a missing Linux display) and app setup errors never indicate a driver failure.
+pub fn keep_marker_after_run(result: &eframe::Result) -> bool {
+    matches!(result, Err(eframe::Error::Wgpu(_)))
+}
 
 impl Sentinel {
     /// Open (creating) the marker in `dir` and lock it. Returns what a previous start left and,
@@ -556,6 +570,43 @@ mod tests {
         assert_eq!(Marker::parse(&long).adapter.len(), 256);
     }
 
+    #[test]
+    fn a_failed_start_keeps_its_marker_only_when_a_safer_backend_exists() {
+        // GPU backends move down the chain on the next start.
+        assert!(keep_marker_after_error(&plan(Auto, None, None, false, Os::Other), Os::Other));
+        assert!(keep_marker_after_error(&plan(Gl, None, None, false, Os::Other), Os::Other));
+        assert!(keep_marker_after_error(&plan(Dx12, None, None, false, Os::Windows), Os::Windows));
+        assert!(keep_marker_after_error(&plan(Auto, None, None, false, Os::Mac), Os::Mac));
+        // The CPU path is the end of every chain, including the `--safe-gpu` retry.
+        for os in [Os::Windows, Os::Mac, Os::Other] {
+            assert!(!keep_marker_after_error(&plan(Cpu, None, None, false, os), os));
+            assert!(!keep_marker_after_error(&plan(Auto, None, None, true, os), os));
+        }
+        // `WGPU_BACKEND` is the user's choice; no plan reads its marker.
+        assert!(!keep_marker_after_error(&plan(Auto, None, Some("vulkan"), false, Os::Other), Os::Other));
+    }
+
+    /// A failed CPU start (no usable GL adapter under XWayland) left a `cpu` marker, so every
+    /// later start was planned on CPU and failed the same way until the marker was deleted by hand.
+    #[test]
+    fn a_failed_cpu_start_does_not_pin_later_starts() {
+        let dir = temp_dir("cpu-error");
+        let (_, s) = Sentinel::begin(&dir);
+        let mut s = s.expect("sentinel");
+        let failed = plan(Auto, None, None, true, Os::Other);
+        s.write(Marker { backend: failed.backend.name().into(), ..Default::default() }).unwrap();
+        // eframe returned an error: what `main` does with the marker.
+        if keep_marker_after_error(&failed, Os::Other) {
+            drop(s);
+        } else {
+            s.finish();
+        }
+        let (prev, _s) = Sentinel::begin(&dir);
+        assert_eq!(prev, Previous::Clean);
+        assert_eq!(plan(Auto, prev.crashed(), None, false, Os::Other).backend, Auto);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("photocraft-gpu-startup-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -597,6 +648,33 @@ mod tests {
         let (prev, _s) = Sentinel::begin(&dir);
         assert_eq!(prev, Previous::Clean);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn returned_non_graphics_errors_do_not_trigger_backend_recovery() {
+        let cases = [
+            ("success", Ok(()), false),
+            ("app-error", Err(eframe::Error::AppCreation(Box::new(std::io::Error::other("app setup failed")))), false),
+            ("gpu-error", Err(eframe::Error::Wgpu(egui_wgpu::WgpuError::CustomNativeAdapterSelectionError("no adapter".into()))), true),
+        ];
+        for (name, result, keep) in cases {
+            let dir = temp_dir(name);
+            let (_, s) = Sentinel::begin(&dir);
+            let mut s = s.expect("sentinel");
+            s.write(Marker { backend: "vulkan".into(), ..Default::default() }).unwrap();
+            if keep_marker_after_run(&result) {
+                drop(s);
+            } else {
+                s.finish();
+            }
+            let (previous, s) = Sentinel::begin(&dir);
+            assert_eq!(previous.crashed().is_some(), keep, "{name}: {result:?}");
+            if !keep {
+                assert_eq!(plan(Vulkan, previous.crashed(), None, false, Os::Other).backend, Vulkan);
+            }
+            s.expect("sentinel").finish();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

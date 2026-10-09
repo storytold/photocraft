@@ -21,6 +21,20 @@ photocraft-cli run input.psd \
   --out output.png
 ```
 
+### Missing font warnings
+
+If a type layer uses a font family that is not installed, `convert` and `run`
+write a warning to standard error before exporting; they do not silently present
+the fallback rendering as an exact match. `info --compact` includes the same
+warning in its `warnings` JSON array, without writing it to stderr. `run`
+also adds `warnings` to the JSON result for the command that first exposes
+the missing family. A multi-command `run` reports each missing family once,
+even if later commands still use it.
+
+Warnings do not change the saved document's font declarations and do not stop
+the operation. To list or replace the missing families intentionally, use
+`type.resolveMissingFonts` on the document.
+
 Paths supplied to the current CLI are ordinary operating-system paths. The CLI does not restrict them to a workspace root. Batch output creates the requested output directory, and save operations may create parent directories. `batch` refuses an output directory that is its input directory (the results would replace the originals) unless `--in-place` is given. Run untrusted action files only in an appropriately isolated account or environment.
 
 CLI parsing reports malformed flags and JSON as errors, and a flag the subcommand doesn't take (a typo such as `--fromat`) is a usage error (exit status 2) rather than being ignored. It is not a security policy layer. Engine commands remain responsible for validating their own parameters.

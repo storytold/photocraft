@@ -75,6 +75,30 @@ fn dynamic_brush_sections_have_translations_and_draw_in_the_selected_language() 
 }
 
 #[test]
+fn fill_dialog_and_contour_choices_have_translations_and_draw_in_the_selected_language() {
+    let labels = ["Contents:", "Color:", "Custom Pattern:", "Mode:", "Opacity:", "{size} (was {old})"];
+    for language in Lang::all().filter(|language| language.complete_menus()) {
+        let contents = crate::fill_ui::CONTENTS.iter().map(|(_, label)| *label);
+        let contours = photocraft_engine::layer_style::CONTOURS.iter().map(|(name, _)| *name);
+        for text in labels.into_iter().chain(contents).chain(contours) {
+            assert!(has(language, text), "{}: untranslated {text}", language.code());
+        }
+    }
+    with_language(Lang::EN, || {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "pt-br"})).expect("language");
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, crate::fill_ui::COMMAND, json!({})).expect("fill dialog");
+        h.run_steps(4);
+        let text = drawn_text(&h);
+        for want in ["Conteúdo:", "Cor de primeiro plano", "Modo:", "Opacidade:"] {
+            assert!(text.iter().any(|text| text == want), "missing {want}");
+        }
+        assert!(!text.iter().any(|text| text == "Contents:" || text == "Foreground Color"));
+    });
+}
+
+#[test]
 fn cjk_font_order_follows_the_selected_language() {
     use photocraft_text::cjk::CjkScript;
     for (code, script) in [("zh-hans", CjkScript::SimplifiedChinese), ("ja", CjkScript::Japanese), ("ko", CjkScript::Korean)] {

@@ -753,6 +753,27 @@ mod tests {
         }
     }
 
+    /// #1543: a Satin or Bevel & Emboss size or softness far past Photoshop's range rendered a
+    /// blur kernel of 2^62 taps ("capacity overflow"), or ran for minutes at 1e6. The blur width
+    /// is capped at the effect reach, so the document still renders, quickly.
+    #[test]
+    fn oversized_satin_and_bevel_sizes_render() {
+        for (cmd, p) in [
+            ("satin", json!({"size": 1e308})),
+            ("satin", json!({"size": 1_000_000})),
+            ("bevelEmboss", json!({"size": 1e308})),
+            ("bevelEmboss", json!({"soften": 1e308})),
+            ("bevelEmboss", json!({"size": 1_000_000, "soften": 1_000_000})),
+        ] {
+            let mut s = session();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute(&format!("layer.layerStyle.{cmd}"), p.clone()).unwrap();
+            let start = std::time::Instant::now();
+            s.execute("document.pixel", json!({"x": 0, "y": 0})).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"));
+            assert!(start.elapsed().as_secs() < 20, "{cmd} {p}: {:?}", start.elapsed());
+        }
+    }
+
     #[test]
     fn params_are_applied_and_replace_or_add() {
         let mut s = session();

@@ -74,9 +74,15 @@ fn build(app: &PhotocraftApp, exclude: &[LayerId], smart: bool) -> SnapTargets {
     if smart { t.filtered(SnapKind::is_smart) } else { t }
 }
 
-/// Union of the selected layers' bounds (what the Move tool drags).
+/// What the Move tool drags: the selection's bounds where its pixels float (`move_ui`), else the
+/// union of the selected layers' bounds.
 fn moving_rect(app: &PhotocraftApp) -> Option<[f64; 4]> {
     let st = app.session.active()?;
+    if crate::move_ui::moves_selected_pixels(app) {
+        let (dx, dy) = photocraft_engine::float_cmds::floating(st).map_or((0, 0), |f| f.offset);
+        let r = st.doc.selection.as_ref()?.content_bounds().translate(dx, dy);
+        return (!r.is_empty()).then(|| [r.x0, r.y0, r.x1, r.y1].map(f64::from));
+    }
     union(st.selected_layers().into_iter().filter_map(|id| layer_rect(&st.doc, id)))
 }
 

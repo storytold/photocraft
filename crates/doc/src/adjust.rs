@@ -17,6 +17,15 @@ pub fn is_identity_curve(points: &[CurvePoint]) -> bool {
     }
 }
 
+/// Number of values in the table of a `size`³ Color Lookup (`size³ × 3`). `None` for a size
+/// below 2 or one whose table length overflows: a stored document's size is untrusted.
+pub fn lut3d_len(size: u32) -> Option<usize> {
+    if size < 2 {
+        return None;
+    }
+    usize::try_from(size).ok()?.checked_pow(3)?.checked_mul(3)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LevelsChannel {
     pub in_black: f32,
@@ -292,5 +301,15 @@ mod tests {
         assert!(matches!(c, Adjustment::Curves { space: ToneSpace::Rgb, .. }));
         let g: Adjustment = serde_json::from_str(r#"{"GradientMap":{"stops":[],"reverse":true}}"#).unwrap();
         assert!(matches!(g, Adjustment::GradientMap { dither: false, .. }));
+    }
+
+    #[test]
+    fn lut3d_len_rejects_tiny_and_overflowing_sizes() {
+        assert_eq!(lut3d_len(0), None);
+        assert_eq!(lut3d_len(1), None);
+        assert_eq!(lut3d_len(2), Some(24));
+        assert_eq!(lut3d_len(33), Some(33 * 33 * 33 * 3));
+        assert_eq!(lut3d_len(1 << 22), None, "(2²²)³ overflows a 64-bit length");
+        assert_eq!(lut3d_len(u32::MAX), None);
     }
 }

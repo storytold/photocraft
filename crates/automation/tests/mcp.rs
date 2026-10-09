@@ -239,6 +239,25 @@ async fn preview_budget_failure_preserves_the_mcp_session() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_save_rejects_headless_only_options_instead_of_saving_with_defaults() {
+    // Bridge mode forwards only the path to the running app: quality/format/tiffLayers/index
+    // must be refused up front (no bridge connection needed for that) rather than silently
+    // saving with the app's current settings.
+    let server = PhotocraftMcp::bridge("127.0.0.1:1", &"a".repeat(64)).unwrap();
+    let client = connect(server).await;
+    for params in [
+        json!({"path": "out.jpg", "quality": 50}),
+        json!({"path": "out.png", "format": "png"}),
+        json!({"path": "out.tif", "tiffLayers": true}),
+        json!({"path": "out.pcraft", "index": 0}),
+    ] {
+        let r = call(&client, "doc_save", params.clone()).await;
+        assert_eq!(r.is_error, Some(true), "{params}: {:?}", text(&r));
+        assert!(text(&r).contains("headless"), "{params}: {}", text(&r));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn bridge_response_budget_drops_connection_without_retrying_the_operation() {
     use photocraft_automation::{BridgeClient, budgets::MAX_RESPONSE_BYTES};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -489,6 +508,59 @@ async fn bridge_forwards_to_control_protocol() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn bridge_lost_reply_does_not_replay_an_edit_and_next_call_reconnects() {
+    use photocraft_automation::{BridgeClient, Headless};
+    use std::time::Duration;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let app = tokio::spawn(async move {
+            let mut backend = Headless::new();
+            backend.handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+            let initial_layers = backend.session.active().unwrap().doc.layer_count();
+            let initial_history = backend.session.active().unwrap().history.past_len();
+            let mut seen = Vec::new();
+            for connection in 0..2 {
+                let (socket, _) = listener.accept().await.unwrap();
+                let (read, mut write) = socket.into_split();
+                let mut reader = BufReader::new(read);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let (auth, authenticated) = photocraft_automation::security::authentication_reply(&line, CONTROL_TOKEN);
+                assert!(authenticated, "each connection must authenticate");
+                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
+                line.clear();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                seen.push(request["params"]["command"].as_str().unwrap().to_owned());
+                let result = backend.handle(request["method"].as_str().unwrap(), request["params"].clone()).unwrap();
+                if connection == 0 {
+                    // The edit has completed, but both socket halves close before its reply.
+                    continue;
+                }
+                let reply = json!({"id": request["id"], "ok": true, "result": result});
+                write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            }
+            let document = backend.session.active().unwrap();
+            assert_eq!(document.doc.layer_count(), initial_layers + 1, "the edit was applied once");
+            assert_eq!(document.history.past_len(), initial_history + 1, "one undo step");
+            seen
+        });
+        let bridge = BridgeClient::new(&addr, CONTROL_TOKEN).unwrap();
+        let result = bridge.call("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Once"}})).await;
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("operation may have completed"), "{error}");
+        assert!(error.contains("inspect"), "{error}");
+        let document = bridge.call("engine.execute", json!({"command": "document.inspect"})).await.unwrap();
+        assert_eq!(document["layers"].as_array().unwrap().len(), 2);
+        assert_eq!(app.await.unwrap(), ["layer.new.layer", "document.inspect"]);
+    })
+    .await
+    .expect("bridge lost-reply regression must finish");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn bridge_previews_downscale_before_enforcing_the_png_budget() {
     use photocraft_automation::budgets::MAX_PNG_BYTES;
 
@@ -524,6 +596,60 @@ async fn bridge_previews_downscale_before_enforcing_the_png_budget() {
 
     client.cancel().await.unwrap();
     app.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_previews_reject_document_indices() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let mut errors = Vec::new();
+    for tool in ["ui_screenshot", "doc_render_preview"] {
+        let args = json!({"index": 0, "max_side": 20}).as_object().unwrap().clone();
+        let result = client.call_tool(CallToolRequestParams::new(tool).with_arguments(args)).await;
+        let error = match result {
+            Err(error) => Some(error.to_string()),
+            Ok(reply) if reply.is_error == Some(true) => Some(text(&reply)),
+            Ok(_) => None,
+        };
+        errors.push((tool, error));
+
+        let reply = call(&client, tool, json!({"max_side": 20})).await;
+        assert_ne!(reply.is_error, Some(true), "{tool}: {}", text(&reply));
+        let image = reply.content.iter().find_map(|content| content.as_image()).expect("screenshot");
+        let png = base64::engine::general_purpose::STANDARD.decode(&image.data).unwrap();
+        assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (20, 10), "{tool}");
+    }
+    let tools = client.list_all_tools().await.unwrap();
+    let schema = &tools.iter().find(|tool| tool.name == "ui_screenshot").unwrap().input_schema;
+    client.cancel().await.unwrap();
+    let seen = tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
+
+    assert!(errors.iter().all(|(_, error)| error.as_ref().is_some_and(|error| error.contains("index"))), "{errors:?}");
+    assert_eq!(seen.iter().filter(|request| request["method"] == "ui.screenshot").count(), 2, "rejected indices must not reach the app");
+    assert!(schema["properties"].get("index").is_none(), "{schema:?}");
+    assert!(schema["properties"].get("max_side").is_some(), "{schema:?}");
+    assert_eq!(schema.get("additionalProperties"), Some(&json!(false)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_previews_preserve_document_indices() {
+    let client = connect(PhotocraftMcp::headless()).await;
+    json_of(&call(&client, "doc_new", json!({"width": 12, "height": 6, "background": "white"})).await);
+    json_of(&call(&client, "doc_new", json!({"width": 6, "height": 12, "background": "black"})).await);
+    for (args, dimensions, pixel) in [(json!({"index": 0, "max_side": 6}), (6, 3), [255, 255, 255, 255]), (json!({"max_side": 6}), (3, 6), [0, 0, 0, 255])] {
+        let reply = call(&client, "doc_render_preview", args).await;
+        assert_ne!(reply.is_error, Some(true), "{}", text(&reply));
+        let image = reply.content.iter().find_map(|content| content.as_image()).expect("preview");
+        let png = base64::engine::general_purpose::STANDARD.decode(&image.data).unwrap();
+        let image = photocraft_codecs::decode(&png).unwrap();
+        assert_eq!(image.dimensions(), dimensions);
+        assert!(image.to_rgba8().as_chunks::<4>().0.iter().all(|actual| actual[..] == pixel[..]));
+    }
+    assert_eq!(json_of(&call(&client, "session_list", json!({})).await)["active"], 1);
+    let tools = client.list_all_tools().await.unwrap();
+    let schema = &tools.iter().find(|tool| tool.name == "doc_render_preview").unwrap().input_schema;
+    assert!(schema["properties"].get("index").is_some(), "{schema:?}");
+    client.cancel().await.unwrap();
 }
 
 #[test]

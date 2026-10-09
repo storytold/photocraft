@@ -160,7 +160,7 @@ fn closed_rect_stroke_and_alignment() {
         ..Default::default()
     };
     let alpha_area = |sh: &ShapeLayer| {
-        let rgba = CompiledShape::new(sh, DEFAULT_TOLERANCE).render_rgba(Rect::new(0, 0, 150, 150));
+        let rgba = CompiledShape::new(sh, DEFAULT_TOLERANCE, Rect::new(0, 0, 150, 150)).render_rgba(Rect::new(0, 0, 150, 150));
         rgba.iter().map(|p| f64::from(p[3])).sum::<f64>()
     };
     assert!((alpha_area(&shape(StrokeAlign::Inside)) - (100.0f64.powi(2) - 80.0f64.powi(2))).abs() < 0.05);
@@ -219,8 +219,97 @@ fn gradient_fill_spans_bounds() {
         fill: Some(Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false)),
         ..Default::default()
     };
-    let rgba = CompiledShape::new(&sh, DEFAULT_TOLERANCE).render_rgba(Rect::new(0, 0, 100, 10));
+    let rgba = CompiledShape::new(&sh, DEFAULT_TOLERANCE, Rect::new(0, 0, 100, 10)).render_rgba(Rect::new(0, 0, 100, 10));
     assert!(rgba[0][0] < 0.02 && rgba[99][0] > 0.98 && (rgba[50][0] - 0.505).abs() < 0.02);
+}
+
+/// A gradient fill with every non-default field, rendered through `Paint`: the expectations
+/// below are hand-derived (the compositor's own rendering is checked against them by the
+/// parity tests in `photocraft-compose`).
+fn grad(fill: Fill, canvas: Rect) -> Vec<[f32; 4]> {
+    let sh = ShapeLayer { path: shapes::rect(0.0, 0.0, 100.0, 10.0), fill: Some(fill), ..Default::default() };
+    let c = Rect::new(0, 0, canvas.x1.min(100), canvas.y1.min(10));
+    CompiledShape::new(&sh, DEFAULT_TOLERANCE, canvas).render_rgba(c)
+}
+
+#[test]
+fn gradient_midpoints_opacity_stops_offset_and_sorted_stops() {
+    // Linear 0° over the path's 100 × 10 bounds: t is the pixel's left corner / 100, so pixel
+    // x sits at t = x / 100.
+    let g = |midpoints: Vec<f32>, opacity_stops: Vec<(f32, f32)>, offset: (f32, f32), stops: Vec<(f32, Color)>| Fill::Gradient {
+        stops,
+        angle: 0.0,
+        scale: 1.0,
+        style: photocraft_doc::GradientStyle::Linear,
+        reverse: false,
+        opacity_stops,
+        midpoints,
+        offset,
+        dither: false,
+        align: true,
+    };
+    // Midpoint 0.25: the colour is half-way at t = 0.25 (pixel 25).
+    let px = grad(g(vec![0.25], vec![], (0.0, 0.0), vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]), Rect::new(0, 0, 100, 10));
+    assert!((px[25][0] - 0.5).abs() < 1e-3, "{}", px[25][0]);
+    // Opacity stop ramp 1 → 0.5: alpha at t = 0.25 is 0.875.
+    let px = grad(g(vec![], vec![(0.0, 1.0), (1.0, 0.5)], (0.0, 0.0), vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]), Rect::new(0, 0, 100, 10));
+    assert!((px[25][3] - 0.875).abs() < 1e-3, "{}", px[25][3]);
+    // Centre offset half a frame right: t = 0 moves to x = 50, so pixel 75 sits at t = 0.25.
+    let px = grad(g(vec![], vec![], (0.5, 0.0), vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]), Rect::new(0, 0, 100, 10));
+    assert!(px[25][0] < 0.01 && (px[75][0] - 0.25).abs() < 1e-3, "{} {}", px[25][0], px[75][0]);
+    // Unsorted stops are sorted by location: black still left, white right.
+    let px = grad(g(vec![], vec![], (0.0, 0.0), vec![(1.0, Color::WHITE), (0.0, Color::BLACK)]), Rect::new(0, 0, 100, 10));
+    assert!(px[1][0] < 0.02 && px[98][0] > 0.97, "{} {}", px[1][0], px[98][0]);
+}
+
+#[test]
+fn gradient_without_align_with_layer_uses_the_canvas_frame() {
+    let canvas = Rect::new(0, 0, 200, 10);
+    let g = |align: bool| Fill::Gradient {
+        stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)],
+        angle: 0.0,
+        scale: 1.0,
+        style: photocraft_doc::GradientStyle::Linear,
+        reverse: false,
+        opacity_stops: vec![],
+        midpoints: vec![],
+        offset: (0.0, 0.0),
+        dither: false,
+        align,
+    };
+    // Aligned: the 100-px path bounds are the frame, pixel 55 sits at t = 0.55.
+    let px = grad(g(true), canvas);
+    assert!((px[55][0] - 0.55).abs() < 1e-3, "{}", px[55][0]);
+    // Not aligned: the 200-px canvas is the frame, the same pixel sits at t = 0.275.
+    let px = grad(g(false), canvas);
+    assert!((px[55][0] - 0.275).abs() < 1e-3, "{}", px[55][0]);
+}
+
+#[test]
+fn gradient_dither_is_deterministic_and_one_level() {
+    let g = |dither: bool| Fill::Gradient {
+        stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)],
+        angle: 30.0,
+        scale: 1.3,
+        style: photocraft_doc::GradientStyle::Radial,
+        reverse: false,
+        opacity_stops: vec![],
+        midpoints: vec![],
+        offset: (0.1, -0.1),
+        dither,
+        align: true,
+    };
+    let a = grad(g(true), Rect::new(0, 0, 100, 10));
+    let b = grad(g(true), Rect::new(0, 0, 100, 10));
+    assert_eq!(a, b, "dither must be deterministic");
+    let plain = grad(g(false), Rect::new(0, 0, 100, 10));
+    let mut max = 0.0f32;
+    let mut changed = 0;
+    for (p, q) in a.iter().zip(&plain) {
+        max = max.max((p[0] - q[0]).abs());
+        changed += usize::from((p[0] - q[0]).abs() > 1e-6);
+    }
+    assert!(changed > 0 && max <= 1.0 / 255.0 + 1e-6, "changed={changed} max={max}");
 }
 
 #[test]

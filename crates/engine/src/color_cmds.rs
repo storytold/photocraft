@@ -288,8 +288,9 @@ impl ColorState {
         self.proofs.get(&doc).cloned().unwrap_or_else(|| ProofView { gamut_threshold: photocraft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() })
     }
 
-    /// The document's proofing state when it was ever changed (no default allocated).
-    pub(crate) fn proof_ref(&self, doc: DocId) -> Option<&ProofView> {
+    /// Borrow the document's proofing state without cloning its profile or allocating defaults.
+    /// `None` means the unchanged defaults documented by [`Self::proof`].
+    pub fn proof_ref(&self, doc: DocId) -> Option<&ProofView> {
         self.proofs.get(&doc)
     }
 

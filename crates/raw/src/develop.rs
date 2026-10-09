@@ -274,9 +274,9 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         }
     }
 
-    // Camera → ProPhoto, exposure, gamma 1.8, 16 bits.
+    // Camera → ProPhoto, exposure, the profile's tone curve, gamma 1.8, 16 bits.
     let mut out = vec![0u16; w * h * 3];
-    let lut = GammaLut::new();
+    let lut = GammaLut::with_curve(&s.tone_curve);
     par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
         let start = b * band * w * 3;
         let src = &rgb[start..start + chunk.len()];
@@ -347,8 +347,20 @@ struct GammaLut {
 const GAMMA_STEPS: usize = 4096;
 
 impl GammaLut {
+    #[cfg(test)]
     fn new() -> Self {
-        GammaLut { table: (0..=GAMMA_STEPS + 1).map(|i| ((i as f32 / GAMMA_STEPS as f32).min(1.0)).powf(2.0 / 1.8) * 65535.0).collect() }
+        Self::with_curve(&[])
+    }
+
+    /// The gamma-1.8 encoding after a tone curve (see [`Sensor::tone_curve`]; empty: none).
+    fn with_curve(curve: &[[f32; 2]]) -> Self {
+        let table = (0..=GAMMA_STEPS + 1)
+            .map(|i| {
+                let s = (i as f32 / GAMMA_STEPS as f32).min(1.0);
+                tone(curve, s * s).clamp(0.0, 1.0).powf(1.0 / 1.8) * 65535.0
+            })
+            .collect();
+        GammaLut { table }
     }
 
     #[inline]
@@ -360,6 +372,22 @@ impl GammaLut {
         let (a, b) = (self.table[i], self.table[i + 1]);
         (a + (b - a) * f + 0.5) as u16
     }
+}
+
+/// `curve` at linear `v`: linear interpolation between the points in log₂ of the input, a line
+/// through 0 below the first point, the last output beyond the last.
+fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
+    let (Some(first), Some(last)) = (curve.first(), curve.last()) else { return v };
+    if v <= first[0] {
+        return if first[0] > 0.0 { v * first[1] / first[0] } else { first[1] };
+    }
+    if v >= last[0] {
+        return last[1];
+    }
+    let i = curve.partition_point(|p| p[0] <= v).clamp(1, curve.len() - 1);
+    let ([x0, y0], [x1, y1]) = (curve[i - 1], curve[i]);
+    let f = (v.log2() - x0.log2()) / (x1.log2() - x0.log2());
+    y0 + (y1 - y0) * f
 }
 
 /// Applies a TIFF orientation (1–8) to interleaved RGB.
@@ -407,6 +435,22 @@ mod tests {
         assert_eq!(lut.encode(-1.0), 0);
         assert_eq!(lut.encode(2.0), 65535);
         assert_eq!(lut.encode(f32::NAN), 0);
+    }
+
+    #[test]
+    fn tone_curve_is_folded_into_the_gamma_table() {
+        let code = |v: f32| v.powf(1.0 / 1.8) * 65535.0;
+        let lut = GammaLut::with_curve(&[[0.25, 0.5], [1.0, 1.0]]);
+        let near = |got: u16, want: f32| (f32::from(got) - want).abs() <= 2.0;
+        // On a point, between points (linear in log2 of the input), on the line through 0 below the first.
+        assert!(near(lut.encode(0.25), code(0.5)));
+        assert!(near(lut.encode(0.5), code(0.75)), "{} vs {}", lut.encode(0.5), code(0.75));
+        assert!(near(lut.encode(0.125), code(0.25)));
+        assert_eq!(lut.encode(0.0), 0);
+        assert_eq!(lut.encode(1.0), 65535);
+        assert!((0..1000).map(|i| lut.encode(i as f32 / 999.0)).collect::<Vec<_>>().windows(2).all(|w| w[1] >= w[0]));
+        // No curve: the plain gamma 1.8.
+        assert!(near(GammaLut::with_curve(&[]).encode(0.25), code(0.25)));
     }
 
     #[test]

@@ -26,24 +26,25 @@ fn begin(app: &mut PhotocraftApp, mods: Modifiers) {
 }
 
 #[test]
-fn alt_clicks_preserve_outline_and_hover_does_not_draw() {
+fn alt_clicks_add_straight_segments_and_releasing_alt_closes_the_outline() {
     let mut app = app();
     begin(&mut app, Modifiers::NONE);
     event(&mut app, "up", 120.0, 50.0, Modifiers::ALT);
-    assert!(app.session.active().unwrap().doc.selection.is_none());
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "Alt held at the release keeps it open");
+    // Hover with Alt only moves the rubber band.
     event(&mut app, "move", 170.0, 10.0, Modifiers::ALT);
     event(&mut app, "move", 180.0, 100.0, Modifiers::ALT);
     assert_eq!(app.drag.as_ref().unwrap().points.len(), 3);
+    // An Alt click adds a straight segment to it.
     event(&mut app, "down", 180.0, 100.0, Modifiers::ALT);
     event(&mut app, "up", 180.0, 100.0, Modifiers::ALT);
-    assert_eq!(app.drag.as_ref().unwrap().points.len(), 4);
+    event(&mut app, "move", 60.0, 140.0, Modifiers::ALT);
+    event(&mut app, "down", 60.0, 140.0, Modifiers::ALT);
+    event(&mut app, "up", 60.0, 140.0, Modifiers::ALT);
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 5);
     assert_eq!(crate::tool_feedback::badge(&app, Tool::Lasso, Modifiers::ALT), None);
-    // Release Alt between clicks, then continue a freehand stroke in the same outline.
-    event(&mut app, "move", 140.0, 150.0, Modifiers::NONE);
-    assert_eq!(app.drag.as_ref().unwrap().points.len(), 4);
-    event(&mut app, "down", 130.0, 140.0, Modifiers::NONE);
-    event(&mut app, "move", 90.0, 130.0, Modifiers::NONE);
-    event(&mut app, "up", 50.0, 120.0, Modifiers::NONE);
+    // Releasing Alt with the button up closes the outline and makes the selection.
+    event(&mut app, "move", 70.0, 140.0, Modifiers::NONE);
     assert!(!active(&app));
     let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap();
     assert!(sel.sample_channel(100, 80, 0) > 0.9);
@@ -53,16 +54,42 @@ fn alt_clicks_preserve_outline_and_hover_does_not_draw() {
 }
 
 #[test]
-fn switching_back_while_pressed_fixes_the_straight_endpoint() {
+fn a_drag_with_alt_held_draws_freehand() {
     let mut app = app();
     begin(&mut app, Modifiers::NONE);
+    // Alt pressed during the drag: still freehand while the button is down.
     event(&mut app, "move", 180.0, 100.0, Modifiers::ALT);
-    assert_eq!(app.drag.as_ref().unwrap().points.len(), 3);
-    event(&mut app, "move", 170.0, 130.0, Modifiers::NONE);
+    event(&mut app, "move", 170.0, 130.0, Modifiers::ALT);
     let pts = &app.drag.as_ref().unwrap().points;
     assert_eq!(&pts[3..], &[[180.0, 100.0, 1.0], [170.0, 130.0, 1.0]]);
-    event(&mut app, "up", 50.0, 120.0, Modifiers::NONE);
+    // Released with Alt held: the outline stays open for straight segments...
+    event(&mut app, "up", 170.0, 130.0, Modifiers::ALT);
+    assert!(active(&app));
+    // ...and an Alt drag adds a freehand stretch to it.
+    event(&mut app, "down", 120.0, 150.0, Modifiers::ALT);
+    event(&mut app, "move", 90.0, 155.0, Modifiers::ALT);
+    event(&mut app, "move", 60.0, 140.0, Modifiers::ALT);
+    event(&mut app, "up", 60.0, 140.0, Modifiers::ALT);
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 8);
+    event(&mut app, "move", 60.0, 140.0, Modifiers::NONE);
     assert!(app.session.active().unwrap().doc.selection.is_some());
+}
+
+#[test]
+fn alt_at_the_first_press_without_a_selection_starts_straight_segments() {
+    let mut app = app();
+    assert_eq!(crate::tool_feedback::badge(&app, Tool::Lasso, Modifiers::ALT), None, "no − badge: nothing to subtract");
+    // Alt-click three corners of a triangle, then let go of Alt.
+    for [x, y] in [[50.0, 50.0], [250.0, 50.0], [150.0, 200.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+        assert!(active(&app), "Alt held: the outline stays open");
+    }
+    event(&mut app, "move", 150.0, 200.0, Modifiers::NONE);
+    assert!(!active(&app));
+    let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+    assert!(sel.sample_channel(150, 100, 0) > 0.9, "a new selection, nothing subtracted");
+    assert!(sel.sample_channel(60, 180, 0) < 0.1);
 }
 
 #[test]
@@ -198,4 +225,69 @@ fn a_drag_inside_the_selection_moves_it() {
     mouse(&mut h, "up", 130.0, 125.0, Modifiers::NONE);
     assert!(h.state().drag.is_none());
     assert_eq!(bounds(h.state()), Some(photocraft_geom::Rect::new(110, 105, 160, 145)));
+}
+
+#[test]
+fn retracting_polygonal_vertices_keeps_the_document_unchanged() {
+    let mut app = app();
+    begin(&mut app, Modifiers::NONE);
+    event(&mut app, "up", 120.0, 50.0, Modifiers::ALT);
+    assert!(waiting_for_vertex(&app));
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 3);
+    assert!(undo_last_vertex(&mut app));
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 2);
+    assert!(undo_last_vertex(&mut app));
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 1);
+    assert!(undo_last_vertex(&mut app));
+    assert!(!active(&app));
+    assert!(!undo_last_vertex(&mut app));
+    let st = app.session.active().unwrap();
+    assert!(st.doc.layer(layer).is_some());
+    assert!(st.doc.selection.is_none());
+}
+
+#[test]
+fn real_canvas_backspace_and_right_click_retract_polygonal_points() {
+    let mut h = harness();
+    mouse(&mut h, "down", 50.0, 50.0, Modifiers::NONE);
+    mouse(&mut h, "move", 120.0, 50.0, Modifiers::NONE);
+    mouse(&mut h, "up", 120.0, 50.0, Modifiers::ALT);
+    mouse(&mut h, "down", 180.0, 100.0, Modifiers::ALT);
+    mouse(&mut h, "up", 180.0, 100.0, Modifiers::ALT);
+    assert_eq!(h.state().drag.as_ref().unwrap().points.len(), 3);
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+
+    h.event(Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    h.run_steps(2);
+    assert_eq!(h.state().drag.as_ref().unwrap().points.len(), 2);
+    assert!(h.state().session.active().unwrap().doc.layer(layer).is_some());
+
+    let state = h.state();
+    let view = &state.ui.views[0];
+    let xf = ViewXform { rect: crate::rulers::content_rect(state, state.last_canvas_rect), zoom: view.zoom, center: view.center, flip: false };
+    let pos = xf.to_screen(155.0, 100.0);
+    h.event(Event::PointerMoved(pos));
+    h.event(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::ALT });
+    h.run_steps(2);
+    assert_eq!(h.state().drag.as_ref().unwrap().points.len(), 1);
+    assert!(h.state().ui.canvas_tool_menu.is_none());
+    assert!(h.state().session.active().unwrap().doc.layer(layer).is_some());
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
+fn clicking_the_last_point_again_closes_the_outline() {
+    let mut app = app();
+    for [x, y] in [[50.0, 50.0], [250.0, 50.0], [150.0, 200.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+    }
+    assert!(active(&app));
+    // Alt still held: a second click on the last point (however long after) closes it.
+    event(&mut app, "down", 151.0, 199.0, Modifiers::ALT);
+    assert!(!active(&app));
+    assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(150, 100, 0) > 0.9);
 }

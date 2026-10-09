@@ -203,6 +203,101 @@ fn blend_if_rejects_bad_params() {
 }
 
 #[test]
+fn blending_options_advanced_blending() {
+    use photocraft_doc::{AdvancedBlending, Knockout};
+    for depth in DEPTHS {
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |x, _| if x < 20 { [0.0, 0.0, 1.0, 1.0] } else { [0.0; 4] });
+        assert!(active(&s).advanced.is_default());
+        s.execute(
+            "layer.layerStyle.blendingOptions",
+            json!({
+                "knockout": "deep",
+                "fillOpacity": 0,
+                "blendInteriorEffectsAsGroup": true,
+                "blendClippedLayersAsGroup": false,
+                "transparencyShapesLayer": false,
+                "layerMaskHidesEffects": true,
+                "vectorMaskHidesEffects": true,
+                "channels": [true, false, true],
+            }),
+        )
+        .unwrap();
+        let l = active(&s);
+        assert_eq!(
+            l.advanced,
+            AdvancedBlending {
+                knockout: Knockout::Deep,
+                blend_interior: true,
+                blend_clipped: false,
+                transparency_shapes: false,
+                layer_mask_hides_effects: true,
+                vector_mask_hides_effects: true,
+            }
+        );
+        assert_eq!(l.excluded_channels, 0b010);
+        // A deep knockout at fill 0 with no Background reveals transparency where the layer has
+        // pixels.
+        let p = photocraft_compose::flatten(doc(&s)).get(5, 5);
+        assert!(p[3] < 2.0 / 255.0, "{depth}: {p:?}");
+        // Inspect reports the switches; omitted keys keep their values; one undo step each.
+        let info = crate::inspect::layer(active(&s));
+        assert_eq!(info["advancedBlending"]["knockout"], json!("deep"), "{info}");
+        s.execute("layer.layerStyle.blendingOptions", json!({"knockout": "Shallow"})).unwrap();
+        assert_eq!(active(&s).advanced.knockout, Knockout::Shallow);
+        assert!(!active(&s).advanced.blend_clipped);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(active(&s).advanced.knockout, Knockout::Deep);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(active(&s).advanced.is_default());
+        assert_eq!(active(&s).excluded_channels, 0);
+    }
+}
+
+#[test]
+fn blending_options_advanced_rejects_bad_params() {
+    let mut s = session(8, "rgb");
+    paint(&mut s, |_, _| [1.0; 4]);
+    let steps = s.active().unwrap().history.past_len();
+    for bad in [
+        json!({"knockout": "medium"}),
+        json!({"knockout": 2}),
+        json!({"knockout": true}),
+        json!({"blendInteriorEffectsAsGroup": "yes"}),
+        json!({"blendClippedLayersAsGroup": 1}),
+        json!({"transparencyShapesLayer": []}),
+        json!({"layerMaskHidesEffects": {}}),
+        json!({"vectorMaskHidesEffects": 0.5}),
+        json!({"channels": [true, true, true, true, true]}),
+        json!({"channels": [1, 0, 1]}),
+        json!({"channels": "rgb"}),
+        // A bad key fails the whole call: nothing else is applied.
+        json!({"fillOpacity": 10, "knockout": "nope"}),
+    ] {
+        assert!(s.execute("layer.layerStyle.blendingOptions", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(active(&s).advanced.is_default());
+    assert_eq!(active(&s).fill_opacity, 1.0);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    // `null` keeps the current value.
+    s.execute("layer.layerStyle.blendingOptions", json!({"knockout": null, "channels": null})).unwrap();
+    assert!(active(&s).advanced.is_default());
+}
+
+#[test]
+fn copy_paste_layer_style_carries_advanced_blending() {
+    let mut s = session(8, "rgb");
+    paint(&mut s, |_, _| [1.0; 4]);
+    s.execute("layer.layerStyle.blendingOptions", json!({"knockout": "shallow", "blendClippedLayersAsGroup": false})).unwrap();
+    let a = active(&s).advanced;
+    s.execute("layer.layerStyle.copyLayerStyle", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(active(&s).advanced.is_default());
+    s.execute("layer.layerStyle.pasteLayerStyle", json!({})).unwrap();
+    assert_eq!(active(&s).advanced, a);
+}
+
+#[test]
 fn blend_if_channel_names_follow_the_mode() {
     let mut s = session(8, "cmyk");
     s.execute("layer.layerStyle.blendingOptions", json!({"blendIf": {"channel": "black", "underlying": [0, 128]}})).unwrap();

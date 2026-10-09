@@ -93,6 +93,15 @@ fn from_values(w: u32, h: u32, layout: ChannelLayout, maxval: u32, values: Vec<u
     }
 }
 
+/// `w × h × channels` samples. `Limits::none()` lets any header through, so the product is
+/// checked here rather than trusted to the limits.
+fn sample_count(w: u32, h: u32, channels: usize) -> Result<usize, CodecError> {
+    (w as usize)
+        .checked_mul(h as usize)
+        .and_then(|p| p.checked_mul(channels))
+        .ok_or_else(|| CodecError::LimitExceeded(format!("{w}x{h}x{channels} samples do not fit in memory")))
+}
+
 fn read_binary(data: &[u8], n: usize, maxval: u32) -> Result<Vec<u32>, CodecError> {
     if maxval < 256 {
         if data.len() < n {
@@ -100,10 +109,10 @@ fn read_binary(data: &[u8], n: usize, maxval: u32) -> Result<Vec<u32>, CodecErro
         }
         Ok(data[..n].iter().map(|&v| v as u32).collect())
     } else {
-        if data.len() < n * 2 {
+        let Some(len) = n.checked_mul(2).filter(|&len| data.len() >= len) else {
             return Err(err("truncated raster"));
-        }
-        Ok(data[..n * 2].as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as u32).collect())
+        };
+        Ok(data[..len].as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as u32).collect())
     }
 }
 
@@ -117,15 +126,16 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         b'1' | b'4' => {
             let (w, h) = (r.uint()?, r.uint()?);
             limits.check(w, h, ChannelLayout::Gray, SampleType::U8)?;
-            let n = w as usize * h as usize;
-            let mut px = Vec::with_capacity(n);
+            let n = sample_count(w, h, 1)?;
+            let mut px;
             if kind == b'4' {
                 r.single_ws()?;
                 let row = (w as usize).div_ceil(8);
                 let data = r.rest();
-                if data.len() < row * h as usize {
+                if row.checked_mul(h as usize).is_none_or(|len| data.len() < len) {
                     return Err(err("truncated raster"));
                 }
+                px = Vec::with_capacity(n);
                 for y in 0..h as usize {
                     for x in 0..w as usize {
                         let bit = (data[y * row + x / 8] >> (7 - x % 8)) & 1;
@@ -133,6 +143,8 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
                     }
                 }
             } else {
+                // Each ASCII pixel takes at least a byte, so the file bounds the reservation (#1110).
+                px = Vec::with_capacity(n.min(r.rest().len()));
                 while px.len() < n {
                     r.skip_ws_and_comments();
                     match r.b.get(r.pos) {
@@ -150,12 +162,14 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
             let (w, h, maxval) = (r.uint()?, r.uint()?, r.uint()?);
             let layout = if matches!(kind, b'2' | b'5') { ChannelLayout::Gray } else { ChannelLayout::Rgb };
             limits.check(w, h, layout, sample_for_maxval(maxval)?)?;
-            let n = w as usize * h as usize * layout.channels();
+            let n = sample_count(w, h, layout.channels())?;
             let values = if matches!(kind, b'5' | b'6') {
                 r.single_ws()?;
                 read_binary(r.rest(), n, maxval)?
             } else {
-                let mut v = Vec::with_capacity(n);
+                // Each ASCII sample is a digit and a separator (the last may lack one), so the
+                // file, not the header, bounds the reservation (#1110).
+                let mut v = Vec::with_capacity(n.min(r.rest().len() / 2 + 1));
                 for _ in 0..n {
                     v.push(r.uint()?);
                 }
@@ -177,7 +191,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
             let nc = layout.channels();
             let row = w as usize * nc;
             let data = r.rest();
-            if data.len() < row * h as usize * 4 {
+            if sample_count(w, h, nc)?.checked_mul(4).is_none_or(|len| data.len() < len) {
                 return Err(err("truncated raster"));
             }
             let le = scale < 0.0;
@@ -235,7 +249,7 @@ fn decode_pam(r: &mut Reader<'_>, limits: &Limits) -> Result<Image, CodecError> 
         }
     };
     limits.check(w, h, layout, sample_for_maxval(maxval)?)?;
-    let n = w as usize * h as usize * layout.channels();
+    let n = sample_count(w, h, layout.channels())?;
     let values = read_binary(r.rest(), n, maxval)?;
     from_values(w, h, layout, maxval, values)
 }

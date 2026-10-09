@@ -15,7 +15,13 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 
 fn harness(ppp: f32, app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(ppp).build_ui_state(
+    make_harness(ppp, app, false)
+}
+
+fn make_harness(ppp: f32, app: PhotocraftApp, render: bool) -> Harness<'static, PhotocraftApp> {
+    let builder = Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(ppp);
+    let builder = if render { builder.wgpu() } else { builder };
+    let mut h = builder.build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -433,4 +439,631 @@ fn vertical_type_tool_creates_point_and_paragraph_text_with_one_undo() {
         app.run("edit.undo", json!({})).unwrap();
         assert!(app.session.active().unwrap().doc.layer(id).is_none());
     }
+}
+
+/// #668: ⌘/Ctrl+T while typing shows or hides the Character panel, as in Photoshop, instead of
+/// starting Free Transform on the layer being typed into.
+#[test]
+fn command_t_while_typing_toggles_the_character_panel() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHO", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = harness(1.0, app);
+    let p = glyph(&mut h, id, 1, 0.5);
+    click(&mut h, p);
+    assert!(h.state().ui.text_edit.is_some(), "editing");
+    let before = crate::view_cmds::checked(h.state(), "window.panel.character");
+    h.event(egui::Event::Key { key: egui::Key::T, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    assert!(h.state().ui.transform.is_none(), "no Free Transform while typing");
+    assert!(h.state().ui.text_edit.is_some(), "still editing");
+    assert_ne!(crate::view_cmds::checked(h.state(), "window.panel.character"), before, "the Character panel toggled");
+}
+
+/// #1381: on Wayland the input method sends an empty preedit (and sometimes an empty commit)
+/// whenever the caret rectangle moves, e.g. while ⌘A, ⇧-arrows or a drag select text. With
+/// nothing being composed that must leave the text and the selection alone; a real composition
+/// still replaces the selection, and clearing it removes only the composed text.
+#[test]
+fn empty_ime_events_never_delete_the_selection() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 40, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.text_edit =
+        Some(crate::state::TextEdit { layer: id.0, caret: 5, anchor: 0, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
+    let mut h = harness(1.0, app);
+    let ime = |h: &mut Harness<'static, PhotocraftApp>, e: egui::ImeEvent| {
+        h.event(egui::Event::Ime(e));
+        h.run_steps(1);
+    };
+    ime(&mut h, egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None });
+    ime(&mut h, egui::ImeEvent::Commit(String::new()));
+    assert_eq!(text(h.state(), id).text, "Hello", "empty IME events keep the text");
+    assert_eq!(selection(&h), (0, 5), "and the selection");
+    // Composing replaces the selection; cancelling the composition leaves the rest.
+    ime(&mut h, egui::ImeEvent::Preedit { text: "か".into(), active_range_chars: None });
+    assert_eq!(text(h.state(), id).text, "か");
+    ime(&mut h, egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None });
+    assert_eq!(text(h.state(), id).text, "");
+}
+
+fn type_command() -> Modifiers {
+    Modifiers { command: true, ctrl: true, ..Modifiers::NONE }
+}
+
+fn hold(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.run_steps(1);
+}
+
+fn transform_press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, mods: Modifiers) {
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: mods });
+    h.run_steps(1);
+}
+
+fn transform_drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2, mods: Modifiers, release_command: bool) {
+    hold(h, mods);
+    h.hover_at(a);
+    h.run_steps(1);
+    transform_press(h, a, true, mods);
+    for k in 1..=6 {
+        if release_command && k == 4 {
+            hold(h, Modifiers { command: false, ctrl: false, mac_cmd: false, ..mods });
+        }
+        h.hover_at(a + (b - a) * (k as f32 / 6.0));
+        h.run_steps(1);
+    }
+    transform_press(h, b, false, if release_command { Modifiers::NONE } else { mods });
+    hold(h, Modifiers::NONE);
+}
+
+fn transform_app(paragraph: bool, vertical: bool, transform: Affine) -> (PhotocraftApp, LayerId) {
+    let mut app = new_app();
+    let mut p = json!({"text": "Hello é世界\nSecond line", "size": 32, "x": 300, "y": 420});
+    if paragraph {
+        p["box"] = json!([300, 300, 240, 180]);
+    }
+    if vertical {
+        p["orientation"] = json!("vertical");
+    }
+    let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
+    app.run("type.edit", json!({"layer": id.0, "transform": transform.m})).unwrap();
+    super::edit_active(&mut app).unwrap();
+    let ed = app.ui.text_edit.as_mut().unwrap();
+    ed.caret = 3;
+    ed.anchor = 3;
+    (app, id)
+}
+
+fn frame_point(app: &PhotocraftApp, p: [f64; 2]) -> Pos2 {
+    xf(app).to_screen(p[0] as f32, p[1] as f32)
+}
+
+fn assert_affine(a: Affine, b: Affine) {
+    for (x, y) in a.m.into_iter().zip(b.m) {
+        assert!((x - y).abs() < 2e-4, "{a:?} != {b:?}");
+    }
+}
+
+/// #1091: modifier changes alone draw/hide the oriented frame without touching editing/history.
+#[test]
+fn temporary_type_transform_visibility_and_cursors() {
+    let (app, id) = transform_app(false, false, Affine::translate(500.0, 350.0));
+    let mut h = harness(1.0, app);
+    let before = h.state().session.active().unwrap().history.entries().len();
+    let original = text(h.state(), id);
+    assert!(!crate::type_transform::visible(h.state(), Modifiers::NONE));
+    hold(&mut h, type_command());
+    assert!(crate::type_transform::visible(h.state(), h.ctx.input(|i| i.modifiers)));
+    let frame = crate::type_transform::frame(h.state_mut()).unwrap();
+    let mut positions: Vec<[f64; 2]> = frame.quad.to_vec();
+    positions.extend((0..4).map(|i| [(frame.quad[i][0] + frame.quad[(i + 1) % 4][0]) / 2.0, (frame.quad[i][1] + frame.quad[(i + 1) % 4][1]) / 2.0]));
+    for (i, q) in positions.into_iter().enumerate() {
+        let p = frame_point(h.state(), q);
+        h.hover_at(p);
+        h.run_steps(2);
+        let cursor = h.output().platform_output.cursor_icon;
+        if i < 4 {
+            assert!(matches!(
+                cursor,
+                egui::CursorIcon::ResizeNwSe | egui::CursorIcon::ResizeNeSw | egui::CursorIcon::ResizeHorizontal | egui::CursorIcon::ResizeVertical
+            ));
+        } else {
+            assert_eq!(cursor, egui::CursorIcon::None, "skew arrowhead");
+        }
+    }
+    let middle = [(frame.quad[0][0] + frame.quad[1][0]) / 2.0, frame.quad[0][1] - 20.0 / f64::from(h.state().current_zoom())];
+    h.hover_at(frame_point(h.state(), middle));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "curved rotation cursor");
+    hold(&mut h, Modifiers::NONE);
+    assert!(!crate::type_transform::visible(h.state(), Modifiers::NONE));
+    assert_eq!(selection(&h), (3, 3));
+    assert_eq!(text(h.state(), id).transform, original.transform);
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), before);
+    assert!(h.state().ui.transform.is_none());
+    assert!(h.state().ui.type_transform.is_none());
+    // macOS's real Control is not the logical Command modifier.
+    assert!(!crate::type_transform::visible(h.state(), Modifiers { ctrl: true, command: false, ..Modifiers::NONE }));
+    h.state_mut().ui.shell.sticky_command = true;
+    let sticky = crate::workspace_ui::sticky_mods(h.state(), Modifiers::NONE);
+    assert!(crate::type_transform::visible(h.state(), sticky));
+}
+
+/// Real canvas input: layer-local scaling stays correct across orientation, zoom, HiDPI and flip.
+#[test]
+fn temporary_type_transform_scales_without_reflow_or_leaving_type() {
+    for ppp in [1.0, 2.0] {
+        for zoom in [0.25, 1.0, 2.0, 8.0] {
+            for (paragraph, vertical, flip) in [(false, false, false), (true, false, true), (false, true, true)] {
+                let transform = Affine { m: [1.2, 0.25, 0.18, 0.9, 500.0, 360.0] };
+                let (app, id) = transform_app(paragraph, vertical, transform);
+                let mut h = harness(ppp, app);
+                let f = crate::type_transform::frame(h.state_mut()).unwrap();
+                let center = f.pivot;
+                h.state_mut().ui.view.flip_horizontal = flip;
+                let view = &mut h.state_mut().ui.views[0];
+                // At high zoom, show the dragged corner; a release beyond the canvas is valid.
+                view.center = if zoom >= 2.0 { [f.quad[2][0] as f32, f.quad[2][1] as f32] } else { [center[0] as f32 + 17.0, center[1] as f32 - 9.0] };
+                view.zoom = zoom;
+                view.fit_pending = false;
+                h.run_steps(2);
+                let before = text(h.state(), id);
+                let count = h.state().session.active().unwrap().history.entries().len();
+                let (a, b) = (f.quad[2], [f.quad[0][0] + 1.25 * (f.quad[2][0] - f.quad[0][0]), f.quad[0][1] + 1.25 * (f.quad[2][1] - f.quad[0][1])]);
+                let (a, b) = (frame_point(h.state(), a), frame_point(h.state(), b));
+                assert!(xf(h.state()).rect.contains(a));
+                transform_drag(&mut h, a, b, type_command() | Modifiers::SHIFT, true);
+                let after = text(h.state(), id);
+                assert_affine(
+                    after.transform,
+                    transform.mul(&Affine::translate(f.rect[0], f.rect[1])).mul(&Affine::scale(1.25)).mul(&Affine::translate(-f.rect[0], -f.rect[1])),
+                );
+                assert_eq!(
+                    (after.text.as_str(), &after.runs, &after.paragraphs, after.orientation, after.shape),
+                    (before.text.as_str(), &before.runs, &before.paragraphs, before.orientation, before.shape)
+                );
+                assert_eq!(selection(&h), (3, 3));
+                assert_eq!(h.state().ui.text_edit.as_ref().unwrap().layer, id.0);
+                assert!(h.state().ui.tool.is_type());
+                assert!(h.state().ui.transform.is_none());
+                assert!(h.state().ui.type_transform.is_none());
+                assert_eq!(h.state().session.active().unwrap().history.entries().len(), count + 1);
+                h.event(egui::Event::Text("!".into()));
+                h.run_steps(2);
+                assert!(text(h.state(), id).text.starts_with("Hel!lo"));
+                h.key_press(if vertical { egui::Key::ArrowUp } else { egui::Key::ArrowLeft });
+                h.run_steps(1);
+                assert_eq!(selection(&h), (3, 3));
+                assert_eq!(h.state().session.active().unwrap().history.entries().len(), count + 1, "one edit session");
+                h.state_mut().run("edit.undo", json!({})).unwrap();
+                assert_affine(text(h.state(), id).transform, before.transform);
+                assert_eq!(text(h.state(), id).text, before.text);
+                h.state_mut().run("edit.redo", json!({})).unwrap();
+                assert_eq!(text(h.state(), id).transform, after.transform);
+            }
+        }
+    }
+}
+
+#[test]
+fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
+    use crate::canvas::{ToolEvent, tool_event};
+    for gesture in ["free", "center", "move", "skew", "rotate", "snap"] {
+        let initial = Affine::translate(400.0, 350.0).mul(&Affine::rotate(0.2));
+        let (mut app, id) = transform_app(true, false, initial);
+        let frame = crate::type_transform::frame(&mut app).unwrap();
+        let before = text(&app, id);
+        let (a, b, mods) = match gesture {
+            "move" => (frame.quad[0].map(|v| v + 20.0), frame.quad[0].map(|v| v + 45.0), type_command()),
+            "skew" => {
+                let p = [(frame.quad[0][0] + frame.quad[1][0]) / 2.0, (frame.quad[0][1] + frame.quad[1][1]) / 2.0];
+                (p, [p[0] + 30.0, p[1] + 12.0], type_command())
+            }
+            "rotate" | "snap" => {
+                let a = [frame.quad[1][0] + 20.0, frame.quad[1][1] - 10.0];
+                let da: f64 = 0.42;
+                let (x, y) = (a[0] - frame.pivot[0], a[1] - frame.pivot[1]);
+                let b = [frame.pivot[0] + x * da.cos() - y * da.sin(), frame.pivot[1] + x * da.sin() + y * da.cos()];
+                (a, b, if gesture == "snap" { type_command() | Modifiers::SHIFT } else { type_command() })
+            }
+            _ => {
+                let a = frame.quad[2];
+                let local = [frame.rect[2] + 60.0, frame.rect[3] + 18.0];
+                let p = initial.apply(Point::new(local[0], local[1]));
+                (a, [p.x, p.y], if gesture == "center" { type_command() | Modifiers::ALT } else { type_command() })
+            }
+        };
+        let count = app.session.active().unwrap().history.entries().len();
+        tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, mods);
+        for k in 1..=5 {
+            let f = f64::from(k) / 5.0;
+            tool_event(&mut app, ToolEvent::Move { x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f, pressure: 1.0 }, mods);
+            assert!(crate::type_transform::display_doc(&mut app, 0).is_some());
+            assert_eq!(text(&app, id).transform, initial, "preview leaves engine untouched");
+        }
+        assert_eq!(app.session.active().unwrap().history.entries().len(), count);
+        tool_event(&mut app, ToolEvent::Up { x: b[0], y: b[1] }, mods);
+        let after = text(&app, id);
+        assert_ne!(after.transform, initial, "{gesture}");
+        assert_eq!(after.shape, before.shape, "no paragraph reflow");
+        assert_eq!(selection(&harness(1.0, app)), (3, 3));
+        // Assertions below use the matrix itself to check the chosen gesture.
+        if gesture == "move" {
+            assert_affine(after.transform, Affine::translate(25.0, 25.0).mul(&initial));
+        } else if gesture == "rotate" {
+            assert_affine(
+                after.transform,
+                Affine::translate(frame.pivot[0], frame.pivot[1])
+                    .mul(&Affine::rotate(0.42))
+                    .mul(&Affine::translate(-frame.pivot[0], -frame.pivot[1]))
+                    .mul(&initial),
+            );
+        } else if gesture == "snap" {
+            let angle = after.transform.m[1].atan2(after.transform.m[0]).to_degrees();
+            assert!((angle / 15.0 - (angle / 15.0).round()).abs() < 1e-8);
+        } else if gesture == "center" {
+            let p = after.transform.apply(Point::new((frame.rect[0] + frame.rect[2]) / 2.0, (frame.rect[1] + frame.rect[3]) / 2.0));
+            assert!((p.x - frame.pivot[0]).abs() < 1e-8 && (p.y - frame.pivot[1]).abs() < 1e-8);
+        } else if gesture == "free" {
+            let ratio_x = after.transform.m[0].hypot(after.transform.m[1]);
+            let ratio_y = after.transform.m[2].hypot(after.transform.m[3]);
+            assert!((ratio_x - ratio_y).abs() > 0.05, "unconstrained corners");
+        } else if gesture == "skew" {
+            assert_ne!(after.transform.m[2], before.transform.m[2]);
+        }
+    }
+}
+
+#[test]
+fn temporary_type_transform_noop_cancel_and_stale_capture() {
+    use crate::canvas::{ToolEvent, tool_event};
+    for stop in ["noop", "escape", "focus", "tool", "undo", "delete", "document", "close"] {
+        let original = Affine::translate(400.0, 350.0);
+        let (app, id) = transform_app(false, false, original);
+        let mut h = harness(1.0, app);
+        let f = crate::type_transform::frame(h.state_mut()).unwrap();
+        let a = f.quad[2];
+        let count = h.state().session.active().unwrap().history.entries().len();
+        tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+        tool_event(h.state_mut(), ToolEvent::Move { x: a[0] + 50.0, y: a[1] + 20.0, pressure: 1.0 }, type_command());
+        let preview = {
+            let (shown, _) = crate::type_transform::display_doc(h.state_mut(), 0).unwrap();
+            std::sync::Arc::downgrade(&shown)
+        };
+        assert_eq!(text(h.state(), id).transform, original);
+        match stop {
+            "noop" => tool_event(h.state_mut(), ToolEvent::Up { x: a[0], y: a[1] }, Modifiers::NONE),
+            "escape" => {
+                h.key_press(egui::Key::Escape);
+                h.run_steps(2);
+            }
+            "focus" => {
+                h.input_mut().focused = false;
+                h.run_steps(2);
+            }
+            "tool" => {
+                h.state_mut().ui.tool = crate::state::Tool::Brush;
+                h.state_mut().sync_views();
+            }
+            "undo" => {
+                h.state_mut().run("edit.undo", json!({})).unwrap();
+            }
+            "delete" => {
+                h.state_mut().run("layer.delete", json!({"layer": id.0})).unwrap();
+            }
+            "close" => {
+                h.state_mut().run("file.close", json!({})).unwrap();
+            }
+            _ => {
+                h.state_mut().run("file.new", json!({"width": 20, "height": 20})).unwrap();
+            }
+        }
+        assert!(h.state().ui.type_transform.is_none(), "{stop}");
+        assert!(preview.upgrade().is_none(), "{stop}: release rendered preview without waiting for another frame");
+        if ["noop", "escape", "focus", "tool"].contains(&stop) {
+            assert_eq!(text(h.state(), id).transform, original);
+            assert_eq!(h.state().session.active().unwrap().history.entries().len(), count);
+        }
+        if stop == "escape" {
+            assert!(h.state().ui.text_edit.is_some());
+        }
+    }
+}
+
+#[test]
+fn temporary_type_transform_control_roundtrip_and_input_safety() {
+    use crate::control::{ControlRequest, Outcome};
+    let initial = Affine::translate(400.0, 350.0);
+    let (mut app, id) = transform_app(true, false, initial);
+    // A document selection must not restrict a text-layer transformation.
+    app.run("select.rect", json!({"x": 1, "y": 1, "width": 2, "height": 2})).unwrap();
+    let frame = crate::type_transform::frame(&mut app).unwrap();
+    let a = frame.quad[2];
+    let ctx = egui::Context::default();
+    let call = |app: &mut PhotocraftApp, params| {
+        let (req, _) = ControlRequest::new("ui.pointer", params);
+        let Outcome::Done(result) = crate::control::handle(app, &ctx, &req) else { panic!("expected immediate pointer reply") };
+        assert_eq!(result["ok"], true, "{result}");
+    };
+    call(&mut app, json!({"command": true, "events": [{"kind": "down", "x": a[0], "y": a[1]}]}));
+    let inspected = crate::control::inspect(&app, &ctx);
+    assert_eq!(inspected["typeTransform"]["frame"]["layer"], id.0);
+    call(&mut app, json!({"command": true, "events": [{"kind": "move", "x": a[0]+60.0, "y": a[1]+30.0}]}));
+    call(&mut app, json!({"events": [{"kind": "up", "x": a[0]+60.0, "y": a[1]+30.0}]}));
+    assert_ne!(text(&app, id).transform, initial);
+    let doc = &app.session.active().unwrap().doc;
+    for name in ["type.pcraft", "type.psd"] {
+        let out = photocraft_io::export(doc, name, &Default::default()).unwrap();
+        let back = photocraft_io::import(name, &out.bytes).unwrap().document;
+        let t = back.walk().into_iter().find_map(|(_, _, l)| if let LayerContent::Text(t) = &l.content { Some(t) } else { None }).unwrap();
+        assert_affine(t.transform, text(&app, id).transform);
+        assert_eq!(t.text, text(&app, id).text);
+        assert_eq!(t.shape, text(&app, id).shape);
+    }
+    for content in ["", "   ", "é👩‍💻世界", "\n\n"] {
+        app.run("type.edit", json!({"layer": id.0, "text": content, "point": [400, 350]})).unwrap();
+        assert!(crate::type_transform::frame(&mut app).is_some());
+        call(
+            &mut app,
+            json!({"command": true, "events": [{"kind": "down", "x": 400, "y": 350}, {"kind": "move", "x": 1e300, "y": -1e300}, {"kind": "up", "x": 400, "y": 350}]}),
+        );
+        assert!(text(&app, id).transform.m.iter().all(|v| v.is_finite()));
+        assert!(app.ui.type_transform.is_none());
+    }
+    app.run("layer.lockLayers", json!({"position": true})).unwrap();
+    assert!(crate::type_transform::frame(&mut app).is_none());
+}
+
+#[test]
+fn temporary_type_transform_preserves_depth_and_color_model() {
+    use crate::canvas::{ToolEvent, tool_event};
+    for (depth, mode) in [(8, "rgb"), (16, "rgb"), (32, "rgb"), (16, "gray"), (8, "cmyk"), (16, "lab")] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 1200, "height": 900, "depth": depth, "mode": mode})).unwrap();
+        let id = LayerId(app.run("type.create", json!({"text": "PhotoCraft é世界", "size": 32, "x": 300, "y": 350})).unwrap()["layer"].as_u64().unwrap());
+        super::edit_active(&mut app).unwrap();
+        let format = app.session.active().unwrap().doc.pixel_format();
+        let a = crate::type_transform::frame(&mut app).unwrap().quad[2];
+        tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+        tool_event(&mut app, ToolEvent::Move { x: a[0] + 30.0, y: a[1] + 15.0, pressure: 1.0 }, type_command());
+        let (shown, _) = crate::type_transform::display_doc(&mut app, 0).unwrap();
+        assert_eq!(shown.pixel_format(), format);
+        assert_eq!(text_layer(&shown, id).unwrap().cache.as_ref().unwrap().format(), format);
+        tool_event(&mut app, ToolEvent::Up { x: a[0] + 30.0, y: a[1] + 15.0 }, Modifiers::NONE);
+        assert_eq!(text(&app, id).cache.as_ref().unwrap().format(), format);
+        assert_eq!(text(&app, id).text, "PhotoCraft é世界");
+    }
+}
+
+#[test]
+fn temporary_type_transform_preserves_paragraph_resize_pivot_ime_and_shortcuts() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let (app, id) = transform_app(true, false, Affine::translate(350.0, 300.0));
+    let mut h = harness(1.0, app);
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let before = text(h.state(), id);
+    let (a, b) = (frame_point(h.state(), f.quad[2]), frame_point(h.state(), [f.quad[2][0] + 40.0, f.quad[2][1] + 20.0]));
+    h.hover_at(a);
+    h.run_steps(2);
+    assert!(matches!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe | egui::CursorIcon::ResizeNeSw));
+    drag(&mut h, a, b);
+    let after = text(h.state(), id);
+    assert_ne!(after.shape, before.shape);
+    assert_eq!(after.transform, before.transform, "plain drag resizes the frame");
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let count = h.state().session.active().unwrap().history.entries().len();
+    let pivot = [f.pivot[0] + 45.0, f.pivot[1] - 15.0];
+    tool_event(h.state_mut(), ToolEvent::Down { x: f.pivot[0], y: f.pivot[1], pressure: 1.0 }, type_command());
+    tool_event(h.state_mut(), ToolEvent::Up { x: pivot[0], y: pivot[1] }, type_command());
+    assert_eq!(h.state().ui.type_transform_pivot, Some(pivot));
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), count, "moving the pivot is view state");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    assert_eq!(selection(&h), (0, after.text.chars().count()));
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
+    h.run_steps(2);
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let a = f.quad[2];
+    tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    tool_event(h.state_mut(), ToolEvent::Up { x: a[0] + 20.0, y: a[1] + 10.0 }, type_command());
+    assert_eq!(h.state().ui.text_edit.as_ref().unwrap().preedit, Some((0, 2)));
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let a = f.quad[2];
+    tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    tool_event(h.state_mut(), ToolEvent::Move { x: a[0] + 15.0, y: a[1] + 10.0, pressure: 1.0 }, type_command());
+    let composed_transform = crate::type_transform::current_transform(h.state(), id).unwrap();
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("確定".into())));
+    h.run_steps(2);
+    assert_eq!(text(h.state(), id).text, "確定");
+    assert_affine(text(h.state(), id).transform, composed_transform);
+    assert!(h.state().ui.type_transform.is_none(), "composition commits a pending drag before editing");
+    assert!(h.state().ui.text_edit.as_ref().unwrap().preedit.is_none());
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().ui.text_edit.is_none());
+    super::edit_active(h.state_mut()).unwrap();
+    assert!(h.state().ui.text_edit.is_some());
+    super::commit(h.state_mut());
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::T);
+    h.run_steps(2);
+    assert!(h.state().ui.transform.is_some(), "outside typing: ordinary Free Transform");
+}
+
+#[test]
+fn temporary_type_transform_captures_press_and_rejects_collapsed_geometry() {
+    let (app, id) = transform_app(false, false, Affine::translate(450.0, 350.0));
+    let mut h = harness(1.0, app);
+    let frame = crate::type_transform::frame(h.state_mut()).unwrap();
+    let a = frame_point(h.state(), frame.quad[2]);
+    let b = a + vec2(50.0, 20.0);
+    hold(&mut h, type_command());
+    h.hover_at(a);
+    transform_press(&mut h, a, true, type_command());
+    assert!(h.state().ui.type_transform.is_some(), "capture before any movement");
+    hold(&mut h, Modifiers::NONE);
+    h.hover_at(b);
+    h.run_steps(2);
+    transform_press(&mut h, b, false, Modifiers::NONE);
+    assert_ne!(text(h.state(), id).transform, Affine::translate(450.0, 350.0));
+    assert_eq!(selection(&h), (3, 3));
+    let frame = crate::type_transform::frame(h.state_mut()).unwrap();
+    let before = text(h.state(), id).transform;
+    use crate::canvas::{ToolEvent, tool_event};
+    let (a, b) = (frame.quad[2], frame.quad[0]);
+    tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    tool_event(h.state_mut(), ToolEvent::Up { x: b[0], y: b[1] }, type_command());
+    assert_eq!(text(h.state(), id).transform, before, "collapsed scale is rejected");
+    let mut saved = serde_json::to_value(&h.state().ui).unwrap();
+    saved["type_transform"] = json!({"invalid": "restored pointer capture"});
+    let restored: crate::state::UiState = serde_json::from_value(saved).unwrap();
+    assert!(restored.type_transform.is_none());
+}
+
+/// Render on demand with the same offscreen wgpu infrastructure as the snapshot example.
+#[test]
+#[ignore = "writes visual evidence to target/issue-1091; run explicitly for visual QA"]
+fn temporary_type_transform_visual_evidence() {
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/issue-1091");
+    std::fs::create_dir_all(&out).unwrap();
+    for (index, theme) in crate::theme::ThemeKind::ALL.into_iter().enumerate() {
+        let (app, _) = transform_app(false, false, Affine::translate(450.0, 350.0));
+        let mut h = make_harness(if index == 0 { 2.0 } else { 1.0 }, app, true);
+        let ctx = h.ctx.clone();
+        h.state_mut().set_theme(&ctx, theme);
+        h.run_steps(4);
+        h.render().unwrap().save(out.join(format!("{index}-normal.png"))).unwrap();
+        hold(&mut h, type_command());
+        h.render().unwrap().save(out.join(format!("{index}-handles.png"))).unwrap();
+        let f = crate::type_transform::frame(h.state_mut()).unwrap();
+        let mut handles = f.quad.to_vec();
+        handles.extend((0..4).map(|i| [(f.quad[i][0] + f.quad[(i + 1) % 4][0]) / 2.0, (f.quad[i][1] + f.quad[(i + 1) % 4][1]) / 2.0]));
+        for (i, q) in handles.into_iter().enumerate() {
+            h.hover_at(frame_point(h.state(), q));
+            h.run_steps(2);
+            h.render().unwrap().save(out.join(format!("{index}-handle-{i}.png"))).unwrap();
+        }
+        let a = frame_point(h.state(), f.quad[2]);
+        transform_press(&mut h, a, true, type_command());
+        h.hover_at(a + vec2(70.0, 35.0));
+        h.run_steps(2);
+        h.render().unwrap().save(out.join(format!("{index}-scaling.png"))).unwrap();
+        crate::type_transform::cancel_drag(h.state_mut());
+        transform_press(&mut h, a + vec2(70.0, 35.0), false, type_command());
+        h.state_mut().ui.type_transform_pivot = None;
+        let ed = h.state().ui.text_edit.as_ref().unwrap().layer;
+        h.state_mut().run("type.edit", json!({"layer": ed, "transform": Affine::translate(450.0, 350.0).mul(&Affine::rotate(-0.3)).m})).unwrap();
+        h.run_steps(3);
+        h.render().unwrap().save(out.join(format!("{index}-rotated.png"))).unwrap();
+        let f = crate::type_transform::frame(h.state_mut()).unwrap();
+        let q = [f.quad[1][0] + 20.0, f.quad[1][1] - 15.0];
+        let a = frame_point(h.state(), q);
+        h.hover_at(a);
+        h.run_steps(2);
+        transform_press(&mut h, a, true, type_command());
+        let b = frame_point(h.state(), [q[0] + 35.0, q[1] + 60.0]);
+        h.hover_at(b);
+        h.run_steps(2);
+        h.render().unwrap().save(out.join(format!("{index}-rotating.png"))).unwrap();
+        transform_press(&mut h, b, false, type_command());
+        h.state_mut().run("type.edit", json!({"layer": ed, "box": [400, 300, 260, 180]})).unwrap();
+        crate::type_transform::reset(h.state_mut());
+        hold(&mut h, Modifiers::NONE);
+        h.run_steps(3);
+        h.render().unwrap().save(out.join(format!("{index}-paragraph.png"))).unwrap();
+        hold(&mut h, type_command());
+        h.render().unwrap().save(out.join(format!("{index}-paragraph-transform.png"))).unwrap();
+    }
+}
+
+#[test]
+fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
+    let (mut app, original_id) = transform_app(false, false, Affine { m: [1.5, 0.2, 0.1, 0.8, 400.0, 350.0] });
+    app.run("type.setStyle", json!({"layer": original_id.0, "range": [0, 5], "fauxBold": true, "color": "#3366cc", "tracking": 25, "align": "center"}))
+        .unwrap();
+    app.run("layer.renameLayer", json!({"layer": original_id.0, "name": "Styled caption"})).unwrap();
+    app.run("layer.layerStyle.dropShadow", json!({"layer": original_id.0, "distance": 8, "size": 4})).unwrap();
+    let exported = photocraft_io::export(&app.session.active().unwrap().doc, "type.psd", &Default::default()).unwrap();
+    let imported = photocraft_io::import("type.psd", &exported.bytes).unwrap().document;
+    let mut app = new_app();
+    app.session.add_document(imported, None);
+    app.sync_views();
+    let id = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).unwrap().2.id;
+    app.session.select_layer(id).unwrap();
+    super::edit_active(&mut app).unwrap();
+    let before = text(&app, id);
+    assert!(before.runs.len() > 1, "mixed character styles were imported");
+    let layer_before = app.session.active().unwrap().doc.layer(id).unwrap().clone();
+    assert!(!layer_before.effects.items.is_empty());
+    let f = crate::type_transform::frame(&mut app).unwrap();
+    use crate::canvas::{ToolEvent, tool_event};
+    let a = f.quad[2];
+    tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    tool_event(&mut app, ToolEvent::Up { x: a[0] + 35.0, y: a[1] + 10.0 }, type_command());
+    let after = text(&app, id);
+    assert_eq!((after.text.as_str(), &after.runs, &after.paragraphs), (before.text.as_str(), &before.runs, &before.paragraphs));
+    assert!(after.psd_raw.is_some());
+    let layer_after = app.session.active().unwrap().doc.layer(id).unwrap();
+    assert_eq!(layer_after.name, layer_before.name);
+    assert_eq!(layer_after.effects, layer_before.effects);
+    assert!(app.ui.text_edit.is_some());
+    assert!(app.ui.transform.is_none());
+    super::cancel(&mut app);
+    assert_affine(text(&app, id).transform, before.transform);
+}
+
+#[test]
+#[ignore = "release benchmark for issue #1091: 24 MP, eight text layers, 60 preview updates"]
+fn temporary_type_transform_large_document_preview() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 6000, "height": 4000})).unwrap();
+    for i in 0..8 {
+        app.run("type.create", json!({"text": "PhotoCraft transform preview", "size": 60, "x": 300, "y": 300 + i * 200})).unwrap();
+    }
+    super::edit_active(&mut app).unwrap();
+    let frame = crate::type_transform::frame(&mut app).unwrap();
+    let a = frame.quad[2];
+    let revision = app.session.active().unwrap().revision;
+    let doc = app.session.active().unwrap().doc.id;
+    let index = app.session.active_index().unwrap();
+    let count = app.session.active().unwrap().history.entries().len();
+    let source = (*app.session.active().unwrap().doc).clone();
+    let layer = app.ui.text_edit.as_ref().unwrap().layer;
+    tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    let mut times = Vec::new();
+    let mut transforms = Vec::new();
+    let mut before = 0;
+    for i in 1..=60 {
+        let started = std::time::Instant::now();
+        tool_event(&mut app, ToolEvent::Move { x: a[0] + f64::from(i) * 2.0, y: a[1] + f64::from(i), pressure: 1.0 }, type_command());
+        let (_, after) = crate::type_transform::display_doc(&mut app, index).unwrap();
+        times.push(started.elapsed().as_secs_f64() * 1000.0);
+        transforms.push(crate::type_transform::current_transform(&app, LayerId(layer)).unwrap());
+        let damage = crate::type_transform::damage(&app, doc, revision, before, after).unwrap();
+        assert!(i64::from(damage.width()) * i64::from(damage.height()) < 2_000_000, "preview only damages the type layer");
+        let (_, same) = crate::type_transform::display_doc(&mut app, index).unwrap();
+        assert_eq!(same, after, "stationary pointer reuses the rendered preview");
+        before = after;
+    }
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), count);
+    times.sort_by(f64::total_cmp);
+    println!(
+        "24 MP / 8 type layers / 60 previews: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms (render + gesture; composite excluded)",
+        times[29], times[56], times[59]
+    );
+    // Compare the same matrices with the existing live-command path on the same document.
+    let mut commands = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    commands.session.add_document(source, None);
+    let mut command_times = Vec::new();
+    for transform in transforms {
+        let started = std::time::Instant::now();
+        commands.run("type.edit", json!({"layer": layer, "transform": transform.m, "coalesce": "1091-bench"})).unwrap();
+        command_times.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    command_times.sort_by(f64::total_cmp);
+    println!(
+        "existing type.edit per update: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms (command + render; composite excluded)",
+        command_times[29], command_times[56], command_times[59]
+    );
+    crate::type_transform::cancel_drag(&mut app);
 }

@@ -104,6 +104,16 @@ pub fn engine_data(text: &Descriptor) -> Option<E> {
     }
 }
 
+/// Whether the text engine of a `TySh` block has nothing to draw: its EngineData text
+/// (`EngineDict/Editor/Text`, what Photoshop lays out) is present and only whitespace. Some
+/// Photoshop layers carry their characters only in the descriptor's `Txt ` and render nothing.
+pub fn engine_text_is_blank(tysh: &[u8]) -> bool {
+    parse_tysh(tysh)
+        .and_then(|t| engine_data(&t.text))
+        .and_then(|e| e.path(&["EngineDict", "Editor", "Text"]).and_then(E::as_str).map(|s| s.trim().is_empty()))
+        .unwrap_or(false)
+}
+
 /// Parses the document's `Txt2` block (Photoshop's text engine data for all type layers).
 pub fn parse_txt2(data: &[u8]) -> Option<E> {
     // Txt2 is a bare sequence of `/key value` pairs (no enclosing `<< >>`).
@@ -594,6 +604,8 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
         ("Strikethrough".into(), E::Bool(s.strikethrough)),
         ("Ligatures".into(), E::Bool(s.ligatures)),
         ("DLigatures".into(), E::Bool(s.discretionary_ligatures)),
+        // Photopea lays out edited text without painting it unless its fill is enabled.
+        ("FillFlag".into(), E::Bool(true)),
         ("FillColor".into(), E::Dict(vec![("Type".into(), E::Int(color_type)), ("Values".into(), E::Array(values))])),
     ];
     dict.append(&mut opentype);

@@ -584,6 +584,13 @@ type Affine3 = ([f64; 3], [f64; 3]);
 fn connection(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<Option<Affine3>, CmsError> {
     if intent == Intent::AbsoluteColorimetric {
         let (ws, wd) = (src.media_white(), dst.media_white());
+        // `wtpt` comes straight from the file. A zero, negative or non-finite component would
+        // make the scale NaN or infinite and poison every colour the transform produces, so a
+        // profile with such a media white is refused for this intent instead.
+        let usable = |w: &[f64; 3]| w.iter().all(|v| v.is_finite() && *v > 0.0);
+        if !usable(&ws) || !usable(&wd) {
+            return Err(CmsError::Invalid(format!("absolute colorimetric needs a positive media white point (source {ws:?}, destination {wd:?})")));
+        }
         let s = [ws[0] / wd[0], ws[1] / wd[1], ws[2] / wd[2]];
         if s.iter().all(|v| (v - 1.0).abs() < 1e-6) {
             return Ok(None);

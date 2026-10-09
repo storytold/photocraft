@@ -3,7 +3,8 @@
 //!
 //! The list lives on [`Session`] so the panel, the CLI, the control channel and MCP share one
 //! copy. Recording copies replayable journal entries (commands whose [`CommandSpec::journal`] is
-//! set, except `actions.*`) into an action. Playback runs those steps with [`Session::execute`]
+//! set, except `actions.*` and the already-expanded `edit.transform.again`) into an action.
+//! Playback runs those steps with [`Session::execute`]
 //! and stops at the first error, leaving one history step per step that ran.
 //!
 //! An untrusted session installs [`Session::authorize`]. `actions.play` calls it for every nested
@@ -58,10 +59,10 @@ impl ActionState {
     }
 }
 
-/// A journal entry worth replaying: the command records itself, and it is not an `actions.*`
-/// command (those would nest recording and playback).
+/// A journal entry worth replaying: omit Actions commands and the already-expanded Again wrapper.
 pub fn replayable(id: &str) -> bool {
-    !id.starts_with("actions.") && crate::commands::find(id).is_some_and(|c| c.journal)
+    // Again journals its concrete transform too; recording the wrapper would replay it twice.
+    !id.starts_with("actions.") && id != "edit.transform.again" && crate::commands::find(id).is_some_and(|c| c.journal)
 }
 
 fn always(_: &Session) -> std::result::Result<(), String> {
@@ -297,6 +298,74 @@ mod tests {
         let _ = s.execute("document.pixel", json!({"x": 1, "y": 1}));
         let _ = s.execute("actions.list", json!({}));
         s.execute("actions.stop", json!({})).unwrap();
+    }
+
+    fn translated_square(s: &mut Session, depth: u32) {
+        s.execute("file.new", json!({"width": 20, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
+        s.edit("red square", |doc, _| {
+            doc.layers[0].surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 2, 2, 4), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 4, 0], "interpolation": "nearest"})).unwrap();
+        assert_eq!(pixel(s, 0, 4, 2), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn record_transform_again_replays_one_concrete_transform_at_each_depth() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            translated_square(&mut s, depth);
+            let from = s.journal.len();
+            s.execute("actions.record", json!({"name": "Again"})).unwrap();
+            s.execute("edit.transform.again", json!({})).unwrap();
+            let ids: Vec<&str> = s.journal.iter().skip(from).map(|(id, _)| id.as_str()).collect();
+            assert_eq!(ids, ["edit.transform", "edit.transform.again"], "both commands stay in the journal during recording");
+            let live_count = s.journal.iter().skip(from).filter(|(id, _)| replayable(id)).count();
+            s.execute("actions.stop", json!({})).unwrap();
+            let recorded = s.execute("actions.get", json!({"action": "Again"})).unwrap();
+            let steps = recorded["steps"].as_array().unwrap();
+            assert_eq!(steps.len(), 1, "depth {depth}: record the concrete transform once");
+            assert_eq!(live_count, 1, "depth {depth}: the live Actions count agrees");
+            assert_eq!(steps[0][0], "edit.transform");
+            assert_eq!(steps[0][1]["matrix"], json!([1, 0, 0, 1, 4, 0]));
+            assert_eq!(steps[0][1]["interpolation"], "nearest");
+
+            translated_square(&mut s, depth);
+            let before = s.active().unwrap().history.past_len();
+            let played = s.execute("actions.play", json!({"action": "Again"})).unwrap();
+            assert!(played.get("failed").is_none(), "depth {depth}: {played}");
+            assert_eq!(played["ran"], 1, "depth {depth}: apply the recorded transform once");
+            assert_eq!(s.active().unwrap().history.past_len(), before + 1, "depth {depth}: one undo step");
+            assert_eq!(pixel(&s, 0, 8, 2), vec![1.0, 0.0, 0.0, 1.0], "depth {depth}: moved four pixels");
+            assert_eq!(pixel(&s, 0, 12, 2), vec![0.0; 4], "depth {depth}: no second transform");
+            assert!(s.undo());
+            assert_eq!(pixel(&s, 0, 4, 2), vec![1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(pixel(&s, 0, 8, 2), vec![0.0; 4]);
+            assert!(s.redo());
+            assert_eq!(pixel(&s, 0, 8, 2), vec![1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(pixel(&s, 0, 4, 2), vec![0.0; 4]);
+        }
+    }
+
+    #[test]
+    fn record_explicit_transform_keeps_one_replayable_step() {
+        let mut s = Session::new();
+        translated_square(&mut s, 8);
+        s.execute("actions.record", json!({"name": "Move"})).unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 4, 0], "interpolation": "nearest"})).unwrap();
+        assert_eq!(s.execute("actions.stop", json!({})).unwrap()["steps"], 1);
+        let recorded = s.execute("actions.get", json!({"action": "Move"})).unwrap();
+        assert_eq!(recorded["steps"][0][0], "edit.transform");
+
+        translated_square(&mut s, 8);
+        let before = s.active().unwrap().history.past_len();
+        let played = s.execute("actions.play", json!({"action": "Move"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(played["ran"], 1);
+        assert_eq!(s.active().unwrap().history.past_len(), before + 1);
+        assert_eq!(pixel(&s, 0, 8, 2), vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(pixel(&s, 0, 12, 2), vec![0.0; 4]);
     }
 
     #[test]
