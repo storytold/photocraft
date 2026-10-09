@@ -1124,3 +1124,31 @@ fn temporary_type_transform_large_document_preview() {
     );
     crate::type_transform::cancel_drag(&mut app);
 }
+
+/// The font-list tests change and hold the process-wide text engine: one at a time.
+static FONT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn font_families_refresh_when_fonts_are_added() {
+    let _one = FONT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = crate::type_tool::families();
+    assert!(std::sync::Arc::ptr_eq(&before, &crate::type_tool::families()), "cached while the fonts don't change");
+    photocraft_text::shared().lock().unwrap().fonts.register_font_data(photocraft_text::fonts::INTER_REGULAR.to_vec());
+    let after = crate::type_tool::families();
+    assert!(!std::sync::Arc::ptr_eq(&before, &after), "a font registered after the first call must refresh the list");
+}
+
+#[test]
+fn cached_font_families_dont_wait_for_the_text_engine() {
+    // A background file open holds the engine: a UI frame with a current list must not stall on it.
+    let _one = FONT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _ = crate::type_tool::families();
+    let held = photocraft_text::shared().lock().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::type_tool::families().len());
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(2));
+    drop(held);
+    assert!(got.is_ok(), "families() waited for the text engine's lock");
+}

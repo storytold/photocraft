@@ -1,0 +1,36 @@
+# Craft-fonts faces the web (wasm32) build fetches from beside the wasm instead of embedding.
+# One face per line: when | family | style (family and style as in craft-fonts' fonts/manifest.txt).
+#   startup    = fetched before the app starts (fallbacks the first frame needs)
+#   background = fetched after the app starts (fonts users pick by name)
+# Read by build.rs (the WEB_FONTS table) and packaging/web/copy-fonts.sh (copies the files).
+startup | Noto Sans Arabic | Regular
+background | Cairo | Regular
+background | Tajawal | ExtraLight
+background | Tajawal | Light
+background | Tajawal | Regular
+background | Tajawal | Medium
+background | Tajawal | Bold
+background | Tajawal | ExtraBold
+background | Tajawal | Black
+background | Almarai | Light
+background | Almarai | Regular
+background | Almarai | Bold
+background | Almarai | ExtraBold
+background | IBM Plex Sans Arabic | Thin
+background | IBM Plex Sans Arabic | ExtraLight
+background | IBM Plex Sans Arabic | Light
+background | IBM Plex Sans Arabic | Regular
+background | IBM Plex Sans Arabic | Medium
+background | IBM Plex Sans Arabic | SemiBold
+background | IBM Plex Sans Arabic | Bold
+background | Noto Kufi Arabic | Regular
+background | Amiri | Regular
+background | Amiri | Italic
+background | Amiri | Bold
+background | Amiri | Bold Italic
+background | Alexandria | Regular
+background | Fustat | Regular
+background | Reem Kufi | Regular
+background | Aref Ruqaa | Regular
+background | Aref Ruqaa | Bold
+background | Gulzar | Regular

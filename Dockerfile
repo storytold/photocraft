@@ -34,6 +34,13 @@ RUN set -eu; \
 
 WORKDIR /src
 COPY . .
+# The Arabic fonts the site serves beside the wasm (crates/text/web-fonts.txt; copied into
+# dist/web/fonts by packaging/web/copy-fonts.sh, a Trunk hook). Needs the sibling craft-fonts
+# checkout as the `craft-fonts` named build context:
+#   docker build --build-context craft-fonts=../craft-fonts -t photocraft-web .
+COPY --from=craft-fonts . /craft-fonts
+ENV CRAFT_FONTS_DIR=/craft-fonts \
+    CRAFT_FONTS_REQUIRED=1
 WORKDIR /src/apps/photocraft-web
 # Docker serving has no static-host per-file size cap. Thin LTO uses less build
 # memory than the release zip's fat LTO; retain the profile's other optimizations.
@@ -51,7 +58,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/root/.cache/trunk \
     trunk build --release --locked \
     && test -s /src/dist/web/index.html \
-    && gzip -9 -k /src/dist/web/*.wasm /src/dist/web/*.js /src/dist/web/index.html
+    && test -d /src/dist/web/fonts \
+    && gzip -9 -k /src/dist/web/*.wasm /src/dist/web/*.js /src/dist/web/index.html /src/dist/web/fonts/*/*.ttf
 
 FROM nginx:${NGINX_VERSION} AS runtime
 COPY packaging/web/nginx.conf /etc/nginx/nginx.conf

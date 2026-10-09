@@ -87,6 +87,9 @@ it ever grows past 24 MiB, so a release can't ship a file a common host refuses.
 `wasm-release` Cargo profile (fat LTO, size-optimized code with the pixel crates kept at full
 speed) plus `wasm-opt -Oz`.
 
+The `fonts/` folder (about 8 MB over 31 files, none above 1 MB) is separate from the wasm and doesn't
+count toward its gate.
+
 ## Any path works
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/photocraft-web/Trunk.toml`),
@@ -124,6 +127,20 @@ location /photocraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+## Fonts folder
+
+Builds made with craft-fonts (`CRAFT_FONTS_DIR`, all releases) have a `fonts/` folder beside the
+wasm: the Arabic fonts the app fetches instead of embedding (about 8 MB, each next to its OFL
+licence; the wasm itself carries no craft fonts, see Sizes). Serve it with the rest of the site.
+Noto Sans Arabic is fetched before the app starts; the other families load in the background and
+appear in the font lists as they arrive.
+
+- Serve `.ttf` as `font/ttf` (the browser checks each file's SHA-256, so a wrong type or a
+  rewritten file makes the app skip that font and log `web font …` in the console).
+- The folder names are the files' SHA-256 prefixes, so `fonts/*` can be cached forever;
+  `_headers`, `.htaccess` and `nginx.conf` do this.
+- Without the folder the app still runs, but Arabic text shows as boxes.
 
 ## Embedding in a page (iframe)
 

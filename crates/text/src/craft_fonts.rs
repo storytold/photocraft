@@ -2,8 +2,10 @@
 //!
 //! `CRAFT_FONTS` is empty unless the app was built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`
 //! (see `build.rs`); every user of it must work when it is empty. Today it carries the Japanese
-//! fonts: BIZ UDPGothic (UI) and Shippori Mincho / BIZ UDMincho (serif document text). The web
-//! build (wasm32) embeds none of them: they don't fit its size cap (see `build.rs`).
+//! fonts (BIZ UDPGothic for UI, Shippori Mincho / BIZ UDMincho for serif document text) and the
+//! Arabic fonts (Noto Sans Arabic as the fallback, plus families users pick by name). The web
+//! build (wasm32) embeds none of them: they don't fit its size cap; it fetches `WEB_FONTS` from
+//! beside the wasm instead (see `build.rs`).
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {
@@ -12,6 +14,20 @@ pub struct CraftFont {
     /// ISO 15924 scripts the font is for, e.g. `"Jpan"`.
     pub scripts: &'static [&'static str],
     pub bytes: &'static [u8],
+}
+
+/// A craft-fonts face the web (wasm32) build fetches from beside the wasm instead of embedding,
+/// listed in `crates/text/web-fonts.txt` (empty unless built with `CRAFT_FONTS_DIR`). Fetched by
+/// `apps/photocraft-web/src/fonts.rs`; copied into the site by `packaging/web/copy-fonts.sh`.
+pub struct WebFont {
+    pub family: &'static str,
+    pub style: &'static str,
+    /// Fetched before the app starts (a fallback the first frame needs), else in the background.
+    pub startup: bool,
+    /// Site-relative URL, `fonts/<first 16 hex digits of the SHA-256>/<file name>`.
+    pub url: &'static str,
+    /// Subresource Integrity value, `sha256-<base64>`; the browser rejects other bytes.
+    pub integrity: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
@@ -23,6 +39,11 @@ impl CraftFont {
     /// True for a font meant for Japanese text.
     pub fn is_japanese(&self) -> bool {
         self.scripts.contains(&"Jpan")
+    }
+
+    /// True for a font meant for Arabic text.
+    pub fn is_arabic(&self) -> bool {
+        self.scripts.contains(&"Arab")
     }
 
     /// True for a Mincho (serif) face.
@@ -146,5 +167,32 @@ mod tests {
         };
         assert_eq!((first.family, first.style), (UI_JAPANESE_FAMILY, "Regular"));
         assert!(v.iter().all(|f| f.is_japanese() && !f.bytes.is_empty()));
+    }
+
+    #[test]
+    fn web_fonts_follow_the_list() {
+        if CRAFT_FONTS.is_empty() {
+            eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+            return;
+        }
+        // The listed faces this craft-fonts checkout has (an older one lacks some; build.rs leaves
+        // those out with a warning).
+        let listed: Vec<_> = crate::web_fonts_build::parse_list(include_str!("../web-fonts.txt"))
+            .unwrap()
+            .into_iter()
+            .filter(|l| CRAFT_FONTS.iter().any(|f| f.family == l.family && f.style == l.style))
+            .collect();
+        assert_eq!(WEB_FONTS.len(), listed.len());
+        for (l, w) in listed.iter().zip(WEB_FONTS) {
+            assert_eq!((l.family, l.style, l.startup), (w.family, w.style, w.startup));
+            assert!(!w.url.starts_with('/'), "{}", w.url);
+            let (dir, name) = w.url.strip_prefix("fonts/").and_then(|r| r.split_once('/')).unwrap();
+            assert!(dir.len() == 16 && dir.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{}", w.url);
+            assert!(name.ends_with(".ttf") || name.ends_with(".otf"), "{}", w.url);
+            assert!(w.integrity.starts_with("sha256-") && w.integrity.len() == "sha256-".len() + 44, "{}", w.integrity);
+        }
+        let startup: Vec<_> = WEB_FONTS.iter().filter(|w| w.startup).map(|w| w.family).collect();
+        let noto = CRAFT_FONTS.iter().any(|f| f.family == "Noto Sans Arabic");
+        assert_eq!(startup, if noto { vec!["Noto Sans Arabic"] } else { vec![] });
     }
 }

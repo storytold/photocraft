@@ -964,7 +964,8 @@ fn works_without_craft_fonts() {
     assert!(e.fonts.has_family("Inter"));
     let l = e.layout(&point("日本語 Latin", 12.0), 72.0);
     assert_eq!(l.glyphs.len(), "日本語 Latin".chars().count());
-    for f in crate::CRAFT_FONTS {
+    // The Japanese and Arabic craft fonts; not Noto Sans CJK SC (see `FontDb::new`).
+    for f in crate::CRAFT_FONTS.iter().filter(|f| f.is_japanese() || f.is_arabic()) {
         assert!(e.fonts.has_family(f.family), "{} registered under its manifest name", f.family);
     }
     if crate::CRAFT_FONTS.is_empty() {
@@ -1028,4 +1029,31 @@ fn word_and_line_navigation() {
     assert_eq!(kept, char_index(text, l.lines[1].range.start), "kept column");
     assert_eq!(jumped, char_index(text, l.lines[1].range.end), "own column");
     assert!(jumped > kept);
+}
+
+#[test]
+fn craft_arabic_fonts_register_and_noto_sans_arabic_is_a_fallback() {
+    let arabic: Vec<_> = crate::CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab")).collect();
+    if arabic.is_empty() {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    }
+    let mut db = fonts::FontDb::new();
+    for f in &arabic {
+        assert!(db.has_family(f.family), "{} {} isn't registered", f.family, f.style);
+    }
+    assert!(db.fallback_stack().any(|f| f == "Noto Sans Arabic"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
+    // The other Arabic families are picked by name, not used as fallbacks.
+    assert!(!db.fallback_stack().any(|f| f == "Cairo" || f == "Amiri"));
+}
+
+#[test]
+fn registering_fonts_bumps_the_generation() {
+    let mut db = fonts::FontDb::new();
+    let g = db.generation();
+    assert!(!db.register_font_data(fonts::INTER_REGULAR.to_vec()).is_empty());
+    assert!(db.generation() > g);
+    let g = db.generation();
+    assert!(db.register_font_data(b"not a font".to_vec()).is_empty());
+    assert_eq!(db.generation(), g, "nothing added, nothing changed");
 }

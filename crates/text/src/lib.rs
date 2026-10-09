@@ -32,7 +32,7 @@ pub mod warp;
 use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
 
-pub use craft_fonts::{CRAFT_FONTS, CraftFont};
+pub use craft_fonts::{CRAFT_FONTS, CraftFont, WEB_FONTS, WebFont};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{
     ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary,
@@ -149,3 +149,6 @@ pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
 mod tests;
 #[cfg(test)]
 mod vertical_tests;
+#[cfg(test)]
+#[path = "../build/web_fonts.rs"]
+mod web_fonts_build;

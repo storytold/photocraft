@@ -4397,6 +4397,7 @@ dependencies = [
  "photocraft-doc",
  "photocraft-engine",
  "photocraft-io",
+ "photocraft-text",
  "photocraft-ui-egui",
  "rfd",
  "wasm-bindgen",

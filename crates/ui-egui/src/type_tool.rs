@@ -35,7 +35,9 @@ pub fn layout(app: &mut PhotocraftApp, id: LayerId) -> Option<(Arc<TextLayout>, 
     let (doc, rev) = (st.doc.clone(), st.revision);
     let t = text_layer(&doc, id)?;
     let transform = crate::type_transform::current_transform(app, id).unwrap_or(t.transform);
-    let key = (doc.id.0, rev, id.0);
+    // Fonts arrive after startup on the web: a layout made before one did is stale.
+    let fonts = photocraft_text::fonts::generation();
+    let key = (doc.id.0, rev, id.0, fonts);
     if let Some((k, l)) = &app.type_layout
         && *k == key
     {
@@ -676,10 +678,24 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     }
 }
 
-/// Font families (bundled + system), cached for the process.
-pub fn families() -> &'static [String] {
-    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    FAMILIES.get_or_init(|| photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default())
+/// Font families (bundled, craft-fonts, system, and fonts registered later such as the web
+/// build's fetched fonts), cached until the font database changes.
+pub fn families() -> std::sync::Arc<[String]> {
+    static CACHE: std::sync::Mutex<Option<(u64, std::sync::Arc<[String]>)>> = std::sync::Mutex::new(None);
+    // Checked every frame: the lock-free counter, so a current list doesn't wait for a text engine
+    // a background file open holds.
+    let generation = photocraft_text::fonts::generation();
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((g, list)) = cache.as_ref()
+        && *g == generation
+    {
+        return list.clone();
+    }
+    let Ok(mut eng) = photocraft_text::shared().lock() else { return std::sync::Arc::from([]) };
+    let generation = photocraft_text::fonts::generation();
+    let list: std::sync::Arc<[String]> = eng.fonts.families().into();
+    *cache = Some((generation, list.clone()));
+    list
 }
 
 fn weight_name(w: f32) -> &'static str {
@@ -726,7 +742,7 @@ pub fn style_label(style: &str) -> String {
 
 /// Searchable font-family combo box.
 fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    font_picker_in(ui, current, width, families())
+    font_picker_in(ui, current, width, &families())
 }
 
 /// Maximum height of the font menu.

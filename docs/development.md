@@ -58,8 +58,26 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 - `crates/text/build.rs` reads `$CRAFT_FONTS_DIR/fonts/manifest.txt` and embeds the fonts as `photocraft_text::CRAFT_FONTS` (`crates/text/src/craft_fonts.rs`). Unset, `CRAFT_FONTS` is empty and the build is unchanged. A bad path is a build warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds set both).
 - **UI:** the Japanese fonts (BIZ UDPGothic Regular first) are the first Japanese fallback in the lazy CJK loader (`crates/ui-egui/src/cjk_fonts.rs`), ahead of the system Japanese fonts and in the same locale script order, appended last to every egui family with the usual baseline alignment.
 - **Type tool:** the text engine registers them in `FontDb::new` (so also with no system fonts) and puts them first in the Japanese slot of the locale-ordered fallback list: BIZ UDPGothic for sans runs, Shippori Mincho / BIZ UDMincho for serif runs.
-- **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. The web build therefore has no Japanese font yet (loading craft-fonts next to the wasm at run time would be the way to add one).
+- **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. It fetches the faces in `crates/text/web-fonts.txt` from beside the wasm at run time instead (see below); Japanese isn't in that list yet.
 - Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's Linux job runs the tests a second time with `CRAFT_FONTS_DIR` set. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
+
+### Arabic fonts and the web build
+
+Desktop builds register craft-fonts' Arabic families (Noto Sans Arabic is the Arabic fallback via
+`FALLBACK_CANDIDATES`; the others are picked by name).
+
+The web build embeds no craft fonts (wasm size gate). Instead `crates/text/web-fonts.txt` lists the
+faces it fetches from beside the wasm, `startup` (before the app starts) or `background` (after):
+
+- `crates/text/build.rs` turns it into `photocraft_text::WEB_FONTS` (URL `fonts/<sha16>/<file>`
+  and the SRI hash).
+- `packaging/web/copy-fonts.sh`, a Trunk `post_build` hook, copies the files.
+- `apps/photocraft-web/src/fonts.rs` fetches and registers them, logging `web font …` for failures.
+- `FontDb::generation()` changes as they arrive, and the Type tool's font list and layout cache key
+  on it.
+
+Try it: `cd apps/photocraft-web && CRAFT_FONTS_DIR=/abs/path/to/craft-fonts trunk serve`. To serve
+another face on the web (e.g. BIZ UDPGothic for Japanese), add a line to `web-fonts.txt`.
 
 ## Graphics startup and device loss
 

@@ -8,3 +8,10 @@ filehash = true
 [serve]
 addresses = ["127.0.0.1"]
 port = 8765
+
+# Copy the craft-fonts faces the web build fetches (crates/text/web-fonts.txt) into the site's
+# fonts/ folder; a no-op without CRAFT_FONTS_DIR. Runs for `trunk serve` and `trunk build`.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["../../packaging/web/copy-fonts.sh"]

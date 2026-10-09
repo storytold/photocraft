@@ -16,3 +16,5 @@ book/output
 **/.env
 **/.env.*
 *.log
+.DS_Store
+**/node_modules

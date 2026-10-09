@@ -313,6 +313,10 @@ pub struct Services {
 /// (document, compute ms, histograms)).
 pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
 
+/// What the Type tool's cached layout was made from: (document id, revision, layer id, font
+/// generation). Fonts arrive after startup on the web, so the font generation is part of it.
+pub(crate) type TypeLayoutKey = (u64, u64, u64, u64);
+
 pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
@@ -455,8 +459,8 @@ pub struct PhotocraftApp {
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
-    /// Type tool layout cache: ((doc, revision, layer), layout).
-    pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
+    /// Type tool layout cache: ([`TypeLayoutKey`], layout).
+    pub(crate) type_layout: Option<(TypeLayoutKey, std::sync::Arc<photocraft_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
     channel_thumbs: Option<(DocId, std::sync::Weak<Document>, Vec<egui::TextureHandle>)>,

@@ -74,12 +74,24 @@ pub struct ResolvedFont {
     pub exact: bool,
 }
 
+/// Bumped whenever any font database adds fonts: see [`generation`].
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A number that changes whenever any font database adds fonts (the web build registers its fetched
+/// fonts after startup). Lock-free, unlike [`FontDb::generation`] behind [`crate::shared`], so UI
+/// caches checked every frame don't wait for a text engine another thread holds.
+pub fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct FontDb {
     pub(crate) fcx: FontContext,
     system_loaded: bool,
     /// PostScript name → (family, weight, italic), filled lazily.
     ps_cache: HashMap<String, Option<ResolvedFont>>,
     fallbacks: Vec<String>,
+    /// Bumped whenever families are added (see [`FontDb::generation`]).
+    generation: u64,
 }
 
 impl Default for FontDb {
@@ -97,13 +109,16 @@ impl FontDb {
             system_loaded: false,
             ps_cache: HashMap::new(),
             fallbacks: Vec::new(),
+            generation: 0,
         };
         for (_, bytes) in BUNDLED {
             db.register_font_data(bytes.to_vec());
         }
         // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
-        // wasm32), before any system font.
-        for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese()) {
+        // wasm32, which fetches its fonts instead), before any system font: the Japanese ones and
+        // the Arabic ones (Noto Sans Arabic is in FALLBACK_CANDIDATES; the others are picked by name).
+        // Not Noto Sans CJK SC: registered, it would take Japanese Han from BIZ UDPGothic.
+        for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese() || f.is_arabic()) {
             db.register_static_font(f.bytes);
         }
         db.refresh_generics();
@@ -140,12 +155,21 @@ impl FontDb {
             }
             self.ps_cache.clear();
             self.refresh_generics();
+            self.generation += 1;
+            GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
         self.register_blob(Blob::new(Arc::new(bytes)))
+    }
+
+    /// A number that changes whenever fonts are added (registered, or the system fonts scanned):
+    /// family lists and layouts cached under it are current while it doesn't. The web build
+    /// registers fonts after startup, as they arrive.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Registers embedded font data without copying it.
@@ -167,6 +191,10 @@ impl FontDb {
         // stable, and macOS ships private UI faces (".Hiragino Kaku Gothic Interface") whose
         // metrics differ from the public family's.
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
+        if !names.is_empty() {
+            self.generation += 1;
+            GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         self.ps_cache.clear();
         self.refresh_generics();
         names

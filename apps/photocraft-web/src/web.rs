@@ -41,6 +41,9 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        // Fallback fonts the first frame needs (Noto Sans Arabic), fetched while the loading text
+        // shows; the rest load in the background once the app runs.
+        crate::fonts::load_startup_fonts().await;
         let pen_target = canvas.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -48,6 +51,7 @@ pub fn start() {
                 options,
                 Box::new(move |cc| {
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+                    crate::fonts::spawn_background_fonts(cc.egui_ctx.clone());
                     let inbox: Inbox = Arc::default();
                     let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone()));
                     listen_pen(&pen_target, app.stylus.feed.clone());
