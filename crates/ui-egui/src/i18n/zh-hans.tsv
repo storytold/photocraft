@@ -672,6 +672,8 @@
 	Pro Medium Gray Theme	专业中灰主题
 	Studio Theme	工作室主题
 	Studio Light Theme	工作室浅色主题
+	Adwaita Light Theme	Adwaita 浅色主题
+	Adwaita Dark Theme	Adwaita 深色主题
 	Classic Theme	经典主题
 	Next Theme	下一代主题
 	Actions	动作
@@ -1876,6 +1878,8 @@
 	Standard	标准
 	Studio	工作室
 	Studio light	工作室（浅色）
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita（深色）
 	Subdivisions	细分
 	System	系统
 	Text engine	文字引擎

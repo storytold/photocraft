@@ -672,6 +672,8 @@
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
+	Adwaita Light Theme	Adwaita(ライト)テーマ
+	Adwaita Dark Theme	Adwaita(ダーク)テーマ
 	Classic Theme	クラシックテーマ
 	Next Theme	次のテーマ
 	Actions	アクション
@@ -1874,6 +1876,8 @@
 	Standard	標準
 	Studio	スタジオ
 	Studio light	スタジオ(ライト)
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita(ダーク)
 	Subdivisions	分割数
 	System	システム
 	Text engine	テキストエンジン

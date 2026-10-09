@@ -186,7 +186,7 @@ pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
-    /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
+    /// studioLight, classic, adwaita, adwaitaDark), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool). Other fields are an
     /// error.

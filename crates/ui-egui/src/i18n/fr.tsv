@@ -660,6 +660,8 @@
 	Pro Medium Gray Theme	Thème Pro gris moyen
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
+	Adwaita Light Theme	Thème Adwaita clair
+	Adwaita Dark Theme	Thème Adwaita sombre
 	Classic Theme	Thème Classique
 	Next Theme	Thème suivant
 	Actions	Actions
@@ -1840,6 +1842,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio clair
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita sombre
 	Subdivisions	Subdivisions
 	System	Système
 	Text engine	Moteur de texte

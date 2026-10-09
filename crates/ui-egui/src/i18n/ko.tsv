@@ -648,6 +648,8 @@
 	Pro Medium Gray Theme	프로 중간 회색 테마
 	Studio Theme	스튜디오 테마
 	Studio Light Theme	스튜디오 밝은 테마
+	Adwaita Light Theme	Adwaita 밝은 테마
+	Adwaita Dark Theme	Adwaita 어두운 테마
 	Classic Theme	클래식 테마
 	Next Theme	다음 테마
 	Actions	액션
@@ -1834,6 +1836,8 @@
 	Standard	표준
 	Studio	스튜디오
 	Studio light	스튜디오 밝게
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita 어둡게
 	Subdivisions	하위 분할
 	System	시스템
 	Text engine	텍스트 엔진

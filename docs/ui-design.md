@@ -8,6 +8,8 @@
 | Studio | Dark studio style: near-black, rounded cards, pill tabs, violet accent, toggles |
 | Studio Light | Studio on light surfaces |
 | Classic | Windows-2000 bevels, square corners, navy selection |
+| Adwaita | GNOME's libadwaita light palette on the Studio layout: white header bar and cards on a grey sidebar, GNOME blue accent (#3584e4), 6 / 9 / 12 px radii, grey (not red) close button |
+| Adwaita Dark | The libadwaita dark palette on the same layout |
 
 Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"}` over the control channel.
 

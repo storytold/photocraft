@@ -666,6 +666,8 @@
 	Pro Medium Gray Theme	Pro-Design (Mittelgrau)
 	Studio Theme	Studio-Design
 	Studio Light Theme	Studio-Design (Hell)
+	Adwaita Light Theme	Adwaita-Design (Hell)
+	Adwaita Dark Theme	Adwaita-Design (Dunkel)
 	Classic Theme	Klassisches Design
 	Next Theme	Nächstes Design
 	Actions	Aktionen
@@ -1860,6 +1862,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio hell
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita dunkel
 	Subdivisions	Unterteilungen
 	System	System
 	Text engine	Text-Engine

@@ -676,6 +676,8 @@
 	Pro Medium Gray Theme	Motiv Pro (středně šedý)
 	Studio Theme	Motiv Studio
 	Studio Light Theme	Motiv Studio (světlý)
+	Adwaita Light Theme	Motiv Adwaita (světlý)
+	Adwaita Dark Theme	Motiv Adwaita (tmavý)
 	Classic Theme	Klasický motiv
 	Next Theme	Další motiv
 	Actions	Akce
@@ -1883,6 +1885,8 @@
 	Standard	Standardní
 	Studio	Studio
 	Studio light	Studio světlý
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita tmavý
 	Subdivisions	Dílky
 	System	Systém
 	Text engine	Textový modul

@@ -1357,6 +1357,8 @@
 	Classic Theme	Классическая тема
 	Studio Theme	Тема Studio
 	Studio Light Theme	Светлая тема Studio
+	Adwaita Light Theme	Светлая тема Adwaita
+	Adwaita Dark Theme	Тёмная тема Adwaita
 	Pro Theme	Тема Pro
 	Pro Medium Gray Theme	Средне-серая тема Pro
 
@@ -2276,6 +2278,8 @@
 	Standard	Стандартный
 	Studio	Studio
 	Studio light	Светлая Studio
+	Adwaita	Adwaita
+	Adwaita dark	Тёмная Adwaita
 	Subdivisions	Подделения
 	System	Системная
 	Text engine	Текстовый движок
