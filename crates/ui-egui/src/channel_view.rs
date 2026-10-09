@@ -165,12 +165,12 @@ fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + S
     if w == 0 {
         return px;
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         px.par_chunks_mut(w).enumerate().for_each(|(y, out)| row(y, out));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     for (y, out) in px.chunks_mut(w).enumerate() {
         row(y, out);
     }

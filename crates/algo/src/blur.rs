@@ -385,12 +385,12 @@ fn average_samples(src: &Image, out: Rect, ctx: &Ctx, offsets: impl Fn(f32, f32,
             }
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         res.par_chunks_mut(ow * n).enumerate().for_each(|(row, data)| process_row(out.y0 + row as i32, data));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     {
         res.chunks_mut(ow * n).enumerate().for_each(|(row, data)| process_row(out.y0 + row as i32, data));
     }

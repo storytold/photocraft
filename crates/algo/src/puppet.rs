@@ -166,12 +166,12 @@ pub fn build_mesh(src: &Surface, bounds: Rect, density: PuppetDensity, expansion
                 }
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         {
             use rayon::prelude::*;
             cov.par_chunks_mut(bw).enumerate().for_each(|(by, out)| scan(by, out));
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         cov.chunks_mut(bw).enumerate().for_each(|(by, out)| scan(by, out));
     }
     // Grow / shrink by the expansion (round stamp in block units).

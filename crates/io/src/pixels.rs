@@ -189,8 +189,17 @@ pub fn unmatte(m: f32, a: f32, white: f32) -> f32 {
     if a <= 0.0 { white } else { (m - white * (1.0 - a)) / a }
 }
 
+/// `items.map(f)` on the rayon worker pool, in order: the wasm threads build can't spawn OS
+/// threads.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync + Send) -> Vec<R> {
+    use rayon::prelude::*;
+    items.into_par_iter().map(f).collect()
+}
+
 /// `items.map(f)` on scoped threads (one per item; callers pass a handful of channels or
 /// bands), in order; sequential on wasm or for a single item.
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
     if cfg!(target_arch = "wasm32") || items.len() < 2 {
         return items.into_iter().map(f).collect();
@@ -206,8 +215,11 @@ pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Ve
     })
 }
 
-/// `0..n` split into about one band per core.
+/// `0..n` split into about one band per core (per rayon worker in the wasm threads build).
 pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    let k = rayon::current_num_threads().clamp(1, 32);
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
     let k = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
     let step = n.div_ceil(k).max(1);
     (0..n).step_by(step).map(|a| a..(a + step).min(n)).collect()

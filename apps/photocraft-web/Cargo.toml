@@ -35,3 +35,10 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Response"] }
+
+# Threads build (packaging/web-threads): shared memory and a Web Worker rayon pool. `web_spin_lock`
+# makes rayon spin instead of block on the browser's main thread, which must never block.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+rayon = { workspace = true, features = ["web_spin_lock"] }
+wasm-bindgen-rayon = { version = "1.3", features = ["no-bundler"] }
+serde_json = { workspace = true }

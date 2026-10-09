@@ -134,12 +134,12 @@ pub trait Sampler: Sync {
             let strip = self.rgb(Rect::new(r.x0, y0, r.x1, y1));
             strip.downsample(step).px
         };
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         let parts: Vec<Vec<[f32; 3]>> = {
             use rayon::prelude::*;
             strips.par_iter().map(run).collect()
         };
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         let parts: Vec<Vec<[f32; 3]>> = strips.iter().map(run).collect();
         let mut px = Vec::with_capacity(ow * oh);
         for p in parts {
@@ -295,12 +295,12 @@ fn add_fixed_link(g: &mut Graph, node: usize, fixed: u8, wt: f32) {
 /// Data costs `(−ln p(z|fg), −ln p(z|bg))` for every pixel.
 pub fn data_costs(img: &RgbImage, fg: &Gmm, bg: &Gmm) -> (Vec<f32>, Vec<f32>) {
     let eval = |p: &[f32; 3]| (fg.neg_log(*p), bg.neg_log(*p));
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let v: Vec<(f32, f32)> = {
         use rayon::prelude::*;
         img.px.par_iter().map(eval).collect()
     };
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let v: Vec<(f32, f32)> = img.px.iter().map(eval).collect();
     v.into_iter().unzip()
 }
@@ -433,12 +433,12 @@ pub fn antialias_u8(mask: &mut [u8], w: usize, h: usize) {
             }
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     {
         use rayon::prelude::*;
         mask.par_chunks_mut(w).enumerate().for_each(|(y, r)| row(y, r));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     mask.chunks_mut(w).enumerate().for_each(|(y, r)| row(y, r));
 }
 
@@ -508,12 +508,12 @@ pub fn finish_region(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bo
                 *o = if low[ly * lw + (x / step).min(lw - 1)] { 255 } else { 0 };
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         {
             use rayon::prelude::*;
             mask.par_chunks_mut(w).enumerate().for_each(|(y, r)| fill(y, r));
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         mask.chunks_mut(w).enumerate().for_each(|(y, r)| fill(y, r));
         if let Some((fg, bg)) = models {
             refine_band(sampler, window, step, low, &band, lw, lh, fg, bg, &mut mask);
@@ -579,12 +579,12 @@ fn refine_band(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bool], b
         }
         (*t, core)
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let results: Vec<(Rect, Vec<bool>)> = {
         use rayon::prelude::*;
         tiles.par_iter().map(run).collect()
     };
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let results: Vec<(Rect, Vec<bool>)> = tiles.iter().map(run).collect();
     for (t, core) in results {
         let cw = t.width() as usize;

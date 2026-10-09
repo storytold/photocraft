@@ -352,17 +352,24 @@ fn adam7_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompression
 const PARALLEL_MIN_BYTES: usize = 4 << 20;
 
 /// The zlib stream of a non-interlaced image, built in parallel (`None` below
-/// [`PARALLEL_MIN_BYTES`], on wasm, or without compression): rows get the adaptive filter
-/// (minimum sum of absolute differences over the five PNG filters, as libpng and the `png`
-/// crate do), then bands of rows are deflated independently at the requested level, each
+/// [`PARALLEL_MIN_BYTES`], on single-threaded wasm, or without compression): rows get the
+/// adaptive filter (minimum sum of absolute differences over the five PNG filters, as libpng and
+/// the `png` crate do), then bands of rows are deflated independently at the requested level, each
 /// ending on a sync flush so the raw deflate streams concatenate into one (as `pigz` does).
 /// A 36 MP RGB export drops from ~9 s to well under a second on 12 cores; the output is a few
 /// percent larger (no dictionary across bands).
 fn parallel_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompression) -> Option<Vec<u8>> {
-    if cfg!(target_arch = "wasm32") || data.len() < PARALLEL_MIN_BYTES || level == PngCompression::None || w == 0 || h == 0 {
+    if data.len() < PARALLEL_MIN_BYTES || level == PngCompression::None || w == 0 || h == 0 {
         return None;
     }
+    #[cfg(not(target_arch = "wasm32"))]
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32);
+    // Wasm can't spawn OS threads: the threads build (`atomics`) deflates on the rayon worker
+    // pool, the single-threaded build not in parallel at all.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    let threads = rayon::current_num_threads().clamp(1, 32);
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    let threads = 1;
     if threads < 2 {
         return None;
     }
@@ -374,33 +381,52 @@ fn parallel_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompress
         PngCompression::Best => flate2::Compression::best(),
         _ => flate2::Compression::default(),
     };
-    let next = std::sync::atomic::AtomicUsize::new(0);
     type Band = (usize, Vec<u8>, u32, usize);
-    let mut parts: Vec<Band> = std::thread::scope(|sc| {
-        let workers: Vec<_> = (0..threads.min(bands.len()))
-            .map(|_| {
-                sc.spawn(|| {
-                    let mut out: Vec<Band> = Vec::new();
-                    loop {
-                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(&(y0, y1)) = bands.get(i) else { break };
-                        let mut filtered = Vec::with_capacity((y1 - y0) * (stride + 1));
-                        let mut scratch = vec![0u8; stride];
-                        for y in y0..y1 {
-                            let row = &data[y * stride..(y + 1) * stride];
-                            let prev = (y > 0).then(|| &data[(y - 1) * stride..y * stride]);
-                            filter_row(row, prev, bpp, &mut scratch, &mut filtered);
+    // Band `i`, filtered and deflated (`None` if deflating failed).
+    let band = |i: usize| -> Option<Band> {
+        let &(y0, y1) = bands.get(i)?;
+        let mut filtered = Vec::with_capacity((y1 - y0) * (stride + 1));
+        let mut scratch = vec![0u8; stride];
+        for y in y0..y1 {
+            let row = &data[y * stride..(y + 1) * stride];
+            let prev = (y > 0).then(|| &data[(y - 1) * stride..y * stride]);
+            filter_row(row, prev, bpp, &mut scratch, &mut filtered);
+        }
+        let adler = adler32(1, &filtered);
+        let z = deflate_band(&filtered, lvl, y1 == h)?;
+        Some((i, z, adler, filtered.len()))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut parts: Vec<Band> = {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|sc| {
+            let workers: Vec<_> = (0..threads.min(bands.len()))
+                .map(|_| {
+                    sc.spawn(|| {
+                        let mut out: Vec<Band> = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if i >= bands.len() {
+                                break;
+                            }
+                            let Some(b) = band(i) else { return Vec::new() };
+                            out.push(b);
                         }
-                        let adler = adler32(1, &filtered);
-                        let Some(z) = deflate_band(&filtered, lvl, y1 == h) else { return Vec::new() };
-                        out.push((i, z, adler, filtered.len()));
-                    }
-                    out
+                        out
+                    })
                 })
-            })
-            .collect();
-        workers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect()
-    });
+                .collect();
+            workers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect()
+        })
+    };
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    let mut parts: Vec<Band> = {
+        use rayon::prelude::*;
+        (0..bands.len()).into_par_iter().filter_map(band).collect()
+    };
+    // Not reached (one thread returns above); keeps the single-threaded build type-checked.
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    let mut parts: Vec<Band> = (0..bands.len()).filter_map(band).collect();
     if parts.len() != bands.len() {
         return None;
     }

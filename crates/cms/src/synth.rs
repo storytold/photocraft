@@ -362,13 +362,13 @@ fn encode_v2(lab: [f64; 3]) -> [f32; 3] {
     ]
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
 fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
     use rayon::prelude::*;
     (0..n).into_par_iter().map(f).collect()
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
     (0..n).map(f).collect()
 }

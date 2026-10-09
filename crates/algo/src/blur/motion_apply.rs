@@ -97,9 +97,9 @@ fn apply_inner(
         return None;
     }
     let row_tile = usize::try_from(tile).ok()?;
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let workers = rayon::current_num_threads();
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let workers = 1;
     let mut tile = tile.clamp(MIN_TILE, MAX_TILE);
     while tile > MIN_TILE && (area.width() < tile as u32 || area.height() < tile as u32) {
@@ -183,12 +183,12 @@ fn apply_inner(
         if ctl.cancelled() {
             return Some(None);
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         let results: Option<Vec<_>> = {
             use rayon::prelude::*;
             chunk.par_iter().map(run).collect()
         };
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         let results: Option<Vec<_>> = chunk.iter().map(run).collect();
         let Some(results) = results else { return if ctl.cancelled() { Some(None) } else { None } };
         for (output, data) in results {

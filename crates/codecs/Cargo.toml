@@ -43,3 +43,7 @@ image = { workspace = true, features = ["png", "jpeg", "tiff"] }
 
 [lints]
 workspace = true
+
+# The browser threads build (wasm with `atomics`, packaging/web-threads) takes the rayon paths too.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+rayon = { workspace = true }

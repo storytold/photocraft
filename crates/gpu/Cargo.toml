@@ -27,3 +27,7 @@ wgpu = { version = "30" }
 pollster = "1"
 # Shape layers in the effect parity tests.
 photocraft-vector = { workspace = true }
+
+# The browser threads build (wasm with `atomics`, packaging/web-threads) takes the rayon paths too.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+rayon = { workspace = true }

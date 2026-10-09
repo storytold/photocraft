@@ -296,17 +296,17 @@ fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, edge: Opt
     };
     // Bands go into the output a group at a time, so the `f32` rows held at once are bounded by
     // the group, not by the whole destination (#1544).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     let group = rayon::current_num_threads().max(1) * 2;
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     let group = 1;
     for chunk in bands.chunks(group) {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
         let parts: Vec<(Rect, Vec<f32>)> = {
             use rayon::prelude::*;
             chunk.par_iter().map(run).collect()
         };
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
         let parts: Vec<(Rect, Vec<f32>)> = chunk.iter().map(run).collect();
         for (r, d) in parts {
             out.write_region(r, &d);

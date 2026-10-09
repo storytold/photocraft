@@ -19,10 +19,16 @@
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
 fn main() {
     web::start();
 }
+
+/// The threads build (`atomics`, packaging/web-threads) starts from its page instead: it first
+/// awaits `initThreadPool`, then calls the exported `start`, so nothing touches rayon before the
+/// Web Worker pool exists (rayon would otherwise build its one-thread fallback pool for good).
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -41,5 +47,21 @@ mod tests {
         assert!(hint.contains("failed to") && hint.contains("<a href=\"\">Reload</a>"), "{hint}");
         assert!(html.contains("animation: photocraft-stalled"), "the hint appears after a delay");
         assert!(!html.contains("<script"), "trunk injects the generated loader; the page has no script of its own");
+    }
+
+    /// The threads build's page must install the Web Worker pool before the app first touches
+    /// rayon (or rayon keeps its one-thread fallback pool), and its host must send the
+    /// cross-origin isolation headers shared WebAssembly memory needs.
+    #[test]
+    fn threads_page_starts_the_worker_pool_before_the_app() {
+        let html = include_str!("../../../packaging/web-threads/index.html");
+        let isolated = html.find("self.crossOriginIsolated").expect("cross-origin isolation check");
+        let init = html.find("await pc.default(").expect("module instantiation");
+        let pool = html.find("await pc.initThreadPool(").expect("worker pool start");
+        let start = html.find("pc.start()").expect("app start");
+        assert!(isolated < init && init < pool && pool < start, "isolation check, instantiate, pool, then start");
+        let headers = include_str!("../../../packaging/web-threads/_headers");
+        assert!(headers.contains("Cross-Origin-Opener-Policy: same-origin"), "{headers}");
+        assert!(headers.contains("Cross-Origin-Embedder-Policy: require-corp"), "{headers}");
     }
 }

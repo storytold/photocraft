@@ -51,14 +51,14 @@ fn outline_scaled_impl(mask: &Surface, bounds: Rect, step: u32, parallel: bool) 
             *cell = x >= bounds.x0 && x < bounds.x1 && v > 0.5;
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
     if parallel {
         use rayon::prelude::*;
         grid.par_chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
     } else {
         grid.chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
     {
         let _ = parallel;
         grid.chunks_mut(w).enumerate().for_each(|(gy, row)| sample_row(gy, row));
