@@ -153,7 +153,9 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
     return min(cb / (2.0 * (1.0 - cs)), 1.0);
 }
 
-const F32_MAX: f32 = 3.40282347e38;
+// f32::MAX exactly. The decimal 3.40282347e38 is just above it: naga rounds it down, but browsers'
+// WebGPU compiler rejects it, which left the web app without a GPU compositor.
+const F32_MAX: f32 = 0x1.fffffep+127f;
 
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.

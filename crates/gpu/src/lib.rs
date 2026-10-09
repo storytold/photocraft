@@ -2019,6 +2019,61 @@ mod tests {
         }
     }
 
+    /// The decimal float literals in `src` (comments skipped; hex literals are exact, so skipped),
+    /// with their line numbers.
+    fn decimal_float_literals(src: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for (n, line) in src.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("").as_bytes();
+            let mut i = 0;
+            while i < code.len() {
+                let digit_or_dot = code[i].is_ascii_digit() || (code[i] == b'.' && code.get(i + 1).is_some_and(u8::is_ascii_digit));
+                let word_before = i > 0 && (code[i - 1].is_ascii_alphanumeric() || code[i - 1] == b'_' || code[i - 1] == b'.');
+                if !digit_or_dot || word_before {
+                    i += 1;
+                    continue;
+                }
+                if code[i] == b'0' && matches!(code.get(i + 1), Some(b'x' | b'X')) {
+                    i += 2;
+                    while i < code.len() && (code[i].is_ascii_hexdigit() || matches!(code[i], b'.' | b'p' | b'P' | b'+' | b'-')) {
+                        i += 1;
+                    }
+                    continue;
+                }
+                let start = i;
+                while i < code.len() && (code[i].is_ascii_digit() || code[i] == b'.') {
+                    i += 1;
+                }
+                if i < code.len() && matches!(code[i], b'e' | b'E') {
+                    let mut j = i + 1;
+                    if j < code.len() && matches!(code[j], b'+' | b'-') {
+                        j += 1;
+                    }
+                    if j < code.len() && code[j].is_ascii_digit() {
+                        i = j;
+                        while i < code.len() && code[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                    }
+                }
+                out.push((n + 1, String::from_utf8_lossy(&code[start..i]).into_owned()));
+            }
+        }
+        out
+    }
+
+    /// Browsers' WebGPU shader compiler (Tint) rejects a float literal beyond f32's finite range
+    /// even when it would round to `f32::MAX` (naga, used natively, rounds it), and then no
+    /// compositor pipeline builds and the web app falls back to the CPU renderer. `3.40282347e38`
+    /// was such a literal.
+    #[test]
+    fn shader_float_literals_fit_f32() {
+        let lits = decimal_float_literals(SHADER);
+        assert!(lits.iter().any(|(_, l)| l == "1.0"), "the scanner finds literals: {lits:?}");
+        let bad: Vec<_> = lits.iter().filter(|(_, l)| l.parse::<f64>().map_or(true, |v| !v.is_finite() || v.abs() > f64::from(f32::MAX))).collect();
+        assert!(bad.is_empty(), "float literals outside f32's finite range (line, literal): {bad:?}");
+    }
+
     #[test]
     fn op_record_fits_the_uniform() {
         let p = plan::Pass::new(Kernel::FxPaint, 0);
