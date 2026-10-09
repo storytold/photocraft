@@ -11,6 +11,58 @@
 - **UI:** use `theme::Tokens` and `widgets::*`. Verify visually (offscreen `snapshot` example or the control channel) before submitting, and attach before/after screenshots to PRs.
 - **Commits:** small, focused, with a clear subject line.
 
+## Reporting issues
+
+Use **Report an Issue** beside Discord in the app's title bar, then choose the
+issue type from the dropdown to open its GitHub form.
+Opening the dropdown does not open a browser or send diagnostics.
+Selecting a type prefills the version, operating system, and a limited set of system
+diagnostics. Review those fields before submitting; GitHub does not create an
+issue until you submit the form.
+
+The dropdown uses this priority order:
+
+| Type | Use for |
+|---|---|
+| [Bug report](https://github.com/storytold/photocraft/issues/new?template=bug_report.yml) | Broken editing/UI behavior, crashes, hangs, or slow operations |
+| [Compatibility issue](https://github.com/storytold/photocraft/issues/new?template=compatibility.yml) | File/Photoshop interchange or platform/package incompatibility |
+| [Feature request](https://github.com/storytold/photocraft/issues/new?template=feature_request.yml) | Missing tools, formats, capabilities, or workflow improvements |
+
+This is a fixed, evidence-informed order, not a live GitHub query. A
+2026-10-08 sample of 45 open reports contained 21 bugs, 4 compatibility issues,
+and 20 feature requests; 10 recently closed reports were bugs. Existing
+breakage comes first, followed by interoperability/platform blockers, then
+new capabilities. Crashes and performance problems use Bug report rather than
+overlapping forms.
+
+The detected platform includes the OS family and architecture; add your OS
+release or Linux distribution manually, and the browser/version for web reports.
+
+For bugs and compatibility problems, include steps to reproduce, the actual
+result, and the expected result. For feature requests, explain the problem the
+feature would solve and the desired workflow instead. For
+file-specific problems, describe the format, dimensions, colour mode, and bit
+depth. Attach a minimal test file, screenshot, or relevant error text if it is
+safe to share; remove personal information and private file paths first.
+Reports opened directly on GitHub need their version and system details filled
+in manually. Search both open and closed issues for related reports.
+
+The issue forms must be merged into the default branch of
+`storytold/photocraft` before GitHub can display them. Their `version`, `os`, and
+`system-info` field IDs are shared with the in-app prefill URL; keep them in sync
+when editing `.github/ISSUE_TEMPLATE/*.yml`.
+
+The fields reflect recurring gaps and useful details in open and closed reports:
+[PSD interoperability](https://github.com/storytold/photocraft/issues/1281)
+needs exact product versions and file details;
+[macOS clipboard behavior](https://github.com/storytold/photocraft/issues/1287)
+needs platform and reproduction steps;
+[display scaling](https://github.com/storytold/photocraft/issues/1249)
+needs monitor/scaling details; and
+[video export](https://github.com/storytold/photocraft/issues/1288) and
+[Slice Options cancellation](https://github.com/storytold/photocraft/issues/910)
+need precise steps and expected versus actual results.
+
 ## Adding a command
 
 1. **Find the id.** Search `crates/ui-egui/src/menu_catalog.rs` for the Photoshop menu item. Using its id makes the menu item live with no UI work. Commands without a Photoshop menu entry use a descriptive id in the same style (`layer.smartFilter.delete`) and an empty menu path.

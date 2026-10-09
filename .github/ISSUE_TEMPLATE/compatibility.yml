@@ -1,0 +1,90 @@
+name: Compatibility issue
+description: Report file/Photoshop interchange problems or platform/package incompatibility.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for files that cannot open, lose content, or change appearance between applications, and for platform/package environments that cannot run PhotoCraft. For a crash, slow operation, or broken editing/UI behavior, use Bug report. For a new format or capability that is not supported yet, use Feature request.
+
+        Search [open and closed issues](https://github.com/storytold/photocraft/issues?q=is%3Aissue) first. Give the report a specific title and report one problem per issue.
+
+        **Reports and attachments are public.** Do not include contact details, usernames, full local filesystem paths, credentials, or private artwork. Redact identifying metadata and details from logs, screenshots, and sample files. Prefer a minimal synthetic file; only share files you have permission to publish. Samples are helpful but not required.
+  - type: input
+    id: version
+    attributes:
+      label: PhotoCraft version
+      description: |
+        Keep the version filled by Report an Issue, or copy the exact version/build from Help > About or Help > System Info. Include the commit hash for source builds. If PhotoCraft cannot start, give the version from the installer/package filename. Do not enter only "latest".
+      placeholder: "Exact version, and build/commit if available"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      description: |
+        Add the OS release/build and Linux distribution to the detected OS family and architecture. For the web app, include host OS and browser/version. Enter the details manually if opening this form directly on GitHub.
+      placeholder: "For example: Windows 11 24H2, macOS 26.6.2, or Rocky Linux 9 / x86_64"
+    validations:
+      required: true
+  - type: textarea
+    id: source-destination
+    attributes:
+      label: Source and destination applications, formats, or environments
+      description: |
+        For files, give the creating application and exact version, input format/extension, PhotoCraft import/export format, and destination application/version. Include Photoshop's exact version when relevant and whether this is import, export, or a round trip.
+        For platform problems, give the PhotoCraft package type/source (installer, portable, AppImage, deb, rpm, Flatpak, web, or source build), CPU architecture, and target OS/runtime/library version. Say which other environment works, if known. If an application/version is unknown, say so.
+      placeholder: |
+        Describe the complete file exchange or package/platform path, including exact versions and formats.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Give numbered steps with exact import/export commands, options, and save/open sequence. For a launch/install failure, include the package and launch method. State whether all files/environments or only a particular sample fail. For CLI/MCP/control reports, include a minimal command sequence with relative example filenames, not private paths.
+      placeholder: |
+        1. Create or obtain a minimal sample, or install the package.
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected compatibility
+      description: |
+        Describe what should open, render, remain editable, or run. If another application opens the same file correctly, give its exact version and the result you verified.
+      placeholder: "Describe the expected file contents, appearance, or platform behavior."
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result and exact error
+      description: |
+        Describe what fails or changes: missing layers, vector shapes, fonts, colors, editability, or a launch/library error. Include the exact error text with private paths removed. Give the last working PhotoCraft/application/package version if known.
+      placeholder: "Describe the observed difference or paste the sanitized error."
+    validations:
+      required: true
+  - type: textarea
+    id: document-info
+    attributes:
+      label: Document details and safe sample (optional)
+      description: |
+        Give dimensions, color mode/profile, bit depth, relevant layer types/count, and embedded or linked resources if known. Say whether a new minimal document also fails. Attach a synthetic sample and/or cropped comparison screenshots if safe to publish. Remove private artwork, full paths, identifying metadata, and embedded personal information; do not upload proprietary fonts or assets without permission.
+      placeholder: "For example: PSD, 2400 x 1600, CMYK / 16-bit, 12 layers with vector shapes; a minimal shape-only file also fails."
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System information (optional)
+      description: |
+        Report an Issue may fill this automatically. Otherwise paste relevant details from Help > System Info if PhotoCraft opens. Include GPU/driver/backend for visual differences, package/runtime details for launch failures, and browser/version for web problems. Review and remove usernames, full paths, and other identifying details.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized logs or additional evidence (optional)
+      description: |
+        Paste relevant import/export/launch log excerpts, a safe recording, or comparison results. Logs and attachments are not required. Remove contact details, credentials, private paths, and identifying metadata before sharing.

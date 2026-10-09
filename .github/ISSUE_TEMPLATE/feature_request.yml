@@ -1,0 +1,62 @@
+name: Feature request
+description: Suggest a missing tool, format, workflow, or improvement to PhotoCraft.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for a new or missing capability, including support for a format that PhotoCraft does not yet support. For existing behavior that is broken, use Bug report. For files that should already work but fail between applications, or platform/package incompatibility, use Compatibility issue.
+
+        Search [open and closed issues](https://github.com/storytold/photocraft/issues?q=is%3Aissue) and the [roadmap](https://github.com/storytold/photocraft/blob/main/docs/roadmap.md) first. Give your request a specific title and focus on one capability.
+
+        **Requests and attachments are public.** Do not include contact details, usernames, full local filesystem paths, credentials, or private artwork. Redact identifying details and document metadata in examples or screenshots. Only share material you have permission to publish; synthetic examples are welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workflow or problem to solve
+      description: |
+        Describe the task you want to accomplish and why the current tools are not enough. Who or what workflow would benefit? You do not need bug reproduction steps or an error message.
+      placeholder: "I need to accomplish ...; currently I have to ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Requested capability and expected behavior
+      description: |
+        Explain what PhotoCraft should let you do and how you would use it. Include the relevant tool, menu, shortcut, format, or automation interface if useful. If matching Photoshop or another app, give the exact app/version and describe the observed behavior in your own words; do not copy proprietary code or assets.
+      placeholder: "PhotoCraft should let me ...; a successful result would be ..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround or alternatives (optional)
+      description: |
+        What do you do instead today? Mention existing commands you tried, other approaches, and any trade-offs. Link related PhotoCraft issues if you found them.
+  - type: input
+    id: version
+    attributes:
+      label: PhotoCraft version (optional)
+      description: |
+        Keep the version filled by Report an Issue, or give the exact version/build you tried. Include the commit hash for source builds. This helps distinguish a missing feature from one already added.
+      placeholder: "Exact version, and build/commit if available"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version (optional)
+      description: |
+        Add your OS release/build or Linux distribution if the request is platform-specific. For web-specific requests, include host OS and browser/version. The app only detects OS family and architecture.
+      placeholder: "OS release/distribution and architecture; browser/version for web"
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System information (optional)
+      description: |
+        Report an Issue may fill this automatically. Keep only details relevant to the request, such as GPU/driver/backend, monitor/scaling, or input device. Remove usernames, full local paths, and other identifying details.
+  - type: textarea
+    id: examples
+    attributes:
+      label: Safe examples or additional context (optional)
+      description: |
+        Add a synthetic document, cropped screenshot, or sketch if it helps explain the workflow. Attachments are not required. Do not share private artwork, credentials, contact details, full paths, identifying metadata, or proprietary assets without permission.

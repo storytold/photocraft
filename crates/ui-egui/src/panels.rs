@@ -420,6 +420,20 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::links::open(app, ui.ctx(), crate::links::DISCORD);
                         }
                     }
+                    let report_width = ui.painter().layout_no_wrap(tl!("Report an Issue").into(), egui::FontId::proportional(12.0), t.text_dim).size().x
+                        + 2.0 * ui.spacing().button_padding.x;
+                    if ui.available_width() >= report_width {
+                        let report = egui::Button::new(egui::RichText::new(tl!("Report an Issue")).color(t.text_dim).size(12.0)).frame(false);
+                        let report = ui.add(report).on_hover_text(tl!("Report an issue on GitHub"));
+                        egui::Popup::menu(&report).show(|ui| {
+                            for &(label, template) in crate::links::ISSUE_TYPES {
+                                if ui.button(crate::i18n::t(label)).clicked() {
+                                    crate::links::report_issue(app, ui.ctx(), template);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
                     ui.min_rect().left()
                 };
             });
@@ -466,7 +480,152 @@ fn title_x(center: f32, menus_right: f32, controls_left: f32, width: f32) -> Opt
 
 #[cfg(test)]
 mod title_tests {
-    use super::title_x;
+    use super::{title_bar, title_x};
+    use crate::PhotocraftApp;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    const REPORT_CHOICES: &[(&str, &str)] =
+        &[("Bug report", "bug_report.yml"), ("Compatibility issue", "compatibility.yml"), ("Feature request", "feature_request.yml")];
+
+    fn assert_report_prefill(url: &str, template: &str) {
+        let (base, query) = url.split_once('?').unwrap();
+        assert_eq!(base, "https://github.com/storytold/photocraft/issues/new");
+        let fields: std::collections::BTreeMap<_, _> = query
+            .split('&')
+            .map(|pair| {
+                let (key, value) = pair.split_once('=').unwrap();
+                (key, percent_encoding::percent_decode_str(value).decode_utf8().unwrap().into_owned())
+            })
+            .collect();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields["template"], template);
+        assert_eq!(fields["version"], photocraft_engine::build_info::long_version());
+        assert_eq!(fields["os"], format!("{} {}", std::env::consts::OS, std::env::consts::ARCH));
+        assert!(fields["system-info"].contains("PhotoCraft "));
+        assert!(fields["system-info"].contains("Canvas renderer: CPU"));
+        assert!(fields["system-info"].contains("Theme: "));
+        assert!(fields["system-info"].contains("UI pixels per point: "));
+        assert!(url.len() < 2048);
+    }
+
+    #[test]
+    fn report_issue_dropdown_orders_forms_and_only_opens_selected_form() {
+        for theme in crate::theme::ThemeKind::ALL {
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut initialized = false;
+            let mut harness = Harness::builder().with_size(egui::vec2(1400.0, 200.0)).build_ui_state(
+                move |ui, (app, opened): &mut (PhotocraftApp, Vec<egui::OpenUrl>)| {
+                    if !initialized {
+                        PhotocraftApp::setup_context(ui.ctx(), theme);
+                        initialized = true;
+                        return;
+                    }
+                    title_bar(app, ui);
+                    ui.ctx().output(|output| {
+                        for command in &output.commands {
+                            if let egui::OutputCommand::OpenUrl(url) = command {
+                                opened.push(url.clone());
+                            }
+                        }
+                    });
+                },
+                (app, Vec::new()),
+            );
+            harness.run_steps(3);
+            let report = harness.get_by_label("Report an Issue").rect();
+            let discord = harness.get_by_label("Discord").rect();
+            assert!(report.right() <= discord.left(), "{theme:?}: {report:?}, {discord:?}");
+            assert!((discord.left() - report.right() - 6.0).abs() < 1.0, "{theme:?}: buttons must be adjacent");
+            assert!((report.center().y - discord.center().y).abs() < 1.0);
+            assert!(harness.state().1.is_empty(), "Rendering must not open any links");
+
+            for (index, &(label, template)) in REPORT_CHOICES.iter().enumerate() {
+                harness.get_by_label("Report an Issue").click();
+                harness.run_steps(3);
+                assert_eq!(harness.state().1.len(), index, "Opening the dropdown must not open a browser");
+                let rows: Vec<_> = REPORT_CHOICES.iter().map(|(label, _)| harness.get_by_label(label).rect()).collect();
+                assert!(rows.windows(2).all(|pair| pair[0].bottom() <= pair[1].top()), "Forms must appear in priority order");
+                harness.get_by_label(label).click();
+                harness.run_steps(3);
+                let opened = &harness.state().1;
+                assert_eq!(opened.len(), index + 1, "Selecting a form must open exactly one URL");
+                assert_report_prefill(&opened[index].url, template);
+                assert!(opened[index].new_tab);
+                for &(choice, _) in REPORT_CHOICES {
+                    assert!(harness.query_by_label(choice).is_none(), "Selecting a form must close the dropdown");
+                }
+            }
+
+            harness.get_by_label("Discord").click();
+            harness.run_steps(3);
+            let opened = &harness.state().1;
+            assert_eq!(opened.len(), REPORT_CHOICES.len() + 1);
+            assert_eq!(opened.last().unwrap().url, crate::links::DISCORD);
+            assert!(opened.last().unwrap().new_tab);
+        }
+    }
+
+    #[test]
+    fn report_issue_choices_use_browser_service_and_fall_back_on_failure() {
+        use std::sync::{Arc, Mutex};
+
+        for service_succeeds in [true, false] {
+            let opened = Arc::new(Mutex::new(Vec::new()));
+            let recorded = opened.clone();
+            let services = crate::Services {
+                open_url: Some(Box::new(move |url| {
+                    recorded.lock().unwrap().push(url.to_owned());
+                    if service_succeeds { Ok(()) } else { Err("browser unavailable".into()) }
+                })),
+                ..Default::default()
+            };
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            let mut initialized = false;
+            let mut harness = Harness::builder().with_size(egui::vec2(1400.0, 200.0)).build_ui_state(
+                move |ui, (app, fallback): &mut (PhotocraftApp, Vec<egui::OpenUrl>)| {
+                    if !initialized {
+                        PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ALL[0]);
+                        initialized = true;
+                        return;
+                    }
+                    title_bar(app, ui);
+                    ui.ctx().output(|output| {
+                        for command in &output.commands {
+                            if let egui::OutputCommand::OpenUrl(url) = command {
+                                fallback.push(url.clone());
+                            }
+                        }
+                    });
+                },
+                (app, Vec::new()),
+            );
+            harness.run_steps(3);
+            for (index, &(label, template)) in REPORT_CHOICES.iter().enumerate() {
+                harness.get_by_label("Report an Issue").click();
+                harness.run_steps(3);
+                assert_eq!(opened.lock().unwrap().len(), index, "Opening the dropdown must not call the browser service");
+                assert_eq!(harness.state().1.len(), if service_succeeds { 0 } else { index });
+                harness.get_by_label(label).click();
+                harness.run_steps(3);
+                let recorded = opened.lock().unwrap();
+                assert_eq!(recorded.len(), index + 1);
+                assert_report_prefill(&recorded[index], template);
+                if service_succeeds {
+                    assert!(harness.state().1.is_empty(), "A successful platform service must not also request the egui fallback");
+                } else {
+                    let fallback = &harness.state().1;
+                    assert_eq!(fallback.len(), index + 1);
+                    assert_eq!(fallback[index].url, recorded[index]);
+                    assert!(fallback[index].new_tab);
+                }
+                assert!(harness.query_by_label(label).is_none());
+            }
+            harness.get_by_label("Discord").click();
+            harness.run_steps(3);
+            assert_eq!(opened.lock().unwrap().last().unwrap(), crate::links::DISCORD);
+            assert_eq!(harness.state().1.len(), if service_succeeds { 0 } else { REPORT_CHOICES.len() + 1 });
+        }
+    }
 
     #[test]
     fn title_never_overlaps_menus_or_controls() {

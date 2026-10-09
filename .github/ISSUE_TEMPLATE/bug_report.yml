@@ -1,0 +1,80 @@
+name: Bug report
+description: Report broken editing or UI behavior, crashes, hangs, or slow operations.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve PhotoCraft! Search [open and closed issues](https://github.com/storytold/photocraft/issues?q=is%3Aissue) first; add details to an existing report if it describes the same problem.
+
+        Give this report a short, specific title describing what goes wrong. Report one problem per issue. For files that do not open or round-trip with another app, or an unsupported platform/package environment, use Compatibility issue. For a missing capability rather than broken behavior, use Feature request.
+
+        **Reports and attachments are public.** Do not include contact details, usernames, full local filesystem paths, credentials, or private artwork. Redact document metadata and identifying details from logs, screenshots, and sample files before sharing. A small synthetic document is often enough.
+  - type: input
+    id: version
+    attributes:
+      label: PhotoCraft version
+      description: |
+        Keep the version filled by Report an Issue in the title bar, or copy the exact version/build from Help > About or Help > System Info. For a source build, include the commit hash. For an installation failure, give the version in the downloaded installer filename. Do not enter only "latest".
+      placeholder: "Exact version, and build/commit if available"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      description: |
+        The app detects the OS family and architecture, not the OS release. Add the OS version/build (for Linux, include the distribution), or enter these details manually. If using the web app, give the host OS plus browser and version.
+      placeholder: "For example: Windows 11 24H2, macOS 26.6.2, or Ubuntu 24.04 / Wayland"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Start with opening PhotoCraft and creating or opening a document. Give numbered steps with exact tools, menu items, shortcuts, settings, and values. State whether it happens every time or intermittently. For CLI/MCP/control reports, include the minimal command sequence and parameters, replacing private paths with relative example filenames. If this is based on code review rather than a reproduced failure, say so and cite the relevant commit/code.
+      placeholder: |
+        1. Create a new 800 x 600 RGB, 8-bit document.
+        2. ...
+        3. ...
+        Repeats: every time / intermittently (describe when).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: |
+        What should happen after these steps? If comparing with another application, give its name/version and the behavior you verified.
+      placeholder: "Describe the result you expected, not just that it should work."
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: |
+        Describe what happens instead. Include the exact error text, unexpected visual result, or whether the app freezes, closes, or loses changes. For slow operations, name the operation and give observed versus expected timings, document size, and whether the first run differs from later runs. If it worked in an earlier version, give that version if known.
+      placeholder: "Describe the observed result and any error message."
+    validations:
+      required: true
+  - type: textarea
+    id: document-info
+    attributes:
+      label: Document or file details (optional)
+      description: |
+        For editing, rendering, import, or export problems, give the input and output formats/extensions, canvas dimensions, color mode/profile, bit depth, and relevant layer types/count if known. Say whether a new blank document also reproduces it. For files exchanged with Photoshop or another app, include that app's version. Do not include private document metadata or full paths.
+      placeholder: "For example: PSD to PSD, 2400 x 1600, CMYK / 16-bit, 12 layers including a smart object; only this file reproduces it."
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System information (optional)
+      description: |
+        Report an Issue in the title bar may fill this automatically. Otherwise paste relevant details from Help > System Info if the app opens. For rendering issues or crashes, include GPU/driver/backend; for slow operations, CPU and available RAM; for scaling issues, monitor resolutions and scaling percentages; for input issues, the tablet/input device. For installation issues, say installer versus portable/package type. Remove usernames, full paths, and other identifying details before submitting.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized screenshots, sample files, or logs (optional)
+      description: |
+        Attach a cropped screenshot, short recording, or minimal synthetic test file if it helps explain or reproduce the issue. Paste relevant log/error excerpts if available. Attachments and logs are not required. Remove private artwork, contact details, credentials, full local paths, and identifying document metadata; only share files you have permission to publish.
