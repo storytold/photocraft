@@ -18,8 +18,9 @@
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
-//! * Every other format goes through `photocraft-codecs` as a single
-//!   "Background" layer (depth and Gray/RGB/CMYK model preserved).
+//! * Every other format goes through `photocraft-codecs` as a single layer
+//!   (depth and Gray/RGB/CMYK model preserved): a locked "Background" when the
+//!   image is opaque, a normal "Layer 0" when it has transparency.
 //!
 //! Exports to PSD render the merged composite with
 //! `photocraft_compose::flatten`; flat exports report what is lost.

@@ -51,7 +51,8 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
     image_to_document(name, &img.oriented(orientation)?)
 }
 
-/// A decoded flat image as a single-layer document.
+/// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
+/// normal "Layer 0" when it has transparency.
 pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
@@ -87,12 +88,18 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         }
     }
     s.prune();
-    let mut bg = Layer::new("Background", LayerContent::Raster(s));
-    if !img.layout().has_alpha() {
+    // As in Photoshop: an opaque image opens as the locked Background layer, one with
+    // transparency (an alpha channel, or a tRNS chunk the decoder expands to one) as a normal
+    // layer named "Layer 0", since a Background can't hold transparency.
+    let layer = if img.layout().has_alpha() {
+        Layer::new("Layer 0", LayerContent::Raster(s))
+    } else {
+        let mut bg = Layer::new("Background", LayerContent::Raster(s));
         bg.locks.transparency = true;
         bg.locks.position = true;
-    }
-    doc.layers.push(bg);
+        bg
+    };
+    doc.layers.push(layer);
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = img.meta.xmp.clone();
