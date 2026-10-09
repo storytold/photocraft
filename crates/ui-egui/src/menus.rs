@@ -274,16 +274,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 Ok(Value::Null)
             } else {
                 // The multi-file picker of File › Open, with the depth kept.
-                if let Some(pick_paths) = app.services.pick_open_paths.as_mut()
-                    && let Some(paths) = pick_paths()
-                {
-                    for path in paths {
-                        if let Err(e) = app.open_path_deep(&path) {
-                            app.open_failed(&crate::file_open::display_name(&path), &e);
-                        }
-                    }
-                }
-                Ok(Value::Null)
+                app.open_dialog_file_deep()
             }
         }
         "file.save" => {
