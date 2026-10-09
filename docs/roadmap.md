@@ -63,6 +63,12 @@ i7-9750H, 12 workers, 24 MP RGBA8, Good quality, amount 1: Spin 66.10 → 16.43 
 (4.02×), Zoom 19.19 → 5.35 s (3.59×), one paired run each, exact output equality.
 These are local measurements at amount 1; see [method and limits](radial-blur-performance.md).
 
+2026-10-10: native selection distance transforms measured 7.59–10.57x faster on six
+24–36 MP synthetic masks on an AWS c7i.4xlarge (16 workers, three paired release runs).
+The transform also corrects f32 envelope errors past coordinate 4096, including nonzero
+distances at selected pixels. The parallel path needs an additional four bytes per pixel;
+see [measurements, correctness and limits](selection-distance-performance.md).
+
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
 workflow depth and the plug-in ecosystem. Most fixes since 0.2.0 have passed our tests but have
