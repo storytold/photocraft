@@ -184,7 +184,7 @@ pub struct Pass<'a> {
     pub extra: [f32; 4],
     /// Extra shader flags (`F_KNOCKOUT`, …).
     pub flags: u32,
-    /// 4096-entry LUT rows (Levels / Curves / Gradient map / gradient stops).
+    /// 4096-entry LUT rows, or packed exact stops when `F_EXACT_RAMP` is set.
     pub lut: Option<Vec<[f32; 4096]>>,
     pub gradient: bool,
     /// Effect map sampled by `FxPaint`.
@@ -364,6 +364,8 @@ pub const F_CHANNELS: u32 = 4096;
 pub const F_LAB: u32 = 65536;
 /// 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1 (`psblend::HDR`).
 pub const F_HDR: u32 = 262144;
+/// Packed gradient stops instead of interpolated LUT samples.
+pub const F_EXACT_RAMP: u32 = 524288;
 /// `Lerp`: A rounded to `p0.x` steps per unit (adjustment results on integer documents).
 pub const F_QUANT: u32 = 32768;
 /// `Lerp` as A + (B − C) premultiplied (layers clipped to pass-through groups).
@@ -788,20 +790,20 @@ impl<'a> Planner<'a> {
                 Ok(s)
             }
             _ => {
-                let p = self.content_pass(layer);
+                let p = self.content_pass(layer)?;
                 Ok(self.emit(p))
             }
         }
     }
 
     /// The Content pass of a raster / text / shape / smart / fill layer.
-    fn content_pass(&self, layer: &'a Layer) -> Pass<'a> {
+    fn content_pass(&self, layer: &'a Layer) -> Result<Pass<'a>, Unsupported> {
         let mut p = Pass::new(Kernel::Content, 0);
         p.mask = self.mask_use(layer);
         match &layer.content {
             LayerContent::Fill(f) => match &layer.fill_cache {
                 Some(c) if c.fill == *f => self.surface_tex(&mut p, layer.id, &c.surface),
-                _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas)),
+                _ => self.fill(&mut p, f, photocraft_compose::fill_frame(layer, self.cx.canvas))?,
             },
             _ => {
                 if let Some(s) = layer.surface() {
@@ -809,7 +811,7 @@ impl<'a> Planner<'a> {
                 }
             }
         }
-        p
+        Ok(p)
     }
 
     fn surface_tex(&self, p: &mut Pass<'a>, id: LayerId, s: &'a Surface) {
@@ -820,13 +822,13 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) {
+    fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) -> Result<(), Unsupported> {
         match f {
             Fill::Solid(c) => {
                 let rgb = c.to_rgb();
                 p.color = [rgb[0], rgb[1], rgb[2], c.alpha];
             }
-            Fill::Gradient { angle, scale, style, reverse, offset, dither, .. } => {
+            Fill::Gradient { stops, opacity_stops, midpoints, angle, scale, style, reverse, offset, dither, .. } => {
                 p.gradient = true;
                 // compose::render_fill: whole-pixel end points (fill_layout).
                 let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(*style, *angle, *scale, *offset, frame);
@@ -835,6 +837,16 @@ impl<'a> Planner<'a> {
                 p.params[1] = [c.x0 as f32, c.y0 as f32, c.width() as f32, c.height() as f32];
                 // p2.xy: centre offset; p2.w: dither (the shared position hash, see the shader).
                 p.params[2] = [offset.0, offset.1, 0.0, if *dither { 1.0 } else { 0.0 }];
+                if needs_exact(stops, opacity_stops) {
+                    check_ramp_size(stops.len(), opacity_stops.len())?;
+                    let mut colors: Vec<_> = stops.iter().map(|(t, c)| (*t, rgba(c, true))).collect();
+                    colors.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let mut opacity = opacity_stops.clone();
+                    opacity.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    p.flags |= F_EXACT_RAMP;
+                    p.lut = Some(exact_ramp_rows(&colors, &opacity, midpoints, false));
+                    return Ok(());
+                }
                 let ramp = photocraft_compose::gradient_fill::Ramp::new(f);
                 let mut rows = vec![[0.0f32; 4096]; 4];
                 for k in 0..4096 {
@@ -848,6 +860,7 @@ impl<'a> Planner<'a> {
             // Pattern fills fall back to the CPU compositor (see `check`).
             Fill::Pattern { .. } => {}
         }
+        Ok(())
     }
 
     /// composite_atop: `layer` onto `base`, restricted to the base's alpha, honouring the
@@ -899,6 +912,17 @@ impl<'a> Planner<'a> {
         }
         let mut p = Pass::new(Kernel::Adjust, 0);
         p.a = Some(src);
+        if let Adjustment::GradientMap { stops, reverse, dither } = adj
+            && needs_exact(stops, &[])
+        {
+            check_ramp_size(stops.len(), 0)?;
+            p.flags |= F_EXACT_RAMP;
+            p.adjust_kind = 13;
+            p.params[0] = [if *reverse { 1.0 } else { 0.0 }, if *dither { 1.0 } else { 0.0 }, 0.0, 0.0];
+            let colors: Vec<_> = stops.iter().map(|(t, c)| (*t, [c[0], c[1], c[2], 1.0])).collect();
+            p.lut = Some(exact_ramp_rows(&colors, &[], &[], true));
+            return Ok(self.emit(p));
+        }
         let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth);
         p.adjust_kind = kind;
         p.params = params;
@@ -910,6 +934,27 @@ impl<'a> Planner<'a> {
     /// (atop = true: effects over the base treated as opaque, keeping the base's alpha).
     /// Consumes `backdrop`.
     fn effects(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
+        // Validate before allocating any exact-stop table. Oversize ramps use the caller's
+        // existing CPU fallback, not a canvas-sized planner allocation or truncated stops.
+        for e in layer.effects.items.iter().filter(|e| e.enabled()) {
+            let gradient = match e {
+                Effect::GradientOverlay { gradient, .. } => Some(gradient),
+                Effect::Stroke(s) => match &s.paint {
+                    FxPaint::Gradient(g) => Some(g),
+                    _ => None,
+                },
+                Effect::InnerGlow(g) | Effect::OuterGlow(g) => match &g.paint {
+                    FxPaint::Gradient(g) => Some(g),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(g) = gradient
+                && needs_exact(&g.stops, &g.opacity_stops)
+            {
+                check_ramp_size(g.stops.len(), g.opacity_stops.len())?;
+            }
+        }
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));
@@ -1300,12 +1345,18 @@ impl<'a> Planner<'a> {
                 p.params[2][0] = offset.0;
                 p.params[2][1] = offset.1;
                 p.params[2][2] = 1.0;
+                if needs_exact(&g.stops, &g.opacity_stops) {
+                    p.flags |= F_EXACT_RAMP;
+                }
                 p.lut = Some(gradient_rows(g));
             }
             Paint::GlowGradient(g, gain) => {
                 // effects::paint_glow: the gradient at 1 - strength, opaque from 1 / gain.
                 p.params[0][0] = *gain;
                 p.params[2][2] = 4.0;
+                if needs_exact(&g.stops, &g.opacity_stops) {
+                    p.flags |= F_EXACT_RAMP;
+                }
                 p.lut = Some(gradient_rows(g));
             }
             Paint::Pattern(pat, pl) => {
@@ -1583,8 +1634,51 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
     }
 }
 
-/// A gradient's colour and alpha as four 4096-entry LUT rows (`lut_tex`).
+// Descending stops need exact evaluation too: effects/maps preserve their stored order,
+// while fills sort it. Strictly increasing ramps retain the existing fast LUT path.
+fn needs_exact<C>(colors: &[(f32, C)], opacity: &[(f32, f32)]) -> bool {
+    colors.windows(2).any(|w| w[1].0 <= w[0].0) || opacity.windows(2).any(|w| w[1].0 <= w[0].0)
+}
+
+const MAX_RAMP_STOPS: usize = 4096;
+
+fn check_ramp_size(colors: usize, opacity: usize) -> Result<(), Unsupported> {
+    if colors > MAX_RAMP_STOPS || opacity > MAX_RAMP_STOPS {
+        return Err(Unsupported("gradient exceeds 4096 exact stops (composited on the CPU)".into()));
+    }
+    Ok(())
+}
+
+fn rgba(c: &photocraft_color::Color, use_alpha: bool) -> [f32; 4] {
+    let rgb = c.to_rgb();
+    [rgb[0], rgb[1], rgb[2], if use_alpha { c.alpha } else { 1.0 }]
+}
+
+/// Texel-exact R32Float data: counts + empty-colour behavior, then colour records
+/// (position, RGBA, midpoint) and opacity records (position, alpha). Counts are checked by
+/// the planner before this function; cap iteration as a second allocation bound.
+fn exact_ramp_rows(colors: &[(f32, [f32; 4])], opacity: &[(f32, f32)], mids: &[f32], empty_gray: bool) -> Vec<[f32; 4096]> {
+    let nc = colors.len().min(MAX_RAMP_STOPS);
+    let na = opacity.len().min(MAX_RAMP_STOPS);
+    let mut data = Vec::with_capacity(4 + nc * 6 + na * 2);
+    data.extend([nc as f32, na as f32, if empty_gray { 1.0 } else { 0.0 }, 0.0]);
+    for (i, (t, c)) in colors.iter().take(nc).enumerate() {
+        data.push(*t);
+        data.extend(c);
+        data.push(mids.get(i).copied().unwrap_or(0.5));
+    }
+    for (t, a) in opacity.iter().take(na) {
+        data.extend([*t, *a]);
+    }
+    data.chunks(4096).map(to_row).collect()
+}
+
+/// A gradient's RGBA LUT, or exact packed stops for a discontinuous ramp (`lut_tex`).
 fn gradient_rows(g: &Gradient) -> Vec<[f32; 4096]> {
+    if needs_exact(&g.stops, &g.opacity_stops) {
+        let colors: Vec<_> = g.stops.iter().map(|(t, c)| (*t, rgba(c, false))).collect();
+        return exact_ramp_rows(&colors, &g.opacity_stops, &[], true);
+    }
     let mut rows = vec![[0.0f32; 4096]; 4];
     for k in 0..4096 {
         let v = photocraft_compose::effects::sample_gradient(g, k as f32 / 4095.0);
@@ -1634,6 +1728,35 @@ mod tests {
     use super::*;
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
+
+    #[test]
+    fn oversized_exact_gradients_request_cpu_fallback() {
+        use photocraft_doc::{FxCommon, GradientStyle};
+        let stops = vec![(0.5, Color::WHITE); MAX_RAMP_STOPS + 1];
+        let fill = Fill::gradient(stops.clone(), 0.0, 1.0, GradientStyle::Linear, false);
+        let mut doc = Document::new("oversize", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("fill", LayerContent::Fill(fill)));
+        assert!(plan(&doc).unwrap_err().0.contains("4096 exact stops"));
+        doc.layers[0].content =
+            LayerContent::Adjustment(Adjustment::GradientMap { stops: stops.iter().map(|(p, c)| (*p, c.to_rgb())).collect(), reverse: false, dither: false });
+        assert!(plan(&doc).unwrap_err().0.contains("4096 exact stops"));
+        doc.layers[0].content = LayerContent::Fill(Fill::Solid(Color::WHITE));
+        doc.layers[0].effects.items.push(Effect::GradientOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            dither: false,
+            gradient: Gradient {
+                stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)],
+                opacity_stops: vec![(0.5, 1.0); MAX_RAMP_STOPS + 1],
+                style: GradientStyle::Linear,
+                angle: 0.0,
+                scale: 1.0,
+                reverse: false,
+                align: true,
+                offset: (0.0, 0.0),
+            },
+        });
+        assert!(plan(&doc).unwrap_err().0.contains("4096 exact stops"));
+    }
 
     #[test]
     fn color_lookup_with_an_overflowing_stored_size_uploads_no_table() {
