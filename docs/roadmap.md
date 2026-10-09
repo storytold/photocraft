@@ -111,6 +111,12 @@ a conservative 512 MiB working-set estimate, excluding stored Surface tiles and 
 memory. The crossover is a heuristic; images dominated by near-cutoff alpha can need extra
 scalar work. These measurements do not establish Photoshop filter parity.
 
+2026-10-10: Proximity Match search medians on an AWS c7i.4xlarge improved 1.54–3.82x
+for four synthetic stroke regions (50–300 px holes), with identical source displacements.
+Bounding the mask table to the hole and pruning losing SSD candidates reduced table storage
+by about 90–93 percent there. Full 24–36 MP kernel inputs improved 4.60–6.24x, but normal
+engine strokes already use a cropped region. See [method and limits](proximity-match-performance.md).
+
 2026-10-08: the tools update above is checked against the current toolbar groups in
 [`panels.rs`](../crates/ui-egui/src/panels.rs), the Pencil and tool-cycle tests in
 [`pencil_tests.rs`](../crates/ui-egui/src/pencil_tests.rs), Patch's live-preview test in
