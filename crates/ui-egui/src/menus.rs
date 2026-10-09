@@ -1167,8 +1167,7 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             }
             shown_subs.push(name);
             let child: Vec<&MenuItem> = items.iter().copied().filter(|c| c.path.len() > depth && c.path[depth] == name).collect();
-            let any_enabled = child.iter().any(|c| c.enabled && c.label != "---");
-            let enabled = any_enabled || !child.is_empty();
+            let enabled = submenu_enabled(&child);
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, |ui, nav| {
                     let r = ui.menu_button(crate::i18n::tr(lang, name), |ui| render_level(ui, &child, depth + 1, clicked, nav));
@@ -1182,6 +1181,12 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             last_was_sep = false;
         }
     }
+}
+
+/// A submenu header is enabled only while some item under it (at any depth) can run, so a
+/// submenu of greyed items is greyed too instead of opening onto them (#1976).
+fn submenu_enabled(children: &[&MenuItem]) -> bool {
+    children.iter().any(|c| c.enabled && c.label != "---")
 }
 
 /// The command a menu click runs: ⌥ + Merge Down / Merge Layers / Merge Visible keep the
@@ -1220,6 +1225,23 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submenu_header_is_disabled_when_every_item_is() {
+        let item = |label: &str, enabled: bool| MenuItem {
+            id: label.into(),
+            label: label.into(),
+            path: vec!["File".into(), "Export".into()],
+            shortcut: None,
+            enabled,
+            checked: None,
+            color: None,
+        };
+        let (off, on, sep) = (item("Off", false), item("On", true), item("---", true));
+        assert!(!submenu_enabled(&[]));
+        assert!(!submenu_enabled(&[&off, &sep]));
+        assert!(submenu_enabled(&[&off, &on]));
+    }
 
     #[test]
     fn live_lookup_finds_engine_and_shell_commands() {
