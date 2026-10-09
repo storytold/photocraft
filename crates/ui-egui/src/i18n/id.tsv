@@ -1279,12 +1279,12 @@
 	Rename…	Ganti Nama…
 	Resample	Resample
 	Reset All to Defaults	Reset Semua ke Default
-	Import Photoshop Shortcuts…	Impor Pintasan Photoshop…
-	Load a shortcut set saved by Photoshop (.kys)	Muat set pintasan yang disimpan Photoshop (.kys)
+	Import Shortcuts…	Impor Pintasan…
+	Load a keyboard shortcut set saved as .kys	Muat set pintasan keyboard yang disimpan sebagai .kys
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} pintasan diimpor dari {file}. Klik OK untuk menyimpannya.
 	{n} commands are not in PhotoCraft.	{n} perintah tidak ada di PhotoCraft.
-	Photoshop shortcuts imported	Pintasan Photoshop diimpor
-	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan Photoshop Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
+	Keyboard shortcuts imported	Pintasan keyboard diimpor
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan keyboard Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
 	Reset Section	Reset Bagian
 	Reset Transform	Reset Transformasi
 	Reset to defaults	Reset ke default

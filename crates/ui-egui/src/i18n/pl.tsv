@@ -1301,12 +1301,12 @@
 	Rename…	Zmień nazwę…
 	Resample	Przepróbkuj
 	Reset All to Defaults	Przywróć wszystko do wartości domyślnych
-	Import Photoshop Shortcuts…	Importuj skróty z Photoshopa…
-	Load a shortcut set saved by Photoshop (.kys)	Wczytaj zestaw skrótów zapisany przez Photoshopa (.kys)
+	Import Shortcuts…	Importuj skróty…
+	Load a keyboard shortcut set saved as .kys	Wczytaj zestaw skrótów klawiaturowych zapisany jako .kys
 	Imported {n} shortcuts from {file}. Click OK to keep them.	Zaimportowano skrótów: {n} z pliku {file}. Kliknij OK, aby je zachować.
 	{n} commands are not in PhotoCraft.	Poleceń, których nie ma w PhotoCraft: {n}.
-	Photoshop shortcuts imported	Zaimportowano skróty z Photoshopa
-	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Twój zestaw skrótów z Photoshopa {set} jest tu używany: skrótów innych niż domyślne: {n}. Edycja › Skróty klawiaturowe je pokazuje; Przywróć wszystkie domyślne cofa import.
+	Keyboard shortcuts imported	Zaimportowano skróty klawiaturowe
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Twój zestaw skrótów klawiaturowych {set} jest tu używany: skrótów innych niż domyślne: {n}. Edycja › Skróty klawiaturowe je pokazuje; Przywróć wszystkie domyślne cofa import.
 	Reset Section	Resetuj sekcję
 	Reset Transform	Resetuj przekształcenie
 	Reset to defaults	Przywróć wartości domyślne

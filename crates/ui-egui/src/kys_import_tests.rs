@@ -68,7 +68,7 @@ fn parses_rows_shortcuts_entities_and_tool_keys() {
 
 #[test]
 fn rejects_other_xml_and_text() {
-    assert!(parse("<svg/>").unwrap_err().contains("not a Photoshop keyboard shortcuts file"));
+    assert!(parse("<svg/>").unwrap_err().contains("not a keyboard shortcut set (.kys)"));
     assert!(parse("Cmd+K\tPreferences").is_err());
     assert_eq!(parse("<photoshop-keyboard-shortcuts/>").unwrap(), super::KysSet::default());
 }
@@ -128,7 +128,7 @@ fn import_button_fills_the_dialog_and_ok_applies_the_set() {
     // A short list keeps the button row on screen.
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("filter".into(), json!("gaussian"));
     h.run_steps(2);
-    h.get_by_label("Import Photoshop Shortcuts…").click();
+    h.get_by_label("Import Shortcuts…").click();
     h.run_steps(3);
     let field = |h: &Harness<'_, PhotocraftApp>, name: &str| -> Value {
         h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.get(name).cloned().unwrap_or(Value::Null)
@@ -175,7 +175,7 @@ fn an_opened_kys_file_opens_the_dialog_filled() {
     assert_eq!(d.fields["overrides"]["filter.blur.gaussianBlur"], json!("Cmd+Ctrl+Alt+G"));
     assert_eq!(d.fields["message"], json!("Imported 1 shortcuts from more.kys. Click OK to keep them."));
     let bad = crate::preset_files_ui::open(&mut app, "notes.kys", b"hello").unwrap().unwrap_err();
-    assert!(bad.contains("not a Photoshop keyboard shortcuts file"), "{bad}");
+    assert!(bad.contains("not a keyboard shortcut set (.kys)"), "{bad}");
 }
 
 type Store = std::sync::Arc<std::sync::Mutex<Option<String>>>;
@@ -210,9 +210,9 @@ fn first_launch_imports_photoshops_live_set_once() {
     assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.search", Some("Cmd+F")), None, "taken by Last Filter");
     assert_eq!(app.session.prefs().dialogs[super::IMPORTED_PREF]["source"].as_str().map(|s| s.ends_with("Keyboard Shortcuts.psp")), Some(true));
     let notice = app.ui.notices.last().unwrap();
-    assert_eq!(notice.title, "Photoshop shortcuts imported");
+    assert_eq!(notice.title, "Keyboard shortcuts imported");
     let line = notice.text(&notice.lines[0]);
-    assert!(line.starts_with("Your Photoshop keyboard shortcut set texcuts is in use here: "), "{line}");
+    assert!(line.starts_with("Your keyboard shortcut set texcuts is in use here: "), "{line}");
     assert!(line.contains(" shortcuts differ from the defaults."), "{line}");
     assert!(!app.ui.status_error, "{}", app.ui.status);
     // The preference moved past the loaded revision, so the next frame saves it.
@@ -244,7 +244,7 @@ fn a_user_with_their_own_shortcuts_keeps_them() {
     // A file that is not a set is reported, not applied, and not retried.
     let (mut bad, _) = with_photoshop("binary junk", None);
     assert!(bad.ui.status_error, "{}", bad.ui.status);
-    assert!(bad.ui.status.contains("not a Photoshop keyboard shortcuts file"), "{}", bad.ui.status);
+    assert!(bad.ui.status.contains("not a keyboard shortcut set (.kys)"), "{}", bad.ui.status);
     assert!(bad.session.prefs().dialogs.contains_key(super::IMPORTED_PREF));
     let _ = (&mut app, &mut quiet, &mut bad);
 }

@@ -1306,12 +1306,12 @@
 	Rename…	名前を変更…
 	Resample	再サンプル
 	Reset All to Defaults	すべて既定に戻す
-	Import Photoshop Shortcuts…	Photoshop のショートカットを読み込む…
-	Load a shortcut set saved by Photoshop (.kys)	Photoshop が保存したショートカットセット (.kys) を読み込みます
+	Import Shortcuts…	ショートカットを読み込む…
+	Load a keyboard shortcut set saved as .kys	.kys として保存されたキーボードショートカットセットを読み込みます
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{file} から {n} 個のショートカットを読み込みました。OK をクリックすると保持されます。
 	{n} commands are not in PhotoCraft.	{n} 個のコマンドは PhotoCraft にありません。
-	Photoshop shortcuts imported	Photoshop のショートカットを読み込みました
-	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Photoshop のショートカットセット {set} をここで使用しています。{n} 個のショートカットが既定と異なります。編集 › キーボードショートカットで確認でき、「すべて既定に戻す」で元に戻せます。
+	Keyboard shortcuts imported	キーボードショートカットを読み込みました
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	キーボードショートカットセット {set} をここで使用しています。{n} 個のショートカットが既定と異なります。編集 › キーボードショートカットで確認でき、「すべて既定に戻す」で元に戻せます。
 	Reset Section	セクションをリセット
 	Reset Transform	変形をリセット
 	Reset to defaults	既定に戻す

@@ -1301,12 +1301,12 @@
 	Rename…	Cambiar nombre…
 	Resample	Remuestrear
 	Reset All to Defaults	Restablecer todo a los valores predeterminados
-	Import Photoshop Shortcuts…	Importar atajos de Photoshop…
-	Load a shortcut set saved by Photoshop (.kys)	Cargar un conjunto de atajos guardado por Photoshop (.kys)
+	Import Shortcuts…	Importar atajos…
+	Load a keyboard shortcut set saved as .kys	Cargar un conjunto de atajos de teclado guardado como .kys
 	Imported {n} shortcuts from {file}. Click OK to keep them.	Se importaron {n} atajos de {file}. Haz clic en OK para conservarlos.
 	{n} commands are not in PhotoCraft.	{n} comandos no existen en PhotoCraft.
-	Photoshop shortcuts imported	Atajos de Photoshop importados
-	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Tu conjunto de atajos de Photoshop {set} se usa aquí: {n} atajos difieren de los predeterminados. Edición › Atajos de teclado los muestra; Restablecer todo a valores predeterminados lo deshace.
+	Keyboard shortcuts imported	Atajos de teclado importados
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Tu conjunto de atajos de teclado {set} se usa aquí: {n} atajos difieren de los predeterminados. Edición › Atajos de teclado los muestra; Restablecer todo a valores predeterminados lo deshace.
 	Reset Section	Restablecer sección
 	Reset Transform	Restablecer transformación
 	Reset to defaults	Restablecer a los valores predeterminados

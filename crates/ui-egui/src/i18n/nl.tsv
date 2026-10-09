@@ -1293,12 +1293,12 @@
 	Rename…	Hernoemen…
 	Resample	Opnieuw bemonsteren
 	Reset All to Defaults	Alles terugzetten naar standaardwaarden
-	Import Photoshop Shortcuts…	Photoshop-sneltoetsen importeren…
-	Load a shortcut set saved by Photoshop (.kys)	Een door Photoshop opgeslagen sneltoetsenset laden (.kys)
+	Import Shortcuts…	Sneltoetsen importeren…
+	Load a keyboard shortcut set saved as .kys	Een als .kys opgeslagen sneltoetsenset laden
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} sneltoetsen geïmporteerd uit {file}. Klik op OK om ze te behouden.
 	{n} commands are not in PhotoCraft.	{n} opdrachten bestaan niet in PhotoCraft.
-	Photoshop shortcuts imported	Photoshop-sneltoetsen geïmporteerd
-	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Je Photoshop-sneltoetsenset {set} wordt hier gebruikt: {n} sneltoetsen wijken af van de standaardwaarden. Bewerken › Sneltoetsen toont ze; Alles terugzetten naar standaard maakt dit ongedaan.
+	Keyboard shortcuts imported	Sneltoetsen geïmporteerd
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Je sneltoetsenset {set} wordt hier gebruikt: {n} sneltoetsen wijken af van de standaardwaarden. Bewerken › Sneltoetsen toont ze; Alles terugzetten naar standaard maakt dit ongedaan.
 	Reset Section	Sectie herstellen
 	Reset Transform	Transformatie herstellen
 	Reset to defaults	Terugzetten naar standaardwaarden

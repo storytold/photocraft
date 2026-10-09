@@ -1285,12 +1285,12 @@
 	Rename…	Renommer…
 	Resample	Rééchantillonner
 	Reset All to Defaults	Tout réinitialiser aux valeurs par défaut
-	Import Photoshop Shortcuts…	Importer les raccourcis Photoshop…
-	Load a shortcut set saved by Photoshop (.kys)	Charger un jeu de raccourcis enregistré par Photoshop (.kys)
+	Import Shortcuts…	Importer des raccourcis…
+	Load a keyboard shortcut set saved as .kys	Charger un jeu de raccourcis clavier enregistré en .kys
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} raccourcis importés depuis {file}. Cliquez sur OK pour les conserver.
 	{n} commands are not in PhotoCraft.	{n} commandes n'existent pas dans PhotoCraft.
-	Photoshop shortcuts imported	Raccourcis Photoshop importés
-	Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Votre jeu de raccourcis Photoshop {set} est utilisé ici : {n} raccourcis diffèrent des valeurs par défaut. Édition › Raccourcis clavier les affiche ; Tout rétablir par défaut annule l'import.
+	Keyboard shortcuts imported	Raccourcis clavier importés
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Votre jeu de raccourcis clavier {set} est utilisé ici : {n} raccourcis diffèrent des valeurs par défaut. Édition › Raccourcis clavier les affiche ; Tout rétablir par défaut annule l'import.
 	Reset Section	Réinitialiser la section
 	Reset Transform	Réinitialiser la transformation
 	Reset to defaults	Réinitialiser aux valeurs par défaut

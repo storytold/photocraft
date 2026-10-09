@@ -42,10 +42,10 @@ pub struct KysSet {
 /// without a name or a shortcut are skipped.
 pub fn parse(text: &str) -> Result<KysSet, String> {
     let text = text.trim_start_matches('\u{feff}');
-    let doc = roxmltree::Document::parse(text).map_err(|e| format!("not a Photoshop keyboard shortcuts file ({e})"))?;
+    let doc = roxmltree::Document::parse(text).map_err(|e| format!("not a keyboard shortcut set (.kys): {e}"))?;
     let root = doc.root_element();
     if root.tag_name().name() != "photoshop-keyboard-shortcuts" {
-        return Err("not a Photoshop keyboard shortcuts file (no <photoshop-keyboard-shortcuts> root)".into());
+        return Err("not a keyboard shortcut set (.kys): no <photoshop-keyboard-shortcuts> root".into());
     }
     let name = root.attribute("filename").map(|f| f.rsplit(['=', '/']).next().unwrap_or(f).trim()).filter(|n| !n.is_empty()).map(str::to_string);
     let mut set = KysSet { name, ..Default::default() };
@@ -179,7 +179,7 @@ pub fn import_text(app: &mut PhotocraftApp, file_name: &str, text: &str) -> Resu
 
 /// A `.kys` opened like a document (File › Open, a drop): its bytes are text.
 pub fn open_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<Value, String> {
-    let text = String::from_utf8(bytes.to_vec()).map_err(|_| format!("{name}: not a Photoshop keyboard shortcuts file (not UTF-8)"))?;
+    let text = String::from_utf8(bytes.to_vec()).map_err(|_| format!("{name}: not a keyboard shortcut set (.kys): not UTF-8"))?;
     import_text(app, name, &text)
 }
 
@@ -218,11 +218,13 @@ pub fn auto_import(app: &mut PhotocraftApp) {
             if changed == 0 {
                 return; // The set is Photoshop's defaults, which are ours too.
             }
-            let set = r["name"].as_str().unwrap_or("Photoshop").to_string();
+            let set = r["name"]
+                .as_str()
+                .map_or_else(|| std::path::Path::new(&source).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(), str::to_string);
             let id = crate::notices::post(
                 app,
-                "Photoshop shortcuts imported",
-                vec!["Your Photoshop keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.".to_owned()],
+                "Keyboard shortcuts imported",
+                vec!["Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.".to_owned()],
                 false,
                 None,
             );
@@ -232,7 +234,7 @@ pub fn auto_import(app: &mut PhotocraftApp) {
         }
         Ok(None) => {}
         Err(e) => {
-            app.ui.status = format!("Photoshop's shortcuts were not imported: {e}");
+            app.ui.status = format!("The keyboard shortcut set was not imported: {e}");
             app.ui.status_error = true;
         }
     }
