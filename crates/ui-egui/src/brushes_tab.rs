@@ -223,6 +223,22 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     preset_interactions(ui, &resp, r, p, presets, false, acts);
 }
 
+/// The gap between grid cells, across and down.
+const GRID_GAP: f32 = 3.0;
+
+/// The grid's columns in a list `width` points wide: how many `cell`-wide cells fit past the
+/// `indent`, and the left margin that centres them in the room past it. At least one column.
+pub(crate) fn grid_columns(width: f32, cell: f32, indent: f32) -> (f32, usize) {
+    let room = if width.is_finite() { (width - indent).max(0.0) } else { 0.0 };
+    let cols = if cell.is_finite() && cell > 0.0 { ((room + GRID_GAP) / (cell + GRID_GAP)).floor() } else { 1.0 };
+    // `as` saturates (and NaN becomes 0), so this is a whole number from 1 to a sane bound.
+    let cols = (cols as usize).clamp(1, 256);
+    let used = cols as f32 * cell + (cols - 1) as f32 * GRID_GAP;
+    // Whole points keep the tiles' edges crisp.
+    let left = indent + ((room - used) / 2.0).max(0.0).floor();
+    (if left.is_finite() { left } else { 0.0 }, cols)
+}
+
 fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], cell: f32, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(cell, cell + 6.0), Sense::click_and_drag());
@@ -377,11 +393,18 @@ pub fn preset_list(
                 continue;
             }
             if grid {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-                    ui.add_space(layout.indent);
-                    for p in items {
-                        grid_cell(ui, p, is_current(&p.brush, brush), presets, layout.cell, &mut acts);
+                // Rows of whole columns, each with the same margin: a wrapped row indented only
+                // its first line and left the spare width on the right.
+                let (left, cols) = grid_columns(ui.available_width(), layout.cell, layout.indent);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(GRID_GAP, GRID_GAP);
+                    for row in items.chunks(cols) {
+                        ui.horizontal(|ui| {
+                            ui.add_space(left);
+                            for p in row {
+                                grid_cell(ui, p, is_current(&p.brush, brush), presets, layout.cell, &mut acts);
+                            }
+                        });
                     }
                 });
             } else {
@@ -487,3 +510,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         c.retain(|slot| slot.split_once(':').is_none_or(|(_, n)| names.contains(n)));
     });
 }
+
+#[cfg(test)]
+#[path = "brushes_tab_tests.rs"]
+mod tests;
