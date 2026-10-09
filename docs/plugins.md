@@ -49,7 +49,9 @@ build. Limits (`photocraft_plugins::Limits`, defaults):
 Every band runs in a **fresh instance**, so no state survives between calls, and parallel bands
 never share memory. Traps, exhausted budgets, malformed modules, bad manifests, out-of-range
 pointers and non-zero return codes all become errors; the document is left untouched (the edit is
-transactional). Output samples that are NaN or infinite keep their original value; integer-depth
+transactional). When a failure stops sibling bands, those bands retain the originating error
+instead of replacing it with a generic cancellation message. Output samples that are NaN or
+infinite keep their original value; integer-depth
 documents and alpha are clamped to 0–1.
 
 wasmi is built with its *portable* (loop) dispatcher: the default tail-call dispatcher relies on LLVM

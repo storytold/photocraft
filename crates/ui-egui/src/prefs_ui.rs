@@ -1022,7 +1022,14 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    crate::widgets::checkbox(ui, &mut b, &label);
+                    if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
+                        ui.vertical(|ui| {
+                            crate::widgets::checkbox(ui, &mut b, &label);
+                            ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                        });
+                    } else {
+                        crate::widgets::checkbox(ui, &mut b, &label);
+                    }
                     obj.insert(k, json!(b));
                 }
                 Value::String(s) if path == "interface.language" => {
@@ -1991,6 +1998,62 @@ mod tests {
         assert_eq!(restarted.session.prefs().performance.history_states, 22);
         assert_eq!(restarted.ui.theme, ThemeKind::StudioLight);
         assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    #[test]
+    fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        app.custom_titlebar = true;
+        let id = open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("System title bar").scroll_to_me();
+        h.run_steps(4);
+        h.get_by_label("Applies at next launch.");
+        for desired in [true, false] {
+            h.get_by_label("System title bar").click();
+            h.run_steps(4);
+            assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["interface"]["systemTitleBar"], desired);
+            assert_eq!(h.state().session.prefs().interface.system_title_bar, !desired, "the draft is not applied yet");
+            h.get_by_label("Applies at next launch.");
+            h.get_by_label("Apply").click();
+            h.run_steps(4);
+            assert_eq!(h.state().session.prefs().interface.system_title_bar, desired);
+            assert_eq!(stored(&store)["interface"]["systemTitleBar"], desired);
+            assert!(h.state().custom_titlebar, "do not change the current window or restart it");
+            let (reloaded, _) = app_with_saved(store.lock().unwrap().clone());
+            assert_eq!(reloaded.session.prefs().interface.system_title_bar, desired);
+            h.get_by_label("Applies at next launch.");
+        }
+        h.get_by_label("System title bar").click();
+        h.run_steps(4);
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
+        assert!(!h.state().session.prefs().interface.system_title_bar);
+        assert_eq!(stored(&store)["interface"]["systemTitleBar"], false);
+        assert!(h.state().custom_titlebar);
+    }
+
+    #[test]
+    fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
+        let mut h =
+            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en")), obj);
+        h.run_steps(4);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
+        h.get_by_label("Show tooltips").click();
+        h.run_steps(4);
+        assert_eq!(h.state()["showTooltips"], false);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
     }
 
     #[test]

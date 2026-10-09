@@ -407,10 +407,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             }
         }
     };
+    // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
+    let paths = app.ui.view.shows(app.ui.view.show.target_path);
     if crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
-        crate::direct_select::draw_overlay(app, painter, &to_scr, accent);
-    } else {
+        crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
+    } else if paths {
         if vector_tool {
             if let Some(wp) = &doc.work_path {
                 draw_path(wp, tool == Tool::PathSelection);
@@ -1023,6 +1025,55 @@ mod tests {
         let layer = PathEntry { kind: PathRow::Layer, ..work };
         let entries = path_context_actions(&layer, doc);
         assert!(!entries.iter().any(|(_, id, _)| *id == "path.delete"));
+    }
+
+    /// How many shapes the path overlay paints for `app` this frame.
+    fn overlay_shapes(app: &PhotocraftApp, ctx: &egui::Context) -> usize {
+        let doc = app.session.active().unwrap().doc.clone();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+            let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
+            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+            draw_overlay(app, &painter, &xf, &doc);
+        });
+        out.textures_delta.clear();
+        out.shapes.len()
+    }
+
+    #[test]
+    fn show_target_path_and_extras_hide_the_path_outlines() {
+        // #1119: View › Show › Target Path only flipped its checkmark; the canvas kept drawing the
+        // work path and the active shape's path.
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let path = json!({"subpaths": [{"closed": true, "knots": [
+            {"anchor": [10, 10], "in": [10, 10], "out": [10, 10]},
+            {"anchor": [80, 10], "in": [80, 10], "out": [80, 10]},
+            {"anchor": [80, 80], "in": [80, 80], "out": [80, 80]}
+        ]}]});
+        app.run("path.set", json!({"path": path})).unwrap();
+        assert!(app.session.active().unwrap().doc.work_path.is_some());
+        finish_shape(&mut app, Tool::Rectangle, [100.0, 100.0], [160.0, 150.0], egui::Modifiers::NONE);
+        let toggle = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, Value::Null).unwrap();
+        for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle] {
+            app.ui.tool = tool;
+            assert!(app.ui.view.show.target_path && app.ui.view.extras);
+            assert!(overlay_shapes(&app, &ctx) > 0, "{tool:?}: the paths are drawn by default");
+            toggle(&mut app, "view.show.targetPath");
+            assert!(!app.ui.view.show.target_path);
+            assert_eq!(overlay_shapes(&app, &ctx), 0, "{tool:?}: Target Path off");
+            toggle(&mut app, "view.show.targetPath");
+            toggle(&mut app, "view.extras");
+            assert!(!app.ui.view.extras);
+            assert_eq!(overlay_shapes(&app, &ctx), 0, "{tool:?}: Extras off");
+            toggle(&mut app, "view.extras");
+            assert!(overlay_shapes(&app, &ctx) > 0, "{tool:?}: shown again");
+        }
+        // The Pen's path in progress is a gesture, not the target path: it stays visible.
+        app.ui.tool = Tool::Pen;
+        app.ui.pen = Some(PenPath { knots: vec![[[20.0, 20.0]; 3], [[60.0, 40.0]; 3]], ..Default::default() });
+        toggle(&mut app, "view.show.targetPath");
+        assert!(overlay_shapes(&app, &ctx) > 0, "the pen path in progress is still drawn");
     }
 
     #[test]

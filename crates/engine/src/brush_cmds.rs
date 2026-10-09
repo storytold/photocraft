@@ -330,6 +330,7 @@ pub struct LiveStroke {
     pub doc: std::sync::Arc<photocraft_doc::Document>,
     /// Jitter seed to pass to `paint.stroke`.
     pub seed: u64,
+    cmd: String,
     renderer: StrokeRenderer,
     mirror: Option<(crate::symmetry_cmds::SymmetryAxis, StrokeRenderer)>,
     mirror_distinct: bool,
@@ -371,8 +372,20 @@ impl LiveStroke {
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let mirror = s.active().and_then(|st| st.symmetry_path.clone()).map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom)));
         let pre = surf.clone();
-        let mut live =
-            Self { doc: std::sync::Arc::new(doc), seed, renderer, mirror, mirror_distinct: false, pre, sel, lock, layer, params: p.clone(), tail: Rect::EMPTY };
+        let mut live = Self {
+            doc: std::sync::Arc::new(doc),
+            seed,
+            cmd: cmd.into(),
+            renderer,
+            mirror,
+            mirror_distinct: false,
+            pre,
+            sel,
+            lock,
+            layer,
+            params: p.clone(),
+            tail: Rect::EMPTY,
+        };
         live.push(&pts)?;
         Ok(live)
     }
@@ -387,7 +400,9 @@ impl LiveStroke {
     /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and
     /// nothing new appears on release.
+    /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         if let Some((axis, mirror)) = &mut self.mirror {
             let reflected = axis.reflect_points(pts);

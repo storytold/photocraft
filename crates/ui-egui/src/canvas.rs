@@ -1104,6 +1104,10 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
 
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it.
 fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32; 2])> {
+    // Command dialogs always edit the active document. Never show their preview in another tab.
+    if app.session.active_index() != Some(idx) {
+        return None;
+    }
     if crate::adjust_preview::on_layer(app, idx) {
         return None;
     }
@@ -1129,7 +1133,10 @@ fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u6
             let buf = photocraft_compose::flatten(r);
             let t1 = crate::gpu_canvas::now_ms();
             let (display, _) = canvas_display(app, &doc, None);
-            app.gpu.as_ref()?.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buf), doc.depth);
+            // Headless/CPU tests can still inspect the computed preview without a GPU texture.
+            if let Some(gpu) = app.gpu.as_ref() {
+                gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buf), doc.depth);
+            }
             app.perf.record("filter-preview", r.size.area(), t1 - t0, crate::gpu_canvas::now_ms() - t1);
         }
         app.filter_preview = Some(crate::filter_dialog::FilterPreview { doc: doc_id, revision, hash, k, result });
@@ -4579,5 +4586,51 @@ mod transform_controls_tests {
         assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
         assert!(!transform_controls_hit(r, r.center()));
         assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
+    }
+}
+
+#[cfg(test)]
+mod rotation_preview_isolation_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A CPU-only app must be able to generate the actual rotation preview without a
+    /// GPU adapter; checking the result also verifies Preview off and document integrity.
+    #[test]
+    fn rotation_preview_is_computed_headlessly_without_mutating_document() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 96, "height": 48})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        assert!(app.gpu.is_none());
+        crate::filter_dialog::open(&mut app, "image.rotation.arbitrary").unwrap();
+        let dialog = app.ui.dialogs.last_mut().unwrap();
+        dialog.fields.insert("angle".into(), json!(90.0));
+        dialog.fields.insert("direction".into(), json!("cw"));
+
+        let (factor, _, size) = ensure_filter_preview(&mut app, 0).expect("CPU preview computed");
+        assert_eq!(factor, 1);
+        assert_eq!(size, [48, 96]);
+        let original = &app.session.active().unwrap().doc;
+        assert_eq!([original.size.width, original.size.height], [96, 48]);
+
+        app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
+        assert!(ensure_filter_preview(&mut app, 0).is_none(), "disabling Preview must hide the preview");
+        assert_eq!([app.session.active().unwrap().doc.size.width, app.session.active().unwrap().doc.size.height], [96, 48]);
+    }
+
+    /// A dialog operates on the active document and cannot render a preview into a
+    /// background tab, even if that tab has a valid canvas index.
+    #[test]
+    fn filter_preview_is_not_returned_for_inactive_document() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 96, "height": 48})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        crate::filter_dialog::open(&mut app, "image.rotation.arbitrary").unwrap();
+        app.ui.dialogs.last_mut().unwrap().fields.insert("angle".into(), json!(90.0));
+        assert!(ensure_filter_preview(&mut app, 0).is_some());
+
+        app.session.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+        assert_eq!(app.session.active_index(), Some(1));
+        assert!(ensure_filter_preview(&mut app, 0).is_none(), "an inactive tab must never inherit the command preview");
     }
 }
