@@ -369,44 +369,139 @@ impl SharpEdge {
     }
 }
 
+/// A sharp edge pixel and where it sits.
+#[derive(Clone, Copy)]
+struct EdgePixel {
+    /// Index of the pixel in the map.
+    at: u32,
+    /// The pixel's coverage ([`local_coverage`] of it).
+    cov: f32,
+    edge: SharpEdge,
+}
+
+/// The sharp edge pixels of a map: a short list, and for every pixel a 4 byte slot (0 = no edge, k =
+/// the k-th of the list). Maps are big and edge pixels few, so a per-pixel `Option<SharpEdge>` (16
+/// bytes) made every pass over it, and the copies the refinement needs, memory-bound.
+struct SharpEdges {
+    w: usize,
+    h: usize,
+    slot: Vec<u32>,
+    pixels: Vec<EdgePixel>,
+}
+
+impl SharpEdges {
+    fn empty(w: usize, h: usize) -> Self {
+        SharpEdges { w, h, slot: Vec::new(), pixels: Vec::new() }
+    }
+
+    /// The edge of pixel `i`, if it is a sharp edge pixel.
+    fn get(&self, i: usize) -> Option<SharpEdge> {
+        let k = (*self.slot.get(i)? as usize).checked_sub(1)?;
+        self.pixels.get(k).map(|p| p.edge)
+    }
+
+    /// The edge of pixel `(x, y)`, if it is a sharp edge pixel (`None` off the map).
+    fn at(&self, x: usize, y: usize) -> Option<SharpEdge> {
+        if x >= self.w || y >= self.h { None } else { self.get(y * self.w + x) }
+    }
+
+    fn has(&self, x: usize, y: usize) -> bool {
+        self.at(x, y).is_some()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.pixels.is_empty()
+    }
+
+    /// Every sharp edge pixel, as (index in the map, its edge), in pixel order.
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = (usize, SharpEdge)> + '_ {
+        self.pixels.iter().map(|p| (p.at as usize, p.edge))
+    }
+}
+
 /// Where the sharp, anti-aliased edge pixels of `s` put the edge ([`edge_offset`], along the normal
 /// the coverage gradient gives). Sharp pixels are partly covered and touch both an empty and a full
-/// pixel; hard edges and soft ramps have none (`None`) and keep the `alpha - 1/2` of
-/// [`dist_outside`].
-fn sharp_edges(s: &Map) -> Vec<Option<SharpEdge>> {
-    let cov = local_coverage(s);
-    let (w, h) = (s.w as i64, s.h as i64);
-    let mut out = vec![None; s.v.len()];
+/// pixel; hard edges and soft ramps have none and keep the `alpha - 1/2` of [`dist_outside`].
+///
+/// An edge pixel is covered and has an empty neighbour, so a row by row pass over which pixels are
+/// covered finds the few candidates without computing [`local_coverage`] of the whole map; the
+/// coverage is then worked out where it is needed, by the same formula.
+fn sharp_edges(s: &Map) -> SharpEdges {
+    let (w, h) = (s.w, s.h);
+    if w == 0 || h == 0 || s.v.len() != w * h || s.v.len() >= u32::MAX as usize {
+        return SharpEdges::empty(w, h);
+    }
+    let (wi, hi) = (w as i64, h as i64);
+    // `local_coverage` of the pixel at (x, y), on the map.
+    let cov_at = |x: i64, y: i64| -> f32 {
+        let a = s.v[y as usize * w + x as usize];
+        if a <= INSIDE_EPS {
+            return a;
+        }
+        let mut mx = a;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                mx = mx.max(s.get(x + dx, y + dy));
+            }
+        }
+        (a / mx).min(1.0)
+    };
     // The coverage with the map's border repeated, for the gradient.
-    let at = |x: i64, y: i64| cov.v[(y.max(0).min(h - 1) as usize) * s.w + x.max(0).min(w - 1) as usize];
-    for y in 0..h {
+    let cov_clamped = |x: i64, y: i64| cov_at(x.max(0).min(wi - 1), y.max(0).min(hi - 1));
+    // Rows of "not empty" with a covered margin of one pixel on each side (off the map counts as covered:
+    // only a neighbour on the map can be empty).
+    let solid_row = |y: i64| -> Vec<bool> {
+        let mut row = vec![true; w + 2];
+        if (0..hi).contains(&y) {
+            for (x, &a) in s.v[y as usize * w..(y as usize + 1) * w].iter().enumerate() {
+                row[x + 1] = a.is_nan() || a > INSIDE_EPS;
+            }
+        }
+        row
+    };
+    let mut slot = vec![0u32; w * h];
+    let mut pixels: Vec<EdgePixel> = Vec::new();
+    let (mut above, mut here, mut below) = (solid_row(-1), solid_row(0), solid_row(1));
+    let mut candidate = vec![false; w];
+    for y in 0..hi {
         for x in 0..w {
-            let i = (y * w + x) as usize;
-            let c = cov.v[i];
+            candidate[x] = here[x + 1] && !(above[x] & above[x + 1] & above[x + 2] & here[x] & here[x + 2] & below[x] & below[x + 1] & below[x + 2]);
+        }
+        for x in 0..wi {
+            if !candidate[x as usize] {
+                continue;
+            }
+            let i = (y * wi + x) as usize;
+            let c = cov_at(x, y);
             if s.v[i] <= INSIDE_EPS || c >= 1.0 - INSIDE_EPS {
                 continue;
             }
             let (mut empty, mut full) = (false, false);
             for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
                 let (nx, ny) = (x + dx, y + dy);
-                if (dx, dy) == (0, 0) || nx < 0 || ny < 0 || nx >= w || ny >= h {
+                if (dx, dy) == (0, 0) || nx < 0 || ny < 0 || nx >= wi || ny >= hi {
                     continue;
                 }
                 empty |= s.get(nx, ny) <= INSIDE_EPS;
-                full |= cov.get(nx, ny) >= 1.0 - INSIDE_EPS;
+                full |= cov_at(nx, ny) >= 1.0 - INSIDE_EPS;
             }
             if !(empty && full) {
                 continue;
             }
+            let at = &cov_clamped;
             let gx = (at(x + 1, y - 1) + 2.0 * at(x + 1, y) + at(x + 1, y + 1)) - (at(x - 1, y - 1) + 2.0 * at(x - 1, y) + at(x - 1, y + 1));
             let gy = (at(x - 1, y + 1) + 2.0 * at(x, y + 1) + at(x + 1, y + 1)) - (at(x - 1, y - 1) + 2.0 * at(x, y - 1) + at(x + 1, y - 1));
             let len = gx.hypot(gy);
             let (normal, n) = if len.is_finite() && len > 1e-6 { ([gx / len, gy / len], [gx / len, gy / len]) } else { ([0.0, 0.0], [1.0, 0.0]) };
-            out[i] = Some(SharpEdge { offset: edge_offset(n, c), normal });
+            pixels.push(EdgePixel { at: i as u32, cov: c, edge: SharpEdge { offset: edge_offset(n, c), normal } });
+            slot[i] = pixels.len() as u32;
         }
+        above = std::mem::replace(&mut here, std::mem::take(&mut below));
+        below = solid_row(y + 2);
     }
-    refine_edge_normals(&mut out, &cov);
-    out
+    refine_edge_normals(&mut pixels, &slot, w, h);
+    SharpEdges { w, h, slot, pixels }
 }
 
 /// How far (in pixels) around an edge pixel [`refine_edge_normals`] looks for its neighbours.
@@ -418,28 +513,27 @@ const NORMAL_RADIUS: i64 = 3;
 /// line, and the line through the points of the pixels around one gives the direction to a fraction
 /// of a degree. Where those points are not on a line (corners, tight curves) the gradient's normal
 /// stays.
-fn refine_edge_normals(sharp: &mut [Option<SharpEdge>], cov: &Map) {
-    let (w, h) = (cov.w as i64, cov.h as i64);
-    let points: Vec<Option<[f32; 2]>> = sharp
+fn refine_edge_normals(pixels: &mut [EdgePixel], slot: &[u32], w: usize, h: usize) {
+    let (wi, hi) = (w as i64, h as i64);
+    let points: Vec<[f32; 2]> = pixels
         .iter()
-        .enumerate()
-        .map(|(i, e)| e.map(|e| [(i as i64 % w) as f32 - e.offset * e.normal[0], (i as i64 / w) as f32 - e.offset * e.normal[1]]))
+        .map(|p| [(p.at as i64 % wi) as f32 - p.edge.offset * p.edge.normal[0], (p.at as i64 / wi) as f32 - p.edge.offset * p.edge.normal[1]])
         .collect();
-    let before = sharp.to_vec();
-    for (i, edge) in sharp.iter_mut().enumerate() {
-        let Some(e) = edge else { continue };
-        let (x, y) = (i as i64 % w, i as i64 / w);
+    let before: Vec<SharpEdge> = pixels.iter().map(|p| p.edge).collect();
+    let mut near: Vec<[f32; 2]> = Vec::new();
+    for (k, pixel) in pixels.iter_mut().enumerate() {
+        let e = before[k];
+        let (x, y) = (pixel.at as i64 % wi, pixel.at as i64 / wi);
         let (mut n, mut sum) = (0.0f32, [0.0f32; 2]);
-        let mut near = Vec::new();
+        near.clear();
         for (dx, dy) in (-NORMAL_RADIUS..=NORMAL_RADIUS).flat_map(|dy| (-NORMAL_RADIUS..=NORMAL_RADIUS).map(move |dx| (dx, dy))) {
             let (nx, ny) = (x + dx, y + dy);
-            if dx * dx + dy * dy > NORMAL_RADIUS * NORMAL_RADIUS || nx < 0 || ny < 0 || nx >= w || ny >= h {
+            if dx * dx + dy * dy > NORMAL_RADIUS * NORMAL_RADIUS || nx < 0 || ny < 0 || nx >= wi || ny >= hi {
                 continue;
             }
-            let j = (ny * w + nx) as usize;
-            if let (Some(o), Some(p)) = (before[j], points[j])
-                && o.normal[0] * e.normal[0] + o.normal[1] * e.normal[1] > 0.9
-            {
+            let Some(j) = slot.get((ny * wi + nx) as usize).and_then(|&s| (s as usize).checked_sub(1)) else { continue };
+            let (Some(o), Some(&p)) = (before.get(j), points.get(j)) else { continue };
+            if o.normal[0] * e.normal[0] + o.normal[1] * e.normal[1] > 0.9 {
                 near.push(p);
                 sum = [sum[0] + p[0], sum[1] + p[1]];
                 n += 1.0;
@@ -468,8 +562,8 @@ fn refine_edge_normals(sharp: &mut [Option<SharpEdge>], cov: &Map) {
         if normal[0] * e.normal[0] + normal[1] * e.normal[1] < 0.0 {
             normal = [-normal[0], -normal[1]];
         }
-        e.normal = normal;
-        e.offset = edge_offset(normal, cov.v[i]);
+        pixel.edge.normal = normal;
+        pixel.edge.offset = edge_offset(normal, pixel.cov);
     }
 }
 
@@ -486,17 +580,16 @@ const FOOT_RADIUS: i64 = 2;
 /// few pixels along the edge from the foot of the perpendicular and deeper than the edge, and the
 /// further `p` is from the edge the further, so its distance ripples along the edge. So this takes
 /// the smallest distance of the edge pixels around that foot, which is exact for a straight edge.
-fn edge_distance(sharp: &[Option<SharpEdge>], w: usize, h: usize, p: [usize; 2], q: [usize; 2], inside: bool) -> Option<f32> {
+fn edge_distance(sharp: &SharpEdges, p: [usize; 2], q: [usize; 2], inside: bool) -> Option<f32> {
     let (px, py) = (p[0] as f32, p[1] as f32);
-    let at = |x: usize, y: usize| sharp.get(y * w + x).copied().flatten();
-    let e = at(q[0], q[1])?;
+    let e = sharp.at(q[0], q[1])?;
     let mut best = e.distance(px - q[0] as f32, py - q[1] as f32, inside)?;
     // Where p's perpendicular meets q's line.
     let signed = e.offset + (px - q[0] as f32) * e.normal[0] + (py - q[1] as f32) * e.normal[1];
     let (fx, fy) = ((px - signed * e.normal[0]).round() as i64, (py - signed * e.normal[1]).round() as i64);
-    for sy in (fy - FOOT_RADIUS).max(0)..=(fy + FOOT_RADIUS).min(h as i64 - 1) {
-        for sx in (fx - FOOT_RADIUS).max(0)..=(fx + FOOT_RADIUS).min(w as i64 - 1) {
-            if let Some(near) = at(sx as usize, sy as usize)
+    for sy in (fy - FOOT_RADIUS).max(0)..=(fy + FOOT_RADIUS).min(sharp.h as i64 - 1) {
+        for sx in (fx - FOOT_RADIUS).max(0)..=(fx + FOOT_RADIUS).min(sharp.w as i64 - 1) {
+            if let Some(near) = sharp.at(sx as usize, sy as usize)
                 && let Some(d) = near.distance(px - sx as f32, py - sy as f32, inside)
             {
                 best = best.min(d);
@@ -512,7 +605,7 @@ fn edge_distance(sharp: &[Option<SharpEdge>], w: usize, h: usize, p: [usize; 2],
 /// distance (to the nearest empty pixel, less half a pixel) never falls short of the true one, so
 /// it caps the result where an edge lies exactly on a pixel boundary and has no sharp pixel; a mask
 /// without sharp pixels gives exactly [`dist_inside`]. Values past `reach` pixels are not refined.
-fn bevel_dist_inside(s: &Map, sharp: &[Option<SharpEdge>], reach: f32) -> Vec<f32> {
+fn bevel_dist_inside(s: &Map, sharp: &SharpEdges, reach: f32) -> Vec<f32> {
     let empty: Vec<bool> = s.v.iter().map(|&a| a <= INSIDE_EPS).collect();
     let (d, near) = edt_nearest(&empty, s.w, s.h);
     (0..d.len())
@@ -520,11 +613,11 @@ fn bevel_dist_inside(s: &Map, sharp: &[Option<SharpEdge>], reach: f32) -> Vec<f3
             if empty[i] {
                 return -0.5;
             }
-            if let Some(e) = sharp[i] {
+            if let Some(e) = sharp.get(i) {
                 return e.offset;
             }
             let plain = d[i] - 0.5;
-            if d[i] > reach + EDGE_MARGIN {
+            if d[i] > reach + EDGE_MARGIN || sharp.is_empty() {
                 return plain;
             }
             // The sharp pixel next to the nearest empty one that is nearest to this pixel.
@@ -532,9 +625,9 @@ fn bevel_dist_inside(s: &Map, sharp: &[Option<SharpEdge>], reach: f32) -> Vec<f3
             let (ox, oy) = ((near[i] % s.w) as i64, (near[i] / s.w) as i64);
             let q = (-1..=1)
                 .flat_map(|dy| (-1..=1).map(move |dx| (ox + dx, oy + dy)))
-                .filter(|&(x, y)| x >= 0 && y >= 0 && x < s.w as i64 && y < s.h as i64 && sharp[y as usize * s.w + x as usize].is_some())
+                .filter(|&(x, y)| x >= 0 && y >= 0 && sharp.has(x as usize, y as usize))
                 .min_by_key(|&(x, y)| (x - px) * (x - px) + (y - py) * (y - py));
-            match q.and_then(|(x, y)| edge_distance(sharp, s.w, s.h, [px as usize, py as usize], [x as usize, y as usize], true)) {
+            match q.and_then(|(x, y)| edge_distance(sharp, [px as usize, py as usize], [x as usize, y as usize], true)) {
                 Some(refined) => refined.min(plain),
                 None => plain,
             }
@@ -543,22 +636,22 @@ fn bevel_dist_inside(s: &Map, sharp: &[Option<SharpEdge>], reach: f32) -> Vec<f3
 }
 
 /// [`dist_outside`] for chiselled bevels, with sharp edge pixels placed as in [`bevel_dist_inside`].
-fn bevel_dist_outside(s: &Map, sharp: &[Option<SharpEdge>], reach: f32) -> Vec<f32> {
+fn bevel_dist_outside(s: &Map, sharp: &SharpEdges, reach: f32) -> Vec<f32> {
     let inside: Vec<bool> = s.v.iter().map(|&a| a > INSIDE_EPS).collect();
     let (d, near) = edt_nearest(&inside, s.w, s.h);
     (0..d.len())
         .map(|i| {
-            if let Some(e) = sharp[i] {
+            if let Some(e) = sharp.get(i) {
                 return -e.offset;
             }
             if inside[i] {
                 return -0.5;
             }
             let q = near[i];
-            let Some(e) = sharp[q] else { return d[i] - (s.v[q].min(1.0) - 0.5) };
+            let Some(e) = sharp.get(q) else { return d[i] - (s.v[q].min(1.0) - 0.5) };
             let (p, qp) = ([i % s.w, i / s.w], [q % s.w, q / s.w]);
             let measured = if d[i] <= reach + EDGE_MARGIN {
-                edge_distance(sharp, s.w, s.h, p, qp, false)
+                edge_distance(sharp, p, qp, false)
             } else {
                 e.distance(p[0] as f32 - qp[0] as f32, p[1] as f32 - qp[1] as f32, false)
             };
@@ -2200,7 +2293,7 @@ mod tests {
         }
         for (i, m) in maps.iter().enumerate() {
             let sharp = sharp_edges(m);
-            assert!(sharp.iter().all(Option::is_none), "map {i} has no anti-aliased edge");
+            assert!(sharp.is_empty(), "map {i} has no anti-aliased edge");
             assert_eq!(bevel_dist_inside(m, &sharp, 1e9), dist_inside(m), "inside, map {i}");
             assert_eq!(bevel_dist_outside(m, &sharp, 1e9), dist_outside(m), "outside, map {i}");
         }
@@ -2234,8 +2327,7 @@ mod tests {
             let sharp = sharp_edges(&aa_bar(w, h, deg, 120.0, wid));
             let (sn, cs) = deg.to_radians().sin_cos();
             let (mut worst, mut seen) = (0.0f32, 0);
-            for (i, e) in sharp.iter().enumerate() {
-                let Some(e) = e else { continue };
+            for (i, e) in sharp.iter() {
                 let (px, py) = ((i % w) as f32 + 0.5 - w as f32 / 2.0, (i / w) as f32 + 0.5 - h as f32 / 2.0);
                 let (u, v) = (px * cs + py * sn, -px * sn + py * cs);
                 if u.abs() > 40.0 || (wid / 2.0 - v.abs()).abs() > 1.5 {
