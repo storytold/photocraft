@@ -5,6 +5,29 @@
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
 - macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
 
+### Windows source builds
+
+Use the Rust MSVC toolchain and install Visual Studio or Microsoft C++ Build Tools with the
+**Desktop development with C++** workload. Follow Microsoft's
+[Rust setup guide](https://learn.microsoft.com/en-us/windows/dev-environment/rust/setup),
+then open a new terminal and check `cargo --version` and `rustc --version`.
+
+On Windows 11, Smart App Control can block Cargo, rustc or executables generated during a build.
+If a build reports `An Application Control policy has blocked this file. (os error 4551)`
+([#1585](https://github.com/storytold/photocraft/issues/1585)), check:
+
+- **Windows Security → App & browser control → Smart App Control settings** for its status.
+- **Event Viewer → Applications and Services Logs → Microsoft → Windows → CodeIntegrity →
+  Operational** for the blocked executable and policy, especially on managed machines.
+
+This error indicates an application-control restriction; moving `CARGO_TARGET_DIR` or
+reinstalling Rust does not establish that the blocked executable is trusted. See Microsoft's
+[Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
+for the available controls; there is no per-app exception. On a managed device, ask your
+administrator about an approved development environment. If you only want to run PhotoCraft,
+use the [packaged Windows release](https://github.com/storytold/photocraft/releases) to avoid
+building locally; the downloaded app is still subject to Windows application-control checks.
+
 ## Build and run
 
 ```sh
