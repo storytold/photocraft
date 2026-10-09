@@ -167,6 +167,8 @@ pub struct LineInfo {
     pub ascent: f32,
     pub descent: f32,
     pub paragraph: usize,
+    /// The paragraph's resolved base direction is right-to-left.
+    pub rtl: bool,
 }
 
 /// A grapheme cluster (caret stops, hit testing, selection), in line space.
@@ -576,6 +578,7 @@ impl Layouter {
                 }
                 b.build(&ptext)
             };
+            let rtl = layout.is_rtl();
             let indent_start = ps.start_indent_pt * k;
             let indent_end = ps.end_indent_pt * k;
             if ps.first_line_indent_pt != 0.0 {
@@ -930,6 +933,7 @@ impl Layouter {
                     ascent,
                     descent,
                     paragraph: pi,
+                    rtl,
                 });
             }
             pending_space += ps.space_after_pt * k;

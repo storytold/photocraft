@@ -148,6 +148,8 @@ pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
 }
 
 #[cfg(test)]
+mod rtl_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod vertical_tests;
