@@ -12,8 +12,11 @@
 //!
 //! Auto-Blend gives each selected layer a mask so the composite shows, per pixel, the sharpest
 //! layer (Stack Images, for focus stacking) or one layer per region with seams routed where the
-//! layers agree (Panorama). With Seamless Tones and Colors it also adds a merged layer blended
-//! with Laplacian pyramids so transitions are invisible.
+//! layers agree (Panorama). With Seamless Tones and Colors it also adds a merged layer: the
+//! panorama blended with Laplacian pyramids so transitions are invisible, the stack fused on the
+//! Laplacian pyramid, each coefficient from the layer sharpest at that scale
+//! ([`pyramid::fuse_stack`]; `haloControl` keeps a bright object's defocused glow out of the
+//! coarse levels).
 
 use photocraft_algo::panorama::Layout;
 use photocraft_algo::pyramid;
@@ -156,6 +159,13 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`method` must be panorama|stack"));
     }
     let seamless = p.get("seamlessTones").and_then(Value::as_bool).unwrap_or(true);
+    let halo = match p.get("haloControl") {
+        None | Some(Value::Null) => pyramid::StackFusion::default().halo,
+        Some(v) => match v.as_f64() {
+            Some(h) if (0.0..=f64::from(pyramid::HALO_MAX)).contains(&h) => h as f32,
+            _ => return Err(bad(cmd, format!("`haloControl` must be a number from 0 to {}", pyramid::HALO_MAX))),
+        },
+    };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc: std::sync::Arc<Document> = st.doc.clone();
     let mut area = Rect::EMPTY;
@@ -196,7 +206,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         let weights = pyramid::stack_weights(w, h, &luma, &alpha);
         let blended = seamless.then(|| {
             let refs: Vec<&[f32]> = imgs.iter().map(Vec::as_slice).collect();
-            pyramid::blend(w, h, fmt.channels(), &refs, &weights, pyramid::auto_levels(w, h))
+            let p = pyramid::StackFusion { halo, ..Default::default() };
+            pyramid::fuse_stack(w, h, fmt.channels(), &refs, &luma, &alpha, p)
         });
         (weights, blended)
     } else {
@@ -246,7 +257,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
             auto_align
         ),
-        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true}"##, auto_blend),
+        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2}"##, auto_blend),
     ]
 }
 
@@ -472,5 +483,51 @@ mod tests {
         .unwrap();
         select(&mut s, &[a, c]);
         assert_eq!(s.execute("edit.autoAlignLayers", json!({"registration": "intensity"})).unwrap_err().to_string(), NO_DETAIL);
+    }
+
+    /// Two layers, each sharp on one half: the merged layer takes each half from the sharp layer.
+    #[test]
+    fn auto_blend_stack_fuses_the_sharp_halves() {
+        let checker = |x: i32, y: i32| if (x / 3 + y / 3) % 2 == 0 { 0.2 } else { 0.8 };
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 96, "height": 64, "depth": depth, "background": "transparent"})).unwrap();
+            let mut ids = Vec::new();
+            for (name, sharp_left) in [("left", true), ("right", false)] {
+                s.execute("layer.new.layer", json!({"name": name})).unwrap();
+                s.edit(name, |doc, active| {
+                    let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for y in 0..64 {
+                        for x in 0..96 {
+                            // The sharp half is the checker, the other half its local mean (flat gray).
+                            let v = if (x < 48) == sharp_left { checker(x, y) } else { 0.5 };
+                            surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[v, v, v, 1.0]);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+                ids.push(s.active().unwrap().active_layer.unwrap());
+            }
+            select(&mut s, &ids);
+            for halo in [0.0, 2.0] {
+                let r = s.execute("edit.autoBlendLayers", json!({"method": "stack", "haloControl": halo})).unwrap();
+                let doc = &s.active().unwrap().doc;
+                let blended = doc.layer(LayerId(r["blended"].as_u64().unwrap())).unwrap().surface().unwrap();
+                for (x, y) in [(10, 20), (20, 40), (76, 20), (85, 40)] {
+                    let px = blended.pixel(x, y);
+                    assert!((px[0] - checker(x, y)).abs() < 0.08, "depth {depth} halo {halo} ({x},{y}): {px:?}");
+                    assert!((px[3] - 1.0).abs() < 1e-3, "{px:?}");
+                }
+                // The masks still pick per pixel.
+                assert_eq!(doc.layer(ids[0]).unwrap().mask.as_ref().unwrap().value(10, 20), 1.0);
+                assert_eq!(doc.layer(ids[1]).unwrap().mask.as_ref().unwrap().value(85, 40), 1.0);
+                s.undo();
+                assert!(s.active().unwrap().doc.layer(ids[0]).unwrap().mask.is_none());
+            }
+            for bad in [json!(-1), json!(9), json!("hard")] {
+                assert!(s.execute("edit.autoBlendLayers", json!({"method": "stack", "haloControl": bad})).is_err(), "{bad}");
+            }
+        }
     }
 }
