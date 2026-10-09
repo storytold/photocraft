@@ -20,6 +20,26 @@ const OPEN_EXTS: &[&str] = &[
     "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
 ];
 
+/// The Open dialog's filter entries for `exts`. On Linux the XDG portal (and GTK) match the
+/// `*.ext` globs rfd makes from them case-sensitively, so a camera's `IMG_0001.JPG` or
+/// `DSC_0001.NEF` didn't show up (#1506); there each letter becomes a `[jJ]` class. Windows and
+/// macOS compare extensions case-insensitively and take them as they are.
+fn open_patterns(exts: &[&str]) -> Vec<String> {
+    if !cfg!(target_os = "linux") {
+        return exts.iter().map(|e| (*e).to_string()).collect();
+    }
+    exts.iter()
+        .map(|e| {
+            e.chars()
+                .map(|c| {
+                    let (lo, up) = (c.to_ascii_lowercase(), c.to_ascii_uppercase());
+                    if lo == up { c.to_string() } else { format!("[{lo}{up}]") }
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
 /// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
 /// keeps defaulting to Photoshop.
@@ -66,7 +86,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
         FileDialogRequest::Open { multiple } => {
-            let dialog = dialog.add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]);
+            let dialog = dialog.add_filter("All Formats", &open_patterns(OPEN_EXTS)).add_filter("PhotoCraft", &open_patterns(&["pcraft"]));
             if multiple {
                 let picked = dialog.pick_files();
                 Box::pin(async move { picked.await.map(|files| FileDialogAnswer::Paths(files.iter().map(path_of).collect())) })
@@ -376,6 +396,18 @@ pub fn export_flat(doc: &Document, path: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_dialog_matches_upper_case_extensions_on_linux() {
+        let p = super::open_patterns(&["jpg", "nef", "rw2", "pcraft"]);
+        if cfg!(target_os = "linux") {
+            assert_eq!(p, ["[jJ][pP][gG]", "[nN][eE][fF]", "[rR][wW]2", "[pP][cC][rR][aA][fF][tT]"]);
+        } else {
+            assert_eq!(p, ["jpg", "nef", "rw2", "pcraft"]);
+        }
+        // Every open extension stays a plain ASCII glob rfd can turn into `*.<pattern>`.
+        assert!(super::open_patterns(super::OPEN_EXTS).iter().all(|g| g.is_ascii() && !g.contains('*')));
+    }
+
     use super::*;
     use photocraft_engine::Session;
     use photocraft_format::list_recovery;
