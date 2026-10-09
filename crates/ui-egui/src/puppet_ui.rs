@@ -93,13 +93,13 @@ impl PuppetSession {
         self.order = solver.draw_order(&depths, &src);
     }
 
-    fn pin_at(&self, p: [f64; 2], tol: f64) -> Option<usize> {
+    fn pin_at(&self, p: [f64; 2], metric: crate::canvas::ScreenMetric) -> Option<usize> {
         self.warp
             .pins
             .iter()
             .enumerate()
-            .filter(|(_, q)| (q.dst[0] - p[0]).hypot(q.dst[1] - p[1]) <= tol)
-            .min_by(|a, b| dist(a.1.dst, p).total_cmp(&dist(b.1.dst, p)))
+            .filter(|(_, q)| metric.distance(q.dst, p) <= 8.0)
+            .min_by(|a, b| metric.distance(a.1.dst, p).total_cmp(&metric.distance(b.1.dst, p)))
             .map(|(i, _)| i)
     }
 
@@ -122,10 +122,6 @@ impl PuppetSession {
         }
         None
     }
-}
-
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
-    (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
 /// Starts Puppet Warp on the active layer.
@@ -152,7 +148,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
         surface,
         bounds,
         warp: PuppetWarp { pins: Vec::new(), mode: PuppetMode::Normal, density: PuppetDensity::Normal, expansion: 2.0 },
-        show_mesh: true,
+        show_mesh: app.ui.view.show.mesh,
         selected: None,
         drag: None,
         mesh: PuppetMesh::default(),
@@ -207,6 +203,10 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     }
     if let Some(v) = ui.get("showMesh").and_then(Value::as_bool) {
         s.show_mesh = v;
+        app.ui.view.show.mesh = v;
+        if v {
+            app.ui.view.extras = true;
+        }
     }
     if remesh {
         s.remesh_or_restore(density, expansion)?;
@@ -217,7 +217,7 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
 }
 
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
-    let tol = crate::distort_ui::tolerance(app);
+    let tol = crate::canvas::ScreenMetric::active(app);
     let Some(s) = app.distort.puppet.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
@@ -260,7 +260,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     }
 }
 
-pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) {
+pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform, options: &crate::view_cmds::ViewOptions) {
     let b = s.bounds;
     let (w, h) = (f64::from(b.width()), f64::from(b.height()));
     let mut mesh = egui::Mesh::with_texture(s.texture.id());
@@ -274,7 +274,7 @@ pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) {
         mesh.add_triangle(a as u32, bb as u32, c as u32);
     }
     painter.add(mesh);
-    if s.show_mesh {
+    if s.show_mesh && options.shows(options.show.mesh) {
         let line = Stroke::new(0.6, Color32::from_rgba_unmultiplied(40, 40, 40, 150));
         let mut seen = std::collections::HashSet::new();
         for tri in &s.mesh.tris {
@@ -286,6 +286,9 @@ pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) {
                 }
             }
         }
+    }
+    if !options.shows(options.show.edit_pins) {
+        return;
     }
     // Pins: yellow discs with a black ring; the selected pin has a black centre (Photoshop).
     for (i, p) in s.warp.pins.iter().enumerate() {
@@ -335,7 +338,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         s.warp.expansion = f64::from(e);
         remesh = true;
     }
-    crate::widgets::checkbox(ui, &mut s.show_mesh, tl!("Show Mesh"));
+    if crate::widgets::checkbox(ui, &mut s.show_mesh, tl!("Show Mesh")).changed() {
+        app.ui.view.show.mesh = s.show_mesh;
+        if s.show_mesh {
+            app.ui.view.extras = true;
+        }
+    }
     crate::widgets::vline(ui, 22.0);
     if let Some(i) = s.selected.filter(|i| *i < s.warp.pins.len()) {
         ui.label(tl!("Pin Depth:"));
@@ -392,6 +400,43 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aspect_review_warp_handle_gestures_use_screen_distance() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for rotation in [0.0, 37.0] {
+                    let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    a.run("file.new", json!({"width":400,"height":200})).unwrap();
+                    a.run("layer.new.layer", json!({})).unwrap();
+                    a.session
+                        .edit("paint", |doc, active| {
+                            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 380, 190), &[1.0, 0.0, 0.0, 1.0]);
+                            Ok(())
+                        })
+                        .unwrap();
+                    crate::distort_ui::menu(&mut a, &egui::Context::default(), "edit.puppetWarp", &json!({})).unwrap().unwrap();
+
+                    pointer(&mut a, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                    pointer(&mut a, ToolEvent::Up { x: 100.0, y: 100.0 }, egui::Modifiers::NONE);
+
+                    a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                    a.ui.view.pixel_aspect_correction = true;
+                    a.ui.views[0].zoom = ppp;
+                    a.ui.views[0].zoom /= ppp;
+                    a.ui.views[0].rotation = rotation;
+                    let xf = ViewXform::active(&a).unwrap();
+                    let at = xf.to_screen(100.0, 100.0);
+                    for (delta, expected) in [(2.0, true), (25.0, false)] {
+                        let p = xf.to_doc(at - egui::vec2(delta, delta));
+                        pointer(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
+                        assert_eq!(a.distort.puppet.as_ref().unwrap().drag == Some(0), expected, "{aspect} {ppp} {rotation}");
+                        pointer(&mut a, ToolEvent::Up { x: 100.0, y: 100.0 }, egui::Modifiers::NONE);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn pins_drag_and_commit_through_the_engine() {

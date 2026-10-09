@@ -14,6 +14,8 @@ use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 
+mod shape_preview;
+
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PenPath {
@@ -112,13 +114,14 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
     let custom = tool == Tool::CustomShape;
     // ponytail: preview colours skip the canvas's colour management; the commit renders them exactly.
     let fill = if o.shape_fill && !custom { rgb32(app.session.tools.foreground) } else { Color32::TRANSPARENT };
-    let stroke = if o.stroke_width > 0.0 && !custom { Stroke::new(o.stroke_width * xf.zoom, rgb32(app.session.tools.background)) } else { Stroke::NONE };
+    let stroke = if o.stroke_width > 0.0 && !custom { Stroke::new(o.stroke_width, rgb32(app.session.tools.background)) } else { Stroke::NONE };
     let accent = Tokens::get(painter.ctx()).accent;
-    for (pts, _) in path_lines(&path, &|q| xf.to_screen(q[0] as f32, q[1] as f32)) {
+    for (pts, _) in path_lines(&path, &|q| pos2(q[0] as f32, q[1] as f32)) {
         // Every tool's own shape is convex (custom shapes aren't, and draw no fill).
-        painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+        shape_preview::paint(painter, xf, &pts, fill, stroke);
         // The accent path over a dark halo: visible on any pixels (#172).
-        painter.extend(crate::tool_feedback::contrast_path(pts, true, accent));
+        let screen = pts.into_iter().map(|p| xf.to_screen(p.x, p.y)).collect();
+        painter.extend(crate::tool_feedback::contrast_path(screen, true, accent));
     }
 }
 
@@ -132,11 +135,11 @@ fn pen_to_json(pen: &PenPath, closed: bool) -> Value {
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles).
 pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
-    let tol = 6.0 / app.current_zoom().max(0.01) as f64;
+    let metric = crate::canvas::ScreenMetric::active(app);
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
     if let Some(first) = pen.knots.first().map(|k| k[0])
         && pen.knots.len() >= 2
-        && (first[0] - x).hypot(first[1] - y) < tol
+        && metric.distance(first, [x, y]) < 6.0
     {
         pen_commit(app, true);
         return;
@@ -145,7 +148,7 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
     // curve. Dragging from that anchor then sets the outgoing handle independently (#1482).
     // This must precede adding a point, or a re-click creates a zero-length segment.
     if let Some((i, last)) = pen.knots.len().checked_sub(1).zip(pen.knots.last_mut())
-        && (last[0][0] - x).hypot(last[0][1] - y) < tol
+        && metric.distance(last[0], [x, y]) < 6.0
     {
         last[2] = last[0];
         if !pen.unlinked.contains(&i) {
@@ -1066,7 +1069,7 @@ mod tests {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
             let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+            let xf = ViewXform { aspect: 1.0, rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
             draw_overlay(app, &painter, &xf, &doc);
         });
         out.textures_delta.clear();

@@ -87,6 +87,7 @@ fn xf(h: &Harness) -> ViewXform {
     let app = h.state();
     let v = &app.ui.views[0];
     ViewXform {
+        aspect: 1.0,
         rect: photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect),
         zoom: v.zoom,
         center: v.center,

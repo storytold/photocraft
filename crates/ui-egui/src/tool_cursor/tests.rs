@@ -236,3 +236,21 @@ fn painting_preference_and_zoom_change_the_native_cursor_without_changing_pointe
     h.run_steps(2);
     assert!(h.output().platform_output.cursor_image.as_ref().unwrap().size[0] > cross_size);
 }
+
+#[test]
+fn aspect_cursor_ellipse_matches_physical_footprint_and_rotates() {
+    for scale in [1.0, 2.0] {
+        for angle in [0.0, std::f32::consts::FRAC_PI_2] {
+            let radii = vec2(20.0, 10.0) / scale;
+            let image = rasterize(Shape::Ellipse { radii, angle, centre: false }, scale).unwrap();
+            let [x, y] = image.hotspot;
+            let [rx, ry] = if angle == 0.0 { [20, 10] } else { [10, 20] };
+            assert_eq!(alpha(&image, x, y), 0);
+            assert!(alpha(&image, x + rx, y) > 230);
+            assert!(alpha(&image, x, y + ry) > 230);
+            assert_eq!(alpha(&image, 0, 0), 0);
+            let bounds = egui::Rect::from_points(&ellipse_points(Pos2::ZERO, radii, angle));
+            assert!((bounds.size() * scale - vec2(rx as f32 * 2.0, ry as f32 * 2.0)).length() < 0.01);
+        }
+    }
+}

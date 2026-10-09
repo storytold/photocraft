@@ -124,6 +124,11 @@ impl Default for ViewOptions {
 }
 
 impl ViewOptions {
+    /// Horizontal view scale; stored presets have no effect while correction is off.
+    pub fn effective_pixel_aspect(&self) -> f32 {
+        if self.pixel_aspect_correction { pixel_aspect_ratio(&self.pixel_aspect) } else { 1.0 }
+    }
+
     /// Is an overlay with this Show flag visible (Extras on and the flag on)?
     pub fn shows(&self, flag: bool) -> bool {
         self.extras && flag
@@ -162,7 +167,7 @@ const LAYOUTS: [&str; 10] = [
 pub fn pixel_aspect_ratio(id: &str) -> f32 {
     // View › Pixel Aspect Ratio › Custom: `custom:<ratio>:<name>` (see `workspace_ui`).
     if let Some(r) = id.strip_prefix("custom:").and_then(|r| r.split(':').next()?.parse::<f32>().ok()) {
-        return r;
+        return if r.is_finite() && (0.1..=10.0).contains(&r) { r } else { 1.0 };
     }
     match id {
         "d1DvNtsc" => 0.91,
@@ -310,9 +315,21 @@ pub fn handles(id: &str) -> bool {
     )
 }
 
+/// These overlays have no corresponding canvas feature yet. Do not expose a cosmetic toggle.
+pub fn unavailable_reason(id: &str) -> Option<&'static str> {
+    match id {
+        "view.show.brushPreview" => Some("Bristle brush previews are not implemented"),
+        "view.show.artboardGuides" => Some("Artboard-specific guides are not implemented"),
+        _ => None,
+    }
+}
+
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if !handles(id) && !wraps(id) {
         return None;
+    }
+    if unavailable_reason(id).is_some() {
+        return Some(false);
     }
     let doc = app.session.active().is_some();
     Some(match id {
@@ -462,7 +479,19 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
     if !handles(id) {
         return None;
     }
-    Some(run(app, ctx, id, params))
+    if let Some(reason) = unavailable_reason(id) {
+        return Some(Err(reason.into()));
+    }
+    app.sync_view_aspect();
+    let result = run(app, ctx, id, params);
+    if result.is_ok()
+        && id.starts_with("view.show.")
+        && let Some(puppet) = &mut app.distort.puppet
+    {
+        puppet.show_mesh = app.ui.view.show.mesh;
+    }
+    app.sync_view_aspect();
+    Some(result)
 }
 
 fn flag_param(p: &Value, cur: bool) -> bool {
@@ -608,7 +637,8 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
     let v = &mut app.ui.views[i];
-    v.zoom = crate::zoom_levels::clamp(((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32), size);
+    let shown = crate::canvas::display_size(v, egui::vec2(b.width().max(1) as f32, b.height().max(1) as f32));
+    v.zoom = crate::zoom_levels::clamp(((area.x - 40.0) / shown.x).min((area.y - 40.0) / shown.y), size);
     v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
     v.fit_pending = false;
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))

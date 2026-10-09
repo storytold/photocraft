@@ -136,6 +136,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    app.sync_view_aspect();
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::begin(app).map(|_| Value::Null);
     }
@@ -387,13 +388,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.clip_read_for_paste = true;
             let external = app.clip_external;
             let visible = !external
-                && app.session.active_index().zip(app.session.clipboard.as_ref()).is_some_and(|(i, clip)| {
-                    let v = &app.ui.views[i];
-                    let (hw, hh) = (app.last_canvas_rect.width() / 2.0 / v.zoom, app.last_canvas_rect.height() / 2.0 / v.zoom);
-                    let r =
-                        photocraft_geom::Rect::new((v.center[0] - hw) as i32, (v.center[1] - hh) as i32, (v.center[0] + hw) as i32, (v.center[1] + hh) as i32);
-                    !clip.bounds.intersect(&r).is_empty()
-                });
+                && app.session.clipboard.as_ref().is_some_and(|clip| crate::canvas::ViewXform::active(app).is_some_and(|xf| xf.sees_rect(clip.bounds)));
             let p = match app.session.active_index() {
                 Some(i) if !visible => json!({"center": app.ui.views[i].center}),
                 _ => json!({}),
@@ -1099,6 +1094,7 @@ fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &m
             }
             let hit = nav.row(ui, 0, it.enabled, Some(&it.id), |ui, _| {
                 let r = ui.add_enabled(it.enabled, b);
+                let r = if let Some(reason) = crate::view_cmds::unavailable_reason(&it.id) { r.on_disabled_hover_text(reason) } else { r };
                 let hit = r.clicked() || released_on(ui, &r);
                 (r, hit)
             });
@@ -1164,6 +1160,7 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             }
             let hit = nav.row(ui, depth - 1, it.enabled, Some(&it.id), |ui, _| {
                 let r = ui.add_enabled(it.enabled, b);
+                let r = if let Some(reason) = crate::view_cmds::unavailable_reason(&it.id) { r.on_disabled_hover_text(reason) } else { r };
                 let r = match it.id.as_str() {
                     "image.mode.bits8" | "image.mode.bits16" => r.on_hover_text(crate::i18n::tr(lang, "Integer")),
                     "image.mode.bits32" => r.on_hover_text(crate::i18n::tr(lang, "Floating point")),
@@ -1258,6 +1255,52 @@ mod tests {
         assert!(!submenu_enabled(&[]));
         assert!(!submenu_enabled(&[&off, &sep]));
         assert!(submenu_enabled(&[&off, &on]));
+    }
+
+    #[test]
+    fn aspect_review_normal_show_menu_explains_unavailable_overlay() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+            |ui, app| {
+                menu_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.ctx.global_style_mut(|s| {
+            s.interaction.tooltip_delay = 0.0;
+            s.interaction.tooltip_grace_time = 0.0;
+        });
+        h.run_steps(3);
+        h.get_by_label("View").click();
+        h.run_steps(3);
+        h.get_by_label("Show ⏵").hover();
+        h.run_steps(10);
+        let r = h.get_by_label_contains("Brush Preview").rect();
+        h.hover_at(r.center());
+        h.run_steps(10);
+        assert!(h.query_by_label("Bristle brush previews are not implemented").is_some());
+    }
+
+    #[test]
+    fn aspect_review_paste_centers_only_offscreen_content() {
+        for (aspect, correction, x, expected) in [(2.0, true, 650, 490), (2.0, true, 450, 450), (2.0, false, 650, 650), (0.1, true, 900, 900)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width":1200,"height":400})).unwrap();
+            app.run("select.rect", json!({"x":x,"y":190,"width":20,"height":20})).unwrap();
+            app.run("edit.copy", json!({})).unwrap();
+            app.ui.extras.rulers = false;
+            app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+            app.ui.views[0].zoom = 1.0;
+            app.ui.views[0].center = [500.0, 200.0];
+            app.ui.view.pixel_aspect = format!("custom:{aspect}");
+            app.ui.view.pixel_aspect_correction = correction;
+            invoke(&mut app, &egui::Context::default(), "edit.paste", json!({})).unwrap();
+            let st = app.session.active().unwrap();
+            let bounds = photocraft_engine::transform_cmds::transform_bounds(&st.doc, st.doc.layer(st.active_layer.unwrap()).unwrap());
+            assert_eq!(bounds.x0, expected, "PAR {aspect} correction {correction}");
+        }
     }
 
     #[test]

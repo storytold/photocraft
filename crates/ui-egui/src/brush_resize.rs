@@ -127,9 +127,11 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> boo
     let b = &app.session.tools.brush;
     let c = xf.to_screen(r.anchor[0] as f32, r.anchor[1] as f32);
     let radius = (b.size / 2.0 * xf.zoom).max(1.0);
-    tip_preview(painter, c, radius, b.hardness, Color32::from_rgba_unmultiplied(255, 0, 0, 110));
-    painter.circle_stroke(c, radius + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-    painter.circle_stroke(c, radius, Stroke::new(1.0, Color32::from_white_alpha(220)));
+    tip_preview(painter, xf, c, radius, b.hardness, Color32::from_rgba_unmultiplied(255, 0, 0, 110));
+    let angle = xf.rotation.to_radians() * if xf.flip { -1.0 } else { 1.0 };
+    for (r, color) in [(radius + 0.5, Color32::from_black_alpha(140)), (radius, Color32::from_white_alpha(220))] {
+        painter.add(egui::Shape::closed_line(crate::tool_cursor::ellipse_points(c, vec2(r * xf.aspect, r), angle), Stroke::new(1.0, color)));
+    }
     // Photoshop hides the pointer while the circle stays put.
     painter.ctx().set_cursor_icon(egui::CursorIcon::None);
     let at = painter.ctx().pointer_latest_pos().unwrap_or(c);
@@ -145,9 +147,9 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> boo
 
 /// A round tip of `radius` screen points: solid out to `hardness` of the radius, fading to clear
 /// at the edge. One mesh (two rings and a centre), so its cost doesn't grow with the brush.
-fn tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, color: Color32) {
+fn tip_preview(painter: &egui::Painter, xf: &ViewXform, c: Pos2, radius: f32, hardness: f32, color: Color32) {
     let clip = painter.clip_rect();
-    if !clip.expand(radius).contains(c) {
+    if !clip.expand(radius * xf.aspect.max(1.0)).contains(c) {
         return;
     }
     // Enough segments for a smooth edge at any size, capped so huge brushes stay cheap.
@@ -158,7 +160,7 @@ fn tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, col
     mesh.colored_vertex(c, color);
     for k in 0..n {
         let a = k as f32 / n as f32 * std::f32::consts::TAU;
-        let d = vec2(a.cos(), a.sin());
+        let d = xf.map_vec(vec2(a.cos(), a.sin()));
         mesh.colored_vertex(c + d * inner, color);
         mesh.colored_vertex(c + d * radius, clear);
     }

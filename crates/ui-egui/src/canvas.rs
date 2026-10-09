@@ -369,7 +369,7 @@ fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter, p: Pos2, d
 /// per point), so it lines up with the pixel grid at any zoom.
 pub(crate) fn pencil_cursor_rect(xf: &ViewXform, doc: [f64; 2], size: f32, ppp: f32) -> Rect {
     let [x0, y0, x1, y1] = photocraft_engine::paint::grid_square(doc[0], doc[1], size);
-    let r = Rect::from_two_pos(xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32));
+    let r = xf.screen_bounds(Rect::from_min_max(pos2(x0 as f32, y0 as f32), pos2(x1 as f32, y1 as f32)));
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let snap = |v: f32| (v * ppp).round() / ppp;
     Rect::from_min_max(pos2(snap(r.min.x), snap(r.min.y)), pos2(snap(r.max.x), snap(r.max.y)))
@@ -554,11 +554,55 @@ pub enum ToolEvent {
     Up { x: f64, y: f64 },
 }
 
+/// Logical-screen lengths along the document axes. Rotation and reflection are isometries,
+/// so this metric supports picking and per-axis snapping without changing native edit coordinates.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ScreenMetric(pub [f64; 2]);
+
+impl ScreenMetric {
+    pub fn active(app: &PhotocraftApp) -> Self {
+        ViewXform::active(app).map_or(Self([1.0; 2]), |xf| xf.metric())
+    }
+    pub fn point(self, p: [f64; 2]) -> [f64; 2] {
+        [p[0] * self.0[0], p[1] * self.0[1]]
+    }
+    pub fn distance(self, a: [f64; 2], b: [f64; 2]) -> f64 {
+        ((a[0] - b[0]) * self.0[0]).hypot((a[1] - b[1]) * self.0[1])
+    }
+    pub fn reach(self, points: f64) -> [f64; 2] {
+        [points / self.0[0], points / self.0[1]]
+    }
+    /// Inside a mapped quad or within a logical-point radius of its boundary.
+    pub fn near_quad(self, quad: [[f64; 2]; 4], p: [f64; 2], reach: f64) -> bool {
+        let q = quad.map(|p| self.point(p));
+        let p = self.point(p);
+        let mut inside = false;
+        for i in 0..4 {
+            let (a, b) = (q[i], q[(i + 1) % 4]);
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+                inside = !inside;
+            }
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let len = d[0] * d[0] + d[1] * d[1];
+            let t = if len > 0.0 { ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len } else { 0.0 }.clamp(0.0, 1.0);
+            if (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1]) <= reach {
+                return true;
+            }
+        }
+        inside
+    }
+    pub fn affine(self) -> photocraft_geom::Affine {
+        photocraft_geom::Affine { m: [self.0[0], 0.0, 0.0, self.0[1], 0.0, 0.0] }
+    }
+}
+
 /// Document ↔ screen mapping for a canvas rect and a view.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewXform {
     pub rect: Rect,
     pub zoom: f32,
+    /// Horizontal document-pixel scale, applied before camera rotation and screen flip.
+    pub aspect: f32,
     pub center: [f32; 2],
     /// View › Flip Horizontal: the view is mirrored left-right (the document is not).
     pub flip: bool,
@@ -571,13 +615,27 @@ impl ViewXform {
     /// The main canvas's mapping for the active document as last laid out (inside the rulers).
     pub fn active(app: &PhotocraftApp) -> Option<Self> {
         let v = app.ui.views.get(app.session.active_index()?)?;
-        Some(Self {
-            rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-            zoom: v.zoom,
-            center: v.center,
-            flip: app.ui.view.flip_horizontal,
-            rotation: v.rotation,
-        })
+        let mut xf = Self::from_view(crate::rulers::content_rect(app, app.last_canvas_rect), v, app.ui.view.flip_horizontal);
+        // Commands may change options between canvas frames.
+        xf.aspect = app.ui.view.effective_pixel_aspect();
+        Some(xf)
+    }
+
+    pub fn from_view(rect: Rect, view: &View, flip: bool) -> Self {
+        Self { rect, zoom: view.zoom, aspect: view.pixel_aspect, center: view.center, flip, rotation: view.rotation }
+    }
+
+    pub(crate) fn metric(self) -> ScreenMetric {
+        let zoom = f64::from(self.zoom);
+        ScreenMetric([zoom * f64::from(self.aspect), zoom])
+    }
+
+    /// Map a document vector without zoom. Aspect precedes rotation, then screen mirroring.
+    pub fn map_vec(self, d: Vec2) -> Vec2 {
+        let (c, s) = self.sincos();
+        let x = d.x * self.aspect;
+        let r = vec2(x * c - d.y * s, x * s + d.y * c);
+        if self.flip { vec2(-r.x, r.y) } else { r }
     }
 
     fn sincos(self) -> (f32, f32) {
@@ -589,47 +647,70 @@ impl ViewXform {
         }
     }
 
-    /// Unflip then unrotate a screen-space vector (no zoom). Hand pan and zoom-about use this.
+    /// Undo screen flip, rotation and pixel aspect (no zoom). Used for input, pan and zoom anchors.
     pub fn unmap_vec(self, d: Vec2) -> Vec2 {
         let d = if self.flip { vec2(-d.x, d.y) } else { d };
         let (c, s) = self.sincos();
-        vec2(d.x * c + d.y * s, -d.x * s + d.y * c)
+        vec2((d.x * c + d.y * s) / self.aspect, -d.x * s + d.y * c)
     }
 
     pub fn to_screen(&self, x: f32, y: f32) -> Pos2 {
-        let (c, s) = self.sincos();
-        let dx = x - self.center[0];
-        let dy = y - self.center[1];
-        let rx = dx * c - dy * s;
-        let ry = dx * s + dy * c;
-        let sx = if self.flip { -1.0 } else { 1.0 };
-        self.rect.center() + vec2(rx * self.zoom * sx, ry * self.zoom)
+        self.rect.center() + self.map_vec(vec2(x - self.center[0], y - self.center[1])) * self.zoom
     }
+
     pub fn to_doc(&self, p: Pos2) -> [f64; 2] {
         let d = (p - self.rect.center()) / self.zoom;
         let u = self.unmap_vec(d);
         [(u.x + self.center[0]) as f64, (u.y + self.center[1]) as f64]
     }
-    pub fn doc_rect(&self, r: DRect) -> Rect {
-        let pts = [
-            self.to_screen(r.x0 as f32, r.y0 as f32),
-            self.to_screen(r.x1 as f32, r.y0 as f32),
-            self.to_screen(r.x1 as f32, r.y1 as f32),
-            self.to_screen(r.x0 as f32, r.y1 as f32),
-        ];
-        let mut min = pts[0];
-        let mut max = pts[0];
-        for p in pts {
-            min = min.min(p);
-            max = max.max(p);
+    /// Draw a native circular tool footprint through the same aspect/rotation as the image.
+    pub(crate) fn circle_outline(&self, painter: &egui::Painter, at: Pos2, radius: f32) {
+        let radii = vec2(radius * self.zoom * self.aspect, radius * self.zoom);
+        let angle = self.rotation.to_radians() * if self.flip { -1.0 } else { 1.0 };
+        for (extra, color) in [(0.5, Color32::from_black_alpha(140)), (0.0, Color32::from_white_alpha(220))] {
+            let points = crate::tool_cursor::ellipse_points(at, radii + Vec2::splat(extra), angle);
+            painter.add(egui::Shape::closed_line(points, Stroke::new(1.0, color)));
         }
-        Rect::from_min_max(min, max)
     }
+
+    pub fn doc_rect(&self, r: DRect) -> Rect {
+        self.screen_bounds(Rect::from_min_max(pos2(r.x0 as f32, r.y0 as f32), pos2(r.x1 as f32, r.y1 as f32)))
+    }
+
+    /// Whether a native rectangle intersects the viewport (separating-axis test).
+    pub(crate) fn sees_rect(self, r: DRect) -> bool {
+        if r.is_empty() {
+            return false;
+        }
+        let q = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| self.to_screen(x as f32, y as f32));
+        let v = [self.rect.left_top(), self.rect.right_top(), self.rect.right_bottom(), self.rect.left_bottom()];
+        let edges = [vec2(1.0, 0.0), vec2(0.0, 1.0), q[1] - q[0], q[3] - q[0]];
+        edges.into_iter().all(|edge| {
+            let normal = vec2(-edge.y, edge.x);
+            let span = |points: [Pos2; 4]| {
+                points.map(|p| p.to_vec2().dot(normal)).into_iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)))
+            };
+            let (a, b) = (span(q), span(v));
+            a.0 < b.1 && b.0 < a.1
+        })
+    }
+
+    /// Axis-aligned screen bounds of all four document corners, including rotated views.
+    pub fn screen_bounds(&self, r: Rect) -> Rect {
+        Rect::from_points(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| self.to_screen(p.x, p.y)))
+    }
+}
+
+/// Corrected, rotated extent at unit zoom. Shared by document, layer and artboard fitting.
+pub(crate) fn display_size(view: &View, size: Vec2) -> Vec2 {
+    let xf = ViewXform { zoom: 1.0, ..ViewXform::from_view(Rect::ZERO, view, false) };
+    xf.screen_bounds(Rect::from_min_size(Pos2::ZERO, size)).size()
 }
 
 pub fn fit_view(view: &mut View, doc: &Document, area: Vec2) {
     let (w, h) = (doc.size.width as f32, doc.size.height as f32);
-    let zoom = crate::zoom_levels::clamp(((area.x - 40.0) / w).min((area.y - 40.0) / h).min(1.0), [doc.size.width, doc.size.height]);
+    let shown = display_size(view, vec2(w, h));
+    let zoom = crate::zoom_levels::clamp(((area.x - 40.0) / shown.x).min((area.y - 40.0) / shown.y).min(1.0), [doc.size.width, doc.size.height]);
     view.zoom = zoom;
     view.center = [w / 2.0, h / 2.0];
     view.fit_pending = false;
@@ -640,7 +721,8 @@ pub fn fit_view(view: &mut View, doc: &Document, area: Vec2) {
 /// viewport, matching the Hand tool's Fill Screen action.
 pub fn fill_view(view: &mut View, doc: &Document, area: Vec2) {
     let (w, h) = (doc.size.width as f32, doc.size.height as f32);
-    let zoom = crate::zoom_levels::clamp((area.x / w).max(area.y / h), [doc.size.width, doc.size.height]);
+    let shown = display_size(view, vec2(w, h));
+    let zoom = crate::zoom_levels::clamp((area.x / shown.x).max(area.y / shown.y), [doc.size.width, doc.size.height]);
     view.zoom = zoom;
     view.center = [w / 2.0, h / 2.0];
     view.fit_pending = false;
@@ -2106,6 +2188,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if !primary {
         crate::monitor_status::check_window(app, &ctx);
     }
+    // Refresh the aspect cache for this window before fitting and drawing.
+    view.pixel_aspect = app.ui.view.effective_pixel_aspect();
+    if primary {
+        app.ui.views[idx].pixel_aspect = view.pixel_aspect;
+    }
     let full = rect;
     let rect = if primary { crate::rulers::content_rect(app, rect) } else { rect };
     let doc = app.session.documents()[idx].doc.clone();
@@ -2128,7 +2215,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         ctx.request_repaint();
     }
     let flip = app.ui.view.flip_horizontal;
-    let xf = ViewXform { rect, zoom: view.zoom, center: view.center, flip, rotation: view.rotation };
+    let xf = ViewXform::from_view(rect, &view, flip);
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -2164,7 +2251,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let params = crate::gpu_canvas::ViewParams {
             doc: key,
             doc_size: preview_size,
-            zoom: view.zoom * k as f32,
+            zoom: xf.zoom * k as f32,
+            aspect: xf.aspect,
             // A size-changing preview grows around the old image center; keep the view's pan.
             center: [
                 view.center[0] / k as f32 + (preview_size[0] as f32 - original_size[0] as f32) / 2.0,
@@ -2190,6 +2278,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             doc: doc.id.0,
             doc_size: [doc.size.width, doc.size.height],
             zoom: view.zoom,
+            aspect: xf.aspect,
             center: view.center,
             rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
             shadow: {
@@ -2284,7 +2373,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
 
     // Pixel grid at high zoom, over pixels with content only (the GPU path draws its own).
-    if !on_gpu && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
+    if !on_gpu && pixel_grid && crate::pixel_grid::shows_for_view(view.zoom * ctx.pixels_per_point(), xf.aspect) {
         crate::pixel_grid::paint(app, &painter, &xf, idx, output, visible_doc_rect(&xf));
     }
 
@@ -2810,7 +2899,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                         }
                         _ => {
                             let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r);
-                            crate::tool_cursor::circle(&painter, p, r, centre)
+                            if (xf.aspect - 1.0).abs() < 1e-6 {
+                                crate::tool_cursor::circle(&painter, p, r, centre)
+                            } else {
+                                crate::tool_cursor::ellipse(
+                                    &painter,
+                                    p,
+                                    vec2(r * xf.aspect, r),
+                                    xf.rotation.to_radians() * if xf.flip { -1.0 } else { 1.0 },
+                                    centre,
+                                )
+                            }
                         }
                     }
                 }
@@ -2846,13 +2945,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     }
                 }
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
-                Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, view.zoom),
+                Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, &xf),
                 Tool::RedEye => {
                     let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
                     let r_doc = photocraft_algo::redeye::search_radius(pupil);
-                    let r = (r_doc * view.zoom).max(2.0);
-                    painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-                    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+                    xf.circle_outline(&painter, p, r_doc);
                     for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
                         painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
                         painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
@@ -3243,7 +3340,7 @@ fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> 
     if b.is_empty() {
         return None;
     }
-    Some(Rect::from_two_pos(xf.to_screen(b.x0 as f32, b.y0 as f32), xf.to_screen(b.x1 as f32, b.y1 as f32)))
+    Some(xf.doc_rect(b))
 }
 
 /// A visible handle starts scaling; the narrow band just outside the box starts rotation.
@@ -3356,7 +3453,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         }
         // The layers themselves follow the pointer (`move_ui`); the arrow only when they can't.
         Tool::Move if !crate::move_ui::showing(app) => {
-            let off = vec2(((last[0] - d.start[0]) as f32) * xf.zoom, ((last[1] - d.start[1]) as f32) * xf.zoom);
+            let off = xf.map_vec(vec2((last[0] - d.start[0]) as f32, (last[1] - d.start[1]) as f32)) * xf.zoom;
             painter.arrow(xf.to_screen(d.start[0] as f32, d.start[1] as f32), off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));
         }
         _ => {}
@@ -3977,11 +4074,7 @@ pub(crate) fn selection_mode(app: &PhotocraftApp, m: egui::Modifiers) -> &'stati
 /// first click fixes the selection mode; a new-selection polygon hides the old outline while it is
 /// drawn, and replaces it in one history step when it closes.
 fn polygon_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    let close = app
-        .ui
-        .polygon
-        .first()
-        .is_some_and(|p0| app.ui.polygon.len() >= 3 && ((p0[0] - x).powi(2) + (p0[1] - y).powi(2)).sqrt() < 8.0 / app.current_zoom().max(0.01) as f64);
+    let close = app.ui.polygon.first().is_some_and(|p0| app.ui.polygon.len() >= 3 && ScreenMetric::active(app).distance(*p0, [x, y]) < 8.0);
     if close {
         commit_polygon(app);
         return;
@@ -4470,7 +4563,8 @@ mod tests {
         app.run("cloneSource.set", json!({"source": [16,16]})).unwrap();
         app.ui.tool = Tool::CloneStamp;
         app.session.tools.brush.size = 20.0;
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0 };
+        let xf =
+            ViewXform { aspect: 1.0, rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0 };
         let revision = app.session.active().unwrap().revision;
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let ctx = ui.ctx();
@@ -4574,7 +4668,14 @@ mod tests {
     #[test]
     fn view_transform_roundtrip() {
         for flip in [false, true] {
-            let xf = ViewXform { rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)), zoom: 2.5, center: [320.0, 240.0], flip, rotation: 0.0 };
+            let xf = ViewXform {
+                aspect: 1.0,
+                rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)),
+                zoom: 2.5,
+                center: [320.0, 240.0],
+                flip,
+                rotation: 0.0,
+            };
             let s = xf.to_screen(10.0, 20.0);
             let d = xf.to_doc(s);
             assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3);
@@ -4837,7 +4938,7 @@ mod tests {
             let ctx = ui.ctx();
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
             let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-            let xf = ViewXform { rect, zoom, center: [60.0, 30.0], flip: false, rotation: 0.0 };
+            let xf = ViewXform { aspect: 1.0, rect, zoom, center: [60.0, 30.0], flip: false, rotation: 0.0 };
             draw_drag_preview(app, &painter, &xf);
         });
         let egui::FullOutput { mut textures_delta, shapes, .. } = out;
@@ -4976,13 +5077,13 @@ mod tests {
     #[test]
     fn zoom_about_centres_the_clicked_point_with_the_preference() {
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
-        let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip: false, rotation: 0.0 };
+        let xf = ViewXform { aspect: 1.0, rect, zoom: 1.0, center: [400.0, 300.0], flip: false, rotation: 0.0 };
         let p = pos2(600.0, 200.0);
         let doc = xf.to_doc(p);
         // Off: the document point under the pointer stays under it.
         let mut view = View { zoom: 1.0, center: [400.0, 300.0], ..Default::default() };
         zoom_about(&mut view, &xf, p, 2.0, false);
-        let after = ViewXform { rect, zoom: 2.0, center: view.center, flip: false, rotation: 0.0 };
+        let after = ViewXform { aspect: 1.0, rect, zoom: 2.0, center: view.center, flip: false, rotation: 0.0 };
         let s = after.to_screen(doc[0] as f32, doc[1] as f32);
         assert!((s - p).length() < 0.5, "{s:?} vs {p:?}");
         // On: the clicked point is the view centre.
@@ -5024,7 +5125,8 @@ mod transform_controls_tests {
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_show_transform = true;
 
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+        let xf =
+            ViewXform { aspect: 1.0, rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
         let r = transform_controls_rect(&app, &xf).expect("shape layers have transform bounds");
         assert!(transform_controls_hit(r, r.right_bottom()));
 
@@ -5089,3 +5191,7 @@ mod rotation_preview_isolation_tests {
         assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_none(), "an inactive tab must never inherit the command preview");
     }
 }
+
+#[cfg(test)]
+#[path = "canvas/aspect_tests.rs"]
+mod aspect_tests;

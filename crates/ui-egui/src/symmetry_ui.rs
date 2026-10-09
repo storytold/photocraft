@@ -206,14 +206,13 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     let Some(t) = &mut app.ui.symmetry_transform else {
         return false;
     };
-    let tol = 8.0 / f64::from(xf.zoom.max(0.001));
-    let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let metric = xf.metric();
     match ev {
         ToolEvent::Down { x, y, .. } => {
             let p = [x, y];
-            t.gesture = if distance(p, t.preview.center) <= tol {
+            t.gesture = if metric.distance(p, t.preview.center) <= 8.0 {
                 Some(Gesture::Move { start: p, center: t.preview.center })
-            } else if distance(p, rotation_handle(t.preview, size)) <= tol {
+            } else if metric.distance(p, rotation_handle(t.preview, size)) <= 8.0 {
                 Some(Gesture::Rotate { angle: (y - t.preview.center[1]).atan2(x - t.preview.center[0]), rotation: t.preview.rotation })
             } else {
                 None

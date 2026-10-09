@@ -54,9 +54,20 @@ pub fn options(app: &PhotocraftApp) -> SnapOptions {
     SnapOptions { guides: st.guides && e.guides, grid: st.grid && e.grid, layers: st.layers, document: st.document_bounds, selection: true, grid_step }
 }
 
-/// Snap tolerance in document pixels at the current zoom.
-pub fn tolerance(app: &PhotocraftApp) -> f64 {
-    SNAP_PX / app.current_zoom().max(0.01) as f64
+/// Native per-axis reach of the fixed logical-screen snap radius.
+fn tolerance(app: &PhotocraftApp) -> [f64; 2] {
+    crate::canvas::ScreenMetric::active(app).reach(SNAP_PX)
+}
+
+fn snap_axes(tol: [f64; 2], mut snap: impl FnMut(f64) -> ([f64; 2], Vec<SnapLine>)) -> ([f64; 2], Vec<SnapLine>) {
+    if tol[0] == tol[1] {
+        return snap(tol[0]);
+    }
+    let (x, mut lines) = snap(tol[0]);
+    lines.retain(|l| l.vertical);
+    let (y, horizontal) = snap(tol[1]);
+    lines.extend(horizontal.into_iter().filter(|l| !l.vertical));
+    ([x[0], y[1]], lines)
 }
 
 fn smart_on(app: &PhotocraftApp) -> bool {
@@ -148,13 +159,13 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
         return;
     }
     let tool = app.ui.tool;
-    let tol = tolerance(app);
+    let metric = crate::canvas::ScreenMetric::active(app);
     let gesture = if let Some(t) = &app.ui.transform {
         if t.mode == crate::state::TransformMode::Distort {
             // Distort is freehand corner placement (fitting an image onto a screen, say): guides
             // and edges pulling the corners about only get in the way.
             None
-        } else if near_handle(&t.quad, p, crate::transform_tool::handle_tolerance(app)) {
+        } else if near_handle(&t.quad.map(|p| metric.point(p)), metric.point(p), 12.0) {
             Some((Gesture::Point, vec![LayerId(t.layer)]))
         } else if in_quad(&t.quad, p) {
             Some((Gesture::TransformMove { rect: quad_rect(&t.quad) }, vec![LayerId(t.layer)]))
@@ -167,13 +178,13 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
         let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
         moving_rect(app).map(|rect| (Gesture::Move { rect }, exclude))
     } else if tool == Tool::Crop
-        && let Some(rect) = app.ui.crop_rect.filter(|r| crate::crop_ui::angle(app) == 0.0 && crate::crop_ui::hit(*r, p, tol) == crate::crop_ui::Hit::Inside)
+        && let Some(rect) =
+            app.ui.crop_rect.filter(|r| crate::crop_ui::angle(app) == 0.0 && crate::crop_ui::hit_screen(app, *r, p) == crate::crop_ui::Hit::Inside)
     {
         // Moving the crop frame snaps its edges, like the Move tool's layer bounds.
         Some((Gesture::Move { rect }, Vec::new()))
     } else if tool == Tool::Crop
-        && (crate::crop_ui::turns_at(app, p)
-            || app.ui.crop_rect.is_some_and(|r| crate::crop_ui::hit_turned(r, crate::crop_ui::angle(app), p, tol) == crate::crop_ui::Hit::Inside))
+        && (crate::crop_ui::turns_at(app, p) || app.ui.crop_rect.is_some_and(|r| crate::crop_ui::hit_screen(app, r, p) == crate::crop_ui::Hit::Inside))
     {
         // Turning the frame, or moving a turned one (its edges don't line up with anything): no
         // snapping.
@@ -214,12 +225,12 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
         return p;
     }
     let (out, lines) = match &snap.gesture {
-        Gesture::Point | Gesture::Guide => snap.targets.snap_point(p, tol),
+        Gesture::Point | Gesture::Guide => snap_axes(tol, |reach| snap.targets.snap_point(p, reach)),
         Gesture::Move { rect } | Gesture::TransformMove { rect } => {
             let d = [p[0] - snap.start[0], p[1] - snap.start[1]];
             let moved = [rect[0] + d[0], rect[1] + d[1], rect[2] + d[0], rect[3] + d[1]];
             let set = if snap.targets.is_empty() { &snap.smart } else { &snap.targets };
-            let (adj, lines) = set.snap_rect(moved, tol);
+            let (adj, lines) = snap_axes(tol, |reach| set.snap_rect(moved, reach));
             ([p[0] + adj[0], p[1] + adj[1]], lines)
         }
     };
@@ -282,7 +293,7 @@ pub fn snap_guide(app: &mut PhotocraftApp, vertical: bool, pos: f64) -> f64 {
     }
     let tol = tolerance(app);
     let t = app.prefs_rt.guide_targets.as_ref().map(|(_, t)| t);
-    t.and_then(|t| t.nearest(vertical, pos, tol)).map_or(pos, |t| t.pos)
+    t.and_then(|t| t.nearest(vertical, pos, tol[usize::from(!vertical)])).map_or(pos, |t| t.pos)
 }
 
 fn hex_color(s: &str, fallback: Color32) -> Color32 {
@@ -326,6 +337,40 @@ fn draw_line(painter: &egui::Painter, xf: &ViewXform, l: &SnapLine, color: Color
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aspect_review_guides_and_snap_use_axis_screen_reach() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                let mut a = app_with_box();
+                a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                a.ui.view.pixel_aspect_correction = true;
+                a.ui.views[0].zoom = ppp;
+                a.ui.views[0].zoom /= ppp;
+                a.session
+                    .edit("guides", |doc, _| {
+                        doc.guides.vertical = vec![200.0];
+                        doc.guides.horizontal = vec![150.0];
+                        Ok(())
+                    })
+                    .unwrap();
+                a.ui.extras.guides = true;
+                a.ui.extras.lock_guides = false;
+                a.ui.extras.snap = true;
+                a.ui.view.snap_to.document_bounds = false;
+                a.ui.view.snap_to.layers = false;
+                assert_eq!(crate::rulers::guide_at(&a, 200.0 + 2.0 / aspect, 100.0), Some((true, 0)));
+                assert_eq!(crate::rulers::guide_at(&a, 200.0 + 20.0 / aspect, 100.0), None);
+                a.ui.tool = Tool::RectMarquee;
+                let p = [200.0 + 5.0 / aspect, 155.0];
+                begin(&mut a, p);
+                assert_eq!(apply(&mut a, p), [200.0, 150.0]);
+                let p = [200.0 + 20.0 / aspect, 170.0];
+                assert_eq!(apply(&mut a, p), p);
+            }
+        }
+    }
+
     use serde_json::json;
 
     fn app_with_box() -> PhotocraftApp {

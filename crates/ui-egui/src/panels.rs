@@ -1468,11 +1468,15 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Visible-area rectangle.
     let v = app.ui.views[idx].clone();
     let canvas = app.last_canvas_rect;
-    let vw = canvas.width() / v.zoom * s;
-    let vh = canvas.height() / v.zoom * s;
-    let c = pos2(rect.min.x + v.center[0] * s, rect.min.y + v.center[1] * s);
-    let vr = Rect::from_center_size(c, vec2(vw, vh)).intersect(frame.shrink(1.0));
-    ui.painter().rect_stroke(vr, 2.0, Stroke::new(1.5, Color32::from_rgb(255, 84, 84)), StrokeKind::Middle);
+    if let Some(xf) = crate::canvas::ViewXform::active(app) {
+        // Map the viewport corners back through aspect and rotation before placing them in
+        // the native-pixel thumbnail. The viewport is a quadrilateral for a rotated view.
+        let pts = [canvas.left_top(), canvas.right_top(), canvas.right_bottom(), canvas.left_bottom()].map(|p| {
+            let d = xf.to_doc(p);
+            pos2(rect.min.x + d[0] as f32 * s, rect.min.y + d[1] as f32 * s)
+        });
+        ui.painter().with_clip_rect(frame.shrink(1.0)).add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(1.5, Color32::from_rgb(255, 84, 84))));
+    }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         label(ui, tl!("Zoom"));

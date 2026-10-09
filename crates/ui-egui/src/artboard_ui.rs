@@ -65,7 +65,8 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
     let v = &mut app.ui.views[i];
     // Leave room for the name above the board.
-    v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32);
+    let shown = crate::canvas::display_size(v, egui::vec2(b.width().max(1) as f32, b.height().max(1) as f32));
+    v.zoom = ((area.x - 60.0) / shown.x).min((area.y - 80.0) / shown.y);
     v.zoom = crate::zoom_levels::clamp(v.zoom, size);
     // Widen before adding: a board near ±2^30, or one whose far edge saturated at i32::MAX,
     // overflows an i32 sum (#981).
@@ -167,7 +168,14 @@ mod tests {
         app.run("layer.new.artboard", json!({"rect": [0, 0, 40, 50]})).unwrap();
         app.run("layer.new.artboard", json!({"rect": [60, 10, 40, 30]})).unwrap();
         let doc = app.session.active().unwrap().doc.clone();
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)), zoom: 1.0, center: [50.0, 25.0], flip: false, rotation: 0.0 };
+        let xf = ViewXform {
+            aspect: 1.0,
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)),
+            zoom: 1.0,
+            center: [50.0, 25.0],
+            flip: false,
+            rotation: 0.0,
+        };
         let rects = pasteboard_rects(&xf, &doc);
         let area: f32 = rects.iter().map(|r| r.area()).sum();
         // 100×50 canvas − 40×50 − 40×30 boards.

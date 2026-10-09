@@ -75,9 +75,13 @@ pub struct TransformPreview {
 /// just beyond it, outside the box, a drag rotates.
 pub const HANDLE_PX: f64 = 12.0;
 
-/// [`HANDLE_PX`] in document pixels at the current zoom.
-pub fn handle_tolerance(app: &PhotocraftApp) -> f64 {
-    HANDLE_PX / app.current_zoom().max(0.01) as f64
+/// Pick with logical-screen distances; editing keeps the original native coordinates.
+pub(crate) fn hit_screen(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2]) -> Hit {
+    hit_metric(t, p, crate::canvas::ScreenMetric::active(app))
+}
+
+fn hit_metric(t: &TransformSession, p: [f64; 2], metric: crate::canvas::ScreenMetric) -> Hit {
+    hit_quad(&t.quad.map(|p| metric.point(p)), metric.point(t.pivot), metric.point(p), HANDLE_PX)
 }
 
 /// The box as one undo step restores it.
@@ -762,17 +766,22 @@ pub(crate) enum Hit {
 
 /// The nearest handle within `tol` (on a small box their grab areas overlap), else inside or
 /// outside the box.
-pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
+#[cfg(test)]
+fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
+    hit_quad(&t.quad, t.pivot, p, tol)
+}
+
+fn hit_quad(quad: &[[f64; 2]; 4], pivot: [f64; 2], p: [f64; 2], tol: f64) -> Hit {
     let d = |a: [f64; 2]| ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt();
     let mid = |i: usize| {
-        let (a, b) = (t.quad[i], t.quad[(i + 1) % 4]);
+        let (a, b) = (quad[i], quad[(i + 1) % 4]);
         [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
     };
-    let handles = (0..4).map(|i| (t.quad[i], Hit::Corner(i))).chain((0..4).map(|i| (mid(i), Hit::Edge(i)))).chain([(t.pivot, Hit::Pivot)]);
+    let handles = (0..4).map(|i| (quad[i], Hit::Corner(i))).chain((0..4).map(|i| (mid(i), Hit::Edge(i)))).chain([(pivot, Hit::Pivot)]);
     let nearest = handles.map(|(q, h)| (d(q), h)).filter(|(dist, _)| *dist < tol).min_by(|a, b| a.0.total_cmp(&b.0));
     match nearest {
         Some((_, h)) => h,
-        None if inside(&t.quad, p) => Hit::Inside,
+        None if inside(quad, p) => Hit::Inside,
         None => Hit::Outside,
     }
 }
@@ -800,15 +809,15 @@ pub(crate) struct Gesture {
 /// Pointer input while transforming. Returns false when no transform is active.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let Some(t) = app.ui.transform.clone() else { return false };
-    let tol = handle_tolerance(app);
+    let metric = crate::canvas::ScreenMetric::active(app);
     if t.warp.is_some() {
-        warp_pointer(app, ev, tol, mods);
+        warp_pointer(app, ev, metric, mods);
         return true;
     }
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     match ev {
         ToolEvent::Down { x, y, .. } => {
-            let mut h = hit(&t, [x, y], tol);
+            let mut h = hit_metric(&t, [x, y], metric);
             // ⌥-click away from the handles moves the reference point there (and drags it).
             if mods.alt
                 && matches!(h, Hit::Inside | Hit::Outside)
@@ -1105,16 +1114,16 @@ fn on_section_edge(i: usize, j: usize) -> bool {
     i.is_multiple_of(3) || j.is_multiple_of(3)
 }
 
-/// Index of the warp control point within `tol` of `p` (nearest anchor or handle).
-fn warp_hit(w: &Warp, p: [f64; 2], tol: f64) -> Option<usize> {
+/// Index of the nearest shown warp control point within the logical-screen grab radius.
+fn warp_hit(w: &Warp, p: [f64; 2], metric: crate::canvas::ScreenMetric) -> Option<usize> {
     let m = w.mesh.as_ref()?;
     let nx = m.nx();
     m.points
         .iter()
         .enumerate()
         .filter(|(i, _)| on_section_edge(i % nx, i / nx))
-        .map(|(i, q)| (i, ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt()))
-        .filter(|(_, d)| *d < tol)
+        .map(|(i, q)| (i, metric.distance(*q, p)))
+        .filter(|(_, d)| *d < HANDLE_PX)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(i, _)| i)
 }
@@ -1199,7 +1208,7 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
 /// Drags a warp control point. Anchors (patch corners) carry their handles along. Preset warps
 /// turn into a custom mesh on the first drag. An armed split tool (or Option) places a split
 /// where the pointer is released instead of moving a point.
-fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Modifiers) {
+fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, metric: crate::canvas::ScreenMetric, mods: egui::Modifiers) {
     if split_gesture(app, ev, mods) {
         return;
     }
@@ -1209,7 +1218,7 @@ fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Mo
         ToolEvent::Down { x, y, .. } => {
             // A preset warp becomes a custom mesh only when the press grabs one of its points.
             let custom = if w.mesh.is_none() || w.style != WarpStyle::Custom { Warp::custom(w.to_mesh(1, 1), w.bounds) } else { w.clone() };
-            pv.warp_drag = warp_hit(&custom, [x, y], tol).map(|i| (i, [x, y], custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default()));
+            pv.warp_drag = warp_hit(&custom, [x, y], metric).map(|i| (i, [x, y], custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default()));
             if pv.warp_drag.is_some() {
                 *w = custom;
             }
@@ -1290,7 +1299,7 @@ fn rotation_degrees(quad: [[f64; 2]; 4]) -> f64 {
 /// split while a warp is active.
 pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon> {
     let t = app.ui.transform.as_ref()?;
-    let tol = handle_tolerance(app);
+    let metric = crate::canvas::ScreenMetric::active(app);
     if let Some(w) = &t.warp {
         if let Some(tool) = app.transform_preview.as_ref().and_then(|pv| pv.split_tool) {
             return Some(split_cursor(tool));
@@ -1298,9 +1307,9 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon>
         if alt {
             return Some(split_cursor(quick_split_kind(&w.to_mesh(1, 1), w.bounds, p)));
         }
-        return Some(if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() { CursorIcon::Crosshair } else { CursorIcon::Default });
+        return Some(if w.style != WarpStyle::Custom || warp_hit(w, p, metric).is_some() { CursorIcon::Crosshair } else { CursorIcon::Default });
     }
-    let h = hit(t, p, tol);
+    let h = hit_screen(app, t, p);
     if !distort_allows(t.mode, h) {
         return Some(CursorIcon::Default);
     }
@@ -1838,6 +1847,56 @@ fn rotate_about_pivot(app: &mut PhotocraftApp, da: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn aspect_review_low_zoom_handle_reach_matches_rendered_geometry() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                let mut a = app_with_square(64, photocraft_geom::Rect::new(0, 0, 64, 64));
+                begin(&mut a, &egui::Context::default()).unwrap();
+                a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                a.ui.view.pixel_aspect_correction = true;
+                a.ui.views[0].zoom = 0.005;
+                a.ui.views[0].zoom /= ppp;
+                a.ui.views[0].rotation = 37.0;
+                let t = a.ui.transform.as_mut().unwrap();
+                t.quad = corners([0.0, 0.0, 200000.0, 200000.0]);
+                t.pivot = [100000.0, 100000.0];
+                let xf = crate::canvas::ViewXform::active(&a).unwrap();
+                let at = xf.to_screen(0.0, 0.0);
+                for (delta, expected) in [(7.0, true), (20.0, false)] {
+                    let p = xf.to_doc(at - egui::vec2(delta, 0.0));
+                    pointer(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
+                    assert_eq!(a.transform_preview.as_ref().unwrap().gesture.unwrap().hit == Hit::Corner(0), expected, "{aspect} ppp{ppp}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aspect_review_transform_gesture_has_screen_sized_grab() {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for rotation in [0.0, 37.0] {
+                    let mut app = app_with_square(512, photocraft_geom::Rect::new(20, 20, 420, 420));
+                    app.ui.view.pixel_aspect = format!("custom:{aspect}");
+                    app.ui.view.pixel_aspect_correction = true;
+                    app.ui.views[0].zoom = ppp;
+                    app.ui.views[0].zoom /= ppp;
+                    app.ui.views[0].rotation = rotation;
+                    begin(&mut app, &egui::Context::default()).unwrap();
+                    let xf = crate::canvas::ViewXform::active(&app).unwrap();
+                    let corner = app.ui.transform.as_ref().unwrap().quad[0];
+                    let screen = xf.to_screen(corner[0] as f32, corner[1] as f32);
+                    for (offset, expected) in [(egui::vec2(-2.0, -2.0), true), (egui::vec2(-25.0, -25.0), false)] {
+                        let p = xf.to_doc(screen + offset);
+                        pointer(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
+                        let hit = app.transform_preview.as_ref().unwrap().gesture.unwrap().hit;
+                        assert_eq!(hit == Hit::Corner(0), expected, "PAR {aspect} ppp {ppp} rot {rotation}: {hit:?}");
+                    }
+                }
+            }
+        }
+    }
 
     fn session() -> TransformSession {
         TransformSession {
@@ -2024,11 +2083,11 @@ mod tests {
         assert!(!on_section_edge(1, 1) && !on_section_edge(2, 2));
         let b = [0.0, 0.0, 30.0, 30.0];
         let w = Warp::custom(BezierMesh::identity(b, 1, 1), b);
-        assert!(warp_hit(&w, [10.0, 10.0], 4.0).is_none(), "the point inside the patch is not shown");
-        assert_eq!(warp_hit(&w, [0.0, 0.0], 4.0), Some(0));
+        assert!(warp_hit(&w, [10.0, 10.0], crate::canvas::ScreenMetric([3.0; 2])).is_none(), "the point inside the patch is not shown");
+        assert_eq!(warp_hit(&w, [0.0, 0.0], crate::canvas::ScreenMetric([3.0; 2])), Some(0));
         let grid = Warp::custom(BezierMesh::identity(b, 3, 3), b);
-        assert_eq!(warp_hit(&grid, [10.0, 10.0], 4.0), Some(33), "a grid-corner anchor stays draggable");
-        assert!(warp_hit(&grid, [30.0 / 9.0, 30.0 / 9.0], 2.0).is_none());
+        assert_eq!(warp_hit(&grid, [10.0, 10.0], crate::canvas::ScreenMetric([3.0; 2])), Some(33), "a grid-corner anchor stays draggable");
+        assert!(warp_hit(&grid, [30.0 / 9.0, 30.0 / 9.0], crate::canvas::ScreenMetric([6.0; 2])).is_none());
     }
 
     #[test]
@@ -2064,10 +2123,10 @@ mod tests {
         let knots = |app: &PhotocraftApp| app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap().us.clone();
         assert_eq!(knots(&app).len(), 2);
         let mods = egui::Modifiers::NONE;
-        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, mods);
-        warp_pointer(&mut app, ToolEvent::Move { x: 14.0, y: 20.0, pressure: 1.0 }, 2.0, mods);
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), mods);
+        warp_pointer(&mut app, ToolEvent::Move { x: 14.0, y: 20.0, pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), mods);
         assert_eq!(knots(&app).len(), 2, "the line is only a guide until release");
-        warp_pointer(&mut app, ToolEvent::Up { x: 14.0, y: 20.0 }, 2.0, mods);
+        warp_pointer(&mut app, ToolEvent::Up { x: 14.0, y: 20.0 }, crate::canvas::ScreenMetric([6.0; 2]), mods);
         let us = knots(&app);
         let has = |ks: &[f64], u: f64| ks.iter().any(|k| (k - u).abs() < 0.02);
         // The default grid's thirds stay; the release cuts the section that contains it.
@@ -2078,8 +2137,8 @@ mod tests {
         // Option-click in the open places both lines, without a button armed.
         app.transform_preview.as_mut().unwrap().split_tool = None;
         let alt = egui::Modifiers::ALT;
-        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, alt);
-        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, 2.0, alt);
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), alt);
+        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, crate::canvas::ScreenMetric([6.0; 2]), alt);
         let m = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap();
         assert!(m.us.len() == us.len() + 1 && has(&m.vs, 0.5), "crosswise cuts the open section: us {:?} vs {:?}", m.us, m.vs);
     }
@@ -2105,8 +2164,8 @@ mod tests {
         let y = rect[1] + (1.0 / 6.0) * (rect[3] - rect[1]);
         app.transform_preview.as_mut().unwrap().split_tool = Some(SplitTool::Vertical);
         let mods = egui::Modifiers::NONE;
-        warp_pointer(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, 2.0, mods);
-        warp_pointer(&mut app, ToolEvent::Up { x, y }, 2.0, mods);
+        warp_pointer(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), mods);
+        warp_pointer(&mut app, ToolEvent::Up { x, y }, crate::canvas::ScreenMetric([6.0; 2]), mods);
         let m = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap();
         assert_eq!(m.vs.len(), before.vs.len(), "horizontal sections are not rebuilt: {:?}", m.vs);
         for (a, b) in m.vs.iter().zip(&before.vs) {
@@ -2691,6 +2750,7 @@ mod tests {
             let _ = ctx.run_ui(egui::RawInput { max_texture_side: Some(16384), ..Default::default() }, |ui| {
                 let painter = ui.ctx().layer_painter(egui::LayerId::background());
                 let xf = ViewXform {
+                    aspect: 1.0,
                     rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 1000.0)),
                     zoom,
                     center: [3000.0, 2000.0],
@@ -2746,8 +2806,8 @@ mod tests {
         let w = app.ui.transform.as_ref().unwrap().warp.clone().unwrap();
         assert!(w.is_identity());
         // Drag the bottom-right anchor (point 15) by (+10, +6): its two handles follow.
-        warp_pointer(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
-        warp_pointer(&mut app, ToolEvent::Up { x: 42.0, y: 38.0 }, 2.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Up { x: 42.0, y: 38.0 }, crate::canvas::ScreenMetric([6.0; 2]), egui::Modifiers::NONE);
         let m = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.clone().unwrap();
         assert_eq!(m.points[15], [42.0, 38.0]);
         let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
@@ -2805,11 +2865,11 @@ mod tests {
         let t = app.ui.transform.as_mut().unwrap();
         let preset = Warp::preset(WarpStyle::Arc, 50.0, t.rect);
         t.warp = Some(preset.clone());
-        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
-        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, 2.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, crate::canvas::ScreenMetric([6.0; 2]), egui::Modifiers::NONE);
         assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref(), Some(&preset), "a miss changes nothing");
         let corner = preset.to_mesh(1, 1).points[15];
-        warp_pointer(&mut app, ToolEvent::Down { x: corner[0], y: corner[1], pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Down { x: corner[0], y: corner[1], pressure: 1.0 }, crate::canvas::ScreenMetric([6.0; 2]), egui::Modifiers::NONE);
         assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Custom);
     }
 

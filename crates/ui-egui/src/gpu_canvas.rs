@@ -61,6 +61,8 @@ pub struct ViewParams {
     pub doc_size: [u32; 2],
     /// Screen points per document pixel.
     pub zoom: f32,
+    /// Horizontal pixel aspect, before camera rotation.
+    pub aspect: f32,
     /// Document point shown at the centre of the canvas rect.
     pub center: [f32; 2],
     /// Camera rotation in radians, clockwise in Y-down screen space. Rotate around [`Self::center`]
@@ -1588,20 +1590,20 @@ fn filter_mode(scale: f32) -> (f32, f32) {
     }
 }
 
-fn map_doc_px(origin: [f32; 2], scale: f32, center: [f32; 2], cos: f32, sin: f32, x: f32, y: f32) -> [f32; 2] {
-    let dx = x - center[0];
-    let dy = y - center[1];
+fn map_doc_px(origin: [f32; 2], scale: [f32; 2], center: [f32; 2], cos: f32, sin: f32, x: f32, y: f32) -> [f32; 2] {
+    let dx = (x - center[0]) * scale[0];
+    let dy = (y - center[1]) * scale[1];
     let rx = dx * cos - dy * sin;
     let ry = dx * sin + dy * cos;
-    [origin[0] + center[0] * scale + rx * scale, origin[1] + center[1] * scale + ry * scale]
+    [origin[0] + center[0] * scale[0] + rx, origin[1] + center[1] * scale[1] + ry]
 }
 
-fn tile_screen_aabb(origin: [f32; 2], scale: f32, center: [f32; 2], cos: f32, sin: f32, tile: [f32; 4]) -> (f32, f32, f32, f32) {
+fn tile_screen_aabb(origin: [f32; 2], scale: [f32; 2], center: [f32; 2], cos: f32, sin: f32, tile: [f32; 4]) -> (f32, f32, f32, f32) {
     let [tx, ty, tw, th] = tile;
     if sin.abs() < 1e-8 && (cos - 1.0).abs() < 1e-8 {
-        let x0 = origin[0] + tx * scale;
-        let y0 = origin[1] + ty * scale;
-        return (x0, y0, x0 + tw * scale, y0 + th * scale);
+        let x0 = origin[0] + tx * scale[0];
+        let y0 = origin[1] + ty * scale[1];
+        return (x0, y0, x0 + tw * scale[0], y0 + th * scale[1]);
     }
     let pts = [
         map_doc_px(origin, scale, center, cos, sin, tx, ty),
@@ -1628,7 +1630,7 @@ impl CanvasCallback {
         let p = &self.params;
         let scale = p.zoom * ppp;
         let c = self.rect.center();
-        let ox = (c.x * ppp - p.center[0] * scale).round();
+        let ox = (c.x * ppp - p.center[0] * scale * p.aspect).round();
         let oy = (c.y * ppp - p.center[1] * scale).round();
         ([ox, oy], scale)
     }
@@ -1639,7 +1641,7 @@ impl CanvasCallback {
         let (mode, lod) = filter_mode(scale);
         // The pixel grid shows above 500% and lightens a dark pixel by about a quarter (the
         // constants are shared with the CPU path, pixel_grid.rs).
-        let grid = if p.pixel_grid && crate::pixel_grid::shows_at(p.zoom) { crate::pixel_grid::STRENGTH } else { 0.0 };
+        let grid = if p.pixel_grid && crate::pixel_grid::shows_for_view(scale, p.aspect) { crate::pixel_grid::STRENGTH } else { 0.0 };
         let square = if style.checker_square > 0.0 { (style.checker_square * ppp).round().max(1.0) } else { 0.0 };
         let (l, d, g) = (style.checker_light, style.checker_dark, style.gamut_color);
         // 32-bit preview: linear-light gain 2^exposure (0 = off) and 1 / gamma.
@@ -1660,7 +1662,7 @@ impl CanvasCallback {
             lod,
             grid,
             square,
-            0.0,
+            p.aspect,
             0.0,
             p.display as f32,
             if out_linear { 1.0 } else { 0.0 },
@@ -1762,7 +1764,7 @@ impl CallbackTrait for CanvasCallback {
         pass.set_bind_group(2, res.luts.get(&(self.params.doc, self.params.output)).unwrap_or(&res.identity_lut), &[]);
         for t in &doc.tiles {
             let [tx, ty, tw, th] = t.rect.map(|v| v as f32);
-            let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, cen, cos, sin, [tx, ty, tw, th]);
+            let (x0, y0, x1, y1) = tile_screen_aabb(origin, [scale * self.params.aspect, scale], cen, cos, sin, [tx, ty, tw, th]);
             if x1 < cx0 || y1 < cy0 || x0 > cx1 || y0 > cy1 {
                 continue;
             }
@@ -1777,7 +1779,7 @@ struct View {
     a: vec4<f32>, // screen_w, screen_h, scale (device px per doc px), pixels_per_point
     b: vec4<f32>, // doc origin x, y (device px), doc w, h (doc px)
     c: vec4<f32>, // filter mode, lod, grid alpha, checker square (device px)
-    d: vec4<f32>, // unused x, y, display (0 none, 1 LUT, 2 LUT + gamut), output linear
+    d: vec4<f32>, // aspect, unused y, display (0 none, 1 LUT, 2 LUT + gamut), output linear
     e: vec4<f32>, // checker light rgb, gamut warning opacity
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
@@ -1803,13 +1805,15 @@ fn px_to_clip(p: vec2<f32>) -> vec4<f32> {
     return vec4(n.x, -n.y, 0.0, 1.0);
 }
 
+fn axis_scale() -> vec2<f32> { return vec2(view.a.z * view.d.x, view.a.z); }
+
 fn screen_center() -> vec2<f32> {
-    return view.b.xy + view.h.zw * view.a.z;
+    return view.b.xy + view.h.zw * axis_scale();
 }
 
 fn doc_to_px(d: vec2<f32>) -> vec2<f32> {
     let cs = view.h.xy;
-    let q = d - view.h.zw;
+    let q = (d - view.h.zw) * vec2(view.d.x, 1.0);
     let r = vec2(q.x * cs.x - q.y * cs.y, q.x * cs.y + q.y * cs.x);
     return screen_center() + r * view.a.z;
 }
@@ -1817,11 +1821,11 @@ fn doc_to_px(d: vec2<f32>) -> vec2<f32> {
 fn px_to_doc(p: vec2<f32>) -> vec2<f32> {
     let cs = view.h.xy;
     let q = (p - screen_center()) / view.a.z;
-    return vec2(q.x * cs.x + q.y * cs.y, -q.x * cs.y + q.y * cs.x) + view.h.zw;
+    return vec2((q.x * cs.x + q.y * cs.y) / view.d.x, -q.x * cs.y + q.y * cs.x) + view.h.zw;
 }
 
 fn doc_min() -> vec2<f32> { return view.b.xy; }
-fn doc_max() -> vec2<f32> { return view.b.xy + view.b.zw * view.a.z; }
+fn doc_max() -> vec2<f32> { return view.b.xy + view.b.zw * axis_scale(); }
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
@@ -1871,7 +1875,7 @@ fn fs_shadow(in: VOut) -> @location(0) vec4<f32> {
     if (all(d >= vec2(0.0)) && all(d < view.b.zw)) {
         discard;
     }
-    let p_align = view.b.xy + d * view.a.z;
+    let p_align = view.b.xy + d * axis_scale();
     let lo = doc_min();
     let hi = doc_max();
     let u = view.a.w;
@@ -1896,7 +1900,7 @@ fn checker(p: vec2<f32>) -> vec3<f32> {
         return vec3(1.0);
     }
     let d = px_to_doc(p);
-    let c = floor(d * view.a.z / view.c.w);
+    let c = floor(d * axis_scale() / view.c.w);
     let odd = fract((c.x + c.y) * 0.5) > 0.25;
     return select(view.e.xyz, view.f.xyz, odd);
 }
@@ -1904,7 +1908,7 @@ fn checker(p: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     let p = in.pos.xy;
-    let scale = view.a.z;
+    let scale = axis_scale();
     let d = px_to_doc(p);                  // document pixel coordinates
     let size = tile.r.zw;
     let t = d - tile.r.xy;                 // texel coordinates within this tile
@@ -2037,10 +2041,10 @@ mod tests {
         // Identity packing: rotation 0 matches the unrotated origin + scale map.
         let origin = [10.0, 20.0];
         let (scale, center) = (2.0, [40.0, 8.0]);
-        let a = map_doc_px(origin, scale, center, 1.0, 0.0, 5.0, 9.0);
+        let a = map_doc_px(origin, [scale, scale], center, 1.0, 0.0, 5.0, 9.0);
         assert!((a[0] - (origin[0] + 5.0 * scale)).abs() < 1e-4);
         assert!((a[1] - (origin[1] + 9.0 * scale)).abs() < 1e-4);
-        let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, center, 1.0, 0.0, [0.0, 0.0, 10.0, 4.0]);
+        let (x0, y0, x1, y1) = tile_screen_aabb(origin, [scale, scale], center, 1.0, 0.0, [0.0, 0.0, 10.0, 4.0]);
         assert!((x0 - origin[0]).abs() < 1e-4 && (y0 - origin[1]).abs() < 1e-4);
         assert!((x1 - (origin[0] + 20.0)).abs() < 1e-4 && (y1 - (origin[1] + 8.0)).abs() < 1e-4);
     }

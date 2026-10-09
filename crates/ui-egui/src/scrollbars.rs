@@ -87,6 +87,15 @@ pub fn clamp_axis(center: f32, len: f32, size: f32, zoom: f32) -> f32 {
     center.clamp(a.min(b), a.max(b))
 }
 
+/// Scroll in the camera's screen axes, using the same aspect-before-rotation mapping as paint.
+fn camera(view: &View, flip: bool) -> (crate::canvas::ViewXform, Rect, egui::Vec2) {
+    let size = vec2(view.doc_size[0] as f32, view.doc_size[1] as f32);
+    let xf = crate::canvas::ViewXform { zoom: 1.0, center: [size.x / 2.0, size.y / 2.0], ..crate::canvas::ViewXform::from_view(Rect::ZERO, view, flip) };
+    let bounds = xf.screen_bounds(Rect::from_min_size(Pos2::ZERO, size));
+    let center = xf.to_screen(view.center[0], view.center[1]) - bounds.min;
+    (xf, bounds, center)
+}
+
 /// Apply Preferences › Tools › Overscroll (off) to `view` for a canvas of `size` points. True
 /// when the view moved (the caller then repaints).
 pub fn clamp_view(view: &mut View, size: egui::Vec2) -> bool {
@@ -94,7 +103,9 @@ pub fn clamp_view(view: &mut View, size: egui::Vec2) -> bool {
     if w == 0 || h == 0 {
         return false;
     }
-    let c = [clamp_axis(view.center[0], w as f32, size.x, view.zoom), clamp_axis(view.center[1], h as f32, size.y, view.zoom)];
+    let (xf, bounds, center) = camera(view, false);
+    let clamped = vec2(clamp_axis(center.x, bounds.width(), size.x, view.zoom), clamp_axis(center.y, bounds.height(), size.y, view.zoom));
+    let c = xf.to_doc(bounds.min + clamped).map(|v| v as f32);
     // Ignore sub-pixel float noise so the clamp never keeps requesting frames.
     let moved = (c[0] - view.center[0]).abs() > 1e-3 || (c[1] - view.center[1]).abs() > 1e-3;
     if moved {
@@ -126,13 +137,11 @@ pub fn bar_rects(rect: Rect, horizontal: bool, vertical: bool) -> (Option<Rect>,
 /// `overscroll` is Preferences › Tools › Overscroll.
 /// Returns true when the pointer is over a bar (the canvas then leaves the pointer alone).
 pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, overscroll: bool, key: Id) -> bool {
-    let [w, h] = view.doc_size;
+    let (xf, bounds, projected) = camera(view, flip);
     let zoom = view.zoom;
-    // Horizontal axis in "screen order": with the view flipped, run the image backwards.
-    let hx = |c: f32| if flip { w as f32 - c } else { c };
     let with_extent = |s: Span| (s, s.extent(overscroll));
-    let ex = Span::of(w as f32, hx(view.center[0]), rect.width(), zoom).map(with_extent);
-    let ey = Span::of(h as f32, view.center[1], rect.height(), zoom).map(with_extent);
+    let ex = Span::of(bounds.width(), projected.x, rect.width(), zoom).map(with_extent);
+    let ey = Span::of(bounds.height(), projected.y, rect.height(), zoom).map(with_extent);
     if ex.is_none() && ey.is_none() {
         return false;
     }
@@ -159,11 +168,13 @@ pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, overscroll: bool, 
             if !c.is_finite() {
                 return;
             }
+            let mut at = xf.to_screen(view.center[0], view.center[1]) - bounds.min;
             if axis == 0 {
-                view.center[0] = if flip { w as f32 - c } else { c };
+                at.x = c;
             } else {
-                view.center[1] = c;
+                at.y = c;
             }
+            view.center = xf.to_doc(bounds.min + at).map(|v| v as f32);
         };
         let center = (s.v0 + s.v1) / 2.0;
         // The drag starts where the button went down, not where it passed egui's drag threshold.
@@ -284,7 +295,8 @@ mod tests {
         assert_eq!(clamp_axis(-400.0, 1000.0, 500.0, 0.2), -250.0, "the image's right edge on the view's");
         assert_eq!(clamp_axis(1400.0, 1000.0, 500.0, 0.2), 1250.0, "its left edge on the view's");
         assert_eq!(clamp_axis(500.0, 1000.0, 1000.0, 1.0), 500.0, "exactly the view's size: centred");
-        let mut v = View { zoom: 1.0, center: [-500.0, 20.0], fit_pending: false, fill_pending: false, doc_size: [1000, 800], rotation: 0.0 };
+        let mut v =
+            View { zoom: 1.0, pixel_aspect: 1.0, center: [-500.0, 20.0], fit_pending: false, fill_pending: false, doc_size: [1000, 800], rotation: 0.0 };
         assert!(clamp_view(&mut v, vec2(500.0, 400.0)));
         assert_eq!(v.center, [250.0, 200.0]);
         assert!(!clamp_view(&mut v, vec2(500.0, 400.0)), "stable: no repaint loop");
@@ -303,7 +315,7 @@ mod tests {
         let (at, len) = s.thumb((0.0, 1000.0), 0.0);
         assert!(at.is_finite() && len.is_finite());
         assert_eq!(s.doc_per_point((0.0, 1000.0), 0.0), 0.0);
-        let mut v = View { zoom: 1.0, center: [0.0, 0.0], fit_pending: false, fill_pending: false, doc_size: [0, 0], rotation: 0.0 };
+        let mut v = View { zoom: 1.0, pixel_aspect: 1.0, center: [0.0, 0.0], fit_pending: false, fill_pending: false, doc_size: [0, 0], rotation: 0.0 };
         assert!(!clamp_view(&mut v, vec2(500.0, 400.0)));
     }
 

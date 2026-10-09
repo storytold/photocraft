@@ -185,7 +185,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// Canvas overlay for the on-canvas modes.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     if let Some(p) = &app.distort.puppet {
-        crate::puppet_ui::draw(p, painter, xf);
+        crate::puppet_ui::draw(p, painter, xf, &app.ui.view);
     }
     if let Some(p) = &app.distort.perspective {
         crate::perspective_ui::draw(p, painter, xf);
@@ -213,10 +213,4 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.distort.liquify.is_some() {
         crate::liquify_ui::show(app, ctx);
     }
-}
-
-/// Screen distance (document px) that counts as "on" a handle at the current zoom.
-pub(crate) fn tolerance(app: &PhotocraftApp) -> f64 {
-    let z = app.session.active_index().and_then(|i| app.ui.views.get(i)).map_or(1.0, |v| v.zoom.max(0.01));
-    8.0 / f64::from(z)
 }
