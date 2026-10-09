@@ -127,6 +127,23 @@ fn a_panic_in_the_worker_becomes_an_error_and_the_document_is_unchanged() {
 }
 
 #[test]
+fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
+    // REL-3: the last-resort guard in `jobs::dispatch` catches a panic that escapes `run`,
+    // reports it as an error and leaves the document (and its history) untouched.
+    let mut s = session(64, 64);
+    let doc_before = s.active().unwrap().doc.clone();
+    let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    let msg = s.execute("test.panic", json!({})).unwrap_err().to_string();
+    assert!(msg.contains("internal error"), "{msg}");
+    assert!(msg.contains("test.panic"), "{msg}");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!((st.revision, st.history.past_len()), (rev, steps));
+    // The session still works.
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
 fn progress_is_monotonic_and_reaches_one() {
     let ctx = JobCtx::new();
     ctx.progress(0.5, "half");

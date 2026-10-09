@@ -1596,6 +1596,7 @@
 	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Κλικ για εφαρμογή, ⌥-κλικ για εκκαθάριση παρακάμψεων, διπλό κλικ για επιλογές στυλ
 	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	Κλικ: γωνία · Σύρσιμο: ομαλή καμπύλη · Κλικ στο πρώτο σημείο: κλείσιμο · ↩ ολοκλήρωση · Esc ακύρωση
 	Lasso around an area, then drag the selection	Σχεδιάστε επιλογή με το Lasso γύρω από μια περιοχή και σύρετέ την
+	Now drag the selection onto another area	Τώρα σύρετε την επιλογή σε άλλη περιοχή
 	Rulers  (⌘R)	Χάρακες  (⌘R)
 	Show Guides  (⌘;)	Εμφάνιση οδηγών  (⌘;)
 	Grid  (⌘')	Πλέγμα  (⌘')
@@ -3362,6 +3363,22 @@ fontWeight	Thin	Πολύ λεπτά
 	Preset Name	Όνομα προεπιλογής
 	No saved presets yet.	Δεν υπάρχουν ακόμη αποθηκευμένες προεπιλογές.
 
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Σημειακό δείγμα
+	3 by 3 Average	Μέσος όρος 3 × 3
+	5 by 5 Average	Μέσος όρος 5 × 5
+	11 by 11 Average	Μέσος όρος 11 × 11
+	31 by 31 Average	Μέσος όρος 31 × 31
+	51 by 51 Average	Μέσος όρος 51 × 51
+	101 by 101 Average	Μέσος όρος 101 × 101
+	Sample Size:	Μέγεθος δείγματος:
+	All Layers No Adjustments	Όλα τα επίπεδα χωρίς προσαρμογές
+	Current & Below No Adjustments	Τρέχον και υποκείμενα χωρίς προσαρμογές
+	Show Sampling Ring	Εμφάνιση δακτυλίου δειγματοληψίας
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Εκτός γκάμας εκτύπωσης: κάντε κλικ για το πλησιέστερο εκτυπώσιμο χρώμα
 	Not a web colour: click for the nearest web colour	Δεν είναι χρώμα web: κάντε κλικ για το πλησιέστερο χρώμα web
+	Color to Alpha…	Χρώμα σε άλφα…
+	Transparency Threshold	Κατώφλι διαφάνειας
+	Opacity Threshold	Κατώφλι αδιαφάνειας

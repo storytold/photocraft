@@ -60,7 +60,15 @@ pub(crate) fn unhex(s: &str) -> Result<Vec<u8>> {
     }
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2).unwrap_or("x"), 16).map_err(|_| FormatError::corrupt(format!("bad hex `{s}`"))))
+        .map(|i| {
+            let pair = s.get(i..i + 2).unwrap_or("x");
+            // `from_str_radix` accepts a leading `+`; reject anything that is not
+            // two ASCII hex digits so a malformed string fails as corrupt (#1818).
+            if !pair.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(FormatError::corrupt(format!("bad hex `{s}`")));
+            }
+            u8::from_str_radix(pair, 16).map_err(|_| FormatError::corrupt(format!("bad hex `{s}`")))
+        })
         .collect()
 }
 
@@ -599,4 +607,38 @@ pub(crate) fn reserve_ids_through(max: u64) -> bool {
     }
     photocraft_doc::ensure_ids_above(max);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unhex_rejects_leading_plus() {
+        // `u8::from_str_radix` accepts a leading `+`; unhex must not (#1818).
+        assert!(unhex("+5").is_err());
+        assert!(unhex("ab+5").is_err());
+        assert!(unhex("+5cd").is_err());
+    }
+
+    #[test]
+    fn unhex_rejects_non_hex_characters() {
+        assert!(unhex("zz").is_err());
+        assert!(unhex(" 1").is_err());
+        assert!(unhex("g0").is_err());
+    }
+
+    #[test]
+    fn unhex_accepts_valid_hex() {
+        assert_eq!(unhex("00").unwrap(), vec![0x00]);
+        assert_eq!(unhex("ff").unwrap(), vec![0xff]);
+        assert_eq!(unhex("0123456789abcdef").unwrap(), vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+        assert_eq!(unhex("FF").unwrap(), vec![0xff]);
+    }
+
+    #[test]
+    fn unhex_rejects_odd_length() {
+        assert!(unhex("0").is_err());
+        assert!(unhex("abc").is_err());
+    }
 }

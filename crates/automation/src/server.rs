@@ -200,7 +200,9 @@ pub struct UiSetParams {
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
-    /// (a blend mode name, for the Gradient tool), gradientClassic (bool). Other fields are an
+    /// (a blend mode name, for the Gradient tool), gradientClassic (bool), eyedropperSampleSize
+    /// ("point" or 1, 3, 5, 11, 31, 51, 101), eyedropperSample (current, currentAndBelow, all,
+    /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool). Other fields are an
     /// error.
     pub fields: Value,
 }

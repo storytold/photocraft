@@ -2045,6 +2045,7 @@ cameraRaw	Color	색상
 	Patch Tool	패치 도구
 	Patch:	패치:
 	Lasso around an area, then drag the selection	올가미로 영역을 둘러싼 다음 선택 영역을 드래그하세요
+	Now drag the selection onto another area	이제 선택 영역을 다른 영역으로 드래그하세요
 
 # Warp grid presets merged on main in #388.
 	3 x 3	3 × 3
@@ -2828,6 +2829,22 @@ fontWeight	Italic	기울임
 	Reset View	보기 재설정
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기를 회전합니다  ·  Shift는 15°로 제한
 
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	포인트 샘플
+	3 by 3 Average	3 × 3 평균
+	5 by 5 Average	5 × 5 평균
+	11 by 11 Average	11 × 11 평균
+	31 by 31 Average	31 × 31 평균
+	51 by 51 Average	51 × 51 평균
+	101 by 101 Average	101 × 101 평균
+	Sample Size:	샘플 크기:
+	All Layers No Adjustments	모든 레이어(조정 제외)
+	Current & Below No Adjustments	현재 및 이하(조정 제외)
+	Show Sampling Ring	샘플링 링 표시
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	인쇄 색역 밖: 클릭하면 가장 가까운 인쇄 가능한 색상으로 바뀝니다
 	Not a web colour: click for the nearest web colour	웹 색상이 아님: 클릭하면 가장 가까운 웹 색상으로 바뀝니다
+	Color to Alpha…	색상을 알파로…
+	Transparency Threshold	투명도 한계값
+	Opacity Threshold	불투명도 한계값

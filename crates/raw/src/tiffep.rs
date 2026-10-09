@@ -209,7 +209,7 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         crop,
         color: Default::default(),
         camera_wb,
-        orientation: ifd0.and_then(|i| t.tag_uint(&i, tag::ORIENTATION)).map(|o| o as u16).filter(|o| (1..=8).contains(o)).unwrap_or(1),
+        orientation: crate::tiff::orientation(ifd0.and_then(|i| t.tag_uint(&i, tag::ORIENTATION))),
         baseline_exposure: 0.0,
         gain_maps: Vec::new(),
         tone_curve: Vec::new(),

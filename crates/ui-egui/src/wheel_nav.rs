@@ -1,7 +1,7 @@
 //! Mouse wheel and trackpad navigation over the canvas (#293, #635), as in Photoshop:
 //!
 //! - The wheel scrolls up and down; ⇧ or ⌘/Ctrl + wheel scrolls sideways.
-//! - ⌥/Alt + wheel zooms around the pointer in gentle steps, about 5% per wheel notch.
+//! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch, applied the frame it arrives.
 //! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
 //!   ⌥/Alt + wheel scrolls.
 //! - A trackpad pinch zooms around the pointer.
@@ -13,14 +13,16 @@
 //! before egui sees them, so Ctrl + a notched mouse wheel scrolls sideways and the pinch still
 //! zooms.
 //!
-//! egui smooths a wheel notch over several frames, so the Alt state is taken from the wheel
-//! events themselves and kept until the next wheel event: releasing Alt while the last notch
-//! is still settling must not turn the rest of it into a pan.
+//! The target behaviour is exact ×1.1 steps, one per notch, with no easing in between
+//! (measured frame by frame on a screen recording). egui smooths a wheel notch over several
+//! frames, so zooming reads the wheel events themselves and ignores that smoothed tail; panning
+//! keeps the smoothed delta. The Alt state is taken from the wheel events and kept until the next
+//! wheel event: releasing Alt while the tail is still settling must not turn it into a pan.
 
 use egui::{Context, Event, Id, Modifiers, MouseWheelUnit, RawInput, Vec2};
 
-/// Zoom factor of one wheel notch with ⌥/Alt held.
-pub const ALT_NOTCH: f32 = 1.05;
+/// Zoom factor of one wheel notch: every step is exactly ×1.1.
+pub const NOTCH: f32 = 1.1;
 
 /// A Ctrl + wheel event this soon (seconds) after a pinch step still belongs to the pinch, even
 /// when it happens to be a whole notch.
@@ -38,8 +40,11 @@ pub enum Wheel {
 /// Inputs of one frame's wheel gesture.
 #[derive(Clone, Copy, Debug)]
 pub struct Input {
-    /// Smoothed scroll delta (points, content direction).
+    /// Smoothed scroll delta (points, content direction); what panning uses.
     pub scroll: Vec2,
+    /// This frame's wheel events for the gesture in progress, unsmoothed (points, content
+    /// direction); what zooming uses.
+    pub raw: Vec2,
     /// egui's pinch zoom factor (1 = none).
     pub zoom_delta: f32,
     /// ⌥/Alt was held for the wheel gesture in progress.
@@ -55,20 +60,20 @@ pub fn classify(i: Input) -> Option<Wheel> {
     if i.zoom_delta.is_finite() && i.zoom_delta > 0.0 && i.zoom_delta != 1.0 {
         return Some(Wheel::Zoom(i.zoom_delta));
     }
-    if !(i.scroll.x.is_finite() && i.scroll.y.is_finite()) || i.scroll == Vec2::ZERO {
-        return None;
-    }
-    let f = match (i.alt, i.zoom_with_wheel) {
-        (true, false) => {
-            // egui folds a scroll with Alt held into y. One notch (`notch` points) is 5%.
-            let notch = if i.notch.is_finite() && i.notch > 0.0 { i.notch } else { 40.0 };
-            ALT_NOTCH.powf((i.scroll.y + i.scroll.x) / notch)
-        }
-        // ⇧ and ⌘/Ctrl fold the wheel into x: those still scroll sideways.
-        (false, true) if i.scroll.y != 0.0 => (i.scroll.y / 200.0).exp(),
-        _ => return Some(Wheel::Pan(i.scroll)),
+    // One notch (`notch` points) is one ×1.1 step.
+    let step = |dy: f32| {
+        let notch = if i.notch.is_finite() && i.notch > 0.0 { i.notch } else { 40.0 };
+        let f = NOTCH.powf(dy / notch);
+        (f.is_finite() && f > 0.0 && f != 1.0).then_some(Wheel::Zoom(f))
     };
-    (f.is_finite() && f > 0.0 && f != 1.0).then_some(Wheel::Zoom(f))
+    match (i.alt, i.zoom_with_wheel) {
+        // egui folds a scroll with Alt held into y. The smoothed tail of a notch is ignored.
+        (true, false) => step(i.raw.y + i.raw.x),
+        // ⇧ and ⌘/Ctrl fold the wheel into x: those still scroll sideways.
+        (false, true) if i.raw.y != 0.0 || i.scroll.y != 0.0 => step(i.raw.y),
+        _ if !(i.scroll.x.is_finite() && i.scroll.y.is_finite()) || i.scroll == Vec2::ZERO => None,
+        _ => Some(Wheel::Pan(i.scroll)),
+    }
 }
 
 /// Set egui's wheel modifiers (once, at setup): ⌘/Ctrl + wheel scrolls sideways like ⇧ + wheel
@@ -131,12 +136,20 @@ fn alt_id() -> Id {
 /// gesture follows the latest wheel event.
 pub fn read(ctx: &Context, zoom_with_wheel: bool) -> Option<Wheel> {
     let notch = ctx.options(|o| o.input_options.line_scroll_speed);
-    let (scroll, zoom_delta, latest) = ctx.input(|i| {
+    let (scroll, zoom_delta, latest, wheel, page) = ctx.input(|i| {
         let latest = i.events.iter().rev().find_map(|e| match e {
             Event::MouseWheel { modifiers, .. } => Some(modifiers.alt && !modifiers.command && !modifiers.ctrl),
             _ => None,
         });
-        (i.smooth_scroll_delta, i.zoom_delta(), latest)
+        let wheel: Vec<(MouseWheelUnit, Vec2, Modifiers)> = i
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, *modifiers)),
+                _ => None,
+            })
+            .collect();
+        (i.smooth_scroll_delta, i.zoom_delta(), latest, wheel, i.content_rect().height())
     });
     let alt = match latest {
         Some(a) => {
@@ -145,7 +158,20 @@ pub fn read(ctx: &Context, zoom_with_wheel: bool) -> Option<Wheel> {
         }
         None => ctx.data(|d| d.get_temp::<bool>(alt_id())).unwrap_or(false),
     };
-    classify(Input { scroll, zoom_delta, alt, zoom_with_wheel, notch })
+    // The wheel events that belong to the gesture in progress: Alt ones, or plain ones (⇧ and
+    // ⌘/Ctrl wheel scroll sideways and never zoom).
+    let raw = wheel.iter().filter(|(_, _, m)| if alt { m.alt && !m.command && !m.ctrl } else { !m.alt && !m.shift && !m.command && !m.ctrl }).fold(
+        Vec2::ZERO,
+        |sum, (unit, delta, _)| {
+            sum + *delta
+                * match unit {
+                    MouseWheelUnit::Point => 1.0,
+                    MouseWheelUnit::Line => notch,
+                    MouseWheelUnit::Page => page,
+                }
+        },
+    );
+    classify(Input { scroll, raw, zoom_delta, alt, zoom_with_wheel, notch })
 }
 
 #[cfg(test)]
@@ -155,7 +181,7 @@ mod tests {
     use super::*;
 
     fn input(scroll: Vec2, alt: bool) -> Input {
-        Input { scroll, zoom_delta: 1.0, alt, zoom_with_wheel: false, notch: 40.0 }
+        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, zoom_with_wheel: false, notch: 40.0 }
     }
 
     fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
@@ -199,21 +225,27 @@ mod tests {
     }
 
     #[test]
-    fn alt_scroll_zooms_five_percent_per_notch() {
+    fn alt_scroll_zooms_ten_percent_per_notch() {
         let Some(Wheel::Zoom(f)) = classify(input(Vec2::new(0.0, 40.0), true)) else { panic!("zoom") };
-        assert!((f - 1.05).abs() < 1e-5, "{f}");
+        assert!((f - 1.1).abs() < 1e-5, "{f}");
         let Some(Wheel::Zoom(f)) = classify(input(Vec2::new(0.0, -40.0), true)) else { panic!("zoom") };
-        assert!((f - 1.0 / 1.05).abs() < 1e-5, "{f}");
-        // Smoothed over frames, the parts multiply back to one notch.
-        let parts = [12.0, 16.0, 8.0, 4.0];
-        let total: f32 = parts
-            .iter()
-            .map(|d| match classify(input(Vec2::new(0.0, *d), true)) {
-                Some(Wheel::Zoom(f)) => f,
-                _ => 1.0,
-            })
-            .product();
-        assert!((total - 1.05).abs() < 1e-4, "{total}");
+        assert!((f - 1.0 / 1.1).abs() < 1e-5, "{f}");
+        // Two notches in one frame are two steps, x1.1 each.
+        let Some(Wheel::Zoom(f)) = classify(input(Vec2::new(0.0, 80.0), true)) else { panic!("zoom") };
+        assert!((f - 1.21).abs() < 1e-4, "{f}");
+    }
+
+    #[test]
+    fn a_notch_zooms_the_frame_it_arrives_and_its_smoothed_tail_does_nothing() {
+        // egui keeps feeding a smoothed delta for several frames after the wheel event. Zooming
+        // must not follow it (that would ease the zoom), nor turn it into a pan.
+        let tail = Input { raw: Vec2::ZERO, ..input(Vec2::new(0.0, 12.0), true) };
+        assert_eq!(classify(tail), None);
+        let tail = Input { raw: Vec2::ZERO, zoom_with_wheel: true, ..input(Vec2::new(0.0, 12.0), false) };
+        assert_eq!(classify(tail), None);
+        // Plain scrolling without the preference still pans from the smoothed delta.
+        let pan = Input { raw: Vec2::ZERO, ..input(Vec2::new(0.0, 12.0), false) };
+        assert_eq!(classify(pan), Some(Wheel::Pan(Vec2::new(0.0, 12.0))));
     }
 
     #[test]
@@ -228,8 +260,8 @@ mod tests {
     #[test]
     fn zoom_with_scroll_wheel_preference_swaps_wheel_and_alt_wheel() {
         let pref = |scroll, alt| Input { zoom_with_wheel: true, ..input(scroll, alt) };
-        let Some(Wheel::Zoom(f)) = classify(pref(Vec2::new(0.0, 200.0), false)) else { panic!("zoom") };
-        assert!((f - std::f32::consts::E).abs() < 1e-4);
+        let Some(Wheel::Zoom(f)) = classify(pref(Vec2::new(0.0, 40.0), false)) else { panic!("zoom") };
+        assert!((f - 1.1).abs() < 1e-5, "{f}");
         assert_eq!(classify(pref(Vec2::new(0.0, 40.0), true)), Some(Wheel::Pan(Vec2::new(0.0, 40.0))), "⌥ + wheel scrolls");
         assert_eq!(classify(pref(Vec2::new(40.0, 0.0), false)), Some(Wheel::Pan(Vec2::new(40.0, 0.0))), "sideways still scrolls");
     }
@@ -245,12 +277,12 @@ mod tests {
             assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "{m:?} + wheel scrolls sideways: {pan:?} {zoom}");
         }
         let (pan, zoom) = one(Modifiers::ALT);
-        assert!(pan == Vec2::ZERO && (zoom - 1.05).abs() < 1e-4, "⌥ + wheel zooms 5%: {pan:?} {zoom}");
+        assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "⌥ + wheel zooms 10%, at once: {pan:?} {zoom}");
         // Zoom with Scroll Wheel on: swapped.
         let (pan, zoom) = gesture(vec![vec![wheel(notch, Modifiers::ALT)]], true, false);
         assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0, "{pan:?} {zoom}");
         let (pan, zoom) = gesture(vec![vec![wheel(notch, Modifiers::NONE)]], true, false);
-        assert!(pan == Vec2::ZERO && zoom > 1.1, "{pan:?} {zoom}");
+        assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "{pan:?} {zoom}");
         let (pan, zoom) = gesture(vec![vec![wheel(notch, CTRL)]], true, false);
         assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "⌘/Ctrl + wheel still scrolls sideways: {pan:?} {zoom}");
     }
@@ -294,7 +326,7 @@ mod tests {
             for alt in [false, true] {
                 for notch in [0.0, -1.0, f32::NAN, 40.0] {
                     for zd in [f32::NAN, 0.0, -1.0, f32::INFINITY, 1.0] {
-                        let i = Input { scroll: Vec2::new(0.0, s), zoom_delta: zd, alt, zoom_with_wheel: !alt, notch };
+                        let i = Input { scroll: Vec2::new(0.0, s), raw: Vec2::new(0.0, s), zoom_delta: zd, alt, zoom_with_wheel: !alt, notch };
                         if let Some(Wheel::Zoom(f)) = classify(i) {
                             assert!(f.is_finite() && f > 0.0, "{f} from {i:?}");
                         }

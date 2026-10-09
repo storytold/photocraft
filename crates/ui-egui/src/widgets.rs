@@ -5,6 +5,9 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, S
 
 use crate::theme::{self, Tokens};
 
+mod color_count;
+pub use color_count::color_count_row;
+
 /// An accent insertion line on one edge of `r` while a drag hovers it (vertical: on its left or,
 /// `after`, right edge; else on its top or bottom).
 pub fn drop_line(ui: &Ui, r: Rect, after: bool, vertical: bool, t: &Tokens) {

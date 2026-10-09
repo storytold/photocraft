@@ -2553,6 +2553,7 @@ cameraRaw	Roughness	Chropowatość
 	Patch Tool	Narzędzie Łatka
 	Patch:	Łatka:
 	Lasso around an area, then drag the selection	Zakreśl obszar lassem, a następnie przeciągnij zaznaczenie
+	Now drag the selection onto another area	Teraz przeciągnij zaznaczenie na inny obszar
 	Edit Type	Edytuj tekst
 	Make Default	Ustaw jako domyślne
 	Reset to Default	Przywróć domyślne
@@ -3273,6 +3274,22 @@ cameraRaw	Roughness	Chropowatość
 	Reset View	Resetuj widok
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
 
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Próbka punktowa
+	3 by 3 Average	Uśrednianie 3 × 3
+	5 by 5 Average	Uśrednianie 5 × 5
+	11 by 11 Average	Uśrednianie 11 × 11
+	31 by 31 Average	Uśrednianie 31 × 31
+	51 by 51 Average	Uśrednianie 51 × 51
+	101 by 101 Average	Uśrednianie 101 × 101
+	Sample Size:	Wielkość próbki:
+	All Layers No Adjustments	Wszystkie warstwy bez korekt
+	Current & Below No Adjustments	Bieżąca i poniżej bez korekt
+	Show Sampling Ring	Pokaż pierścień próbkowania
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Poza gamą druku: kliknij, aby wybrać najbliższy kolor do druku
 	Not a web colour: click for the nearest web colour	To nie jest kolor internetowy: kliknij, aby wybrać najbliższy kolor internetowy
+	Color to Alpha…	Kolor na alfę…
+	Transparency Threshold	Próg przezroczystości
+	Opacity Threshold	Próg krycia

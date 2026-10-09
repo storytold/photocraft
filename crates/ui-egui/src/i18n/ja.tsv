@@ -2077,6 +2077,7 @@ cameraRaw	Color	カラー
 	Patch Tool	パッチツール
 	Patch:	パッチ:
 	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
+	Now drag the selection onto another area	選択範囲を別の場所へドラッグします
 	Edit Type	文字を編集
 
 
@@ -2231,6 +2232,19 @@ fontWeight	Italic	斜体
 	Rotate View Tool	表示回転ツール
 	Reset View	表示をリセット
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	中心の周りをドラッグして表示を回転  ·  Shift で 15° 単位
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	ポイントサンプル
+	3 by 3 Average	3 × 3 平均
+	5 by 5 Average	5 × 5 平均
+	11 by 11 Average	11 × 11 平均
+	31 by 31 Average	31 × 31 平均
+	51 by 51 Average	51 × 51 平均
+	101 by 101 Average	101 × 101 平均
+	Sample Size:	サンプルサイズ:
+	All Layers No Adjustments	すべてのレイヤー（色調補正なし）
+	Current & Below No Adjustments	現在のレイヤーとその下（色調補正なし）
+	Show Sampling Ring	サンプリングリングを表示
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	印刷の色域外：クリックすると最も近い印刷可能な色になります
@@ -3279,3 +3293,6 @@ fontWeight	Italic	斜体
 
 # Command id overrides
 @id	select.all	すべてを選択
+	Color to Alpha…	カラーを透明に…
+	Transparency Threshold	透明のしきい値
+	Opacity Threshold	不透明度のしきい値

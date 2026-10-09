@@ -316,6 +316,8 @@ pub fn encode_jpeg_rgb8(
         enc.set_density(jpeg_encoder::Density::Inch { x: v, y: v });
     }
     if let Some(x) = xmp {
+        // Its `tiff:` resolution, if any, says what the JFIF density says (#1691).
+        let x = crate::resolution::export_xmp(x, dpi.filter(|d| *d >= 1.0).map(|d| (d, d)));
         let mut seg = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
         seg.extend_from_slice(x.as_bytes());
         enc.add_app_segment(1, &seg).map_err(e)?;
@@ -411,6 +413,17 @@ mod tests {
         // SOF2 marks a progressive frame.
         assert!(prog.windows(2).any(|w| w == [0xFF, 0xC2]));
         assert_eq!(crate::decode(&prog).unwrap().dimensions(), (64, 48));
+    }
+
+    /// #1691: the XMP resolution of a Save for Web JPEG says what its JFIF density says.
+    #[test]
+    fn web_jpeg_xmp_resolution_follows_the_density() {
+        let rgb = vec![100u8; 8 * 8 * 3];
+        let xmp = r#"<rdf:Description tiff:XResolution="300/1" tiff:YResolution="300/1"/>"#;
+        let out = encode_jpeg_rgb8(8, 8, &rgb, 80, false, false, None, Some(72.0), Some(xmp)).unwrap();
+        let img = crate::decode(&out).unwrap();
+        assert_eq!(img.meta.dpi, Some((72.0, 72.0)));
+        assert_eq!(img.meta.xmp.as_deref().and_then(crate::xmp_resolution), Some((72.0, 72.0)));
     }
 }
 

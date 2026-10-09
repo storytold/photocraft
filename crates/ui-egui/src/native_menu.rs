@@ -633,12 +633,23 @@ impl NativeMenu {
 
     /// Before egui sees this frame's input: key equivalents become the key presses they were,
     /// and clicks wait for [`NativeMenu::run`].
+    ///
+    /// AppKit takes only the key-down: winit still delivers the key-up (it forwards key-ups while
+    /// ⌘ is held). So a key equivalent adds just its press, ahead of its key-up when that is
+    /// already queued. A second, made-up release made ⌘V paste three times (#1638): a ⌘V release
+    /// without a press is how an image paste reaches us (see [`crate::shortcuts::clipboard_keys`]).
     pub fn raw_input(&mut self, raw: &mut egui::RawInput) {
         for e in self.backend.drain() {
             match e {
                 Event::Key(chord) => {
-                    raw.events.extend(chord.key_event(true));
-                    raw.events.extend(chord.key_event(false));
+                    if let Some(press @ egui::Event::Key { key: pressed_key, .. }) = chord.key_event(true) {
+                        let at = raw
+                            .events
+                            .iter()
+                            .position(|e| matches!(e, egui::Event::Key { key, pressed: false, .. } if *key == pressed_key))
+                            .unwrap_or(raw.events.len());
+                        raw.events.insert(at, press);
+                    }
                 }
                 Event::Click(id) => self.clicks.push(id),
             }
@@ -934,7 +945,7 @@ mod tests {
         if let Some(m) = app.services.native_menu.as_mut() {
             m.raw_input(&mut raw);
         }
-        assert_eq!(raw.events.len(), 2, "a press and a release");
+        assert_eq!(raw.events.len(), 1, "the press: winit delivers the release");
         frame(&ctx, raw, |ui| {
             run(&mut app, ui.ctx());
             crate::shortcuts::handle(&mut app, ui.ctx());
@@ -945,6 +956,42 @@ mod tests {
         // Nothing changed: no rebuild of the rows on the next frame.
         frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
         assert_eq!(synced.borrow().len(), 1);
+    }
+
+    /// #1638: ⌘V through the Mac menu pasted three layers. AppKit takes the key-down for Edit ›
+    /// Paste's key equivalent, but winit still delivers the key-up (it forwards key-ups while ⌘ is
+    /// held). The menu's press plus that real release must paste once, whether the release
+    /// arrives in a later frame or already sits in the same input as the menu event.
+    #[test]
+    fn a_paste_key_equivalent_pastes_once() {
+        let release = || egui::Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: false, repeat: false, modifiers: Modifiers::COMMAND };
+        for same_frame in [false, true] {
+            let mut app = app(true);
+            let ctx = egui::Context::default();
+            app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+            app.run("edit.copy", json!({})).unwrap();
+            let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layer_count();
+            let before = layers(&app);
+            let paste = Chord::parse("Cmd+V").unwrap();
+            app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: Default::default(), events: vec![Event::Key(paste)] })));
+            let step = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+                let mut raw = egui::RawInput { events, ..Default::default() };
+                eframe::App::raw_input_hook(app, &ctx, &mut raw);
+                frame(&ctx, raw, |ui| {
+                    run(app, ui.ctx());
+                    crate::shortcuts::handle(app, ui.ctx());
+                });
+            };
+            if same_frame {
+                // A quick tap: the real key-up is already queued when the menu event is drained.
+                step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), release()]);
+            } else {
+                step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::COMMAND)]);
+                step(&mut app, vec![release()]);
+            }
+            step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+            assert_eq!(layers(&app), before + 1, "one ⌘V pastes one layer (key-up in the same frame: {same_frame})");
+        }
     }
 
     #[test]

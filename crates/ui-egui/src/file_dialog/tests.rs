@@ -32,6 +32,29 @@ fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
 }
 
 #[test]
+fn open_starts_in_the_last_used_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
+    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir) }, _)] if dir == "/pics"),
+        "{:?}",
+        open.borrow().first().map(|(r, _)| r.clone())
+    );
+}
+
+#[test]
+fn last_used_dir_takes_the_most_recent_parent() {
+    assert_eq!(last_used_dir(&[]), None);
+    assert_eq!(last_used_dir(&["/pics/cat.psd".into()]), Some("/pics".into()));
+    assert_eq!(last_used_dir(&["/pics/cat.psd".into(), "/old/dog.png".into()]), Some("/pics".into()));
+    assert_eq!(last_used_dir(&["cat.psd".into()]), None, "no folder to start in");
+    assert_eq!(last_used_dir(&["/".into()]), None, "the root has no parent");
+}
+
+#[test]
 fn the_app_keeps_running_while_a_dialog_is_open() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();

@@ -530,6 +530,18 @@ pub struct ToolOptions {
     pub red_eye_pupil_size: f32,
     #[serde(default = "fifty")]
     pub red_eye_darken: f32,
+    /// Eyedropper › Sample Size: 1 = Point Sample, else the side of the averaged square (3, 5,
+    /// 11, 31, 51, 101; `photocraft_engine::sample_cmds::SAMPLE_SIZES`). Shared, as in Photoshop,
+    /// with the ⌥-click eyedropper of the painting tools, the dialog eyedroppers and the Info panel.
+    #[serde(default = "one_u32")]
+    pub eyedropper_size: u32,
+    /// Eyedropper › Sample: current | currentAndBelow | all | allNoAdjustments |
+    /// currentAndBelowNoAdjustments (`document.sampleColor`'s `sampleLayer`).
+    #[serde(default = "default_eyedropper_sample")]
+    pub eyedropper_sample: String,
+    /// Eyedropper › Show Sampling Ring.
+    #[serde(default = "yes")]
+    pub eyedropper_ring: bool,
 }
 
 fn yes() -> bool {
@@ -555,6 +567,14 @@ fn fifty() -> f32 {
 /// The session brush starts out as the Brush's (the tool the app opens with).
 fn default_brush_tool() -> Tool {
     Tool::Brush
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+fn default_eyedropper_sample() -> String {
+    "all".into()
 }
 
 impl Default for ToolOptions {
@@ -624,6 +644,9 @@ impl Default for ToolOptions {
             magnetic_pressure: false,
             red_eye_pupil_size: 50.0,
             red_eye_darken: 50.0,
+            eyedropper_size: 1,
+            eyedropper_sample: default_eyedropper_sample(),
+            eyedropper_ring: true,
         }
     }
 }

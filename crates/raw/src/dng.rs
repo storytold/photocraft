@@ -258,7 +258,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         crop,
         color,
         camera_wb: None,
-        orientation: t.tag_uint(&ifd0, tag::ORIENTATION).map(|o| o as u16).filter(|o| (1..=8).contains(o)).unwrap_or(1),
+        orientation: crate::tiff::orientation(t.tag_uint(&ifd0, tag::ORIENTATION)),
         baseline_exposure: if baseline_exposure.is_finite() { baseline_exposure.clamp(-10.0, 10.0) } else { 0.0 },
         gain_maps,
         tone_curve: Vec::new(),

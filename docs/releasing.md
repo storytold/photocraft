@@ -140,6 +140,13 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   "Open with" for PSD/PSB and image files. It also registers App Paths (Win+R `photocraft`).
   The MSI version is the numeric `X.Y.Z`, because MSI has no pre-release field. Same-version
   upgrades are allowed so that release candidates replace each other.
+- Double-clicking the MSI opens a setup wizard (WixUI_InstallDir without the licence page):
+  Welcome, install folder (remembered for upgrades in `HKLM\Software\PhotoCraft\InstallDir`),
+  Ready, a progress page, and a Finish page that says where to find the app, with a ticked "Launch
+  PhotoCraft" box. The pages name the full version (`photocraft.en-us.wxl`). `package.ps1` draws
+  the wizard's banner and side bitmaps from the app icon, so no WiX stock art ships. `msiexec /qn`
+  still installs silently. Building needs the WiX UI and Util extensions:
+  `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`.
 - Shortcut icon identifiers keep the executable's `.exe` extension: MSI uses the identifier
   as the cached icon filename, and an extensionless filename can render as a blank document
   icon. `packaging/windows/check-icons.ps1` checks the references and extensions in CI;
@@ -159,7 +166,8 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
 
   The script is the single place to change when the Windows signing setup changes.
 
-Locally on Windows: `dotnet tool install -g wix --version 5.0.2`, then
+Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
+`wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`, then
 `pwsh packaging/windows/package.ps1 -Arch x64`.
 
 ### Linux

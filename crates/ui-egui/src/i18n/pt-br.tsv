@@ -2512,6 +2512,7 @@ cameraRaw	Blending	Mesclagem
 	Patch Tool	Ferramenta Correção
 	Patch:	Correção:
 	Lasso around an area, then drag the selection	Contorne uma área com o laço e arraste a seleção
+	Now drag the selection onto another area	Agora arraste a seleção para outra área
 	3 x 3	3 × 3
 	4 x 4	4 × 4
 	5 x 5	5 × 5
@@ -2679,6 +2680,22 @@ fontWeight	Italic	Itálico
 	Reset View	Redefinir visualização
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arraste ao redor do centro para girar a visualização  ·  Shift restringe a 15°
 
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Amostra pontual
+	3 by 3 Average	Média de 3 × 3
+	5 by 5 Average	Média de 5 × 5
+	11 by 11 Average	Média de 11 × 11
+	31 by 31 Average	Média de 31 × 31
+	51 by 51 Average	Média de 51 × 51
+	101 by 101 Average	Média de 101 × 101
+	Sample Size:	Tamanho da amostra:
+	All Layers No Adjustments	Todas as camadas sem ajustes
+	Current & Below No Adjustments	Atual e abaixo sem ajustes
+	Show Sampling Ring	Mostrar anel de amostragem
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Fora da gama de impressão: clique para a cor imprimível mais próxima
 	Not a web colour: click for the nearest web colour	Não é uma cor da Web: clique para a cor da Web mais próxima
+	Color to Alpha…	Cor para alfa…
+	Transparency Threshold	Limiar de transparência
+	Opacity Threshold	Limiar de opacidade

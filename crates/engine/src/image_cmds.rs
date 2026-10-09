@@ -169,7 +169,9 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
         Ok(())
     })?;
-    Ok(json!({ "width": nw, "height": nh }))
+    // The size the document has now: without resampling `width`/`height` are ignored (#1815).
+    let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
+    Ok(json!({ "width": size.width, "height": size.height }))
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -437,7 +439,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.imageSize",
             "Image Size…",
             ["Image"],
-            r##"{"width":px,"height":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails|none"="bicubic"}"##,
+            r##"{"width":px,"height":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
             has_doc,
             image_size
         ),
@@ -636,9 +638,33 @@ mod tests {
     #[test]
     fn resolution_only_change() {
         let mut s = session();
-        s.execute("image.imageSize", json!({"resolution": 300, "resample": "none", "width": 999})).unwrap();
+        let r = s.execute("image.imageSize", json!({"resolution": 300, "resample": "none", "width": 999})).unwrap();
         assert_eq!(doc(&s).size, Size::new(40, 20));
         assert_eq!(doc(&s).resolution_dpi, 300.0);
+        // #1815: the result is the size the document has, not the ignored request.
+        assert_eq!(r, json!({"width": 40, "height": 20}));
+    }
+
+    #[test]
+    fn image_size_reports_the_size_it_applied() {
+        // #1815: every path reports the document's size afterwards, at every depth.
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
+            let size = |s: &Session| json!({"width": doc(s).size.width, "height": doc(s).size.height});
+            for p in [
+                json!({"width": 999, "height": 777, "resample": "none", "resolution": 150}),
+                json!({"width": 32}),
+                json!({"height": 96, "resample": "nearest"}),
+                json!({"width": 96, "height": 72, "resample": "none"}),
+                json!({}),
+            ] {
+                let r = s.execute("image.imageSize", p.clone()).unwrap();
+                assert_eq!(r, size(&s), "{depth}-bit {p}");
+            }
+            // 64×48 → (none) → 32×24 → 128×96 (aspect kept) → (none) → unchanged.
+            assert_eq!(doc(&s).size, Size::new(128, 96), "{depth}-bit");
+        }
     }
 
     /// #1114: nearest neighbor reduction keeps source values without averaging.

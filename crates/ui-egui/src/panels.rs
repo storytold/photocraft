@@ -935,13 +935,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::checkbox(ui, &mut app.ui.tool_options.move_auto_select, tl!("Auto-Select:"));
                         hint(ui, tl!("Drag to move the active layer"));
                     }
-                    Tool::Eyedropper => hint(
-                        ui,
-                        &crate::i18n::fmt(
-                            tl!("Click to sample the foreground colour  ·  {key}-click for background"),
-                            &[("key", &crate::shortcuts::pretty("Alt"))],
-                        ),
-                    ),
+                    Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
                     Tool::Zoom => {
                         widgets::checkbox(ui, &mut app.ui.tool_options.zoom_scrubby, tl!("Scrubby Zoom"));
                         hint(
@@ -1101,8 +1095,8 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let (w, h, mode, bits, layers) =
                         (st.doc.size.width, st.doc.size.height, crate::canvas::mode_label(&st.doc), st.doc.depth.bits(), st.doc.layer_count());
                     let mut pct = app.ui.views[i].zoom * 100.0;
-                    if widgets::value_field(ui, &mut pct, 1.0..=3200.0, "%", 78.0).changed() {
-                        app.ui.views[i].zoom = pct / 100.0;
+                    if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 78.0).changed() {
+                        app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
                         app.ui.views[i].fit_pending = false;
                     }
                     widgets::vline(ui, 16.0);
@@ -1262,15 +1256,18 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .hover_doc
         .map(|p| (p[0].floor() as i32, p[1].floor() as i32))
         .filter(|(x, y)| *x >= 0 && *y >= 0 && *x < size.width as i32 && *y < size.height as i32);
+    // The readout averages the Eyedropper's Sample Size, as in Photoshop (#1649).
+    let sample_size = app.ui.tool_options.eyedropper_size;
     let rgba = pos.and_then(|(x, y)| {
-        if let Some(((cx, cy, cr), v)) = app.info_sample
-            && (cx, cy, cr) == (x, y, rev)
+        if let Some(((cx, cy, cr, cs), v)) = app.info_sample
+            && (cx, cy, cr, cs) == (x, y, rev, sample_size)
         {
             return Some(v);
         }
-        let v: Vec<f32> = serde_json::from_value(app.session.execute("document.pixel", json!({"x": x, "y": y})).ok()?).ok()?;
-        let v = [v[0], v[1], v[2], v[3]];
-        app.info_sample = Some(((x, y, rev), v));
+        let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
+        let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
+        let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+        app.info_sample = Some(((x, y, rev, sample_size), v));
         Some(v)
     });
     let mono = theme::mono(11.5);
@@ -1361,9 +1358,11 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
     });
-    let mut lz = v.zoom.max(0.01).log2();
-    if widgets::slider(ui, &mut lz, -6.64..=5.0, None).changed() {
-        app.ui.views[idx].zoom = 2f32.powf(lz);
+    // The whole zoom range, and always the current zoom: a narrower slider would pull it back.
+    let (lo, hi) = (crate::zoom_levels::min(v.doc_size).min(v.zoom).log2(), crate::zoom_levels::MAX.max(v.zoom).log2());
+    let mut lz = v.zoom.log2();
+    if lz.is_finite() && widgets::slider(ui, &mut lz, lo..=hi, None).changed() {
+        app.ui.views[idx].zoom = crate::zoom_levels::clamp(2f32.powf(lz), v.doc_size);
         app.ui.views[idx].fit_pending = false;
     }
 }
@@ -1434,20 +1433,22 @@ fn blend_options(groups: bool) -> Vec<(BlendMode, &'static str)> {
     std::iter::once(BlendMode::PassThrough).filter(|_| groups).chain(BlendMode::LAYER_MODES).map(|m| (m, m.label())).collect()
 }
 
-/// Scroll the Layers panel while holding a layer drag over its top/bottom edge.
+/// Scroll the Layers panel while holding a layer drag over its top/bottom edge or past them.
 ///
 /// Returns the *content* displacement in points for this frame, so positive moves the
 /// list downward (reveals rows above) and negative upward (reveals rows below).
-/// The speed ramps with proximity to the edge and uses elapsed time instead of
-/// assuming a particular refresh rate.
+/// The speed ramps with proximity to the edge and clamps to the maximum speed when
+/// dragged outside, using elapsed time instead of assuming a particular refresh rate.
 fn layer_drag_edge_scroll(pointer: Option<Pos2>, viewport: Rect, dragging: bool, dt: f32) -> f32 {
-    if !dragging || viewport.width() <= 0.0 || viewport.height() <= 0.0 {
+    if !dragging || viewport.width() <= 0.0 || viewport.height() <= 0.0 || dt.is_nan() || dt <= 0.0 {
         return 0.0;
     }
-    let Some(pointer) = pointer.filter(|p| viewport.contains(*p)) else { return 0.0 };
+    let Some(pointer) = pointer.filter(|p| p.x.is_finite() && p.y.is_finite() && p.x >= viewport.left() && p.x <= viewport.right()) else {
+        return 0.0;
+    };
     let edge = 32.0_f32.min(viewport.height() * 0.25);
-    let top = (edge - (pointer.y - viewport.top())).max(0.0) / edge;
-    let bottom = (edge - (viewport.bottom() - pointer.y)).max(0.0) / edge;
+    let top = ((edge - (pointer.y - viewport.top())) / edge).clamp(0.0, 1.0);
+    let bottom = ((edge - (viewport.bottom() - pointer.y)) / edge).clamp(0.0, 1.0);
     let direction = top - bottom;
     if direction == 0.0 {
         return 0.0;
@@ -1586,9 +1587,14 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .min_scrolled_height(if fill { rows_h } else { 0.0 })
         .auto_shrink([false, !fill])
         .show(ui, |ui| {
-            // The drag key is set only by actual layer-row drags, not clicks or
+            // The drag keys are set only by actual layer-row and fx drags, not clicks or
             // ordinary scrolling. The ScrollArea applies this to its own content.
-            let dragging = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag"))).is_some() && ctx.input(|i| i.pointer.primary_down());
+            // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
+            if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
+                ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+            }
+            let held = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag")).is_some() || d.get_temp::<FxDrag>(fx_drag_key()).is_some());
+            let dragging = held && ctx.input(|i| i.pointer.primary_down());
             let pointer = ctx.input(|i| i.pointer.interact_pos());
             let delta = layer_drag_edge_scroll(pointer, ui.clip_rect(), dragging, ctx.input(|i| i.stable_dt));
             if delta != 0.0 {
@@ -1644,9 +1650,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let in_selection = selection.iter().any(|s| s.0 == id);
         (id, in_selection)
     });
+    fx_drag_feedback(&ctx, &doc);
     // End any layer drag after every row has had a chance to accept the drop.
     if ctx.input(|i| i.pointer.any_released()) {
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
+        ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
     }
     widgets::panel_footer(ui, |ui| {
         let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete layer"));
@@ -1886,6 +1894,7 @@ fn layer_row(
     let row_h = if t.pro { 32.0 } else { 46.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
+    fx_drop(ctx, ui, l, rect, actions);
     if resp.drag_started() {
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
     }
@@ -1977,6 +1986,13 @@ fn layer_row(
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
     let fx_open = app.session.active().is_none_or(|d| !d.fx_collapsed.contains(&l.id));
     let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
+    // Dragging the fx badge drags all the layer's effects, not the layer (Photoshop). Like the eye,
+    // it takes the drag from the row; clicks still reach the row.
+    if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx)
+        && ui.interact(badge, ui.id().with(("fx-badge", l.id.0)), Sense::drag()).drag_started()
+    {
+        start_fx_drag(ctx, l.id, None);
+    }
     let name_color = if l.visible { t.text } else { t.text_faint };
     let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
@@ -2825,6 +2841,60 @@ fn layer_drag_and_drop(
     }
 }
 
+/// An fx row being dragged: the layer it belongs to and the effect index (`None` = the "Effects"
+/// row, all of them).
+type FxDrag = (u64, Option<usize>);
+
+fn fx_drag_key() -> egui::Id {
+    egui::Id::new("fx-drag")
+}
+
+/// Start dragging the effects of `layer`: one (`effect`) or all of them.
+fn start_fx_drag(ctx: &egui::Context, layer: LayerId, effect: Option<usize>) {
+    ctx.data_mut(|d| d.insert_temp::<FxDrag>(fx_drag_key(), (layer.0, effect)));
+}
+
+/// While effects are dragged: their name by the pointer, and the copy cursor while ⌥ is held.
+fn fx_drag_feedback(ctx: &egui::Context, doc: &photocraft_doc::Document) {
+    let Some((from, effect)) = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key())) else { return };
+    let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    let label = match effect {
+        Some(i) => doc.layer(LayerId(from)).and_then(|l| l.effects.items.get(i)).map_or("", |e| e.label()),
+        None => "Effects",
+    };
+    crate::layer_transfer::ghost(ctx, p, label);
+    if ctx.input(|i| i.modifiers.alt) {
+        ctx.set_cursor_icon(egui::CursorIcon::Copy);
+    }
+}
+
+/// The command for dropping effects of layer `from` on `target`: they move there, or with ⌥ held
+/// on release are copied (Photoshop). `effect` is one effect row, or all effects when `None`.
+fn fx_drop_action(from: u64, effect: Option<usize>, target: LayerId, copy: bool) -> (String, Value) {
+    let mut payload = json!({"from": from, "to": target.0, "copy": copy});
+    if let Some(o) = payload.as_object_mut()
+        && let Some(i) = effect
+    {
+        o.insert("effect".into(), json!(i));
+    }
+    ("layer.layerStyle.transferEffects".into(), payload)
+}
+
+/// A layer row accepts the fx row being dragged: outlined while the pointer is over it, dropped
+/// on release.
+fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, actions: &mut Vec<(String, Value)>) {
+    let Some((from, effect)) = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key())) else { return };
+    let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    if from == l.id.0 || !rect.contains(p) {
+        return;
+    }
+    let t = Tokens::get(ctx);
+    ui.painter().rect_stroke(rect.shrink(1.0), t.radius_sm, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+    if ctx.input(|i| i.pointer.any_released()) {
+        actions.push(fx_drop_action(from, effect, l.id, ctx.input(|i| i.modifiers.alt)));
+    }
+}
+
 /// Photoshop shows a layer's effects as indented sub-rows ("Effects", then each effect). The eye
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
 fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
@@ -2836,7 +2906,11 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
         rows.push((e.label().to_string(), e.enabled(), kind));
     }
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+        // Drag the row onto another layer to move its effects there, ⌥-drag to copy them.
+        if resp.drag_started() {
+            start_fx_drag(ui.ctx(), l.id, i.checked_sub(1));
+        }
         if !ui.is_rect_visible(rect) {
             continue;
         }
@@ -3173,6 +3247,10 @@ mod history_transform_tests {
 mod layer_pct_slider_tests;
 
 #[cfg(test)]
+#[path = "fx_drag_tests.rs"]
+mod fx_drag_tests;
+
+#[cfg(test)]
 mod lock_tests {
     use super::*;
     use crate::canvas::{ToolEvent, tool_event};
@@ -3486,7 +3564,7 @@ mod layer_drag_edge_scroll_tests {
     use super::*;
 
     #[test]
-    fn scrolls_both_edges_with_distance_dependent_velocity() {
+    fn inside_edge_scrolls_proportional_to_proximity() {
         let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
         let point = |y| Some(pos2(100.0, y));
         let near_top = layer_drag_edge_scroll(point(33.0), viewport, true, 1.0 / 60.0);
@@ -3500,18 +3578,45 @@ mod layer_drag_edge_scroll_tests {
     }
 
     #[test]
-    fn scrolling_stops_outside_or_after_the_drag_finishes() {
+    fn outside_edges_scroll_in_drag_direction() {
+        let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
+        let above = layer_drag_edge_scroll(Some(pos2(100.0, 20.0)), viewport, true, 1.0 / 60.0);
+        let below = layer_drag_edge_scroll(Some(pos2(100.0, 335.0)), viewport, true, 1.0 / 60.0);
+        assert!(above > 0.0, "dragging past the top continues scrolling upward");
+        assert!(below < 0.0, "dragging past the bottom continues scrolling downward");
+    }
+
+    #[test]
+    fn clamp_bounds_speed_outside_edges_and_across_frame_times() {
+        let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
+        let at_top = layer_drag_edge_scroll(Some(pos2(100.0, 30.0)), viewport, true, 1.0 / 60.0);
+        let past_top = layer_drag_edge_scroll(Some(pos2(100.0, 15.0)), viewport, true, 1.0 / 60.0);
+        let far_past_top = layer_drag_edge_scroll(Some(pos2(100.0, -50.0)), viewport, true, 1.0 / 60.0);
+        assert_eq!(past_top, at_top, "speed past top edge is clamped to maximum edge speed");
+        assert_eq!(far_past_top, at_top, "speed far past top edge remains clamped");
+
+        let at_bottom = layer_drag_edge_scroll(Some(pos2(100.0, 330.0)), viewport, true, 1.0 / 60.0);
+        let past_bottom = layer_drag_edge_scroll(Some(pos2(100.0, 345.0)), viewport, true, 1.0 / 60.0);
+        let far_past_bottom = layer_drag_edge_scroll(Some(pos2(100.0, 500.0)), viewport, true, 1.0 / 60.0);
+        assert_eq!(past_bottom, at_bottom, "speed past bottom edge is clamped to maximum edge speed");
+        assert_eq!(far_past_bottom, at_bottom, "speed far past bottom edge remains clamped");
+
+        let active = Some(pos2(100.0, 325.0));
+        let step = layer_drag_edge_scroll(active, viewport, true, 1.0 / 60.0);
+        let twice = layer_drag_edge_scroll(active, viewport, true, 2.0 / 60.0);
+        assert!((twice - step * 2.0).abs() < 1e-4, "time-based scrolling scales across refresh rates");
+        assert!(layer_drag_edge_scroll(active, viewport, true, 0.5).abs() <= 30.0, "long frames have a bounded step");
+    }
+
+    #[test]
+    fn zero_when_no_drag_or_outside_horizontal_bounds() {
         let viewport = Rect::from_min_max(pos2(10.0, 30.0), pos2(310.0, 330.0));
         let active = Some(pos2(100.0, 325.0));
         assert_eq!(layer_drag_edge_scroll(active, viewport, false, 1.0 / 60.0), 0.0);
         assert_eq!(layer_drag_edge_scroll(None, viewport, true, 1.0 / 60.0), 0.0);
         assert_eq!(layer_drag_edge_scroll(Some(pos2(9.0, 325.0)), viewport, true, 1.0 / 60.0), 0.0);
-        assert_eq!(layer_drag_edge_scroll(Some(pos2(100.0, 335.0)), viewport, true, 1.0 / 60.0), 0.0);
+        assert_eq!(layer_drag_edge_scroll(Some(pos2(311.0, 325.0)), viewport, true, 1.0 / 60.0), 0.0);
         assert_eq!(layer_drag_edge_scroll(active, viewport, true, 0.0), 0.0);
-        let step = layer_drag_edge_scroll(active, viewport, true, 1.0 / 60.0);
-        let twice = layer_drag_edge_scroll(active, viewport, true, 2.0 / 60.0);
-        assert!((twice - step * 2.0).abs() < 1e-4, "time-based scrolling scales across refresh rates");
-        assert!(layer_drag_edge_scroll(active, viewport, true, 0.5).abs() <= 30.0, "long frames have a bounded step");
     }
 
     #[test]

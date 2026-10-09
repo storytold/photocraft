@@ -74,7 +74,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 22] = [
+pub const UI_SET_FIELDS: [&str; 25] = [
     "tool",
     "panels",
     "dock",
@@ -97,6 +97,9 @@ pub const UI_SET_FIELDS: [&str; 22] = [
     "brushSize",
     "gradientBlendMode",
     "gradientClassic",
+    "eyedropperSampleSize",
+    "eyedropperSample",
+    "eyedropperRing",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -303,6 +306,23 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     None => None,
                 };
                 let gradient_classic = bool_field(p, "gradientClassic")?;
+                // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
+                let eyedropper_size = match p.get("eyedropperSampleSize") {
+                    Some(v) => Some(
+                        photocraft_engine::sample_cmds::size_param("ui.set", &json!({"size": v}))
+                            .map_err(|_| format!("eyedropperSampleSize must be \"point\" or one of {:?}", photocraft_engine::sample_cmds::SAMPLE_SIZES))?,
+                    ),
+                    None => None,
+                };
+                let eyedropper_sample = match p.get("eyedropperSample") {
+                    Some(v) => {
+                        let ids: Vec<&str> = photocraft_engine::sample_cmds::SampleLayers::ALL.iter().map(|(_, n)| *n).collect();
+                        let id = v.as_str().filter(|id| ids.contains(id)).ok_or_else(|| format!("eyedropperSample must be one of {}", ids.join(", ")))?;
+                        Some(id.to_string())
+                    }
+                    None => None,
+                };
+                let eyedropper_ring = bool_field(p, "eyedropperRing")?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
@@ -394,6 +414,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if gradient_blend.is_some() {
                     crate::gradient_ui::options_changed(app, &gradient_before);
                 }
+                if let Some(size) = eyedropper_size {
+                    app.ui.tool_options.eyedropper_size = size;
+                }
+                if let Some(id) = eyedropper_sample {
+                    app.ui.tool_options.eyedropper_sample = id;
+                }
+                if let Some(ring) = eyedropper_ring {
+                    app.ui.tool_options.eyedropper_ring = ring;
+                }
                 if let Some(v) = panels {
                     app.ui.panels = v;
                 }
@@ -425,7 +454,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(i) = app.session.active_index() {
                     if let Some(z) = zoom {
-                        app.ui.views[i].zoom = (z as f32).clamp(0.01, 64.0);
+                        let size = app.session.documents().get(i).map_or([0, 0], |st| [st.doc.size.width, st.doc.size.height]);
+                        app.ui.views[i].zoom = crate::zoom_levels::clamp(z as f32, size);
                         app.ui.views[i].fit_pending = false;
                         app.ui.views[i].fill_pending = false;
                     }
@@ -1029,6 +1059,37 @@ mod tests {
         let bad = call(&mut app, &ctx, "ui.set", json!({"gradientBlendMode": "nonsense", "gradientClassic": false}));
         assert_eq!(bad["ok"], false, "{bad}");
         assert!(app.ui.tool_options.gradient_classic, "invalid mode must not change options");
+    }
+
+    #[test]
+    fn ui_set_drives_the_eyedropper_options() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let good = call(
+            &mut app,
+            &ctx,
+            "ui.set",
+            json!({"tool": "eyedropper", "eyedropperSampleSize": 11, "eyedropperSample": "currentAndBelow", "eyedropperRing": false}),
+        );
+        assert_eq!(good["ok"], true, "{good}");
+        let o = &app.ui.tool_options;
+        assert_eq!((o.eyedropper_size, o.eyedropper_sample.as_str(), o.eyedropper_ring), (11, "currentAndBelow", false));
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"eyedropperSampleSize": "point"}))["ok"], true);
+        assert_eq!(app.ui.tool_options.eyedropper_size, 1);
+        for bad in [
+            json!({"eyedropperSampleSize": 4}),
+            json!({"eyedropperSampleSize": "big"}),
+            json!({"eyedropperSample": "below"}),
+            json!({"eyedropperSample": 2}),
+            json!({"eyedropperRing": "yes"}),
+        ] {
+            let r = call(&mut app, &ctx, "ui.set", bad.clone());
+            assert_eq!(r["ok"], false, "{bad}: {r}");
+        }
+        // A rejected call applies none of its fields.
+        let r = call(&mut app, &ctx, "ui.set", json!({"eyedropperSampleSize": 101, "eyedropperSample": "nope"}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(app.ui.tool_options.eyedropper_size, 1);
     }
 
     #[test]

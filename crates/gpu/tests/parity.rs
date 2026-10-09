@@ -7,7 +7,10 @@ use photocraft_doc::{Adjustment, Document, Fill, GradientStyle, Layer, LayerCont
 use photocraft_geom::{Rect, Size};
 use photocraft_gpu::{Compositor, render_to_vec};
 
-const TOL: f32 = 1.0 / 255.0;
+/// One 8-bit step, plus a few f32 ulps: two results exactly one step apart can differ by a hair
+/// more than `1.0 / 255.0` after premultiplying and subtracting (NVIDIA's shader arithmetic
+/// lands on that side at the Hue/Saturation pixel in `adjustment_layers`).
+const TOL: f32 = 1.0 / 255.0 + 4.0 * f32::EPSILON;
 
 /// Concurrent wgpu instances in one process segfault on some drivers (RADV), so the GPU tests
 /// take this lock and hold it until their device is dropped.

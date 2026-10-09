@@ -71,20 +71,20 @@ impl Span {
     }
 }
 
-/// Clamp one axis of the view centre with Overscroll off: the image can't leave its edges; an
-/// image smaller than the view is centred.
+/// Clamp one axis of the view centre with Overscroll off, as Photoshop 25.4 does: an image larger
+/// than the view can't leave its edges, and one smaller than the view stays inside it, where
+/// zooming put it (zooming out around the pointer doesn't re-centre it; Fit on Screen does).
 pub fn clamp_axis(center: f32, len: f32, size: f32, zoom: f32) -> f32 {
     if !(zoom.is_finite() && zoom > 0.0 && len.is_finite() && len > 0.0 && size.is_finite() && size > 0.0) {
         return center;
     }
-    let half = size / zoom / 2.0;
-    if 2.0 * half >= len {
-        len / 2.0
-    } else if center.is_finite() {
-        center.clamp(half, len - half)
-    } else {
-        len / 2.0
+    if !center.is_finite() {
+        return len / 2.0;
     }
+    let half = size / zoom / 2.0;
+    // Larger: the view stays within the image. Smaller: the image stays within the view.
+    let (a, b) = (half, len - half);
+    center.clamp(a.min(b), a.max(b))
 }
 
 /// Apply Preferences › Tools › Overscroll (off) to `view` for a canvas of `size` points. True
@@ -278,8 +278,12 @@ mod tests {
         assert_eq!(clamp_axis(-400.0, 1000.0, 500.0, 1.0), 250.0);
         assert_eq!(clamp_axis(4000.0, 1000.0, 500.0, 1.0), 750.0);
         assert_eq!(clamp_axis(600.0, 1000.0, 500.0, 1.0), 600.0);
-        // Smaller than the view: centred.
-        assert_eq!(clamp_axis(-90.0, 1000.0, 500.0, 0.2), 500.0);
+        // Smaller than the view (2500 doc px of view for 1000 of image): it stays where it is
+        // while it is inside the view, and is pushed back in at the edges.
+        assert_eq!(clamp_axis(-90.0, 1000.0, 500.0, 0.2), -90.0);
+        assert_eq!(clamp_axis(-400.0, 1000.0, 500.0, 0.2), -250.0, "the image's right edge on the view's");
+        assert_eq!(clamp_axis(1400.0, 1000.0, 500.0, 0.2), 1250.0, "its left edge on the view's");
+        assert_eq!(clamp_axis(500.0, 1000.0, 1000.0, 1.0), 500.0, "exactly the view's size: centred");
         let mut v = View { zoom: 1.0, center: [-500.0, 20.0], fit_pending: false, fill_pending: false, doc_size: [1000, 800], rotation: 0.0 };
         assert!(clamp_view(&mut v, vec2(500.0, 400.0)));
         assert_eq!(v.center, [250.0, 200.0]);
@@ -458,10 +462,16 @@ mod tests {
                 } else {
                     assert!((x - w / 2.0).abs() < 1e-3, "clamped to the left edge: {x}");
                 }
-                // Zoomed out below fit: centred.
+                // Zoomed out below fit (Photoshop): the image is not re-centred, it stays where it
+                // is while it fits in the view, and is pushed back in at the view's edge.
                 set_view(&mut h, 0.1, [-50.0, 9000.0]);
                 if !overscroll {
-                    assert_eq!(view(&h).center, [1000.0, 750.0]);
+                    let r = h.state().last_canvas_rect;
+                    let (hw, hh) = (r.width() / 0.1 / 2.0, r.height() / 0.1 / 2.0);
+                    let c = view(&h).center;
+                    assert_eq!(c[0], -50.0, "inside the view: left alone");
+                    assert!((c[1] - hh).abs() < 1e-2, "pushed back in: the image's top on the view's: {c:?}");
+                    assert!(c[0] - hw <= 0.0 && c[0] + hw >= 2000.0 && c[1] - hh <= 0.0 && c[1] + hh >= 1500.0, "{c:?}");
                 }
             }
         }

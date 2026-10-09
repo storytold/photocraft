@@ -2072,6 +2072,7 @@ cameraRaw	Blending	混合
 	Patch Tool	修補工具
 	Patch:	修補：
 	Lasso around an area, then drag the selection	用套索圈出區域，然後拖曳選取範圍
+	Now drag the selection onto another area	現在將選取範圍拖曳到另一個區域
 	Edit Type	編輯文字
 
 
@@ -2226,6 +2227,22 @@ fontWeight	Italic	斜體
 	Reset View	重設檢視
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	繞中心拖曳以旋轉檢視  ·  Shift 限制為 15°
 
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	取樣點
+	3 by 3 Average	3 × 3 平均
+	5 by 5 Average	5 × 5 平均
+	11 by 11 Average	11 × 11 平均
+	31 by 31 Average	31 × 31 平均
+	51 by 51 Average	51 × 51 平均
+	101 by 101 Average	101 × 101 平均
+	Sample Size:	取樣大小：
+	All Layers No Adjustments	所有圖層（不含調整）
+	Current & Below No Adjustments	目前及以下（不含調整）
+	Show Sampling Ring	顯示取樣環
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	超出列印色域：按一下以使用最接近的可列印顏色
 	Not a web colour: click for the nearest web colour	不是網頁顏色：按一下以使用最接近的網頁顏色
+	Color to Alpha…	顏色轉為 Alpha…
+	Transparency Threshold	透明度臨界值
+	Opacity Threshold	不透明度臨界值

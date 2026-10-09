@@ -109,6 +109,10 @@ pub static LANGUAGES: [LangInfo; 16] = [
     },
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
+    // Ukrainian has the same one/few/many rule for integer counts.
+    LangInfo {
+        code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new()
+    },
     LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -486,6 +490,64 @@ mod tests {
         assert_eq!(trn(ru(), 22, "{n} item", "{n} items"), "22 элемента");
         assert_eq!(trn(ru(), 101, "{n} item", "{n} items"), "101 элемент");
         assert_eq!(trn(ru(), 111, "{n} item", "{n} items"), "111 элементов");
+    }
+
+    #[test]
+    fn ukrainian_resolves_locales_and_preferences() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        assert_eq!(uk.name(), "Українська");
+        assert!(uk.complete_menus());
+        for tag in ["uk", "UK", "uk-UA", "uk_UA", "uk_UA.UTF-8", "uk-UA@euro", "uk-Cyrl-UA"] {
+            assert_eq!(lang_from_tag(tag), Some(uk), "{tag}");
+            assert_eq!(Lang::from_pref(tag), uk, "{tag}");
+        }
+        assert_eq!(tr(uk, "File"), "Файл");
+        assert_eq!(tr(uk, "Layer"), "Шар");
+        assert_eq!(tr(uk, "New document…"), "Новий документ…");
+        assert_eq!(tr(uk, "No properties"), "Немає властивостей");
+        assert_eq!(tr_id(uk, "select.all", "All"), "Виділити все");
+        assert_eq!(tr_ctx(uk, "cameraRaw", "Light"), "Світло");
+        assert_eq!(tr_ctx(uk, "fontWeight", "Light"), "Легкий");
+        assert_eq!(fmt(tr(uk, "Camera Raw Filter ({layer})"), &[("layer", "Background")]), "Фільтр Camera Raw (Background)");
+        for key in ["Alt", "⌥"] {
+            assert_eq!(
+                fmt(tr(uk, "Add a mask  (from the selection; {key} inverts)"), &[("key", key)]),
+                format!("Додати маску  (із виділення; {key} інвертує)")
+            );
+        }
+        assert_eq!(tr(uk, "unknown translation"), "unknown translation");
+    }
+
+    #[test]
+    fn ukrainian_plural_messages_handle_teens_and_compound_counts() {
+        let uk = Lang::from_code("uk").expect("uk registered");
+        for (n, item, layer) in [
+            (0, "елементів", "шарів"),
+            (1, "елемент", "шар"),
+            (2, "елементи", "шари"),
+            (4, "елементи", "шари"),
+            (5, "елементів", "шарів"),
+            (11, "елементів", "шарів"),
+            (12, "елементів", "шарів"),
+            (14, "елементів", "шарів"),
+            (19, "елементів", "шарів"),
+            (21, "елемент", "шар"),
+            (22, "елементи", "шари"),
+            (24, "елементи", "шари"),
+            (25, "елементів", "шарів"),
+            (100, "елементів", "шарів"),
+            (101, "елемент", "шар"),
+            (111, "елементів", "шарів"),
+            (112, "елементів", "шарів"),
+            (114, "елементів", "шарів"),
+            (121, "елемент", "шар"),
+            (122, "елементи", "шари"),
+            (u64::MAX, "елементів", "шарів"),
+        ] {
+            assert_eq!(trn(uk, n, "{n} item", "{n} items"), format!("{n} {item}"));
+            assert_eq!(trn(uk, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
+            assert_eq!(trn(uk, n, "Group · {n} layer", "Group · {n} layers"), format!("Група · {n} {layer}"));
+        }
     }
 
     #[test]

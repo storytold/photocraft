@@ -2128,6 +2128,7 @@
 	Grid:	Raster:
 	Highlight Clipping Warning (O)	Lichter-Abschneidewarnung (O)
 	Lasso around an area, then drag the selection	Lasso um einen Bereich ziehen, dann die Auswahl verschieben
+	Now drag the selection onto another area	Jetzt die Auswahl auf einen anderen Bereich ziehen
 	Patch:	Korrektur:
 	Shadow Clipping Warning (U)	Tiefen-Abschneidewarnung (U)
 	Show Lab Color Readouts	Lab-Farbwerte anzeigen
@@ -2288,6 +2289,22 @@ fontWeight	Italic	Kursiv
 	Reset View	Ansicht zurücksetzen
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Ansicht drehen: im Bogen ziehen · Umschalt: 15°-Schritte
 
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	1 Pixel
+	3 by 3 Average	3 x 3 Pixel Durchschnitt
+	5 by 5 Average	5 x 5 Pixel Durchschnitt
+	11 by 11 Average	11 x 11 Pixel Durchschnitt
+	31 by 31 Average	31 x 31 Pixel Durchschnitt
+	51 by 51 Average	51 x 51 Pixel Durchschnitt
+	101 by 101 Average	101 x 101 Pixel Durchschnitt
+	Sample Size:	Aufnahmebereich:
+	All Layers No Adjustments	Alle Ebenen ohne Einstellungen
+	Current & Below No Adjustments	Aktuelle und darunter ohne Einstellungen
+	Show Sampling Ring	Aufnahmering anzeigen
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Außerhalb des Druckfarbumfangs: Klicken für die nächstliegende druckbare Farbe
 	Not a web colour: click for the nearest web colour	Keine Webfarbe: Klicken für die nächstliegende Webfarbe
+	Color to Alpha…	Farbe zu Alpha…
+	Transparency Threshold	Transparenz-Schwellenwert
+	Opacity Threshold	Deckkraft-Schwellenwert

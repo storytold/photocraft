@@ -386,6 +386,7 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             };
             FilterParams::HsbHsl { input: m("inputMode", "rgb"), output: m("rowOrder", "hsb") }
         }
+        crate::color_to_alpha_cmds::ID => crate::color_to_alpha_cmds::params(p),
         // ---- Video ----
         "filter.video.deInterlace" => FilterParams::DeInterlace {
             eliminate_even: s(p, "eliminate", "oddFields") == "evenFields",

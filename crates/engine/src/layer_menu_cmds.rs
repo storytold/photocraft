@@ -5,7 +5,7 @@
 
 use photocraft_algo::selection::Region;
 use photocraft_color::{BlendMode, ColorMode};
-use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Knockout, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
+use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Effects, Knockout, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -605,6 +605,68 @@ fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Dragging a layer's fx onto another layer in the Layers panel: all its effects (or just the one
+/// at `effect`) move there, or with `copy` are copied. Moving all effects replaces the target's
+/// style, as pasting a layer style does; a single effect replaces the target's effect of the same
+/// kind, else is added.
+fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.layerStyle.transferEffects";
+    let id_of = |key: &str| p.get(key).and_then(Value::as_u64).map(LayerId).ok_or_else(|| bad(CMD, format!("`{key}` must be a layer id")));
+    let from = id_of("from")?;
+    let to = id_of("to")?;
+    if from == to {
+        return Err(bad(CMD, "the effects are already on that layer"));
+    }
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let index = match p.get("effect") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(CMD, "`effect` must be an effect index"))?),
+    };
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let src = d.doc.layer(from).ok_or(EngineError::NoLayer(from))?;
+    d.doc.layer(to).ok_or(EngineError::NoLayer(to))?;
+    let payload = match index {
+        Some(i) => {
+            let e = src.effects.items.get(i).cloned().ok_or_else(|| bad(CMD, format!("the layer has no effect {i}")))?;
+            Effects { enabled: true, items: vec![e], psd_raw: None, reference: None }
+        }
+        None => Effects { psd_raw: None, ..src.effects.clone() },
+    };
+    if payload.items.is_empty() {
+        return Err(bad(CMD, "the layer has no layer effects"));
+    }
+    let label = if copy { "Copy Layer Effects" } else { "Move Layer Effects" };
+    s.edit(label, |doc, _| {
+        let dst = doc.layer_mut(to).ok_or(EngineError::NoLayer(to))?;
+        dst.effects.psd_raw = None;
+        if index.is_some() {
+            dst.effects.enabled = true;
+            for e in payload.items {
+                let same = dst.effects.items.iter().position(|x| std::mem::discriminant(x) == std::mem::discriminant(&e));
+                match same.and_then(|i| dst.effects.items.get_mut(i)) {
+                    Some(slot) => *slot = e,
+                    None => dst.effects.items.push(e),
+                }
+            }
+        } else {
+            dst.effects = payload;
+        }
+        if !copy {
+            let src = doc.layer_mut(from).ok_or(EngineError::NoLayer(from))?;
+            match index {
+                Some(i) if i < src.effects.items.len() => {
+                    src.effects.items.remove(i);
+                    src.effects.psd_raw = None;
+                }
+                Some(_) => {}
+                None => src.effects = Effects::default(),
+            }
+        }
+        Ok(())
+    })?;
+    Ok(json!({"from": from.0, "to": to.0}))
+}
+
 /// Effects drawn beneath the layer (they become separate layers below it, unclipped).
 fn is_below(e: &Effect) -> bool {
     match e {
@@ -861,6 +923,14 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("layer.layerStyle.createLayer", "Create Layer", ["Layer", "Layer Style"], r##"{"layer":id?}"##, has_effects, create_layer),
         spec!("layer.layerStyle.scaleEffects", "Scale Effects…", ["Layer", "Layer Style"], r##"{"scale":1..1000=100}"##, has_effects, scale_effects),
+        spec!(
+            "layer.layerStyle.transferEffects",
+            "Move Layer Effects",
+            [],
+            r##"{"from":id,"to":id,"effect":index? (default: all effects),"copy":bool=false}"##,
+            has_doc,
+            transfer_effects
+        ),
         CommandSpec {
             id: "layer.layerContentOptions",
             label: "Layer Content Options…",
