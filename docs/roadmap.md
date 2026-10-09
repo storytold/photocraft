@@ -39,6 +39,14 @@ approximated or left out, each with a warning; damaged or unknown files fall bac
 preview. Affinity writing is not implemented: no Affinity installation was available to check
 written files, so `.af` export stays unsupported.
 
+2026-10-09: `corpus/affinity/` now has 39 pinned documents and 21 PNGs (20 rendered references and
+one bitmap-fill texture): the prior 21 public documents plus 18 CC0 samples for #1606. The new
+samples compare against their exported PNGs;
+mean differences range from 0.44/255 (conical gradients) to 86.05/255 (RGB/32 reduced to 8-bit).
+Clouds, hearts, cogs, callouts, arrows, double stars, tears, crescents, diamonds and circular segments
+now import as parametric shapes; the special-shapes sample measures 5.68/255 against its PNG. The
+remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
+
 ## Honest parity assessment (2026-10-05)
 
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it
