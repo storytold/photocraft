@@ -277,6 +277,13 @@ impl TextLayout {
                 return (x, l.baseline - l.ascent, l.baseline + l.descent);
             }
         }
+        // Inside a grapheme (an offset before a mark): after the whole cluster.
+        if let Some(c) = self.clusters.iter().find(|c| c.range.start < offset && offset < c.range.end)
+            && let Some(l) = self.lines.get(c.line)
+        {
+            let x = if c.rtl { c.x } else { c.x + c.advance };
+            return (x, l.baseline - l.ascent, l.baseline + l.descent);
+        }
         // End of a line (or empty line): after the last cluster of the line containing it.
         let li = self.lines.iter().position(|l| offset >= l.range.start && offset <= l.range.end).unwrap_or(self.lines.len().saturating_sub(1));
         match self.lines.get(li) {
@@ -472,6 +479,8 @@ impl Layouter {
             let ps = para_style_at(prange.start).clone();
             let content_end = strip_break(text, &prange);
             let content = &text[prange.start..content_end];
+            // Caret stops: the grapheme boundaries of this paragraph, as layer offsets.
+            let graphemes: Vec<usize> = crate::segment::grapheme_boundaries(content).into_iter().map(|b| prange.start + b).collect();
             let prefix = match ps.direction {
                 TextDirection::Auto => "",
                 TextDirection::Ltr => LRM,
@@ -890,6 +899,7 @@ impl Layouter {
                         out.decorations.push(DecorationRect { x0: run_x0, y0, x1: run_x1, y1: y0 + rm.strikethrough_size.max(1.0), style: si });
                     }
                 }
+                fold_graphemes(&mut out.clusters, c0, |o| graphemes.binary_search(&o).is_ok());
                 if vertical {
                     extra -= squeeze_punctuation(text, &mut out.clusters[c0..], &mut out.glyphs[g0..]);
                 }
@@ -967,6 +977,27 @@ pub fn split_paragraphs(text: &str) -> Vec<Range<usize>> {
     }
     v.push(start..b.len());
     v
+}
+
+/// Merges the neighbouring pieces of one grapheme, from `from` on, into one cluster spanning
+/// the union of their x extents. Parley splits a multi-character shaping cluster (a letter with
+/// its harakat) into one piece per character, placed next to each other: logically adjacent
+/// pieces, in either visual order (RTL puts the mark's piece first). Carets, hit tests and
+/// selections must stop only at grapheme boundaries. لا stays two clusters: ل and ا are two
+/// graphemes. A piece with no neighbour in its grapheme stays separate: parley 0.11 can wrap a
+/// line inside an RTL grapheme, leaving a mark at the start of the next line.
+fn fold_graphemes(clusters: &mut Vec<ClusterInfo>, from: usize, starts_grapheme: impl Fn(usize) -> bool) {
+    let mut line = clusters.split_off(from.min(clusters.len()));
+    line.dedup_by(|c, p| {
+        let joins = (c.range.start == p.range.end && !starts_grapheme(c.range.start)) || (c.range.end == p.range.start && !starts_grapheme(p.range.start));
+        if joins {
+            let (x0, x1) = (p.x.min(c.x), (p.x + p.advance).max(c.x + c.advance));
+            p.range = p.range.start.min(c.range.start)..p.range.end.max(c.range.end);
+            (p.x, p.advance) = (x0, x1 - x0);
+        }
+        joins
+    });
+    clusters.append(&mut line);
 }
 
 fn strip_break(text: &str, r: &Range<usize>) -> usize {
@@ -1218,8 +1249,57 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SmallCapsMode, feature_list, small_caps_mode};
+    use super::{ClusterInfo, SmallCapsMode, feature_list, fold_graphemes, small_caps_mode};
     use photocraft_doc::text::{Caps, CharStyle};
+
+    fn piece(range: std::ops::Range<usize>, x: f32, advance: f32) -> ClusterInfo {
+        ClusterInfo { range, x, advance, line: 0, rtl: false }
+    }
+
+    fn fold(mut v: Vec<ClusterInfo>, from: usize, boundaries: &[usize]) -> Vec<ClusterInfo> {
+        fold_graphemes(&mut v, from, |o| boundaries.contains(&o));
+        v
+    }
+
+    fn ranges(v: &[ClusterInfo]) -> Vec<std::ops::Range<usize>> {
+        v.iter().map(|c| c.range.clone()).collect()
+    }
+
+    #[test]
+    fn fold_merges_a_mark_into_the_preceding_base_in_ltr_order() {
+        let out = fold(vec![piece(0..1, 0.0, 10.0), piece(1..3, 10.0, 10.0), piece(3..4, 20.0, 10.0)], 0, &[0, 3, 4]);
+        assert_eq!(ranges(&out), vec![0..3, 3..4]);
+        assert_eq!((out[0].x, out[0].advance), (0.0, 20.0));
+    }
+
+    #[test]
+    fn fold_merges_rtl_pieces_when_the_mark_comes_first_visually() {
+        let out = fold(vec![piece(4..6, 0.0, 5.0), piece(0..4, 5.0, 5.0)], 0, &[0, 6]);
+        assert_eq!(ranges(&out), vec![0..6]);
+        assert_eq!((out[0].x, out[0].advance), (0.0, 10.0));
+    }
+
+    #[test]
+    fn fold_chains_a_base_and_two_marks() {
+        let out = fold(vec![piece(0..2, 0.0, 4.0), piece(2..4, 4.0, 4.0), piece(4..6, 8.0, 4.0)], 0, &[0, 6]);
+        assert_eq!(ranges(&out), vec![0..6]);
+        assert_eq!((out[0].x, out[0].advance), (0.0, 12.0));
+    }
+
+    #[test]
+    fn fold_leaves_clusters_before_from_untouched() {
+        let v = vec![piece(0..1, 0.0, 5.0), piece(1..2, 5.0, 5.0), piece(2..3, 10.0, 5.0)];
+        // Offset 1 is not a boundary, but the piece at 0 is before `from`.
+        let out = fold(v, 1, &[0, 2, 3]);
+        assert_eq!(ranges(&out), vec![0..1, 1..2, 2..3]);
+    }
+
+    #[test]
+    fn fold_keeps_a_mark_with_no_neighbouring_host() {
+        let out = fold(vec![piece(5..7, 0.0, 5.0), piece(8..9, 5.0, 5.0)], 0, &[8, 9]);
+        assert_eq!(ranges(&out), vec![5..7, 8..9]);
+        assert!(fold(Vec::new(), 3, &[]).is_empty());
+    }
 
     #[test]
     fn uses_real_small_caps_only_when_the_selected_face_supports_smcp() {
