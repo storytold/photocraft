@@ -646,9 +646,9 @@ pub fn fill_view(view: &mut View, doc: &Document, area: Vec2) {
 
 /// Zoom steps like Photoshop's (⌘+ / ⌘−).
 pub fn zoom_step(z: f32, dir: i32) -> f32 {
-    const STEPS: [f32; 22] =
-        [0.01, 0.02, 0.03, 0.05, 0.0667, 0.1, 0.125, 0.1667, 0.25, 0.333, 0.5, 0.6667, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 12.0, 16.0, 32.0];
-    if dir > 0 { STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(32.0) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(0.01) }
+    const STEPS: [f32; 23] =
+        [0.01, 0.02, 0.03, 0.05, 0.0667, 0.1, 0.125, 0.1667, 0.25, 0.333, 0.5, 0.6667, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 12.0, 16.0, 32.0, 64.0];
+    if dir > 0 { STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(z) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(z) }
 }
 
 fn checker(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::TextureId {
@@ -4494,7 +4494,16 @@ mod tests {
         assert_eq!(zoom_step(1.0, 1), 2.0);
         assert_eq!(zoom_step(1.0, -1), 0.6667);
         assert_eq!(zoom_step(0.4, 1), 0.5);
-        assert_eq!(zoom_step(32.0, 1), 32.0);
+        assert_eq!(zoom_step(32.0, 1), 64.0);
+    }
+
+    #[test]
+    fn zoom_steps_reach_max_zoom_and_stop_there() {
+        assert_eq!(zoom_step(32.0, 1), 64.0, "the table reaches MAX_ZOOM");
+        assert_eq!(zoom_step(40.0, 1), 64.0, "a zoom between steps still steps in");
+        assert_eq!(zoom_step(crate::zoom_tool::MAX_ZOOM, 1), crate::zoom_tool::MAX_ZOOM, "Zoom In at 6400 % stays there");
+        assert_eq!(zoom_step(crate::zoom_tool::MAX_ZOOM, -1), 32.0, "Zoom Out at 6400 % steps back down");
+        assert_eq!(zoom_step(crate::zoom_tool::MIN_ZOOM, -1), crate::zoom_tool::MIN_ZOOM, "Zoom Out at 1 % stays there");
     }
 
     #[test]
