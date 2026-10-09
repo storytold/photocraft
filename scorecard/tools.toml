@@ -50,9 +50,9 @@ note = "fill_ui.rs dialog over edit.fill (fill_cmds.rs): all contents, mode, opa
 [[item]]
 id = "TOOL-213-7"
 target = "Live stroke preview for every brush-based retouch tool"
-status = "missing"
+status = "partial"
 issue = 213
-note = "Live stroke only for Brush and Eraser (canvas.rs:1684)"
+note = "Live (canvas.rs strokes_live): Brush, Pencil, Eraser, Blur, Sharpen, Smudge, Dodge, Burn, Sponge, Clone Stamp, Healing Brush, History Brush (#1026, #1040); the release commits the live stroke's pixels (P32). Not yet live: Spot Healing Brush, Mixer Brush, Background Eraser, Pattern Stamp"
 
 [[item]]
 id = "TOOL-213-8"
@@ -71,9 +71,9 @@ note = "eyedropper_ring (canvas.rs): the sampled colour on the upper arc, the fo
 [[item]]
 id = "TOOL-213-10"
 target = "Ctrl+Alt drag resizes brush size/hardness with an on-canvas readout"
-status = "missing"
+status = "done"
 issue = 213
-note = "Only [ ] resize (shortcuts.rs:270)"
+note = "brush_resize.rs: ⌃⌥-drag (and ⌥-right-drag) sets diameter horizontally and hardness vertically with the circle and readout beside the pointer, never painting (#271; tests ctrl_alt_drag_resizes_every_brush_tool_without_painting_or_history, canvas_drag_shows_the_circle_and_readout)"
 
 [[item]]
 id = "TOOL-213-11"

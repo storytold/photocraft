@@ -359,6 +359,9 @@ pub struct PhotocraftApp {
     drag: Option<canvas::Drag>,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
+    /// A live stroke just committed with its own pixels: the canvas caches that showed it
+    /// refresh only what it drew after the step they showed (`canvas::damage_since`).
+    committed_stroke: Option<canvas::CommittedStroke>,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
     trail: Option<stroke_trail::Trail>,
     /// Move tool drag shown live (`move_ui`).
@@ -548,6 +551,7 @@ impl PhotocraftApp {
             checker: None,
             drag: None,
             live_stroke: None,
+            committed_stroke: None,
             trail: None,
             move_preview: None,
             blend_preview: None,

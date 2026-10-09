@@ -163,3 +163,41 @@ fn moves_in_one_frame_take_the_pressures_the_pen_reported_between_them() {
     let tail: Vec<f64> = pts.iter().filter(|p| p[0] >= 29.0).map(|p| (p[2] * 100.0).round() / 100.0).collect();
     assert_eq!(tail.get(..3), Some(&[0.4, 0.6, 0.8][..]), "each move keeps its own pressure: {pts:?}");
 }
+
+#[test]
+fn releasing_a_stroke_commits_the_live_pixels_and_replays_identically() {
+    let mut h = harness();
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 14, "hardness": 0.2}, "smoothing": {"amount": 0.3}})).unwrap();
+    move_to(&mut h, 20.0, 50.0);
+    button(&mut h, 20.0, 50.0, true);
+    for (x, y) in [(40.0, 30.0), (70.0, 60.0), (110.0, 40.0), (150.0, 70.0)] {
+        move_to(&mut h, x, y);
+    }
+    button(&mut h, 150.0, 70.0, false);
+    h.run_steps(2);
+    let app = h.state();
+    let st = app.session.active().unwrap();
+    let committed = app.committed_stroke.as_ref().expect("the commit took the live stroke's pixels");
+    assert_eq!((committed.doc, committed.revision), (st.doc.id, st.revision));
+    // Replaying the journaled command from scratch gives the same pixels.
+    let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").cloned().unwrap();
+    let mut fresh = photocraft_engine::Session::new();
+    fresh.execute("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
+    fresh.execute("tools.setBrush", json!({"brush": {"size": 14, "hardness": 0.2}, "smoothing": {"amount": 0.3}})).unwrap();
+    fresh.execute("paint.stroke", p).unwrap();
+    let a = photocraft_compose::render(&st.doc, st.doc.bounds());
+    let b = photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds());
+    assert_eq!(a.px.len(), b.px.len());
+    assert!(a.px.iter().zip(&b.px).all(|(x, y)| x == y), "live commit and replay differ");
+}
+
+#[test]
+fn a_committed_stroke_refreshes_only_what_each_cache_had_not_shown() {
+    use crate::canvas::CommittedStroke;
+    let r = |x: i32| photocraft_geom::Rect::new(x, 0, x + 10, 10);
+    let c = CommittedStroke::for_test(100, vec![r(0), r(20), r(40)]);
+    assert_eq!(c.since(103), Some(photocraft_geom::Rect::EMPTY), "showed the last step: nothing");
+    assert_eq!(c.since(102), Some(r(40)), "one step behind: that step");
+    assert_eq!(c.since(0), Some(r(0).union(&r(20)).union(&r(40))), "never showed the stroke: all of it");
+    assert_eq!(c.since(99), None, "not a key of this stroke");
+}
