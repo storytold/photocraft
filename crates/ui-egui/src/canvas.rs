@@ -743,15 +743,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::blend_preview::display_doc(app, idx) {
         return shown;
     }
+    if let Some(shown) = crate::transform_tool::display_doc(app, idx) {
+        return shown;
+    }
     let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc().clone(), l.display_key());
-    }
-    if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
-        && app.session.active_index() == Some(idx)
-        && st.doc.layer(photocraft_doc::LayerId(t.layer)).is_some()
-    {
-        return (pv.doc.clone(), (1 << 40) + pv.session);
     }
     // Layer Style dialog: show its effects live (Cancel just drops the preview).
     let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);
@@ -2133,6 +2130,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
 
+    // Free Transform updates its quad below, while handling pointer input. Refresh an existing
+    // canvas after that input, so its pixels and handles show the same frame. Painting references
+    // the same GPU canvas / egui texture; their contents are uploaded after this UI pass.
+    let transform_refresh = primary
+        && app.session.active_index() == Some(idx)
+        && app.ui.transform.as_ref().is_some_and(|t| !t.selection && t.target.is_none() && t.path.is_none())
+        && app.transform_preview.as_ref().is_some_and(|p| p.doc.id == doc.id);
+    let cached_gpu =
+        transform_refresh && app.canvases.get(&(doc.id, GPU_OUTPUT)).is_some_and(|c| c.on_gpu) && app.gpu.as_ref().is_some_and(|gpu| gpu.has(doc.id.0, size));
+
     match crate::prefs_ui::pasteboard_color(app) {
         Some(c) => {
             ui.painter_at(rect).rect_filled(rect, 0.0, c);
@@ -2182,7 +2189,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             hdr: hdr_preview(app, &doc),
         };
         crate::gpu_canvas::GpuCanvas::paint(&painter, rect, params);
-    } else if gpu_ok && ensure_gpu(app, idx, visible_doc_rect(&xf)) {
+    } else if gpu_ok && (cached_gpu || ensure_gpu(app, idx, visible_doc_rect(&xf))) {
         on_gpu = true;
         app.perf.gpu = true;
         // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).
@@ -2228,7 +2235,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 }
             }
         }
-        if let Some((tex, _scale)) = ensure_texture(app, &ctx, idx, output) {
+        let cached_texture =
+            transform_refresh.then(|| app.canvases.get(&cache_key(doc.id, output)).and_then(|c| c.texture.as_ref().map(|t| (t.id(), c.scale)))).flatten();
+        if let Some((tex, _scale)) = cached_texture.or_else(|| ensure_texture(app, &ctx, idx, output)) {
             if rotated {
                 paint_mapped_image(&painter, &xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), size, Color32::WHITE);
             } else {
@@ -2857,6 +2866,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             // ⇧ after a stroke: the straight line a click would paint (#257).
             crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
+        }
+    }
+    if transform_refresh {
+        if on_gpu {
+            ensure_gpu(app, idx, visible_doc_rect(&xf));
+        } else {
+            ensure_texture(app, &ctx, idx, output);
         }
     }
     // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
@@ -5059,3 +5075,6 @@ mod rotation_preview_isolation_tests {
         assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_none(), "an inactive tab must never inherit the command preview");
     }
 }
+#[cfg(test)]
+#[path = "transform_composition_tests.rs"]
+mod transform_composition_tests;

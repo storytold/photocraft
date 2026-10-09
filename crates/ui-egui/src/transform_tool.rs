@@ -54,6 +54,7 @@ pub struct TransformPreview {
     pub doc: Arc<Document>,
     pub texture: crate::transform_tex::PreviewTextures,
     pub opacity: f32,
+    composite: Option<CompositePreview>,
     gesture: Option<Gesture>,
     /// Warp-mode drag: (control point, pointer start, mesh points at the start).
     warp_drag: Option<(usize, [f64; 2], Vec<[f64; 2]>)>,
@@ -69,6 +70,113 @@ pub struct TransformPreview {
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
     path: Option<photocraft_doc::vector::Path>,
+}
+
+#[derive(Clone, PartialEq)]
+struct CompositeGeometry {
+    rect: [f64; 4],
+    quad: [[f64; 2]; 4],
+    warp: Option<Warp>,
+    interpolation: String,
+}
+
+struct CompositePreview {
+    source: Arc<Document>,
+    geometry: CompositeGeometry,
+    shown: Arc<Document>,
+    key: u64,
+}
+
+/// Resample only when the transform changes, then let the normal compositor apply the layer's
+/// position, blending, masks, effects and parent groups. The isolated engine session uses the
+/// same command as commit without touching the real document or its history.
+pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    let t = app.ui.transform.as_ref()?;
+    let pv = app.transform_preview.as_ref()?;
+    let st = app.session.documents().get(idx)?;
+    if app.session.active_index() != Some(idx) || pv.doc.id != st.doc.id || st.doc.layer(LayerId(t.layer)).is_none() {
+        return None;
+    }
+    // Marquee transforms and lone mask/channel targets intentionally use a tinted overlay.
+    if t.selection || t.target.is_some() || t.path.is_some() {
+        return Some((pv.doc.clone(), (1 << 40) + pv.session));
+    }
+    let source = st.doc.clone();
+    let layer = LayerId(t.layer);
+    let geometry = CompositeGeometry { rect: t.rect, quad: t.quad, warp: t.warp.clone(), interpolation: t.interpolation.clone() };
+    if let Some(p) = &pv.composite
+        && Arc::ptr_eq(&p.source, &source)
+        && p.geometry == geometry
+    {
+        return Some((p.shown.clone(), p.key));
+    }
+    let started = crate::gpu_canvas::now_ms();
+    let shown = match composite_document(&source, layer, &geometry) {
+        Ok(shown) => shown,
+        Err(error) => {
+            app.ui.status = error;
+            app.ui.status_error = true;
+            source.clone()
+        }
+    };
+    let shown = photocraft_engine::mode_cmds::display_document(&shown).map(Arc::new).unwrap_or(shown);
+    let key = (1 << 40) | (app.ui.alloc_id() & ((1 << 40) - 1));
+    app.transform_preview.as_mut()?.composite = Some(CompositePreview { source, geometry, shown: shown.clone(), key });
+    app.perf.span("transform composite preview", crate::gpu_canvas::now_ms() - started);
+    Some((shown, key))
+}
+
+fn composite_document(source: &Arc<Document>, layer: LayerId, geometry: &CompositeGeometry) -> Result<Arc<Document>, String> {
+    if geometry.warp.as_ref().is_some_and(Warp::is_identity) || (geometry.warp.is_none() && geometry.quad == corners(geometry.rect)) {
+        return Ok(source.clone());
+    }
+    if let Some((dx, dy)) = pixel_translation(source, layer, geometry) {
+        return photocraft_engine::layer_multi_cmds::moved(source, &[layer], dx, dy).map(Arc::new).map_err(|e| e.to_string());
+    }
+    let mut session = photocraft_engine::Session::new();
+    session.add_document((**source).clone(), None);
+    session.select_layer(layer).map_err(|e| e.to_string())?;
+    let (command, params) = match &geometry.warp {
+        Some(warp) => ("edit.transform.warp", json!({"layer": layer.0, "rect": geometry.rect, "warp": warp, "interpolation": geometry.interpolation})),
+        None => ("edit.transform", json!({"layer": layer.0, "rect": geometry.rect, "quad": geometry.quad, "interpolation": geometry.interpolation})),
+    };
+    session.execute(command, params).map_err(|e| e.to_string())?;
+    session.active().map(|st| st.doc.clone()).ok_or_else(|| "Transform preview has no document".into())
+}
+
+/// A plain raster shifted by whole pixels needs no interpolation. Keep other content on the
+/// commit-command path: selections, masks, effects and Background unlocking have extra semantics.
+fn pixel_translation(doc: &Document, layer: LayerId, geometry: &CompositeGeometry) -> Option<(i32, i32)> {
+    let l = doc.layer(layer)?;
+    let LayerContent::Raster(surface) = &l.content else { return None };
+    if geometry.warp.is_some()
+        || doc.selection.is_some()
+        || l.mask.is_some()
+        || l.vector_mask.is_some()
+        || l.locks.position
+        || l.effects.reference.is_some()
+        || !surface.format().alpha
+        || surface.default_pixel().last().copied() != Some(0.0)
+    {
+        return None;
+    }
+    let original = corners(geometry.rect);
+    let [dx, dy] = [geometry.quad[0][0] - original[0][0], geometry.quad[0][1] - original[0][1]];
+    // The resampler clips to ±2^20. Stay within that same range, and never round a fractional
+    // move: it genuinely needs interpolation. Other quads can represent scale/skew/perspective.
+    let limit = f64::from(1 << 20);
+    if !dx.is_finite()
+        || !dy.is_finite()
+        || dx.abs() > f64::from(i32::MAX)
+        || dy.abs() > f64::from(i32::MAX)
+        || dx != dx.round()
+        || dy != dy.round()
+        || geometry.quad.iter().flatten().any(|v| !v.is_finite() || v.abs() >= limit)
+        || !original.iter().zip(&geometry.quad).all(|(a, b)| b[0] - a[0] == dx && b[1] - a[1] == dy)
+    {
+        return None;
+    }
+    Some((dx as i32, dy as i32))
 }
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
@@ -177,6 +285,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
+        composite: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -313,6 +422,7 @@ fn begin_lone(
         doc: Arc::new(pd),
         texture,
         opacity: 0.6,
+        composite: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -359,6 +469,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         doc,
         texture,
         opacity: 1.0,
+        composite: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -437,6 +548,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         doc: Arc::new(pd),
         texture,
         opacity: 1.0,
+        composite: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -1334,7 +1446,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
             }
         }
-        painter.add(mesh);
+        paint_preview_mesh(painter, xf, t, pv, mesh);
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
@@ -1364,6 +1476,41 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
 }
 
+/// Pixel overlays are needed only outside the composited canvas/artboard. Inside, painting
+/// them again would bypass upper layers and blend the moving pixels twice. Controls stay above.
+fn preview_clips(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, pv: &TransformPreview) -> Vec<egui::Rect> {
+    let outer = painter.clip_rect();
+    if t.selection || t.target.is_some() || t.path.is_some() {
+        return vec![outer];
+    }
+    let layer = LayerId(t.layer);
+    let canvas = pv
+        .doc
+        .artboard_of(layer)
+        .filter(|id| *id != layer)
+        .and_then(|id| pv.doc.artboards().iter().find(|b| b.0 == id).map(|b| b.2.rect))
+        .unwrap_or(pv.doc.bounds());
+    let inside = xf.doc_rect(canvas).intersect(outer);
+    if !inside.is_positive() {
+        return vec![outer];
+    }
+    [
+        egui::Rect::from_min_max(outer.min, pos2(outer.right(), inside.top())),
+        egui::Rect::from_min_max(pos2(outer.left(), inside.bottom()), outer.max),
+        egui::Rect::from_min_max(pos2(outer.left(), inside.top()), pos2(inside.left(), inside.bottom())),
+        egui::Rect::from_min_max(pos2(inside.right(), inside.top()), pos2(outer.right(), inside.bottom())),
+    ]
+    .into_iter()
+    .filter(egui::Rect::is_positive)
+    .collect()
+}
+
+fn paint_preview_mesh(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, pv: &TransformPreview, mesh: egui::Mesh) {
+    for clip in preview_clips(painter, xf, t, pv) {
+        painter.with_clip_rect(clip).add(mesh.clone());
+    }
+}
+
 /// Warp preview (the moving pixels on a fine textured mesh) plus the control mesh. Patch
 /// boundaries are solid. A single patch (Grid › Default) also draws its rule-of-thirds guides;
 /// 3×3, 4×4 and 5×5 are just those even cells, with an anchor at every intersection. `guide` is
@@ -1389,7 +1536,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
             mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
         }
     }
-    painter.add(mesh);
+    paint_preview_mesh(painter, xf, t, pv, mesh);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let line = Stroke::new(1.0, accent);
     let thin = Stroke::new(0.75, accent.gamma_multiply(0.7));
