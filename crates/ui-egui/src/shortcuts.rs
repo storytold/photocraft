@@ -291,16 +291,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Pen path in progress: ↩ finishes (open path), Esc cancels.
-    if app.ui.pen.is_some() {
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-            crate::vector_ui::pen_commit(app, false);
-            return;
-        }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            app.ui.pen = None;
-            return;
-        }
+    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
+    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::vector_ui::pen_commit(app, false);
+        return;
     }
     // Magnetic Lasso: ↩ closes, Esc cancels, ⌫ removes a fastening point (not Edit › Clear),
     // [ ] change the detection width (not the brush size).
