@@ -203,6 +203,9 @@ impl Default for ExportSettings {
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Encode a document and write it to a path, reporting the stage to the job; returns the export
+/// warnings. Runs on a worker thread (see [`Services::save_file`]).
+pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &photocraft_engine::jobs::JobCtx) -> Result<Vec<String>, String> + Send + Sync>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -269,6 +272,9 @@ pub struct Services {
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
+    /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
+    pub save_file: Option<SaveFileFn>,
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
@@ -962,34 +968,63 @@ impl PhotocraftApp {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        let (path, warnings) = self.write_document(path, &ExportSettings::default(), false)?;
-        Ok(serde_json::json!({"path": path, "warnings": warnings}))
+        match self.write_document(path.clone(), &ExportSettings::default(), false)? {
+            Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
+            None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true})),
+        }
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
     /// document's path unless saving a copy. A copy leaves the original's path and unsaved
-    /// changes intact. Returns the path and the export warnings (also shown to the user).
-    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<(String, Vec<String>), String> {
+    /// changes intact. Returns the path and the export warnings (also shown to the user), or
+    /// `None` when the save went to a background job (#2017), which finishes it in
+    /// [`jobs_ui::tick`].
+    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        if self.background_jobs
+            && let Some(save) = self.services.save_file.clone()
+        {
+            return jobs_ui::start_save(self, path, settings.clone(), copy, save);
+        }
         let st = self.session.active().ok_or("no document")?;
+        let (doc, revision) = (st.doc.id, st.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
-        if !copy && let Some(st) = self.session.active_mut() {
-            st.saved_to(path.clone());
-        }
+        self.saved(doc, revision, &path, &warnings, copy);
+        Ok(Some((path, warnings)))
+    }
+
+    /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
+    /// state (unless a copy), the status, script events and the warnings.
+    pub(crate) fn saved(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
         self.ui.status = format!("Saved {path}");
-        // "Save Document" script events and File › Generate › Image Assets.
-        if !copy
-            && let Some(i) = self.session.active_index()
-            && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut self.session, i)
-        {
-            self.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
+        if !copy {
+            // A background save may finish while another document is active (or after its
+            // document was closed, when there is nothing left to record).
+            let _ = self.with_document(doc, |app| {
+                if let Some(st) = app.session.active_mut() {
+                    st.saved_to(path.to_string());
+                    // The job locked the document, but record the revision that was written.
+                    st.saved_revision = revision;
+                }
+                // "Save Document" script events and File › Generate › Image Assets.
+                if let Some(i) = app.session.active_index()
+                    && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, i)
+                {
+                    app.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
+                }
+                Ok(())
+            });
         }
         self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&path)), &warnings);
+        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(path)), warnings);
         self.sync_views();
-        Ok((path, warnings))
+    }
+
+    /// A save is running in the background.
+    pub(crate) fn saving(&self) -> bool {
+        !self.jobs.saves.is_empty()
     }
 
     /// Save through the control session's capability-scoped writer. No file

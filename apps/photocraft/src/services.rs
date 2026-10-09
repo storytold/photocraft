@@ -166,6 +166,32 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
+fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_io::ExportOptions {
+    let mut opts = photocraft_io::ExportOptions::default();
+    if let Some(q) = settings.jpeg_quality {
+        opts.encode.jpeg_quality = q;
+    }
+    opts.encode.webp_lossless = settings.webp_lossless;
+    if let Some(q) = settings.webp_quality {
+        opts.encode.webp_quality = q;
+    }
+    opts.tiff_layers = settings.tiff_layers;
+    opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+    opts
+}
+
+/// A save on a worker thread (`Services::save_file`, #2017): encode, then write atomically.
+/// Cancelling while encoding leaves the file on disk untouched.
+fn save_file(doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctx: &photocraft_engine::jobs::JobCtx) -> Result<Vec<String>, String> {
+    ctx.progress(0.0, "Encoding");
+    let opts = export_options(settings);
+    let r = crate::crash_guard::guard("Save", || photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string()))?;
+    ctx.check().map_err(|e| e.to_string())?;
+    ctx.progress(0.0, "Writing");
+    write_atomic(Path::new(path), &r.bytes)?;
+    Ok(r.warnings)
+}
+
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
 
 /// Run `f` on the recovery store (`Err` without a config directory). The service closures never
@@ -266,18 +292,10 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
-            let mut opts = photocraft_io::ExportOptions::default();
-            if let Some(q) = settings.jpeg_quality {
-                opts.encode.jpeg_quality = q;
-            }
-            opts.encode.webp_lossless = settings.webp_lossless;
-            if let Some(q) = settings.webp_quality {
-                opts.encode.webp_quality = q;
-            }
-            opts.tiff_layers = settings.tiff_layers;
-            opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+            let opts = export_options(settings);
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
+        save_file: Some(Arc::new(save_file)),
         file_dialog: Some(Box::new(show_file_dialog)),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,

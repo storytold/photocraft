@@ -297,3 +297,114 @@ fn templates_open_untitled_in_the_background() {
     assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("Untitled-1", None));
     assert_eq!(h.state().ui.recent_files.first().map(String::as_str), Some("/tmp/photocraft-test/card.psdt"));
 }
+
+/// A `save_file` service that holds the save until `gate` opens (or it is cancelled), then
+/// records the path, or fails with `fail`.
+fn gated_save(gate: &Arc<AtomicBool>, written: &Arc<std::sync::Mutex<Vec<String>>>, fail: Option<&'static str>) -> crate::SaveFileFn {
+    let (gate, written) = (gate.clone(), written.clone());
+    Arc::new(move |_, path, _, ctx| {
+        ctx.progress(0.0, "Encoding");
+        while !gate.load(Ordering::Relaxed) {
+            ctx.check().map_err(|e| e.to_string())?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        if let Some(e) = fail {
+            return Err(e.into());
+        }
+        written.lock().unwrap().push(path.to_string());
+        Ok(vec!["a warning".into()])
+    })
+}
+
+fn noticed(app: &PhotocraftApp, text: &str) -> bool {
+    app.ui.notices.iter().any(|n| n.title.contains(text) || n.lines.iter().any(|l| l.contains(text)))
+}
+
+fn step_until(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&PhotocraftApp) -> bool) {
+    let t = Instant::now();
+    while !done(h.state()) && t.elapsed() < Duration::from_secs(30) {
+        h.step();
+    }
+    h.run_steps(2);
+}
+
+#[test]
+fn saves_run_in_the_background_and_are_recorded_when_they_end() {
+    let mut h = app_harness();
+    let (gate, written) = (Arc::new(AtomicBool::new(false)), Arc::default());
+    h.state_mut().services.save_file = Some(gated_save(&gate, &written, None));
+    let r = h.state_mut().save_as(Some("/tmp/photocraft-test/big.psd".into())).unwrap();
+    assert_eq!(r["pending"], true);
+    assert!(h.state().saving());
+
+    // The window keeps drawing; the document stays unsaved and can't be edited meanwhile.
+    let (frames, _) = frames_for(&mut h, 400);
+    assert!(frames >= 4, "only {frames} frames while saving");
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty() && st.path.is_none());
+    assert!(h.state_mut().run("layer.new.layer", json!({})).is_err(), "the saving document is locked");
+    // The progress dialog and the status bar name the save; the dialog shows its stage.
+    assert_eq!(h.query_all_by_label("Saving big.psd").count(), 2);
+    h.get_by_label("Encoding");
+
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(*written.lock().unwrap(), ["/tmp/photocraft-test/big.psd"]);
+    let st = h.state().session.active().unwrap();
+    assert!(!st.is_dirty());
+    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/big.psd"));
+    assert_eq!(st.doc.name, "big.psd", "the document takes the saved file's name, as a synchronous Save As does");
+    assert_eq!(h.state().ui.status, "Saved big.psd: a warning");
+    assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
+    assert!(h.state_mut().run("layer.new.layer", json!({})).is_ok(), "unlocked again");
+}
+
+#[test]
+fn a_failed_or_cancelled_background_save_leaves_the_document_unsaved() {
+    let mut h = app_harness();
+    let (gate, written) = (Arc::new(AtomicBool::new(true)), Arc::default());
+    h.state_mut().services.save_file = Some(gated_save(&gate, &written, Some("disk full")));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/a.psd".into())).unwrap();
+    step_until(&mut h, |a| !a.saving());
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty() && st.path.is_none());
+    assert!(noticed(h.state(), "disk full"), "the failure is reported");
+
+    gate.store(false, Ordering::Relaxed);
+    h.state_mut().services.save_file = Some(gated_save(&gate, &written, None));
+    h.state_mut().save_as(Some("/tmp/photocraft-test/b.psd".into())).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    step_until(&mut h, |a| !a.saving());
+    assert!(written.lock().unwrap().is_empty(), "nothing written");
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty() && st.path.is_none());
+    assert_eq!(h.state().ui.status, "Cancelled Saving b.psd");
+}
+
+#[test]
+fn quitting_waits_for_a_background_save_to_finish() {
+    let mut h = app_harness();
+    let (gate, written) = (Arc::new(AtomicBool::new(false)), Arc::default());
+    h.state_mut().services.save_file = Some(gated_save(&gate, &written, None));
+    // A copy leaves nothing unsaved for the close prompt to wait on.
+    let st = h.state_mut().session.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    assert_eq!(h.state_mut().write_document("/tmp/photocraft-test/copy.psd".into(), &crate::ExportSettings::default(), true), Ok(None));
+    h.run_steps(2);
+
+    let mut info = egui::ViewportInfo::default();
+    info.events.push(egui::ViewportEvent::Close);
+    let mut input = egui::RawInput::default();
+    input.viewports.insert(egui::ViewportId::ROOT, info);
+    let mut out = egui::Context::default().run_ui(input, |ui| crate::discard_ui::guard_window_close(h.state_mut(), ui.ctx()));
+    out.textures_delta.clear();
+    let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|o| o.commands).unwrap_or_default();
+    assert!(commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)), "the close waits for the save");
+    assert!(h.state().jobs.close_after_saves);
+
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(*written.lock().unwrap(), ["/tmp/photocraft-test/copy.psd"]);
+    assert!(!h.state().jobs.close_after_saves, "the close is repeated once the save ends");
+}
