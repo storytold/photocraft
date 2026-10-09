@@ -39,6 +39,7 @@ mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
 pub mod pattern_map;
+pub mod pdn;
 pub mod pixels;
 mod psd_export;
 mod psd_import;
@@ -200,6 +201,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
     }
+    if pdn::is_pdn(bytes) || pdn::has_extension(name) {
+        return pdn::import(name, bytes);
+    }
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
     }
@@ -223,6 +227,9 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
     let ext = extension(name_or_ext);
     if affinity::EXTENSIONS.contains(&ext.as_str()) {
         return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
+    }
+    if pdn::EXTENSIONS.contains(&ext.as_str()) {
+        return Err(IoError::Unsupported("Paint.NET (.pdn) export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
     }
     if ext == photocraft_format::EXTENSION {
         let previews = photocraft_format::SaveOptions {

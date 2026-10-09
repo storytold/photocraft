@@ -43,6 +43,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("heif", Class::Standalone),
     ("raw", Class::Standalone),
     ("affinity", Class::Standalone),
+    ("pdn", Class::Standalone),
     ("adobe-assets", Class::Standalone),
     // Pen tablet input (the one isolated `unsafe` helper: AppKit interop on macOS).
     ("tablet", Class::Standalone),

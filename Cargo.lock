@@ -4228,6 +4228,7 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-paint",
+ "photocraft-pdn",
  "photocraft-psd",
  "photocraft-raster",
  "photocraft-raw",
@@ -4255,6 +4256,14 @@ dependencies = [
  "photocraft-raster",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "photocraft-pdn"
+version = "0.5.0"
+dependencies = [
+ "flate2",
+ "proptest",
 ]
 
 [[package]]
