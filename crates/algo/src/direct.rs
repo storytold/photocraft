@@ -106,6 +106,10 @@ pub struct Registration {
     pub rms: f64,
     /// Pixels of the finest level searched that both layers cover at the pose.
     pub overlap: usize,
+    /// The correlation of the reference with the warped target over those pixels (Pearson, −1
+    /// to 1): how much of the reference the pose explains, whatever the exposure. Near 1 for a
+    /// bracket of one scene, near 0 for unrelated pictures; 0 without overlap or texture.
+    pub correlation: f64,
 }
 
 /// One pyramid level: the plane, its coverage and its size.
@@ -207,13 +211,14 @@ fn covered(valid: Option<&[bool]>, w: usize, sx: f64, sy: f64) -> bool {
 }
 
 /// The cost of `pose`: the RMS of `reference − target ∘ pose`, the mean removed, over the pixels
-/// of the reference that both cover; 1e9 when fewer than 16 do. One row-parallel pass folds Σd,
-/// Σd² and the count, and rms = √((Σd² − (Σd)²/n) / n).
-fn cost(reference: &Lvl, target: &Lvl, pose: &Pose) -> (f64, usize) {
-    let Some(inv) = pose.matrix(target.w, target.h).inverse() else { return (1e9, 0) };
+/// of the reference that both cover; 1e9 when fewer than 16 do. One row-parallel pass folds Σr,
+/// Σt, Σr², Σt², Σrt and the count: rms = √((Σd² − (Σd)²/n) / n) with d = r − t, and the
+/// correlation of r and t over the same pixels, also returned (0 when either has no spread).
+fn cost(reference: &Lvl, target: &Lvl, pose: &Pose) -> (f64, usize, f64) {
+    let Some(inv) = pose.matrix(target.w, target.h).inverse() else { return (1e9, 0, 0.0) };
     let (xmax, ymax) = ((target.w - 1) as f64, (target.h - 1) as f64);
     let rows = par_map(reference.h, |y| {
-        let (mut sd, mut sd2, mut cnt) = (0.0f64, 0.0f64, 0usize);
+        let (mut sr, mut st, mut sr2, mut st2, mut srt, mut cnt) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0usize);
         let yf = y as f64;
         let aff = affine_row(&inv, yf);
         let row = &reference.luma[y * reference.w..(y + 1) * reference.w];
@@ -229,19 +234,27 @@ fn cost(reference: &Lvl, target: &Lvl, pose: &Pose) -> (f64, usize) {
             if !inside || !covered(target.valid.as_deref(), target.w, sx, sy) {
                 continue;
             }
-            let d = f64::from(r - sample(&target.luma, target.w, target.h, sx, sy));
-            sd += d;
-            sd2 += d * d;
+            let (r, t) = (f64::from(r), f64::from(sample(&target.luma, target.w, target.h, sx, sy)));
+            sr += r;
+            st += t;
+            sr2 += r * r;
+            st2 += t * t;
+            srt += r * t;
             cnt += 1;
         }
-        (sd, sd2, cnt)
+        (sr, st, sr2, st2, srt, cnt)
     });
-    let (sd, sd2, cnt) = rows.iter().fold((0.0, 0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+    let (sr, st, sr2, st2, srt, cnt) =
+        rows.iter().fold((0.0, 0.0, 0.0, 0.0, 0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4, a.5 + b.5));
     if cnt < 16 {
-        return (1e9, cnt);
+        return (1e9, cnt, 0.0);
     }
     let n = cnt as f64;
-    (((sd2 - sd * sd / n) / n).max(0.0).sqrt(), cnt)
+    // Central moments: Σ(r−r̄)², Σ(t−t̄)², Σ(r−r̄)(t−t̄).
+    let (vr, vt, cov) = ((sr2 - sr * sr / n).max(0.0), (st2 - st * st / n).max(0.0), srt - sr * st / n);
+    let rms = ((vr + vt - 2.0 * cov) / n).max(0.0).sqrt();
+    let correlation = if vr > 0.0 && vt > 0.0 { (cov / (vr * vt).sqrt()).clamp(-1.0, 1.0) } else { 0.0 };
+    (rms, cnt, correlation)
 }
 
 /// Full-resolution pixels a point at the layer's edge moves per unit of each parameter (the
@@ -364,7 +377,7 @@ pub fn register(reference: &Plane, target: &Plane, motion: Motion, init: Pose, c
     let lo: Vec<f64> = free.iter().map(|&k| iv[k] - Pose::SPAN[k]).collect();
     let hi: Vec<f64> = free.iter().map(|&k| iv[k] + Pose::SPAN[k]).collect();
     let finest = coarsen.min(n.saturating_sub(1));
-    let (mut rms, mut overlap) = (1e9, 0);
+    let (mut rms, mut overlap, mut correlation) = (1e9, 0, 0.0);
     for lvl in (finest..n).rev() {
         let (rl, tl) = (&pref[lvl], &ptgt[lvl]);
         let snap = cur;
@@ -381,10 +394,10 @@ pub fn register(reference: &Plane, target: &Plane, motion: Motion, init: Pose, c
         for (k, &idx) in free.iter().enumerate() {
             cur[idx] = best[k];
         }
-        (rms, overlap) = cost(rl, tl, &Pose::from_vec(&cur));
+        (rms, overlap, correlation) = cost(rl, tl, &Pose::from_vec(&cur));
     }
     let pose = Pose::from_vec(&cur);
-    Registration { pose, h: pose.matrix(w, h), rms, overlap }
+    Registration { pose, h: pose.matrix(w, h), rms, overlap, correlation }
 }
 
 /// `src` (with its coverage) warped by `pose` into a plane of the same size with the cubic
@@ -478,6 +491,27 @@ mod tests {
         let lb = levels(&plane(w, h, &bright));
         assert!(cost(&l[0], &lb[0], &Pose::IDENTITY).0 < 1e-6);
         assert!(cost(&l[0], &lb[0], &Pose { dx: 0.02, ..Pose::IDENTITY }).0 > 1e-3);
+    }
+
+    /// The correlation tells a fit from a non-fit whatever the exposure: a stop brighter copy of
+    /// the texture correlates fully at the truth (where the mean-removed RMS does not vanish),
+    /// another texture hardly at all, and a flat plane not at all.
+    #[test]
+    fn correlation_is_exposure_independent_and_low_for_unrelated_pictures() {
+        let (w, h) = (96, 72);
+        let src = texture(w, h, 2);
+        let l = levels(&plane(w, h, &src));
+        let doubled: Vec<f32> = src.iter().map(|v| v * 2.0).collect();
+        let ld = levels(&plane(w, h, &doubled));
+        let (rms, _, corr) = cost(&l[0], &ld[0], &Pose::IDENTITY);
+        assert!(rms > 0.05 && corr > 0.9999, "rms {rms} correlation {corr}");
+        let other = levels(&plane(w, h, &texture(w, h, 7)));
+        let (_, _, corr) = cost(&l[0], &other[0], &Pose::IDENTITY);
+        assert!(corr.abs() < 0.3, "unrelated textures correlate at {corr}");
+        let flat = levels(&plane(w, h, &vec![0.5; w * h]));
+        assert_eq!(cost(&l[0], &flat[0], &Pose::IDENTITY).2, 0.0);
+        let r = register(&plane(w, h, &src), &plane(w, h, &doubled), Motion::Similarity, Pose::IDENTITY, 0);
+        assert!(r.correlation > 0.999, "{r:?}");
     }
 
     #[test]

@@ -147,14 +147,27 @@ pub(crate) fn register(images: &[(&Surface, Rect)], layout: Layout, reference: O
     Some(Alignment { placements: a.placements.iter().map(|p| p.as_ref().map(|p| p.scaled(kf))).collect(), focal: a.focal * kf, rms: a.rms * kf, ..a })
 }
 
-/// The finest pyramid level the intensity registration searches is at most this many pixels
-/// across: the pose is resolution independent, so the fit still applies at full resolution.
+/// The intensity registration searches planes at most this many pixels across: the pose is
+/// resolution independent, so the fit still applies at full resolution.
 pub(crate) const DIRECT_SIDE: usize = 2048;
+
+/// A layer and its neighbour must share at least this fraction of the plane at the pose found.
+const DIRECT_MIN_OVERLAP: f64 = 0.25;
+/// The reference and the warped layer must correlate at least this much: a bracket of one scene
+/// correlates near 1 whatever the exposure; unrelated pictures, or a pose that ran into the
+/// search box, do not.
+const DIRECT_MIN_CORRELATION: f64 = 0.5;
+
+/// The error of either registration when the layers have no detail in common.
+pub(crate) const NO_DETAIL: &str = "Auto-Align couldn't find enough matching detail between the layers";
 
 /// Registers `images` (surface, content area, all of one size) by intensity
 /// ([`photocraft_algo::direct`]), for layers that nearly coincide (a focus or exposure bracket,
 /// a burst): outward from the reference, each layer to the previous one aligned, starting from
-/// its pose. Planar layouts only; Auto means a similarity (Collage).
+/// its pose. The luminance planes are built at the search scale (≤ [`DIRECT_SIDE`] across), so
+/// nothing full-resolution is held or warped. A layer whose best pose overlaps its neighbour
+/// too little or explains too little of it is no fit, and fails with [`NO_DETAIL`]. Planar
+/// layouts only; Auto means a similarity (Collage).
 pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, reference: usize) -> std::result::Result<Alignment, String> {
     use photocraft_algo::direct::{self, Plane, Pose};
     use photocraft_algo::transform::Homography;
@@ -167,53 +180,57 @@ pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, refer
         }
     };
     let n = images.len();
-    if n == 0 {
-        return Err("no layers to align".into());
-    }
-    let planes: Vec<panorama::PreparedImage> = images
-        .iter()
-        .map(|(s, r)| {
-            let (w, h, l, a) = luma_alpha(s, *r, 1);
-            let valid = a.iter().any(|v| *v < 0.5).then(|| a.iter().map(|v| *v > 0.5).collect());
-            (w, h, l, valid)
-        })
-        .collect();
-    let (w, h) = (planes[reference.min(n - 1)].0, planes[reference.min(n - 1)].1);
-    if planes.iter().any(|p| (p.0, p.1) != (w, h)) {
+    let Some(&(_, area)) = images.get(reference) else { return Err("no layers to align".into()) };
+    let (fw, fh) = (area.width().max(1) as usize, area.height().max(1) as usize);
+    if images.iter().any(|(_, r)| (r.width(), r.height()) != (area.width(), area.height())) {
         return Err("the layers to align have different sizes".into());
     }
-    let mut coarsen = 0;
-    let mut side = w.max(h);
-    while side > DIRECT_SIDE {
-        side = side.div_ceil(2);
-        coarsen += 1;
-    }
-    let mut regs: Vec<Option<direct::Registration>> = (0..n).map(|_| None).collect();
+    // Luminance at the search scale: the box average over k×k pixels, read row by row.
+    let k = fw.max(fh).div_ceil(DIRECT_SIDE).max(1);
+    let planes: Vec<(Vec<f32>, Option<Vec<bool>>)> = images
+        .iter()
+        .map(|(s, r)| {
+            let (_, _, l, a) = luma_alpha(s, *r, k);
+            let valid = a.iter().any(|v| *v < 0.5).then(|| a.iter().map(|v| *v > 0.5).collect());
+            (l, valid)
+        })
+        .collect();
+    let (w, h) = (fw.div_ceil(k).max(1), fh.div_ceil(k).max(1));
+    let min_overlap = (DIRECT_MIN_OVERLAP * (w * h) as f64) as usize;
+    let mut poses: Vec<Option<Pose>> = vec![None; n];
+    let mut rmss = Vec::new();
     let mut pairs = Vec::new();
     for dir in [1i64, -1] {
-        let (mut prev_luma, mut prev_valid) = (planes[reference].2.clone(), planes[reference].3.clone());
+        let Some((ref_luma, ref_valid)) = planes.get(reference) else { continue };
+        let (mut prev_luma, mut prev_valid) = (ref_luma.clone(), ref_valid.clone());
         let mut init = Pose::IDENTITY;
         let mut i = reference as i64 + dir;
         while i >= 0 && (i as usize) < n {
-            let k = i as usize;
-            let (_, _, l, v) = &planes[k];
+            let idx = i as usize;
+            let Some((l, v)) = planes.get(idx) else { break };
             let target = Plane { w, h, luma: l, valid: v.as_deref() };
-            let reg = direct::register(&Plane { w, h, luma: &prev_luma, valid: prev_valid.as_deref() }, &target, motion, init, coarsen);
+            let reg = direct::register(&Plane { w, h, luma: &prev_luma, valid: prev_valid.as_deref() }, &target, motion, init, 0);
+            if reg.overlap < min_overlap || reg.correlation < DIRECT_MIN_CORRELATION {
+                return Err(NO_DETAIL.into());
+            }
             init = reg.pose;
-            let (wl, wv) = direct::warp(&target, &reg.pose);
-            (prev_luma, prev_valid) = (wl, Some(wv));
-            pairs.push(((k as i64 - dir) as usize, k, reg.overlap));
-            regs[k] = Some(reg);
+            (prev_luma, prev_valid) = {
+                let (wl, wv) = direct::warp(&target, &reg.pose);
+                (wl, Some(wv))
+            };
+            pairs.push(((i - dir) as usize, idx, reg.overlap * k * k));
+            rmss.push(reg.rms);
+            poses[idx] = Some(reg.pose);
             i += dir;
         }
     }
-    let center = [w as f64 / 2.0, h as f64 / 2.0];
+    let center = [fw as f64 / 2.0, fh as f64 / 2.0];
     let to_center = Homography([1.0, 0.0, center[0], 0.0, 1.0, center[1], 0.0, 0.0, 1.0]);
-    let placement = |hm: &Homography| Placement { projection: panorama::Projection::Plane, focal: w.max(h) as f64, center, k1: 0.0, h: hm.mul(&to_center) };
+    let placement = |hm: &Homography| Placement { projection: panorama::Projection::Plane, focal: fw.max(fh) as f64, center, k1: 0.0, h: hm.mul(&to_center) };
+    // The pose is in fractions of the layer: its matrix at full resolution places the layer.
     let placements: Vec<Option<Placement>> =
-        (0..n).map(|k| if k == reference { Some(placement(&Homography::IDENTITY)) } else { regs[k].as_ref().map(|r| placement(&r.h)) }).collect();
-    let fitted: Vec<f64> = regs.iter().flatten().map(|r| r.rms).collect();
-    let rms = if fitted.is_empty() { 0.0 } else { fitted.iter().sum::<f64>() / fitted.len() as f64 };
+        (0..n).map(|i| if i == reference { Some(placement(&Homography::IDENTITY)) } else { poses[i].map(|p| placement(&p.matrix(fw, fh))) }).collect();
+    let rms = if rmss.is_empty() { 0.0 } else { rmss.iter().sum::<f64>() / rmss.len() as f64 };
     Ok(Alignment { layout, reference, placements, focal: 0.0, k1: 0.0, pairs, rms })
 }
 

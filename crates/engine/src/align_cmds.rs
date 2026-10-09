@@ -24,7 +24,7 @@ use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::photo_cmds::{plane_matrix, register, register_direct, seam_blend, seam_order, warp_placed};
+use crate::photo_cmds::{NO_DETAIL, plane_matrix, register, register_direct, seam_blend, seam_order, warp_placed};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -68,14 +68,17 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     if !matches!(registration, "auto" | "features" | "intensity") {
         return Err(bad(cmd, "`registration` must be auto|features|intensity"));
     }
-    let no_detail = || EngineError::Other("Auto-Align couldn't find enough matching detail between the layers".into());
+    let no_detail = || EngineError::Other(NO_DETAIL.into());
     // Features first (a panorama); layers that nearly coincide (a focus or exposure bracket) have
     // nothing to match, and register by intensity instead.
     let by_features = (registration != "intensity").then(|| register(&images, layout, Some(ref_idx), geometric, focal35)).flatten();
     let (al, used) = match (by_features, registration) {
         (Some(al), _) => (al, "features"),
         (None, "features") => return Err(no_detail()),
-        (None, _) => (register_direct(&images, layout, ref_idx).map_err(|m| if registration == "intensity" { bad(cmd, m) } else { no_detail() })?, "intensity"),
+        (None, _) => (
+            register_direct(&images, layout, ref_idx).map_err(|m| if registration == "intensity" && m != NO_DETAIL { bad(cmd, m) } else { no_detail() })?,
+            "intensity",
+        ),
     };
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let planar = matches!(al.layout, Layout::Perspective | Layout::Collage | Layout::Reposition);
@@ -432,5 +435,42 @@ mod tests {
                 s.undo();
             }
         }
+    }
+
+    /// Layers with nothing in common are no fit: the intensity registration says so instead of
+    /// moving them by whatever pose its search box ends at.
+    #[test]
+    fn auto_align_rejects_unrelated_layers_instead_of_guessing_a_pose() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 150, "depth": 8, "background": "transparent"})).unwrap();
+        let a = smooth_layer(&mut s, "A", 0, 0);
+        s.execute("layer.new.layer", json!({"name": "stripes"})).unwrap();
+        s.edit("stripes", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in 0..150 {
+                for x in 0..200 {
+                    let g = if (x / 7 + y / 11) % 2 == 0 { 0.9 } else { 0.1 };
+                    surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[g, g, g, 1.0]);
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        let b = s.active().unwrap().active_layer.unwrap();
+        select(&mut s, &[a, b]);
+        for registration in ["intensity", "auto"] {
+            let err = s.execute("edit.autoAlignLayers", json!({"registration": registration})).unwrap_err().to_string();
+            assert_eq!(err, NO_DETAIL, "{registration}");
+        }
+        // A layer that is mostly empty overlaps too little to be placed.
+        let c = smooth_layer(&mut s, "C", 2, 1);
+        s.edit("hole", |doc, _| {
+            let surf = doc.layer_mut(c).unwrap().surface_mut().unwrap();
+            surf.fill_rect(Rect::new(0, 0, 200, 120), &[0.0, 0.0, 0.0, 0.0]);
+            Ok(())
+        })
+        .unwrap();
+        select(&mut s, &[a, c]);
+        assert_eq!(s.execute("edit.autoAlignLayers", json!({"registration": "intensity"})).unwrap_err().to_string(), NO_DETAIL);
     }
 }
