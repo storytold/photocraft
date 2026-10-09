@@ -27,7 +27,7 @@ const FILES: &[(&str, f64)] = &[
     ("afdesignload/margins.afdesign", 1e+00),              // 0.00
     ("afdesignload/raster_test.afdesign", 2e+00),          // 0.82: pixel layer
     ("afdesignload/revision_test.afdesign", 1e+00),        // 0.01
-    ("afdesignload/shape_test.afdesign", 6e+00),           // 5.44 after importing the public cloud/heart geometry
+    ("afdesignload/shape_test.afdesign", 4.6),             // 4.60 with cloud/heart using the ellipse fallback
     ("afdesignload/slice_test.afdesign", 1e+00),           // 0.02
     ("afdesignload/test_path.afdesign", 2e+00),            // 1.37
     ("jac21/SimpleLogo.afdesign", 2e+00),                  // 0.78
@@ -38,9 +38,9 @@ const FILES: &[(&str, f64)] = &[
     ("affinity-samples/03-brush-strokes.af", 1.5),         // 1.39: pressure strokes approximated
     ("affinity-samples/04-master-page.af", 2.0),           // 1.49: master content not placed on pages
     ("affinity-samples/05-symbols.af", 20.0),              // 19.49: cached symbol and embedded pictures
-    ("affinity-samples/06-special-shapes.af", 6.0),        // 5.68: special-shape geometry
+    ("affinity-samples/06-special-shapes.af", 6.0),        // 5.53 with two ellipse fallbacks; all-special ellipse baseline: 6.76
     ("affinity-samples/07-transparency.af", 12.0),         // 11.61: transparency and bitmap fills
-    ("affinity-samples/08-gradients.af", 1.0),             // 0.44: conical gradient currently maps to Angle
+    ("affinity-samples/08-gradients.af", 1.0),             // 0.44: conical ramp rendered with the Angle sweep
     ("affinity-samples/09-corners-stars.af", 1.5),         // 0.80: non-round corners and rounded stars
     ("affinity-samples/10-multiple-fills.af", 10.0),       // 9.50: only one fill/stroke per object
     ("affinity-samples/11-text.af", 3.0),                  // 2.66: outlined/scaled text and text fields
@@ -138,11 +138,7 @@ fn issue_1606_special_shapes_match_the_exported_sample() {
     let name = "affinity-samples/06-special-shapes.af";
     let bytes = corpus(name);
     let imported = import(name, &bytes).unwrap();
-    assert!(
-        !imported.warnings.iter().any(|w| w.contains("unrecognized parametric shape")),
-        "supported special-shape sample still reports a bounding-ellipse fallback: {:?}",
-        imported.warnings
-    );
+    assert!(imported.warnings.iter().any(|w| w.contains("unrecognized parametric shape")), "cloud and heart remain explicitly reported ellipse fallbacks");
     let rendered = photocraft_codecs::decode(&export(&imported.document, "x.png", &ExportOptions::default()).unwrap().bytes).unwrap();
     let reference = photocraft_codecs::decode(&corpus("affinity-samples/06-special-shapes.png")).unwrap();
     let (rw, rh) = reference.dimensions();
@@ -151,6 +147,23 @@ fn issue_1606_special_shapes_match_the_exported_sample() {
     let got = shrink(&on_white(&rendered.to_rgba8()), ow as usize, oh as usize, w as usize, h as usize);
     let want = shrink(&on_white(&reference.to_rgba8()), rw as usize, rh as usize, w as usize, h as usize);
     let diff = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).sum::<f64>() / want.len() as f64;
-    eprintln!("{name} vs exported PNG: {diff:.2} ({}×{} vs {}×{})", ow, oh, rw, rh);
+    eprintln!("{name} vs exported PNG: {diff:.2} ({}×{} vs {}×{}; all-special-shapes ellipse fallback baseline: 6.76)", ow, oh, rw, rh);
     assert!(diff <= 6.0, "special-shape sample exceeded its corpus ceiling: {diff:.2} > 6.0");
+}
+
+fn has_angle_gradient(layers: &[photocraft_doc::Layer]) -> bool {
+    layers.iter().any(|layer| match &layer.content {
+        photocraft_doc::LayerContent::Shape(shape) => {
+            matches!(shape.fill, Some(photocraft_doc::Fill::Gradient { style: photocraft_doc::GradientStyle::Angle, .. }))
+        }
+        photocraft_doc::LayerContent::Group(group) => has_angle_gradient(&group.children),
+        _ => false,
+    })
+}
+
+#[test]
+fn affinity_conical_gradients_map_to_the_angle_sweep_style() {
+    let name = "affinity-samples/08-gradients.af";
+    let imported = import(name, &corpus(name)).unwrap();
+    assert!(has_angle_gradient(&imported.document.layers), "Affinity's conical gradient should use PhotoCraft's angular/Angle sweep");
 }

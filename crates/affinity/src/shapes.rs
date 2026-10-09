@@ -131,10 +131,8 @@ pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) ->
             let (l, rr) = (num(r, shape, b"PosL").unwrap_or(0.25), num(r, shape, b"PosR").unwrap_or(0.75));
             polygon([pt(x0 + l * w, y0), pt(x0 + rr * w, y0), pt(x1, y1), pt(x0, y1)])?
         }
-        b"ShCl" => cloud(cx, cy, rx, ry, sides(r, shape, b"Bubl", 12.0)),
-        b"ShHt" => heart(b),
         b"ShCg" => cog(r, shape, cx, cy, rx, ry),
-        b"ShCR" => callout_rect(r, shape, b, false),
+        b"ShCR" => callout_rect(r, shape, b),
         b"ShCE" => callout_ellipse(r, shape, cx, cy, rx, ry),
         b"ShDA" => arrow(r, shape, b),
         b"ShDS" => double_star(r, shape, cx, cy, rx, ry),
@@ -158,41 +156,6 @@ pub(crate) fn shape(r: &mut Reader, shape: ObjId, b: [f64; 4], world: Affine) ->
     Some((path, false))
 }
 
-fn cloud(cx: f64, cy: f64, rx: f64, ry: f64, bubbles: usize) -> SubPath {
-    let n = bubbles.clamp(3, 128) * 4;
-    let points: Vec<Point> = (0..n)
-        .map(|i| {
-            let a = TAU * i as f64 / n as f64 - FRAC_PI_2;
-            let lobe = (0.5 - 0.5 * (TAU * i as f64 / 4.0).cos()).powi(2);
-            let radius = 0.78 + 0.22 * lobe;
-            pt(cx + rx * radius * a.cos(), cy + ry * radius * a.sin())
-        })
-        .collect();
-    let segments = (0..n)
-        .map(|i| {
-            let p0 = points[(i + n - 1) % n];
-            let p1 = points[i];
-            let p2 = points[(i + 1) % n];
-            let p3 = points[(i + 2) % n];
-            [pt(p1.x + (p2.x - p0.x) / 6.0, p1.y + (p2.y - p0.y) / 6.0), pt(p2.x - (p3.x - p1.x) / 6.0, p2.y - (p3.y - p1.y) / 6.0), p2]
-        })
-        .collect();
-    SubPath { start: points[0], segments, closed: true }
-}
-
-fn heart([x0, y0, x1, y1]: [f64; 4]) -> SubPath {
-    let (w, h) = (x1 - x0, y1 - y0);
-    let p = |x: f64, y: f64| pt(x0 + x * w, y0 + y * h);
-    let start = p(0.5, 0.92);
-    let segments = vec![
-        [p(0.38, 0.85), p(0.04, 0.67), p(0.04, 0.37)],
-        [p(0.04, 0.02), p(0.39, 0.00), p(0.5, 0.27)],
-        [p(0.61, 0.00), p(0.96, 0.02), p(0.96, 0.37)],
-        [p(0.96, 0.67), p(0.62, 0.85), start],
-    ];
-    SubPath { start, segments, closed: true }
-}
-
 fn cog(r: &Reader, shape: ObjId, cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath {
     let teeth = sides(r, shape, b"Teth", 12.0);
     let tooth = num(r, shape, b"TtSz").unwrap_or(0.3).clamp(0.05, 0.9);
@@ -210,7 +173,7 @@ fn cog(r: &Reader, shape: ObjId, cx: f64, cy: f64, rx: f64, ry: f64) -> SubPath 
     polygon(pts).unwrap_or_else(|| rectangle_sub(cx - rx, cy - ry, cx + rx, cy + ry))
 }
 
-fn callout_rect(r: &Reader, shape: ObjId, [x0, y0, x1, y1]: [f64; 4], _ellipse: bool) -> SubPath {
+fn callout_rect(r: &Reader, shape: ObjId, [x0, y0, x1, y1]: [f64; 4]) -> SubPath {
     let (w, h) = (x1 - x0, y1 - y0);
     let tail_h = num(r, shape, b"TlHg").unwrap_or(0.2).clamp(0.0, 0.8) * h;
     let tail_w = num(r, shape, b"TlWd").unwrap_or(0.1).clamp(0.02, 0.8) * w;
