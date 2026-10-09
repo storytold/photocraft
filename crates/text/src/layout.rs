@@ -781,6 +781,9 @@ impl Layouter {
                         match ps.align {
                             TextAlign::JustifyCenter => slack * 0.5 - m.offset,
                             TextAlign::JustifyRight => slack - m.offset,
+                            // Parley start-aligns a last line, which in RTL is the right: put it
+                            // back on the left edge, past the whitespace hung there.
+                            TextAlign::JustifyLeft | TextAlign::JustifyAll if rtl => -m.offset - m.trailing_whitespace,
                             _ => 0.0,
                         }
                     } else {

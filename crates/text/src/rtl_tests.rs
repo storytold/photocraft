@@ -146,3 +146,32 @@ fn start_indent_is_on_the_right_in_rtl_paragraphs() {
     let l = e.layout(&t, 72.0);
     assert!((l.lines[0].x1 + 30.0).abs() < 0.5, "{:?}", l.lines[0]);
 }
+
+/// Visible extent (min x, max x) of the non-whitespace clusters on line `li`. Line bounds
+/// include the whitespace parley hangs past the edge (on the left in RTL), so tests that check
+/// placement measure ink instead.
+fn ink(l: &TextLayout, text: &str, li: usize) -> (f32, f32) {
+    l.clusters
+        .iter()
+        .filter(|c| c.line == li && !text[c.range.clone()].chars().all(char::is_whitespace))
+        .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x + c.advance)))
+}
+
+#[test]
+fn rtl_justified_last_lines_stay_in_the_box() {
+    let mut e = TextEngine::new();
+    let text = "سلام عليكم ".repeat(12);
+    let text = text.trim_end();
+    for align in [TextAlign::JustifyLeft, TextAlign::JustifyAll] {
+        let l = e.layout(&boxed(text, 20.0, 300.0, ParagraphStyle { align, ..Default::default() }), 72.0);
+        assert!(l.lines.len() >= 2, "{align:?} wraps");
+        for li in 0..l.lines.len() {
+            let (lo, hi) = ink(&l, text, li);
+            assert!(lo >= 99.5 && hi <= 400.5, "{align:?} line {li}: {lo}..{hi}");
+        }
+        let (lo, _) = ink(&l, text, l.lines.len() - 1);
+        if align == TextAlign::JustifyLeft {
+            assert!((lo - 100.0).abs() < 0.5, "last line on the left: {lo}");
+        }
+    }
+}
