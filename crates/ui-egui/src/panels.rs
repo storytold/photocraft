@@ -2002,6 +2002,12 @@ fn layer_row(
     });
 }
 
+/// Screen rect and UVs for a layer thumbnail: the document-shaped part of the square cell and of
+/// the letterboxed square texture, so tall and wide documents don't show empty bars.
+fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
+    crate::channels_panel::fit_thumb(cell, w, h)
+}
+
 fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
@@ -2028,9 +2034,11 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         _ => {
             // Keep row layout and outside thumbnail decorations when the image is clipped.
             if ui.is_rect_visible(rect) {
-                widgets::checker(p, rect, 5.0);
+                // The texture is a letterboxed square: draw only the part the document fills.
+                let (fitted, uv) = layer_thumb_fit(rect, doc.size.width, doc.size.height);
+                widgets::checker(p, fitted, 5.0);
                 let tex = app.layer_thumb(ctx, doc, l);
-                p.image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                p.image(tex, fitted, uv, Color32::WHITE);
             }
         }
     }
@@ -3459,5 +3467,14 @@ mod group_drag_selection_tests {
         assert_eq!(layer_drop_payload(9, group, "into", &[a, b]), json!({"layer": 9, "target": 20, "position": "into"}));
         assert_eq!(layer_drop_payload(a.0, group, "above", &[a]), json!({"layer": 10, "target": 20, "position": "above"}));
         assert_eq!(layer_drop_payload(a.0, group, "below", &[]), json!({"layer": 10, "target": 20, "position": "below"}));
+    }
+
+    #[test]
+    fn layer_thumb_of_a_tall_document_fills_the_height() {
+        let cell = Rect::from_min_size(pos2(10.0, 20.0), vec2(30.0, 30.0));
+        let (r, uv) = layer_thumb_fit(cell, 100, 400);
+        assert_eq!((r.top(), r.bottom()), (cell.top(), cell.bottom()));
+        assert!((r.width() - 7.5).abs() < 1e-3, "{r:?}");
+        assert!((uv.width() - 0.25).abs() < 1e-3 && (uv.height() - 1.0).abs() < 1e-3, "{uv:?}");
     }
 }
