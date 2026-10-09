@@ -189,3 +189,67 @@ fn tracking_never_separates_joined_letters() {
     // Latin still tracks: 200/1000 em = 4 px after each of a, b and c at 20 px.
     assert!(span(&wide, t, latin) - span(&plain, t, latin) > 7.0);
 }
+
+#[test]
+fn manual_kerning_never_separates_joined_letters() {
+    let mut e = TextEngine::new();
+    let t = "سلام";
+    let w0 = span(&e.layout(&styled(t, CharStyle { kern: 0.0, ..inter(20.0) }), 72.0), t, |_| true);
+    let w1 = span(&e.layout(&styled(t, CharStyle { kern: 200.0, ..inter(20.0) }), 72.0), t, |_| true);
+    assert!((w0 - w1).abs() < 1e-3, "{w0} vs {w1}");
+}
+
+#[test]
+fn a_kern_follows_its_logical_character_in_rtl() {
+    let mut e = TextEngine::new();
+    // Hebrew is RTL but not cursive, so kerning applies. A kern on א (the first character) opens
+    // the gap between א and ב: in RTL, ב sits left of א.
+    let t = "אב";
+    let layer = |kern: f32| TextLayer {
+        text: t.into(),
+        runs: vec![TextRun { len: 2, style: CharStyle { kern, ..inter(20.0) } }, TextRun { len: 2, style: inter(20.0) }],
+        ..Default::default()
+    };
+    let gap = |l: &TextLayout| {
+        let alef = l.clusters.iter().find(|c| c.range.start == 0).unwrap();
+        let bet = l.clusters.iter().find(|c| c.range.start == 2).unwrap();
+        alef.x - bet.x
+    };
+    let plain = gap(&e.layout(&layer(0.0), 72.0));
+    let kerned = gap(&e.layout(&layer(200.0), 72.0));
+    assert!((kerned - plain - 4.0).abs() < 0.01, "{plain} → {kerned}"); // 200/1000 em at 20 px
+    // LTR is unchanged: a kern on a widens a→b.
+    let ltr = |kern: f32| TextLayer {
+        text: "ab".into(),
+        runs: vec![TextRun { len: 1, style: CharStyle { kern, ..inter(20.0) } }, TextRun { len: 1, style: inter(20.0) }],
+        ..Default::default()
+    };
+    let d = |l: &TextLayout| l.clusters.iter().find(|c| c.range.start == 1).unwrap().x;
+    assert!((d(&e.layout(&ltr(200.0), 72.0)) - d(&e.layout(&ltr(0.0), 72.0)) - 4.0).abs() < 0.01);
+}
+
+#[test]
+fn a_kern_never_lands_inside_a_grapheme() {
+    let mut e = TextEngine::new();
+    // Every character kerned 200 (4 px at 20 px): "é" (e + combining acute) gets ONE kern after it,
+    // none between the e and its accent, so x moves by exactly 4 px. A manual kern replaces the
+    // font's kerning table, so the baseline has kerning off too.
+    let t = "e\u{301}x";
+    let mut x_at = |kern: f32| {
+        let style = CharStyle { kern, kerning: photocraft_doc::text::Kerning::Off, ..inter(20.0) };
+        let l = e.layout(&styled(t, style), 72.0);
+        l.clusters.iter().find(|c| c.range.start == 3).unwrap().x
+    };
+    let (plain, kerned) = (x_at(0.0), x_at(200.0));
+    assert!((kerned - plain - 4.0).abs() < 0.01, "{plain} → {kerned}");
+}
+
+#[test]
+fn pair_kerning_measures_grapheme_pairs_and_rtl_but_not_joined_letters() {
+    let mut e = TextEngine::new();
+    let t = styled("e\u{301}x", inter(20.0));
+    assert_eq!(e.pair_kerning(&t, 72.0, 0), None, "e is not the last character of its grapheme");
+    assert!(e.pair_kerning(&t, 72.0, 1).is_some(), "the accent ends é: é|x is a pair");
+    assert!(e.pair_kerning(&styled("אב", inter(20.0)), 72.0, 0).is_some(), "RTL Hebrew pair");
+    assert_eq!(e.pair_kerning(&styled("سلام", inter(20.0)), 72.0, 0), None, "joined letters");
+}

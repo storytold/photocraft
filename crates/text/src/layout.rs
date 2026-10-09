@@ -546,6 +546,8 @@ impl Layouter {
             let fallback: Vec<String> = fonts.fallback_stack().map(str::to_string).collect();
             // Cursive words of this paragraph (byte ranges in `ptext`).
             let words = crate::segment::cursive_words(&ptext);
+            // Grapheme boundaries of `ptext`: kerning goes between graphemes, never inside one.
+            let pgraphemes = crate::segment::grapheme_boundaries(&ptext);
             let mut layout: Layout<RunBrush> = {
                 let mut b = self.lcx.ranged_builder(&mut fonts.fcx, &ptext, 1.0, false);
                 // Paragraph-start style as the default (covers the direction mark and empty
@@ -719,11 +721,25 @@ impl Layouter {
                 let mut kern_px: Vec<f32> = vec![0.0; slots.len()];
                 for j in 0..slots.len().saturating_sub(1) {
                     let (a, b) = (&slots[j], &slots[j + 1]);
-                    if a.start < prefix.len() {
+                    if a.start < prefix.len() || b.start < prefix.len() {
                         continue;
                     }
-                    let st = &out.styles[style_at(map(a.start))];
-                    let next = &out.styles[style_at(map(b.start))];
+                    // The pieces of one grapheme (a letter and its marks) never move apart.
+                    let grapheme = |o: usize| pgraphemes.partition_point(|&g| g <= o);
+                    if grapheme(a.start) == grapheme(b.start) {
+                        continue;
+                    }
+                    // Joined letters never move apart (alreq): no kerning inside a cursive word.
+                    if let (Some(wa), Some(wb)) = (crate::segment::word_at(&words, a.start), crate::segment::word_at(&words, b.start))
+                        && wa == wb
+                    {
+                        continue;
+                    }
+                    // A kern is space after the logically first character of the pair: in RTL text
+                    // that is the visually right one.
+                    let (first, second) = if a.rtl && b.rtl { (b, a) } else { (a, b) };
+                    let st = &out.styles[style_at(map(first.start))];
+                    let next = &out.styles[style_at(map(second.start))];
                     let mut units = if st.kern.is_finite() { st.kern } else { 0.0 };
                     // Optical pairs: both characters optical (a mode change splits shaping
                     // runs, which ends automatic kerning, as with Metrics).
@@ -749,7 +765,7 @@ impl Layouter {
                             units += k + crate::optical::size_adjust(st.size_pt);
                         }
                     }
-                    kern_px[j] = units / 1000.0 * a.size;
+                    kern_px[j] = units / 1000.0 * first.size;
                 }
                 let line_kern: f32 = kern_px.iter().sum();
                 // Per run on the line: (run index, glyph → slot, glyphs emitted, first slot whose

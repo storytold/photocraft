@@ -719,7 +719,7 @@ pub fn specs() -> Vec<CommandSpec> {
                             let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
                             eng.pair_kerning(t, doc.resolution_dpi, a)
                         }
-                        .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break or line end)"))?;
+                        .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break, line end, or joined letters)"))?;
                         let value = (f64::from(now.round()) + by).clamp(KERN_MIN, KERN_MAX) as f32;
                         style_range(t, a, b, &|st| {
                             st.kerning = Kerning::Off;
@@ -1225,6 +1225,22 @@ mod tests {
         assert_eq!(kerning_of(&s, id)[3], (Kerning::Off, 0.0));
         let info = s.execute("type.info", json!({"layer": id})).unwrap();
         assert_eq!(info["runs"][1]["style"]["kern"], json!(-50.0));
+    }
+
+    /// The kern lands on the last character of a grapheme: a caret after "e" + accent kerns the accent.
+    #[test]
+    fn kern_pair_after_a_combining_mark_kerns_the_mark() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 5, "y": 50, "text": "e\u{301}x", "size": 30})).unwrap()["layer"].as_u64().unwrap();
+        let shown = {
+            let t = text_layer(&s, id);
+            let mut eng = photocraft_text::shared().lock().unwrap();
+            eng.pair_kerning(&t, s.active().unwrap().doc.resolution_dpi, 1).unwrap()
+        };
+        s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 2, "by": 20}})).unwrap();
+        let k = kerning_of(&s, id);
+        assert_eq!(k[1], (Kerning::Off, shown.round() + 20.0));
+        assert_eq!((k[0], k[2]), ((Kerning::Metrics, 0.0), (Kerning::Metrics, 0.0)));
     }
 
     /// Bad kerning params are errors, never panics, and leave the layer alone.

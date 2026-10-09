@@ -70,9 +70,10 @@ impl TextEngine {
         self.layouter.layout(&mut self.fonts, layer, dpi)
     }
 
-    /// Kerning (1/1000 em) between the character starting at byte `at` and the next one, as
-    /// laid out: the manual kern, or the automatic (metrics / optical) kerning of the pair.
-    /// `None` when there is no such pair on one line.
+    /// Kerning (1/1000 em) between the grapheme ending with the character starting at byte `at`
+    /// and the next grapheme, as laid out: the manual kern, or the automatic (metrics / optical)
+    /// kerning of the pair. Works in RTL. `None` when there is no such pair on one line, or when
+    /// the pair is joined letters of a cursive word (never kerned).
     pub fn pair_kerning(&mut self, layer: &TextLayer, dpi: f32, at: usize) -> Option<f32> {
         let runs = layer.char_runs();
         let ch = layer.text.get(at..)?.chars().next()?;
@@ -80,10 +81,18 @@ impl TextEngine {
         if ch == '\n' || ch == '\r' || layer.text.get(next..)?.chars().next().is_none_or(|c| c == '\n' || c == '\r') {
             return None;
         }
+        // Joined letters are never kerned (layout skips them), so there is no pair to report.
+        let words = crate::segment::cursive_words(&layer.text);
+        if let (Some(wa), Some(wb)) = (crate::segment::word_at(&words, at), crate::segment::word_at(&words, next))
+            && wa == wb
+        {
+            return None;
+        }
+        // The pair: the grapheme that ends with the character at `at`, and the next grapheme.
         let gap = |l: &TextLayout| {
-            let a = l.clusters.iter().find(|c| c.range.start == at)?;
-            let b = l.clusters.iter().find(|c| c.range.start == next)?;
-            (a.line == b.line && !a.rtl).then_some(b.x - a.x)
+            let a = l.clusters.iter().find(|c| c.range.start <= at && at < c.range.end)?;
+            let b = l.clusters.iter().find(|c| c.range.start == a.range.end)?;
+            (a.line == b.line && a.range.end == next).then_some(if a.rtl && b.rtl { a.x - b.x } else { b.x - a.x })
         };
         let with = gap(&self.layout(layer, dpi))?;
         // Em of the pair's first character (px).
