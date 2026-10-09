@@ -86,6 +86,26 @@ fn cmd_enter_while_drawing_finishes_the_path_and_loads_it() {
 }
 
 #[test]
+fn escape_while_drawing_finishes_an_open_work_path() {
+    let mut h = harness();
+    h.state_mut().ui.tool = Tool::Pen;
+
+    let p = |x: f64, y: f64| [[x, y], [x, y], [x, y]];
+    h.state_mut().ui.pen =
+        Some(PenPath { knots: vec![p(20.0, 20.0), p(120.0, 20.0), p(120.0, 80.0)], unlinked: Vec::new(), dragging: false, adjusting_last: false });
+
+    h.run_steps(2);
+    press(&mut h, Key::Escape, Modifiers::NONE);
+
+    let app = h.state();
+    assert!(app.ui.pen.is_none(), "Escape should finish the pen draft");
+
+    let work_path = app.session.active().unwrap().doc.work_path.as_ref().expect("Escape should save the path as the work path");
+
+    assert_eq!(serde_json::to_value(work_path).unwrap()["subpaths"][0]["closed"], false, "Escape should leave the path open");
+}
+
+#[test]
 fn cmd_enter_loads_the_path_selected_in_the_paths_panel() {
     let mut h = harness();
     h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(0.0, 0.0, 30.0, 30.0)})).unwrap();

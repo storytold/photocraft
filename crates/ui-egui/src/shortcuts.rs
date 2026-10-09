@@ -298,7 +298,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            app.ui.pen = None;
+            crate::vector_ui::pen_commit(app, false);
             return;
         }
     }
