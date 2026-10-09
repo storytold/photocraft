@@ -633,6 +633,53 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// Imported slice URLs are document data. Only ordinary web/contact links and relative links
+/// become anchors; an unsupported scheme leaves the image unlinked.
+fn safe_slice_url(url: &str) -> bool {
+    if url.is_empty() || url.trim() != url || url.chars().any(|c| c.is_control() || c == '\\') {
+        return false;
+    }
+    let delimiter = url.find(['/', '?', '#']).unwrap_or(url.len());
+    let Some(colon) = url.find(':').filter(|pos| *pos < delimiter) else {
+        return true;
+    };
+    let scheme = url.get(..colon).unwrap_or_default().to_ascii_lowercase();
+    let rest = url.get(colon + 1..).unwrap_or_default();
+    match scheme.as_str() {
+        "http" | "https" | "ftp" | "ftps" => rest.strip_prefix("//").is_some_and(|host| !host.is_empty() && !host.starts_with('/')),
+        "mailto" | "tel" => !rest.is_empty(),
+        _ => false,
+    }
+}
+
+/// Keep the image folder relative to the selected export directory on every platform.
+fn web_images_folder(images: &str, cmd: &str) -> Result<String> {
+    if images.is_empty() {
+        return Ok(String::new());
+    }
+    let trimmed = images.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return Err(bad(cmd, "imagesFolder must be a relative folder name"));
+    }
+    let parts = asset_path_components(trimmed).map_err(|e| bad(cmd, format!("imagesFolder: {e}")))?;
+    Ok(parts.join("/"))
+}
+
+fn web_output_path(dir: &str, relative: &str) -> Result<String> {
+    let root = if dir.is_empty() { "." } else { dir };
+    asset_output_path(root, relative).map(|(actual, _)| actual)
+}
+
+fn web_derived_path(dir: &str, relative: &str, native_paths: bool) -> Result<String> {
+    if native_paths {
+        web_output_path(dir, relative)
+    } else {
+        // Browser downloads use logical names, without a host filesystem to inspect.
+        asset_path_components(relative)?;
+        Ok(join(dir, relative))
+    }
+}
+
 fn scale_rect(r: Rect, sx: f64, sy: f64) -> Rect {
     Rect::new(
         (f64::from(r.x0) * sx).round() as i32,
@@ -690,14 +737,14 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
             s.push_str(&td);
         }
         if let Some(sp) = spacer {
-            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{sp}\" width=\"1\" height=\"{}\" alt=\"\"></td>\n", ys[j + 1] - ys[j]));
+            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{}\" width=\"1\" height=\"{}\" alt=\"\"></td>\n", html_escape(sp), ys[j + 1] - ys[j]));
         }
         s.push_str("\t</tr>\n");
     }
     if let Some(sp) = spacer {
         s.push_str("\t<tr>\n");
         for i in 0..nc {
-            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{sp}\" width=\"{}\" height=\"1\" alt=\"\"></td>\n", xs[i + 1] - xs[i]));
+            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"1\" alt=\"\"></td>\n", html_escape(sp), xs[i + 1] - xs[i]));
         }
         s.push_str("\t\t<td></td>\n\t</tr>\n");
     }
@@ -707,13 +754,18 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
 
 /// File › Export › Save for Web (Legacy).
 fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
-    save_for_web_with_writer(s, p, &mut write_file)
+    save_for_web_impl(s, p, &mut write_file, true)
 }
 
 /// Save for Web through a platform writer (native files or browser downloads).
 /// The writer receives every image, spacer and HTML file. A write error stops the export;
-/// only a complete export remembers its settings and fires the export event.
+/// only a complete export remembers its settings and fires the export event. A custom writer
+/// that targets the local filesystem must enforce its own path confinement.
 pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<Value> {
+    save_for_web_impl(s, p, write, false)
+}
+
+fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
         authorize(cmd, p)?;
@@ -743,6 +795,12 @@ pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMu
         .collect();
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
+    let mut last_web = p.clone();
+    // A trusted-markup decision applies to this export only, never to another document opened
+    // with the dialog's remembered settings.
+    if let Some(last) = last_web.as_object_mut() {
+        last.remove("trustedSliceHtml");
+    }
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
@@ -751,14 +809,15 @@ pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMu
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
         write(path, &o.bytes)?;
-        s.file_menu.last_web = Some(p.clone());
+        s.file_menu.last_web = Some(last_web);
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
     let dir =
         dir.map(str::to_string).or_else(|| single.and_then(|f| std::path::Path::new(f).parent().map(|d| d.to_string_lossy().into_owned()))).unwrap_or_default();
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
-    let images = p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images").to_string();
+    let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
+    let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = single.map(stem).unwrap_or_else(|| slices::base_name(&doc));
     let mut files = Vec::new();
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
@@ -801,7 +860,7 @@ pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMu
                 let text = if k > 0 {
                     String::new()
                 } else {
-                    stored.map(|s| if s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) }).unwrap_or_default()
+                    stored.map(|s| if trusted_slice_html && s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) }).unwrap_or_default()
                 };
                 let bg = stored.and_then(|s| s.background).map(|c| format!(" bgcolor=\"#{:02X}{:02X}{:02X}\"", c[1], c[2], c[3])).unwrap_or_default();
                 cells.push((piece, bg, text));
@@ -812,12 +871,12 @@ pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMu
             let name = unique(&stem, o.ext);
             let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
             let out = join(&dir, &rel);
-            write(&out, &o.bytes)?;
+            write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
             total += o.bytes.len();
             files.push(out);
             let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
             let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
-            let body = match stored.filter(|s| !s.url.is_empty()) {
+            let body = match stored.filter(|s| safe_slice_url(&s.url)) {
                 Some(s) => {
                     let target = if s.target.is_empty() { String::new() } else { format!(" target=\"{}\"", html_escape(&s.target)) };
                     format!("\n\t\t\t<a href=\"{}\"{target}>{img}</a>", html_escape(&s.url))
@@ -833,14 +892,14 @@ pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMu
         let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
         if let Some(sp) = &spacer {
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write(&join(&dir, sp), &gif)?;
+            write(&web_derived_path(&dir, sp, native_paths)?, &gif)?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
         let hp = join(&dir, &format!("{base}.html"));
-        write(&hp, page.as_bytes())?;
+        write(&web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes())?;
         html_path = Some(hp);
     }
-    s.file_menu.last_web = Some(p.clone());
+    s.file_menu.last_web = Some(last_web);
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height}))
 }
@@ -1091,6 +1150,97 @@ fn asset_settings(spec: &AssetSpec) -> WebSettings {
     }
 }
 
+fn is_windows_device_asset_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
+        || stem.strip_prefix("COM").is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        || stem.strip_prefix("LPT").is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+}
+
+/// Layer names and `default` folders are document data, so reject unsafe output components.
+fn asset_path_components(relative: &str) -> Result<Vec<&str>> {
+    // Split both separator styles even on Unix, where a backslash would otherwise be a legal
+    // filename. This also catches Windows drive, rooted, and UNC paths on every platform.
+    let mut parts = Vec::new();
+    for part in relative.split(['/', '\\']) {
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.ends_with('.')
+            || part.ends_with(' ')
+            || part.contains(':')
+            || part.contains('\0')
+            || is_windows_device_asset_name(part)
+        {
+            return Err(other(format!("asset path {relative:?} has an unsafe component {part:?}")));
+        }
+        parts.push(part);
+    }
+    Ok(parts)
+}
+
+/// Resolve a generated asset below the selected output directory. The atomic writer follows an
+/// existing file symlink, so reject it and directory symlinks before writing.
+fn asset_output_path(dir: &str, relative: &str) -> Result<(String, String)> {
+    if dir.is_empty() {
+        return Err(other("image assets need an output directory"));
+    }
+    let mut parts = asset_path_components(relative)?;
+    // Keep the caller's spelling in the result (for example /var on macOS), while writes use
+    // the canonical directory so a symlink in the selected root cannot move the destination.
+    let mut reported = std::path::PathBuf::from(dir);
+    for part in &parts {
+        reported.push(part);
+    }
+    let file = parts.pop().ok_or_else(|| other(format!("asset path {relative:?} is empty")))?;
+    let chosen_root: std::path::PathBuf = std::path::Path::new(dir).components().collect();
+    std::fs::create_dir_all(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
+    let root_meta = std::fs::symlink_metadata(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
+    if root_meta.file_type().is_symlink() {
+        return Err(other(format!("asset output directory {dir:?} is a symlink")));
+    }
+    let root = std::fs::canonicalize(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
+    let mut parent = root.clone();
+    for part in parts {
+        parent.push(part);
+        match std::fs::symlink_metadata(&parent) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(other(format!("asset path {relative:?} crosses a symlink at {}", parent.display())));
+            }
+            Ok(meta) if !meta.is_dir() => {
+                return Err(other(format!("asset path {relative:?} has a non-directory at {}", parent.display())));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&parent).map_err(|e| other(format!("asset folder {}: {e}", parent.display())))?;
+            }
+            Err(e) => return Err(other(format!("asset folder {}: {e}", parent.display()))),
+        }
+        let actual = std::fs::canonicalize(&parent).map_err(|e| other(format!("asset folder {}: {e}", parent.display())))?;
+        if !actual.starts_with(&root) {
+            return Err(other(format!("asset path {relative:?} escapes output directory {dir:?}")));
+        }
+        parent = actual;
+    }
+    let parent = std::fs::canonicalize(&parent).map_err(|e| other(format!("asset folder {}: {e}", parent.display())))?;
+    if !parent.starts_with(&root) {
+        return Err(other(format!("asset path {relative:?} escapes output directory {dir:?}")));
+    }
+    let output = parent.join(file);
+    match std::fs::symlink_metadata(&output) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(other(format!("asset path {relative:?} points to a symlink")));
+        }
+        Ok(meta) if !meta.is_file() => {
+            return Err(other(format!("asset path {relative:?} is not a file")));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(other(format!("asset path {relative:?}: {e}"))),
+    }
+    Ok((output.to_string_lossy().into_owned(), reported.to_string_lossy().into_owned()))
+}
+
 /// Exports every asset named by `doc`'s layers into `dir`. Returns (files, errors).
 pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
@@ -1117,6 +1267,9 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     for (id, spec) in &jobs {
         for v in &variants {
             let r = (|| -> Result<String> {
+                let (name_stem, ext) = spec.file.rsplit_once('.').unwrap_or((spec.file.as_str(), "png"));
+                let rel = format!("{}{}{}.{ext}", v.folder, name_stem, v.suffix);
+                asset_path_components(&rel)?;
                 let mut one = crate::layer_menu_cmds::layer_document(doc, *id)?;
                 one.metadata = Default::default();
                 let (w0, h0) = (f64::from(one.size.width), f64::from(one.size.height));
@@ -1141,17 +1294,16 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
                 let st = asset_settings(spec);
                 let p = json!({"width": tw.round().max(1.0), "height": th.round().max(1.0)});
                 let (wdoc, _, _) = web_document(&one, &p, &WebSettings { convert_to_srgb: true, ..st.clone() })?;
-                let (name_stem, ext) = spec.file.rsplit_once('.').unwrap_or((spec.file.as_str(), "png"));
-                let rel = format!("{}{}{}.{ext}", v.folder, name_stem, v.suffix);
-                let out = join(dir, &rel);
                 if spec.format == "webp" {
+                    let (out, reported) = asset_output_path(dir, &rel)?;
                     crate::file_cmds::save_doc(&wdoc, &out, None)?;
-                    return Ok(out);
+                    return Ok(reported);
                 }
                 let buf = photocraft_compose::flatten(&wdoc);
                 let o = optimize(&buf.px, wdoc.size.width as usize, wdoc.bounds(), &st, None, None, wdoc.resolution_dpi, false)?;
+                let (out, reported) = asset_output_path(dir, &rel)?;
                 write_file(&out, &o.bytes)?;
-                Ok(out)
+                Ok(reported)
             })();
             match r {
                 Ok(f) => files.push(f),
@@ -1221,7 +1373,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save for Web (Legacy)…",
             &["File", "Export"],
             Some("Cmd+Alt+Shift+S"),
-            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="#ffffff","interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60,"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|all"="copyright","convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"html":bool=false,"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors} estimate; else {files, html, bytes}"##,
+            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="#ffffff","interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60,"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|all"="copyright","convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"imagesFolder":relative-folder?="images","html":bool=false,"trustedSliceHtml":bool=false (only for trusted documents; emit raw no-image cell HTML),"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors} estimate; else {files, html, bytes}"##,
             has_doc,
             save_for_web
         ),
