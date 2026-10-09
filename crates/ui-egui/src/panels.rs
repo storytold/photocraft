@@ -1138,32 +1138,34 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if t.pro {
         dock_panels(app, ui, &p, &t);
     }
-    // Narrow icon rail (always visible): shows, expands or collapses panel groups.
-    let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
-    egui::Panel::right("rail").resizable(false).exact_size(rw).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8))).show(
-        ui,
-        |ui| {
-            let r = ui.max_rect();
-            ui.painter().line_segment([r.left_top() - vec2(6.0, 8.0), r.left_bottom() + vec2(-6.0, 8.0)], Stroke::new(1.0, t.separator));
-            ui.spacing_mut().item_spacing.y = 4.0;
-            use crate::dock::Group;
-            let entries: [(&str, &str, Group); 5] = [
-                ("sliders-horizontal", tl!("Properties"), Group::Properties),
-                ("navigation", tl!("Navigator"), Group::Navigator),
-                ("palette", tl!("Color & Swatches"), Group::Color),
-                ("layers", tl!("Layers"), Group::Layers),
-                ("clock", tl!("History"), Group::History),
-            ];
-            for (icon, name, g) in entries {
-                // Studio floats Properties outside the dock.
-                let docked = t.pro || g != Group::Properties;
-                let on = g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g));
-                if icons::rail_button(ui, icon, rb, on, name).clicked() {
-                    crate::dock::rail_click(app, g, docked);
+    // Narrow icon rail, unless an embedding app hides it: shows, expands or collapses panel groups.
+    if p.rail {
+        let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
+        egui::Panel::right("rail").resizable(false).exact_size(rw).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8))).show(
+            ui,
+            |ui| {
+                let r = ui.max_rect();
+                ui.painter().line_segment([r.left_top() - vec2(6.0, 8.0), r.left_bottom() + vec2(-6.0, 8.0)], Stroke::new(1.0, t.separator));
+                ui.spacing_mut().item_spacing.y = 4.0;
+                use crate::dock::Group;
+                let entries: [(&str, &str, Group); 5] = [
+                    ("sliders-horizontal", tl!("Properties"), Group::Properties),
+                    ("navigation", tl!("Navigator"), Group::Navigator),
+                    ("palette", tl!("Color & Swatches"), Group::Color),
+                    ("layers", tl!("Layers"), Group::Layers),
+                    ("clock", tl!("History"), Group::History),
+                ];
+                for (icon, name, g) in entries {
+                    // Studio floats Properties outside the dock.
+                    let docked = t.pro || g != Group::Properties;
+                    let on = g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g));
+                    if icons::rail_button(ui, icon, rb, on, name).clicked() {
+                        crate::dock::rail_click(app, g, docked);
+                    }
                 }
-            }
-        },
-    );
+            },
+        );
+    }
     if !t.pro {
         dock_panels(app, ui, &p, &t);
     }
@@ -3556,6 +3558,56 @@ mod toolbar_tests {
         h.run_steps(2);
         assert!(!h.state().ui.panels.toolbar_double);
         assert_eq!(left(&h), single);
+    }
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn whole_app(rail: bool, menu_bar: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.panels.rail = rail;
+            app.ui.panels.menu_bar = menu_bar;
+            app
+        });
+        h.run_steps(4);
+        h
+    }
+
+    fn drawn(h: &egui_kittest::Harness<'_, PhotocraftApp>, panel: &str) -> bool {
+        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new(panel)).is_some()
+    }
+
+    /// An app that embeds the UI can hide the icon rail and the menu bar; both are on by default.
+    #[test]
+    fn rail_and_menu_bar_follow_their_panel_flags() {
+        let panels = crate::state::Panels::default();
+        assert!(panels.rail && panels.menu_bar);
+
+        let h = whole_app(true, true);
+        assert!(drawn(&h, "rail") && drawn(&h, "title_bar"));
+        assert!(h.query_by_label("File").is_some());
+
+        let h = whole_app(false, false);
+        assert!(!drawn(&h, "rail"), "the icon rail is drawn");
+        assert!(!drawn(&h, "title_bar"), "the title bar is drawn");
+        assert!(h.query_by_label("File").is_none(), "the menus are drawn");
+        assert!(drawn(&h, "dock"), "the dock itself stays");
+    }
+
+    /// Settings saved before the flags existed load with both on.
+    #[test]
+    fn panels_without_the_flags_deserialize_with_both_on() {
+        let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
+        let m = v.as_object_mut().unwrap();
+        m.remove("rail");
+        m.remove("menu_bar");
+        let p: crate::state::Panels = serde_json::from_value(v).unwrap();
+        assert!(p.rail && p.menu_bar);
     }
 }
 

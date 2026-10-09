@@ -1176,7 +1176,7 @@ impl eframe::App for PhotocraftApp {
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
-        if chrome {
+        if chrome && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
         if chrome && self.ui.panels.options_bar {
