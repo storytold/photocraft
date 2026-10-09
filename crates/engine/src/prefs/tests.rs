@@ -370,3 +370,20 @@ fn linux_only_preferences_show_only_on_linux() {
     assert!(!is_hidden("performance.gpuBackend"));
     assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
 }
+
+#[test]
+fn percent_grid_spacing_is_per_axis() {
+    let mut g = GuidesGridAndSlices { grid_unit: Unit::Percent, gridline_every: 20.0, ..Default::default() };
+    assert_eq!(g.major_px(72.0, [1280.0, 720.0], 72.0), [256.0, 144.0]);
+    // Every other unit is the same on both axes, whatever the document's shape.
+    g.grid_unit = Unit::Pixels;
+    g.gridline_every = 50.0;
+    assert_eq!(g.major_px(72.0, [1280.0, 720.0], 72.0), [50.0, 50.0]);
+    g.grid_unit = Unit::Inches;
+    g.gridline_every = 1.0;
+    assert_eq!(g.major_px(300.0, [1280.0, 720.0], 72.0), [300.0, 300.0]);
+    // A degenerate size or a zero spacing still gives a usable (tiny, positive) step.
+    g.grid_unit = Unit::Percent;
+    g.gridline_every = 0.0;
+    assert!(g.major_px(72.0, [0.0, 0.0], 72.0).iter().all(|s| *s > 0.0));
+}

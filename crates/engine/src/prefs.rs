@@ -621,9 +621,12 @@ impl Default for GuidesGridAndSlices {
 }
 
 impl GuidesGridAndSlices {
-    /// Major gridline spacing in document pixels.
-    pub fn major_px(&self, dpi: f64, extent: f64, ppi: f64) -> f64 {
-        self.grid_unit.to_px(self.gridline_every.max(1e-3), dpi, extent, ppi).max(1e-3)
+    /// Major gridline spacing in document pixels, `[across, down]`. For a percent grid 100% is
+    /// the document's width across and its height down, so a non-square document gets
+    /// rectangular cells; the other units give the same spacing on both axes.
+    pub fn major_px(&self, dpi: f64, size: [f64; 2], ppi: f64) -> [f64; 2] {
+        let every = self.gridline_every.max(1e-3);
+        size.map(|extent| self.grid_unit.to_px(every, dpi, extent, ppi).max(1e-3))
     }
 }
 

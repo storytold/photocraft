@@ -111,26 +111,44 @@ fn tick_step(zoom: f32) -> f64 {
 pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let g = &app.session.prefs().guides_grid_and_slices;
     let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
-    let major = g.major_px(doc.resolution_dpi.max(1.0) as f64, doc.size.width as f64, ppi);
-    let minor = major / g.subdivisions.max(1) as f64;
+    let size = [doc.size.width as f64, doc.size.height as f64];
+    let major = g.major_px(doc.resolution_dpi.max(1.0) as f64, size, ppi);
+    let minor = major.map(|m| m / g.subdivisions.max(1) as f64);
     let base = pref_color(&g.grid_color, Color32::from_gray(140));
-    let (w, h) = (doc.size.width as f64, doc.size.height as f64);
+    let (w, h) = (size[0] as f32, size[1] as f32);
     for (step, alpha) in [(minor, 0.45f32), (major, 1.0)] {
-        if step * (xf.zoom as f64) < 6.0 || (alpha < 1.0 && g.subdivisions <= 1) {
+        if alpha < 1.0 && g.subdivisions <= 1 {
             continue;
         }
         let st = Stroke::new(1.0, base.gamma_multiply(alpha));
-        let mut x = step;
-        while x < w {
-            styled_line(painter, xf.to_screen(x as f32, 0.0), xf.to_screen(x as f32, h as f32), st, g.grid_style);
-            x += step;
+        let [xs, ys] = grid_lines(step, size, xf.zoom as f64);
+        for x in xs {
+            styled_line(painter, xf.to_screen(x as f32, 0.0), xf.to_screen(x as f32, h), st, g.grid_style);
         }
-        let mut y = step;
-        while y < h {
-            styled_line(painter, xf.to_screen(0.0, y as f32), xf.to_screen(w as f32, y as f32), st, g.grid_style);
-            y += step;
+        for y in ys {
+            styled_line(painter, xf.to_screen(0.0, y as f32), xf.to_screen(w, y as f32), st, g.grid_style);
         }
     }
+}
+
+/// One level of grid lines, `[x of the vertical lines, y of the horizontal lines]` in document
+/// px, for the spacing `step` (`[across, down]`) inside a `size` document. An axis whose lines
+/// would sit closer than 6 screen px at `zoom` gets none.
+fn grid_lines(step: [f64; 2], size: [f64; 2], zoom: f64) -> [Vec<f64>; 2] {
+    [0, 1].map(|axis| {
+        let (step, extent) = (step[axis], size[axis]);
+        let mut lines = Vec::new();
+        let on_screen = step * zoom;
+        if on_screen.is_nan() || on_screen < 6.0 {
+            return lines;
+        }
+        let mut at = step;
+        while at < extent {
+            lines.push(at);
+            at += step;
+        }
+        lines
+    })
 }
 
 pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
@@ -304,6 +322,35 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #1876: "every 20 %" on a 1280 x 720 document is a 256 x 144 px cell, not a square.
+    #[test]
+    fn percent_grid_cells_follow_the_document_aspect() {
+        let g = photocraft_engine::prefs::GuidesGridAndSlices { grid_unit: Unit::Percent, gridline_every: 20.0, subdivisions: 2, ..Default::default() };
+        let size = [1280.0, 720.0];
+        let major = g.major_px(72.0, size, 72.0);
+        assert_eq!(major, [256.0, 144.0]);
+        let [xs, ys] = grid_lines(major, size, 1.0);
+        assert_eq!(xs, vec![256.0, 512.0, 768.0, 1024.0]);
+        assert_eq!(ys, vec![144.0, 288.0, 432.0, 576.0]);
+        // With the subdivisions: 10 columns and 10 rows (9 inner lines each way).
+        let minor = major.map(|m| m / 2.0);
+        let [xs, ys] = grid_lines(minor, size, 1.0);
+        assert_eq!((xs.len(), ys.len()), (9, 9));
+        assert_eq!((xs.first(), ys.first()), (Some(&128.0), Some(&72.0)));
+    }
+
+    #[test]
+    fn grid_lines_skip_an_axis_that_is_too_dense() {
+        // 10 px apart across, 2 px apart down: at 100 % only the vertical lines are far enough.
+        let [xs, ys] = grid_lines([10.0, 2.0], [100.0, 100.0], 1.0);
+        assert_eq!(xs.len(), 9);
+        assert!(ys.is_empty());
+        // Hostile spacing and zoom draw nothing rather than looping or allocating without end.
+        for (step, zoom) in [([0.0, 0.0], 1.0), ([f64::NAN; 2], 1.0), ([1e-3; 2], f64::NAN), ([5.0; 2], 0.0)] {
+            assert_eq!(grid_lines(step, [100.0, 100.0], zoom), [Vec::<f64>::new(), Vec::new()], "{step:?} {zoom}");
+        }
+    }
 
     #[test]
     fn unit_steps_allow_fractions() {

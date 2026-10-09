@@ -45,10 +45,11 @@ pub struct ActiveSnap {
 pub fn options(app: &PhotocraftApp) -> SnapOptions {
     let st = &app.ui.view.snap_to;
     let e = &app.ui.extras;
-    let grid_step = app.session.active().map_or(18.0, |d| {
+    let grid_step = app.session.active().map_or([18.0; 2], |d| {
         let g = &app.session.prefs().guides_grid_and_slices;
         let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
-        g.major_px(d.doc.resolution_dpi as f64, d.doc.size.width as f64, ppi) / g.subdivisions.max(1) as f64
+        let size = [d.doc.size.width as f64, d.doc.size.height as f64];
+        g.major_px(d.doc.resolution_dpi as f64, size, ppi).map(|major| major / g.subdivisions.max(1) as f64)
     });
     SnapOptions { guides: st.guides && e.guides, grid: st.grid && e.grid, layers: st.layers, document: st.document_bounds, selection: true, grid_step }
 }
@@ -69,7 +70,8 @@ fn snap_on(app: &PhotocraftApp) -> bool {
 /// Targets of the active document (smart = layer alignments only).
 fn build(app: &PhotocraftApp, exclude: &[LayerId], smart: bool) -> SnapTargets {
     let Some(st) = app.session.active() else { return SnapTargets::default() };
-    let opts = if smart { SnapOptions { guides: false, grid: false, layers: true, document: true, selection: false, grid_step: 0.0 } } else { options(app) };
+    let opts =
+        if smart { SnapOptions { guides: false, grid: false, layers: true, document: true, selection: false, grid_step: [0.0; 2] } } else { options(app) };
     let t = SnapTargets::from_document(&st.doc, &opts, exclude);
     if smart { t.filtered(SnapKind::is_smart) } else { t }
 }
@@ -458,12 +460,32 @@ mod tests {
             json!({"values": {"guidesGridAndSlices.gridlineEvery": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 4}}),
         )
         .unwrap();
-        assert_eq!(options(&app).grid_step, 25.0);
+        assert_eq!(options(&app).grid_step, [25.0, 25.0]);
         app.ui.tool = Tool::RectMarquee;
         let m = egui::Modifiers::NONE;
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 152.0, y: 127.0, pressure: 1.0 }, m);
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 199.0, y: 176.0 }, m);
         let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
         assert_eq!((sel.x0, sel.y0, sel.x1, sel.y1), (150, 125, 200, 175));
+    }
+
+    /// Issue #1876: a percent grid on a 400 x 300 document is 80 x 60 px cells (20 %), so the
+    /// subdivision step is 40 x 30 and the marquee snaps to those, not to 40 x 40.
+    #[test]
+    fn percent_grid_snaps_to_rectangular_cells() {
+        let mut app = app_with_box();
+        app.ui.extras.grid = true;
+        app.run(
+            "prefs.set",
+            json!({"values": {"guidesGridAndSlices.gridlineEvery": 20, "guidesGridAndSlices.gridUnit": "percent", "guidesGridAndSlices.subdivisions": 2}}),
+        )
+        .unwrap();
+        assert_eq!(options(&app).grid_step, [40.0, 30.0]);
+        app.ui.tool = Tool::RectMarquee;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 82.0, y: 58.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 158.0, y: 121.0 }, m);
+        let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+        assert_eq!((sel.x0, sel.y0, sel.x1, sel.y1), (80, 60, 160, 120));
     }
 }
