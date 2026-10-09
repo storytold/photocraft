@@ -1720,7 +1720,7 @@ fn large_documents_thumbnail_from_a_proxy() {
 /// parallel), each carrying a different effect.
 #[cfg(not(target_arch = "wasm32"))]
 fn nested_parallel_fx_doc() -> Document {
-    use photocraft_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
+    use photocraft_doc::{Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
     let mut d = doc_white(512, 512);
     let g = |a: f32| Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(0.2, 0.5, 0.9))], a, 1.0, photocraft_doc::GradientStyle::Linear, false);
     let mut shadow = Layer::new("shadow", LayerContent::Fill(g(0.0)));
@@ -1748,11 +1748,32 @@ fn nested_parallel_fx_doc() -> Document {
         noise: 0.0,
         source: GlowSource::Edge,
     })];
+    // A chiselled bevel: its distance transforms run on threads of their own, inside the tile that builds them.
+    let mut chisel = solid_layer("chisel", Rect::new(60, 60, 450, 450), [0.8, 0.6, 0.2, 1.0]);
+    chisel.effects.items = vec![Effect::BevelEmboss(Bevel {
+        enabled: true,
+        style: BevelStyle::InnerBevel,
+        technique: BevelTechnique::ChiselHard,
+        depth: 1.5,
+        up: true,
+        size: 9.0,
+        soften: 0.0,
+        angle: 120.0,
+        altitude: 32.0,
+        use_global_light: false,
+        gloss_contour: Contour::Linear,
+        highlight: FxCommon::new(BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    })];
     // Unaffected layers whose rows also render in parallel keep both workers stealing.
     let base = Layer::new("base", LayerContent::Fill(g(30.0)));
     let mut top = Layer::new("top", LayerContent::Fill(g(60.0)));
     top.opacity = 0.3;
-    d.layers.extend([base, shadow, stroke, glow, top]);
+    d.layers.extend([base, shadow, stroke, glow, chisel, top]);
     d
 }
 
