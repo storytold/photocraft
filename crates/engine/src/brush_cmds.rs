@@ -412,6 +412,12 @@ impl LiveStroke {
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 
+    /// Does the stroke change with time while the pointer is held still (airbrush Build-up, or
+    /// smoothing still catching up)? See `photocraft_paint::dynamics::DabGenerator::wants_time`.
+    pub fn wants_time(&self) -> bool {
+        self.renderer.wants_time()
+    }
+
     /// Render more points; returns the rectangle that changed. The doc shows the stroke as
     /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and

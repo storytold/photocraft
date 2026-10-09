@@ -259,6 +259,15 @@ enum EngineStroke {
 }
 
 impl EngineStroke {
+    /// The brush engine's strokes can change while the pointer is held still (see
+    /// `LiveStroke::wants_time`); the retouch strokes don't.
+    fn wants_time(&self) -> bool {
+        match self {
+            EngineStroke::Brush(l) => l.wants_time(),
+            EngineStroke::Retouch(_) | EngineStroke::Dab(_) => false,
+        }
+    }
+
     fn doc(&self) -> &std::sync::Arc<photocraft_doc::Document> {
         match self {
             Self::Brush(s) => &s.doc,
@@ -470,12 +479,15 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
     }
     let (Some(l), Some(d)) = (app.live_stroke.as_mut(), app.drag.as_ref()) else { return };
     let pose = &app.stylus.stroke;
+    // The same times `stroke_points` gives the commit (from the drag's first point).
+    let t0 = app.stylus.point_ms(0);
     let pts: Vec<_> = (l.fed..d.points.len())
         .filter_map(|i| {
             let p = d.points.get(i)?;
             let t = pose.get(i).or(pose.last()).copied().unwrap_or_default();
             let mut sp = photocraft_engine::paint::StrokePoint::new(p[0], p[1], p[2] as f32);
             (sp.tilt_x, sp.tilt_y, sp.rotation) = (t[0], t[1], t[2]);
+            sp.time = app.stylus.point_ms(i) - t0;
             Some(sp)
         })
         .collect();
@@ -487,6 +499,26 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
         Ok(r) => l.damage.push(r),
         Err(_) => app.live_stroke = None,
     }
+}
+
+/// While a stroke is held still, its point repeats this often (in ms) so time-based brush
+/// features (airbrush build-up, smoothing catch-up) keep going, as when the pen moves.
+const HOLD_REPEAT_MS: f64 = 16.0;
+
+/// Is the live stroke one that changes while the pointer is held still (airbrush Build-up, or
+/// smoothing catching up)? Only then does a held pointer repeat its point and keep repainting.
+fn stroke_wants_time(app: &PhotocraftApp) -> bool {
+    app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time())
+}
+
+/// Time of sample `k` of the `n` samples a frame delivered, spread evenly after `base` (the
+/// previous point) up to `now` (this frame): egui's pointer events carry no timestamps.
+pub(crate) fn spread_ms(base: f64, now: f64, k: usize, n: usize) -> f64 {
+    // Not after `base` (or not comparable, NaN): every sample takes the frame time.
+    if n == 0 || now.partial_cmp(&base) != Some(std::cmp::Ordering::Greater) {
+        return now;
+    }
+    base + (now - base) * (k + 1) as f64 / n as f64
 }
 
 /// Tools whose gesture follows a freehand path (a polyline of the input points), so every pointer
@@ -2574,6 +2606,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // A drag is only recognised once the pointer has moved past egui's click distance: the
         // gesture starts where the button went down, not where it is now (#123).
         let gesture_active_before = app.drag.is_some();
+        // Stroke timing: egui's events carry no timestamps, so a press takes the frame time and
+        // the moves below are spread between the previous point and this frame (`spread_ms`).
+        let now_ms = ui.input(|i| i.time) * 1000.0;
+        app.stylus.clock_ms = now_ms;
         // Live painting tools start on the press, not once the pointer passes egui's click
         // distance: the first dab shows at once. The drag recognised later continues that stroke,
         // and a click (or a long press that never moved) just ends it.
@@ -2603,7 +2639,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let press_mods = if tool.is_type() { ctx.data(|d| d.get_temp(type_press)).unwrap_or(mods) } else { mods };
             tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
         }
-        if buttons.dragged || buttons.stopped {
+        // A stroke started on the press takes its moves from the press on, not only once egui
+        // recognises a drag (past its click distance): otherwise the first few points are lost
+        // and the stroke starts with a straight segment and no pressure ramp.
+        let press_stroke_moving = press_stroke && app.drag.is_some();
+        if buttons.dragged || buttons.stopped || press_stroke_moving {
             // Feed every pointer move the OS delivered this frame, not just the latest position, so
             // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
             // polyline. egui-winit pushes one `PointerMoved` per `CursorMoved`, and they accumulate
@@ -2633,15 +2673,23 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // A frame with no raw move still tracks a held gesture (a still pointer, a modifier
             // change): fall back to the latest position, as the old code always did.
             if positions.is_empty()
-                && buttons.dragged
-                && let Some(p) = response.interact_pointer_pos()
+                && (buttons.dragged || press_stroke_moving)
+                && let Some(p) = response.interact_pointer_pos().or(ui.input(|i| i.pointer.latest_pos()))
             {
                 positions.push(p);
             }
             app.defer_live_stroke = true;
-            for p in positions {
+            let base = app.stylus.last_point_ms().map_or(now_ms, |t| t.min(now_ms));
+            let n = positions.len();
+            for (k, p) in positions.into_iter().enumerate() {
+                app.stylus.clock_ms = spread_ms(base, now_ms, k, n);
                 let d = xf.to_doc(p);
                 tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            }
+            app.stylus.clock_ms = now_ms;
+            // A held pen keeps the clock running for airbrush build-up and smoothing catch-up.
+            if app.drag.is_some() && stroke_wants_time(app) {
+                ctx.request_repaint_after(std::time::Duration::from_millis(HOLD_REPEAT_MS as u64));
             }
             app.defer_live_stroke = false;
             // One live-stroke update for the whole frame, not one per recovered sample.
@@ -3476,7 +3524,11 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         // ⇧: straight 0/45/90° strokes, 45° gradient angles (stroke_constraint.rs).
         let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
         let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
-        if d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25) {
+        let moved = d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25);
+        // A held pen repeats its point now and then, so the stroke's time keeps advancing.
+        let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
+            && app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time());
+        if moved || held {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
         }

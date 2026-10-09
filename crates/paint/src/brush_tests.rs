@@ -616,6 +616,48 @@ fn smoothing_modes() {
 }
 
 #[test]
+fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
+    // The pointer jumps 100 px and is held there for 32 ms, reported at 1000 Hz or about 60 Hz.
+    let cfg = Smoothing { amount: 0.8, catch_up: true, catch_up_on_end: false, ..Default::default() };
+    let run = |interval: f64| {
+        let mut s = Smoother::new(&cfg, 1.0);
+        let mut out = Vec::new();
+        s.push(StrokePoint::new(0.0, 0.0, 1.0), &mut out);
+        let mut t = 0.0;
+        while t < 32.0 {
+            t += interval;
+            s.push(StrokePoint { time: t, ..StrokePoint::new(100.0, 0.0, 1.0) }, &mut out);
+        }
+        out.last().map_or(0.0, |p| p.x)
+    };
+    let (fast, slow) = (run(1.0), run(16.0));
+    // Two 16 ms steps of a 0.2 pull: 1 - 0.8² = 36 % of the way.
+    assert!((slow - 36.0).abs() < 1e-4, "{slow}");
+    assert!((fast - slow).abs() < 1e-4, "1000 Hz {fast} vs 60 Hz {slow}");
+    // Without timestamps each point is one step, as before.
+    let mut s = Smoother::new(&cfg, 1.0);
+    let mut out = Vec::new();
+    for x in [0.0, 100.0] {
+        s.push(StrokePoint::new(x, 0.0, 1.0), &mut out);
+    }
+    assert!((out.last().map_or(0.0, |p| p.x) - 20.0).abs() < 1e-4);
+}
+
+#[test]
+fn smoothing_without_catch_up_stops_while_the_pointer_pauses() {
+    let cfg = Smoothing { amount: 0.8, catch_up: false, catch_up_on_end: false, ..Default::default() };
+    let mut s = Smoother::new(&cfg, 1.0);
+    let mut out = Vec::new();
+    s.push(StrokePoint::new(0.0, 0.0, 1.0), &mut out);
+    s.push(StrokePoint { time: 16.0, ..StrokePoint::new(100.0, 0.0, 1.0) }, &mut out);
+    let n = out.len();
+    for t in [32.0, 48.0, 64.0] {
+        s.push(StrokePoint { time: t, ..StrokePoint::new(100.0, 0.0, 1.0) }, &mut out);
+    }
+    assert_eq!(out.len(), n, "held still: the brush doesn't move");
+}
+
+#[test]
 fn pose_overrides_stylus_values() {
     let b = BrushSettings {
         size: 40.0,
