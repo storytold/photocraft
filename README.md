@@ -259,6 +259,16 @@ cargo run --release -p photocraft -- image.psd   # the desktop app
 cargo test --workspace                           # the test suite
 ```
 
+With [Nix](https://nixos.org/download) (flakes enabled), no Rust toolchain or system libraries are needed:
+
+```
+nix run github:storytold/photocraft -- image.psd    # run the desktop app directly from this repo without manual clone
+nix run .#photocraft -- image.psd                   # run the desktop app inside a local git clone
+nix develop                                         # dev shell with toolchain and libraries
+```
+
+See [`docs/nix.md`](docs/nix.md) for the CLI, the checks and non-NixOS GPU setup.
+
 Japanese fonts for the UI and Type tool come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build input (desktop release builds always include it). Without it PhotoCraft uses your system's CJK fonts:
 
 ```sh

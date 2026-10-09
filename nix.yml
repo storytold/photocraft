@@ -1,0 +1,104 @@
+name: Nix
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "book/**"
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "book/**"
+      - "**.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  # cache-nix-action deletes superseded caches (purge-*), which needs this.
+  actions: write
+
+jobs:
+  flake:
+    name: Build flake (x86_64-linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Nix store, the Rust toolchain and the dependency artifacts are big.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: nixbuild/nix-quick-install-action@v30
+        with:
+          nix_conf: |
+            experimental-features = nix-command flakes
+            # Keep build-time-only outputs (crane's dependency artifacts) so
+            # they survive the GC below and end up in the cache.
+            keep-env-derivations = true
+            keep-outputs = true
+
+      # Restores /nix from the GitHub Actions cache and saves it again at the
+      # end of the job. A hit on the exact key means "nothing relevant changed";
+      # otherwise we start from the newest cache with the same prefix and only
+      # build what's new (usually just the workspace crates, not the deps).
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          # Everything not rooted below (see the --out-link builds) is garbage.
+          # Keep well under GitHub's 10 GB per-repository cache limit.
+          gc-max-store-size-linux: 6G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+
+      # Fast failure: evaluates every output of every system without building.
+      - name: Evaluate flake
+        run: nix flake check --no-build --all-systems
+
+      # --out-link creates GC roots, so the store GC before the cache is saved
+      # keeps these paths. The dependency derivation is built on its own so the
+      # step log shows whether the dependency cache was hit.
+      - name: Build dependencies (cargoArtifacts)
+        run: nix build .#photocraft-deps --print-build-logs --out-link result-deps
+
+      - name: Build photocraft
+        run: nix build .#photocraft --print-build-logs --out-link result-photocraft
+
+      - name: Build photocraft-cli
+        run: nix build .#photocraft-cli --print-build-logs --out-link result-cli
+
+      - name: Smoke test
+        run: |
+          set -euxo pipefail
+          test -x result-photocraft/bin/photocraft
+          test -f result-photocraft/share/applications/ai.storyteller.photocraft.desktop
+          # winit/wgpu dlopen these at runtime; they must survive in RUNPATH.
+          rpath=$(nix run nixpkgs#patchelf -- --print-rpath result-photocraft/bin/.photocraft-wrapped)
+          echo "$rpath" | tr ':' '\n'
+          for lib in wayland libxkbcommon vulkan-loader libglvnd; do
+            echo "$rpath" | grep -q "$lib"
+          done
+          result-cli/bin/photocraft-cli --help
+          # Headless engine round trip (see docs/development.md, "Headless CLI").
+          result-cli/bin/photocraft-cli run --new '{"width":64,"height":64}' --cmd document.inspect
+
+      # fmt + clippy + tests over the whole workspace. Non-blocking until it has
+      # been seen green on this runner: these use the latest stable toolchain
+      # from flake.lock, and the tests run in the Nix sandbox without a GPU.
+      # Drop `continue-on-error` once stable.
+      - name: Checks (fmt, clippy, tests)
+        continue-on-error: true
+        run: nix flake check --print-build-logs --keep-going

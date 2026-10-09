@@ -4,6 +4,7 @@
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
 - macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
+- Nix users: `nix develop` provides the toolchain and all of the above. See [nix.md](nix.md).
 
 ## Build and run
 
