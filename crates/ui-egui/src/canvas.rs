@@ -1532,8 +1532,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if let Some(g) = &gpu {
             gpu_budget(app, g, idx, true, visible_doc_rect(&xf));
         }
-        let count = (app.streams.len() + 1).max(1) as u64;
-        let s = app.streams.entry((doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id(), idx)).value())).or_default();
+        // Tab indices move when documents close or reorder; the view belongs to the document.
+        let stream_key = (doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id())).value());
+        let count = (app.streams.len() + usize::from(!app.streams.contains_key(&stream_key))).max(1) as u64;
+        let s = app.streams.entry(stream_key).or_default();
         let encode_srgb = display.as_ref().is_some_and(|d| d.encode_srgb);
         if let Some(target) = wanted.first()
             && let Some(damage) = app.session.documents().get(idx).and_then(|s| s.last_damage)
@@ -1577,7 +1579,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             } else {
                 painter.rect_filled(img_rect, 0.0, Color32::WHITE);
             }
-            if let Some(s) = app.streams.get(&(doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id(), idx)).value())) {
+            if let Some(s) = app.streams.get(&stream_key) {
                 s.paint_cpu(&painter, &xf, &doc, &wanted);
             }
         }
@@ -2926,6 +2928,38 @@ fn hex(c: [f32; 4]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_earlier_tabs_keeps_the_surviving_document_stream() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        for name in ["closed", "survivor"] {
+            app.session.add_document(
+                Document::new(name, photocraft_doc::Size::new(8192, 4096), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::F32),
+                None,
+            );
+        }
+        app.sync_views();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::default());
+        let draw = |app: &mut PhotocraftApp| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| document_area(app, ui));
+            });
+            output.textures_delta.clear();
+        };
+        draw(&mut app);
+        assert_eq!(app.streams.len(), 1);
+        let key = *app.streams.keys().next().unwrap();
+        let before = app.streams[&key].stats.cache_limit;
+        app.run("file.close", json!({"document": 0})).unwrap();
+        draw(&mut app);
+        assert_eq!(app.streams.len(), 1, "the surviving view must not duplicate its cache after its tab index changes");
+        assert!(app.streams.contains_key(&key));
+        assert_eq!(app.streams[&key].stats.cache_limit, before);
+        app.run("file.close", json!({})).unwrap();
+        assert!(app.streams.is_empty());
+    }
 
     /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an
     /// sRGB colour.

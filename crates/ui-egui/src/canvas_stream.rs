@@ -12,6 +12,8 @@ use std::sync::{Arc, mpsc};
 pub const PAGE_SIDE: u32 = 512;
 const MAX_PAGES: usize = 512;
 const MAX_JOBS: usize = 2;
+// RGBA F32 plus its display image, including the one-pixel apron on each side.
+const PAGE_BYTES: u64 = (PAGE_SIDE as u64 + 2) * (PAGE_SIDE as u64 + 2) * 20;
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 struct WorkerSlot;
 impl Drop for WorkerSlot {
@@ -118,6 +120,10 @@ pub struct Stats {
     pub cancellations: u64,
     pub gpu_composites: u64,
     pub last_error: Option<String>,
+    pub visible_pages: usize,
+    pub ready_pages: usize,
+    pub pending_bytes: u64,
+    pub cache_limit: u64,
 }
 
 pub struct Stream {
@@ -271,7 +277,8 @@ impl Stream {
             }
         }
         let mut bytes: u64 = self.cache.values().map(Page::bytes).sum();
-        while bytes > limit || self.cache.len() > MAX_PAGES {
+        let mut pending = self.jobs.len() as u64 * PAGE_BYTES;
+        while bytes.saturating_add(pending) > limit || self.cache.len() > MAX_PAGES {
             let cold = self
                 .cache
                 .iter()
@@ -297,22 +304,41 @@ impl Stream {
             if self.cache.get(key).is_some_and(|p| !exact || p.exact) {
                 continue;
             }
-            if bytes.saturating_add(514 * 514 * 20) > limit {
+            // Admission must make room before the budget is exhausted. Otherwise old zooms
+            // just below the limit block a new visible page forever, even with idle workers.
+            while bytes.saturating_add(pending).saturating_add(PAGE_BYTES) > limit {
+                let cold = self.cache.iter().filter(|(k, _)| !desired.contains(k)).min_by_key(|(_, p)| p.touched).map(|(k, _)| *k);
+                let Some(cold) = cold else { break };
+                if let Some(page) = self.cache.remove(&cold) {
+                    bytes = bytes.saturating_sub(page.bytes());
+                }
+            }
+            if bytes.saturating_add(pending).saturating_add(PAGE_BYTES) > limit {
                 break;
             }
-            self.spawn(ctx, doc.clone(), *key, display.clone(), exact);
+            if !self.spawn(ctx, doc.clone(), *key, display.clone(), exact) {
+                // Another view owns the shared workers. Keep this view runnable even if it
+                // has no local jobs, and stop probing the pool once per remaining page.
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                break;
+            }
+            pending = pending.saturating_add(PAGE_BYTES);
         }
         self.stats.resident_pages = self.cache.len();
         self.stats.resident_bytes = bytes;
         self.stats.active_jobs = self.jobs.len();
+        self.stats.visible_pages = wanted.len();
+        self.stats.ready_pages = wanted.iter().filter(|key| self.cache.get(key).is_some_and(|p| p.gpu || p.texture.is_some())).count();
+        self.stats.pending_bytes = pending;
+        self.stats.cache_limit = limit;
         if !self.jobs.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
     }
 
-    fn spawn(&mut self, ctx: &egui::Context, doc: Arc<Document>, key: PageKey, display: Option<Arc<CanvasDisplay>>, exact: bool) {
+    fn spawn(&mut self, ctx: &egui::Context, doc: Arc<Document>, key: PageKey, display: Option<Arc<CanvasDisplay>>, exact: bool) -> bool {
         if ACTIVE.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |n| (n < MAX_JOBS).then_some(n + 1)).is_err() {
-            return;
+            return false;
         }
         let slot = WorkerSlot;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -322,24 +348,28 @@ impl Stream {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let result = std::thread::Builder::new().name("pc-viewport-page".into()).spawn(move || {
-                let _slot = slot;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compute(&doc, key, display.as_deref(), exact, &cancel)))
                     .unwrap_or_else(|_| Err("viewport rendering failed; original document preserved".into()));
                 let _ = tx.try_send(Completed { key, exact, result });
+                // Release capacity before waking any view waiting for it.
+                drop(slot);
                 ctx.request_repaint();
             });
             if let Err(e) = result {
                 self.jobs.remove(&key);
+                self.failed.insert(key);
                 self.stats.last_error = Some(e.to_string());
+                return false;
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _slot = slot;
             let result = compute(&doc, key, display.as_deref(), exact, &cancel);
             let _ = tx.try_send(Completed { key, exact, result });
+            drop(slot);
             ctx.request_repaint();
         }
+        true
     }
 
     /// Upload at most two pages per frame; all disk reads and colour transforms ran on workers.
@@ -383,6 +413,7 @@ impl Stream {
             ctx.request_repaint();
         }
         self.stats.resident_bytes = self.cache.values().map(Page::bytes).sum();
+        self.stats.ready_pages = wanted.iter().filter(|key| self.cache.get(key).is_some_and(|p| p.gpu || p.texture.is_some())).count();
     }
 
     pub fn paint_cpu(&self, painter: &egui::Painter, xf: &crate::canvas::ViewXform, doc: &Document, wanted: &[PageKey]) {
@@ -453,6 +484,58 @@ mod tests {
         assert_eq!(s.cache.keys().filter(|k| k.revision == 2).count(), 3);
         assert!(s.cache.keys().filter(|k| k.revision == 2).all(|k| k.source(&d).intersect(&damage).is_empty()));
         assert_eq!(PageKey { x: u32::MAX, ..target }.core(&d), Rect::EMPTY);
+    }
+
+    #[test]
+    fn cold_zoom_pages_cannot_block_new_visible_pages() {
+        let doc = Arc::new(Document::new("tabs", photocraft_doc::Size::new(8192, 4096), ColorMode::Rgb, SampleType::F32));
+        let ctx = egui::Context::default();
+        let mut stream = Stream::default();
+        let old = pages(&doc, doc.bounds(), 0.5, 1, 0, 0);
+        for key in old.iter().take(8) {
+            stream.cache.insert(
+                *key,
+                Page {
+                    buffer: None,
+                    rect: key.core(&doc),
+                    image: egui::ColorImage::filled([514, 514], Color32::BLACK),
+                    texture: None,
+                    gpu: false,
+                    exact: true,
+                    touched: 0,
+                },
+            );
+        }
+        let wanted = pages(&doc, Rect::new(0, 0, 512, 512), 1.0, 1, 0, 0);
+        let limit = 12 << 20;
+        assert!(stream.cache.values().map(Page::bytes).sum::<u64>() < limit);
+        stream.update(&ctx, doc.clone(), &wanted, None, StreamOptions { limit, gpu: None, refine: true });
+        assert!(stream.cache.len() < 8, "evict cold zoom pages before admitting the visible page, even when another view owns the workers");
+        for _ in 0..1000 {
+            stream.update(&ctx, doc.clone(), &wanted, None, StreamOptions { limit, gpu: None, refine: true });
+            stream.upload(&ctx, &doc, &wanted, None, 0, false);
+            if wanted.iter().all(|k| stream.texture(k).is_some()) && stream.jobs.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(wanted.iter().all(|k| stream.texture(k).is_some()));
+        assert!(stream.stats.resident_bytes <= limit);
+    }
+
+    #[test]
+    fn pending_pages_reserve_cache_capacity_until_they_are_consumed() {
+        let doc = Arc::new(Document::new("pending", photocraft_doc::Size::new(8192, 4096), ColorMode::Rgb, SampleType::F32));
+        let ctx = egui::Context::default();
+        let mut stream = Stream::default();
+        let wanted = pages(&doc, Rect::new(0, 0, 1024, 512), 1.0, 1, 0, 0);
+        // A completed inactive-view job still owns its queued result until update consumes it.
+        stream.jobs.insert(wanted[0], Arc::new(AtomicBool::new(false)));
+        let limit = PAGE_BYTES + 1;
+        stream.update(&ctx, doc.clone(), &wanted, None, StreamOptions { limit, gpu: None, refine: true });
+        assert_eq!(stream.jobs.len(), 1, "the second result would exceed the shared view capacity");
+        assert_eq!(stream.stats.pending_bytes, PAGE_BYTES);
+        assert!(stream.stats.resident_bytes + stream.stats.pending_bytes <= limit);
     }
 
     #[test]

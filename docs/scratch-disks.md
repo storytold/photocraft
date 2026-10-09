@@ -21,6 +21,12 @@ CPU fallback also displays source-resolution regions instead of a reduced full-d
 Cold pages are disposable; original pixels and history remain in the tile store. GPU composition
 on the UI thread is admitted only while its input tiles are resident.
 
+Viewport caches discard cold zoom pages before admitting new visible pages and reserve capacity
+for worker results until consumed. A view waiting for the two shared workers retries after
+capacity becomes available. Canvas cache identity follows the document and viewport, so closing
+or reordering tabs does not duplicate a surviving document's cache or reduce its budget.
+Streaming diagnostics include visible/ready page counts, queued-result capacity and cache limits.
+
 Native GPU composition uses a 32 MiB upload threshold and drains the final batch before
 returning from a render that transferred pixels. This keeps consecutive viewport requests
 from accumulating mapped staging buffers, whose available memory can be much smaller than
