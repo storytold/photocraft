@@ -1675,13 +1675,19 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let lk = l.locks;
                 for (key, icon, tip, on) in [
-                    ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
+                    ("transparency", "lock-transparency", tl!("Lock transparent pixels"), lk.transparency),
                     ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
                     ("position", "move", tl!("Lock position"), lk.position),
                     ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
                     ("all", "lock", tl!("Lock all"), lk.all),
                 ] {
-                    if icons::button(ui, icon, 20.0, on, tip).clicked() {
+                    // Solid 4×4 checker, drawn large enough that the squares stay separate.
+                    let resp = if key == "transparency" {
+                        icons::button_with_icon_size(ui, icon, 20.0, 12.0, on, tip)
+                    } else {
+                        icons::button(ui, icon, 20.0, on, tip)
+                    };
+                    if resp.clicked() {
                         actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "locks": { key: !on }})));
                     }
                 }

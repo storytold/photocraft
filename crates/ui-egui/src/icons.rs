@@ -212,4 +212,29 @@ mod tests {
             assert!(coverage[3] > vertical * 1.7 && coverage[3] < vertical * 2.1);
         }
     }
+
+    /// Lock Transparent Pixels is Photoshop's checkerboard: solid squares and empty squares.
+    #[test]
+    fn lock_transparency_icon_is_a_solid_checkerboard() {
+        let bytes = white_icons().get("lock-transparency").unwrap();
+        let size = 24_u32;
+        let image = egui_extras::image::load_svg_bytes_with_size(
+            bytes,
+            egui::load::SizeHint::Size { width: size, height: size, maintain_aspect_ratio: true },
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(image.size, [size as usize; 2]);
+        let a = |x: usize, y: usize| image.pixels[y * size as usize + x].a();
+        for j in 0..4 {
+            for i in 0..4 {
+                let alpha = a(i * 6 + 3, j * 6 + 3);
+                if (i + j) % 2 == 0 {
+                    assert!(alpha > 220, "filled square ({i},{j}) alpha {alpha}");
+                } else {
+                    assert!(alpha < 16, "empty square ({i},{j}) alpha {alpha}");
+                }
+            }
+        }
+    }
 }
