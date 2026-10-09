@@ -62,6 +62,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all_layers})),
+        Tool::Remove => ("paint.remove", json!({"sampleAllLayers": o.sample_all_layers})),
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
         Tool::PatternStamp => {
             let mut p = json!({
@@ -286,6 +287,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
         }
+        Tool::Remove => {
+            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+        }
         Tool::Patch => {
             opt(ui, tl!("Patch:"));
             for (k, l) in [("source", tl!("Source")), ("destination", tl!("Destination"))] {
@@ -498,7 +502,7 @@ mod tests {
     #[test]
     fn sample_all_layers_reaches_the_command() {
         // #207, #731: the options-bar checkbox reaches the command.
-        for tool in [Tool::SpotHealing, Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+        for tool in [Tool::SpotHealing, Tool::Remove, Tool::Blur, Tool::Sharpen, Tool::Smudge] {
             for all in [false, true] {
                 let mut app = app();
                 stripes(&mut app, 4, "pixels");
@@ -681,8 +685,25 @@ mod tests {
     }
 
     #[test]
+    fn remove_tool_stroke_removes_what_it_covers() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
+        app.run("paint.pencil", json!({"points": [[30, 20], [30, 40]], "size": 4, "color": "#000000"})).unwrap();
+        let bg = active(&app).surface().unwrap().rgba(70, 30);
+        app.ui.tool = Tool::Remove;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 18.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 42.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 42.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.remove"));
+        let px = active(&app).surface().unwrap().rgba(30, 30);
+        assert!(px.iter().zip(bg).all(|(a, b)| (a - b).abs() < 0.02), "{px:?} vs {bg:?}");
+    }
+
+    #[test]
     fn red_eye_is_in_the_j_flyout() {
-        let j = [Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye];
+        let j = [Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye];
         assert!(j.contains(&Tool::RedEye));
         assert!(j.iter().all(|t| t.key() == 'J'));
     }

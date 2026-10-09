@@ -29,12 +29,12 @@ const PAR_MIN: usize = 128 * 128;
 
 /// SplitMix64: tiny deterministic RNG.
 #[derive(Clone)]
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Rng(seed ^ 0x9E37_79B9_7F4A_7C15)
     }
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -42,7 +42,7 @@ impl Rng {
         z ^ (z >> 31)
     }
     /// Uniform integer in `lo..=hi`.
-    fn range(&mut self, lo: i32, hi: i32) -> i32 {
+    pub(crate) fn range(&mut self, lo: i32, hi: i32) -> i32 {
         if hi <= lo {
             return lo;
         }

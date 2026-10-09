@@ -166,16 +166,16 @@ fn read(doc: &mut Document, plan: &Plan, p: &Value, rect: Rect) -> Result<Region
 
 /// Write `out` over `mask` into the target, replacing the pixels (the result already holds what
 /// should show there). With the transparency lock, alpha is kept and transparent pixels stay as
-/// they are. Returns the written rectangle.
-fn replace(doc: &mut Document, plan: &Plan, p: &Value, out: &Region, mask: &[bool]) -> Result<Rect> {
-    let (surf, lock) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
+/// they are. Returns the written rectangle. Shared with the Remove Tool.
+pub(super) fn replace(doc: &mut Document, id: Option<LayerId>, p: &Value, out: &Region, mask: &[bool]) -> Result<Rect> {
+    let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
     let fmt = surf.format();
     let a = alpha_index(&fmt);
     let rect = out.rect;
     let mut px = surf.read_region(rect);
     let n = out.ch;
     if px.len() != out.data.len() || mask.len() * n != px.len() {
-        return Err(EngineError::Other("internal error: content-aware move buffers disagree in size".into()));
+        return Err(EngineError::Other("internal error: fill buffers disagree in size".into()));
     }
     for ((dst, src), m) in px.chunks_exact_mut(n).zip(out.data.chunks_exact(n)).zip(mask) {
         if !*m {
@@ -256,7 +256,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
         let allowed: Vec<bool> = old_place.iter().map(|o| !*o).collect();
         buf.data = ctx.stage(0.0, split, label, |ctl| fill_with(w, h, n, &buf.data, &band, &allowed, &opts, ctl)).map_err(cancelled)?;
     }
-    let mut damage = replace(doc, plan, p, &buf, &moved)?;
+    let mut damage = replace(doc, plan.id, p, &buf, &moved)?;
 
     // 2. Move: fill the place the content left (where the content didn't land on it).
     if plan.mode == Mode::Move {
@@ -269,7 +269,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
         if hole.iter().any(|h| *h) {
             let allowed: Vec<bool> = landed.iter().map(|l| !*l).collect();
             let data = ctx.stage(split, 1.0, label, |ctl| fill_with(w, h, img.ch, &img.data, &hole, &allowed, &opts, ctl)).map_err(cancelled)?;
-            damage = damage.union(&replace(doc, plan, p, &Region { rect: win, ch: img.ch, data }, &hole)?);
+            damage = damage.union(&replace(doc, plan.id, p, &Region { rect: win, ch: img.ch, data }, &hole)?);
         }
     }
     let surf = crate::channel_cmds::target_surface(doc, plan.id, p)?.0.clone();

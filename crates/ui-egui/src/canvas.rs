@@ -534,6 +534,7 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::BackgroundEraser
             | Tool::HistoryBrush
             | Tool::SpotHealing
+            | Tool::Remove
             | Tool::Healing
             | Tool::CloneStamp
             | Tool::PatternStamp
@@ -3395,7 +3396,12 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         t if t.is_brushlike() || t == Tool::QuickSelection => {
             // Retouching strokes preview as a translucent trail of the brush footprint: a mask,
             // not a brush-wide egui polyline (which zoomed in tessellates into wedges, #189).
-            let col = Color32::from_white_alpha(if t == Tool::QuickSelection { 40 } else { 60 });
+            let col = match t {
+                Tool::QuickSelection => Color32::from_white_alpha(40),
+                // The Remove Tool tints what it will remove, like Photoshop's.
+                Tool::Remove => crate::theme::Tokens::get(painter.ctx()).danger.gamma_multiply(0.45),
+                _ => Color32::from_white_alpha(60),
+            };
             let Some(st) = app.session.active() else { return };
             let size = [st.doc.size.width, st.doc.size.height];
             let doc_rect = xf.doc_rect(st.doc.bounds());

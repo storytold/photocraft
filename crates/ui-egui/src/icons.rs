@@ -86,6 +86,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::RotateView => "compass",
         Tool::Zoom => "zoom-in",
         Tool::SpotHealing | Tool::Healing => "bandage",
+        Tool::Remove => "bandage-sparkle",
         Tool::Patch => "lasso-select",
         Tool::ContentAwareMove => "arrow-left-right",
         Tool::RedEye => "eye",

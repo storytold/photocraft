@@ -88,6 +88,7 @@ pub enum Tool {
     RotateView,
     Zoom,
     SpotHealing,
+    Remove,
     Healing,
     Patch,
     ContentAwareMove,
@@ -117,7 +118,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 52] = [
+    pub const ALL: [Tool; 53] = [
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,
@@ -144,6 +145,7 @@ impl Tool {
         Tool::RotateView,
         Tool::Zoom,
         Tool::SpotHealing,
+        Tool::Remove,
         Tool::Healing,
         Tool::Patch,
         Tool::ContentAwareMove,
@@ -202,6 +204,7 @@ impl Tool {
             Tool::RotateView => "Rotate View Tool",
             Tool::Zoom => "Zoom Tool",
             Tool::SpotHealing => "Spot Healing Brush Tool",
+            Tool::Remove => "Remove Tool",
             Tool::Healing => "Healing Brush Tool",
             Tool::Patch => "Patch Tool",
             Tool::ContentAwareMove => "Content-Aware Move Tool",
@@ -242,6 +245,7 @@ impl Tool {
                 | Tool::Eraser
                 | Tool::BackgroundEraser
                 | Tool::SpotHealing
+                | Tool::Remove
                 | Tool::Healing
                 | Tool::CloneStamp
                 | Tool::PatternStamp
@@ -270,7 +274,7 @@ impl Tool {
             Tool::Hand => 'H',
             Tool::RotateView => 'R',
             Tool::Zoom => 'Z',
-            Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
+            Tool::SpotHealing | Tool::Remove | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
@@ -1091,7 +1095,10 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 52);
+        assert_eq!(Tool::ALL.len(), 53);
+        assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
+        assert_eq!(Tool::Remove.key(), 'J');
+        assert!(Tool::Remove.is_brushlike());
         assert_eq!(Tool::from_name("RotateView"), Some(Tool::RotateView));
         assert_eq!(Tool::from_name("Rotate View Tool"), Some(Tool::RotateView));
         assert_eq!(Tool::RotateView.key(), 'R');

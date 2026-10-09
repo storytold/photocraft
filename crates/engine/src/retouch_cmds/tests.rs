@@ -373,6 +373,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
         "paint.sharpen",
         "paint.smudge",
         "paint.historyBrush",
+        "paint.remove",
     ];
     for id in ids {
         let spec = crate::commands::find(id).unwrap_or_else(|| panic!("{id} missing"));
@@ -389,7 +390,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
 // Paint target (#207): mask, alpha channel, Quick Mask
 // ---------------------------------------------------------------------------------------------
 
-const RETOUCH_IDS: [&str; 11] = [
+const RETOUCH_IDS: [&str; 12] = [
     "paint.cloneStamp",
     "paint.patternStamp",
     "paint.healingBrush",
@@ -401,6 +402,7 @@ const RETOUCH_IDS: [&str; 11] = [
     "paint.sharpen",
     "paint.smudge",
     "paint.historyBrush",
+    "paint.remove",
 ];
 
 /// Grey noise in 0.3..0.7 (no period along the clone offset used below).
@@ -457,10 +459,11 @@ fn retouch_params(id: &str, history_state: usize, target: Value) -> Value {
     p
 }
 
-/// Tools whose stroke must visibly change grey noise (Sponge has no colour to change on grey, and
-/// healing a noise texture with itself may land on the same values).
+/// Tools whose stroke must visibly change grey noise (Sponge has no colour to change on grey,
+/// healing a noise texture with itself may land on the same values, and Remove completes this
+/// periodic noise exactly).
 fn changes_gray(id: &str) -> bool {
-    !matches!(id, "paint.sponge" | "paint.healingBrush" | "paint.spotHealing")
+    !matches!(id, "paint.sponge" | "paint.healingBrush" | "paint.spotHealing" | "paint.remove")
 }
 
 #[test]
@@ -1274,6 +1277,7 @@ fn retouch_strokes_refuse_absurd_point_coordinates() {
         "paint.spotHealing",
         "paint.historyBrush",
         "paint.patternStamp",
+        "paint.remove",
     ];
     // A single far point first: cheap even without the bound, so a regression fails fast.
     let far = [json!([[1_000_001, 0]]), json!([[0, 0], [0, -2_000_000]]), json!([[0, 0], [1e300, 0]]), json!([[1e300, 1e300]])];
@@ -1293,4 +1297,92 @@ fn retouch_strokes_refuse_absurd_point_coordinates() {
         s.execute("paint.dodge", json!({"points": [[4, 16], [28, 16]], "size": 8})).unwrap();
         assert_ne!(rgba(&s, 16, 16), before, "{depth}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Remove Tool
+// ---------------------------------------------------------------------------------------------
+
+/// A flat grey layer with a dark square at 40..52 × 24..36.
+fn square_session(depth: u64, mode: &str) -> Session {
+    let mut s = session(96, 64, depth, mode);
+    paint_layer(&mut s, |x, y| if (40..52).contains(&x) && (24..36).contains(&y) { [0.05, 0.05, 0.05, 1.0] } else { [0.5, 0.5, 0.5, 1.0] });
+    s
+}
+
+/// A ring of points around the square.
+fn ring() -> Vec<[f64; 2]> {
+    (0..=64).map(|i| f64::from(i) / 64.0 * std::f64::consts::TAU).map(|t| [46.0 + 13.0 * t.cos(), 30.0 + 13.0 * t.sin()]).collect()
+}
+
+fn near(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol)
+}
+
+#[test]
+fn remove_a_ring_around_an_object_removes_it_in_one_undo_step() {
+    for (depth, mode) in [(8, "rgb"), (16, "gray"), (32, "rgb"), (8, "cmyk"), (16, "lab")] {
+        let mut s = square_session(depth, mode);
+        let bg = rgba(&s, 10, 10);
+        assert!(!near(rgba(&s, 46, 30), bg, 0.05), "{mode}/{depth}: the square is there");
+        let past = s.active().unwrap().history.past_len();
+        let r = s.execute("paint.remove", json!({"points": ring(), "size": 4})).unwrap();
+        assert!(r["damage"].is_array(), "{r}");
+        for (x, y) in [(46, 30), (40, 24), (51, 35)] {
+            assert!(near(rgba(&s, x, y), bg, 0.03), "{mode}/{depth} ({x}, {y}): {:?} vs {bg:?}", rgba(&s, x, y));
+        }
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{mode}/{depth}: one undo step");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(!near(rgba(&s, 46, 30), bg, 0.05), "{mode}/{depth}: undo brings the square back");
+    }
+}
+
+#[test]
+fn remove_open_strokes_and_the_selection_limit_what_changes() {
+    let mut s = square_session(8, "rgb");
+    let bg = rgba(&s, 10, 10);
+    // Without closeLoops a ring leaves its inside alone.
+    s.execute("paint.remove", json!({"points": ring(), "size": 4, "closeLoops": false})).unwrap();
+    assert!(!near(rgba(&s, 46, 30), bg, 0.05));
+    // A stroke straight over the square removes it.
+    s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16})).unwrap();
+    assert!(near(rgba(&s, 46, 30), bg, 0.03), "{:?}", rgba(&s, 46, 30));
+    // Selected elsewhere, a stroke over the square changes nothing.
+    let mut s = square_session(8, "rgb");
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    let err = s.execute("paint.remove", json!({"points": [[46, 30]], "size": 20})).unwrap_err().to_string();
+    assert!(err.contains("check the selection"), "{err}");
+    assert!(!near(rgba(&s, 46, 30), bg, 0.05));
+}
+
+#[test]
+fn remove_thin_scratches_take_their_surroundings() {
+    let mut s = session(80, 40, 16, "rgb");
+    paint_layer(&mut s, |x, y| if y == 20 { [1.0, 1.0, 1.0, 1.0] } else { [x as f32 / 80.0, 0.4, 0.6, 1.0] });
+    s.execute("paint.remove", json!({"points": [[5, 20], [75, 20]], "size": 2})).unwrap();
+    for x in [10, 40, 70] {
+        assert!(near(rgba(&s, x, 20), [x as f32 / 80.0, 0.4, 0.6, 1.0], 0.02), "x {x}: {:?}", rgba(&s, x, 20));
+    }
+}
+
+#[test]
+fn remove_bad_params_are_errors() {
+    assert!(Session::new().execute("paint.remove", json!({"points": [[1, 1]]})).is_err(), "no document");
+    let mut s = square_session(8, "rgb");
+    for p in [
+        json!({}),
+        json!({"points": []}),
+        json!({"points": "x"}),
+        json!({"points": [[1, 1]], "size": "big", "closeLoops": "yes", "sampleAllLayers": 3}),
+        json!({"points": [[1, 1]], "layer": 999_999}),
+    ] {
+        let _ = s.execute("paint.remove", p);
+    }
+    let err = s.execute("paint.remove", json!({"points": [[-500, -500]], "size": 10})).unwrap_err().to_string();
+    assert!(err.contains("outside the canvas"), "{err}");
+    // A stroke far off the canvas is refused before its coverage (its whole bounding box) is rendered.
+    let err = s.execute("paint.remove", json!({"points": [[0, 0], [99_999, 99_999]], "size": 5000})).unwrap_err().to_string();
+    assert!(err.contains("too large"), "{err}");
+    let err = s.execute("paint.remove", json!({"points": [[48, 32]], "size": 3000})).unwrap_err().to_string();
+    assert!(err.contains("nothing is left"), "{err}");
 }
