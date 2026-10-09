@@ -422,10 +422,15 @@ pub struct RowGestures {
 /// egui memory until they make whole notches (high-resolution wheels report fractions of one);
 /// smooth (point) deltas count `line_scroll_speed` points per notch, like the canvas wheel.
 fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
-    if !resp.hovered() {
+    wheel_notches_of(ui, resp.id, resp.hovered(), 10.0)
+}
+
+/// [`wheel_notches`] of widget `id` while `hovered`, a notch with Shift counting `shift_notches`.
+fn wheel_notches_of(ui: &Ui, id: egui::Id, hovered: bool, shift_notches: f32) -> f32 {
+    if !hovered {
         return 0.0;
     }
-    let acc_id = resp.id.with("wheel-acc");
+    let acc_id = id.with("wheel-acc");
     let mut acc: f32 = ui.data(|d| d.get_temp(acc_id)).unwrap_or(0.0);
     let per_line = ui.ctx().options(|o| o.input_options.line_scroll_speed);
     let per_line = if per_line.is_finite() && per_line > 0.0 { per_line } else { 40.0 };
@@ -448,7 +453,7 @@ fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
         };
         let whole = acc.trunc();
         acc -= whole;
-        notches += if shift { whole * 10.0 } else { whole };
+        notches += if shift { whole * shift_notches } else { whole };
     }
     if !acc.is_finite() {
         acc = 0.0;
@@ -822,8 +827,22 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, op
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
+    let (chosen, hovered) = dropdown_with(ui, id, current, options, width, false);
+    (!chosen.is_empty(), hovered)
+}
+
+/// [`dropdown_hovered`] whose value also steps with the wheel over its button: down picks the next
+/// option, up the previous one, one per notch (Shift too), stopping at the ends (Photoshop's
+/// Layers panel blend modes, #1747). The wheel then doesn't scroll what the dropdown is in.
+/// Returns every option chosen this frame in order (one per notch; the last is `current`) and the
+/// option under the pointer in the open list.
+pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, current, options, width, true)
+}
+
+fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32, wheel: bool) -> (Vec<T>, Option<T>) {
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| tl!(l)).unwrap_or("—");
-    let (mut changed, mut hovered) = (false, None);
+    let (mut chosen, mut hovered) = (Vec::new(), None);
     let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
         for (v, l) in options {
             let item = ui.selectable_label(v == current, tl!(l));
@@ -832,12 +851,41 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &m
             }
             if item.clicked() {
                 *current = v.clone();
-                changed = true;
+                chosen.push(v.clone());
             }
         }
     });
-    let stepped = combo_box_arrow_keys(ui, &response.response, current, options);
-    (changed || stepped, hovered)
+    if combo_box_arrow_keys(ui, &response.response, current, options) {
+        chosen.push(current.clone());
+    }
+    if wheel {
+        chosen.extend(wheel_steps(ui, &response.response, current, options));
+    }
+    (chosen, hovered)
+}
+
+/// The options the wheel over `button` steps `current` through this frame, one per notch, in
+/// order; the last is the new `current`. While the pointer is over it the wheel scrolls nothing
+/// else.
+fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, button: &Response, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
+    let hovered = button.hovered();
+    if hovered {
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
+    let notches = wheel_notches_of(ui, button.id, hovered, 1.0);
+    let Some(mut index) = options.iter().position(|(v, _)| v == current) else { return Vec::new() };
+    let mut chosen = Vec::new();
+    // Down (negative) is the next option. No more steps than there are options.
+    for _ in 0..(notches.abs().min(options.len() as f32) as usize) {
+        let next = if notches < 0.0 { index.checked_add(1) } else { index.checked_sub(1) };
+        let Some((next, (v, _))) = next.and_then(|i| options.get(i).map(|o| (i, o))) else { break };
+        index = next;
+        chosen.push(v.clone());
+    }
+    if let Some(v) = chosen.last() {
+        *current = v.clone();
+    }
+    chosen
 }
 
 /// Give a dropdown keyboard focus when it opens, then use the arrow keys to move through its
@@ -1295,6 +1343,83 @@ mod tests {
         assert_eq!(*h.state(), 1);
         h.key_press(egui::Key::ArrowUp);
         h.run();
+        assert_eq!(*h.state(), 0);
+    }
+
+    const MODES: [(usize, &str); 4] = [(0, "Normal"), (1, "Dissolve"), (2, "Darken"), (3, "Multiply")];
+
+    /// A wheel dropdown (or a plain one) of [`MODES`], whose state is the chosen index.
+    fn mode_dropdown(wheel: bool) -> Harness<'static, usize> {
+        Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+            move |ui, selected: &mut usize| {
+                if wheel {
+                    super::dropdown_wheel_hovered(ui, "blend-mode", selected, &MODES, 120.0);
+                } else {
+                    super::dropdown(ui, "blend-mode", selected, &MODES, 120.0);
+                }
+            },
+            0,
+        )
+    }
+
+    /// One wheel event over the dropdown: negative `delta.y` is down.
+    fn wheel<T>(h: &mut Harness<'_, T>, unit: egui::MouseWheelUnit, delta: egui::Vec2, modifiers: Modifiers) {
+        let at = h.get_by_role(egui::accesskit::Role::ComboBox).rect().center();
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.hover_at(at);
+        h.run();
+        h.event(egui::Event::MouseWheel { unit, delta, phase: egui::TouchPhase::Move, modifiers });
+        h.run();
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run();
+    }
+
+    #[test]
+    fn shift_wheel_steps_one_mode_per_notch() {
+        let mut h = mode_dropdown(true);
+        wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::SHIFT);
+        assert_eq!(*h.state(), 1, "not ten like a slider");
+        // Some systems turn Shift+wheel into a horizontal scroll.
+        wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(-1.0, 0.0), Modifiers::SHIFT);
+        assert_eq!(*h.state(), 2);
+    }
+
+    #[test]
+    fn fractional_wheel_deltas_add_up_to_whole_mode_steps() {
+        let mut h = mode_dropdown(true);
+        wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -0.5), Modifiers::NONE);
+        assert_eq!(*h.state(), 0, "half a notch");
+        wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -0.5), Modifiers::NONE);
+        assert_eq!(*h.state(), 1);
+        let per_line = h.ctx.options(|o| o.input_options.line_scroll_speed);
+        wheel(&mut h, egui::MouseWheelUnit::Point, egui::vec2(0.0, -per_line), Modifiers::NONE);
+        assert_eq!(*h.state(), 2, "a line's worth of points is a notch");
+    }
+
+    #[test]
+    fn the_wheel_over_a_wheel_dropdown_does_not_scroll_its_container() {
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+            |ui, selected: &mut usize| {
+                egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
+                    super::dropdown_wheel_hovered(ui, "blend-mode", selected, &MODES, 120.0);
+                    ui.add_space(400.0);
+                });
+            },
+            0,
+        );
+        let top = h.get_by_role(egui::accesskit::Role::ComboBox).rect().top();
+        wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
+        for _ in 0..10 {
+            h.run();
+        }
+        assert_eq!(*h.state(), 1);
+        assert_eq!(h.get_by_role(egui::accesskit::Role::ComboBox).rect().top(), top, "the container didn't scroll");
+    }
+
+    #[test]
+    fn the_wheel_leaves_a_plain_dropdown_alone() {
+        let mut h = mode_dropdown(false);
+        wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
         assert_eq!(*h.state(), 0);
     }
 }

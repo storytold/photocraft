@@ -1709,6 +1709,9 @@ mod hidden_layer_tests;
 mod blend_dropdown_keys_tests;
 
 #[cfg(test)]
+mod blend_dropdown_wheel_tests;
+
+#[cfg(test)]
 mod marquee_tests;
 
 #[cfg(test)]
