@@ -1621,27 +1621,6 @@ fn channel_tint(mode: photocraft_doc::ColorMode, k: usize, byte: u8, in_color: b
     }
 }
 
-#[cfg(test)]
-mod channel_tint_tests {
-    use super::channel_tint;
-    use egui::Color32;
-    use photocraft_doc::ColorMode::{Cmyk, Grayscale, Rgb};
-
-    #[test]
-    fn channels_in_color_tint_rgb_from_black_and_cmyk_inks_from_white() {
-        assert_eq!(channel_tint(Rgb, 0, 255, true), Color32::from_rgb(255, 0, 0));
-        assert_eq!(channel_tint(Rgb, 2, 0, true), Color32::BLACK);
-        // CMYK: no ink is white, full ink is the ink's colour.
-        assert_eq!(channel_tint(Cmyk, 0, 255, true), Color32::WHITE);
-        assert_eq!(channel_tint(Cmyk, 0, 0, true), Color32::from_rgb(0, 255, 255));
-        assert_eq!(channel_tint(Cmyk, 1, 0, true), Color32::from_rgb(255, 0, 255));
-        assert_eq!(channel_tint(Cmyk, 2, 0, true), Color32::from_rgb(255, 255, 0));
-        assert_eq!(channel_tint(Cmyk, 3, 0, true), Color32::BLACK);
-        assert_eq!(channel_tint(Grayscale, 0, 77, true), Color32::from_gray(77));
-        assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
-    }
-}
-
 impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     fn export_os_clipboard(&mut self) {
@@ -1924,5 +1903,26 @@ mod clipboard_tests {
         let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
         assert!((mask.value(32, 32) - 128.0 / 255.0).abs() < 2.0 / 255.0, "the grey, centred in the view: {}", mask.value(32, 32));
         assert_eq!(mask.value(0, 0), 0.0, "the rest of the mask is unchanged");
+    }
+}
+
+#[cfg(test)]
+mod channel_tint_tests {
+    use super::channel_tint;
+    use egui::Color32;
+    use photocraft_doc::ColorMode::{Cmyk, Grayscale, Rgb};
+
+    #[test]
+    fn channels_in_color_tint_rgb_from_black_and_cmyk_inks_from_white() {
+        assert_eq!(channel_tint(Rgb, 0, 255, true), Color32::from_rgb(255, 0, 0));
+        assert_eq!(channel_tint(Rgb, 2, 0, true), Color32::BLACK);
+        // CMYK: no ink is white, full ink is the ink's colour.
+        assert_eq!(channel_tint(Cmyk, 0, 255, true), Color32::WHITE);
+        assert_eq!(channel_tint(Cmyk, 0, 0, true), Color32::from_rgb(0, 255, 255));
+        assert_eq!(channel_tint(Cmyk, 1, 0, true), Color32::from_rgb(255, 0, 255));
+        assert_eq!(channel_tint(Cmyk, 2, 0, true), Color32::from_rgb(255, 255, 0));
+        assert_eq!(channel_tint(Cmyk, 3, 0, true), Color32::BLACK);
+        assert_eq!(channel_tint(Grayscale, 0, 77, true), Color32::from_gray(77));
+        assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
     }
 }
