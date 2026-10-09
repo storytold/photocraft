@@ -84,3 +84,36 @@ fn command_rejects_bad_params_without_losing_tabs() {
     }
     assert!(Snapshot::capture(&Session::new()).is_err());
 }
+
+#[test]
+fn cropped_pdf_page_artboard_and_binder_use_the_cropped_sheet() {
+    use photocraft_io::{ExportOptions, export, pdf};
+    for delete in [false, true] {
+        for angle in [0.0, 17.0] {
+            let source = Document::with_background("source", Size::new(100, 80), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let bytes = export(&source, "pdf", &ExportOptions::default()).unwrap().bytes;
+            let imported = photocraft_io::import("source.pdf", &bytes).unwrap().document;
+            let page = photocraft_engine::jobs::pdf_page_documents(&imported).unwrap().remove(0);
+            let mut s = Session::new();
+            s.add_document(page, None);
+            let original = s.active().unwrap().doc.clone();
+            s.execute("image.crop", json!({"x": 30, "y": 20, "width": 60, "height": 40, "angle": angle, "deleteCroppedPixels": delete})).unwrap();
+            let cropped = &s.active().unwrap().doc;
+            assert_eq!(cropped.size, Size::new(60, 40));
+            assert_eq!(cropped.artboards()[0].2.rect, cropped.bounds(), "the visible page boundary must follow Crop");
+            let single = export(cropped, "pdf", &ExportOptions::default()).unwrap();
+            assert_eq!(pdf::page_sizes(&single.bytes).unwrap(), [(30.0, 20.0)], "144 ppi pixels must export at the cropped physical size");
+            let mut binder = Vec::new();
+            Snapshot::capture(&s)
+                .unwrap()
+                .write(&mut s, "binder.pdf", false, |_, bytes| {
+                    binder = bytes.to_vec();
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(pdf::page_sizes(&binder).unwrap(), [(30.0, 20.0)]);
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, original, "Undo must restore both the image and the page boundary");
+        }
+    }
+}

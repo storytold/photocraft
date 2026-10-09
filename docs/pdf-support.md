@@ -17,6 +17,8 @@ Open selected imports only those pages. Open all pages explicitly imports the bi
 Each selected page is rasterized at 144 ppi and opens in its own named tab, in binder
 order. Cancel leaves existing documents untouched. The CLI retains multipage
 artboard import for batch conversion.
+Crop and Trim resize a single-page artboard along with its canvas, so PDF exports
+use the cropped page dimensions instead of retaining the original blank sheet.
 Crop boxes and page rotation are applied by Hayro, the pure Rust PDF renderer
 also used by PdfCraft/PrintCraft. Imported PDFs have no automatic overwrite path.
 
