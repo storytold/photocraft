@@ -63,12 +63,24 @@ mod platform {
         // Lazily opened on first use and kept: the Lock-modifier mask is stable per keymap, so it
         // is queried once and only the toggle state is re-read every frame.
         let mut conn: Option<(RustConnection, ModMask)> = None;
-        Some(Box::new(move || match caps_lock_on(&mut conn) {
-            Ok(on) => on,
-            Err(error) => {
-                log::warn!("couldn't read the Caps Lock state: {error}");
-                conn = None;
-                false
+        // After a failure, wait before reconnecting (and warn once per failure), so a broken X
+        // connection doesn't reconnect and log on every frame.
+        let mut retry_at: Option<std::time::Instant> = None;
+        Some(Box::new(move || {
+            if retry_at.is_some_and(|t| std::time::Instant::now() < t) {
+                return false;
+            }
+            match caps_lock_on(&mut conn) {
+                Ok(on) => {
+                    retry_at = None;
+                    on
+                }
+                Err(error) => {
+                    log::warn!("couldn't read the Caps Lock state: {error}");
+                    conn = None;
+                    retry_at = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+                    false
+                }
             }
         }))
     }
