@@ -2,8 +2,8 @@
 //! command path (`Session::execute`: window read, hole, fill, write, undo snapshot).
 //! `cargo run --release -p photocraft-engine --example remove_bench [depth]`
 //!
-//! Rings around objects of 100, 300 and 1000 px (PatchMatch completion) and a 3000 px thin line
-//! (diffusion), each undone before the next.
+//! Rings around objects of 100, 300 and 1000 px (one completion each) and a 3000 px thin line
+//! (completed tile by tile), each undone before the next.
 use std::time::Instant;
 
 use photocraft_engine::Session;

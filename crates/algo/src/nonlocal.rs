@@ -33,7 +33,7 @@ use photocraft_raster::{Cancelled, Interrupt};
 const PAR_MIN: usize = 128 * 128;
 
 /// Parameters for [`complete_with`]. The defaults are the paper's, except for the PatchMatch
-/// passes per iteration (two instead of ten: the convergence test makes up for it).
+/// passes per iteration (two instead of ten, for speed).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Params {
     /// Patch radius (patches are `2r+1` square).
@@ -549,8 +549,8 @@ impl Solver<'_> {
     /// fusion, after S. Darabi et al., *Image Melding*, SIGGRAPH 2012). Across a seam, two
     /// neighbouring cells should differ as their sources do: as the better-matched side's source
     /// says. Where the actual step departs from that by more than `SEAM_CONTRAST` times the local
-    /// texture `(Tx + Ty) / 2` (two random samples of a texture already differ by about 1.5 times it),
-    /// the seam shows. A correction `δ` is solved for those steps only (`Δδ = div e`, `δ = 0` at known
+    /// texture `(Tx + Ty) / 2`, the seam shows (within a texture, where both steps are random and
+    /// about that size, the departure is already about √2 times it). A correction `δ` is solved for those steps only (`Δδ = div e`, `δ = 0` at known
     /// cells, red-black SOR) and added to the fill: it is smooth away from the seams, so the copied
     /// texture keeps its grain while each step is spread out. Steps hidden by texture, and the edge
     /// of the hole (matched by `blend_seams`), add nothing.

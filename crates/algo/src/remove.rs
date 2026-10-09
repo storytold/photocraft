@@ -145,9 +145,9 @@ const MIN_TILE: usize = 256;
 /// hole); a buffer or mask of the wrong size comes back unchanged. When nothing around the hole is
 /// fully known (a hole about as big as `img`), it is diffused from its edges instead.
 ///
-/// A sparse hole is filled in tiles of at least [`MIN_TILE`] pixels (eight times its thickness),
-/// row by row, each with a margin of six times its thickness: each tile sees the ones before it as
-/// filled, so the fill runs on across tile edges.
+/// A sparse hole is filled in tiles eight times its thickness (at least [`MIN_TILE`] pixels), row
+/// by row, each with a margin of six times its thickness (at least 48 pixels): each tile sees the
+/// ones before it as filled, so the fill runs on across tile edges.
 pub fn remove_with(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], seed: u64, ctl: &Interrupt) -> Result<Vec<f32>, Cancelled> {
     let n = w.saturating_mul(h);
     if ch == 0 || hole.len() != n || img.len() != n.saturating_mul(ch) {
