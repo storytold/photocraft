@@ -789,9 +789,17 @@ fn tent_line(src: &[f32], dst: &mut [f32], bw: f32) {
 /// Rows of a `w`-wide row-major buffer, each through `f(src_row, dst_row)`, in parallel on
 /// scoped OS threads. Not rayon: maps can be built from inside a rayon tile, where a waiting
 /// worker steals other tiles. Map builds no longer block on each other (#276), but the blur
-/// keeps out of the tile pool.
+/// keeps out of the tile pool. The wasm threads build has no OS threads to spawn, so there the
+/// rows do go to the rayon pool (safe for the same reason: nothing blocks on a build).
 fn rows_par(src: &[f32], dst: &mut [f32], w: usize, f: impl Fn(&[f32], &mut [f32]) + Sync) {
     if w == 0 {
+        return;
+    }
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    if src.len() >= 1 << 16 {
+        use rayon::prelude::*;
+        let rows = (src.len() / w).div_ceil(rayon::current_num_threads() * 4).max(1);
+        dst.par_chunks_mut(rows * w).zip(src.par_chunks(rows * w)).for_each(|(d, s)| d.chunks_mut(w).zip(s.chunks(w)).for_each(|(d, s)| f(s, d)));
         return;
     }
     let threads =

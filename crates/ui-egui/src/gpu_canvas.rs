@@ -979,6 +979,14 @@ fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mut Vec<u8>) 
         });
         return;
     }
+    // The wasm threads build can't spawn OS threads; it converts on the rayon worker pool.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    if px.len() > 1 << 18 {
+        use rayon::prelude::*;
+        let chunk = px.len().div_ceil(rayon::current_num_threads() * 4).max(1);
+        px.par_chunks(chunk).zip(out.par_chunks_mut(chunk * bpp)).for_each(|(src, dst)| convert(src, dst));
+        return;
+    }
     convert(px, out);
 }
 

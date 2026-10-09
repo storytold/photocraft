@@ -29,3 +29,7 @@ rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
+
+# The browser threads build (wasm with `atomics`, packaging/web-threads) runs its parallel steps on rayon.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+rayon = { workspace = true }

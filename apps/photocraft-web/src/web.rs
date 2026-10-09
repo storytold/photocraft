@@ -54,8 +54,9 @@ pub fn start_threads() {
 
 /// Threads build diagnostic, for checking that a browser really runs PhotoCraft's parallel code on
 /// the worker pool: a busy loop spread over rayon reports how many workers took part and how long it
-/// took (pure parallel work, so it shows the pool's scaling), then a
-/// Gaussian blur (radius 20) runs through the engine on a noisy `width`×`height` document. The page
+/// took (pure parallel work, so it shows the pool's scaling), then a Gaussian blur (radius 20) runs
+/// through the engine on a noisy `width`×`height` document and an image that size is encoded as
+/// PNG (deflated in parallel bands). The page
 /// exposes the module as `photocraft`, so from the console: `photocraft.parallelSelfTest(4000, 3000)`.
 /// Compare with the page opened as `?threads=1`.
 #[cfg(target_feature = "atomics")]
@@ -83,7 +84,24 @@ pub fn parallel_self_test(width: u32, height: u32) -> Result<String, String> {
     let t0 = js_sys::Date::now();
     s.execute("filter.blur.gaussianBlur", json!({"radius": 20})).map_err(err)?;
     let blur_ms = js_sys::Date::now() - t0;
-    Ok(json!({"poolThreads": rayon::current_num_threads(), "workersUsed": workers.len(), "loopMs": loop_ms.round(), "blurMs": blur_ms.round()}).to_string())
+    // PNG export of a noisy RGBA image the same size (deflated in parallel bands).
+    let (w, h) = (width.clamp(1, 16_000), height.clamp(1, 16_000));
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let px: Vec<u8> = (0..w as usize * h as usize * 4)
+        .map(|i| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            if i % 4 == 3 { 255 } else { 96 + (seed >> 59) as u8 }
+        })
+        .collect();
+    let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).map_err(|e| e.to_string())?;
+    let t0 = js_sys::Date::now();
+    let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())?;
+    let png_ms = js_sys::Date::now() - t0;
+    Ok(json!({
+        "poolThreads": rayon::current_num_threads(), "workersUsed": workers.len(), "loopMs": loop_ms.round(),
+        "blurMs": blur_ms.round(), "pngMs": png_ms.round(), "pngBytes": png.len(),
+    })
+    .to_string())
 }
 
 pub fn start() {
