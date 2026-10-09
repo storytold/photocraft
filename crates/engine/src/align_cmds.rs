@@ -17,6 +17,9 @@
 //! Laplacian pyramid, each coefficient from the layer sharpest at that scale
 //! ([`pyramid::fuse_stack`]; `haloControl` keeps a bright object's defocused glow out of the
 //! coarse levels).
+//! Stack Images can also add a hidden Depth layer, the layer each pixel is sharpest in by depth
+//! from focus ([`photocraft_algo::dff`]): black = the bottom layer, white = the top, so that once
+//! on a layer mask it drives Lens Blur's depth map.
 
 use photocraft_algo::panorama::Layout;
 use photocraft_algo::pyramid;
@@ -166,6 +169,10 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad(cmd, format!("`haloControl` must be a number from 0 to {}", pyramid::HALO_MAX))),
         },
     };
+    let want_depth = p.get("depthMap").and_then(Value::as_bool).unwrap_or(false);
+    if want_depth && method != "stack" {
+        return Err(bad(cmd, "`depthMap` needs `method`: stack"));
+    }
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc: std::sync::Arc<Document> = st.doc.clone();
     let mut area = Rect::EMPTY;
@@ -220,9 +227,33 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         let blended = seamless.then(|| b.composite.read_region(area));
         (weights, blended)
     };
+    // The depth map: the layer each pixel is sharpest in, from the focus volume guided by the
+    // merged picture (or, without one, by the per-pixel pick), as a hidden gray layer, black =
+    // the bottom layer, white = the top, ready for Lens Blur's depth map once on a mask.
+    let depth_px = want_depth.then(|| {
+        let n = fmt.channels();
+        let guide: Vec<f32> = match &blended {
+            Some(px) => (0..w * h)
+                .map(|i| {
+                    let c = to_rgba(&fmt, &px[i * n..(i + 1) * n]);
+                    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+                })
+                .collect(),
+            None => (0..w * h).map(|i| luma.iter().zip(&weights).map(|(l, wt)| l[i] * wt[i]).sum()).collect(),
+        };
+        let refs: Vec<&[f32]> = luma.iter().map(Vec::as_slice).collect();
+        let dm = photocraft_algo::dff::depth_from_focus(&refs, &guide, w, h, &photocraft_algo::dff::DepthParams::default());
+        let scale = 1.0 / (ids.len() - 1).max(1) as f32;
+        let mut out = vec![0.0f32; w * h * n];
+        for (i, d) in dm.depth.iter().enumerate() {
+            let g = (d * scale).clamp(0.0, 1.0);
+            photocraft_raster::from_rgba_into(&fmt, [g, g, g, 1.0], &mut out[i * n..(i + 1) * n]);
+        }
+        out
+    });
     let top = *ids.last().ok_or_else(|| EngineError::Other("Auto-Blend needs two or more layers".into()))?;
     let label = "Auto-Blend Layers";
-    let new_layer = s.edit(label, |doc, active| {
+    let (new_layer, depth_layer) = s.edit(label, |doc, active| {
         for (id, wt) in ids.iter().zip(&weights) {
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             let mut mask = LayerMask::hide_all();
@@ -230,17 +261,33 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
             mask.surface.prune();
             l.mask = Some(mask);
         }
-        let Some(px) = &blended else { return Ok(None) };
+        let mut below = top;
+        let depth_id = depth_px.as_ref().map(|px| {
+            let mut l = Layer::raster(doc.next_layer_name("Depth"), fmt);
+            l.visible = false;
+            if let Some(surf) = l.surface_mut() {
+                surf.write_region(area, px);
+                surf.prune();
+            }
+            below = doc.insert_above(Some(below), l);
+            below
+        });
+        let Some(px) = &blended else {
+            if depth_id.is_some() {
+                *active = depth_id;
+            }
+            return Ok((None, depth_id));
+        };
         let mut l = Layer::raster(doc.next_layer_name("Blended"), fmt);
         if let Some(surf) = l.surface_mut() {
             surf.write_region(area, px);
             surf.prune();
         }
-        let nid = doc.insert_above(Some(top), l);
+        let nid = doc.insert_above(Some(below), l);
         *active = Some(nid);
-        Ok(Some(nid))
+        Ok((Some(nid), depth_id))
     })?;
-    Ok(json!({"method": method, "layers": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "blended": new_layer.map(|l| l.0)}))
+    Ok(json!({"method": method, "layers": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "blended": new_layer.map(|l| l.0), "depth": depth_layer.map(|l| l.0)}))
 }
 
 macro_rules! spec {
@@ -257,7 +304,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
             auto_align
         ),
-        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2}"##, auto_blend),
+        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##, auto_blend),
     ]
 }
 
@@ -527,6 +574,58 @@ mod tests {
             }
             for bad in [json!(-1), json!(9), json!("hard")] {
                 assert!(s.execute("edit.autoBlendLayers", json!({"method": "stack", "haloControl": bad})).is_err(), "{bad}");
+            }
+        }
+    }
+
+    /// Three layers, each sharp in one third: the Depth layer says which, black to white from
+    /// the bottom layer to the top, hidden, and undone with the rest.
+    #[test]
+    fn auto_blend_stack_depth_map() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 96, "height": 48, "depth": depth, "background": "transparent"})).unwrap();
+            let mut ids = Vec::new();
+            for k in 0..3 {
+                s.execute("layer.new.layer", json!({"name": format!("L{k}")})).unwrap();
+                s.edit("third", |doc, active| {
+                    let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for y in 0..48 {
+                        for x in 0..96 {
+                            let v = if x / 32 == k && ((x / 2) + (y / 2)) % 2 == 0 {
+                                0.2
+                            } else if x / 32 == k {
+                                0.8
+                            } else {
+                                0.5
+                            };
+                            surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[v, v, v, 1.0]);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+                ids.push(s.active().unwrap().active_layer.unwrap());
+            }
+            select(&mut s, &ids);
+            assert!(s.execute("edit.autoBlendLayers", json!({"method": "panorama", "depthMap": true})).is_err());
+            for seamless in [false, true] {
+                let r = s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": seamless, "depthMap": true})).unwrap();
+                let doc = &s.active().unwrap().doc;
+                let d = doc.layer(LayerId(r["depth"].as_u64().unwrap())).unwrap();
+                assert!(!d.visible && d.name.starts_with("Depth"), "depth {depth}: {} visible {} {r}", d.name, d.visible);
+                let surf = d.surface().unwrap();
+                for (x, want) in [(8, 0.0), (48, 0.5), (88, 1.0)] {
+                    let px = surf.pixel(x, 24);
+                    assert!((px[0] - want).abs() < 0.2 && (px[3] - 1.0).abs() < 1e-3, "depth {depth} seamless {seamless} x {x}: {px:?}");
+                }
+                assert_eq!(r["blended"].is_null(), !seamless);
+                if seamless {
+                    // The merged layer sits above the depth layer and is the active one.
+                    assert_eq!(s.active().unwrap().active_layer, Some(LayerId(r["blended"].as_u64().unwrap())));
+                }
+                s.undo();
+                assert!(s.active().unwrap().doc.layer(LayerId(r["depth"].as_u64().unwrap())).is_none());
             }
         }
     }
