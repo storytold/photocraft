@@ -572,7 +572,6 @@ fn deep_layer_round_trips_with_its_samples() {
 /// A file whose deep counts decrease (a hostile or truncated edit) must be refused on load,
 /// not turned into a `total * 4` slice mismatch or an underflowing index later. The counts
 /// blob is rewritten through the save path, so the bundle itself stays valid.
-/// not turned into a `total * 4` slice mismatch or an underflowing index later.
 #[test]
 fn decreasing_deep_counts_are_refused_at_load() {
     use photocraft_doc::{DeepChannel, DeepData};
@@ -595,7 +594,7 @@ fn decreasing_deep_counts_are_refused_at_load() {
     if let Some(LayerContent::Deep(d)) = hostile.layers.first_mut().map(|l| &mut l.content) {
         d.counts = vec![0, 2, 1];
         for c in &mut d.channels {
-            c.samples = vec![1.0, 1.0]; // total == 2 stays consistent with the channel length
+            c.samples = vec![1.0, 1.0]; // total == 2 keeps the length check happy
         }
     }
     let bytes = save_to_bytes(&hostile, &SaveOptions::default()).unwrap();

@@ -614,7 +614,10 @@ impl DeepData {
     /// every pixel holding the concatenation of both sides' samples; the renderer's Z sort then
     /// composites the whole stack per pixel. Channels are united by name; a channel missing on
     /// one side contributes zero samples there. The result sits at the union's origin.
-    pub fn merge(&self, other: &DeepData) -> DeepData {
+    // The union grid is capped at the same 2^28 cells the .pcraft load accepts: two layers
+    // parked far apart must be refused, not silently merged into a grid whose counts cannot
+    // round-trip.
+    pub fn merge(&self, other: &DeepData) -> Result<DeepData, String> {
         use std::collections::BTreeMap;
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
@@ -635,7 +638,10 @@ impl DeepData {
         let (ca, cb) = (chans(self), chans(other));
         let mut out: Vec<Vec<f32>> = names.iter().map(|_| Vec::new()).collect();
         let cells = usize::try_from(w).unwrap_or(usize::MAX).saturating_mul(usize::try_from(h).unwrap_or(0));
-        let mut counts = Vec::with_capacity(cells.saturating_add(1).min(1 << 28));
+        if cells > 1 << 28 {
+            return Err(format!("merging these deep layers needs a union grid of {cells} pixels ({w} x {h}), above the 2^28 limit"));
+        }
+        let mut counts = Vec::with_capacity(cells.saturating_add(1));
         counts.push(0u64);
         for py in 0..h as i32 {
             for px in 0..w as i32 {
@@ -672,7 +678,7 @@ impl DeepData {
                 counts.push(counts.last().copied().unwrap_or(0).saturating_add(n));
             }
         }
-        DeepData { x, y, width: w, height: h, channels: names.into_iter().zip(out).map(|(name, samples)| DeepChannel { name, samples }).collect(), counts }
+        Ok(DeepData { x, y, width: w, height: h, channels: names.into_iter().zip(out).map(|(name, samples)| DeepChannel { name, samples }).collect(), counts })
     }
 }
 
@@ -1314,7 +1320,7 @@ mod tests {
             channels: vec![ch("A", vec![1.0]), ch("B", vec![1.0]), ch("Z", vec![9.0]), ch("ZBack", vec![11.0])],
             counts: vec![0, 1],
         };
-        let m = a.merge(&b);
+        let m = a.merge(&b).expect("a small union merges");
         assert_eq!((m.x, m.y, m.width, m.height), (0, 0, 3, 1), "the union grid");
         assert_eq!(m.counts, vec![0, 1, 1, 2], "samples only where the inputs sit");
         assert_eq!(m.total_samples(), 2);
@@ -1465,9 +1471,10 @@ mod id_tests {
 #[test]
 fn deep_merge_survives_hostile_origins_and_counts() {
     use crate::{DeepChannel, DeepData};
-    // A file that declares an origin/size whose corner overflows i32, and counts whose
-    // sum overflows the u32 pixel index: the union must stay inside i32 and merge must
-    // not panic (this used to compute `x + width as i32` and `to - from` unchecked).
+    // A file that declares an origin/size whose corner overflows i32: the union must stay
+    // inside i32, and a grid past the 2^28 load limit must be refused, not silently merged
+    // into counts that can never round-trip (this used to compute `x + width as i32` and
+    // `to - from` unchecked, and the old test passed only because the wrapped loop skipped).
     let far = DeepData {
         x: i32::MAX - 1,
         y: i32::MAX - 1,
@@ -1477,9 +1484,15 @@ fn deep_merge_survives_hostile_origins_and_counts() {
         counts: vec![1; 16],
     };
     let near = DeepData { x: -2, y: -2, width: 2, height: 2, channels: vec![], counts: vec![0; 4] };
-    let m = near.merge(&far);
-    assert!(m.width > 0 && m.height > 0);
-    // Every channel slice stays aligned with the merged counts.
+    let err = near.merge(&far).expect_err("a grid past the load limit must be refused");
+    assert!(err.contains("2^28 limit"), "{err}");
+    // A benign merge stays consistent: every channel slice aligned with the merged counts.
+    let (a, b) = (
+        DeepData { x: 0, y: 0, width: 2, height: 1, channels: vec![DeepChannel { name: "Z".into(), samples: vec![1.0, 1.0] }], counts: vec![0, 1, 1] },
+        DeepData { x: 1, y: 0, width: 2, height: 1, channels: vec![], counts: vec![0, 0, 0] },
+    );
+    let m = a.merge(&b).expect("a small union merges");
+    assert_eq!(m.counts.len(), m.width as usize * m.height as usize + 1);
     let total = *m.counts.last().unwrap_or(&0) as usize;
     for c in &m.channels {
         assert_eq!(c.samples.len(), total, "channel {}", c.name);

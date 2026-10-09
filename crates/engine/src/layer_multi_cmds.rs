@@ -1137,7 +1137,7 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
                 if let LayerContent::Deep(d) = &l.content
                     && let Some(acc) = data.as_mut()
                 {
-                    *acc = acc.merge(d);
+                    *acc = acc.merge(d).map_err(|e| EngineError::Other(format!("layer \"{}\": {e}", top.name)))?;
                 } else if let LayerContent::Deep(d) = &l.content {
                     data = Some(d.clone());
                 }

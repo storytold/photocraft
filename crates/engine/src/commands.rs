@@ -741,7 +741,7 @@ fn build() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc.bounds(), &lower, &upper, doc.pixel_format());
+                let merged = pixels::merge_down(doc.bounds(), &lower, &upper, doc.pixel_format()).map_err(EngineError::Other)?;
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);

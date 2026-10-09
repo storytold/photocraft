@@ -495,6 +495,11 @@ impl Loader<'_> {
                 let counts_bytes = self.fetch.blob(counts)?;
                 let counts_v: Vec<u64> = counts_bytes.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)).collect();
                 let npx = usize::try_from(*width).unwrap_or(usize::MAX / 2).saturating_mul(usize::try_from(*height).unwrap_or(0));
+                // Before any `npx + 1`: on a 32-bit target a saturating width*height can sit at
+                // usize::MAX, where the +1 would overflow.
+                if npx > 1 << 28 {
+                    return Err(crate::FormatError::LimitExceeded(format!("deep grid of {npx} pixels is too large")));
+                }
                 if counts_v.len() != npx + 1 {
                     return Err(crate::FormatError::LimitExceeded(format!(
                         "deep counts hold {} entries, expected width*height+1 = {}",
@@ -504,9 +509,6 @@ impl Loader<'_> {
                 }
                 if counts_v.windows(2).any(|w| w[1] < w[0]) {
                     return Err(crate::FormatError::LimitExceeded("deep sample counts must not decrease".into()));
-                }
-                if npx > 1 << 28 {
-                    return Err(crate::FormatError::LimitExceeded(format!("deep grid of {npx} pixels is too large")));
                 }
                 let total = counts_v.last().copied().unwrap_or(0) as usize;
                 let mut channels_v = Vec::with_capacity(channels.len());
