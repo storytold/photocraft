@@ -2019,6 +2019,41 @@ mod tests {
         }
     }
 
+    /// naga rounds a float literal above f32::MAX down to it, but Chrome's WGSL compiler (Tint)
+    /// rejects it, and with it the whole module: the web build's GPU canvas then falls back to the
+    /// CPU compositor on the first document. `shader_validates` can't see that, so every decimal
+    /// float literal must fit in an f32 (write f32::MAX as the hex `0x1.fffffep+127f`).
+    #[test]
+    fn shader_float_literals_fit_in_f32() {
+        for (n, line) in SHADER.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            let b = code.as_bytes();
+            let mut i = 0;
+            while i < b.len() {
+                let starts = b[i].is_ascii_digit() && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'.'));
+                if !starts {
+                    i += 1;
+                    continue;
+                }
+                // A literal: digits, letters (exponent, hex, suffix), '.', and a sign after the exponent mark.
+                let part = |c: u8, prev: u8| c.is_ascii_alphanumeric() || c == b'.' || (matches!(c, b'+' | b'-') && matches!(prev, b'e' | b'E' | b'p' | b'P'));
+                let mut j = i + 1;
+                while j < b.len() && part(b[j], b[j - 1]) {
+                    j += 1;
+                }
+                let lit = &code[i..j];
+                let dec = lit.trim_end_matches(['f', 'h']);
+                if !lit.starts_with("0x")
+                    && dec.contains(['.', 'e', 'E'])
+                    && let Ok(v) = dec.parse::<f64>()
+                {
+                    assert!(v <= f64::from(f32::MAX), "compose.wgsl:{}: {lit} is above f32::MAX", n + 1);
+                }
+                i = j;
+            }
+        }
+    }
+
     #[test]
     fn op_record_fits_the_uniform() {
         let p = plan::Pass::new(Kernel::FxPaint, 0);

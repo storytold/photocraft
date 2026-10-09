@@ -153,7 +153,10 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
     return min(cb / (2.0 * (1.0 - cs)), 1.0);
 }
 
-const F32_MAX: f32 = 3.40282347e38;
+// Exactly f32::MAX. The decimal 3.40282347e38 is slightly above it: naga rounds it down, but Chrome's
+// WGSL compiler (Tint) rejects it ("cannot be represented as 'f32'"), and the whole module with it,
+// so the web build fell back to the CPU compositor on every document.
+const F32_MAX: f32 = 0x1.fffffep+127f;
 
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
