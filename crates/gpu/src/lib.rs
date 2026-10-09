@@ -388,6 +388,9 @@ pub struct Compositor {
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, (u64, Tex)>,
+    /// The colour mode of the document being encoded: patterns paint in it
+    /// (`photocraft_compose::pattern::pattern_rgba`).
+    pattern_mode: photocraft_color::ColorMode,
     /// Texture side limit the paging is planned for (the device's, or smaller in tests).
     max_dim: u32,
     /// The device's real texture side limit.
@@ -590,6 +593,7 @@ impl Compositor {
             fx: HashMap::new(),
             temps: Vec::new(),
             patterns: HashMap::new(),
+            pattern_mode: photocraft_color::ColorMode::Rgb,
             max_dim: 0,
             device_max: device.limits().max_texture_dimension_2d,
             page: PAGE,
@@ -853,6 +857,7 @@ impl Compositor {
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
         self.check_fx(doc, &plan)?;
+        self.pattern_mode = doc.pixel_format().mode;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
         if region.is_empty() {
             return Ok(stats);
@@ -1322,20 +1327,21 @@ impl Compositor {
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 
-    /// Premultiplied RGBA32F texture of a pattern (cached by pixel identity).
+    /// Premultiplied RGBA32F texture of a pattern as it paints in the document's mode (cached by
+    /// pixel identity and mode).
     fn pattern_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pat: &Pattern) -> wgpu::TextureView {
         let fp = pat.surface.tiles().fold((pat.width as u64) << 32 | pat.height as u64, |acc, (c, t)| {
             acc.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 20) ^ c.ty as u64
         });
-        let key = format!("{}\u{0}{}", pat.id, pat.name);
+        let mode = self.pattern_mode;
+        let key = format!("{}\u{0}{}\u{0}{mode:?}", pat.id, pat.name);
         if let Some((f, t)) = self.patterns.get(&key)
             && *f == fp
         {
             return t.view.clone();
         }
         let (w, h) = (pat.width, pat.height);
-        let mut px = vec![[0.0f32; 4]; w as usize * h as usize];
-        pat.surface.read_rgba_into(pat.rect(), &mut px);
+        let px = photocraft_compose::pattern::pattern_rgba(pat, mode);
         let bytes: Vec<u8> = px.iter().flat_map(|q| [q[0] * q[3], q[1] * q[3], q[2] * q[3], q[3]]).flat_map(f32::to_le_bytes).collect();
         let t = Tex::new(device, "pc_pattern", w, h, wgpu::TextureFormat::Rgba32Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         queue.write_texture(
