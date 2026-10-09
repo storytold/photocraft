@@ -35,7 +35,7 @@ RUN set -eu; \
 WORKDIR /src
 COPY . .
 # The Arabic fonts the site serves beside the wasm (crates/text/web-fonts.txt; copied into
-# dist/web/fonts by packaging/web/copy-fonts.sh, a Trunk hook). Needs the sibling craft-fonts
+# dist/web/fonts by `cargo xtask web-fonts`, a Trunk hook). Needs the sibling craft-fonts
 # checkout as the `craft-fonts` named build context:
 #   docker build --build-context craft-fonts=../craft-fonts -t photocraft-web .
 COPY --from=craft-fonts . /craft-fonts

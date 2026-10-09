@@ -15,10 +15,9 @@
 //!
 //! The web build embeds no craft fonts: it fetches the faces listed in `web-fonts.txt` (the
 //! generated `WEB_FONTS`) from `fonts/<sha16>/` beside the wasm, where
-//! `packaging/web/copy-fonts.sh` copies them (`apps/photocraft-web/src/fonts.rs` fetches them). Add
-//! a line there to serve another face, e.g. BIZ UDPGothic for Japanese. A list line the manifest
-//! lacks is a warning, or an error with `CRAFT_FONTS_REQUIRED=1`, and never costs the desktop its
-//! fonts.
+//! `cargo xtask web-fonts` copies them (`apps/photocraft-web/src/fonts.rs` fetches them). Add a line
+//! there to serve another face, e.g. BIZ UDPGothic for Japanese. A list line the manifest lacks is
+//! left out with a warning, never an error, and never costs the desktop its fonts.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 

@@ -71,7 +71,9 @@ faces it fetches from beside the wasm, `startup` (before the app starts) or `bac
 
 - `crates/text/build.rs` turns it into `photocraft_text::WEB_FONTS` (URL `fonts/<sha16>/<file>`
   and the SRI hash).
-- `packaging/web/copy-fonts.sh`, a Trunk `post_build` hook, copies the files.
+- `cargo xtask web-fonts` (`xtask/src/web_fonts.rs`), the Trunk `post_build` hook, copies the files,
+  checking each one's SHA-256. A listed face the checkout lacks is skipped with a warning, as in
+  `build.rs`, so an older craft-fonts just means fewer fonts.
 - `apps/photocraft-web/src/fonts.rs` fetches and registers them, logging `web font …` for failures.
 - `FontDb::generation()` changes as they arrive, and the Type tool's font list and layout cache key
   on it.
@@ -346,7 +348,9 @@ trunk build --release              # writes ../../dist/web (index.html, .js glue
 trunk serve --release              # dev server on http://127.0.0.1:8765
 ```
 
-Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "s" except the pixel crates). The `.wasm` is about 18.8 MiB raw, 7.8 MiB gzipped and 5.6 MiB with Brotli; serve it with compression. Keep it under 24 MiB (`packaging/web/package.sh` enforces this; Cloudflare's per-file cap is 25 MiB). The web build never embeds craft-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/photocraft-web.wasm` (before wasm-opt strips the names).
+Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "s" except the pixel crates). The `.wasm` is about 18.8 MiB raw, 7.8 MiB gzipped and 5.6 MiB with Brotli; serve it with compression. Keep it under 24 MiB (`packaging/web/package.sh` enforces this; Cloudflare's per-file cap is 25 MiB). The web build never embeds craft-fonts (see Fonts above).
+
+What the web build needs: `trunk`, the `wasm32-unknown-unknown` target and `cargo`, nothing else (no POSIX shell, so it works the same on Windows). Optionally, `CRAFT_FONTS_DIR` set to an absolute craft-fonts checkout adds the fonts the site serves beside the wasm: Trunk's `post_build` hook runs `cargo xtask web-fonts`, which copies them into `dist/web/fonts/` (it does nothing without `CRAFT_FONTS_DIR`, and skips with a warning any listed face an older checkout lacks). See Fonts › Arabic fonts and the web build. To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/photocraft-web.wasm` (before wasm-opt strips the names).
 
 URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path.
 

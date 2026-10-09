@@ -1,5 +1,5 @@
 //! Craft-fonts faces served beside the wasm (`fonts/<sha16>/…`, copied by
-//! `packaging/web/copy-fonts.sh`) instead of embedded: [`load_startup_fonts`] fetches the `startup`
+//! `cargo xtask web-fonts`) instead of embedded: [`load_startup_fonts`] fetches the `startup`
 //! ones before the app starts, [`spawn_background_fonts`] the rest once it runs. The browser checks
 //! each file against its SHA-256 (Subresource Integrity). A face that fails is logged and skipped:
 //! the app runs without it. With `WEB_FONTS` empty (built without craft-fonts) both do nothing.

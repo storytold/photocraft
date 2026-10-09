@@ -14,6 +14,7 @@ mod scorecard;
 mod sha256;
 mod stats;
 mod version;
+mod web_fonts;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -34,6 +35,8 @@ commands:
                   crates; --changed runs only if psd/io/codecs/compose/gpu/text/format changed;
                   --local takes corpus/photoshop from the photocraft-corpus authoring clone
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
+  web-fonts       copy the craft-fonts faces in crates/text/web-fonts.txt into the web site (the Trunk
+                  post_build hook; a no-op without CRAFT_FONTS_DIR)
   parity          Photoshop menu parity; rewrites docs/parity.md
   i18n-coverage   report stable UI translation coverage for registered languages
   perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
@@ -57,6 +60,7 @@ fn main() -> ExitCode {
         Some("corpus") => corpus::cmd(&rest),
         Some("test-corpus") => corpus::test_cmd(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
+        Some("web-fonts") => web_fonts::run(&root()),
         Some("parity") => cmd_parity(),
         Some("i18n-coverage") => i18n_coverage::run(&root()),
         Some("perf") => perf::run(&root(), &rest),

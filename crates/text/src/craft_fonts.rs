@@ -18,7 +18,7 @@ pub struct CraftFont {
 
 /// A craft-fonts face the web (wasm32) build fetches from beside the wasm instead of embedding,
 /// listed in `crates/text/web-fonts.txt` (empty unless built with `CRAFT_FONTS_DIR`). Fetched by
-/// `apps/photocraft-web/src/fonts.rs`; copied into the site by `packaging/web/copy-fonts.sh`.
+/// `apps/photocraft-web/src/fonts.rs`; copied into the site by `cargo xtask web-fonts`.
 pub struct WebFont {
     pub family: &'static str,
     pub style: &'static str,
