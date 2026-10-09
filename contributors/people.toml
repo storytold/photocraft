@@ -44,6 +44,3 @@ sync_github_name = true
 real_name = "Willy Foo"
 display_name = "Willy Foo"
 sync_github_name = false
-
-[people.maxm11]
-real_name = "Max Murphy"
