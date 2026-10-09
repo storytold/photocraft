@@ -5,7 +5,8 @@
 //! centre crop marks, registration marks, description and label) with a small PDF writer
 //! (ISO 32000: one page, a Flate-compressed image XObject, vector marks, Helvetica text), then
 //! hands it to the system spooler with `lp` (CUPS, macOS and Linux). `"dryRun": true` stops
-//! before spooling and reports the command line, which is how the tests exercise the path.
+//! before spooling and reports the command line. Without an explicit PDF output, the spool file
+//! is private and removed when `lp` finishes; dry runs do not create one.
 //!
 //! Paths to Illustrator writes the document's paths as an Adobe Illustrator 3 compatible
 //! PostScript file (`m`/`L`/`C` path construction, `n`/`N` unpainted closed/open paths, `*u`/`*U`
@@ -313,8 +314,27 @@ pub fn layout(doc: &Document, p: &Value, cmd: &str) -> Result<PrintLayout> {
     Ok(PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn private_spool_pdf(pdf: &[u8]) -> Result<tempfile::NamedTempFile> {
+    private_spool_pdf_in(pdf, &std::env::temp_dir())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn private_spool_pdf_in(pdf: &[u8], dir: &std::path::Path) -> Result<tempfile::NamedTempFile> {
+    // tempfile creates a random name with create_new semantics and mode 0600 on Unix.
+    // Keeping this handle alive prevents a symlink at a guessed path from redirecting the write.
+    let mut file = tempfile::Builder::new().prefix("photocraft-print-").suffix(".pdf").tempfile_in(dir).map_err(other)?;
+    file.write_all(pdf).map_err(other)?;
+    file.flush().map_err(other)?;
+    Ok(file)
+}
+
 /// Lays out, renders and (unless dry-run) spools a print. Shared by Print and Print One Copy.
 fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    do_print_with_spooler(s, p, cmd, spool_pdf)
+}
+
+fn do_print_with_spooler(s: &mut Session, p: &Value, cmd: &str, spooler: impl FnOnce(&[String]) -> Result<String>) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks } = layout(&doc, p, cmd)?;
@@ -329,17 +349,22 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let pdf = print_pdf(&page);
     let output = p.get("output").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
     let send = p.get("send").and_then(Value::as_bool).unwrap_or(output.is_none());
-    let pdf_path = match &output {
-        Some(o) => o.clone(),
-        None => {
-            // Unique per call: concurrent prints of same-named documents must not share a spool file.
-            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let tmp = std::env::temp_dir().to_string_lossy().into_owned();
-            join(&tmp, &format!("{}-print-{}-{n}.pdf", crate::file_cmds::sanitize(&stem(&doc.name)), std::process::id()))
-        }
-    };
-    write_file(&pdf_path, &pdf)?;
+    let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    if let Some(path) = &output {
+        // An explicit output is the caller's requested artifact, including for dry runs.
+        write_file(path, &pdf)?;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let spool_file = if output.is_none() && send && !dry { Some(private_spool_pdf(&pdf)?) } else { None };
+    #[cfg(target_arch = "wasm32")]
+    if output.is_none() && send && !dry {
+        return Err(other("printing needs the desktop app"));
+    }
+    // Dry-run commands use a descriptive placeholder because no spool file exists.
+    let command_path = output.clone();
+    #[cfg(not(target_arch = "wasm32"))]
+    let command_path = command_path.or_else(|| spool_file.as_ref().map(|f| f.path().to_string_lossy().into_owned()));
+    let command_path = command_path.unwrap_or_else(|| "<temporary PDF>".into());
     let copies = crate::commands::int(p, "copies").unwrap_or(1).clamp(1, 999);
     let mut argv: Vec<String> = vec!["lp".into()];
     if let Some(pr) = p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()) {
@@ -348,14 +373,15 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     if copies > 1 {
         argv.extend(["-n".into(), copies.to_string()]);
     }
-    argv.extend(["-t".into(), doc.name.clone(), pdf_path.clone()]);
-    let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    argv.extend(["-t".into(), doc.name.clone(), command_path]);
     let mut sent = false;
     let mut spool = Value::Null;
     if send && !dry {
-        spool = json!(spool_pdf(&argv)?);
+        spool = json!(spooler(&argv)?);
         sent = true;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    drop(spool_file);
     let mut remembered = p.clone();
     if let Some(o) = remembered.as_object_mut() {
         o.remove("output");
@@ -364,7 +390,7 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     s.file_menu.last_print = Some(remembered);
     crate::automate_cmds::fire_event(s, "print");
     Ok(
-        json!({"pdf": pdf_path, "bytes": pdf.len(), "paper": [pw, ph], "imageRect": [x, y, w, h], "scale": scale * 100.0, "copies": copies, "command": if send { json!(argv) } else { Value::Null }, "sent": sent, "spooler": spool, "color": color}),
+        json!({"pdf": output, "bytes": pdf.len(), "paper": [pw, ph], "imageRect": [x, y, w, h], "scale": scale * 100.0, "copies": copies, "command": if send { json!(argv) } else { Value::Null }, "sent": sent, "spooler": spool, "color": color}),
     )
 }
 
@@ -549,7 +575,7 @@ pub fn specs() -> Vec<CommandSpec> {
             CommandSpec { id: $id, label: $label, menu: $menu, shortcut: $sc, params: $params, enabled: $enabled, journal: true, run: $run }
         };
     }
-    const PRINT_PARAMS: &str = r##"{"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"description":bool,"labels":bool,"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"dryRun":bool=false (render the PDF, report the lp command, don't spool)} → {pdf, imageRect, command, sent}"##;
+    const PRINT_PARAMS: &str = r##"{"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"description":bool,"labels":bool,"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"dryRun":bool=false (render the PDF, report the lp command, don't spool; no temporary PDF is written)} → {pdf:explicit output path or null, imageRect, command, sent}"##;
     vec![
         spec!("file.print", "Print…", &["File"], Some("Cmd+P"), PRINT_PARAMS, native_doc, print),
         spec!(
