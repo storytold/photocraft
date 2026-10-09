@@ -3193,7 +3193,7 @@ mod toolbar_hidden_tests {
             );
             out.textures_delta.clear();
         }
-        let size = Vec2::splat(if Tokens::get(&ctx).pro { 30.0 } else { 36.0 });
+        let size = egui::Vec2::splat(if Tokens::get(&ctx).pro { 30.0 } else { 36.0 });
         ctx.viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).count())
     }
 
