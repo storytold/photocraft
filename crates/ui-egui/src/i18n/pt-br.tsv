@@ -2678,3 +2678,10 @@ fontWeight	Italic	Itálico
 	Rotate View Tool	Ferramenta Girar visualização
 	Reset View	Redefinir visualização
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arraste ao redor do centro para girar a visualização  ·  Shift restringe a 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Fora da gama de impressão: clique para a cor imprimível mais próxima
+	Not a web colour: click for the nearest web colour	Não é uma cor da Web: clique para a cor da Web mais próxima
+	Color to Alpha…	Cor para alfa…
+	Transparency Threshold	Limiar de transparência
+	Opacity Threshold	Limiar de opacidade

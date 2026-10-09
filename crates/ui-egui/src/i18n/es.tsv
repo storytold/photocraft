@@ -2317,3 +2317,10 @@ fontWeight	Italic	Cursiva
 	Rotate View Tool	Herramienta Rotar vista
 	Reset View	Restablecer vista
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arrastre alrededor del centro para rotar la vista  ·  Mayús fija a 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Fuera de la gama de impresión: haga clic para el color imprimible más cercano
+	Not a web colour: click for the nearest web colour	No es un color web: haga clic para el color web más cercano
+	Color to Alpha…	Color a alfa…
+	Transparency Threshold	Umbral de transparencia
+	Opacity Threshold	Umbral de opacidad

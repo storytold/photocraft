@@ -3272,3 +3272,10 @@ cameraRaw	Roughness	Chropowatość
 	Rotate View Tool	Narzędzie Obróć widok
 	Reset View	Resetuj widok
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Poza gamą druku: kliknij, aby wybrać najbliższy kolor do druku
+	Not a web colour: click for the nearest web colour	To nie jest kolor internetowy: kliknij, aby wybrać najbliższy kolor internetowy
+	Color to Alpha…	Kolor na alfę…
+	Transparency Threshold	Próg przezroczystości
+	Opacity Threshold	Próg krycia

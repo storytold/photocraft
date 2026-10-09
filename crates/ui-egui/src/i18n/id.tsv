@@ -2658,3 +2658,10 @@ fontWeight	Italic	Miring
 	Rotate View Tool	Alat Putar Tampilan
 	Reset View	Atur Ulang Tampilan
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Seret di sekitar pusat untuk memutar tampilan  ·  Shift membatasi ke 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Di luar gamut cetak: klik untuk warna cetak terdekat
+	Not a web colour: click for the nearest web colour	Bukan warna web: klik untuk warna web terdekat
+	Color to Alpha…	Warna ke Alpha…
+	Transparency Threshold	Ambang transparansi
+	Opacity Threshold	Ambang opasitas

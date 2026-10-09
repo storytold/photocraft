@@ -1089,6 +1089,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_style::specs());
     v.extend(crate::filters::specs());
     v.extend(crate::filters_ext::specs());
+    v.extend(crate::color_to_alpha_cmds::specs());
     v.extend(crate::gallery_cmds::specs());
     v.extend(crate::gradient_fill_cmds::specs());
     v.extend(crate::type_cmds::specs());
@@ -1165,6 +1166,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::plugin_cmds::specs());
     v.extend(crate::group_view_cmds::specs());
     v.extend(crate::fx_view_cmds::specs());
+    v.extend(crate::fx_visibility_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
     v.extend(crate::actions_cmds::specs());
     v

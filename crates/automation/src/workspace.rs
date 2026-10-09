@@ -68,7 +68,8 @@ impl AuthorizedWorkspace {
         options.write(true).create_new(true);
         let written = root.dir.open_with(&tmp, &options).and_then(|mut file| {
             file.write_all(bytes)?;
-            file.sync_all()
+            // Falls back to a plain fsync on shares that refuse a full flush (#1336).
+            photocraft_format::atomic::sync_file(&file.into_std())
         });
         let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
         if let Err(e) = renamed {
@@ -80,7 +81,7 @@ impl AuthorizedWorkspace {
         {
             let dir = if parent.as_os_str().is_empty() { PathBuf::from(".") } else { parent };
             if let Ok(d) = root.dir.open(&dir) {
-                let _ = d.sync_all();
+                let _ = photocraft_format::atomic::sync_file(&d.into_std());
             }
         }
         Ok(())
@@ -281,6 +282,62 @@ fn command_error(id: &str) -> AutomationError {
     AutomationError::BadRequest(format!("automation command `{id}` uses ambient filesystem paths and is disabled; use capability-scoped document methods"))
 }
 
+/// An export owns only files it created through this held directory capability. Refuse
+/// collisions (including symlinks) so cancellation cannot delete or replace an earlier export.
+pub(crate) struct ExportSequence {
+    dir: Dir,
+    created: Vec<String>,
+}
+
+impl AuthorizedWorkspace {
+    pub(crate) fn export_sequence(&self, path: &str) -> Result<ExportSequence, AutomationError> {
+        let relative = relative_path(path)?;
+        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))?;
+        let dir = root.dir.open_dir(&relative).map_err(|e| file_error("open export directory", path, e))?;
+        Ok(ExportSequence { dir, created: Vec::new() })
+    }
+}
+
+impl ExportSequence {
+    pub(crate) fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), AutomationError> {
+        let relative = relative_path(name)?;
+        if relative.components().count() != 1 {
+            return Err(path_error(name, "export filename must be a single component"));
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = self.dir.open_with(&relative, &options).map_err(|e| file_error("create export", name, e))?;
+        // Record immediately after creation, before any fallible write, including partial writes.
+        self.created.push(name.to_owned());
+        file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|e| file_error("write export", name, e))
+    }
+
+    pub(crate) fn commit(&mut self) {
+        self.created.clear();
+    }
+
+    pub(crate) fn cleanup(&mut self) -> Result<(), AutomationError> {
+        let mut failed = Vec::new();
+        self.created.retain(|name| match self.dir.remove_file(name) {
+            Ok(()) => false,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                failed.push(format!("{name}: {e}"));
+                true
+            }
+        });
+        if failed.is_empty() { Ok(()) } else { Err(AutomationError::Io(format!("export cleanup failed: {}", failed.join("; ")))) }
+    }
+}
+
+impl Drop for ExportSequence {
+    fn drop(&mut self) {
+        // Also cover an escaped rendering panic; normal errors report cleanup failures above.
+        let _ = self.cleanup();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +351,33 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
         (inside, outside, workspace)
+    }
+
+    #[test]
+    fn export_cleanup_owns_only_created_files_even_during_unwind() {
+        let (inside, _, workspace) = roots("export-cleanup");
+        std::fs::create_dir(inside.join("frames")).unwrap();
+        std::fs::write(inside.join("frames/clip_0009.png"), b"old").unwrap();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut export = workspace.export_sequence("frames").unwrap();
+            export.write("clip_0000.png", b"new").unwrap();
+            assert!(export.write("clip_0009.png", b"overwrite").is_err());
+            assert!(export.write("../escape.png", b"escape").is_err());
+            panic!("rendering panic");
+        }));
+        assert!(panic.is_err());
+        assert_eq!(std::fs::read_dir(inside.join("frames")).unwrap().count(), 1);
+        assert_eq!(std::fs::read(inside.join("frames/clip_0009.png")).unwrap(), b"old");
+        assert!(AuthorizedWorkspace::default().export_sequence("frames").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_directory_symlinks_cannot_escape_the_granted_root() {
+        let (inside, outside, workspace) = roots("export-symlink");
+        std::os::unix::fs::symlink(&outside, inside.join("escape")).unwrap();
+        assert!(workspace.export_sequence("escape").is_err());
+        assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
     }
 
     #[test]

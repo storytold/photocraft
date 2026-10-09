@@ -2671,3 +2671,10 @@ fontWeight	Italic	Italique
 	Rotate View Tool	Outil Rotation de la vue
 	Reset View	Réinitialiser la vue
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Faites glisser autour du centre pour tourner la vue  ·  Maj contraint à 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Hors de la gamme d’impression : cliquez pour la couleur imprimable la plus proche
+	Not a web colour: click for the nearest web colour	Pas une couleur web : cliquez pour la couleur web la plus proche
+	Color to Alpha…	Couleur vers alpha…
+	Transparency Threshold	Seuil de transparence
+	Opacity Threshold	Seuil d'opacité

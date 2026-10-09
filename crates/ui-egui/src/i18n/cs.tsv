@@ -2248,3 +2248,10 @@ fontWeight	Italic	Kurzíva
 	Rotate View Tool	Nástroj otočení zobrazení
 	Reset View	Obnovit zobrazení
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Mimo gamut tisku: klepnutím zvolíte nejbližší tisknutelnou barvu
+	Not a web colour: click for the nearest web colour	Není webová barva: klepnutím zvolíte nejbližší webovou barvu
+	Color to Alpha…	Barva na alfu…
+	Transparency Threshold	Práh průhlednosti
+	Opacity Threshold	Práh krytí

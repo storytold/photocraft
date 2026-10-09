@@ -1,6 +1,6 @@
 //! Photoshop's Color Picker (Foreground / Background Color) dialog: a 2D colour field and a slider
-//! for the selected component (H, S, B, R, G or B radio), new/current swatches, and HSB, RGB, Lab,
-//! CMYK and hex fields. The colour lives in the dialog fields (`color` as `#rrggbb`, plus the HSB
+//! for the selected component (H, S, B, R, G, B, L, a or b radio), new/current swatches with the
+//! out-of-gamut and web-colour warnings, and HSB, RGB, Lab, CMYK and hex fields. The colour lives in the dialog fields (`color` as `#rrggbb`, plus the HSB
 //! floats so hue survives greys), so `ui.dialog.set` drives it; OK runs `tools.setColors`.
 //! While it is the top dialog the image is its eyedropper, as in Photoshop: the pointer over the
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
@@ -15,6 +15,45 @@ use crate::widgets;
 
 /// Radio components, Photoshop order: H, S, B, R, G, B.
 pub const MODES: &[(&str, &str)] = &[("h", "H:"), ("s", "S:"), ("v", "B:"), ("r", "R:"), ("g", "G:"), ("b", "B:")];
+/// Lab radio components (Photoshop's right-hand column): L, a, b.
+pub const LAB_MODES: &[(&str, &str)] = &[("lab_l", "L:"), ("lab_a", "a:"), ("lab_b", "b:")];
+
+/// The Lab colour at field position (x, y) in 0..1 (y down) with the slider at `z`, for a Lab
+/// `mode`, as Photoshop 25.4 lays them out: L shows a across and b upwards; a shows b across and L
+/// upwards; b shows a across and L upwards (a and b run -128..127, L 0..100).
+fn field_lab(mode: &str, z: f32, x: f32, y: f32) -> Option<[f32; 3]> {
+    let ab = |t: f32| t * 255.0 - 128.0;
+    match mode {
+        "lab_l" => Some([z * 100.0, ab(x), ab(1.0 - y)]),
+        "lab_a" => Some([(1.0 - y) * 100.0, ab(z), ab(x)]),
+        "lab_b" => Some([(1.0 - y) * 100.0, ab(x), ab(z)]),
+        _ => None,
+    }
+}
+
+/// Lab → sRGB, clamped to what the field can show.
+fn lab_rgb(lab: [f32; 3]) -> [f32; 3] {
+    photocraft_color::convert::lab_to_srgb(lab).map(|c| c.clamp(0.0, 1.0))
+}
+
+/// Colour differences the CMYK round trip leaves inside the printable gamut (ΔE ≤ 0.4, black ≈ 1.4
+/// with black-point compensation) stay below this; out-of-gamut colours move far more.
+const GAMUT_DE: f32 = 3.0;
+
+/// The nearest printable colour, when `rgb` is outside the CMYK gamut (Photoshop's ⚠ warning).
+pub fn out_of_gamut(rgb: [f32; 3]) -> Option<[f32; 3]> {
+    use photocraft_color::convert::{cmyk_to_rgb, rgb_to_cmyk, srgb_to_lab};
+    let back = cmyk_to_rgb(rgb_to_cmyk(rgb)).map(|c| c.clamp(0.0, 1.0));
+    let (a, b) = (srgb_to_lab(rgb), srgb_to_lab(back));
+    let de = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+    (de > GAMUT_DE).then_some(back)
+}
+
+/// The nearest web colour (channels in steps of 51), when `rgb` isn't one.
+pub fn not_web_safe(rgb: [f32; 3]) -> Option<[f32; 3]> {
+    let web = rgb.map(|v| (v.clamp(0.0, 1.0) * 5.0).round() / 5.0);
+    (hex(web) != hex(rgb)).then_some(web)
+}
 
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let h = (h.rem_euclid(360.0)) / 60.0;
@@ -65,6 +104,9 @@ pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
 /// The colour at field position (x, y) in 0..1 (y down) for `mode` with the slider at `z` (0..1),
 /// given the current HSV/RGB (used for the components the field doesn't vary).
 pub fn field_color(mode: &str, z: f32, x: f32, y: f32) -> [f32; 3] {
+    if let Some(lab) = field_lab(mode, z, x, y) {
+        return lab_rgb(lab);
+    }
     match mode {
         "s" => hsv_to_rgb(x * 360.0, z, 1.0 - y),
         "v" => hsv_to_rgb(x * 360.0, 1.0 - y, z),
@@ -76,9 +118,14 @@ pub fn field_color(mode: &str, z: f32, x: f32, y: f32) -> [f32; 3] {
 }
 
 /// Field position and slider value of a colour in `mode` (inverse of [`field_color`]).
-pub fn locate(mode: &str, hsv: [f32; 3], rgb: [f32; 3]) -> (f32, f32, f32) {
+pub fn locate(mode: &str, hsv: [f32; 3], rgb: [f32; 3], lab: [f32; 3]) -> (f32, f32, f32) {
     let h = hsv[0] / 360.0;
+    let ab = |v: f32| ((v + 128.0) / 255.0).clamp(0.0, 1.0);
+    let l = (lab[0] / 100.0).clamp(0.0, 1.0);
     match mode {
+        "lab_l" => (ab(lab[1]), 1.0 - ab(lab[2]), l),
+        "lab_a" => (ab(lab[2]), 1.0 - l, ab(lab[1])),
+        "lab_b" => (ab(lab[1]), 1.0 - l, ab(lab[2])),
         "s" => (h, 1.0 - hsv[2], hsv[1]),
         "v" => (h, 1.0 - hsv[1], hsv[2]),
         "r" => (rgb[2], 1.0 - rgb[1], rgb[0]),
@@ -89,7 +136,10 @@ pub fn locate(mode: &str, hsv: [f32; 3], rgb: [f32; 3]) -> (f32, f32, f32) {
 }
 
 /// Colour for slider position `z` (0..1) in `mode`, other components from the current colour.
-fn slider_color(mode: &str, z: f32, hsv: [f32; 3], rgb: [f32; 3]) -> [f32; 3] {
+fn slider_color(mode: &str, z: f32, hsv: [f32; 3], rgb: [f32; 3], lab: [f32; 3]) -> [f32; 3] {
+    if let Some(l) = slider_lab(mode, z, lab) {
+        return lab_rgb(l);
+    }
     match mode {
         "s" => hsv_to_rgb(hsv[0], z, hsv[2]),
         "v" => hsv_to_rgb(hsv[0], hsv[1], z),
@@ -97,6 +147,17 @@ fn slider_color(mode: &str, z: f32, hsv: [f32; 3], rgb: [f32; 3]) -> [f32; 3] {
         "g" => [rgb[0], z, rgb[2]],
         "b" => [rgb[0], rgb[1], z],
         _ => hsv_to_rgb(z * 360.0, 1.0, 1.0),
+    }
+}
+
+/// The Lab colour with the slider of a Lab `mode` at `z`, the other components kept.
+fn slider_lab(mode: &str, z: f32, lab: [f32; 3]) -> Option<[f32; 3]> {
+    let ab = z * 255.0 - 128.0;
+    match mode {
+        "lab_l" => Some([z * 100.0, lab[1], lab[2]]),
+        "lab_a" => Some([lab[0], ab, lab[2]]),
+        "lab_b" => Some([lab[0], lab[1], ab]),
+        _ => None,
     }
 }
 
@@ -293,8 +354,8 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
     let now = current(f);
-    let (rgb, hsv) = (now.rgb, now.hsv);
-    let (fx, fy, fz) = locate(&mode, hsv, rgb);
+    let (rgb, hsv, lab) = (now.rgb, now.hsv, now.lab);
+    let (fx, fy, fz) = locate(&mode, hsv, rgb, lab);
     // Colour field.
     let (field, resp) = ui.allocate_exact_size(vec2(280.0, 280.0), Sense::click_and_drag());
     ui.painter().add(grid_mesh(field, 32, |x, y| field_color(&mode, fz, x, y)));
@@ -308,13 +369,13 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             "h" => Keep::Hsv([fz * 360.0, x, 1.0 - y]),
             "s" => Keep::Hsv([x * 360.0, fz, 1.0 - y]),
             "v" => Keep::Hsv([x * 360.0, 1.0 - y, fz]),
-            _ => Keep::Nothing,
+            m => field_lab(m, fz, x, y).map_or(Keep::Nothing, Keep::Lab),
         };
         set_rgb(f, c, keep);
     }
     // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
     let (strip, sresp) = ui.allocate_exact_size(vec2(20.0, 280.0), Sense::click_and_drag());
-    ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, hsv, rgb)));
+    ui.painter().add(grid_mesh(strip, 32, |_, y| slider_color(&mode, 1.0 - y, hsv, rgb, lab)));
     let sy = strip.top() + (1.0 - fz) * strip.height();
     for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
         let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
@@ -328,9 +389,10 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             "v" => Some([hsv[0], hsv[1], z]),
             _ => None,
         };
-        match h {
-            Some(h) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
-            None => set_rgb(f, slider_color(&mode, z, hsv, rgb), Keep::Nothing),
+        match (h, slider_lab(&mode, z, lab)) {
+            (Some(h), _) => set_rgb(f, hsv_to_rgb(h[0], h[1], h[2]), Keep::Hsv(h)),
+            (None, Some(l)) => set_rgb(f, lab_rgb(l), Keep::Lab(l)),
+            (None, None) => set_rgb(f, slider_color(&mode, z, hsv, rgb, lab), Keep::Nothing),
         }
     }
 }
@@ -338,22 +400,84 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let rgb = current(f).rgb;
-    ui.allocate_ui_with_layout(vec2(64.0, 104.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-        // new / current swatches.
-        ui.label(egui::RichText::new(tl!("new")).size(11.0).color(t.text_dim));
-        let (sw, _) = ui.allocate_exact_size(vec2(64.0, 72.0), Sense::hover());
-        let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
-        ui.painter().rect_filled(Rect::from_min_size(sw.min, vec2(64.0, 36.0)), 0.0, c32(rgb));
-        let cur = Rect::from_min_size(sw.min + vec2(0.0, 36.0), vec2(64.0, 36.0));
-        ui.painter().rect_filled(cur, 0.0, c32(orig));
-        ui.painter().rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-        let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
-        click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
-        if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
-            set_rgb(f, orig, Keep::Nothing);
+    let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
+    let (area, _) = ui.allocate_exact_size(vec2(64.0 + 26.0, 104.0), Sense::hover());
+    // new / current swatches, labelled above and below.
+    let sw = Rect::from_min_size(area.min + vec2(0.0, 16.0), vec2(64.0, 72.0));
+    let p = ui.painter();
+    let label = |text: &str, at: egui::Pos2, align: egui::Align2| {
+        p.text(at, align, text, egui::FontId::proportional(11.0), t.text_dim);
+    };
+    label(tl!("new"), pos2(sw.center().x, sw.top() - 3.0), egui::Align2::CENTER_BOTTOM);
+    label(tl!("current"), pos2(sw.center().x, sw.bottom() + 3.0), egui::Align2::CENTER_TOP);
+    p.rect_filled(Rect::from_min_size(sw.min, vec2(64.0, 36.0)), 0.0, c32(rgb));
+    let cur = Rect::from_min_size(sw.min + vec2(0.0, 36.0), vec2(64.0, 36.0));
+    p.rect_filled(cur, 0.0, c32(orig));
+    p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
+    let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
+    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
+    if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
+        set_rgb(f, orig, Keep::Nothing);
+    }
+    // Photoshop's warnings beside the swatch, each over a chip of the nearest colour that passes
+    // (a click takes it): out of gamut for printing on top, not a web colour below.
+    let x = sw.right() + 8.0;
+    let gamut = tl!("Out of gamut for printing: click for the nearest printable colour");
+    let web = tl!("Not a web colour: click for the nearest web colour");
+    for (slot, warning, tip) in [(0.0, out_of_gamut(rgb), gamut), (34.0, not_web_safe(rgb), web)] {
+        let Some(near) = warning else { continue };
+        let icon = Rect::from_min_size(pos2(x, sw.top() + 2.0 + slot), vec2(13.0, 13.0));
+        let chip = Rect::from_min_size(pos2(x + 1.5, icon.bottom() + 3.0), vec2(10.0, 10.0));
+        let p = ui.painter();
+        if slot == 0.0 {
+            warning_triangle(p, icon, t.text, t.chrome);
+        } else {
+            web_cube(p, icon, t.text);
         }
-        ui.label(egui::RichText::new(tl!("current")).size(11.0).color(t.text_dim));
-    });
+        p.rect_filled(chip, 0.0, c32(near));
+        p.rect_stroke(chip, 0.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
+        let resp = ui.interact(icon.union(chip), ui.id().with(("cp-warning", slot as i32)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip));
+        if resp.on_hover_text(tip).clicked() {
+            set_rgb(f, near, Keep::Nothing);
+        }
+    }
+}
+
+/// ⚠: a filled triangle with an exclamation mark cut out of it.
+fn warning_triangle(p: &egui::Painter, r: Rect, ink: Color32, cut: Color32) {
+    let tri = vec![pos2(r.center().x, r.top()), pos2(r.right(), r.bottom()), pos2(r.left(), r.bottom())];
+    p.add(egui::Shape::convex_polygon(tri, ink, Stroke::NONE));
+    let x = r.center().x;
+    p.line_segment([pos2(x, r.top() + 4.5), pos2(x, r.bottom() - 4.0)], Stroke::new(1.5, cut));
+    p.circle_filled(pos2(x, r.bottom() - 2.0), 0.9, cut);
+}
+
+/// A cube seen corner-on: a hexagon with three edges meeting in the middle.
+fn web_cube(p: &egui::Painter, r: Rect, ink: Color32) {
+    let (c, rad) = (r.center(), r.width() / 2.0);
+    let corner = |k: f32| {
+        let a = std::f32::consts::FRAC_PI_3 * k - std::f32::consts::FRAC_PI_2;
+        c + vec2(rad * a.cos(), rad * a.sin())
+    };
+    let hex: Vec<_> = (0..6).map(|k| corner(k as f32)).collect();
+    let stroke = Stroke::new(1.2, ink);
+    p.add(egui::Shape::closed_line(hex, stroke));
+    for k in [1.0, 3.0, 5.0] {
+        p.line_segment([c, corner(k)], stroke);
+    }
+}
+
+/// A component radio: true when clicked.
+fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+    ui.painter().circle_stroke(r.center(), 5.5, Stroke::new(1.2, if on { t.accent } else { t.text_faint }));
+    if on {
+        ui.painter().circle_filled(r.center(), 3.0, t.accent);
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, ui.is_enabled(), on, label));
+    resp.clicked()
 }
 
 /// Component radios and numeric fields: HSB, RGB, Lab, CMYK and hex.
@@ -372,12 +496,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 for i in 0..6 {
                     let (key, label) = MODES[i];
                     let on = mode == key;
-                    let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
-                    ui.painter().circle_stroke(r.center(), 5.5, Stroke::new(1.2, if on { t.accent } else { t.text_faint }));
-                    if on {
-                        ui.painter().circle_filled(r.center(), 3.0, t.accent);
-                    }
-                    if resp.clicked() {
+                    if radio(ui, on, label) {
                         new_mode = Some(key);
                     }
                     ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
@@ -422,9 +541,12 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
             });
         });
-        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(3).spacing([6.0, 4.0]).show(ui, |ui| {
-            for (i, (label, v, range)) in [("L:", lab[0], 0.0..=100.0), ("a:", lab[1], -128.0..=127.0), ("b:", lab[2], -128.0..=127.0)].into_iter().enumerate()
-            {
+        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
+            for (i, (v, range)) in [(lab[0], 0.0..=100.0), (lab[1], -128.0..=127.0), (lab[2], -128.0..=127.0)].into_iter().enumerate() {
+                let (key, label) = LAB_MODES[i];
+                if radio(ui, mode == key, label) {
+                    new_mode = Some(key);
+                }
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = v.round();
                 if widgets::value_field(ui, &mut x, range, "", 54.0).changed() {
@@ -438,6 +560,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
             ui.allocate_exact_size(vec2(0.0, 6.0), Sense::hover());
             ui.end_row();
             for (i, label) in ["C:", "M:", "Y:", "K:"].into_iter().enumerate() {
+                ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = (cmyk[i] * 100.0).round();
                 if widgets::value_field(ui, &mut x, 0.0..=100.0, "", 54.0).changed() {
@@ -659,12 +782,44 @@ mod tests {
     #[test]
     fn field_and_locate_are_inverse_in_every_mode() {
         let rgb = [0.8, 0.3, 0.2];
-        let hsv = rgb_to_hsv(rgb);
-        for (m, _) in MODES {
-            let (x, y, z) = locate(m, hsv, rgb);
+        let (hsv, lab) = (rgb_to_hsv(rgb), photocraft_color::convert::srgb_to_lab(rgb));
+        for (m, _) in MODES.iter().chain(LAB_MODES) {
+            let (x, y, z) = locate(m, hsv, rgb, lab);
             let c = field_color(m, z, x, y);
             assert_eq!(hex(c), hex(rgb), "mode {m}");
         }
+    }
+
+    #[test]
+    fn lab_fields_are_laid_out_like_photoshops() {
+        // Photoshop 25.4. L: a across (green to red), b upwards (blue to yellow).
+        let l = |x, y| photocraft_color::convert::srgb_to_lab(field_color("lab_l", 0.6, x, y));
+        assert!(l(0.0, 0.5)[1] < -40.0 && l(1.0, 0.5)[1] > 40.0, "{:?} {:?}", l(0.0, 0.5), l(1.0, 0.5));
+        assert!(l(0.5, 1.0)[2] < -40.0 && l(0.5, 0.0)[2] > 40.0, "{:?} {:?}", l(0.5, 1.0), l(0.5, 0.0));
+        // a: b across, L upwards (white at the top, black at the bottom).
+        assert!(field_color("lab_a", 0.5, 0.5, 0.0).iter().all(|&c| c > 0.99), "white at the top");
+        assert!(field_color("lab_a", 0.5, 0.5, 1.0).iter().all(|&c| c < 0.01), "black at the bottom");
+        let a = |x| photocraft_color::convert::srgb_to_lab(field_color("lab_a", 0.5, x, 0.5));
+        assert!(a(0.0)[2] < -40.0 && a(1.0)[2] > 40.0);
+        // b: a across, L upwards; its slider runs from yellow (top) to blue.
+        let b = |x| photocraft_color::convert::srgb_to_lab(field_color("lab_b", 0.5, x, 0.5));
+        assert!(b(0.0)[1] < -40.0 && b(1.0)[1] > 40.0);
+        let lab = [60.0, 0.0, 0.0];
+        let top = photocraft_color::convert::srgb_to_lab(slider_color("lab_b", 1.0, [0.0; 3], [0.0; 3], lab));
+        let bottom = photocraft_color::convert::srgb_to_lab(slider_color("lab_b", 0.0, [0.0; 3], [0.0; 3], lab));
+        assert!(top[2] > 40.0 && bottom[2] < -40.0, "{top:?} {bottom:?}");
+    }
+
+    #[test]
+    fn gamut_and_web_warnings() {
+        // Photoshop 25.4: #714343 is printable but not a web colour; #fd0303 is neither.
+        let rgb = |h| parse_hex(h).unwrap();
+        assert_eq!(out_of_gamut(rgb("#714343")), None);
+        assert!(out_of_gamut(rgb("#fd0303")).is_some());
+        assert_eq!(out_of_gamut(rgb("#000000")), None, "black prints");
+        assert_eq!(out_of_gamut(rgb("#ffffff")), None);
+        assert_eq!(not_web_safe(rgb("#714343")).map(hex).as_deref(), Some("#663333"));
+        assert_eq!(not_web_safe(rgb("#cc3366")), None);
     }
 
     #[test]

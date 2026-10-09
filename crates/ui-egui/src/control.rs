@@ -239,6 +239,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
+            // A control-channel menu click must respect the same modal gate as the native menu.
+            // engine.execute is deliberately not subject to the UI's menu-click semantics.
+            if req.method == "ui.menu.invoke" && !crate::menus::modal_allows(app, id) {
+                return err("menu command is unavailable while a modal dialog is open");
+            }
             let params = p.get("params").cloned().unwrap_or(json!({}));
             if let Some(authorize) = app.services.automation_command.as_ref()
                 && let Err(error) = authorize(id, &params)
@@ -762,6 +767,10 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
         "layerMenu": app.ui.layer_menu,
+        "brushPicker": app.ui.brush_picker.map(|pos| json!({
+            "pos": pos,
+            "list": app.ui.brush_picker_list,
+        })),
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
             json!({
                 "pos": menu.pos,
@@ -956,6 +965,38 @@ mod tests {
     }
 
     #[test]
+    fn menu_invoke_cannot_edit_document_behind_an_open_dialog() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+
+        let opened = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "image.imageSize"}));
+        assert_eq!(opened["ok"], true, "{opened}");
+        let dialog = opened["result"]["dialog"].as_u64().unwrap();
+        let revision = app.session.active().unwrap().revision;
+        let before = call(&mut app, &ctx, "ui.inspect", json!({}));
+        let fields = before["result"]["dialogs"][0]["fields"].clone();
+
+        for params in [json!({"id": "image.imageRotation.90cw"}), json!({"id": "image.imageRotation.90cw", "params": {}})] {
+            let blocked = call(&mut app, &ctx, "ui.menu.invoke", params);
+            assert_eq!(blocked["ok"], false, "{blocked}");
+            assert_eq!(app.session.active().unwrap().revision, revision);
+            let snapshot = call(&mut app, &ctx, "ui.inspect", json!({}));
+            assert_eq!(snapshot["result"]["dialogs"][0]["id"], dialog);
+            assert_eq!(snapshot["result"]["dialogs"][0]["fields"], fields);
+        }
+
+        // View navigation stays permitted by the same policy as native menus and shortcuts.
+        assert!(crate::menus::modal_allows(&app, "view.zoomIn"));
+        assert!(!crate::menus::modal_allows(&app, "image.imageRotation.90cw"));
+
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
+        let rotated = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "image.imageRotation.90cw"}));
+        assert_eq!(rotated["ok"], true, "{rotated}");
+        assert!(app.session.active().unwrap().revision > revision);
+    }
+
+    #[test]
     fn ui_set_rejects_unknown_fields_before_changing_anything() {
         use crate::theme::ThemeKind;
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1005,6 +1046,40 @@ mod tests {
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]), "a bad value leaves the picker alone");
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         assert_eq!(app.ui.brush_picker, None);
+    }
+
+    #[test]
+    fn ui_inspect_tracks_brush_picker_open_and_closed() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 128, "height": 128})).unwrap();
+
+        let closed = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert!(closed["result"]["brushPicker"].is_null());
+
+        // A right-click on the canvas with Brush opens the same picker as the options bar.
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "brush"}))["ok"], true);
+        let click = call(
+            &mut app,
+            &ctx,
+            "ui.pointer",
+            json!({
+                "button": "right",
+                "events": [{"kind": "down", "x": 64, "y": 64}, {"kind": "up", "x": 64, "y": 64}]
+            }),
+        );
+        assert_eq!(click["ok"], true, "{click}");
+        let open = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
+        assert_eq!(open["result"]["brushPicker"]["list"]["view"], "grid");
+
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerView": "list"}))["ok"], true);
+        let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert_eq!(changed["result"]["brushPicker"]["list"]["view"], "list");
+
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
+        let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert!(closed_again["result"]["brushPicker"].is_null());
     }
 
     #[test]

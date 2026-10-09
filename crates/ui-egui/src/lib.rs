@@ -889,6 +889,9 @@ impl PhotocraftApp {
     /// continues on a later frame, see `file_dialog`). Returns `{"path", "warnings"}` (the export
     /// warnings are also shown to the user).
     pub fn save_as(&mut self, path: Option<String>) -> Result<Value, String> {
+        if self.tiff_options.is_some() {
+            return Err("Answer TIFF Options before starting another save".into());
+        }
         // Edit Contents documents save back into their smart object.
         if path.is_none() && self.session.is_enabled("layer.smartObjects.saveContents") {
             self.run("layer.smartObjects.saveContents", serde_json::json!({}))?;
@@ -919,28 +922,30 @@ impl PhotocraftApp {
         // A layered TIFF asks about its layers first (Preferences › File Handling); the save
         // continues from the prompt.
         if tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone());
+            tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        let (path, warnings) = self.write_document(path, &ExportSettings::default())?;
+        let (path, warnings) = self.write_document(path, &ExportSettings::default(), false)?;
         Ok(serde_json::json!({"path": path, "warnings": warnings}))
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
-    /// document's path. Returns the path and the export warnings (also shown to the user).
-    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings) -> Result<(String, Vec<String>), String> {
+    /// document's path unless saving a copy. A copy leaves the original's path and unsaved
+    /// changes intact. Returns the path and the export warnings (also shown to the user).
+    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<(String, Vec<String>), String> {
         let st = self.session.active().ok_or("no document")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
-        if let Some(st) = self.session.active_mut() {
+        if !copy && let Some(st) = self.session.active_mut() {
             st.path = Some(path.clone());
             st.saved_revision = st.revision;
         }
         self.ui.status = format!("Saved {path}");
         // "Save Document" script events and File › Generate › Image Assets.
-        if let Some(i) = self.session.active_index()
+        if !copy
+            && let Some(i) = self.session.active_index()
             && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut self.session, i)
         {
             self.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
