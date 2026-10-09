@@ -564,13 +564,29 @@ pub fn commit(app: &mut PhotocraftApp) {
 /// never stays on a layer that is no longer the active one (#1400). Checked every frame and before
 /// each pointer event, so a press with a tool chosen just before it (`ui.pointer`'s `tool`) goes to
 /// that tool.
+
 pub fn end_if_left(app: &mut PhotocraftApp) {
     let Some(t) = &app.ui.transform else { return };
     let Some(st) = app.session.active() else { return cancel(app) };
-    if app.transform_preview.as_ref().is_some_and(|pv| pv.doc.id != st.doc.id) || st.doc.layer(LayerId(t.layer)).is_none() {
+
+    let layer = LayerId(t.layer);
+    let made = t.made;
+    let selection = t.selection;
+    let preview_doc_id = app.transform_preview.as_ref().map(|pv| pv.doc.id);
+    let switched_document = preview_doc_id.is_some_and(|id| id != st.doc.id);
+
+    let editing_placed_smart_object = switched_document
+        && made == Some(MadeLayer::Place)
+        && preview_doc_id
+            .is_some_and(|parent_id| app.session.smart_links.iter().any(|link| link.parent == parent_id && link.child == st.doc.id && link.layer == layer));
+
+    if editing_placed_smart_object {
+        app.ui.transform = None;
+        app.transform_preview = None;
+    } else if switched_document || st.doc.layer(layer).is_none() {
         cancel(app);
     } else if app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool)
-        || (!t.selection && st.active_layer.is_some_and(|active| active.0 != t.layer))
+        || (!selection && st.active_layer.is_some_and(|active| active.0 != layer.0))
     {
         commit(app);
     }
@@ -1725,6 +1741,34 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run_steps(2);
         h.state().ui.transform.clone().unwrap()
+    }
+
+    #[test]
+    fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.sync_views();
+
+        app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();
+        app.sync_views();
+
+        let parent_id = app.session.active().unwrap().doc.id;
+        let placed_layer = app.session.active().unwrap().active_layer.unwrap();
+
+        begin_placed(&mut app, &egui::Context::default()).unwrap();
+
+        app.session.execute("layer.smartObjects.editContents", json!({})).unwrap();
+
+        assert_ne!(app.session.active().unwrap().doc.id, parent_id, "Edit Contents should activate the child document");
+
+        end_if_left(&mut app);
+
+        let parent = app.session.documents().iter().find(|st| st.doc.id == parent_id);
+
+        assert!(parent.is_some_and(|st| st.doc.layer(placed_layer).is_some()), "the placed Smart Object must remain in the parent document");
+        assert!(app.ui.transform.is_none(), "the transform session should end");
+        assert!(app.transform_preview.is_none(), "the transform preview should end");
     }
 
     /// Large documents need scales past 10000% and positions past 30000 px (#1267).
