@@ -1,0 +1,213 @@
+--- a/winit-0.30.13/src/platform_impl/android/mod.rs
++++ b/winit-0.30.13/src/platform_impl/android/mod.rs
+@@ -26,6 +26,7 @@
+ };
+ 
+ mod keycodes;
++mod palm_rejection;
+ 
+ pub(crate) use crate::cursor::{
+     NoCustomCursor as PlatformCustomCursor, NoCustomCursor as PlatformCustomCursorSource,
+@@ -143,6 +144,8 @@
+     cause: StartCause,
+     ignore_volume_keys: bool,
+     combining_accent: Option<char>,
++    palm_rejection: palm_rejection::PalmRejection,
++    input_clock: Instant,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq)]
+@@ -168,6 +171,7 @@
+              Android",
+         );
+         let redraw_flag = SharedFlag::new();
++        tracing::info!(target: "photocraft.palm", "automatic palm rejection enabled; touch resume delay 250 ms");
+ 
+         Ok(Self {
+             android_app: android_app.clone(),
+@@ -192,6 +196,8 @@
+             cause: StartCause::Init,
+             ignore_volume_keys: attributes.ignore_volume_keys,
+             combining_accent: None,
++            palm_rejection: Default::default(),
++            input_clock: Instant::now(),
+         })
+     }
+ 
+@@ -209,6 +215,12 @@
+ 
+         if let Some(event) = main_event {
+             trace!("Handling main event {:?}", event);
++            if matches!(&event, MainEvent::LostFocus | MainEvent::Pause | MainEvent::Stop
++                | MainEvent::TerminateWindow { .. } | MainEvent::Destroy)
++            {
++                let cancelled = self.palm_rejection.reset();
++                self.dispatch_filtered_input(cancelled, callback);
++            }
+ 
+             match event {
+                 MainEvent::InitWindow { .. } => {
+@@ -362,6 +374,30 @@
+         self.pending_redraw = pending_redraw;
+     }
+ 
++    fn dispatch_filtered_input<F>(&self, events: Vec<palm_rejection::Output>, callback: &mut F)
++    where
++        F: FnMut(event::Event<T>, &RootAEL),
++    {
++        for sample in events {
++            let phase = match sample.phase {
++                palm_rejection::Phase::Started => event::TouchPhase::Started,
++                palm_rejection::Phase::Moved => event::TouchPhase::Moved,
++                palm_rejection::Phase::Ended => event::TouchPhase::Ended,
++                palm_rejection::Phase::Cancelled => event::TouchPhase::Cancelled,
++            };
++            callback(event::Event::WindowEvent {
++                window_id: window::WindowId(WindowId),
++                event: event::WindowEvent::Touch(event::Touch {
++                    device_id: event::DeviceId(DeviceId(sample.contact.device)),
++                    phase,
++                    location: PhysicalPosition { x: sample.contact.position[0], y: sample.contact.position[1] },
++                    id: sample.id,
++                    force: Some(Force::Normalized(sample.contact.pressure)),
++                }),
++            }, self.window_target());
++        }
++    }
++
+     fn handle_input_event<F>(
+         &mut self,
+         android_app: &AndroidApp,
+@@ -374,53 +410,46 @@
+         let mut input_status = InputStatus::Handled;
+         match event {
+             InputEvent::MotionEvent(motion_event) => {
+-                let window_id = window::WindowId(WindowId);
+-                let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
+-
+-                let phase = match motion_event.action() {
+-                    MotionAction::Down | MotionAction::PointerDown => {
+-                        Some(event::TouchPhase::Started)
++                use android_activity::input::ToolType;
++                use palm_rejection::{Action, Contact, Tool};
++                // Android AMOTION_EVENT_FLAG_CANCELED: a PointerUp can cancel one pointer
++                // without ending the other contacts in this event (API 33 and later).
++                const FLAG_CANCELED: u32 = 0x20;
++                let action = match motion_event.action() {
++                    MotionAction::Down | MotionAction::PointerDown => Action::Down(motion_event.pointer_index()),
++                    MotionAction::Up | MotionAction::PointerUp => {
++                        if motion_event.flags().0 & FLAG_CANCELED != 0 {
++                            Action::CancelPointer(motion_event.pointer_index())
++                        } else {
++                            Action::Up(motion_event.pointer_index())
++                        }
+                     },
+-                    MotionAction::Up | MotionAction::PointerUp => Some(event::TouchPhase::Ended),
+-                    MotionAction::Move => Some(event::TouchPhase::Moved),
+-                    MotionAction::Cancel => Some(event::TouchPhase::Cancelled),
+-                    _ => {
+-                        None // TODO mouse events
++                    MotionAction::Move => Action::Move,
++                    MotionAction::HoverEnter | MotionAction::HoverMove => Action::Hover,
++                    MotionAction::HoverExit => Action::HoverExit,
++                    MotionAction::Cancel => Action::Cancel,
++                    _ => return InputStatus::Handled,
++                };
++                let contacts: Vec<_> = motion_event.pointers().map(|pointer| Contact {
++                    device: motion_event.device_id(),
++                    pointer: pointer.pointer_id(),
++                    tool: match pointer.tool_type() {
++                        ToolType::Stylus | ToolType::Eraser => Tool::Pen,
++                        ToolType::Finger => Tool::Finger,
++                        ToolType::Palm => Tool::Palm,
++                        ToolType::Mouse => Tool::Mouse,
++                        _ => Tool::Unknown,
+                     },
+-                };
+-                if let Some(phase) = phase {
+-                    let pointers: Box<dyn Iterator<Item = android_activity::input::Pointer<'_>>> =
+-                        match phase {
+-                            event::TouchPhase::Started | event::TouchPhase::Ended => {
+-                                Box::new(std::iter::once(
+-                                    motion_event.pointer_at_index(motion_event.pointer_index()),
+-                                ))
+-                            },
+-                            event::TouchPhase::Moved | event::TouchPhase::Cancelled => {
+-                                Box::new(motion_event.pointers())
+-                            },
+-                        };
+-
+-                    for pointer in pointers {
+-                        let location =
+-                            PhysicalPosition { x: pointer.x() as _, y: pointer.y() as _ };
+-                        trace!(
+-                            "Input event {device_id:?}, {phase:?}, loc={location:?}, \
+-                             pointer={pointer:?}"
+-                        );
+-                        let event = event::Event::WindowEvent {
+-                            window_id,
+-                            event: event::WindowEvent::Touch(event::Touch {
+-                                device_id,
+-                                phase,
+-                                location,
+-                                id: pointer.pointer_id() as u64,
+-                                force: Some(Force::Normalized(pointer.pressure() as f64)),
+-                            }),
+-                        };
+-                        callback(event, self.window_target());
+-                    }
++                    position: [pointer.x() as f64, pointer.y() as f64],
++                    pressure: pointer.pressure() as f64,
++                }).collect();
++                let before = self.palm_rejection.status();
++                let events = self.palm_rejection.motion(self.input_clock.elapsed(), motion_event.device_id(), action, &contacts);
++                let after = self.palm_rejection.status();
++                if before != after {
++                    tracing::info!(target: "photocraft.palm", pen_near = after.0, blocked_contacts = after.1, "palm rejection state");
+                 }
++                self.dispatch_filtered_input(events, callback);
+             },
+             InputEvent::KeyEvent(key) => {
+                 match key.key_code() {
+--- a/egui-0.36.2/src/data/input/event.rs
++++ b/egui-0.36.2/src/data/input/event.rs
+@@ -103,6 +103,10 @@
+     /// On touch-up first send `PointerButton{pressed: false, …}` followed by `PointerLeft`.
+     PointerGone,
+ 
++    /// Cancel a held pointer button without generating a click. Android palm rejection
++    /// uses this when a previously accepted finger must stop before the pen takes over.
++    PointerCancelled(PointerButton),
++
+     /// Zoom scale factor this frame (e.g. from a pinch gesture).
+     ///
+     /// * `zoom = 1`: no change.
+--- a/egui-0.36.2/src/input_state/mod.rs
++++ b/egui-0.36.2/src/input_state/mod.rs
+@@ -1200,6 +1200,16 @@
+ 
+                     self.down[button as usize] = pressed; // must be done after the above call to `could_any_button_be_click`
+                 }
++                Event::PointerCancelled(button) => {
++                    if self.down[*button as usize] {
++                        self.pointer_events.push(PointerEvent::Released { click: None, button: *button });
++                    }
++                    self.down[*button as usize] = false;
++                    self.press_origin = None;
++                    self.press_start_time = None;
++                    self.has_moved_too_much_for_a_click = true;
++                    clear_history_after_velocity_calculation = true;
++                }
+                 Event::PointerGone => {
+                     self.latest_pos = None;
+                     // When dragging a slider and the mouse leaves the viewport, we still want the drag to work,
+--- a/egui-winit-0.36.2/src/lib.rs
++++ b/egui-winit-0.36.2/src/lib.rs
+@@ -927,6 +927,7 @@
+                     self.egui_input.events.push(egui::Event::PointerGone);
+                 }
+                 winit::event::TouchPhase::Cancelled => {
++                    self.egui_input.events.push(egui::Event::PointerCancelled(egui::PointerButton::Primary));
+                     self.pointer_touch_id = None;
+                     self.pointer_pos_in_points = None;
+                     self.egui_input.events.push(egui::Event::PointerGone);

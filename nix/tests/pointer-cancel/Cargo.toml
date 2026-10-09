@@ -1,0 +1,11 @@
+[package]
+name = "photocraft-pointer-cancel-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# This small test package is copied into the Nix build and uses the patched vendor tree.
+[workspace]
+
+[dependencies]
+egui = "=0.36.2"

@@ -1,0 +1,2 @@
+# Unified diffs contain single-space context lines; those are not source whitespace errors.
+nix/patches/*.patch -whitespace

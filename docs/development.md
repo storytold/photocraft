@@ -4,6 +4,7 @@
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
 - macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
+- Or, with Nix: `nix develop` provides all of the above plus debuggers and profilers (see [Nix](#nix)).
 
 ## Build and run
 
@@ -37,6 +38,46 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 - **Type tool:** the text engine registers them in `FontDb::new` (so also with no system fonts) and puts them first in the Japanese slot of the locale-ordered fallback list: BIZ UDPGothic for sans runs, Shippori Mincho / BIZ UDMincho for serif runs.
 - **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. The web build therefore has no Japanese font yet (loading craft-fonts next to the wasm at run time would be the way to add one).
 - Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's Linux job runs the tests a second time with `CRAFT_FONTS_DIR` set. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
+
+## Nix
+
+`flake.nix` builds a release and provides a development shell. The package is in `nix/package.nix`, written in nixpkgs style (`callPackage`, `lib.fileset`, `versionCheckHook`); the shell is in `nix/devshell.nix`.
+
+```sh
+nix run .                                   # the desktop app (release build)
+nix run .#photocraft-cli -- info image.psd  # the headless CLI
+nix build                                   # ./result/bin/{photocraft,photocraft-cli}
+nix profile add .                           # install into your profile (older Nix: nix profile install)
+nix build .#photocraft-debug                # dev profile: debug assertions, full debug info, unstripped
+nix develop                                 # the development shell
+nix flake check                             # builds the package (with tests) and the shell; checks pins and formatting
+nix fmt                                     # formats the Nix files (nixfmt)
+```
+
+On NixOS, add the flake as an input and use `inputs.photocraft.packages.${system}.default`, or `overlays.default`, which adds `pkgs.photocraft`.
+
+**The package is a release build.** It is built like `packaging/linux/package.sh`: `--release`, craft-fonts embedded at the commit pinned in `.github/workflows/release.yml` (the `craft-fonts` flake input; `nix flake check` fails if the two differ), the commit and its date baked in for `--version` and About, and the desktop file, MIME type, AppStream metainfo, hicolor icons and licences installed, validated with `desktop-file-validate` and `appstreamcli validate`. The tests of `photocraft` and `photocraft-cli` run during the build; the whole workspace's tests run in CI. On macOS it also builds an unsigned `Applications/PhotoCraft.app`.
+
+**Runtime libraries.** winit and wgpu `dlopen` the windowing and GPU libraries, so the package adds them to the binary's RUNPATH and sets `PHOTOCRAFT_SKIP_LIB_CHECK=1` (the start-up check reads the host's linker cache, which says nothing about the Nix closure). The GPU driver comes from the system: NixOS provides it through `hardware.graphics.enable` (`/run/opengl-driver`). Elsewhere the Nix build may not find the host's driver and stops with `FailedToCreateSurfaceForAnyBackend`; run it through [nixGL](https://github.com/nix-community/nixGL).
+
+**The development shell** has the toolchain the package builds with (rustc's `wasm32-unknown-unknown` std included, so `cargo xtask wasm` and `trunk` work without rustup), `clippy`, `rustfmt`, `rust-analyzer` and:
+
+| Purpose | Tools |
+|---|---|
+| Debugging | `gdb`, `lldb`, `rr` (record and replay), `cargo-expand` |
+| Profiling | `samply`, `perf`, `cargo flamegraph`, `heaptrack`, `valgrind`, `cargo-bloat` |
+| System calls | `strace`, `ltrace` |
+| GPU and windowing | `renderdoc` (`qrenderdoc`), `vulkaninfo`, the Vulkan validation layers, `eglinfo`/`glxinfo`, `wayland-info`, `xdpyinfo`, `xvfb-run` |
+| Web build | `trunk`, `wasm-opt` (trunk fetches the `wasm-bindgen` matching `Cargo.lock`) |
+| Driving and packaging | `nc` and `jq` for the control channel, `curl` and `git` for `cargo xtask corpus`, `shellcheck`, `desktop-file-validate`, `appstreamcli` |
+
+Linux-only tools are left out on macOS. The shell sets `LD_LIBRARY_PATH` to the runtime libraries so `cargo run` opens a window, `RUST_SRC_PATH` for rust-analyzer, `RUST_BACKTRACE=1`, and `VK_ADD_LAYER_PATH` so wgpu's validation (on in debug builds) finds `VK_LAYER_KHRONOS_validation`. `CRAFT_FONTS_DIR` defaults to the pinned craft-fonts, as in CI; set it to empty (`export CRAFT_FONTS_DIR=`) to build without it.
+
+To move to a newer nixpkgs, run `nix flake update nixpkgs`. To bump craft-fonts, change its commit in `flake.nix` together with `release.yml` and `ci.yml`, then run `nix flake update craft-fonts`.
+
+## Android build experiment
+
+`nix build .#photocraft-android` builds an unsigned ARM64 NativeActivity APK on x86_64 Linux. `nix run .#photocraft-android-sign -- photocraft-test.apk` signs it outside the Nix store. This is not a supported mobile release. See [Android build](android.md) for installation, the proposed entry-point exception, and limitations including the missing file picker, accessibility, and lifecycle recovery.
 
 ## Graphics startup and device loss
 
