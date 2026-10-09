@@ -2288,3 +2288,9 @@ fontWeight	Italic	斜體
 	Create Ellipse	建立橢圓
 	Create Triangle	建立三角形
 	Create Polygon	建立多邊形
+	Some brush presets could not be loaded	部分筆刷預設集無法載入
+	Retry saving presets	重試儲存預設集
+	Brush preset changes are not saved: {error}	筆刷預設集的變更尚未儲存：{error}
+	Keep this tab open to retain your brushes.	請保持此分頁開啟以保留您的筆刷。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	瀏覽器儲存空間無法使用；筆刷僅在本次工作階段有效。請保持此分頁開啟以保留它們。
+	Saving brush presets… Keep this tab open until saving finishes.	正在儲存筆刷預設集… 請保持此分頁開啟，直到儲存完成。

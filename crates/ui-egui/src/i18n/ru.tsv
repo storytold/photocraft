@@ -2585,3 +2585,9 @@ fontWeight	Italic	Курсив
 	Create Ellipse	Создать эллипс
 	Create Triangle	Создать треугольник
 	Create Polygon	Создать многоугольник
+	Some brush presets could not be loaded	Не удалось загрузить некоторые наборы кистей
+	Retry saving presets	Повторить сохранение наборов
+	Brush preset changes are not saved: {error}	Изменения наборов кистей не сохранены: {error}
+	Keep this tab open to retain your brushes.	Не закрывайте эту вкладку, чтобы сохранить кисти.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Хранилище браузера недоступно; кисти действуют только в этом сеансе. Не закрывайте эту вкладку, чтобы сохранить их.
+	Saving brush presets… Keep this tab open until saving finishes.	Сохранение наборов кистей… Не закрывайте эту вкладку, пока сохранение не завершится.

@@ -2380,3 +2380,9 @@ fontWeight	Italic	Corsivo
 	Create Ellipse	Crea ellisse
 	Create Triangle	Crea triangolo
 	Create Polygon	Crea poligono
+	Some brush presets could not be loaded	Impossibile caricare alcuni predefiniti pennello
+	Retry saving presets	Riprova a salvare i predefiniti
+	Brush preset changes are not saved: {error}	Le modifiche ai predefiniti pennello non sono salvate: {error}
+	Keep this tab open to retain your brushes.	Tieni aperta questa scheda per conservare i tuoi pennelli.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	L'archiviazione del browser non è disponibile; i pennelli valgono solo per questa sessione. Tieni aperta questa scheda per conservarli.
+	Saving brush presets… Keep this tab open until saving finishes.	Salvataggio dei predefiniti pennello… Tieni aperta questa scheda finché il salvataggio non è completato.

@@ -3420,3 +3420,9 @@ cameraRaw	Masking	Маскування
 	Create Ellipse	Створити еліпс
 	Create Triangle	Створити трикутник
 	Create Polygon	Створити багатокутник
+	Some brush presets could not be loaded	Не вдалося завантажити деякі набори пензлів
+	Retry saving presets	Повторити збереження наборів
+	Brush preset changes are not saved: {error}	Зміни наборів пензлів не збережено: {error}
+	Keep this tab open to retain your brushes.	Не закривайте цю вкладку, щоб зберегти пензлі.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Сховище браузера недоступне; пензлі діють лише в цьому сеансі. Не закривайте цю вкладку, щоб зберегти їх.
+	Saving brush presets… Keep this tab open until saving finishes.	Збереження наборів пензлів… Не закривайте цю вкладку, доки збереження не завершиться.

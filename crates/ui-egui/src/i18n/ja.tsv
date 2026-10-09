@@ -3335,3 +3335,9 @@ fontWeight	Italic	斜体
 	Create Ellipse	楕円を作成
 	Create Triangle	三角形を作成
 	Create Polygon	多角形を作成
+	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
+	Retry saving presets	プリセットの保存を再試行
+	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}
+	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
+	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。

@@ -2349,3 +2349,9 @@ fontWeight	Italic	Kursiv
 	Create Ellipse	Ellipse erstellen
 	Create Triangle	Dreieck erstellen
 	Create Polygon	Polygon erstellen
+	Some brush presets could not be loaded	Einige Pinselvorgaben konnten nicht geladen werden
+	Retry saving presets	Speichern der Vorgaben erneut versuchen
+	Brush preset changes are not saved: {error}	Änderungen an Pinselvorgaben sind nicht gespeichert: {error}
+	Keep this tab open to retain your brushes.	Lass diesen Tab geöffnet, um deine Pinsel zu behalten.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Der Browserspeicher ist nicht verfügbar; Pinsel gelten nur für diese Sitzung. Lass diesen Tab geöffnet, um sie zu behalten.
+	Saving brush presets… Keep this tab open until saving finishes.	Pinselvorgaben werden gespeichert… Lass diesen Tab geöffnet, bis das Speichern abgeschlossen ist.

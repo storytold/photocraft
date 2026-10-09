@@ -2732,3 +2732,9 @@ fontWeight	Italic	Italique
 	Create Ellipse	Créer une ellipse
 	Create Triangle	Créer un triangle
 	Create Polygon	Créer un polygone
+	Some brush presets could not be loaded	Certains paramètres prédéfinis de forme n'ont pas pu être chargés
+	Retry saving presets	Réessayer d'enregistrer les paramètres prédéfinis
+	Brush preset changes are not saved: {error}	Les modifications des paramètres prédéfinis de forme ne sont pas enregistrées : {error}
+	Keep this tab open to retain your brushes.	Gardez cet onglet ouvert pour conserver vos formes.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Le stockage du navigateur n'est pas disponible ; les formes ne durent que le temps de la session. Gardez cet onglet ouvert pour les conserver.
+	Saving brush presets… Keep this tab open until saving finishes.	Enregistrement des paramètres prédéfinis de forme… Gardez cet onglet ouvert jusqu'à la fin de l'enregistrement.

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
+use photocraft_ui_egui::i18n;
 use photocraft_ui_egui::served_fonts;
 use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
@@ -83,7 +84,7 @@ pub fn start() {
                     preset_warnings.extend(warnings);
                     let mut app = PhotocraftApp::new(session, services(inbox.clone()));
                     if !preset_warnings.is_empty() {
-                        photocraft_ui_egui::notices::post(&mut app, "Some brush presets could not be loaded", preset_warnings, true, None);
+                        photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
@@ -293,19 +294,19 @@ impl eframe::App for WebShell {
                     let tokens = photocraft_ui_egui::theme::Tokens::for_kind(self.app.ui.theme);
                     // Put retry first so floating brush windows cannot cover the control.
                     ui.horizontal_wrapped(|ui| {
-                        if self.database.is_some() && ui.button("Retry saving presets").clicked() {
+                        if self.database.is_some() && ui.button(i18n::t("Retry saving presets")).clicked() {
                             self.presets.retry();
                             ui.ctx().request_repaint();
                         }
-                        ui.colored_label(tokens.warning, format!("Brush preset changes are not saved: {error}"));
+                        ui.colored_label(tokens.warning, i18n::fmt(i18n::t("Brush preset changes are not saved: {error}"), &[("error", &error)]));
                     });
                     ui.label(if self.database.is_some() {
-                        "Keep this tab open to retain your brushes."
+                        i18n::t("Keep this tab open to retain your brushes.")
                     } else {
-                        "Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them."
+                        i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
                     });
                 } else {
-                    ui.label("Saving brush presets… Keep this tab open until saving finishes.");
+                    ui.label(i18n::t("Saving brush presets… Keep this tab open until saving finishes."));
                 }
             });
         }

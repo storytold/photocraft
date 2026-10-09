@@ -3495,3 +3495,9 @@ cameraRaw	Whites	Witten
 	Create Ellipse	Ellips maken
 	Create Triangle	Driehoek maken
 	Create Polygon	Veelhoek maken
+	Some brush presets could not be loaded	Sommige penseelvoorinstellingen konden niet worden geladen
+	Retry saving presets	Opslaan van voorinstellingen opnieuw proberen
+	Brush preset changes are not saved: {error}	Wijzigingen in penseelvoorinstellingen zijn niet opgeslagen: {error}
+	Keep this tab open to retain your brushes.	Houd dit tabblad open om je penselen te behouden.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Browseropslag is niet beschikbaar; penselen gelden alleen voor deze sessie. Houd dit tabblad open om ze te behouden.
+	Saving brush presets… Keep this tab open until saving finishes.	Penseelvoorinstellingen opslaan… Houd dit tabblad open tot het opslaan klaar is.
