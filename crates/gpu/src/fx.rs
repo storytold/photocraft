@@ -76,10 +76,15 @@ pub(crate) struct MapProgram {
 }
 
 /// How far a field value depends on the shape, for a field exact up to `reach`.
-pub(crate) fn field_radius(_kind: FieldKind, reach: i32) -> i32 {
+pub(crate) fn field_radius(kind: FieldKind, reach: i32) -> i32 {
     // The nearest seed lies within the reach (seeds may start up to 1 px in, at their sub-pixel
     // edge); stroke fields classify seeds by their 3×3 local coverage, one more pixel.
-    reach + 3
+    match kind {
+        // A bevel field also looks at the edge pixels around the foot of the perpendicular
+        // (a few pixels further), and each of those reads its own 5×5 neighbourhood.
+        FieldKind::BevelInside | FieldKind::BevelOutside => reach + 9,
+        _ => reach + 3,
+    }
 }
 
 impl MapProgram {
@@ -352,8 +357,8 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             let mut h = if bv.technique == BevelTechnique::Smooth {
                 b.conv(In::Shape, photocraft_compose::effects::tent_kernel(g.width))
             } else {
-                let din = b.field(FieldKind::Inside, size);
-                let dout = b.field(FieldKind::Outside, size);
+                let din = b.field(FieldKind::BevelInside, size);
+                let dout = b.field(FieldKind::BevelOutside, size);
                 let h = b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), size, 0.0, 0.0], 0));
                 if g.chisel_soft > 0.0 { b.conv(h, photocraft_compose::effects::tent_kernel(g.chisel_soft)) } else { h }
             };
@@ -492,7 +497,7 @@ pub(crate) fn field(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, ou
     let halo = field_radius(kind, reach) + 1;
     let parts = par_map(bands(out, BAND.max(halo)), |band| {
         let win = band.inflate(halo).intersect(&region);
-        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize);
+        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize, reach as f32);
         crop(&f, win, band)
     });
     parts.concat()
@@ -689,11 +694,18 @@ mod tests {
                 shape[y * w + x] = (90.0 - r).clamp(0.0, 1.0) * if (x / 13 + y / 17) % 5 == 0 { 0.6 } else { 1.0 };
             }
         }
-        for kind in
-            [FieldKind::Outside, FieldKind::Inside, FieldKind::ChokeInside, FieldKind::StrokeOutside, FieldKind::StrokeInside, FieldKind::StrokeOutsideVector]
-        {
+        for kind in [
+            FieldKind::Outside,
+            FieldKind::Inside,
+            FieldKind::BevelOutside,
+            FieldKind::BevelInside,
+            FieldKind::ChokeInside,
+            FieldKind::StrokeOutside,
+            FieldKind::StrokeInside,
+            FieldKind::StrokeOutsideVector,
+        ] {
             let reach = 9;
-            let whole = photocraft_compose::effects::distance_field(kind, shape.clone(), w, h);
+            let whole = photocraft_compose::effects::distance_field(kind, shape.clone(), w, h, reach as f32);
             let banded = field(kind, reach, &shape, region, region);
             let part = Rect::new(40, 30, 170, 120);
             let partial = field(kind, reach, &shape, region, part);
