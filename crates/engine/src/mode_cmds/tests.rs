@@ -211,6 +211,13 @@ fn bitmap_methods_need_grayscale() {
         s.execute("edit.undo", json!({})).unwrap();
     }
     assert!(s.execute("image.mode.bitmap", json!({"method": "nope"})).is_err());
+    // An unlisted halftone shape is a bad-params error, not a silent Round (#507).
+    assert!(s.execute("image.mode.bitmap", json!({"method": "halftone", "shape": "hexagon"})).is_err());
+    assert_eq!(doc(&s).mode, ColorMode::Grayscale);
+    for shape in ["round", "ellipse", "line", "square", "diamond", "cross"] {
+        s.execute("image.mode.bitmap", json!({"method": "halftone", "shape": shape})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+    }
 }
 
 #[test]

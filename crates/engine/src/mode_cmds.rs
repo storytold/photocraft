@@ -346,7 +346,8 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
         "diffusion" => BitmapMethod::Diffusion,
         "halftone" => {
             let freq = num(p, "frequency", 53.0).clamp(1.0, 999.0);
-            BitmapMethod::Halftone { cell: (dpi / freq).max(2.0), angle: num(p, "angle", 45.0), shape: HalftoneShape::from_id(str_or(p, "shape", "round")) }
+            let shape = HalftoneShape::from_id(str_or(p, "shape", "round")).ok_or_else(|| bad(CMD, "shape: round|ellipse|line|square|diamond|cross"))?;
+            BitmapMethod::Halftone { cell: (dpi / freq).max(2.0), angle: num(p, "angle", 45.0), shape }
         }
         m => {
             return Err(bad(CMD, format!("method `{m}` (threshold|pattern|diffusion|halftone)")));

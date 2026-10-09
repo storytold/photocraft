@@ -483,15 +483,16 @@ pub enum HalftoneShape {
 }
 
 impl HalftoneShape {
-    pub fn from_id(s: &str) -> Self {
-        match s {
+    pub fn from_id(s: &str) -> Option<Self> {
+        Some(match s {
+            "round" => HalftoneShape::Round,
             "ellipse" => HalftoneShape::Ellipse,
             "line" => HalftoneShape::Line,
             "square" => HalftoneShape::Square,
             "diamond" => HalftoneShape::Diamond,
             "cross" => HalftoneShape::Cross,
-            _ => HalftoneShape::Round,
-        }
+            _ => return None,
+        })
     }
 }
 
