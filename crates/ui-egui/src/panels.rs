@@ -24,7 +24,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eyedropper, Tool::Ruler, Tool::Note, Tool::Count],
     ],
     &[
-        &[Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
+        &[Tool::Remove, Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
         &[Tool::Brush, Tool::Pencil, Tool::MixerBrush],
         &[Tool::CloneStamp, Tool::PatternStamp],
         &[Tool::HistoryBrush],
@@ -3533,6 +3533,8 @@ mod type_flyout_tests {
         let j = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).find(|slot| slot.contains(&Tool::SpotHealing)).expect("J group");
         assert!(j.contains(&Tool::RedEye), "{j:?}");
         assert_eq!(j.last(), Some(&Tool::RedEye));
+        // Remove leads the flyout, so the slot shows it until another J tool is picked.
+        assert_eq!(j.first(), Some(&Tool::Remove));
     }
 
     #[test]

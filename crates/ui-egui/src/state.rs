@@ -87,8 +87,8 @@ pub enum Tool {
     Hand,
     RotateView,
     Zoom,
-    SpotHealing,
     Remove,
+    SpotHealing,
     Healing,
     Patch,
     ContentAwareMove,
@@ -144,8 +144,8 @@ impl Tool {
         Tool::Hand,
         Tool::RotateView,
         Tool::Zoom,
-        Tool::SpotHealing,
         Tool::Remove,
+        Tool::SpotHealing,
         Tool::Healing,
         Tool::Patch,
         Tool::ContentAwareMove,
@@ -203,8 +203,8 @@ impl Tool {
             Tool::Hand => "Hand Tool",
             Tool::RotateView => "Rotate View Tool",
             Tool::Zoom => "Zoom Tool",
-            Tool::SpotHealing => "Spot Healing Brush Tool",
             Tool::Remove => "Remove Tool",
+            Tool::SpotHealing => "Spot Healing Brush Tool",
             Tool::Healing => "Healing Brush Tool",
             Tool::Patch => "Patch Tool",
             Tool::ContentAwareMove => "Content-Aware Move Tool",
@@ -244,8 +244,8 @@ impl Tool {
                 | Tool::MixerBrush
                 | Tool::Eraser
                 | Tool::BackgroundEraser
-                | Tool::SpotHealing
                 | Tool::Remove
+                | Tool::SpotHealing
                 | Tool::Healing
                 | Tool::CloneStamp
                 | Tool::PatternStamp
@@ -274,7 +274,7 @@ impl Tool {
             Tool::Hand => 'H',
             Tool::RotateView => 'R',
             Tool::Zoom => 'Z',
-            Tool::SpotHealing | Tool::Remove | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
+            Tool::Remove | Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',

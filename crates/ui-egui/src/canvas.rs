@@ -533,8 +533,8 @@ pub(crate) fn freehand_tool(tool: Tool) -> bool {
             | Tool::Eraser
             | Tool::BackgroundEraser
             | Tool::HistoryBrush
-            | Tool::SpotHealing
             | Tool::Remove
+            | Tool::SpotHealing
             | Tool::Healing
             | Tool::CloneStamp
             | Tool::PatternStamp
