@@ -196,7 +196,8 @@ impl PhotocraftApp {
     /// File › Open as Deep: [`Self::open_dialog_file`]'s picker, keeping every chosen file's
     /// depth. Web dialogs hand over contents, which the deep importer has no bytes path for.
     pub(crate) fn open_dialog_file_deep(&mut self) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: true }, |app, answer| {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     for path in paths {
