@@ -315,6 +315,21 @@ fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
     app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
 }
 
+/// Edit › Free Transform Path (⌘T with Path Selection or Direct Selection): the path the
+/// box transforms (the one Path Selection edits) and `path.transform`'s params that name it.
+pub(crate) fn free_transform_path(app: &PhotocraftApp) -> Option<(Value, Path)> {
+    if !matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection) {
+        return None;
+    }
+    let (target, path) = target_path(app)?;
+    path.control_bounds()?;
+    let params = match target {
+        PathTarget::Shape(id) | PathTarget::VectorMask(id) => json!({"name": "layer", "layer": id}),
+        PathTarget::Work => json!({"name": "work"}),
+    };
+    Some((params, path))
+}
+
 pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
     if dx.abs() + dy.abs() < 0.5 {
@@ -408,7 +423,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
     };
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
-    let paths = app.ui.view.shows(app.ui.view.show.target_path);
+    // Free Transform Path draws the path through its box instead (transform_tool).
+    let paths = app.ui.view.shows(app.ui.view.show.target_path) && !app.ui.transform.as_ref().is_some_and(|t| t.path.is_some());
     if crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);

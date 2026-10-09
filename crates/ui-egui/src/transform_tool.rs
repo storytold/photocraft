@@ -66,6 +66,8 @@ pub struct TransformPreview {
     steps: Steps,
     /// The tool the session began with: picking another one applies the transform.
     tool: Tool,
+    /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
+    path: Option<photocraft_doc::vector::Path>,
 }
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
@@ -131,6 +133,9 @@ fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
+        return begin_path(app, ctx, params, path);
+    }
     let target = crate::canvas::paint_target(app);
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
@@ -179,6 +184,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         split_quick: false,
         steps: Steps::default(),
         tool: app.ui.tool,
+        path: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -190,6 +196,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         warp: None,
         selection: false,
         target: None,
+        path: None,
         made: None,
         mode: Default::default(),
     });
@@ -313,6 +320,7 @@ fn begin_lone(
         split_quick: false,
         steps: Steps::default(),
         tool: app.ui.tool,
+        path: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -324,11 +332,75 @@ fn begin_lone(
         warp: None,
         selection: false,
         target: Some(target),
+        path: None,
         made: None,
         mode: Default::default(),
     });
     start_steps(app);
     Ok(())
+}
+
+/// Edit › Free Transform Path: the box frames the path's anchors and handles and draws the
+/// path through it; OK commits one `path.transform` step.
+fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::Value, path: photocraft_doc::vector::Path) -> Result<(), String> {
+    let (x0, y0, x1, y1) = path.control_bounds().ok_or("the path has no points to transform")?;
+    let st = app.session.active().ok_or("no document")?;
+    let doc = st.doc.clone();
+    let layer = st.active_layer.or_else(|| doc.layers.first().map(|l| l.id)).ok_or("no layer")?;
+    crate::type_tool::commit(app);
+    // A straight horizontal or vertical path still gets a box to turn.
+    let rect = [x0, y0, x1.max(x0 + 1.0), y1.max(y0 + 1.0)];
+    let session = app.ui.alloc_id();
+    let texture =
+        crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]);
+    app.transform_preview = Some(TransformPreview {
+        session,
+        doc,
+        texture,
+        opacity: 1.0,
+        gesture: None,
+        warp_drag: None,
+        split_tool: None,
+        split_pointer: None,
+        split_placing: false,
+        split_quick: false,
+        steps: Steps::default(),
+        tool: app.ui.tool,
+        path: Some(path),
+    });
+    app.ui.transform = Some(TransformSession {
+        session,
+        layer: layer.0,
+        rect,
+        quad: corners(rect),
+        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+        interpolation: "bicubic".into(),
+        warp: None,
+        selection: false,
+        target: None,
+        path: Some(params),
+        made: None,
+        mode: Default::default(),
+    });
+    start_steps(app);
+    Ok(())
+}
+
+/// The affine map taking `rect`'s corners to `quad`'s; `None` when the box was distorted out of a
+/// parallelogram (Distort, Perspective), which an affine path transform can't follow.
+fn rect_to_quad_affine(r: [f64; 4], q: [[f64; 2]; 4]) -> Option<photocraft_geom::Affine> {
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let tol = 1e-3 * (1.0 + w.max(h));
+    if (q[0][0] + q[2][0] - q[1][0] - q[3][0]).abs() > tol || (q[0][1] + q[2][1] - q[1][1] - q[3][1]).abs() > tol {
+        return None;
+    }
+    let (a, b) = ((q[1][0] - q[0][0]) / w, (q[1][1] - q[0][1]) / w);
+    let (c, d) = ((q[3][0] - q[0][0]) / h, (q[3][1] - q[0][1]) / h);
+    let m = [a, b, c, d, q[0][0] - a * r[0] - c * r[1], q[0][1] - b * r[0] - d * r[1]];
+    m.iter().all(|v| v.is_finite()).then_some(photocraft_geom::Affine { m })
 }
 
 /// Start Select › Transform Selection: the same box over the selection's bounds, previewing the
@@ -372,6 +444,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         split_quick: false,
         steps: Steps::default(),
         tool: app.ui.tool,
+        path: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -383,6 +456,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         warp: None,
         selection: true,
         target: None,
+        path: None,
         made: None,
         mode: Default::default(),
     });
@@ -410,8 +484,8 @@ pub fn enter_warp(app: &mut PhotocraftApp) {
     let existing =
         app.session.active().and_then(|d| d.doc.layer(LayerId(app.ui.transform.as_ref()?.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
     let Some(t) = app.ui.transform.as_mut() else { return };
-    // Warp moves layers only: a lone mask or channel keeps the box.
-    if t.warp.is_some() || t.target.is_some() {
+    // Warp moves layers only: a lone mask, channel or path keeps the box.
+    if t.warp.is_some() || t.target.is_some() || t.path.is_some() {
         return;
     }
     if t.quad == corners(t.rect)
@@ -522,6 +596,21 @@ pub fn commit(app: &mut PhotocraftApp) {
             None => p["quad"] = json!(t.quad),
         }
         if let Err(e) = app.run("select.transformSelection", p) {
+            app.ui.status = e;
+        }
+        return;
+    }
+    if let Some(target) = t.path {
+        if t.warp.is_some() || t.quad == corners(t.rect) {
+            return;
+        }
+        let Some(a) = rect_to_quad_affine(t.rect, t.quad) else {
+            app.ui.status = "Distort and Perspective can't be applied to a path".into();
+            return;
+        };
+        let mut p = target;
+        p["matrix"] = json!(a.m);
+        if let Err(e) = app.run("path.transform", p) {
             app.ui.status = e;
         }
         return;
@@ -1210,6 +1299,17 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         painter.add(mesh);
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
+        crate::vector_ui::draw_outline(
+            painter,
+            path,
+            &|q| {
+                let (x, y) = h.apply(q[0], q[1]);
+                xf.to_screen(x as f32, y as f32)
+            },
+            accent,
+        );
+    }
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
     painter.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, accent)));
     let mids: Vec<Pos2> = (0..4).map(|i| pts[i].lerp(pts[(i + 1) % 4], 0.5)).collect();
@@ -1659,6 +1759,7 @@ mod tests {
             warp: None,
             selection: false,
             target: None,
+            path: None,
             made: None,
             mode: Default::default(),
         }
@@ -2621,5 +2722,45 @@ mod tests {
         begin(&mut app, &ctx).unwrap();
         assert_eq!(app.ui.transform.as_ref().unwrap().target, None);
         assert_eq!(app.ui.transform.as_ref().unwrap().rect, [8.0, 8.0, 24.0, 24.0]);
+    }
+
+    /// ⌘T with Path Selection and a path transforms the path, not the layer's pixels, as one
+    /// undoable step; it works on the Background too.
+    #[test]
+    fn free_transform_moves_the_selected_path_not_pixels() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.sync_views();
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 20], [10, 20]]}]}})).unwrap();
+        app.ui.tool = Tool::PathSelection;
+        assert!(crate::menus::is_enabled(&app, "edit.freeTransform"), "a path is transformable on the Background");
+        let pixels = app.session.active().unwrap().doc.layers[0].surface().cloned();
+        let steps = app.session.active().unwrap().history.past_len();
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        let t = app.ui.transform.as_mut().unwrap();
+        assert_eq!(t.rect, [10.0, 10.0, 30.0, 20.0], "the box frames the path");
+        assert_eq!(t.path, Some(json!({"name": "work"})));
+        // Twice as wide and 5 px down.
+        t.quad = [[10.0, 15.0], [50.0, 15.0], [50.0, 25.0], [10.0, 25.0]];
+        commit(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.history.past_len(), steps + 1, "one step");
+        let wp = st.doc.work_path.as_ref().unwrap();
+        let anchors: Vec<[f64; 2]> = wp.subpaths[0].knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
+        assert_eq!(anchors, vec![[10.0, 15.0], [50.0, 15.0], [50.0, 25.0], [10.0, 25.0]]);
+        assert_eq!(st.doc.layers[0].surface().cloned(), pixels, "the pixels stay put");
+
+        // A box pulled out of a parallelogram (Distort) can't be applied to a path: an error, no step.
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        app.ui.transform.as_mut().unwrap().quad[2] = [70.0, 40.0];
+        commit(&mut app);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        assert!(!app.ui.status.is_empty());
+
+        // Without a path tool, ⌘T is the pixel transform again.
+        app.ui.tool = Tool::Move;
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(crate::vector_ui::free_transform_path(&app).is_none());
     }
 }

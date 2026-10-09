@@ -122,6 +122,7 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
         warp: None,
         selection: false,
         target: None,
+        path: None,
         made: None,
         mode: Default::default(),
     })

@@ -677,6 +677,10 @@ pub struct TransformSession {
     /// the Quick Mask by itself (`None`: the layer, with its linked masks).
     #[serde(default)]
     pub target: Option<serde_json::Value>,
+    /// Free Transform Path: `path.transform`'s `name` (and `layer`) when the box moves a
+    /// path's anchors and handles instead of pixels.
+    #[serde(default)]
+    pub path: Option<serde_json::Value>,
     /// The layer was made for this session (⌥⌘T's copy, #352; a file dropped on the canvas), so
     /// Cancel takes it back and OK folds it into one history step with the transform.
     #[serde(default)]
