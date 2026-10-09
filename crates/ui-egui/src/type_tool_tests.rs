@@ -1124,3 +1124,21 @@ fn temporary_type_transform_large_document_preview() {
     );
     crate::type_transform::cancel_drag(&mut app);
 }
+
+/// A variable face lists every standard weight of its `wght` axis, not only its default instance
+/// (Montserrat from Google Fonts: its default instance is Thin).
+#[test]
+fn variable_faces_list_the_weights_of_their_axis() {
+    let face = |weight: f32, italic: bool, axes: Vec<(String, f32, f32, f32)>| photocraft_text::FaceInfo { family: "Montserrat".into(), weight, italic, axes };
+    let full = || vec![("wght".to_string(), 100.0, 100.0, 900.0)];
+    let names = super::style_names(&[face(100.0, false, full()), face(100.0, true, full())]);
+    assert_eq!(names.len(), 18, "{names:?}");
+    assert_eq!(names.first().map(String::as_str), Some("Thin"));
+    for s in ["Regular", "Italic", "Bold", "Bold Italic", "Black Italic"] {
+        assert!(names.iter().any(|n| n == s), "{s}: {names:?}");
+    }
+    // A narrower axis lists only its range; a static face only itself.
+    let names = super::style_names(&[face(300.0, false, vec![("wght".into(), 300.0, 400.0, 700.0)])]);
+    assert_eq!(names, ["Light", "Regular", "Medium", "SemiBold", "Bold"]);
+    assert_eq!(super::style_names(&[face(700.0, false, Vec::new())]), ["Bold"]);
+}

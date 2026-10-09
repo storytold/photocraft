@@ -699,22 +699,31 @@ fn weight_name(w: f32) -> &'static str {
 /// Style names ("Regular", "Bold Italic", …) available for a family.
 pub fn styles(family: &str) -> Vec<String> {
     let faces = photocraft_text::shared().lock().map(|mut e| e.fonts.faces(family)).unwrap_or_default();
-    let mut v: Vec<(i32, bool, String)> = faces
-        .iter()
-        .map(|f| {
-            let w = weight_name(f.weight);
-            let name = match (w, f.italic) {
-                ("Regular", true) => "Italic".to_string(),
-                (w, true) => format!("{w} Italic"),
-                (w, false) => w.to_string(),
-            };
-            (f.weight.round() as i32, f.italic, name)
-        })
-        .collect();
+    let v = style_names(&faces);
+    if v.is_empty() { vec![tl!("Regular").into()] } else { v }
+}
+
+/// [`styles`] of these faces, lightest first. A variable face reports only its default instance
+/// (Montserrat's is Thin), yet the layout draws any weight its `wght` axis covers, so the standard
+/// weights in that range are listed too.
+fn style_names(faces: &[photocraft_text::FaceInfo]) -> Vec<String> {
+    let label = |weight: f32, italic: bool| {
+        let name = match (weight_name(weight), italic) {
+            ("Regular", true) => "Italic".to_string(),
+            (w, true) => format!("{w} Italic"),
+            (w, false) => w.to_string(),
+        };
+        (weight.round() as i32, italic, name)
+    };
+    let mut v: Vec<(i32, bool, String)> = faces.iter().map(|f| label(f.weight, f.italic)).collect();
+    for f in faces {
+        if let Some((_, min, _, max)) = f.axes.iter().find(|a| a.0 == "wght") {
+            v.extend((100..=900).step_by(100).map(|w| w as f32).filter(|w| (*min..=*max).contains(w)).map(|w| label(w, f.italic)));
+        }
+    }
     v.sort();
     v.dedup_by(|a, b| a.2 == b.2);
-    let v: Vec<String> = v.into_iter().map(|x| x.2).collect();
-    if v.is_empty() { vec![tl!("Regular").into()] } else { v }
+    v.into_iter().map(|x| x.2).collect()
 }
 
 /// Localized style label for the dropdown. The raw string stays the engine's `fontStyle` key;
