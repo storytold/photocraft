@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PhotoCraft on Android: a NativeActivity APK with no Java/Kotlin code. The activity loads
+  lib/<abi>/libphotocraft_android.so (apps/photocraft-android) and calls its android_main.
+  nix/android.nix links this manifest with aapt2; @VERSION@ and @VERSION_CODE@ are filled in there.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ai.storyteller.photocraft"
+    android:versionCode="@VERSION_CODE@"
+    android:versionName="@VERSION@">
+
+    <!-- wgpu needs Vulkan 1.1 (or GLES 3.0 as a fallback). -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+    <application
+        android:label="PhotoCraft"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="false"
+        android:extractNativeLibs="true"
+        android:resizeableActivity="true">
+
+        <!--
+          configChanges: rotating, folding and unfolding (foldables change screenSize and
+          smallestScreenSize) keep the activity, and so the open documents, alive. Without
+          them Android restarts the activity and the native app with it.
+        -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Black.NoTitleBar"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode">
+            <meta-data android:name="android.app.lib_name" android:value="photocraft_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

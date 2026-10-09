@@ -1,0 +1,78 @@
+--- a/android-activity-0.6.1/src/native_activity/mod.rs
++++ b/android-activity-0.6.1/src/native_activity/mod.rs
+@@ -27,6 +27,7 @@
+ };
+ 
+ mod glue;
++mod immersive;
+ use self::glue::NativeActivityGlue;
+ 
+ pub const LOOPER_ID_MAIN: libc::c_int = 1;
+@@ -323,6 +324,22 @@
+         self.main_callbacks.run_on_java_main_thread(f);
+     }
+ 
++    pub fn request_immersive(&self) {
++        let activity = match self.jvm.attach_current_thread(|env| env.new_global_ref(&*self.activity)) {
++            Ok(activity) => activity,
++            Err(error) => {
++                log::warn!(target: "photocraft.immersive", "could not retain the activity: {error}");
++                return;
++            }
++        };
++        let sdk = self.config().sdk_version();
++        self.run_on_java_main_thread(Box::new(move || {
++            if let Err(error) = immersive::apply(activity, sdk) {
++                log::warn!(target: "photocraft.immersive", "could not request immersive bars: {error}");
++            }
++        }));
++    }
++
+     pub fn config(&self) -> ConfigurationRef {
+         self.native_activity.config()
+     }
+--- a/android-activity-0.6.1/src/lib.rs
++++ b/android-activity-0.6.1/src/lib.rs
+@@ -985,6 +985,13 @@
+         F: FnOnce() + Send + 'static,
+     {
+         self.inner.read().unwrap().run_on_java_main_thread(f);
++    }
++
++    /// Request immersive system bars on the Java UI thread using the owned activity reference.
++    /// Reapply on native-window creation, resume and focus gain. No raw JNI handles escape.
++    #[cfg(feature = "native-activity")]
++    pub fn request_immersive(&self) {
++        self.inner.read().unwrap_or_else(std::sync::PoisonError::into_inner).request_immersive();
+     }
+ 
+     /// Returns a **reference** to this application's [`ndk::configuration::Configuration`].
+--- a/winit-0.30.13/src/platform_impl/android/mod.rs
++++ b/winit-0.30.13/src/platform_impl/android/mod.rs
+@@ -212,6 +212,8 @@
+ 
+             match event {
+                 MainEvent::InitWindow { .. } => {
++                    #[cfg(feature = "android-native-activity")]
++                    self.android_app.request_immersive();
+                     callback(event::Event::Resumed, self.window_target());
+                 },
+                 MainEvent::TerminateWindow { .. } => {
+@@ -223,6 +225,8 @@
+                     warn!("TODO: find a way to notify application of content rect change");
+                 },
+                 MainEvent::GainedFocus => {
++                    #[cfg(feature = "android-native-activity")]
++                    self.android_app.request_immersive();
+                     HAS_FOCUS.store(true, Ordering::Relaxed);
+                     callback(
+                         event::Event::WindowEvent {
+@@ -270,6 +274,8 @@
+                     warn!("TODO: forward onStart notification to application");
+                 },
+                 MainEvent::Resume { .. } => {
++                    #[cfg(feature = "android-native-activity")]
++                    self.android_app.request_immersive();
+                     debug!("App Resumed - is running");
+                     self.running = true;
+                 },
