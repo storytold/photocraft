@@ -1,7 +1,7 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
-//! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
-//! fonts found by scanning the platform font directories (no fontconfig), user-registered font
-//! data, and PostScript-name lookup for PSD import.
+//! Japanese and Arabic fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional
+//! system fonts found by scanning the platform font directories (no fontconfig), user-registered
+//! font data, and PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -128,7 +128,7 @@ impl FontDb {
         }
         // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
         // wasm32), before any system font.
-        for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese()) {
+        for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese() || f.is_arabic()) {
             db.register_static_font(f.bytes);
         }
         db.refresh_generics();
