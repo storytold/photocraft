@@ -961,7 +961,7 @@ pub fn ensure_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
 /// What changed since a canvas cache showed (`revision`, `preview key`) `seen`, when only a
 /// rectangle did: the last edit's damage, or the live stroke's dabs since then. Cached keys have
 /// the colour display's key folded in (`^ display_key`); `now`'s is still raw.
-fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64, last_damage: Option<DRect>) -> Option<DRect> {
+pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64, last_damage: Option<DRect>) -> Option<DRect> {
     if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
         return last_damage;
     }
@@ -1010,6 +1010,11 @@ fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u6
 /// refreshes only that area instead of everything.
 pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, was_preview: impl Fn(u64) -> bool) {
     let Some(d) = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone()) else { return };
+    if let Some(c) = app.channel_views.get_mut(&doc.0)
+        && was_preview(c.preview_key)
+    {
+        c.preview_key = 0;
+    }
     // Every display's cache of the document: the GPU state folds in the texture key, CPU
     // textures their display's key.
     let outputs: Vec<u32> = app.canvases.keys().filter(|k| k.0 == doc).map(|k| k.1).collect();
@@ -4762,6 +4767,136 @@ mod tests {
         // Control+Alt stays the brush-resize gesture, never a sample.
         assert!(!alt_samples(Tool::Brush, egui::Modifiers { alt: true, ctrl: true, ..Default::default() }));
         assert!(!alt_samples(Tool::Eraser, alt), "⌥ with the Eraser is not the Eyedropper");
+    }
+
+    /// #2078: the opaque mask-view texture must show the live stroke, not cover it with
+    /// the committed mask until the mouse is released.
+    #[test]
+    fn mask_view_uploads_each_live_stroke_before_release() {
+        for depth in [8, 16, 32] {
+            for mode in ["gray", "overlay"] {
+                for (width, factor) in [(120u32, 1u32), (513, 3)] {
+                    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    app.run("file.new", json!({"width": width, "height": 60, "depth": depth})).unwrap();
+                    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+                    app.run("view.layerMask", json!({"mode": mode})).unwrap();
+                    app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
+                    app.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
+                    app.ui.tool = Tool::Brush;
+                    let ctx = egui::Context::default();
+                    ctx.input_mut(|i| i.max_texture_side = 256);
+                    let tex = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+                    ctx.tex_manager().write().take_delta().clear();
+                    let revision = app.session.documents()[0].revision;
+                    let steps = app.session.documents()[0].history.past_len();
+                    let layer = app.session.documents()[0].active_layer.unwrap();
+                    let original = app.session.documents()[0].doc.layer(layer).unwrap().clone();
+                    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                    for x in [30.0, 50.0, 70.0] {
+                        tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                        let shown = display_doc(&mut app, 0).0;
+                        assert!(shown.layer(layer).unwrap().mask.as_ref().unwrap().value(x as i32, 30) < 0.1);
+                        assert_eq!(crate::channel_view::ensure(&mut app, &ctx, 0), Some(tex));
+                        let mut delta = ctx.tex_manager().write().take_delta();
+                        let uploads = delta.set.get(&tex).unwrap_or_else(|| panic!("{depth}-bit {mode}: live mask texture must upload before release at {x}"));
+                        assert_eq!(uploads.len(), 1);
+                        let upload = &uploads[0];
+                        let pos = upload.pos.expect("only the damaged region is uploaded");
+                        let egui::ImageData::Color(image) = &upload.image;
+                        assert!(image.pixels.len() < (width.div_ceil(factor) * 60u32.div_ceil(factor)) as usize, "the whole mask is not uploaded");
+                        let f = factor as i32;
+                        let r = DRect::new(pos[0] as i32 * f, pos[1] as i32 * f, (pos[0] + image.size[0]) as i32 * f, (pos[1] + image.size[1]) as i32 * f)
+                            .intersect(&shown.bounds());
+                        let expected = crate::channel_view::render(&shown, &app.session.documents()[0].channel_view, r, factor, false).unwrap();
+                        assert_eq!(image.pixels, expected, "uploaded mask values match the live stroke");
+                        delta.clear();
+                        assert_eq!(app.session.documents()[0].revision, revision);
+                        assert_eq!(app.session.documents()[0].history.past_len(), steps);
+                        assert_eq!(app.session.documents()[0].doc.layer(layer).unwrap(), &original);
+                        crate::channel_view::ensure(&mut app, &ctx, 0);
+                        assert!(ctx.tex_manager().write().take_delta().set.is_empty(), "idle frame does not upload");
+                    }
+                    tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 30.0 }, egui::Modifiers::NONE);
+                    let st = &app.session.documents()[0];
+                    assert_eq!(st.history.past_len(), steps + 1);
+                    assert!(st.doc.layer(layer).unwrap().mask.as_ref().unwrap().value(50, 30) < 0.1);
+                    assert_eq!(st.doc.layer(layer).unwrap().content, original.content);
+                    crate::channel_view::ensure(&mut app, &ctx, 0);
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    assert!(delta.set.get(&tex).unwrap()[0].pos.is_some(), "commit keeps its partial upload");
+                    delta.clear();
+                    app.session.undo();
+                    assert_eq!(app.session.documents()[0].doc.layer(layer).unwrap(), &original);
+                    crate::channel_view::ensure(&mut app, &ctx, 0);
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let egui::ImageData::Color(image) = &delta.set.get(&tex).unwrap()[0].image;
+                    let st = &app.session.documents()[0];
+                    assert_eq!(
+                        image.pixels,
+                        crate::channel_view::render(&st.doc, &st.channel_view, st.doc.bounds(), factor, false).unwrap(),
+                        "undo restores the shown mask"
+                    );
+                    delta.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn channel_views_show_live_targets_and_discarded_strokes() {
+        for target in ["quickMask", "alpha", "red"] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
+            match target {
+                "quickMask" => {
+                    app.run("select.rect", json!({"x": 0, "y": 0, "width": 120, "height": 60})).unwrap();
+                    app.run("select.editInQuickMaskMode", json!({})).unwrap();
+                }
+                "alpha" => {
+                    app.run("channel.new", json!({"fill": "white"})).unwrap();
+                }
+                _ => {
+                    app.run("channel.target", json!({"channel": "red"})).unwrap();
+                }
+            }
+            app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
+            app.run("tools.setBrush", json!({"brush": {"size": 12, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
+            app.ui.tool = Tool::Brush;
+            let ctx = egui::Context::default();
+            let tex = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+            ctx.tex_manager().write().take_delta().clear();
+            let original = app.session.documents()[0].doc.clone();
+            let steps = app.session.documents()[0].history.past_len();
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            let shown = display_doc(&mut app, 0).0;
+            crate::channel_view::ensure(&mut app, &ctx, 0);
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let upload = &delta.set.get(&tex).expect("live channel upload")[0];
+            let pos = upload.pos.expect("partial channel upload");
+            let egui::ImageData::Color(image) = &upload.image;
+            let r = DRect::new(pos[0] as i32, pos[1] as i32, (pos[0] + image.size[0]) as i32, (pos[1] + image.size[1]) as i32);
+            assert_eq!(image.pixels, crate::channel_view::render(&shown, &app.session.documents()[0].channel_view, r, 1, false).unwrap(), "{target}");
+            assert_ne!(
+                image.pixels,
+                crate::channel_view::render(&original, &app.session.documents()[0].channel_view, r, 1, false).unwrap(),
+                "target was painted"
+            );
+            delta.clear();
+            assert_eq!(app.session.documents()[0].history.past_len(), steps);
+            assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
+            // Dropping a preview without committing must restore its texture, even though the
+            // document revision did not change. There is no committed damage rectangle to use.
+            app.drag = None;
+            app.live_stroke = None;
+            crate::channel_view::ensure(&mut app, &ctx, 0);
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let upload = &delta.set.get(&tex).unwrap()[0];
+            assert!(upload.pos.is_none(), "discarding a preview refreshes the view");
+            let egui::ImageData::Color(image) = &upload.image;
+            assert_eq!(image.pixels, crate::channel_view::render(&original, &app.session.documents()[0].channel_view, original.bounds(), 1, false).unwrap());
+            delta.clear();
+        }
     }
 
     #[test]
