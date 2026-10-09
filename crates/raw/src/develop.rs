@@ -5,6 +5,7 @@
 use crate::color::{self, Mat3};
 use crate::demosaic::{Demosaic, PAD, Padded, Pattern, demosaic, demosaic_cfa};
 use crate::error::{RawError, Result};
+use crate::look::{CameraLook, ToneCurve};
 use crate::sensor::Sensor;
 use crate::{Limits, RawFormat, par};
 
@@ -30,11 +31,14 @@ pub struct DevelopOptions {
     /// Apply the file's orientation (rotate / flip the pixels).
     pub orient: bool,
     pub limits: Limits,
+    /// A colour rendering fitted to the camera's own JPEG ([`crate::fit_look`]). When set it
+    /// replaces the file's colour calibration (or the neutral fallback) and adds its tone curve.
+    pub camera_look: Option<CameraLook>,
 }
 
 impl Default for DevelopOptions {
     fn default() -> Self {
-        DevelopOptions { demosaic: Demosaic::default(), white_balance: WhiteBalance::default(), exposure: 0.0, orient: true, limits: Limits::default() }
+        DevelopOptions { demosaic: Demosaic::default(), white_balance: WhiteBalance::default(), exposure: 0.0, orient: true, limits: Limits::default(), camera_look: None }
     }
 }
 
@@ -70,14 +74,19 @@ pub struct Developed {
 }
 
 /// Linearization + black/white scaling for one sample (pre white balance), 0..1.
-struct Scale<'a> {
+pub(crate) struct Scale<'a> {
     s: &'a Sensor,
     lin: Option<&'a [u16]>,
 }
 
-impl Scale<'_> {
+impl<'a> Scale<'a> {
+    /// The scale for `s` (lazily: `lin` is the sensor's linearization table).
+    pub(crate) fn new(s: &'a Sensor) -> Self {
+        Scale { s, lin: s.linearization.as_deref() }
+    }
+
     #[inline]
-    fn value(&self, x: usize, y: usize, sample: usize) -> f32 {
+    pub(crate) fn value(&self, x: usize, y: usize, sample: usize) -> f32 {
         let s = self.s;
         let raw = s.data[(y * s.width + x) * s.samples + sample];
         let v = match self.lin {
@@ -140,6 +149,31 @@ fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
     (m > 0.0 && n.iter().all(|v| v.is_finite() && *v > 1e-4)).then(|| n.map(|v| v / m))
 }
 
+/// The camera-space neutral (max component 1) for `opts.white_balance`, as
+/// [`develop_sensor`] uses it (the same white balance [`crate::fit_look`] balances with).
+pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, warnings: &mut Vec<String>) -> Result<[f64; 3]> {
+    // White balance: camera-space neutral, max component 1.
+    let as_shot = s
+        .color
+        .as_shot_neutral
+        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
+        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
+        .and_then(normalize);
+    Ok(match opts.white_balance {
+        WhiteBalance::AsShot => match as_shot {
+            Some(n) => n,
+            None => {
+                warnings.push("no as-shot white balance in the file; estimated automatically (grey world)".into());
+                grey_world(s, sc)
+            }
+        },
+        WhiteBalance::Auto => grey_world(s, sc),
+        WhiteBalance::Multipliers(m) => {
+            normalize(m.map(|v| 1.0 / v)).ok_or_else(|| RawError::Malformed("white-balance multipliers must be positive".into()))?
+        }
+    })
+}
+
 /// Develops sensor data.
 pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     let c = s.crop;
@@ -154,34 +188,24 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
     opts.limits.check(c.width as u64, c.height as u64, if bayer { 4 + 12 + 6 } else { 4 + 4 + 12 + 6 })?;
     let mut warnings = s.warnings.clone();
-    let sc = Scale { s, lin: s.linearization.as_deref() };
+    let sc = Scale::new(s);
 
-    // White balance: camera-space neutral, max component 1.
-    let as_shot = s
-        .color
-        .as_shot_neutral
-        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
-        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
-        .and_then(normalize);
-    let neutral = match opts.white_balance {
-        WhiteBalance::AsShot => match as_shot {
-            Some(n) => n,
-            None => {
-                warnings.push("no as-shot white balance in the file; estimated automatically (grey world)".into());
-                grey_world(s, &sc)
-            }
-        },
-        WhiteBalance::Auto => grey_world(s, &sc),
-        WhiteBalance::Multipliers(m) => {
-            normalize(m.map(|v| 1.0 / v)).ok_or_else(|| RawError::Malformed("white-balance multipliers must be positive".into()))?
-        }
-    };
+    let neutral = resolve_neutral(s, opts, &sc, &mut warnings)?;
     let mult = neutral.map(|v| (1.0 / v) as f32);
 
-    // Balanced camera → XYZ D50.
-    let to_xyz: Mat3 = match s.color.balanced_to_xyz_d50(neutral) {
-        Some(m) => m,
-        None => {
+    // Balanced camera → XYZ D50: a look fitted to the camera's JPEG, the file's calibration,
+    // or the neutral fallback.
+    let look = opts.camera_look.as_ref().filter(|l| l.is_usable());
+    if opts.camera_look.is_some() && look.is_none() {
+        warnings.push("the supplied camera look is not usable (non-finite or singular); ignored".into());
+    }
+    let to_xyz: Mat3 = match (look, s.color.balanced_to_xyz_d50(neutral)) {
+        (Some(l), _) => {
+            warnings.push(l.note());
+            l.to_xyz
+        }
+        (None, Some(m)) => m,
+        (None, None) => {
             if s.format != RawFormat::Dng {
                 warnings.push("no colour calibration for this camera; camera colours are treated as sRGB primaries".into());
             }
@@ -288,9 +312,12 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         }
     }
 
-    // Camera → ProPhoto, exposure, the profile's tone curve, gamma 1.8, 16 bits.
+    // Camera → ProPhoto, exposure, the look's tone curve, gamma 1.8, 16 bits.
     let mut out = vec![0u16; w * h * 3];
-    let lut = GammaLut::with_curve(&s.tone_curve);
+    let lut = match look {
+        Some(l) => GammaLut::with_tone(l.tone.as_ref()),
+        None => GammaLut::with_curve(&s.tone_curve),
+    };
     par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
         let start = b * band * w * 3;
         let src = &rgb[start..start + chunk.len()];
@@ -377,6 +404,20 @@ impl GammaLut {
         GammaLut { table }
     }
 
+    /// The gamma-1.8 encoding after a fitted [`ToneCurve`] (`None`: none, plain gamma 1.8).
+    fn with_tone(tone: Option<&ToneCurve>) -> Self {
+        let table = (0..=GAMMA_STEPS + 1)
+            .map(|i| {
+                let s = (i as f64 / GAMMA_STEPS as f64).min(1.0);
+                match tone {
+                    Some(t) => (t.eval(s * s).powf(1.0 / 1.8) * 65535.0) as f32,
+                    None => (s as f32).powf(2.0 / 1.8) * 65535.0,
+                }
+            })
+            .collect();
+        GammaLut { table }
+    }
+
     #[inline]
     fn encode(&self, v: f32) -> u16 {
         let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
@@ -402,6 +443,22 @@ fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
     let ([x0, y0], [x1, y1]) = (curve[i - 1], curve[i]);
     let f = (v.log2() - x0.log2()) / (x1.log2() - x0.log2());
     y0 + (y1 - y0) * f
+}
+
+/// The source position in a `w × h` image of output pixel (`x2`, `y2`) after
+/// applying TIFF orientation `o` (output in range when the input is).
+pub(crate) fn source_xy(o: u16, w: usize, h: usize, x2: usize, y2: usize) -> (usize, usize) {
+    let (wl, hl) = (w.saturating_sub(1), h.saturating_sub(1));
+    match o {
+        2 => (wl.saturating_sub(x2), y2),
+        3 => (wl.saturating_sub(x2), hl.saturating_sub(y2)),
+        4 => (x2, hl.saturating_sub(y2)),
+        5 => (y2, x2),
+        6 => (y2, hl.saturating_sub(x2)),
+        7 => (wl.saturating_sub(y2), hl.saturating_sub(x2)),
+        8 => (wl.saturating_sub(y2), x2),
+        _ => (x2, y2),
+    }
 }
 
 /// Applies a TIFF orientation (1–8) to interleaved RGB.
