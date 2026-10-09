@@ -2613,7 +2613,7 @@ fontWeight	Italic	斜体
 	Auto-Align Layers	レイヤーを自動整列
 	Auto-Blend Layers	レイヤーを自動合成
 	Bold Italic	太字斜体
-	Box Blur	ボックスぼかし
+	Box Blur	ぼかし(ボックス)
 	Bulge	膨らみ
 	Burn	焼き込み
 	Camera Raw Filter	Camera Raw フィルター
@@ -2621,7 +2621,7 @@ fontWeight	Italic	斜体
 	Circularity	真円度
 	Clipping Path	クリッピングパス
 	Clone Stamp	コピースタンプ
-	Color Decontaminate	カラーの除染
+	Color Decontaminate	カラーの混入を除去
 	Color Halftone	カラーハーフトーン
 	Color Range	色域指定
 	Color Replacement	色の置き換え
@@ -2637,7 +2637,7 @@ fontWeight	Italic	斜体
 	Deep Emerald	濃いエメラルド
 	Deep Red	濃い赤
 	Deep Yellow	濃い黄
-	Defringe	フリンジ除去
+	Defringe	フリンジ削除
 	Delete Path	パスを削除
 	Diffuse	拡散
 	Displace	置き換え
@@ -2646,10 +2646,10 @@ fontWeight	Italic	斜体
 	Duplicate Layer Comp	レイヤーカンプを複製
 	Duplicate Layers	レイヤーを複製
 	Duplicate Path	パスを複製
-	Dust & Scratches	ゴミ・キズ
+	Dust & Scratches	ダスト&スクラッチ
 	EXIF	EXIF
-	Export As	書き出し形式
-	Export/Import Presets	プリセットを書き出し/読み込み
+	Export As	書き出し形式を指定
+	Export/Import Presets	プリセットの書き出し/読み込み
 	Extrude	押し出し
 	F	F
 	Fibers	繊維
@@ -2660,8 +2660,8 @@ fontWeight	Italic	斜体
 	Fish	魚形
 	Flag	旗
 	Focus Area	焦点領域
-	Gaussian Blur	ぼかし (ガウス)
-	Global Light	グローバルライト
+	Gaussian Blur	ぼかし(ガウス)
+	Global Light	グローバル光源
 	Gray Value (Maximum)	グレー値 (最大)
 	Gray Value (Mean)	グレー値 (平均)
 	Gray Value (Median)	グレー値 (中央値)
@@ -2679,40 +2679,40 @@ fontWeight	Italic	斜体
 	Justification	行揃え
 	Label	ラベル
 	Layer Comp	レイヤーカンプ
-	Layer From Background	背景からレイヤー
-	Lens Blur	レンズぼかし
+	Layer From Background	背景からレイヤーへ
+	Lens Blur	ぼかし(レンズ)
 	Lens Correction	レンズ補正
 	Lens Flare	レンズフレア
-	Lighting Effects	ライティング効果
-	Liquify	液状化
+	Lighting Effects	照明効果
+	Liquify	ゆがみ
 	Lock Layers	レイヤーをロック
 	Magnetic Lasso	マグネット投げ縄
 	Make	作成
 	Make Selection	選択範囲を作成
 	Make Work Path	作業用パスを作成
-	Match Color	カラー一致
-	Mezzotint	メゾチント
+	Match Color	カラーを一致
+	Mezzotint	メゾティント
 	Mosaic	モザイク
-	Motion Blur	ぼかし (移動)
+	Motion Blur	ぼかし(移動)
 	New Group	新規グループ
 	New Guide	新規ガイド
 	New Guide Layout	新規ガイドレイアウト
 	New Layer Comp	新規レイヤーカンプ
 	New Layer…	新規レイヤー…
 	New Video Layer from File	ファイルから新規ビデオレイヤー
-	Oil Paint	油絵
-	Package	パッケージ
+	Oil Paint	油彩画
+	Package	パッケージ化
 	Patch	パッチ
 	Path Blur	パスぼかし
 	Pencil	鉛筆
 	Pencil Tool	鉛筆ツール
 	Perimeter	周囲長
-	Photomerge	Photomerge
+	Photomerge	写真を貼り合わせ
 	Pinch	つまみ
 	Place Embedded	埋め込みで配置
 	Place Linked	リンクで配置
 	Place Scale Marker	スケールマーカーを配置
-	Pointillize	点描画
+	Pointillize	ポインティリスト
 	Polar Coordinates	極座標
 	Preserve Transparency	透明部分を保持
 	Preset Manager	プリセットマネージャー
@@ -2720,45 +2720,45 @@ fontWeight	Italic	斜体
 	Punctuation	句読点
 	Quick Selection	クイック選択
 	RGB	RGB
-	Radial Blur	ぼかし (放射状)
+	Radial Blur	ぼかし(円形)
 	Reading	読み取り
 	Recovery	リカバリー
 	Rectangle	長方形
 	Relink to File	ファイルに再リンク
 	Rename Brush	ブラシの名前を変更
 	Rename Layer Comp	レイヤーカンプの名前を変更
-	Replace Color	カラーを置き換え
+	Replace Color	色を置き換え
 	Replace Contents	コンテンツを置き換え
 	Replace Footage	素材を置き換え
 	Ripple	波紋
 	Rise	上昇
 	Ruler	定規
-	Save for Web (Legacy)	Web 用に保存 (従来)
+	Save for Web (Legacy)	Web 用に保存(従来方式)
 	Scale Effects	効果を拡大・縮小
 	Scale Factor	拡大・縮小の倍率
 	Scale Units	スケール単位
-	Script Events Manager	スクリプトイベントマネージャー
+	Script Events Manager	スクリプトイベント管理
 	Select and Mask	選択とマスク
 	Sepia	セピア
 	Set Measurement Scale	測定スケールを設定
 	Shadows/Highlights	シャドウ・ハイライト
-	Shape Blur	シェイプぼかし
+	Shape Blur	ぼかし(シェイプ)
 	Shear	シアー
 	Shell Lower	シェル (下)
 	Shell Upper	シェル (上)
 	Slice Options	スライスオプション
-	Smart Blur	ぼかし (詳細)
+	Smart Blur	ぼかし(詳細)
 	Smart Sharpen	スマートシャープ
 	Software	ソフトウェア
 	Spherize	球面
-	Spin Blur	スピンぼかし
+	Spin Blur	回転ぼかし
 	Squeeze	絞り込み
 	Stroke Path	パスのストローク
-	Surface Blur	表面ぼかし
+	Surface Blur	ぼかし(表面)
 	Symbols	記号
 	Tiles	タイル
 	Tilt-Shift	チルトシフト
-	Trace Contour	輪郭をトレース
+	Trace Contour	輪郭のトレース
 	Trap	トラップ
 	Tree	樹木
 	Trim	トリミング
@@ -2768,7 +2768,7 @@ fontWeight	Italic	斜体
 	Unknown	不明
 	Unsharp Mask	アンシャープマスク
 	Update Layer Comp	レイヤーカンプを更新
-	Vanishing Point	バニシングポイント
+	Vanishing Point	消点
 	Video Frames to Layers	ビデオフレームをレイヤーへ
 	W	W
 	Warp Text	文字ワープ
@@ -2792,13 +2792,13 @@ fontWeight	Italic	斜体
 	Auto-Leading	自動行送り
 	Auto-leading %	自動行送り %
 	Baseline Shift	ベースラインシフト
-	Batch	バッチ
+	Batch	バッチ処理
 	Bleach Bypass	銀残し
 	Blend	合成
 	Blue Yellow	青と黄
 	Border	境界
 	Browse	参照
-	Calculations	計算
+	Calculations	演算
 	Camera Raw	Camera Raw
 	Caption	キャプション
 	Category	カテゴリー
@@ -2845,9 +2845,9 @@ fontWeight	Italic	斜体
 	Extensions	拡張機能
 	Faded Film	色あせたフィルム
 	Fast	高速
-	Find and Replace Text	テキストの検索と置換
+	Find and Replace Text	テキストを検索して置換
 	First Line Indent	先頭行の字下げ
-	Fit Image	画像をフィット
+	Fit Image	画像を枠に合わせる
 	Flame	炎
 	Generic	汎用
 	Glyph	字形
@@ -2869,7 +2869,7 @@ fontWeight	Italic	斜体
 	Hsl Hue	HSL 色相
 	Hsl Lum	HSL 輝度
 	Hsl Sat	HSL 彩度
-	Image Processor	イメージプロセッサー
+	Image Processor	画像プロセッサー
 	Import…	読み込み…
 	In	イン
 	In Black	入力の黒
@@ -2878,11 +2878,11 @@ fontWeight	Italic	斜体
 	Keywords	キーワード
 	Layer Comps to Files	レイヤーカンプをファイルへ
 	Layer Content Options	レイヤーコンテンツのオプション
-	Layer from Background	背景からレイヤー
+	Layer from Background	背景からレイヤーへ
 	Layers to Files	レイヤーをファイルへ
 	Legacy	従来
 	Libraries	ライブラリ
-	Load Files into Stack	ファイルをスタックに読み込む
+	Load Files into Stack	ファイルをスタックに読み込み
 	Load Selection	選択範囲を読み込む
 	Location	場所
 	Loop	ループ
@@ -2905,7 +2905,7 @@ fontWeight	Italic	斜体
 	Out Black	出力の黒
 	Out White	出力の白
 	Path:	パス:
-	Paths to Illustrator	パスを Illustrator へ
+	Paths to Illustrator	パスをベクター形式へ
 	Pen	ペン
 	Picture Frame	ピクチャフレーム
 	Pins	ピン
@@ -2918,11 +2918,11 @@ fontWeight	Italic	斜体
 	Point Curve Red	ポイントカーブ (赤)
 	Profile	プロファイル
 	Public Domain	パブリックドメイン
-	Raw Defaults	Raw の既定値
+	Raw Defaults	RAW の既定値
 	Red Cyan	赤とシアン
-	Rename Group	グループの名前を変更
-	Render Video	ビデオをレンダリング
-	Resolve Missing Fonts	見つからないフォントを解決
+	Rename Group	グループ名を変更
+	Render Video	ビデオを書き出し
+	Resolve Missing Fonts	不足しているフォントを解決
 	Result	結果
 	Sampler	サンプラー
 	Sat	彩度
@@ -2939,7 +2939,7 @@ fontWeight	Italic	斜体
 	Spacing:	間隔:
 	Spot Healing	スポット修復
 	Spot:	スポット:
-	Statistics	統計
+	Statistics	統計情報
 	Step Backward	1 つ戻る
 	Stop	停止
 	Stops	ストップ
@@ -2951,7 +2951,7 @@ fontWeight	Italic	斜体
 	Tint Color	色合い
 	Tool	ツール
 	Units	単位
-	Variable Data Sets	可変データセット
+	Variable Data Sets	変数データセット
 	Vignette Amount	周辺光量の量
 	Vignette Feather	周辺光量のぼかし
 	Vignette Highlights	周辺光量のハイライト
@@ -3057,7 +3057,7 @@ fontWeight	Italic	斜体
 	Create new set	新規セットを作成
 	Credit	クレジット
 	Current Time	現在の時間
-	Custom Pixel Aspect Ratio	カスタムのピクセル縦横比
+	Custom Pixel Aspect Ratio	ピクセル縦横比をカスタム
 	Custom pattern	カスタムパターン
 	Date Created	作成日
 	DateTime Original	撮影日時
@@ -3138,7 +3138,7 @@ fontWeight	Italic	斜体
 	Ligature	合字
 	Light Source	光源
 	Limit Playback	再生を制限
-	Load 3D LUT	3D LUT を読み込む
+	Load 3D LUT	3D LUT を読み込み
 	Localize Color Clusters	カラークラスターをローカライズ
 	Log Errors To File	エラーをファイルに記録
 	Luminance Smoothness	輝度の滑らかさ
@@ -3148,7 +3148,7 @@ fontWeight	Italic	斜体
 	Mac Smooth	Mac スムーズ
 	Mac Strong	Mac ストロング
 	Masked Areas	マスクされた領域
-	Merge to HDR Pro	HDR Pro に統合
+	Merge to HDR Pro	HDR 合成(Pro)
 	Metering Mode	測光モード
 	Minimalistic	ミニマル
 	Missing Profiles: Ask When Opening	プロファイルなし: 開くときに確認
@@ -3198,7 +3198,7 @@ fontWeight	Italic	斜体
 	Raw Data	Raw データ
 	Recent Items	最近使用した項目
 	Reference point location	基準点の位置
-	Rename Tool Preset	ツールプリセットの名前を変更
+	Rename Tool Preset	ツールプリセット名を変更
 	Report an Issue	問題を報告
 	Restore last viewed comp	最後に表示したカンプを復元
 	Roman	ローマン
