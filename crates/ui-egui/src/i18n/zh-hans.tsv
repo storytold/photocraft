@@ -2253,3 +2253,6 @@ fontWeight	Italic	斜体
 	Rotate View Tool	旋转视图工具
 	Reset View	重置视图
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
+	Color to Alpha…	颜色转为 Alpha…
+	Transparency Threshold	透明度阈值
+	Opacity Threshold	不透明度阈值

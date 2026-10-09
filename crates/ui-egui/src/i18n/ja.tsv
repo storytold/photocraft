@@ -2228,3 +2228,6 @@ fontWeight	Italic	斜体
 	Rotate View Tool	表示回転ツール
 	Reset View	表示をリセット
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	中心の周りをドラッグして表示を回転  ·  Shift で 15° 単位
+	Color to Alpha…	カラーを透明に…
+	Transparency Threshold	透明のしきい値
+	Opacity Threshold	不透明度のしきい値

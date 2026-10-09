@@ -31,6 +31,9 @@ pub enum Kind {
     Grid(usize),
     /// Structured JSON (pins, curve points…): settable through the command, not shown in the dialog.
     Json,
+    /// A `"#rrggbb"` colour (`color`, or `color=#rrggbb` with a default), picked with a swatch.
+    /// Without a default the param stays unset until a colour is picked.
+    Color(Option<[f32; 3]>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,6 +86,10 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
             Kind::Bool(rest.trim_start_matches('=').trim() == "true")
         } else if v == "text" {
             Kind::Text
+        } else if v == "color" {
+            Kind::Color(None)
+        } else if let Some(default) = v.strip_prefix("color=") {
+            Kind::Color(crate::color_picker_ui::parse_hex(default))
         } else if v == "doc" {
             Kind::Document
         } else if v == "json" || v.starts_with("layer id") || v.starts_with('[') || v.starts_with('{') {
@@ -185,6 +192,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
             Kind::Document => json!(-1),
             // Identity kernel: 1 in the centre.
             Kind::Grid(n) => json!((0..*n).map(|i| i64::from(i == *n / 2)).collect::<Vec<_>>()),
+            Kind::Color(Some(rgb)) => json!(crate::color_picker_ui::hex(*rgb)),
+            Kind::Color(None) => continue,
             // Colour inputs come from the current swatches, so the proxy preview matches the result.
             Kind::Json if p.key == "foreground" => json!(app.session.tools.foreground),
             Kind::Json if p.key == "background" => json!(app.session.tools.background),
@@ -231,6 +240,7 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
             Kind::Choice(c) => json!(c.first().cloned().unwrap_or_default()),
             Kind::Bool(default) => json!(default),
             Kind::Int { default } => json!(default),
+            Kind::Color(Some(rgb)) => json!(crate::color_picker_ui::hex(*rgb)),
             _ => continue,
         };
         fields.insert(p.key, v);
@@ -308,7 +318,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 } else {
                     crate::widgets::slider_row(ui, &label(&p.key), &mut v, min..=max, unit, None);
                 }
-                f.insert(p.key, json!((v * 10.0).round() / 10.0));
+                // Small ranges (0–1 thresholds and centres) keep the two decimals their field shows.
+                let scale = if max - min <= 10.0 { 100.0 } else { 10.0 };
+                f.insert(p.key, json!((v * scale).round() / scale));
             }
             Kind::Choice(options) => {
                 ui.horizontal(|ui| {
@@ -370,6 +382,25 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert(p.key, json!(vals.iter().map(|v| v.round() as i64).collect::<Vec<_>>()));
             }
             Kind::Json => {}
+            Kind::Color(default) => {
+                let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
+                let rgb = set.or(default).unwrap_or([0.0; 3]);
+                let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let mut bytes = rgb.map(q);
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        changed = crate::widgets::color_edit_button_srgb(ui, &mut bytes).changed();
+                        ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
+                    });
+                });
+                if changed {
+                    f.insert(p.key, json!(crate::color_picker_ui::hex(bytes.map(|b| f32::from(b) / 255.0))));
+                } else if set.is_none() && default.is_some() {
+                    f.insert(p.key, json!(crate::color_picker_ui::hex(rgb)));
+                }
+            }
             Kind::Int { default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
                 ui.horizontal(|ui| {
@@ -482,6 +513,7 @@ mod tests {
             "filter.pixelate.mezzotint",
             "filter.render.lightingEffects",
             "filter.render.relight",
+            "filter.other.colorToAlpha",
         ] {
             assert!(has_dialog(id), "{id}");
         }
@@ -549,6 +581,47 @@ mod tests {
         let p = out.layers[0].surface().unwrap().pixel(32, 32);
         assert!(p[0] > 0.2 && p[0] < 0.8, "edge blurred: {p:?}");
         assert_eq!(label("wavelengthMin"), "Wavelength Min");
+    }
+
+    #[test]
+    fn colour_params_parse_with_and_without_a_default() {
+        let p = parse_spec(r##"{"color":color=#ffffff,"vineColor":color,"bad":color=#zz}"##);
+        assert_eq!(p[0].kind, Kind::Color(Some([1.0, 1.0, 1.0])));
+        assert_eq!(p[1].kind, Kind::Color(None));
+        assert_eq!(p[2].kind, Kind::Color(None));
+    }
+
+    /// Color to Alpha (#1576): the dialog starts at white and the GIMP-style thresholds, drawing it
+    /// keeps those params, and its live preview makes the white of a Background transparent.
+    #[test]
+    fn color_to_alpha_dialog_defaults_draw_and_preview() {
+        const ID: &str = "filter.other.colorToAlpha";
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let id = open(&mut app, ID).unwrap();
+        let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+        assert_eq!(f.get("__preview"), Some(&json!(true)));
+        let want = json!({"color": "#ffffff", "transparencyThreshold": 0.0, "opacityThreshold": 1.0});
+        assert_eq!(params_of(&f), want);
+        egui::Context::default().run_ui(Default::default(), |ui| body(ui, &mut f)).textures_delta.clear();
+        assert_eq!(params_of(&f), want, "drawing the dialog keeps its params");
+
+        let mut doc = Document::with_background(
+            "p",
+            photocraft_doc::Size::new(32, 32),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U16,
+            photocraft_doc::Color::WHITE,
+        );
+        let bg = doc.layers[0].id;
+        doc.layers[0].surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 8, 32), &[0.0, 0.0, 0.0, 1.0]);
+        for k in [1, 2] {
+            let out = preview_document(&doc, Some(bg), ID, &want, k).unwrap();
+            let s = out.layers[0].surface().unwrap();
+            assert_eq!(out.layers[0].name, "Layer 0", "k={k}");
+            assert!(s.pixel(24 / k as i32, 4)[3] < 1e-3, "k={k}: white removed");
+            assert_eq!(s.pixel(1, 4)[3], 1.0, "k={k}: black kept");
+        }
     }
 
     #[test]
