@@ -6,6 +6,25 @@ are included in this repository. The integration/performance checks below are su
 fixed 22-case evaluation. Its 20 labelled COCO targets are exploratory evidence, not a representative
 or held-out benchmark, a soft-alpha matting assessment, or evidence of a universal winner.
 
+## Upstream integration check: 2026-10-09
+
+Rebased on upstream `ec350d64aedd019afc5eda290cc32909bc9bab7d`. The integration keeps the
+upstream Rotate View preference and Linux Wayland snapshot behavior alongside the optional
+model controls. It adds model labels to the newly supported Greek catalog and keeps every
+upstream translation and contributor entry. Additive catalog/self-credit blocks are placed
+before existing entries to reduce conflicts with future upstream additions.
+
+The native optional-backend suites passed on macOS: engine unit tests **944 passed / 11 ignored**,
+UI unit tests **1,107 passed / 7 ignored**, plus ML runtime and CLI integration tests. Six-package
+all-target Clippy with warnings denied, the default native build, layers, 627/627 parity,
+regenerated scorecard, optional-backend adversarial panic hunt, full L0–L6 wasm and optional
+engine/UI wasm checks passed. Ignored tests are not counted as passes. The native matrix now
+also runs model Preferences and complete-language catalog tests; its current run is linked from
+[#1199](https://github.com/storytold/photocraft/pull/1199).
+
+The real-image measurements and screenshots below remain the earlier evidence at their stated
+commits; rebasing does not turn them into a new accuracy or performance benchmark.
+
 ## Preferences before and after
 
 Before, from the unmodified `5896f0b` source:

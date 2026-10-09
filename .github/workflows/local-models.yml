@@ -66,6 +66,10 @@ jobs:
         run: cargo test -p photocraft-ml --features onnx --locked
       - name: Test commands and CLI with the optional backend
         run: cargo test -p photocraft-engine -p photocraft-cli --features local-ml --locked
+      - name: Test model preferences and translated labels
+        run: |
+          cargo test -p photocraft-ui-egui --features local-ml --locked prefs_ui::tests
+          cargo test -p photocraft-ui-egui --features local-ml --locked i18n::tests
       - name: Check native app and UI with the optional backend
         run: cargo check -p photocraft -p photocraft-ui-egui --features local-ml --locked
       - name: Clippy optional backend
