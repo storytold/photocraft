@@ -71,6 +71,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
+    ("help.search", "Documentation…", &["Help"], None),
     ("help.website", "PhotoCraft Website", &["Help"], None),
     ("help.artcraftWebsite", "ArtCraft Website", &["Help"], None),
     ("help.github", "PhotoCraft on GitHub", &["Help"], None),
@@ -322,6 +323,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.ui.palette_open = !app.ui.palette_open;
             Ok(Value::Null)
         }
+        "help.search" => {
+            if app.ui.help_search_open {
+                app.ui.help_search_open = false;
+            } else {
+                crate::help_search::open(app, ctx);
+            }
+            Ok(Value::Null)
+        }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
         "help.systemInfo" => {
             let mut fields = serde_json::Map::new();
@@ -546,7 +555,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
+        "file.open" | "file.exit" | "file.clearRecent" | "help.about" | "help.systemInfo" | "help.search" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
@@ -882,6 +891,8 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     let mut right = ui.cursor().left();
     let lang = crate::i18n::current();
     let mut clicked: Option<String> = None;
+    let mut open_documentation: Option<String> = None;
+    let mut documentation_query: Option<String> = None;
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut nav = crate::menu_nav::Nav::load(ui.ctx());
     ui.scope(|ui| {
@@ -899,6 +910,10 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 // egui's menu_button toggles on release; these titles open on the press (one
                 // gesture can press, drag to an item and release), so each drives its popup.
                 let title = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(lang, top)).color(t.text_dim)));
+                let popup_id = egui::Popup::menu(&title).get_id();
+                if crate::help_search::menu_navigation(ui.ctx()).is_some_and(|(_, path)| path.first().is_some_and(|root| root == top)) {
+                    egui::Popup::open_id(ui.ctx(), popup_id);
+                }
                 // The bar's close behaviour and style, as a menu (not bar) config so submenus inside
                 // render as submenus.
                 let bar = egui::containers::menu::MenuConfig::find(ui);
@@ -931,7 +946,18 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                         if top == "Help" {
                             // The search field scrolls with the rows, as part of the menu's content.
                             crate::menu_nav::level(ui, 1, &mut nav, |ui, nav| {
-                                help_search(ui, items, opening, &mut clicked, nav);
+                                help_search(
+                                    ui,
+                                    app_ref,
+                                    items,
+                                    opening,
+                                    HelpSearchActions {
+                                        clicked: &mut clicked,
+                                        open_documentation: &mut open_documentation,
+                                        documentation_query: &mut documentation_query,
+                                    },
+                                    nav,
+                                );
                                 render_level_rows(ui, &mine, 1, &mut clicked, nav);
                             });
                         } else {
@@ -953,11 +979,32 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     }
     if let Some(id) = clicked {
         let ctx = ui.ctx().clone();
+        if let Some(tool_name) = id.strip_prefix("help.search.tool.")
+            && let Some(tool) = crate::state::Tool::from_name(tool_name)
+        {
+            crate::help_search::navigate_tool(app, &ctx, tool);
+            return right;
+        }
+        if let Some(section) = id.strip_prefix("help.search.setting.") {
+            crate::prefs_ui::open_preferences(app, section);
+            return right;
+        }
+        if let Some(index) = id.strip_prefix("help.search.note.").and_then(|index| index.parse::<usize>().ok()) {
+            crate::help_search::open_note(app, &ctx, index);
+            return right;
+        }
         let id = alt_click(id, ctx.input(|i| i.modifiers.alt));
         if let Err(e) = invoke(app, &ctx, &id, json!({})) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
+    }
+    if let Some(url) = open_documentation {
+        let ctx = ui.ctx().clone();
+        crate::links::open(app, &ctx, &url);
+    }
+    if let Some(query) = documentation_query {
+        crate::help_search::open_with_query(app, ui.ctx(), &query);
     }
     right
 }
@@ -1059,10 +1106,30 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
     hits.into_iter().filter(|(_, _, it)| seen.insert(it.id.as_str())).take(HELP_SEARCH_MAX).map(|(_, _, it)| it).collect()
 }
 
+/// Toolbar tools shown alongside menu commands in Help's live search.
+fn search_tools(query: &str, lang: crate::i18n::Lang) -> Vec<crate::state::Tool> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    crate::state::Tool::ALL
+        .into_iter()
+        .filter(|tool| search_rank(&q, tool.label(), &[]).is_some() || search_rank(&q, crate::i18n::tr(lang, tool.label()), &[]).is_some())
+        .take(8)
+        .collect()
+}
+
 /// Help › Search : a field at the top of the Help menu that finds any menu command
 /// by name. Results show their menu path; click, ↓ then ↩, or ↩ in the field runs one.
 /// `opening`: this frame's release ends the click on the Help title that opened the menu.
-fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
+struct HelpSearchActions<'a> {
+    clicked: &'a mut Option<String>,
+    open_documentation: &'a mut Option<String>,
+    documentation_query: &'a mut Option<String>,
+}
+
+fn help_search(ui: &mut egui::Ui, app: &PhotocraftApp, items: &[MenuItem], opening: bool, actions: HelpSearchActions<'_>, nav: &mut crate::menu_nav::Nav) {
+    let HelpSearchActions { clicked, open_documentation, documentation_query } = actions;
     let ctx = ui.ctx().clone();
     let lang = crate::i18n::current();
     let text_id = egui::Id::new("help-menu-search");
@@ -1079,17 +1146,59 @@ fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &m
         field.request_focus();
     }
     let results = search_items(items, &query, lang);
-    if field.lost_focus()
-        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        && let Some(it) = results.iter().find(|it| it.enabled)
-    {
-        *clicked = Some(it.id.clone());
-        ui.close();
+    let tools = search_tools(&query, lang);
+    let settings = crate::help_search::setting_results(&query);
+    let notes = crate::help_search::note_results(app, &query);
+    let documentation = crate::help_search::documentation_results(&query);
+    if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if let Some(tool) = tools.first() {
+            *clicked = Some(format!("help.search.tool.{tool:?}"));
+            ui.close();
+        } else if let Some(it) = results.iter().find(|it| it.enabled) {
+            *clicked = Some(it.id.clone());
+            ui.close();
+        } else if let Some(setting) = settings.first() {
+            let section =
+                photocraft_engine::prefs::SECTIONS.iter().find(|(_, title)| setting.location.ends_with(title)).map(|(id, _)| *id).unwrap_or("general");
+            *clicked = Some(format!("help.search.setting.{section}"));
+            ui.close();
+        } else if let Some(note) = notes.first() {
+            *clicked = Some(note.url.replacen("photocraft-note://", "help.search.note.", 1));
+            ui.close();
+        } else if let Some(doc) = documentation.first() {
+            *open_documentation = Some(doc.url.clone());
+            ui.close();
+        }
     }
     ctx.data_mut(|d| d.insert_temp(text_id, query.clone()));
     if !query.trim().is_empty() {
-        if results.is_empty() {
+        if results.is_empty() && tools.is_empty() && settings.is_empty() && notes.is_empty() && documentation.is_empty() {
             ui.weak(crate::i18n::tr(lang, "No matching commands"));
+        }
+        for tool in &tools {
+            let id = format!("help.search.tool.{tool:?}");
+            let label = crate::i18n::tr(lang, tool.label());
+            let text = format!("{} › {label}", crate::i18n::tr(lang, "Toolbar"));
+            let hit = nav.row(ui, 0, true, Some(&id), |ui, _| {
+                let response = ui.button(&text).on_hover_ui(|ui| {
+                    ui.label(crate::help_search::tool_description(*tool));
+                    if let Some(doc) = crate::help_search::documentation_results(label).first()
+                        && let Some(media) = &doc.media
+                    {
+                        ui.add(egui::Image::from_bytes(media.uri, media.bytes).max_size(egui::vec2(220.0, 140.0)));
+                    }
+                });
+                if response.secondary_clicked() {
+                    *documentation_query = Some(label.to_string());
+                    ui.close();
+                }
+                let hit = response.clicked() || released_on(ui, &response);
+                (response, hit)
+            });
+            if hit {
+                *clicked = Some(id);
+                ui.close();
+            }
         }
         for it in results {
             let mut trail: Vec<String> = it.path.iter().map(|p| crate::i18n::tr(lang, p).to_string()).collect();
@@ -1099,12 +1208,64 @@ fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &m
                 b = b.shortcut_text(crate::shortcuts::pretty(sc));
             }
             let hit = nav.row(ui, 0, it.enabled, Some(&it.id), |ui, _| {
-                let r = ui.add_enabled(it.enabled, b);
+                let r = ui.add_enabled(it.enabled, b).on_hover_ui(|ui| {
+                    let path = it.path.join(" › ");
+                    ui.label(format!("Find {} in {path}.", translated_menu_label(lang, it)));
+                });
+                if r.secondary_clicked() {
+                    *documentation_query = Some(format!("{} {}", translated_menu_label(lang, it), it.path.join(" ")));
+                    ui.close();
+                }
                 let hit = r.clicked() || released_on(ui, &r);
                 (r, hit)
             });
             if hit {
                 *clicked = Some(it.id.clone());
+                ui.close();
+            }
+        }
+        for setting in &settings {
+            let section =
+                photocraft_engine::prefs::SECTIONS.iter().find(|(_, title)| setting.location.ends_with(title)).map(|(id, _)| *id).unwrap_or("general");
+            let id = format!("help.search.setting.{section}");
+            let title = format!("Preferences › {}", setting.title);
+            let response = ui.button(title).on_hover_ui(|ui| {
+                ui.label(&setting.description);
+                ui.weak(&setting.location);
+            });
+            if response.secondary_clicked() {
+                *documentation_query = Some(format!("{} {}", setting.title, section));
+                ui.close();
+            } else if response.clicked() {
+                *clicked = Some(id);
+                ui.close();
+            }
+        }
+        for note in &notes {
+            let response = ui.button(format!("Your Notes › {}", note.title)).on_hover_ui(|ui| {
+                ui.label(&note.description);
+                ui.weak(&note.location);
+            });
+            if response.clicked() || response.secondary_clicked() {
+                *clicked = Some(note.url.replacen("photocraft-note://", "help.search.note.", 1));
+                ui.close();
+            }
+        }
+        for doc in &documentation {
+            let title = format!("{} › {}", crate::i18n::tr(lang, "Documentation"), doc.title);
+            let response = ui.button(title).on_hover_ui(|ui| {
+                ui.label(&doc.description);
+                if let Some(media) = &doc.media {
+                    ui.add(egui::Image::from_bytes(media.uri, media.bytes).max_size(egui::vec2(240.0, 160.0)));
+                    ui.label(egui::RichText::new(media.caption).small());
+                }
+                ui.weak(&doc.location);
+            });
+            if response.secondary_clicked() {
+                *documentation_query = Some(doc.title.clone());
+                ui.close();
+            } else if response.clicked() {
+                *open_documentation = Some(doc.url.clone());
                 ui.close();
             }
         }
@@ -1165,6 +1326,10 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             }
             let hit = nav.row(ui, depth - 1, it.enabled, Some(&it.id), |ui, _| {
                 let r = ui.add_enabled(it.enabled, b);
+                crate::help_search::register_target(ui.ctx(), crate::help_search::highlight_id(&it.id), r.rect);
+                if crate::help_search::menu_navigation(ui.ctx()).is_some_and(|(_, path)| path.len() == it.path.len() && path == it.path) {
+                    ui.scroll_to_rect(r.rect, Some(egui::Align::Center));
+                }
                 let r = match it.id.as_str() {
                     "image.mode.bits8" | "image.mode.bits16" => r.on_hover_text(crate::i18n::tr(lang, "Integer")),
                     "image.mode.bits32" => r.on_hover_text(crate::i18n::tr(lang, "Floating point")),
@@ -1189,6 +1354,9 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, |ui, nav| {
                     let r = ui.menu_button(crate::i18n::tr(lang, name), |ui| render_level(ui, &child, depth + 1, clicked, nav));
+                    if crate::help_search::menu_navigation(ui.ctx()).is_some_and(|(_, path)| path.get(depth).is_some_and(|target| target == name)) {
+                        egui::Popup::open_id(ui.ctx(), egui::Popup::menu(&r.response).get_id());
+                    }
                     if r.inner.is_some() {
                         // Where the submenu hangs from, to keep it below the menu bar (#319).
                         nav.set_anchor(depth, r.response.rect);
@@ -1427,6 +1595,9 @@ mod tests {
         assert_eq!(search_rank("trans", "Distort", &["Edit".into(), "Transform".into()]), Some(3));
         assert!(ids("   ").is_empty());
         assert!(ids("zzzzqqq").is_empty());
+        let tools = search_tools("brush", crate::i18n::Lang::EN);
+        assert_eq!(tools.first(), Some(&crate::state::Tool::Brush));
+        assert!(tools.contains(&crate::state::Tool::MixerBrush));
     }
 
     /// In another UI language both the translated and the English names match.
@@ -1494,6 +1665,24 @@ mod tests {
             typing(&mut h, "els");
             assert!(open(&h), "typing after the click keeps Help open ({what})");
             assert!(h.query_all_by_label_contains("› Levels").next().is_some(), "and lists the matches ({what})");
+            for _ in 0..12 {
+                for pressed in [true, false] {
+                    h.event(Event::Key {
+                        key: egui::Key::Backspace,
+                        physical_key: Some(egui::Key::Backspace),
+                        pressed,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    });
+                    h.run_steps(1);
+                }
+            }
+            typing(&mut h, "brush");
+            let brush = h.query_all_by_label_contains("Toolbar › Brush Tool").next();
+            assert!(brush.is_some(), "Help search includes the Brush toolbar tool ({what})");
+            brush.unwrap().click();
+            h.run_steps(4);
+            assert_eq!(h.state().ui.tool, crate::state::Tool::Brush, "choosing the tool navigates to Brush ({what})");
         }
     }
 

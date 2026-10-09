@@ -912,6 +912,9 @@ pub struct UiState {
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
     pub palette_open: bool,
+    /// Documentation search and personal notes section.
+    #[serde(default, skip_deserializing)]
+    pub help_search_open: bool,
     pub dock_tabs: DockTabs,
     /// Right-dock group order, heights and collapsed groups (see `dock`).
     #[serde(default)]
@@ -1015,6 +1018,7 @@ impl Default for UiState {
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
             palette_open: false,
+            help_search_open: false,
             dock_tabs: DockTabs::default(),
             dock: Default::default(),
             color_panel: Default::default(),

@@ -70,6 +70,7 @@ pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
 pub mod gradient_ui;
+pub mod help_search;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
@@ -285,6 +286,9 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Personal Documentation notes (separate from shipped PhotoCraft documentation).
+    pub load_documentation: Option<LoadTextFn>,
+    pub save_documentation: Option<SaveTextFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -331,6 +335,8 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// User-authored Markdown notes in Documentation.
+    pub(crate) documentation_notes: Vec<help_search::UserNote>,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
@@ -517,11 +523,15 @@ pub struct PhotocraftApp {
 }
 
 impl PhotocraftApp {
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(session: Session, mut services: Services) -> Self {
+        let documentation_text = services.load_documentation.as_mut().and_then(|load| load());
+        // Invalid or oversized notes are ignored rather than taking down app startup.
+        let documentation_notes = help_search::load_notes(documentation_text.as_deref());
         let mut app = Self {
             session,
             ui: UiState::default(),
             services,
+            documentation_notes,
             canvases: HashMap::new(),
             navigator_textures: HashMap::new(),
             monitors: Default::default(),
@@ -1222,6 +1232,7 @@ impl eframe::App for PhotocraftApp {
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
+        help_search::show(self, &ctx);
         dialogs::show(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
