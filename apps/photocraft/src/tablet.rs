@@ -1,10 +1,12 @@
-//! Pen tablet pressure, tilt, rotation and eraser end on macOS and Linux X11 (issue #79).
+//! Pen tablet pressure, tilt, rotation and eraser end on macOS, Linux X11 and Windows (issue #79).
 //!
-//! winit 0.30 drops tablet data on both, so `photocraft-tablet` reads it beside winit (an AppKit
-//! local event monitor; XInput2 raw events on a second X connection) and this module writes each
-//! sample into the UI's [`StylusFeed`], where the canvas reads it exactly like the web runner's
-//! Pointer Events and automation's simulated pen. Windows needs nothing here: winit forwards
-//! `WM_POINTER` pressure as touch force.
+//! winit 0.30 drops tablet data, so `photocraft-tablet` reads it beside winit (an AppKit local
+//! event monitor; XInput2 raw events on a second X connection) and this module writes each sample
+//! into the UI's [`StylusFeed`], where the canvas reads it exactly like the web runner's Pointer
+//! Events and automation's simulated pen. On Windows, winit forwards `WM_POINTER` (Windows Ink)
+//! pressure as touch force; when the driver serves Wintab instead — the Wacom driver's "Use
+//! Windows Ink" checkbox off, read from its settings file (`wacom::windows_ink`) — this module installs
+//! the Wintab reader too, and `PHOTOCRAFT_WINTAB=1` forces it on (`=0` keeps it off).
 //!
 //! Wayland compositors give a pen only to clients that bind the tablet protocol
 //! (`zwp_tablet_v2`), which winit 0.30 doesn't (and binding it on winit's connection needs
@@ -34,6 +36,28 @@ pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
 #[cfg(target_os = "macos")]
 pub fn install_macos(feed: &StylusFeed) -> Option<photocraft_tablet::macos::Monitor> {
     photocraft_tablet::macos::Monitor::install(sink(feed.clone())).map_err(|e| log::warn!("{e}")).ok()
+}
+
+/// Whether to read the pen through Wintab: `PHOTOCRAFT_WINTAB=1` forces the reader on, `=0` keeps
+/// it off; unset, it is on exactly when the driver itself says Windows Ink is off for this
+/// executable (`use_ink` from `wacom::windows_ink`, the Wacom driver's "Use Windows Ink" checkbox — off,
+/// the driver serves Wintab and synthesizes the mouse itself; on, winit already reports the
+/// pressure). `None` = no readable Wacom settings (another vendor or no driver): only the env var
+/// turns the reader on.
+#[cfg(any(target_os = "windows", test))]
+pub fn wintab_wanted(var: impl Fn(&str) -> Option<String>, use_ink: Option<bool>) -> bool {
+    match var("PHOTOCRAFT_WINTAB") {
+        Some(v) if !v.is_empty() => v != "0",
+        _ => use_ink == Some(false),
+    }
+}
+
+/// Install the Wintab reader on the window (`hwnd` from eframe's window handle; the window's
+/// thread). Keep the result until the event loop returns. On failure this logs why: the pen then
+/// paints like a mouse (the driver's own synthesized input still moves and clicks).
+#[cfg(target_os = "windows")]
+pub fn install_windows(feed: &StylusFeed, hwnd: isize) -> Option<photocraft_tablet::wintab::Monitor> {
+    photocraft_tablet::wintab::Monitor::install(hwnd as *mut _, sink(feed.clone())).map_err(|e| log::warn!("{e}")).ok()
 }
 
 /// The display server to open the window on: the session's own, except Xwayland on Wayland when
@@ -259,6 +283,25 @@ mod tests {
         assert!(pen_needs_xwayland(DisplaySession::Wayland, env(&zero), || true, || true));
         // X11 already gets the pen; the probes don't even run off Wayland.
         assert!(!pen_needs_xwayland(DisplaySession::X11, env(&[("DISPLAY", ":0")]), || panic!("probed"), || panic!("probed")));
+    }
+
+    #[test]
+    fn the_wintab_reader_follows_the_ink_checkbox_unless_the_env_var_says() {
+        let var = |pairs: &[(&str, &str)]| {
+            let m: std::collections::HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            move |k: &str| m.get(k).cloned()
+        };
+        // No Wacom settings (another vendor, no driver): only the env var turns the reader on.
+        let none = var(&[]);
+        assert!(!wintab_wanted(&none, None));
+        assert!(wintab_wanted(var(&[("PHOTOCRAFT_WINTAB", "1")]), None));
+        // The driver's checkbox decides otherwise: off (Wintab served) = reader on.
+        assert!(wintab_wanted(&none, Some(false)));
+        assert!(!wintab_wanted(&none, Some(true)), "Windows Ink on: winit already reports the pressure");
+        // The env var beats the checkbox, both ways.
+        assert!(wintab_wanted(var(&[("PHOTOCRAFT_WINTAB", "1")]), Some(true)));
+        assert!(!wintab_wanted(var(&[("PHOTOCRAFT_WINTAB", "0")]), Some(false)));
+        assert!(wintab_wanted(var(&[("PHOTOCRAFT_WINTAB", "")]), Some(false)), "empty is unset");
     }
 
     #[test]

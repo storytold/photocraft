@@ -370,6 +370,9 @@ pub struct PhotocraftApp {
     /// The next tool `Down` is an Alt+right-drag that resizes the brush (#297). `tool_event`
     /// takes it on every event, so a press another handler consumes can't leave it set.
     pub(crate) brush_resize_armed: bool,
+    /// The press that opened the Brush Preset picker is this frame's (`paint_mouse`): the picker's
+    /// outside-press close must not consume it, or press-to-open would close it the same frame.
+    pub(crate) brush_picker_open_press: bool,
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
@@ -541,6 +544,7 @@ impl PhotocraftApp {
             brush_resize: None,
             quick_pick: false,
             brush_resize_armed: false,
+            brush_picker_open_press: false,
             alt_sampling: false,
             opacity_keys: None,
             control_rx: None,

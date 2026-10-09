@@ -39,8 +39,9 @@ mod logging;
 mod monitor_profile;
 mod screen_color;
 mod services;
-// Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+// Windows gets pen pressure from winit (WM_POINTER), or through Wintab when the driver serves it;
+// the web runner has its own listener.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows", test))]
 mod tablet;
 mod ui_state;
 
@@ -266,11 +267,11 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
 
-    // The macOS pen tablet monitor (installed once eframe created the app, see below); it lives
-    // until the event loop returns.
-    #[cfg(target_os = "macos")]
+    // The pen tablet monitor (macOS AppKit, or Windows Wintab; installed once eframe created the
+    // app, see below); it lives until the event loop returns.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let tablet_monitor = std::cell::OnceCell::new();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let tablet_monitor = &tablet_monitor;
 
     // Read the displays' ICC profiles while the window opens (colour-managed canvas; `None`
@@ -454,6 +455,32 @@ fn main() -> eframe::Result {
             }
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
+            #[cfg(target_os = "windows")]
+            {
+                // Wintab pen pressure: the Wacom driver serves it and synthesizes the mouse itself
+                // when its "Use Windows Ink" checkbox is off (read from its settings file); a
+                // subclass proc then reads WT_PACKET. The env var beats the checkbox; with Ink on,
+                // winit already reports the pressure as touch force, so the reader stays off.
+                let var = |k: &str| std::env::var(k).ok();
+                let use_ink = photocraft_tablet::wacom::windows_ink(None);
+                if tablet::wintab_wanted(var, use_ink) {
+                    use eframe::wgpu::rwh::HasWindowHandle;
+                    let hwnd = cc.window_handle().ok().and_then(|h| match h.as_raw() {
+                        eframe::wgpu::rwh::RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
+                        _ => None,
+                    });
+                    match hwnd {
+                        Some(hwnd) => {
+                            if let Some(monitor) = tablet::install_windows(&app.stylus.feed, hwnd) {
+                                let _ = tablet_monitor.set(monitor);
+                            }
+                        }
+                        None => log::warn!("tablet pressure: this window has no Win32 handle; the Wintab reader cannot start"),
+                    }
+                } else if use_ink.is_some() {
+                    log::info!("tablet pressure: the Wacom driver serves Windows Ink; wintab off (PHOTOCRAFT_WINTAB=1 forces it on)");
+                }
+            }
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
