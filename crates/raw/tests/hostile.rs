@@ -1,7 +1,7 @@
 //! Truncated and corrupted raw files must fail cleanly, never panic, and
 //! never allocate beyond the limits.
 
-use photocraft_raw::testgen::{Cr2Spec, DngSpec, DngStorage, mosaic, orf, rw2, scene, sony_craw, tiff_ep};
+use photocraft_raw::testgen::{Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, orf, rw2, scene, sony_craw, tiff_ep};
 use photocraft_raw::*;
 
 fn samples() -> Vec<Vec<u8>> {
@@ -46,6 +46,14 @@ fn samples() -> Vec<Vec<u8>> {
     out.push(sony_craw(64, 6, &codes, [8000, 10400, 12900, 14100]));
     out.push(rw2(30, 8, &mosaic(&scene(30, 8), 30, [0, 1, 1, 2], 128, 4095), 12));
     out.push(orf(w, h, &cfa));
+    let xt = mosaic_cfa(&scene(w, h), w, &XTRANS, 6, 256, 4000);
+    for packing in [RafPacking::U16 { le: true }, RafPacking::Lsb12] {
+        let raf =
+            RafSpec { bits: 12, packing, black: vec![256; 36], crop: Some([1, 2, 10, 20]), orientation: 8, ..RafSpec::new(w, h, xt.clone(), XTRANS.to_vec()) };
+        out.push(raf.build());
+    }
+    let bayer = RafSpec { packing: RafPacking::Words14, exposure_bias: Some((-100, 100)), ..RafSpec::new(w, h, cfa.clone(), vec![0, 1, 1, 2]) };
+    out.push(bayer.build());
     out
 }
 
