@@ -21,6 +21,11 @@ CPU fallback also displays source-resolution regions instead of a reduced full-d
 Cold pages are disposable; original pixels and history remain in the tile store. GPU composition
 on the UI thread is admitted only while its input tiles are resident.
 
+Native GPU composition uses a 32 MiB upload threshold and drains the final batch before
+returning from a render that transferred pixels. This keeps consecutive viewport requests
+from accumulating mapped staging buffers, whose available memory can be much smaller than
+total VRAM. Rendering cached inputs remains asynchronous.
+
 Current documents, masks, channels and undo snapshots share the same tile storage. Cold tiles
 are compressed with LZ4, CRC-checked and written to a temporary scratch file. Reading restores
 them on demand; editing keeps copy-on-write semantics. With scratch enabled, History States

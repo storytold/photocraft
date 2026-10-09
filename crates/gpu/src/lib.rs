@@ -71,8 +71,9 @@ pub const PAGE: u32 = 2048;
 /// GPU memory resident layer pages may hold before the least recently used are evicted.
 pub const RESIDENT_BUDGET: u64 = 4 << 30;
 /// Uploads (bytes) [`Compositor::render`] stages before submitting the work recorded so far, so
-/// a refresh of a huge document never holds all its uploads in staging memory at once.
-const FLUSH_BYTES: u64 = 512 << 20;
+/// mapped buffers stay bounded separately from VRAM residency: some discrete GPUs have a
+/// small host-visible heap. Two batches can be in flight; one RGBA16F page is already 32 MiB.
+const FLUSH_BYTES: u64 = 32 << 20;
 /// Pass pixels (chunk pixels × passes) [`Compositor::render`] records before submitting: one
 /// command buffer holding a whole huge refresh can run for seconds, long enough for the OS to
 /// reset the GPU.
@@ -789,7 +790,9 @@ impl Compositor {
     /// still open; the chunk texture is reused afterwards, so the sink must record any copies
     /// or passes that read it into the given encoder. Submits the work before returning; a
     /// refresh of a huge document also submits in between (the sink may be handed a new
-    /// encoder), so its uploads and evicted pages never pile up in memory.
+    /// encoder), so its uploads and evicted pages never pile up in memory. Native renders that
+    /// uploaded data drain their final batch before returning: consecutive regional renders
+    /// must share the same bound as one large refresh. Cached renders remain asynchronous.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -800,8 +803,32 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") });
         let stats = self.encode_inner(device, queue, &mut encoder, doc, region, &mut sink, true)?;
-        queue.submit([encoder.finish()]);
+        let index = queue.submit([encoder.finish()]);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.staged > 0 || stats.flushes > 0 {
+            self.wait_uploads(device, index)?;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = index;
         Ok(stats)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_uploads(&self, device: &wgpu::Device, index: wgpu::SubmissionIndex) -> Result<(), Unsupported> {
+        if let Some(health) = &self.health {
+            if !health.wait(device, Some(index)) {
+                return Err(Unsupported(health.fault().map_or_else(|| "GPU upload failed".into(), |f| f.to_string())));
+            }
+        } else {
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None })));
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => return Err(Unsupported(format!("GPU upload wait failed: {e}"))),
+                Err(_) => return Err(Unsupported("the GPU stopped responding during upload".into())),
+            }
+        }
+        Ok(())
     }
 
     /// Like [`Self::render`] but records into `encoder` without submitting.
@@ -922,14 +949,7 @@ impl Compositor {
                 let index = queue.submit([done.finish()]);
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(prev) = last_submit.replace(index) {
-                    match &self.health {
-                        Some(h) => {
-                            h.wait(device, Some(prev));
-                        }
-                        None => {
-                            let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
-                        }
-                    }
+                    self.wait_uploads(device, prev)?;
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = index;

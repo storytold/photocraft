@@ -22,6 +22,57 @@ use serde_json::json;
 static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
+fn native_float_pages_composite_after_reduced_pages_without_losing_the_device() {
+    let _lock = gpu_lock();
+    let Some((g, rs)) = canvas() else { return };
+    let mut doc = Document::new("16K EXR dimensions", Size::new(16384, 8192), ColorMode::Rgb, SampleType::F32);
+    // A native viewport page with its filtering apron straddles four 2048-square input
+    // cells. The previous staging policy exhausted the mapped-buffer heap on AMD Vulkan
+    // here, then egui's next index-buffer upload panicked on the same device.
+    let r = Rect::new(8191, 3583, 8705, 4097);
+    let mut surface = Surface::with_default(doc.pixel_format(), &[0.25, 0.5, 0.75, 1.0]);
+    surface.fill_rect(Rect::new(0, 0, 1, 1), &[1.0; 4]);
+    surface.fill_rect(Rect::new(16383, 8191, 16384, 8192), &[1.0; 4]);
+    surface.fill_rect(r, &[2.0, 0.5, 0.25, 1.0]);
+    doc.layers.push(Layer::new("Background", LayerContent::Raster(surface)));
+    let reduced = photocraft_compose::Buffer::transparent(Rect::new(4096, 1792, 4353, 2049));
+    let native = photocraft_compose::Buffer::transparent(r);
+    for (page, factor, buffer) in [(1, 2, &reduced), (2, 1, &native)] {
+        assert!(
+            g.upload_page(gpu_canvas::PageUpload { key: doc.id.0, page, size: [16384, 8192], factor, depth: doc.depth, limit: 128 << 20, core: r }, buffer)
+        );
+    }
+    g.set_memory_budget(665 << 20);
+    g.composite_resident(&doc, r, true).expect("native float regional composite");
+    // Separate regional renders must not accumulate each other's pending staging buffers.
+    for page in 3..40 {
+        let r = Rect::from_xywh(6655 + (page % 6) * 512, 2559 + (page % 4) * 512, 514, 514);
+        let buffer = photocraft_compose::Buffer::transparent(r);
+        assert!(g.upload_page(
+            gpu_canvas::PageUpload {
+                key: doc.id.0,
+                page: u64::try_from(page).unwrap(),
+                size: [16384, 8192],
+                factor: 1,
+                depth: doc.depth,
+                limit: 128 << 20,
+                core: r
+            },
+            &buffer
+        ));
+        g.composite_resident(&doc, r, true).expect("repeated native float composite");
+    }
+    assert!(g.health().wait(&rs.device, None), "{:?}", g.fault());
+    let indices = rs.device.create_buffer(&eframe::wgpu::BufferDescriptor {
+        label: Some("regression egui index buffer"),
+        size: 184392,
+        usage: eframe::wgpu::BufferUsages::INDEX | eframe::wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    assert!(rs.queue.write_buffer_with(&indices, 0, std::num::NonZeroU64::new(114888).unwrap()).is_some(), "{:?}", g.fault());
+}
+
+#[test]
 fn huge_document_stream_pages_have_bounded_residency_and_exact_texels() {
     let _lock = gpu_lock();
     let Some((g, _rs)) = canvas() else { return };
