@@ -19,7 +19,7 @@ struct State {
     dirty: BTreeSet<String>,
     writing: bool,
     error: Option<String>,
-    rejected: Option<String>,
+    rejected: BTreeMap<String, String>,
     preserve_tips: bool,
 }
 
@@ -111,12 +111,12 @@ impl Bridge {
 
     pub fn error(&self) -> Option<String> {
         let s = self.state();
-        s.rejected.clone().or_else(|| s.error.clone())
+        s.rejected.values().next().cloned().or_else(|| s.error.clone())
     }
 
     pub fn unsaved(&self) -> bool {
         let s = self.state();
-        s.writing || !s.dirty.is_empty() || s.rejected.is_some()
+        s.writing || !s.dirty.is_empty() || !s.rejected.is_empty()
     }
 }
 
@@ -137,18 +137,22 @@ impl PresetBackend for Bridge {
     fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
         let mut s = self.state();
         if s.files.get(name).is_some_and(|old| old.as_ref() == bytes) {
+            s.rejected.remove(name);
             return Ok(());
         }
         if !s.dirty.contains(name) && s.dirty.len() >= MAX_RECORDS {
             let e = "too many pending preset records".to_string();
-            s.rejected = Some(e.clone());
+            s.rejected.insert(name.to_string(), e.clone());
             return Err(e);
         }
         if let Err(e) = Self::insert(&mut s, name, bytes) {
-            s.rejected = Some(e.clone());
+            s.rejected.insert(name.to_string(), e.clone());
             return Err(e);
         }
         s.dirty.insert(name.to_string());
+        // This current replacement resolves only its own omitted edit. Pending transactions
+        // still keep unsaved() true; Retry or an older successful batch cannot clear it.
+        s.rejected.remove(name);
         Ok(())
     }
 
@@ -156,17 +160,19 @@ impl PresetBackend for Bridge {
         record_limit(name)?;
         let mut s = self.state();
         if s.preserve_tips && name.starts_with("tips/") {
+            s.rejected.remove(name);
             return Ok(());
         }
         if !s.dirty.contains(name) && s.dirty.len() >= MAX_RECORDS {
             let e = "too many pending preset records".to_string();
-            s.rejected = Some(e.clone());
+            s.rejected.insert(name.to_string(), e.clone());
             return Err(e);
         }
         if let Some(bytes) = s.files.remove(name) {
             s.bytes = s.bytes.saturating_sub(bytes.len() as u64);
             s.dirty.insert(name.to_string());
         }
+        s.rejected.remove(name);
         Ok(())
     }
 }
@@ -285,6 +291,45 @@ mod tests {
         b.retry();
         assert!(b.error().is_some(), "staging errors cannot be cleared by retrying older writes");
         assert_eq!(b.read("index.json", 100).unwrap(), b"initial");
+    }
+
+    #[test]
+    fn accepted_replacement_resolves_only_its_own_staging_rejection() {
+        let b = Bridge::default();
+        b.load("index.json", b"initial".to_vec()).unwrap();
+        let oversized = vec![0; MAX_INDEX_BYTES as usize + 1];
+        assert!(b.write("index.json", &oversized).is_err());
+        b.retry();
+        assert!(b.error().is_some(), "retrying older bytes cannot save the rejected edit");
+        b.write("index.json", b"repaired").unwrap();
+        assert!(b.unsaved(), "accepted replacement still needs its transaction");
+        b.finish(b.begin().unwrap(), Ok(()));
+        assert!(b.error().is_none());
+        assert!(!b.unsaved());
+        assert_eq!(b.read("index.json", 100).unwrap(), b"repaired");
+
+        assert!(b.write("index.json", &oversized).is_err());
+        assert!(b.write("other.pcbrushes", &vec![0; MAX_GROUP_BYTES as usize + 1]).is_err());
+        b.write("index.json", b"repaired").unwrap();
+        assert!(b.error().is_some(), "an unchanged accepted record cannot clear another record's rejection");
+        assert!(b.unsaved());
+        b.remove("other.pcbrushes").unwrap();
+        assert!(b.error().is_none());
+        assert!(!b.unsaved(), "discarding the rejected absent record resolves its pending edit");
+    }
+
+    #[test]
+    fn older_successful_transaction_does_not_resolve_an_omitted_edit() {
+        let b = Bridge::default();
+        b.write("index.json", b"older").unwrap();
+        let older = b.begin().unwrap();
+        assert!(b.write("index.json", &vec![0; MAX_INDEX_BYTES as usize + 1]).is_err());
+        b.finish(older, Ok(()));
+        assert!(b.error().is_some());
+        assert!(b.unsaved());
+        b.write("index.json", b"older").unwrap();
+        assert!(b.error().is_none(), "explicitly restoring the already saved bytes resolves the omitted edit");
+        assert!(!b.unsaved());
     }
 
     #[test]
