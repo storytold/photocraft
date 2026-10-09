@@ -536,6 +536,7 @@ fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
             (LayerContent::Text(x), LayerContent::Text(y)) => texts_equal(x, y),
             (LayerContent::Shape(x), LayerContent::Shape(y)) => x == y,
             (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_equal(x, y),
+            (LayerContent::Deep(x), LayerContent::Deep(y)) => x == y,
             _ => false,
         }
         && match (fill_cache, &b.fill_cache) {
@@ -2257,5 +2258,32 @@ mod tests {
         let v = s.execute("document.inspect", json!({})).unwrap();
         assert_eq!(v["selectedLayers"], json!([a.0, b.0]));
         assert_eq!(v["layers"][0]["selected"], true);
+    }
+
+    #[test]
+    fn undo_between_identical_deep_layers_reports_no_damage() {
+        let mut s = session(32);
+        let deep = || {
+            LayerContent::Deep(photocraft_doc::DeepData {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 1,
+                channels: vec![photocraft_doc::DeepChannel { name: "Z".to_string(), samples: vec![1.0] }],
+                counts: vec![0, 1],
+            })
+        };
+        for _ in 0..2 {
+            s.edit("deep", |doc, _| {
+                doc.layers[0].content = deep();
+                Ok(())
+            })
+            .unwrap();
+        }
+        s.undo();
+        // Identical deep samples are equal pixels; the catch-all used to recomposite the
+        // whole canvas for every undo that touched a deep layer.
+        let d = damage(&s);
+        assert!(d.is_none_or(|r| r.is_empty()), "identical deep samples touch no pixels: {d:?}");
     }
 }
