@@ -136,7 +136,7 @@ fn import_button_fills_the_dialog_and_ok_applies_the_set() {
     assert_eq!(h.state().ui.status, "", "the import failed");
     let overrides = field(&h, "overrides");
     assert_eq!(overrides["filter.blur.gaussianBlur"], json!("Cmd+Ctrl+Alt+G"));
-    assert_eq!(overrides["edit.preferences.general"], json!("Cmd+K"));
+    assert!(overrides.get("edit.preferences.general").is_none(), "Cmd+K is Preferences' default: {overrides}");
     assert_eq!(overrides["filter.lastFilter"], json!("Cmd+F"));
     assert!(overrides.get("edit.undo").is_none(), "Cmd+Z is the default again: {overrides}");
     assert!(overrides.get("select.all").is_none(), "already the default: {overrides}");
@@ -150,9 +150,9 @@ fn import_button_fills_the_dialog_and_ok_applies_the_set() {
     let app = h.state();
     assert_eq!(crate::shortcuts::effective_shortcut(app, "edit.undo", Some("Cmd+Z")).as_deref(), Some("Cmd+Z"));
     assert_eq!(crate::shortcuts::effective_shortcut(app, "filter.blur.gaussianBlur", None).as_deref(), Some("Cmd+Ctrl+Alt+G"));
-    assert_eq!(crate::shortcuts::effective_shortcut(app, "edit.preferences.general", None).as_deref(), Some("Cmd+K"));
-    // Cmd+K went to Preferences and Cmd+F to Last Filter, so Search lost its key.
-    assert_eq!(crate::shortcuts::effective_shortcut(app, "edit.search", Some("Cmd+K")), None);
+    assert_eq!(crate::shortcuts::effective_shortcut(app, "edit.preferences.general", Some("Cmd+K")).as_deref(), Some("Cmd+K"));
+    // Cmd+F went to Last Filter, so Search (Cmd+F by default) lost its key.
+    assert_eq!(crate::shortcuts::effective_shortcut(app, "edit.search", Some("Cmd+F")), None);
     assert_eq!(crate::shortcuts::effective_shortcut(app, "filter.lastFilter", Some("Cmd+Alt+F")).as_deref(), Some("Cmd+F"));
 }
 
@@ -206,8 +206,8 @@ fn first_launch_imports_photoshops_live_set_once() {
     let (mut app, store) = with_photoshop(SAMPLE, None);
     assert!(app.ui.dialogs.is_empty(), "applied without a dialog");
     assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.blur.gaussianBlur", None).as_deref(), Some("Cmd+Ctrl+Alt+G"));
-    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.preferences.general", None).as_deref(), Some("Cmd+K"));
-    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.search", Some("Cmd+K")), None, "taken by Preferences");
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "filter.lastFilter", Some("Cmd+Alt+F")).as_deref(), Some("Cmd+F"));
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.search", Some("Cmd+F")), None, "taken by Last Filter");
     assert_eq!(app.session.prefs().dialogs[super::IMPORTED_PREF]["source"].as_str().map(|s| s.ends_with("Keyboard Shortcuts.psp")), Some(true));
     let notice = app.ui.notices.last().unwrap();
     assert_eq!(notice.title, "Photoshop shortcuts imported");
