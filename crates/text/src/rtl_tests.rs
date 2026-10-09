@@ -175,3 +175,17 @@ fn rtl_justified_last_lines_stay_in_the_box() {
         }
     }
 }
+
+#[test]
+fn tracking_never_separates_joined_letters() {
+    let mut e = TextEngine::new();
+    let t = "سلام abc";
+    let tracked = |tracking: f32| styled(t, CharStyle { tracking, ..inter(20.0) });
+    let plain = e.layout(&tracked(0.0), 72.0);
+    let wide = e.layout(&tracked(200.0), 72.0);
+    let arabic_word = |s: &str| s.chars().all(crate::segment::is_cursive_letter);
+    let latin = |s: &str| s.chars().all(|c| c.is_ascii_alphabetic());
+    assert!((span(&plain, t, arabic_word) - span(&wide, t, arabic_word)).abs() < 1e-3);
+    // Latin still tracks: 200/1000 em = 4 px after each of a, b and c at 20 px.
+    assert!(span(&wide, t, latin) - span(&plain, t, latin) > 7.0);
+}

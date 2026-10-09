@@ -544,6 +544,8 @@ impl Layouter {
             // fetches it (`served`); it joins the fallback stack once it arrives.
             crate::served::request_for_text(&ptext);
             let fallback: Vec<String> = fonts.fallback_stack().map(str::to_string).collect();
+            // Cursive words of this paragraph (byte ranges in `ptext`).
+            let words = crate::segment::cursive_words(&ptext);
             let mut layout: Layout<RunBrush> = {
                 let mut b = self.lcx.ranged_builder(&mut fonts.fcx, &ptext, 1.0, false);
                 // Paragraph-start style as the default (covers the direction mark and empty
@@ -591,6 +593,11 @@ impl Layouter {
                             flush(&mut b, from, piece.len(), c);
                         }
                     }
+                }
+                // Tracking would tear joined letters apart: none inside cursive words (CSS Text 3
+                // §7.2.1), set over whole words so a shaping run never splits inside one.
+                for w in &words {
+                    b.push(StyleProperty::LetterSpacing(0.0), w.clone());
                 }
                 for (range, size) in synthetic_small_caps {
                     b.push(StyleProperty::FontSize(size), range);
