@@ -30,8 +30,8 @@ const FONTS_MANIFEST: &str = "fonts/manifest.txt";
 /// The served fonts: the manifest once read, and what the network has delivered.
 #[derive(Default)]
 struct ServedFonts {
-    /// Font files by family.
-    files: HashMap<String, Vec<String>>,
+    /// Font files by family, each with its Subresource Integrity value when the manifest has one.
+    files: HashMap<String, Vec<(String, Option<String>)>>,
     /// Families fetched or being fetched: each one once per page load.
     fetched: HashSet<String>,
     /// Downloaded files waiting for the next frame: (family, bytes).
@@ -165,7 +165,7 @@ fn query() -> String {
 fn load_font_manifest(served: Served, ctx: egui::Context) {
     wasm_bindgen_futures::spawn_local(async move {
         // Most hosts serve no fonts: a missing manifest is the normal case, not an error.
-        let Ok(bytes) = fetch_bytes(FONTS_MANIFEST).await else { return };
+        let Ok(bytes) = fetch_bytes(FONTS_MANIFEST, None).await else { return };
         let text = String::from_utf8_lossy(&bytes);
         // A host that answers unknown paths with its HTML page (single-page app fallback).
         if text.trim_start().starts_with('<') {
@@ -175,24 +175,41 @@ fn load_font_manifest(served: Served, ctx: egui::Context) {
         for s in skipped {
             log::warn!("{FONTS_MANIFEST}: skipped {s}");
         }
-        let mut files: HashMap<String, Vec<String>> = HashMap::new();
-        for f in fonts {
-            files.entry(f.family).or_default().push(f.file);
+        let mut files: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+        for f in &fonts {
+            files.entry(f.family.clone()).or_default().push((f.file.clone(), f.integrity.clone()));
         }
         log::info!("photocraft-web: {} served font families", files.len());
-        let families: Vec<String> = files.keys().cloned().collect();
         served.lock().unwrap_or_else(|e| e.into_inner()).files = files;
-        served_fonts::add_families(families);
+        // The families for the font menus, and the script fallbacks (the manifest's `scripts`).
+        served_fonts::add_fonts(&fonts);
+        // Fetch now the fallbacks of the scripts the browser's languages use (an Arabic reader gets
+        // the Arabic font before typing); the rest is fetched when text or a font menu needs it.
+        served_fonts::request_for_languages(browser_languages().iter().map(String::as_str));
         ctx.request_repaint();
     });
 }
 
-/// GET `url` (relative to the page) and read the whole body.
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+/// The browser's preferred languages (`navigator.languages`, e.g. `["ar-EG", "en"]`).
+fn browser_languages() -> Vec<String> {
+    web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|l| l.as_string()).collect()).unwrap_or_default()
+}
+
+/// GET `url` (relative to the page) and read the whole body. With `integrity` (a Subresource
+/// Integrity value), the browser rejects a body whose hash differs.
+async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, String> {
     use wasm_bindgen_futures::JsFuture;
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url)).await.map_err(js)?.dyn_into().map_err(|_| "not a Response")?;
+    let request = match integrity {
+        Some(sri) => {
+            let init = web_sys::RequestInit::new();
+            init.set_integrity(sri);
+            window.fetch_with_str_and_init(url, &init)
+        }
+        None => window.fetch_with_str(url),
+    };
+    let resp: web_sys::Response = JsFuture::from(request).await.map_err(js)?.dyn_into().map_err(|_| "not a Response")?;
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -242,16 +259,16 @@ impl WebShell {
                 if let Some(files) = s.files.get(&family).cloned()
                     && s.fetched.insert(family.clone())
                 {
-                    fetch.extend(files.into_iter().map(|file| (family.clone(), file)));
+                    fetch.extend(files.into_iter().map(|(file, integrity)| (family.clone(), file, integrity)));
                 }
             }
             (fetch, std::mem::take(&mut s.arrived))
         };
-        for (family, file) in fetch {
+        for (family, file, integrity) in fetch {
             let served = self.served.clone();
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_bytes(&file).await {
+                match fetch_bytes(&file, integrity.as_deref()).await {
                     Ok(bytes) => {
                         served.lock().unwrap_or_else(|e| e.into_inner()).arrived.push((family, bytes));
                         ctx.request_repaint();

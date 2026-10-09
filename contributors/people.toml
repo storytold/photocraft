@@ -66,3 +66,8 @@ sync_github_name = true
 
 [people.excited-raccoon]
 sync_github_name = true
+
+[people.hamada147]
+real_name = "Ahmed Moussa"
+display_name = "Ahmed Moussa"
+sync_github_name = false
