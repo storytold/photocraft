@@ -1,0 +1,19 @@
+# Cloudflare Workers static assets / Pages header rules for the threads build.
+# Wasm threads need a cross-origin isolated page (SharedArrayBuffer): COOP + COEP on every
+# response, including the workers' scripts. Everything is served from this origin, so
+# require-corp blocks nothing the app uses.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+  Cache-Control: no-cache
+
+# Loaded as ?v=<content hash> by index.html, so a new build is a new URL.
+/photocraft_bg.wasm.gz
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
+
+/photocraft.js
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
