@@ -39,6 +39,7 @@ fn gpu() -> Option<Gpu> {
             return None;
         }
     };
+    eprintln!("GPU parity adapter: {:?}", adapter.get_info());
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     // Exact parity needs 32-bit float targets. Adapters without them (e.g. GL software
     // rasterizers) use the CPU compositor in the app, so there is nothing to compare there.
@@ -143,6 +144,197 @@ fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<phot
 
 fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
+}
+
+// Issue #974: execute the real shader, including the exact boundary (CPU chooses the
+// preceding segment), rather than replaying the LUT arithmetic on the host.
+fn hard_stops(at: f32) -> Vec<(f32, Color)> {
+    vec![(0.0, Color::BLACK), (at, Color::WHITE), (at, Color::BLACK), (1.0, Color::WHITE)]
+}
+
+#[test]
+fn hard_stop_gradient_fill() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("hard stop", Size::new(8, 2), ColorMode::Rgb, SampleType::U8);
+    d.layers.push(Layer::new("gradient", LayerContent::Fill(Fill::gradient(hard_stops(0.5), 0.0, 1.0, GradientStyle::Linear, false))));
+    check(&mut g, &d, "hard stop fill at 0.5");
+}
+
+#[test]
+fn hard_stop_gradient_overlay() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("hard stop", Size::new(8, 2), ColorMode::Rgb, SampleType::U8);
+    let mut l = Layer::new("overlay", LayerContent::Fill(Fill::Solid(Color::WHITE)));
+    l.effects.items.push(Effect::GradientOverlay {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        gradient: Gradient {
+            stops: hard_stops(0.5),
+            opacity_stops: vec![],
+            style: GradientStyle::Linear,
+            angle: 0.0,
+            scale: 1.0,
+            reverse: false,
+            align: true,
+            offset: (0.0, 0.0),
+        },
+        dither: false,
+    });
+    d.layers.push(l);
+    check(&mut g, &d, "hard stop overlay at 0.5");
+}
+
+#[test]
+fn hard_stop_gradient_map() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("hard stop", Size::new(8, 2), ColorMode::Rgb, SampleType::F32);
+    d.layers.push(Layer::new("gray", LayerContent::Fill(Fill::Solid(Color::rgb(0.5, 0.5, 0.5)))));
+    d.layers.push(Layer::new(
+        "map",
+        LayerContent::Adjustment(Adjustment::GradientMap {
+            stops: hard_stops(0.5).iter().map(|(p, c)| (*p, c.to_rgb())).collect(),
+            reverse: false,
+            dither: false,
+        }),
+    ));
+    check(&mut g, &d, "hard stop gradient map at 0.5");
+}
+
+#[test]
+fn hard_stop_gradient_styles_depths_and_opacity() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for style in [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond] {
+            for reverse in [false, true] {
+                for at in [0.5, 0.375] {
+                    for opacity_only in [false, true] {
+                        let mut d = Document::new("hard stops", Size::new(8, 8), ColorMode::Rgb, depth);
+                        let mut stops = if opacity_only { vec![(0.0, Color::BLACK), (1.0, Color::WHITE)] } else { hard_stops(at) };
+                        // Fill ramps stable-sort positions. Shuffle the endpoints without changing
+                        // the duplicate stops' order; segment midpoints still follow sorted order.
+                        stops.rotate_right(1);
+                        let fill = Fill::Gradient {
+                            stops,
+                            angle: 0.0,
+                            scale: 1.0,
+                            style,
+                            reverse,
+                            opacity_stops: vec![(1.0, 0.8), (0.0, 0.3), (at, 1.0), (at, 0.0)],
+                            midpoints: vec![0.25, 0.75, 0.9],
+                            offset: (0.0, 0.0),
+                            dither: false,
+                            align: true,
+                        };
+                        d.layers.push(Layer::new("gradient", LayerContent::Fill(fill)));
+                        check(&mut g, &d, &format!("hard stops {depth:?} {style:?} reverse={reverse} at={at} opacity_only={opacity_only}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hard_stop_effect_paints_and_maps() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for reverse in [false, true] {
+            for at in [0.5, 0.375] {
+                let grad = Gradient {
+                    stops: hard_stops(at),
+                    opacity_stops: vec![(0.0, 0.2), (at, 1.0), (at, 0.0), (1.0, 0.7)],
+                    style: GradientStyle::Linear,
+                    angle: 0.0,
+                    scale: 1.0,
+                    reverse,
+                    align: true,
+                    offset: (0.0, 0.0),
+                };
+                for effect in [
+                    Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 0.8), gradient: grad.clone(), dither: false },
+                    Effect::GradientOverlay {
+                        common: FxCommon::new(BlendMode::Normal, 0.8),
+                        gradient: Gradient { stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], ..grad.clone() },
+                        dither: false,
+                    },
+                    Effect::Stroke(stroke(2.0, StrokePosition::Inside, FxPaint::Gradient(grad.clone()))),
+                    Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Gradient(grad.clone()))),
+                    Effect::Stroke(stroke(2.0, StrokePosition::Center, FxPaint::Gradient(grad.clone()))),
+                    Effect::InnerGlow(glow(FxPaint::Gradient(grad.clone()), GlowTechnique::Softer, 3.0, 0.0, GlowSource::Edge)),
+                    Effect::OuterGlow(glow(FxPaint::Gradient(grad.clone()), GlowTechnique::Softer, 3.0, 0.0, GlowSource::Edge)),
+                ] {
+                    let mut d = Document::new("effect", Size::new(16, 16), ColorMode::Rgb, depth);
+                    let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
+                    let mut l = Layer::raster("shape", fmt);
+                    l.surface_mut().unwrap().write_region(Rect::new(4, 4, 12, 12), &vec![1.0; 8 * 8 * 4]);
+                    l.effects.items.push(effect);
+                    d.layers.push(l);
+                    check(&mut g, &d, &format!("hard stop effect {depth:?} reverse={reverse} at={at}: {:?}", d.layers[0].effects));
+                }
+                let mut d = Document::new("map", Size::new(8, 2), ColorMode::Rgb, depth);
+                d.layers.push(Layer::new("gray", LayerContent::Fill(Fill::Solid(Color::rgb(at, at, at)))));
+                d.layers.push(Layer::new(
+                    "map",
+                    LayerContent::Adjustment(Adjustment::GradientMap {
+                        stops: grad.stops.iter().map(|(p, c)| (*p, c.to_rgb())).collect(),
+                        reverse,
+                        dither: true,
+                    }),
+                ));
+                check(&mut g, &d, &format!("hard stop map {depth:?} reverse={reverse} at={at}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn hard_stop_gradient_color_modes_and_masks() {
+    let Some(mut g) = gpu() else { return };
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut d = Document::new("mode", Size::new(8, 8), mode, depth);
+            let mut stops = hard_stops(0.375);
+            stops[1].1.alpha = 0.4;
+            stops[2].1.alpha = 0.8;
+            let mut l = Layer::new("gradient", LayerContent::Fill(Fill::gradient(stops, 0.0, 1.0, GradientStyle::Linear, false)));
+            l.opacity = 0.7;
+            l.mask = Some(mask(d.bounds(), 8, 1.0));
+            d.layers.push(l);
+            check(&mut g, &d, &format!("hard stop mode {mode:?} {depth:?}"));
+        }
+    }
+}
+
+#[test]
+fn hard_stop_gradient_maximum_stop_table() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("many stops", Size::new(8, 2), ColorMode::Rgb, SampleType::F32);
+    let mut stops: Vec<_> = (0..4096).map(|i| (i as f32 / 4095.0, Color::rgb(i as f32 / 4095.0, 0.2, 0.7))).collect();
+    stops[2047] = (0.5, Color::WHITE);
+    stops[2048] = (0.5, Color::BLACK);
+    let mut fill = Fill::gradient(stops, 0.0, 1.0, GradientStyle::Linear, false);
+    if let Fill::Gradient { opacity_stops, .. } = &mut fill {
+        *opacity_stops = (0..4096).map(|i| (i as f32 / 4095.0, 0.8)).collect();
+    }
+    d.layers.push(Layer::new("gradient", LayerContent::Fill(fill)));
+    check(&mut g, &d, "maximum packed table crosses texture rows");
+}
+
+#[test]
+fn hard_stop_gradient_rotated_styles() {
+    let Some(mut g) = gpu() else { return };
+    for style in [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond] {
+        for angle in [30.0, 90.0, 180.0, 270.0] {
+            for reverse in [false, true] {
+                let mut d = Document::new("rotated", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+                let mut fill = Fill::gradient(hard_stops(0.5), angle, 1.0, style, reverse);
+                if let Fill::Gradient { dither, .. } = &mut fill {
+                    *dither = true;
+                }
+                d.layers.push(Layer::new("gradient", LayerContent::Fill(fill)));
+                check(&mut g, &d, &format!("rotated hard stops {style:?} angle={angle} reverse={reverse}"));
+            }
+        }
+    }
 }
 
 #[test]

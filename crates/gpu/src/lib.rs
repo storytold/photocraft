@@ -282,7 +282,7 @@ impl FxEntry {
 /// Pipelines and layouts, shared by cheap clones (wgpu handles are reference counted).
 #[derive(Clone)]
 struct Kit {
-    pipelines: HashMap<(Kernel, wgpu::TextureFormat), wgpu::RenderPipeline>,
+    pipelines: HashMap<(Kernel, wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     bgl0: wgpu::BindGroupLayout,
     bgl1: wgpu::BindGroupLayout,
     dummy: wgpu::TextureView,
@@ -346,7 +346,7 @@ impl Kit {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines[&(d.kernel, d.format)]);
+            pass.set_pipeline(&self.pipelines[&(d.kernel, d.format, false)]);
             pass.set_scissor_rect(d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3]);
             pass.set_bind_group(0, &bg0, &[(2 * i as u64 * STRIDE) as u32, ((2 * i + 1) as u64 * STRIDE) as u32]);
             pass.set_bind_group(1, &bg1, &[]);
@@ -551,7 +551,7 @@ impl Compositor {
             immediate_size: 0,
         });
         // `None` only for kernels without a fragment entry point, which are never drawn.
-        let pipeline = |k: Kernel, format: wgpu::TextureFormat| {
+        let pipeline = |k: Kernel, format: wgpu::TextureFormat, exact_ramp: bool| {
             let entry = k.entry()?;
             Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
@@ -564,18 +564,28 @@ impl Compositor {
                     module: &module,
                     entry_point: Some(entry),
                     targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("EXACT_RAMP", if exact_ramp { 1.0 } else { 0.0 })],
+                        ..Default::default()
+                    },
                 }),
                 multiview_mask: None,
                 cache: None,
             }))
         };
         let mut pipelines: HashMap<_, _> =
-            Kernel::DRAWN.iter().filter(|k| !k.is_map()).filter_map(|&k| Some(((k, acc_format), pipeline(k, acc_format)?))).collect();
+            Kernel::DRAWN.iter().filter(|k| !k.is_map()).filter_map(|&k| Some(((k, acc_format, false), pipeline(k, acc_format, false)?))).collect();
+        // Only these four entry points sample gradients. The finite exact variants are built
+        // once per compositor, never cached per gradient or rebuilt while editing stops.
+        for k in [Kernel::Content, Kernel::Adjust, Kernel::FxPaint, Kernel::FxStroke] {
+            if let Some(p) = pipeline(k, acc_format, true) {
+                pipelines.insert((k, acc_format, true), p);
+            }
+        }
         // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
-        let maps = Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)]);
-        let (maps, map_error) = first_error(device, || maps.filter_map(|key| Some((key, pipeline(key.0, key.1)?))).collect::<Vec<_>>());
+        let maps = Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32, false), (k, MAP16, false)]);
+        let (maps, map_error) = first_error(device, || maps.filter_map(|key| Some((key, pipeline(key.0, key.1, false)?))).collect::<Vec<_>>());
         if let Some(e) = &map_error {
             log::info!("GPU compositor: no effect-map pipelines ({e}); layer effects use the CPU");
         } else {
@@ -911,7 +921,7 @@ impl Compositor {
             let chunks = grid_rects(part, self.chunk);
             stats.chunks += chunks.len();
             work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
-            self.run_cell(device, queue, encoder, doc.id, &plan, &paged, cell, &fr, &chunks, &mut stats, sink);
+            self.run_cell(device, queue, encoder, doc.id, &plan, &paged, cell, &fr, &chunks, &mut stats, sink)?;
             let (evicted, bytes) = self.evict();
             stats.evicted += evicted;
             freed += bytes;
@@ -1081,9 +1091,9 @@ impl Compositor {
         chunks: &[Rect],
         stats: &mut Stats,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
-    ) {
+    ) -> Result<(), Unsupported> {
         if chunks.is_empty() {
-            return;
+            return Ok(());
         }
         let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, stats);
 
@@ -1206,7 +1216,9 @@ impl Compositor {
                 if clear {
                     continue;
                 }
-                pass.set_pipeline(&self.kit.pipelines[&(p.kernel, self.acc_format)]);
+                let exact = p.flags & plan::F_EXACT_RAMP != 0;
+                let pipeline = self.kit.pipelines.get(&(p.kernel, self.acc_format, exact)).ok_or_else(|| Unsupported("missing compositor pipeline".into()))?;
+                pass.set_pipeline(pipeline);
                 pass.set_scissor_rect(scissor.x0 as u32, scissor.y0 as u32, scissor.width(), scissor.height());
                 pass.set_bind_group(0, &bg0, &[(ci as u64 * STRIDE) as u32, (op_base + i as u64 * STRIDE) as u32]);
                 pass.set_bind_group(1, bg1[i].as_ref(), &[]);
@@ -1215,6 +1227,7 @@ impl Compositor {
             let (t, v) = &self.pool[plan.root as usize];
             sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
         }
+        Ok(())
     }
 
     /// Upload changed tiles of `surface` within `region` (its tile area inside one page cell);
