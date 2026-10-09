@@ -253,3 +253,32 @@ fn pair_kerning_measures_grapheme_pairs_and_rtl_but_not_joined_letters() {
     assert!(e.pair_kerning(&styled("אב", inter(20.0)), 72.0, 0).is_some(), "RTL Hebrew pair");
     assert_eq!(e.pair_kerning(&styled("سلام", inter(20.0)), 72.0, 0), None, "joined letters");
 }
+
+#[test]
+fn justify_all_spreads_the_last_line_over_word_gaps() {
+    let mut e = TextEngine::new();
+    let t = "aa bb";
+    let l = e.layout(&boxed(t, 20.0, 400.0, ParagraphStyle { align: TextAlign::JustifyAll, ..Default::default() }), 72.0);
+    let at = |i: usize| l.clusters.iter().find(|c| c.range.start == i).unwrap();
+    // Letters of a word stay together; the gap takes the slack.
+    assert!((at(0).x + at(0).advance - at(1).x).abs() < 1e-3);
+    assert!((at(3).x + at(3).advance - at(4).x).abs() < 1e-3);
+    assert!((at(4).x + at(4).advance - 500.0).abs() < 0.5, "fills to the right edge");
+    assert!((l.lines[0].x1 - 500.0).abs() < 0.5);
+}
+
+#[test]
+fn justify_all_without_gaps_letter_spaces_latin_but_not_arabic() {
+    let mut e = TextEngine::new();
+    let p = ParagraphStyle { align: TextAlign::JustifyAll, ..Default::default() };
+    // A single Latin word still spreads between its letters (today's behaviour).
+    let l = e.layout(&boxed("abc", 20.0, 400.0, p.clone()), 72.0);
+    assert!((l.lines[0].x1 - 500.0).abs() < 0.5);
+    // A single Arabic word can't be letter-spaced: it stays whole at its start edge, the right.
+    let t = "مرحبا";
+    let l = e.layout(&boxed(t, 20.0, 400.0, p), 72.0);
+    let natural = span(&e.layout(&point(t, 20.0), 72.0), t, |_| true);
+    assert!((span(&l, t, |_| true) - natural).abs() < 1e-3);
+    let (_, hi) = ink(&l, t, 0);
+    assert!((hi - 500.0).abs() < 0.5, "at the right edge: {hi}");
+}

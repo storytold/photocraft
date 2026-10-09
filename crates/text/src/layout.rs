@@ -942,20 +942,13 @@ impl Layouter {
                 if vertical {
                     extra -= squeeze_punctuation(text, &mut out.clusters[c0..], &mut out.glyphs[g0..]);
                 }
+                let mut line_shift = 0.0f32;
                 if justify_all {
                     let slack = avail.unwrap_or(0.0) - (adv + extra);
-                    let n = out.clusters.len() - c0;
-                    if n > 1 && slack > 0.0 {
-                        let step = slack / (n - 1) as f32;
-                        let starts: Vec<f32> = out.clusters[c0..].iter().map(|c| c.x).collect();
-                        for (i, c) in out.clusters[c0..].iter_mut().enumerate() {
-                            c.x += step * i as f32;
-                        }
-                        for g in &mut out.glyphs[g0..] {
-                            let i = starts.iter().rposition(|&s| s <= g.x + 1e-3).unwrap_or(0);
-                            g.x += step * i as f32;
-                        }
-                        extra += slack;
+                    if slack > 0.0 {
+                        let (added, shift) = justify_all_line(&mut out.clusters[c0..], &mut out.glyphs[g0..], text, slack, rtl);
+                        extra += added;
+                        line_shift = shift;
                     }
                 }
                 if vertical {
@@ -973,7 +966,7 @@ impl Layouter {
                         }
                     }
                 }
-                let x0 = dx + m.offset;
+                let x0 = dx + m.offset + line_shift;
                 out.lines.push(LineInfo {
                     range: map(lr.start)..map(lr.end).min(content_end),
                     baseline,
@@ -1284,6 +1277,58 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
         }
     }
     best
+}
+
+/// Spreads the slack of a "Justify all" last line over its word gaps (Photoshop's default letter
+/// spacing is 0%). A line without gaps is letter-spaced instead, except cursive text, which
+/// can't be: it moves whole to its start edge. `clusters` and `glyphs` are the line's, in visual
+/// order. Returns (width added to the line, shift of the whole line).
+fn justify_all_line(clusters: &mut [ClusterInfo], glyphs: &mut [PlacedGlyph], text: &str, slack: f32, rtl: bool) -> (f32, f32) {
+    let blank = |c: &ClusterInfo| text.get(c.range.clone()).is_some_and(|s| !s.is_empty() && s.chars().all(char::is_whitespace));
+    let (lo, hi) = clusters.iter().filter(|c| !blank(c)).fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
+    let gaps: Vec<usize> = clusters.iter().enumerate().filter(|(_, c)| blank(c) && c.x > lo && c.x < hi).map(|(i, _)| i).collect();
+    if !gaps.is_empty() {
+        let step = slack / gaps.len() as f32;
+        let gap_x: Vec<f32> = gaps.iter().filter_map(|&i| clusters.get(i)).map(|c| c.x).collect();
+        let before = |x: f32| gap_x.iter().filter(|&&g| g < x - 1e-3).count() as f32;
+        for (i, c) in clusters.iter_mut().enumerate() {
+            c.x += step * before(c.x);
+            if gaps.contains(&i) {
+                c.advance += step;
+            }
+        }
+        for g in glyphs.iter_mut() {
+            g.x += step * before(g.x);
+        }
+        return (slack, 0.0);
+    }
+    let cursive = clusters.iter().any(|c| text.get(c.range.clone()).is_some_and(|s| s.chars().any(crate::segment::is_cursive_letter)));
+    if cursive {
+        if !rtl {
+            return (0.0, 0.0);
+        }
+        for c in clusters.iter_mut() {
+            c.x += slack;
+        }
+        for g in glyphs.iter_mut() {
+            g.x += slack;
+        }
+        return (0.0, slack);
+    }
+    let n = clusters.len();
+    if n < 2 {
+        return (0.0, 0.0);
+    }
+    let step = slack / (n - 1) as f32;
+    let starts: Vec<f32> = clusters.iter().map(|c| c.x).collect();
+    for (i, c) in clusters.iter_mut().enumerate() {
+        c.x += step * i as f32;
+    }
+    for g in glyphs.iter_mut() {
+        let i = starts.iter().rposition(|&s| s <= g.x + 1e-3).unwrap_or(0);
+        g.x += step * i as f32;
+    }
+    (slack, 0.0)
 }
 
 #[cfg(test)]
