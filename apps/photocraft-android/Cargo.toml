@@ -1,0 +1,42 @@
+[package]
+name = "photocraft-android"
+description = "PhotoCraft on Android (eframe NativeActivity, wgpu on Vulkan)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Android loads the app as a shared library (android.app.NativeActivity, see
+# packaging/android/AndroidManifest.xml). On every other target the library is empty.
+[lib]
+name = "photocraft_android"
+crate-type = ["cdylib"]
+
+# The workspace forbids unsafe code. NativeActivity finds the entry point by its symbol name, so
+# `android_main` needs `#[unsafe(no_mangle)]`, which the `unsafe_code` lint counts as unsafe. That
+# one attribute is the only proposed exception for maintainer review. It is allowed on that
+# item alone in src/android.rs; there are no unsafe memory operations.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[target.'cfg(target_os = "android")'.dependencies]
+photocraft-engine = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
+egui = { workspace = true }
+log = { workspace = true }
+# Android sends a process's stdout and stderr nowhere: logs and panics go to logcat instead.
+android_logger = "0.15"
+# Must match the AndroidApp type used by winit/eframe, already pinned in Cargo.lock.
+android-activity = { version = "=0.6.1", features = ["native-activity"] }
+tempfile = "3"
+
+[dev-dependencies]
+tempfile = "3"
