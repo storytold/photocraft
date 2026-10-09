@@ -81,10 +81,7 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
     if pts.is_empty() {
         return Err(bad(cmd, "`points` is empty"));
     }
-    // A stroke runs dab by dab along its length: an absurd coordinate would mean billions of dabs.
-    if pts.iter().any(|q| !(q.x.abs() <= crate::brush_cmds::MAX_COORD && q.y.abs() <= crate::brush_cmds::MAX_COORD)) {
-        return Err(bad(cmd, format!("point coordinates must be finite and within ±{}", crate::brush_cmds::MAX_COORD)));
-    }
+    crate::brush_cmds::check_coords(&pts, cmd)?;
     let base = s.tools.brush.clone();
     let pct = |k: &str, d: f32, lo: f32, hi: f32| num(p, k, d).clamp(lo, hi) / 100.0;
     let brush = BrushSettings {
@@ -318,6 +315,7 @@ enum LivePaint {
 pub struct LiveRetouch {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
+    cmd: String,
     renderer: photocraft_paint::StrokeRenderer,
     pre: std::sync::Arc<Document>,
     pre_surf: Surface,
@@ -364,8 +362,21 @@ impl LiveRetouch {
             LivePaint::History(src) if src.format() != pre_surf.format() => LivePaint::History(src.convert(pre_surf.format())),
             other => other,
         };
-        let mut live =
-            Self { doc: std::sync::Arc::new(doc), renderer, pre, pre_surf, id, params: p.clone(), paint, mode, opacity, sel, lock, tail: Rect::EMPTY };
+        let mut live = Self {
+            doc: std::sync::Arc::new(doc),
+            cmd: cmd.into(),
+            renderer,
+            pre,
+            pre_surf,
+            id,
+            params: p.clone(),
+            paint,
+            mode,
+            opacity,
+            sel,
+            lock,
+            tail: Rect::EMPTY,
+        };
         live.push(&stroke.points)?;
         Ok(live)
     }
@@ -380,7 +391,9 @@ impl LiveRetouch {
     /// the commit, and pixels painted earlier in the stroke are never re-cloned. What finishing
     /// the stroke now would add is drawn too (a lone first dab shows on the press), and redrawn on
     /// every step.
+    /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        crate::brush_cmds::check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
         let mut dmg = Rect::EMPTY;
@@ -867,6 +880,7 @@ fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 pub struct LiveDab {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
+    cmd: String,
     renderer: photocraft_paint::StrokeRenderer,
     done: usize,
     effect: DabEffect,
@@ -899,6 +913,7 @@ impl LiveDab {
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
+            cmd: cmd.into(),
             renderer,
             done: 0,
             effect,
@@ -922,7 +937,9 @@ impl LiveDab {
     }
 
     /// Render more points; returns the rectangle that changed.
+    /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        crate::brush_cmds::check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         let ctx = self.renderer.ctx.clone();
         let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();

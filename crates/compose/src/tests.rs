@@ -76,7 +76,10 @@ fn every_blend_mode_matches_reference_on_opaque_pixels() {
         top.blend = mode;
         d.layers = vec![bottom, top];
         let got = px(&d, 0, 0);
+        // A 32-bit document: Add / Divide don't clip at 1 (Divide gives 0.6 / 0.2 = 3 in red).
+        psblend::HDR.with(|h| h.set(true));
         let want = blend::blend_rgb(mode, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        psblend::HDR.with(|h| h.set(false));
         for i in 0..3 {
             assert!((got[i] - want[i]).abs() < 1e-5, "{mode:?}: {got:?} vs {want:?}");
         }
@@ -373,6 +376,50 @@ fn sixteen_bit_and_float_layers_composite() {
     }
 }
 
+/// `top` blended with `mode` over an opaque `bg`, both solid, in a 4×4 RGB document of `depth`.
+fn two_solid_layers(depth: SampleType, mode: BlendMode, bg: [f32; 3], top: [f32; 3]) -> Document {
+    let mut d = Document::new("hdr", Size::new(4, 4), ColorMode::Rgb, depth);
+    let fmt = d.pixel_format();
+    let mut b = Layer::raster("bg", fmt);
+    b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [bg[0], bg[1], bg[2], 1.0]));
+    let mut t = Layer::raster("top", fmt);
+    t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
+    t.blend = mode;
+    d.layers.push(b);
+    d.layers.push(t);
+    d
+}
+
+#[test]
+fn float_documents_add_and_divide_past_white() {
+    // 32-bit: Linear Dodge (Add) and Divide keep HDR values (adding light never darkens).
+    let (bg, top) = ([2.0, 0.5, 4.0], [0.5, 0.25, 0.5]);
+    for (mode, want) in [(BlendMode::LinearDodge, [2.5, 0.75, 4.5]), (BlendMode::Divide, [4.0, 2.0, 8.0]), (BlendMode::Multiply, [1.0, 0.125, 2.0])] {
+        let d = two_solid_layers(SampleType::F32, mode, bg, top);
+        for buf in [flatten(&d), render_tiled(&d, d.bounds(), 2)] {
+            for p in &buf.px {
+                assert!(close4(*p, [want[0], want[1], want[2], 1.0]), "{mode:?}: {p:?}");
+            }
+        }
+    }
+    // The flag doesn't leak into later renders on this thread.
+    let d = two_solid_layers(SampleType::U16, BlendMode::LinearDodge, [0.8, 0.5, 0.6], top);
+    assert!(close4(flatten(&d).px[0], [1.0, 0.75, 1.0, 1.0]));
+}
+
+#[test]
+fn integer_documents_clip_add_and_divide_at_white() {
+    let (bg, top) = ([0.8, 0.5, 0.6], [0.5, 0.25, 0.5]);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let f32_doc = depth == SampleType::F32;
+        for (mode, clipped, hdr) in [(BlendMode::LinearDodge, [1.0, 0.75, 1.0], [1.3, 0.75, 1.1]), (BlendMode::Divide, [1.0, 1.0, 1.0], [1.6, 2.0, 1.2])] {
+            let want = if f32_doc { hdr } else { clipped };
+            let p = flatten(&two_solid_layers(depth, mode, bg, top)).px[5];
+            assert!(close4(p, [want[0], want[1], want[2], 1.0]), "{mode:?} {depth:?}: {p:?}");
+        }
+    }
+}
+
 #[test]
 fn thumbnail_dimensions() {
     let d = doc_white(400, 200);
@@ -567,6 +614,17 @@ fn outer_and_inner_glow_regions() {
     let edge = px(&d, 10, 20);
     assert!(edge[1] > 0.3, "{edge:?}");
     assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]));
+    assert!(close4(px(&d, 5, 20), [1.0; 4]));
+}
+
+// A Precise inner glow from the centre is brightest in the middle and fades towards the edge,
+// like the Softer one; it used to paint nothing at all (#966).
+#[test]
+fn precise_inner_glow_from_center_paints_the_middle() {
+    let d = fx_doc(vec![Effect::InnerGlow(glow(GlowTechnique::Precise, GlowSource::Center))]);
+    let (center, edge) = (px(&d, 20, 20), px(&d, 10, 20));
+    assert!(center[1] > 0.9 && center[0] < 0.1, "green in the middle: {center:?}");
+    assert!(edge[0] > center[0] && edge[1] < center[1], "fades towards the edge: {edge:?} vs {center:?}");
     assert!(close4(px(&d, 5, 20), [1.0; 4]));
 }
 

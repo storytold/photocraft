@@ -1,7 +1,7 @@
 # Scorecard checklist: open bugs (#203–#208).
 # Each item: id, short target, status (done | partial | missing), issue, note (evidence).
 # Statuses must be true on main. BUG-203 verified against 47f9306 on 2026-10-07; the rest
-# against 4b53f62 on 2026-10-05.
+# against 4b53f62 on 2026-10-05, except BUG-204 against ec350d6 on 2026-10-09.
 area = "bugs"
 title = "Open bugs"
 order = 9
@@ -51,23 +51,23 @@ note = "format/src/atomic/tests.rs: Faulty AtomicFs injects mid-write StorageFul
 [[item]]
 id = "BUG-204-1"
 target = "Interface prefs (UI scale, font size, channels in colour, sliders, tooltips) wired or hidden"
-status = "missing"
+status = "done"
 issue = 204
-note = "prefs.rs:196-202; no reader outside prefs.rs (see the prefs audit)"
+note = "prefs_ui.rs tick reads ui_scale (sync_display_scale), ui_font_size (theme::set_ui_font_size) and show_tooltips (sync_tooltips); show_channels_in_color and dynamic_color_sliders are in prefs::HIDDEN_UNTIL_IMPLEMENTED"
 
 [[item]]
 id = "BUG-204-2"
 target = "workspace.large_tabs, animated_zoom, auto_show_home_screen wired or hidden"
-status = "missing"
+status = "done"
 issue = 204
-note = "prefs.rs:163,166,229; no reader outside prefs.rs"
+note = "large_tabs and animated_zoom are in prefs::HIDDEN_UNTIL_IMPLEMENTED; auto_show_home_screen drives the Home screen (chrome_ui.rs home_button, canvas.rs)"
 
 [[item]]
 id = "BUG-204-3"
 target = "RAW prefs and ask_before_saving_layered_tiff read, or hidden"
-status = "partial"
+status = "done"
 issue = 204
-note = "ask_before_saving_layered_tiff drives the TIFF Options prompt (ui-egui tiff_options_ui.rs); raw_defaults (prefs.rs:712) still has no readers"
+note = "ask_before_saving_layered_tiff drives the TIFF Options prompt (ui-egui tiff_options_ui.rs); raw_defaults.open_in_camera_raw drives the Camera Raw dialog (camera_raw_ui.rs); the other raw_defaults fields are in prefs::HIDDEN_UNTIL_IMPLEMENTED"
 
 [[item]]
 id = "BUG-204-4"
@@ -86,9 +86,9 @@ note = "lib.rs push_recent caps the list with recent_cap (recent_file_count); me
 [[item]]
 id = "BUG-204-6"
 target = "Test: every Prefs field is read somewhere or on a hidden allowlist"
-status = "partial"
+status = "done"
 issue = 204
-note = "The scorecard's prefs audit counts unread fields; no engine test or allowlist yet"
+note = "crates/engine/tests/prefs_usage.rs every_preference_is_read_or_hidden: each field is read outside prefs.rs or listed in prefs::HIDDEN_UNTIL_IMPLEMENTED, never both"
 
 [[item]]
 id = "BUG-205-1"

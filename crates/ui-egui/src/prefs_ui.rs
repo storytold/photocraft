@@ -1022,7 +1022,14 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    crate::widgets::checkbox(ui, &mut b, &label);
+                    if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
+                        ui.vertical(|ui| {
+                            crate::widgets::checkbox(ui, &mut b, &label);
+                            ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                        });
+                    } else {
+                        crate::widgets::checkbox(ui, &mut b, &label);
+                    }
                     obj.insert(k, json!(b));
                 }
                 Value::String(s) if path == "interface.language" => {
@@ -1130,7 +1137,11 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
         ui.add(egui::TextEdit::singleline(&mut filter).desired_width(260.0).hint_text(tl!("command or shortcut")));
     });
     f.insert("filter".into(), json!(filter));
-    let mut overrides: BTreeMap<String, String> = f.get("overrides").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    // A malformed map (set over automation) is left as it is, so OK rejects it instead of
+    // saving the empty map drawn in its place.
+    let parsed = f.get("overrides").map(|v| serde_json::from_value::<BTreeMap<String, String>>(v.clone()));
+    let overrides_ok = parsed.as_ref().is_none_or(Result::is_ok);
+    let mut overrides = parsed.and_then(Result::ok).unwrap_or_default();
     let mut hidden: Vec<String> = f.get("hidden").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let mut colors: BTreeMap<String, String> = f.get("colors").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let mut selected = f.get("selected").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1275,7 +1286,9 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     if !message.is_empty() {
         ui.label(RichText::new(&message).color(if message.contains("already in use") { t.warning } else { t.text_dim }));
     }
-    f.insert("overrides".into(), json!(overrides));
+    if overrides_ok {
+        f.insert("overrides".into(), json!(overrides));
+    }
     f.insert("hidden".into(), json!(hidden));
     f.insert("colors".into(), json!(colors));
     f.insert("selected".into(), json!(selected));
@@ -1409,7 +1422,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             let overrides = f.get("overrides").cloned().unwrap_or(json!({}));
             // Shortcuts moved to another command are taken from their old owner (shell
             // commands included, which the engine doesn't know).
-            let mut ov: BTreeMap<String, String> = serde_json::from_value(overrides).unwrap_or_default();
+            // The map replaces every stored override, so a malformed one is an error, not "none".
+            let mut ov: BTreeMap<String, String> =
+                serde_json::from_value(overrides).map_err(|e| format!("overrides must map command IDs to shortcut strings: {e}"))?;
             let items = shortcut_items(app);
             // Newly assigned shortcuts are checked first and take theirs from any holder, custom
             // overrides included; unchanged overrides only take theirs from defaults.
@@ -1985,6 +2000,62 @@ mod tests {
         assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    #[test]
+    fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        app.custom_titlebar = true;
+        let id = open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("System title bar").scroll_to_me();
+        h.run_steps(4);
+        h.get_by_label("Applies at next launch.");
+        for desired in [true, false] {
+            h.get_by_label("System title bar").click();
+            h.run_steps(4);
+            assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["interface"]["systemTitleBar"], desired);
+            assert_eq!(h.state().session.prefs().interface.system_title_bar, !desired, "the draft is not applied yet");
+            h.get_by_label("Applies at next launch.");
+            h.get_by_label("Apply").click();
+            h.run_steps(4);
+            assert_eq!(h.state().session.prefs().interface.system_title_bar, desired);
+            assert_eq!(stored(&store)["interface"]["systemTitleBar"], desired);
+            assert!(h.state().custom_titlebar, "do not change the current window or restart it");
+            let (reloaded, _) = app_with_saved(store.lock().unwrap().clone());
+            assert_eq!(reloaded.session.prefs().interface.system_title_bar, desired);
+            h.get_by_label("Applies at next launch.");
+        }
+        h.get_by_label("System title bar").click();
+        h.run_steps(4);
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
+        assert!(!h.state().session.prefs().interface.system_title_bar);
+        assert_eq!(stored(&store)["interface"]["systemTitleBar"], false);
+        assert!(h.state().custom_titlebar);
+    }
+
+    #[test]
+    fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
+        let mut h =
+            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en")), obj);
+        h.run_steps(4);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
+        h.get_by_label("Show tooltips").click();
+        h.run_steps(4);
+        assert_eq!(h.state()["showTooltips"], false);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
+    }
+
     #[test]
     fn preferences_confirm_after_apply_commits_later_edits() {
         let (mut app, _) = app_with_store();
@@ -2075,6 +2146,35 @@ mod tests {
         assert_eq!(effective_shortcut(&app, "layer.new.layer", None).as_deref(), Some("Cmd+O"));
         assert_eq!(effective_shortcut(&app, "layer.new.group", None), None, "taken back from the group");
         assert_eq!(effective_shortcut(&app, "file.open", Some("Cmd+O")), None, "File › Open stays cleared");
+    }
+
+    #[test]
+    fn shortcut_dialog_rejects_malformed_overrides() {
+        // #956: a non-map `overrides` was read as "no overrides" and wiped every custom shortcut.
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        app.run("edit.keyboardShortcuts", json!({"set": {"file.new": "Ctrl+Shift+N"}})).unwrap();
+        let before = app.session.prefs().shortcuts.clone();
+        assert!(!before.is_empty());
+        for bad in [json!("bogus"), json!(["file.new"]), json!({"file.new": 5})] {
+            let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
+            app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), bad.clone());
+            assert!(crate::dialogs::confirm(&mut app, id).is_err(), "{bad} accepted");
+            assert_eq!(app.session.prefs().shortcuts, before, "{bad} changed the shortcuts");
+        }
+
+        // Drawing the open dialog keeps the malformed value for OK to reject, instead of
+        // replacing it with the empty map it shows.
+        let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!("bogus"));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["overrides"], json!("bogus"));
+        assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+        assert_eq!(h.state().session.prefs().shortcuts, before);
     }
 
     #[test]

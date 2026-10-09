@@ -207,7 +207,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Vec<Sur
     for f in &files {
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
-        let doc = photocraft_io::import(&name, &bytes).map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?.document;
+        let doc = crate::file_cmds::import(&name, &bytes)?;
         frames.push(crate::file_cmds::flattened(&doc, fmt));
     }
     Ok(frames)

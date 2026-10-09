@@ -28,6 +28,17 @@ readiness; treat it as an upper bound.
 
 **Menu parity: 532 / 625 (85.1%)** on 2026-10-01, up from 224 (35.8%) the day before. See [`parity.md`](parity.md).
 
+2026-10-08: Affinity `.af`, `.afdesign`, `.afphoto` and `.afpub` documents (container versions
+8–12) open **natively** ([format notes](../crates/affinity/README.md)): pages and artboards, layers
+and groups, curves and geometric shapes with fills, gradients and strokes, text as type layers,
+placed images as smart objects, pixel layers and masks, as an 8-bit RGB document without a source
+save path. Measured against the thumbnail Affinity embeds in each file, 21 pinned public documents
+(`cargo xtask corpus --affinity`) differ by 0–4.6 of 255 on average. Layer effects, adjustments,
+live filters, brush strokes, special shapes, master pages and CMYK/Lab/16-bit document colour are
+approximated or left out, each with a warning; damaged or unknown files fall back to the embedded
+preview. Affinity writing is not implemented: no Affinity installation was available to check
+written files, so `.af` export stays unsupported.
+
 ## Honest parity assessment (2026-10-05)
 
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it
@@ -172,4 +183,3 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 | **M10** | Smart features | `ml` (ort native / ort-web on the web), Select Subject/Object/Sky, Remove BG, Remove tool, content-aware fill, healing, AI denoise, RAW develop | Quality benchmarks on a public dataset; timing budgets |
 | **M11** | Automation + formats | MCP server, batch, scripting, remaining formats (JP2, DICOM, DPX…), C2PA | An agent completes 10 scripted edit tasks via MCP |
 | **M12** | Pro parity | CMYK/Lab UI, print, HDR display, photomerge/HDR merge, timeline, layer comps, artboards, symmetry, neural filters | `xtask parity` ≥ 90% of Photoshop menu checklist |
-

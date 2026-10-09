@@ -91,7 +91,10 @@ impl Headless {
             }
             None => Some(requested.to_string()),
         };
-        let index = self.session.add_document(o.document, path);
+        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
+        if let Some(st) = self.session.active_mut() {
+            st.source_read_only = o.source_read_only;
+        }
         let d = &self.session.documents()[index];
         Ok(json!({
             "index": index,

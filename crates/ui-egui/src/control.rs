@@ -773,6 +773,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             })
         }),
         "panels": app.ui.panels,
+        "view": app.ui.view,
         "views": app.ui.views,
         "dialogs": dialogs,
         "windows": app.ui.windows,
@@ -923,6 +924,19 @@ mod tests {
         let dialog = chosen["result"]["dialog"].as_u64().unwrap();
         assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":dialog}))["ok"], true);
         assert!(app.session.active().unwrap().doc.selection.is_some());
+    }
+
+    #[test]
+    fn ui_inspect_reports_the_view_preferences() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let before = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert_eq!(before.pointer("/result/view/show/selection_edges"), Some(&json!(true)));
+        assert_eq!(before.pointer("/result/view/screen_mode"), Some(&json!("standard")));
+        assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "view.show.selectionEdges"}))["ok"], true);
+        let after = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert_eq!(after.pointer("/result/view/show/selection_edges"), Some(&json!(false)));
+        assert_eq!(after["result"]["view"], json!(app.ui.view));
     }
 
     #[test]

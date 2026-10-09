@@ -121,7 +121,7 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     if doc.layers.is_empty() {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { document: doc, warnings: conv.warnings })
+    Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
 }
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at

@@ -806,6 +806,13 @@ pub(crate) type NavigatorCache = (std::sync::Weak<Document>, u64, egui::TextureH
 /// How long adjustment-dialog settings must stay unchanged before the navigator shows them.
 const NAVIGATOR_SETTLE_MS: f64 = 200.0;
 
+/// While a Move or Patch drag or a live paint stroke is under way, the navigator keeps its image
+/// of document `idx` and catches up on release: each step of the drag is a new preview, and a
+/// thumbnail composite of the whole document per step makes painting lag on large images.
+fn navigator_waits_for_drag(app: &PhotocraftApp, idx: usize) -> bool {
+    crate::move_ui::showing(app) || crate::patch_preview::showing(app) || live_stroke(app, idx).is_some()
+}
+
 /// The Navigator panel's image of document `idx`. With the CPU canvas that is the canvas texture
 /// itself; with the GPU canvas a thumbnail cached per revision, so an edit to a huge document
 /// doesn't also pay a full-resolution CPU composite for the navigator.
@@ -825,9 +832,8 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     {
         return Some(t.id());
     }
-    // While a Move or Patch drag is under way the navigator keeps its image and catches up on release.
     if let Some((_, _, t)) = &cached
-        && (crate::move_ui::showing(app) || crate::patch_preview::showing(app))
+        && navigator_waits_for_drag(app, idx)
     {
         return Some(t.id());
     }
@@ -1098,6 +1104,10 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
 
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it.
 fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32; 2])> {
+    // Command dialogs always edit the active document. Never show their preview in another tab.
+    if app.session.active_index() != Some(idx) {
+        return None;
+    }
     if crate::adjust_preview::on_layer(app, idx) {
         return None;
     }
@@ -1123,7 +1133,10 @@ fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u6
             let buf = photocraft_compose::flatten(r);
             let t1 = crate::gpu_canvas::now_ms();
             let (display, _) = canvas_display(app, &doc, None);
-            app.gpu.as_ref()?.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buf), doc.depth);
+            // Headless/CPU tests can still inspect the computed preview without a GPU texture.
+            if let Some(gpu) = app.gpu.as_ref() {
+                gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buf), doc.depth);
+            }
             app.perf.record("filter-preview", r.size.area(), t1 - t0, crate::gpu_canvas::now_ms() - t1);
         }
         app.filter_preview = Some(crate::filter_dialog::FilterPreview { doc: doc_id, revision, hash, k, result });
@@ -2165,7 +2178,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if !fresh {
             let t0 = crate::gpu_canvas::now_ms();
             let b = app.cached_bounds(u64::MAX - doc.id.0, sel).intersect(&vis);
-            let segs = crate::outline::outline_scaled(sel, b, step);
+            // Filters can occupy every worker in Rayon's global pool. A parallel scan here would
+            // block the UI thread waiting for those workers, preventing job cancellation (#1554).
+            let segs = if app.session.has_jobs() { crate::outline::outline_scaled_serial(sel, b, step) } else { crate::outline::outline_scaled(sel, b, step) };
             app.perf.span("outline", crate::gpu_canvas::now_ms() - t0);
             app.outline_cache = Some((doc.id, key, std::sync::Arc::new(segs)));
         }
@@ -4289,6 +4304,27 @@ mod tests {
     }
 
     #[test]
+    fn navigator_keeps_its_image_during_a_live_brush_stroke() {
+        // #1631: every step of a live stroke is a new preview key, so a navigator keyed by it
+        // re-composited the whole document per frame while painting. It waits for the release.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
+        app.ui.tool = Tool::Brush;
+        let m = egui::Modifiers::NONE;
+        assert!(!navigator_waits_for_drag(&app, 0));
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: 1.0 }, m);
+        let mut keys = Vec::new();
+        for x in [40.0, 70.0, 100.0] {
+            tool_event(&mut app, ToolEvent::Move { x, y: 40.0, pressure: 1.0 }, m);
+            keys.push(display_doc(&mut app, 0).1);
+            assert!(navigator_waits_for_drag(&app, 0), "painting at x = {x}");
+        }
+        assert!(keys.windows(2).all(|k| k[0] != k[1]), "each step is a new preview: {keys:?}");
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 40.0 }, m);
+        assert!(!navigator_waits_for_drag(&app, 0), "the navigator catches up on release");
+    }
+
+    #[test]
     fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
         // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
         // preview draws that tail live, so no frame after release is missing the end.
@@ -4550,5 +4586,51 @@ mod transform_controls_tests {
         assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
         assert!(!transform_controls_hit(r, r.center()));
         assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
+    }
+}
+
+#[cfg(test)]
+mod rotation_preview_isolation_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A CPU-only app must be able to generate the actual rotation preview without a
+    /// GPU adapter; checking the result also verifies Preview off and document integrity.
+    #[test]
+    fn rotation_preview_is_computed_headlessly_without_mutating_document() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 96, "height": 48})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        assert!(app.gpu.is_none());
+        crate::filter_dialog::open(&mut app, "image.rotation.arbitrary").unwrap();
+        let dialog = app.ui.dialogs.last_mut().unwrap();
+        dialog.fields.insert("angle".into(), json!(90.0));
+        dialog.fields.insert("direction".into(), json!("cw"));
+
+        let (factor, _, size) = ensure_filter_preview(&mut app, 0).expect("CPU preview computed");
+        assert_eq!(factor, 1);
+        assert_eq!(size, [48, 96]);
+        let original = &app.session.active().unwrap().doc;
+        assert_eq!([original.size.width, original.size.height], [96, 48]);
+
+        app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
+        assert!(ensure_filter_preview(&mut app, 0).is_none(), "disabling Preview must hide the preview");
+        assert_eq!([app.session.active().unwrap().doc.size.width, app.session.active().unwrap().doc.size.height], [96, 48]);
+    }
+
+    /// A dialog operates on the active document and cannot render a preview into a
+    /// background tab, even if that tab has a valid canvas index.
+    #[test]
+    fn filter_preview_is_not_returned_for_inactive_document() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 96, "height": 48})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        crate::filter_dialog::open(&mut app, "image.rotation.arbitrary").unwrap();
+        app.ui.dialogs.last_mut().unwrap().fields.insert("angle".into(), json!(90.0));
+        assert!(ensure_filter_preview(&mut app, 0).is_some());
+
+        app.session.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+        assert_eq!(app.session.active_index(), Some(1));
+        assert!(ensure_filter_preview(&mut app, 0).is_none(), "an inactive tab must never inherit the command preview");
     }
 }

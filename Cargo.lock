@@ -4010,6 +4010,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-affinity"
+version = "0.5.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "proptest",
+ "ruzstd",
+]
+
+[[package]]
 name = "photocraft-algo"
 version = "0.5.0"
 dependencies = [
@@ -4126,6 +4136,7 @@ version = "0.5.0"
 dependencies = [
  "blake3",
  "flate2",
+ "photocraft-affinity",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",
@@ -4162,6 +4173,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-raster",
  "proptest",
+ "rustix 1.1.5",
  "ruzstd",
  "serde",
  "serde_json",
@@ -4204,6 +4216,9 @@ name = "photocraft-io"
 version = "0.5.0"
 dependencies = [
  "blake3",
+ "crc32fast",
+ "flate2",
+ "photocraft-affinity",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",

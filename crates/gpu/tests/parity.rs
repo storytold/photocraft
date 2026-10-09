@@ -1245,6 +1245,42 @@ fn blend_mode_extremes() {
 }
 
 #[test]
+fn float_documents_blend_past_white() {
+    // 32-bit documents hold values above 1; Linear Dodge (Add) and Divide don't clip them there
+    // (integer depths do, see `blend_mode_extremes`). Values and alphas are exact in half floats.
+    // Separable modes only: the non-separable ones' ClipColor is ill-conditioned past white (a
+    // grey above 1 has max − lum ≈ 0), so CPU and GPU rounding diverge there.
+    let Some(mut g) = gpu() else { return };
+    let vals = [0.0f32, 0.25, 0.5, 1.0, 2.0, 4.0];
+    let alphas = [1.0f32, 0.5, 0.25];
+    for mode in BlendMode::LAYER_MODES.into_iter().filter(|m| m.is_separable()) {
+        let n = vals.len() as u32;
+        let mut d = Document::new("hdr", Size::new(n * 3, n), ColorMode::Rgb, SampleType::F32);
+        let fmt = d.pixel_format();
+        let mut bg = Layer::raster("bg", fmt);
+        let mut top = Layer::raster("top", fmt);
+        for (i, &b) in vals.iter().enumerate() {
+            for (j, &s) in vals.iter().enumerate() {
+                for (k, &a) in alphas.iter().enumerate() {
+                    let r = Rect::from_xywh((i * 3 + k) as i32, j as i32, 1, 1);
+                    bg.surface_mut().unwrap().fill_rect(r, &[b, b * 0.5, b, 1.0]);
+                    top.surface_mut().unwrap().fill_rect(r, &[s, s, s * 0.5, a]);
+                }
+            }
+        }
+        top.blend = mode;
+        d.layers.push(bg);
+        d.layers.push(top);
+        check(&mut g, &d, &format!("hdr {mode:?}"));
+        if mode == BlendMode::LinearDodge {
+            // 4 + 0.25 at full opacity (column 5 × 3, row 1): unclipped on the GPU too.
+            let px = render_to_vec(&mut g.comp, &g.device, &g.queue, &d, Rect::from_xywh(15, 1, 1, 1)).unwrap();
+            assert!((px[0][0] - 4.25).abs() < 1e-3, "{:?}", px[0]);
+        }
+    }
+}
+
+#[test]
 fn stroked_shapes_with_clipped_layers() {
     let Some(mut g) = gpu() else { return };
     use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};

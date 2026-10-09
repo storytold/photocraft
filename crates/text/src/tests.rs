@@ -1,6 +1,6 @@
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
+use photocraft_doc::text::{Caps, CharStyle, FontFeature, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape};
 use photocraft_geom::Affine;
 
 use crate::{TextEngine, fonts};
@@ -53,6 +53,20 @@ fn metrics_are_stable_and_scale_with_dpi() {
     // Point text: first baseline at the anchor.
     assert_eq!(a.lines[0].baseline, 0.0);
     assert!(a.lines[0].ascent > 8.0 && a.lines[0].ascent < 13.0);
+}
+
+#[test]
+fn small_caps_are_synthesized_when_the_font_has_no_small_caps_feature() {
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 40.0, caps: Caps::SmallCaps, ..Default::default() };
+    let mut engine = TextEngine::new();
+    let small = engine.layout(&styled("aA", style), 72.0);
+    let upper = engine.layout(&styled("AA", CharStyle { font_family: "Inter".into(), size_pt: 40.0, ..Default::default() }), 72.0);
+    assert_eq!(small.glyphs.len(), 2);
+    assert_eq!(small.glyphs[0].id, upper.glyphs[0].id, "lowercase uses the uppercase glyph");
+    assert_eq!(small.glyphs[1].id, upper.glyphs[1].id, "uppercase remains uppercase");
+    let size = |layout: &crate::TextLayout, glyph: usize| layout.faces[layout.glyphs[glyph].face as usize].size_px;
+    assert!((size(&small, 0) - 28.0).abs() < 0.01, "{}", size(&small, 0));
+    assert!((size(&small, 1) - 40.0).abs() < 0.01, "{}", size(&small, 1));
 }
 
 #[test]

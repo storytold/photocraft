@@ -74,11 +74,17 @@ pub fn parse_points(p: &Value, cmd: &str) -> Result<Vec<StrokePoint>> {
     if pts.is_empty() {
         return Err(bad(cmd, "`points` is empty"));
     }
-    // A stroke runs dab by dab along its length: an absurd coordinate would mean billions of dabs.
+    check_coords(&pts, cmd)?;
+    Ok(pts)
+}
+
+/// A stroke runs dab by dab along its length: an absurd coordinate would mean billions of dabs.
+/// Shared by the painting and the retouch tools' `points` (#976).
+pub(crate) fn check_coords(pts: &[StrokePoint], cmd: &str) -> Result<()> {
     if pts.iter().any(|q| !(q.x.abs() <= MAX_COORD && q.y.abs() <= MAX_COORD)) {
         return Err(bad(cmd, format!("point coordinates must be finite and within ±{MAX_COORD}")));
     }
-    Ok(pts)
+    Ok(())
 }
 
 /// Deep-merge `patch` into `base` (objects merge key by key; anything else replaces).
@@ -324,6 +330,7 @@ pub struct LiveStroke {
     pub doc: std::sync::Arc<photocraft_doc::Document>,
     /// Jitter seed to pass to `paint.stroke`.
     pub seed: u64,
+    cmd: String,
     renderer: StrokeRenderer,
     mirror: Option<(crate::symmetry_cmds::SymmetryAxis, StrokeRenderer)>,
     mirror_distinct: bool,
@@ -365,8 +372,20 @@ impl LiveStroke {
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let mirror = s.active().and_then(|st| st.symmetry_path.clone()).map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom)));
         let pre = surf.clone();
-        let mut live =
-            Self { doc: std::sync::Arc::new(doc), seed, renderer, mirror, mirror_distinct: false, pre, sel, lock, layer, params: p.clone(), tail: Rect::EMPTY };
+        let mut live = Self {
+            doc: std::sync::Arc::new(doc),
+            seed,
+            cmd: cmd.into(),
+            renderer,
+            mirror,
+            mirror_distinct: false,
+            pre,
+            sel,
+            lock,
+            layer,
+            params: p.clone(),
+            tail: Rect::EMPTY,
+        };
         live.push(&pts)?;
         Ok(live)
     }
@@ -381,7 +400,9 @@ impl LiveStroke {
     /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and
     /// nothing new appears on release.
+    /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         if let Some((axis, mirror)) = &mut self.mirror {
             let reflected = axis.reflect_points(pts);

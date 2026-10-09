@@ -288,6 +288,20 @@ async fn bridge_doc_save_rejects_headless_only_options_instead_of_saving_with_de
     }
 }
 
+/// #946: like headless mode, a bridged `doc_save` without `path` reaches the app's `app.save`,
+/// which writes back to the document's own PSD, PSB or .pcraft file or refuses with its own error.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_save_without_path_forwards_app_save_for_write_back() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let saved = json_of(&call(&client, "doc_save", json!({})).await);
+    assert_eq!(saved, json!({"saved": {}}), "no `path` is sent, not even null");
+    let saved = json_of(&call(&client, "doc_save", json!({"path": "out.psd"})).await);
+    assert_eq!(saved, json!({"saved": {"path": "out.psd"}}));
+    client.cancel().await.unwrap();
+    app.abort();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_response_budget_drops_connection_without_retrying_the_operation() {
     use photocraft_automation::{BridgeClient, budgets::MAX_RESPONSE_BYTES};
@@ -364,6 +378,49 @@ fn write_image(dir: &std::path::Path, name: &str, format: photocraft_codecs::For
     let bytes = photocraft_codecs::encode(&img, format, &Default::default()).unwrap();
     std::fs::write(dir.join(name), &bytes).unwrap();
     bytes
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn affinity_preview_warns_and_requires_a_new_save_path() {
+    let dir = tmp("affinity-preview");
+    let png = write_image(&dir, "preview.png", photocraft_codecs::Format::Png);
+    // Synthetic v12 envelope; the native document graph is intentionally absent.
+    let mut bytes = vec![0; 72];
+    bytes[..4].copy_from_slice(b"\x00\xffKA");
+    bytes[4..6].copy_from_slice(&12u16.to_le_bytes());
+    bytes[8..12].copy_from_slice(b"nsrP");
+    bytes[12..16].copy_from_slice(b"#Inf");
+    bytes[24..32].copy_from_slice(&72u64.to_le_bytes());
+    bytes[64..68].copy_from_slice(b"Prot");
+    bytes.extend(b"\xff\xff\xff\xffThmb");
+    bytes.extend(1u32.to_le_bytes());
+    bytes.extend((png.len() as u32 + 13).to_le_bytes());
+    bytes.extend(29u32.to_le_bytes());
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend((png.len() as u32).to_le_bytes());
+    bytes.push(1);
+    bytes.extend(png);
+    std::fs::write(dir.join("source.af"), &bytes).unwrap();
+    // A renamed layered extension must not bypass source protection.
+    std::fs::write(dir.join("renamed.psd"), &bytes).unwrap();
+    let client = connect(headless_in(&dir)).await;
+    for name in ["source.af", "renamed.psd"] {
+        let opened = json_of(&call(&client, "doc_open", json!({"path": name})).await);
+        assert!(opened["warnings"].to_string().contains("only its embedded 16×8 PNG preview"));
+        assert_eq!(opened["width"], 16);
+        let refused = call(&client, "doc_save", json!({})).await;
+        assert_eq!(refused.is_error, Some(true), "{}", text(&refused));
+        assert!(text(&refused).contains("pass `path`"), "{}", text(&refused));
+        let native = call(&client, "doc_save", json!({"path": "source.af"})).await;
+        assert_eq!(native.is_error, Some(true));
+        assert!(text(&native).contains("Affinity export"));
+        assert_eq!(std::fs::read(dir.join(name)).unwrap(), bytes);
+    }
+    json_of(&call(&client, "doc_save", json!({"path": "copy.pcraft"})).await);
+    assert_eq!(json_of(&call(&client, "doc_save", json!({})).await)["path"], "copy.pcraft");
+    assert_eq!(std::fs::read(dir.join("source.af")).unwrap(), bytes);
+    client.cancel().await.unwrap();
+    cleanup(&dir);
 }
 
 /// A save without `path` writes back only to a layered file in its own format (#416).
@@ -486,6 +543,7 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
                 "engine.execute" => {
                     json!({"id": id, "ok": true, "result": {"ran": req["params"]["command"], "params": req["params"]["params"], "wait": req["params"]["wait"]}})
                 }
+                "app.save" => json!({"id": id, "ok": true, "result": {"saved": req["params"]}}),
                 "engine.commands" => {
                     json!({"id": id, "ok": true, "result": [{"id": "file.new", "label": "New…", "enabled": true}]})
                 }

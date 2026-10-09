@@ -68,7 +68,8 @@ impl AuthorizedWorkspace {
         options.write(true).create_new(true);
         let written = root.dir.open_with(&tmp, &options).and_then(|mut file| {
             file.write_all(bytes)?;
-            file.sync_all()
+            // Falls back to a plain fsync on shares that refuse a full flush (#1336).
+            photocraft_format::atomic::sync_file(&file.into_std())
         });
         let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
         if let Err(e) = renamed {
@@ -80,7 +81,7 @@ impl AuthorizedWorkspace {
         {
             let dir = if parent.as_os_str().is_empty() { PathBuf::from(".") } else { parent };
             if let Ok(d) = root.dir.open(&dir) {
-                let _ = d.sync_all();
+                let _ = photocraft_format::atomic::sync_file(&d.into_std());
             }
         }
         Ok(())

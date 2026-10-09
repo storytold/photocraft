@@ -427,6 +427,9 @@ impl Session {
             },
             move |s, r: photocraft_io::ImportResult| {
                 let (index, color) = s.open_document(r.document, None);
+                if let Some(st) = s.active_mut() {
+                    st.source_read_only = r.source_read_only;
+                }
                 Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
             },
         )

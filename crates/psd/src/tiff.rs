@@ -1056,7 +1056,11 @@ pub mod transcode {
                         Ok(())
                     })?;
                     mask_heights = mh;
-                    t.sized_region(false, |x| x.u32s_to_end())?;
+                    // Blending ranges are bytes (black low/high, white low/high per channel), so
+                    // Photoshop stores them in the same order in either byte order: an Intel-order
+                    // layered TIFF holds the default ranges as `00 00 ff ff`. Swapping them as u32s
+                    // turned every range into `ff ff 00 00`, which hides every pixel of the layer.
+                    t.sized_region(false, |x| x.rest())?;
                     t.pascal(4)?;
                     t.blocks()
                 })?;
@@ -2221,6 +2225,24 @@ mod tests {
         let counts = &ch.data[..table];
         let swapped: Vec<u8> = counts.chunks(2).flat_map(|c| [c[1], c[0]]).collect();
         assert!(little.windows(table + samples.len()).any(|w| w[..table] == swapped[..] && w[table..] == *samples));
+    }
+
+    #[test]
+    fn blending_ranges_are_bytes_in_either_order() {
+        let mut file = testgen::layered(Version::Psd, ColorMode::Rgb, 8, Compression::Rle);
+        let ranges: Vec<u8> = [0u8, 0, 255, 255].repeat(10);
+        let marked: Vec<u8> = (1u8..=40).collect();
+        for (i, l) in file.layer_info.as_mut().unwrap().layers.iter_mut().enumerate() {
+            l.blending_ranges.data = if i == 0 { marked.clone() } else { ranges.clone() };
+        }
+        let d = ImageSourceData::from_psd(&file);
+        let (little, _) = d.to_bytes(ByteOrder::Little).unwrap();
+        // Written verbatim (what Photoshop writes in an `II` TIFF), not swapped per u32.
+        assert!(little.windows(marked.len()).any(|w| w == marked));
+        let (back, _) = ImageSourceData::from_bytes(&little).unwrap();
+        for (a, b) in d.layer_info.as_ref().unwrap().layers.iter().zip(&back.layer_info.as_ref().unwrap().layers) {
+            assert_eq!(a.blending_ranges, b.blending_ranges);
+        }
     }
 
     #[test]

@@ -116,11 +116,18 @@ pub(crate) fn maker_note(t: &Tiff, ifds: &[Ifd]) -> Option<Ifd> {
 /// As-shot white-balance multipliers (R, G, B) from ColorData.
 fn as_shot_wb(t: &Tiff, mn: &Ifd) -> Option<[f64; 3]> {
     let e = mn.get(CANON_COLOR_DATA)?;
-    let v = t.uints(e);
+    // The entry is UNDEFINED: its bytes are a table of 16-bit words (file byte order), and the
+    // offsets below count words, not bytes. Reads stay inside the entry's own byte count.
+    let bytes = e.unit().checked_mul(e.count as usize)?;
+    let word = |off: usize| {
+        let at = off.checked_mul(2)?.checked_add(e.at)?;
+        (at.checked_add(2)? <= e.at.checked_add(bytes)?).then(|| t.u16_at(at)).flatten().map(f64::from)
+    };
     // Word offsets of WB_RGGBLevelsAsShot used by the ColorData versions.
     for off in [0x3F, 0x47, 0x19, 0x22] {
-        let Some(l) = v.get(off..off + 4) else { continue };
-        let [r, g1, g2, b] = [l[0], l[1], l[2], l[3]].map(f64::from);
+        let (Some(r), Some(g1), Some(g2), Some(b)) = (word(off), word(off + 1), word(off + 2), word(off + 3)) else {
+            continue;
+        };
         let g = (g1 + g2) / 2.0;
         let plausible = (256.0..16384.0).contains(&g) && (g1 - g2).abs() <= g * 0.05 && (0.25..8.0).contains(&(r / g)) && (0.25..8.0).contains(&(b / g));
         if plausible {
@@ -342,6 +349,78 @@ mod tests {
                 })
                 .collect();
             assert_eq!(measured_red_row(&data, w, Rect::new(0, 0, w, h), 100.0, 4000.0), Some(red_row));
+        }
+    }
+}
+#[cfg(all(test, feature = "corpus"))]
+mod wb_debug {
+
+    /// The corpus PowerShot CR2: ColorData's WB_RGGBLevelsAsShot sits at word offset 0x47 (the
+    /// PowerShot SX50 HS's ColorData version), the same words its DNG conversion neutralises
+    /// (AsShotNeutral -> WB ≈ [1.66, 1.0, 1.74]; the ColorData words give [1.70, 1.0, 1.69] —
+    /// the converter re-derives them through the color matrix). The synthetic twin of this
+    /// oracle is `color_data_wb_as_words` above; it runs in every CI.
+    #[test]
+    fn power_shot_color_data_holds_the_as_shot_wb() {
+        let Ok(bytes) = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus/pixls/IMG_4059.CR2")) else {
+            panic!("corpus/pixls is fetched for corpus runs: cargo xtask corpus --pixls");
+        };
+        let s = crate::decode(&bytes, &crate::Limits::default()).expect("decode");
+        let wb = s.camera_wb.expect("the PowerShot's as-shot WB is read now");
+        assert!((wb[0] - 1.696).abs() < 0.01 && wb[1] == 1.0 && (wb[2] - 1.688).abs() < 0.01, "{wb:?}");
+        // The file's white balance is used, not an estimate: no grey-world note in the develop.
+        let d = crate::develop_sensor(&s, &crate::DevelopOptions::default()).expect("develop");
+        assert!(!d.warnings.iter().any(|w| w.contains("estimated automatically")), "{:?}", d.warnings);
+    }
+}
+#[cfg(test)]
+mod wb_words {
+    use crate::testgen::Cr2Spec;
+
+    /// ColorData arrives as UNDEFINED bytes that are 16-bit words; the offsets count words.
+    /// Regression for the byte-scaled lookup that never found the balance (synthetic twin of
+    /// the corpus oracle, runs in every CI).
+    #[test]
+    fn color_data_wb_as_words() {
+        let spec = Cr2Spec {
+            width: 8,
+            height: 8,
+            data: vec![2048u16; 64],
+            precision: 12,
+            components: 1,
+            slices: Vec::new(),
+            borders: None,
+            wb_rggb: Some([1613, 951, 951, 1605]),
+            orientation: 1,
+            model_id: None,
+        };
+        let bytes = spec.build();
+        let s = crate::decode(&bytes, &crate::Limits::default()).expect("decode");
+        let wb = s.camera_wb.expect("the synthetic as-shot WB is read");
+        assert!((wb[0] - 1613.0 / 951.0).abs() < 1e-9 && wb[1] == 1.0 && (wb[2] - 1605.0 / 951.0).abs() < 1e-9, "{wb:?}");
+    }
+
+    /// A ColorData entry too short for the offsets reads no balance instead of running past it.
+    #[test]
+    fn short_color_data_reads_no_wb() {
+        let spec = Cr2Spec { wb_rggb: None, ..minimal_spec() };
+        let bytes = spec.build();
+        let s = crate::decode(&bytes, &crate::Limits::default()).expect("decode");
+        assert!(s.camera_wb.is_none());
+    }
+
+    fn minimal_spec() -> Cr2Spec {
+        Cr2Spec {
+            width: 8,
+            height: 8,
+            data: vec![2048u16; 64],
+            precision: 12,
+            components: 1,
+            slices: Vec::new(),
+            borders: None,
+            wb_rggb: None,
+            orientation: 1,
+            model_id: None,
         }
     }
 }

@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parley::FontContext;
-use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, GenericFamily, SourceCache};
-use skrifa::raw::FileRef;
+use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
+use skrifa::raw::{FileRef, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
 
 /// Family used when a style names no family or an unknown one.
@@ -208,6 +208,31 @@ impl FontDb {
 
     pub fn has_family(&mut self, name: &str) -> bool {
         self.fcx.collection.family_id(name).is_some()
+    }
+
+    /// Whether the face selected for a character style exposes an OpenType GSUB feature.
+    ///
+    /// This deliberately checks the matched face, rather than every face in the family: a
+    /// regular face can lack a feature that its italic or bold sibling has (or vice versa).
+    pub(crate) fn selected_face_has_feature(&mut self, family: &str, weight: u16, italic: bool, feature: Tag) -> bool {
+        let family = if family.is_empty() || !self.has_family(family) { DEFAULT_FAMILY } else { family };
+        let Some(info) = self.fcx.collection.family_by_name(family) else {
+            return false;
+        };
+        let style = if italic { FontStyle::Italic } else { FontStyle::Normal };
+        let Some(font) = info.match_font(FontWidth::default(), style, FontWeight::new(weight.clamp(1, 1000) as f32), true) else {
+            return false;
+        };
+        let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else {
+            return false;
+        };
+        let Ok(font) = skrifa::FontRef::from_index(blob.as_ref(), font.index()) else {
+            return false;
+        };
+        font.gsub()
+            .ok()
+            .and_then(|gsub| gsub.feature_list().ok())
+            .is_some_and(|features| features.feature_records().iter().any(|record| record.feature_tag() == feature))
     }
 
     /// Faces of a family (weights, italics, variation axes).

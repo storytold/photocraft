@@ -586,7 +586,9 @@ fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
     };
     let mut m = match g.technique {
         GlowTechnique::Precise => {
-            let d = if inner && g.source == GlowSource::Edge { dist_inside(shape) } else { dist_outside(&src) };
+            // An inner glow, from either source, measures from the edge inwards; a centre glow is
+            // the inverse below (the distance outside is ≤ 0 everywhere inside, #966).
+            let d = if inner { dist_inside(shape) } else { dist_outside(&src) };
             let solid = g.size * g.spread;
             let soft = (g.size - solid).max(1e-3);
             let mut m = Map::new(shape.w, shape.h, 0.0);
@@ -1549,9 +1551,9 @@ fn mix_premul(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 /// `glow_map`, `bevel_maps` and `build_maps`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FieldKind {
-    /// `dist_outside` of the shape: precise outer and centre glows, bevels.
+    /// `dist_outside` of the shape: precise outer glows, bevels.
     Outside,
-    /// `dist_inside` of the shape: precise edge inner glows, bevels.
+    /// `dist_inside` of the shape: precise inner glows, bevels.
     Inside,
     /// Chamfer distance outside the shape: outside strokes, and the spread of drop shadows and
     /// softer outer glows ([`dilate`]).

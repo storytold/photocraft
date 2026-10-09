@@ -15,6 +15,9 @@
 //!   layer; unsupported raw variants fall back to the embedded JPEG preview.
 //! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
 //!   layers through the PSD path and are written back the same way; see `tiff_layers`.
+//! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
+//!   with no source save path, what isn't imported listed in the warnings; a file
+//!   whose native data can't be read opens as its embedded preview; see `affinity`.
 //! * Every other format goes through `photocraft-codecs` as a single
 //!   "Background" layer (depth and Gray/RGB/CMYK model preserved).
 //!
@@ -25,6 +28,7 @@
 
 pub mod abr_map;
 mod adjust_map;
+pub mod affinity;
 pub mod annotations_map;
 pub mod blocks;
 mod channel_map;
@@ -92,6 +96,11 @@ pub struct ImportResult {
     pub document: Document,
     /// Human-readable notes about anything approximated or dropped.
     pub warnings: Vec<String>,
+    /// Save must not write back to the source (an Affinity document: PhotoCraft can't write it).
+    pub source_read_only: bool,
+    /// Only a stand-in picture of the file (an Affinity document whose native data couldn't be
+    /// read): Open shows it with its warning; Place and other auxiliary imports refuse it.
+    pub preview_only: bool,
 }
 
 /// The import note for a file whose horizontal and vertical resolutions (`x`, `y`, in pixels per
@@ -152,7 +161,7 @@ pub fn is_psd(bytes: &[u8]) -> bool {
     bytes.starts_with(b"8BPS")
 }
 
-/// Imports a file. PSD/PSB and camera raws are detected by magic; everything
+/// Imports a file. PSD/PSB, Affinity containers and camera raws are detected by magic; everything
 /// else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_with(name, bytes, &photocraft_raster::Interrupt::NONE)
@@ -171,7 +180,7 @@ pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt)
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
-        return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new() });
+        return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
     }
     if is_psd(bytes) {
         let file = PsdFile::from_bytes(bytes)?;
@@ -185,7 +194,10 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
         let (mut document, warnings) = psd_import::psd_to_document_with(&file, ctl).ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
         text_import::prepare(&mut document);
-        return Ok(ImportResult { document, warnings });
+        return Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false });
+    }
+    if affinity::is_affinity(bytes) || affinity::has_extension(name) {
+        return affinity::import(name, bytes);
     }
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
@@ -208,6 +220,9 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
+    if affinity::EXTENSIONS.contains(&ext.as_str()) {
+        return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
+    }
     if ext == photocraft_format::EXTENSION {
         let previews = photocraft_format::SaveOptions {
             thumbnail: Some(photocraft_compose::thumbnail(doc, 256)),

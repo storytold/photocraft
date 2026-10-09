@@ -898,6 +898,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         let id = alt_click(id, ctx.input(|i| i.modifiers.alt));
         if let Err(e) = invoke(app, &ctx, &id, json!({})) {
             app.ui.status = e;
+            app.ui.status_error = true;
         }
     }
     right

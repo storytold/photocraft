@@ -663,7 +663,7 @@ pub struct Cr2Spec {
     pub slices: Vec<usize>,
     /// Image borders: left, top, right, bottom (inclusive), as in SensorInfo.
     pub borders: Option<[u16; 4]>,
-    /// As-shot RGGB levels written to ColorData at word offset 0x3F.
+    /// As-shot RGGB levels written to ColorData at word offset 0x47 (the PowerShot version).
     pub wb_rggb: Option<[u16; 4]>,
     pub orientation: u16,
     /// Canon model ID written to MakerNote tag 0x0010.
@@ -703,9 +703,14 @@ impl Cr2Spec {
             mn.push((0x00E0, Val::Short(vec![34, w as u16, h as u16, 0, 0, l, tp, r, b, 0, 0, 0, 0, 0, 0, 0, 0])));
         }
         if let Some(wb) = self.wb_rggb {
-            let mut cd = vec![0u16; 1273];
-            cd[0x3F..0x43].copy_from_slice(&wb);
-            mn.push((0x4001, Val::Short(cd)));
+            // Canon writes ColorData (0x4001) as UNDEFINED bytes that are 16-bit words; the
+            // WB_RGGBLevelsAsShot of the PowerShot version sits at word offset 0x47 (the EOS
+            // versions use 0x3F — see as_shot_wb).
+            let mut cd = vec![0u8; 2 * 1273];
+            for (i, v) in wb.iter().enumerate() {
+                cd[2 * (0x47 + i)..2 * (0x47 + i) + 2].copy_from_slice(&v.to_le_bytes());
+            }
+            mn.push((0x4001, Val::Undefined(cd)));
         }
         let mut exif: Vec<(u16, Val)> = vec![(33434, Val::Rational(vec![(1, 100)]))];
         if !mn.is_empty() {

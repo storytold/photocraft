@@ -935,6 +935,50 @@ mod tests {
         assert!(open(&mut app, &ctx).is_ok());
     }
 
+    /// Follow-up to #1494 / #1484: Alt is captured at stroke-down and stays recorded
+    /// through undo, redo and deterministic Liquify field reconstruction.
+    #[test]
+    fn alt_reversed_twirl_survives_replay_undo_and_redo() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        control(&mut app, &json!({"tool": "twirlCw", "size": 36, "rate": 80})).unwrap();
+
+        // Releasing Alt while dragging must not change the tool recorded at pointer-down.
+        pointer(&mut app, ToolEvent::Down { x: 53.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        pointer(&mut app, ToolEvent::Move { x: 58.0, y: 41.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 58.0, y: 41.0 }, egui::Modifiers::NONE);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.opts.tool, LiquifyTool::TwirlCw, "Alt must not change the selected tool");
+        assert_eq!(d.strokes.len(), 1);
+        assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+
+        // A following stroke without Alt records the original tool.
+        pointer(&mut app, ToolEvent::Down { x: 70.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Move { x: 75.0, y: 42.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        pointer(&mut app, ToolEvent::Up { x: 75.0, y: 42.0 }, egui::Modifiers::ALT);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.strokes.len(), 2);
+        assert_eq!(d.strokes[1].tool, LiquifyTool::TwirlCw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+
+        control(&mut app, &json!({"undo": true})).unwrap();
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.strokes.len(), 1);
+        assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
+        assert_eq!(d.redo[0].tool, LiquifyTool::TwirlCw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+
+        control(&mut app, &json!({"redo": true})).unwrap();
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.strokes.len(), 2);
+        assert!(d.redo.is_empty());
+        assert_eq!(d.strokes[0].tool, LiquifyTool::TwirlCcw);
+        assert_eq!(d.strokes[1].tool, LiquifyTool::TwirlCw);
+        assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field);
+    }
+
     #[test]
     fn dialog_strokes_match_the_engine_and_commit_once() {
         let ctx = egui::Context::default();

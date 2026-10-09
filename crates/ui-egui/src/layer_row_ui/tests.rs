@@ -152,6 +152,53 @@ fn a_configured_but_disabled_effect_stays_discoverable_in_the_panel() {
     assert!(effect_row.is_positive(), "a configured disabled effect remains visible for discovery");
 }
 
+/// #1622: the eyes on the effects rows work. The "Effects" eye hides and shows the whole list, an
+/// effect's eye only that effect; each click is one history step, keeps the effect's settings and
+/// never opens the Layer Style dialog.
+#[test]
+fn the_eyes_on_the_effects_rows_hide_and_show_effects() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let id = s.execute("layer.new.layer", json!({"name": "Styled"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerStyle.dropShadow", json!({"layer": id})).unwrap();
+    s.execute("layer.layerStyle.colorOverlay", json!({"layer": id})).unwrap();
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    // (the whole list is on, each effect is on).
+    let fx = |h: &Harness<'_, PhotocraftApp>| {
+        let fx = &h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().effects;
+        (fx.enabled, fx.items.iter().map(Effect::enabled).collect::<Vec<_>>())
+    };
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let eye = |h: &Harness<'_, PhotocraftApp>, row: &str| {
+        let r = h.get_by_label(row).rect();
+        pos2(r.left() + 15.0, r.center().y)
+    };
+    let (settings, n) = (h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().effects.items.clone(), steps(&h));
+    assert_eq!(fx(&h), (true, vec![true, true]));
+
+    let p = eye(&h, "Color Overlay");
+    click(&mut h, p);
+    assert_eq!(fx(&h), (true, vec![true, false]), "only the clicked effect is hidden");
+    assert_eq!(steps(&h), n + 1, "one history step");
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Hide Color Overlay"));
+    // The row stays (its eye box empty), and a click there shows the effect again.
+    let p = eye(&h, "Color Overlay");
+    click(&mut h, p);
+    assert_eq!(fx(&h), (true, vec![true, true]));
+
+    let p = eye(&h, "Effects");
+    click(&mut h, p);
+    assert_eq!(fx(&h), (false, vec![true, true]), "the Effects eye hides the list; each effect keeps its own eye");
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Hide Layer Effects"));
+    let p = eye(&h, "Effects");
+    click(&mut h, p);
+    assert_eq!(fx(&h), (true, vec![true, true]));
+
+    assert_eq!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().effects.items, settings, "settings survive");
+    assert_eq!(steps(&h), n + 4);
+    assert!(h.state().ui.dialogs.is_empty(), "an eye click never opens the Layer Style dialog");
+}
+
 fn groups_open(s: &photocraft_engine::Session) -> Vec<bool> {
     s.active().unwrap().doc.walk().into_iter().filter_map(|(_, _, l)| if let LayerContent::Group(g) = &l.content { Some(g.expanded) } else { None }).collect()
 }

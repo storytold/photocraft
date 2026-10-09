@@ -288,6 +288,18 @@ impl Effect {
         }
     }
 
+    /// Switches this instance on or off, keeping its settings.
+    pub fn set_enabled(&mut self, on: bool) {
+        match self {
+            Effect::DropShadow(s) | Effect::InnerShadow(s) => s.common.enabled = on,
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.common.enabled = on,
+            Effect::Stroke(s) => s.common.enabled = on,
+            Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => common.enabled = on,
+            Effect::Satin(s) => s.common.enabled = on,
+            Effect::BevelEmboss(b) => b.enabled = on,
+        }
+    }
+
     /// Short label for UIs.
     pub fn label(&self) -> &'static str {
         match self {

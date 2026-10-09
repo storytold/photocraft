@@ -103,7 +103,7 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     if !img.meta.text.is_empty() {
         warnings.push(format!("{} text metadata entries are not kept in the document", img.meta.text.len()));
     }
-    Ok(ImportResult { document: doc, warnings })
+    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
 /// `Some(surface)` when the document is exactly one visible, unmasked,
