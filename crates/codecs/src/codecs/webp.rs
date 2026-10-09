@@ -60,10 +60,10 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     if opts.embed_metadata {
         if let Some(exif) = &img.meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            enc.set_exif_metadata(crate::orientation::upright_exif(exif).into_owned());
+            enc.set_exif_metadata(crate::resolution::export_exif(exif, img.meta.dpi).into_owned());
         }
         if let Some(xmp) = &img.meta.xmp {
-            enc.set_xmp_metadata(crate::orientation::upright_xmp(xmp).as_bytes().to_vec());
+            enc.set_xmp_metadata(crate::resolution::export_xmp(xmp, img.meta.dpi).as_bytes().to_vec());
         }
     }
     enc.encode(img.data(), img.width(), img.height(), ct).map_err(|e| CodecError::encode(F, e))?;
@@ -92,8 +92,8 @@ fn encode_lossy(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         None
     };
     let icc = if opts.embed_icc { img.icc.as_deref() } else { None };
-    let exif = if opts.embed_metadata { img.meta.exif.as_deref().map(crate::orientation::upright_exif) } else { None };
-    let xmp = if opts.embed_metadata { img.meta.xmp.as_deref().map(crate::orientation::upright_xmp) } else { None };
+    let exif = if opts.embed_metadata { img.meta.exif.as_deref().map(|e| crate::resolution::export_exif(e, img.meta.dpi)) } else { None };
+    let xmp = if opts.embed_metadata { img.meta.xmp.as_deref().map(|x| crate::resolution::export_xmp(x, img.meta.dpi)) } else { None };
     Ok(riff(w, h, &frame, alpha.as_deref(), icc, exif.as_deref(), xmp.as_deref().map(str::as_bytes)))
 }
 

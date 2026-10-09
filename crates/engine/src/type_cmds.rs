@@ -849,6 +849,32 @@ mod tests {
         assert_eq!(text_layer(&s, id).runs, before.runs);
     }
 
+    /// A font that arrives after the layer was drawn (served fonts on the web) re-renders it with
+    /// no history step, and a clean document stays clean.
+    #[test]
+    fn refreshing_type_layers_takes_no_history_step() {
+        let mut s = session();
+        let id = LayerId(s.execute("type.create", json!({"text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap());
+        let doc_id = s.active().unwrap().doc.id;
+        // Stale pixels, and a document saved in this state.
+        {
+            let st = s.active_mut().unwrap();
+            let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(&mut st.doc).layer_mut(id) else { panic!("not a type layer") };
+            t.cache = None;
+            st.saved_revision = st.revision;
+        }
+        let rev = s.active().unwrap().revision;
+        let unknown = [(doc_id, LayerId(9999)), (photocraft_doc::DocId(u64::MAX), id)];
+        assert!(s.refresh_type_layers(&[&[(doc_id, id)][..], &unknown].concat()).is_empty());
+        assert!(text_layer(&s, id.0).cache.is_some());
+        let st = s.active().unwrap();
+        assert!(st.revision > rev);
+        assert_eq!(st.saved_revision, st.revision, "still clean");
+        // The only history step is still the creation.
+        assert!(s.undo());
+        assert!(s.active().unwrap().doc.layer(id).is_none());
+    }
+
     #[test]
     fn create_renders_and_is_undoable() {
         let mut s = session();

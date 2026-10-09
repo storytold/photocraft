@@ -81,6 +81,33 @@ thread_local! {
     pub static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Runs `f` with [`LAB_MIX`] set to `lab`, then restores the value it had (also on unwind). A
+/// nested rayon job can run another tile on this thread mid-composite; clearing the flag there
+/// made the rest of the outer tile mix in sRGB (#1112).
+pub fn with_lab_mix<R>(lab: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LAB_MIX.with(|l| l.set(self.0));
+        }
+    }
+    let _restore = Restore(LAB_MIX.with(|l| l.replace(lab)));
+    f()
+}
+
+/// Runs `f` with [`HDR`] set to `hdr`, then restores the value it had (also on unwind), like
+/// [`with_lab_mix`].
+pub fn with_hdr<R>(hdr: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HDR.with(|h| h.set(self.0));
+        }
+    }
+    let _restore = Restore(HDR.with(|h| h.replace(hdr)));
+    f()
+}
+
 /// `B(Cb, Cs)` with Photoshop's variants.
 pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     match mode {

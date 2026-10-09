@@ -55,7 +55,7 @@ fn row(h: &Harness<'static, PhotocraftApp>, name: &str) -> Option<Rect> {
 /// Fully inside the rows viewport (below the strip and the blend/lock rows, above the footer).
 fn in_view(h: &Harness<'static, PhotocraftApp>, r: Rect) -> bool {
     let layers = last_rects(&h.ctx).into_iter().find(|(g, _)| *g == Group::Layers).unwrap().1;
-    r.top() >= layers.top() + 26.0 && r.bottom() <= layers.bottom() - 36.0
+    r.top() >= layers.top() + 26.0 && r.bottom() <= layers.bottom() - (crate::widgets::FOOTER_BAR + 1.0)
 }
 
 fn expanded(app: &PhotocraftApp, group: LayerId) -> bool {

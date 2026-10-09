@@ -173,6 +173,15 @@ budget_ms = 30
 enforce = false  # over budget in the 2026-10-05 baseline
 
 [[scenario]]
+id = "P51"
+title = "New layer in a 150-layer document"
+issue = 1771
+bench = "perf_scenarios"
+row = "new layer in the many-layer document + refresh"
+budget_ms = 16
+enforce = false  # not in the baseline yet
+
+[[scenario]]
 id = "P13"
 title = "Brush dab on a 15000×10000 16-bit document"
 issue = 209

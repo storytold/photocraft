@@ -71,6 +71,27 @@ fn linear_raw_decodes_and_develops() {
     assert!(d.info.cfa.is_none());
 }
 
+/// `spec`'s file with its Orientation entry (a SHORT `from`) rewritten as a LONG `to`.
+fn with_long_orientation(spec: &DngSpec, from: u16, to: u32) -> Vec<u8> {
+    let mut b = spec.build();
+    let short = [&[0x12, 0x01, 3, 0, 1, 0, 0, 0][..], &from.to_le_bytes(), &[0, 0]].concat();
+    let at: Vec<usize> = b.windows(short.len()).enumerate().filter(|(_, w)| *w == short.as_slice()).map(|(i, _)| i).collect();
+    assert_eq!(at.len(), 1, "one Orientation entry");
+    let long = [&[0x12, 0x01, 4, 0, 1, 0, 0, 0][..], &to.to_le_bytes()].concat();
+    b[at[0]..at[0] + long.len()].copy_from_slice(&long);
+    b
+}
+
+#[test]
+fn an_orientation_past_u16_is_not_truncated_into_range() {
+    // #1817: 65538 truncated to 2 and rotated the image; it is out of range, so 1.
+    let mut spec = DngSpec::cfa(8, 6, vec![500; 48]);
+    spec.orientation = 2;
+    assert_eq!(sensor(&with_long_orientation(&spec, 2, 65_538)).orientation, 1);
+    // Control: a LONG orientation in range is read.
+    assert_eq!(sensor(&with_long_orientation(&spec, 2, 6)).orientation, 6);
+}
+
 #[test]
 fn metadata_is_read() {
     let (w, h) = (40, 30);

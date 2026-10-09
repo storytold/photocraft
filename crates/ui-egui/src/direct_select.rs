@@ -291,10 +291,11 @@ fn marquee(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], add: bool) {
 }
 
 /// Paths with their anchors (selected ones filled), the shown handles, the drag's preview in
-/// place of its path, and the marquee.
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
+/// place of its path, and the marquee. `paths` false (View › Show › Target Path off) leaves only
+/// the marquee.
+pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, paths: bool) {
     let ds = &app.ui.direct_selection;
-    for (r, path) in candidates(app) {
+    for (r, path) in if paths { candidates(app) } else { Vec::new() } {
         let path = match &ds.drag {
             Some(Drag::Edit { target, preview: Some(p), .. }) if *target == r => p.clone(),
             _ => path,

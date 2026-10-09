@@ -235,3 +235,17 @@ target = "Rotate View tool: drag to turn the view, Reset View, Match Rotation co
 status = "done"
 issue = 214
 note = "Tool::RotateView in the Hand flyout; view.rotateView / view.resetView; Match Rotation copies views[].rotation; enhanced_controls.rotate_view_with_trackpad is read"
+
+[[item]]
+id = "TOOL-1649-1"
+target = "Eyedropper Sample Size (Point, 3×3 … 101×101 Average), Sample layers, Show Sampling Ring"
+status = "done"
+issue = 1649
+note = "document.sampleColor (sample_cmds.rs): average of the square clipped to the canvas, in the document's model and depth; eyedropper_ui.rs options bar; shared with Alt-click, dialog eyedroppers and the Info panel; ui.set eyedropperSampleSize/eyedropperSample/eyedropperRing. Color Sampler tool still missing"
+
+[[item]]
+id = "TOOL-214-18"
+target = "Crop: drag outside the frame to rotate it (Shift 15 deg steps, angle readout); Enter rotates and crops in one step"
+status = "done"
+issue = 1792
+note = "image.crop angle param (image_cmds.rs: Image Rotation > Arbitrary + crop, one undo step); crop_ui.rs turns, moves and resizes the frame along its axes (Classic Mode visuals); UiState.crop_angle"

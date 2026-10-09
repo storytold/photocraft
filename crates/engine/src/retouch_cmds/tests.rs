@@ -1133,6 +1133,68 @@ fn live_clone_matches_the_commit() {
     }
 }
 
+// Both preview implementations must reject an entire pointer batch before their renderer,
+// coverage, tail or working surface changes. Compare a resumed stroke with a clean control.
+macro_rules! live_coordinate_regression {
+    ($name:ident, $live:ty, [$($cmd:literal),+]) => {
+        #[test]
+        fn $name() {
+            for depth in DEPTHS {
+                let mut s = session(32, 32, depth, "rgb");
+                paint_layer(&mut s, texture);
+                let st = s.active().unwrap();
+                let (doc, revision, history) = (st.doc.clone(), st.revision, st.history.past_len());
+                let id = st.active_layer.unwrap();
+                for cmd in [$($cmd),+] {
+                    let p = json!({"points": [[8, 16]], "source": [4, 8], "size": 4, "hardness": 100});
+                    let mut live = <$live>::begin(&s, cmd, &p).unwrap();
+                    let mut control = <$live>::begin(&s, cmd, &p).unwrap();
+                    // The first regression case fails fast even without the guard, before any
+                    // enormous coordinate reaches the path walker.
+                    for (x, y) in [
+                        (f64::NAN, 16.0),
+                        (16.0, f64::NAN),
+                        (f64::INFINITY, 16.0),
+                        (16.0, f64::NEG_INFINITY),
+                        (1e300, 16.0),
+                        (16.0, -crate::brush_cmds::MAX_COORD - 1.0),
+                    ] {
+                        let shown = live.doc.clone();
+                        let bounds = live.bounds();
+                        let batch = [StrokePoint::new(12.0, 18.0, 1.0), StrokePoint::new(x, y, 1.0)];
+                        let err = live.push(&batch).unwrap_err();
+                        assert!(matches!(err, EngineError::BadParams { cmd: ref actual, ref msg }
+                            if actual == cmd && msg.contains("point coordinates must be finite")));
+                        assert!(std::sync::Arc::ptr_eq(&shown, &live.doc), "{cmd}: invalid batch changed the preview");
+                        assert_eq!(live.bounds(), bounds, "{cmd}");
+                    }
+                    let next = [StrokePoint::new(-4.0, 16.0, 1.0), StrokePoint::new(24.0, 16.0, 1.0)];
+                    assert_eq!(live.push(&next).unwrap(), control.push(&next).unwrap(), "{cmd}");
+                    assert_eq!(live.bounds(), control.bounds(), "{cmd}");
+                    let got = live.doc.layer(id).unwrap().surface().unwrap();
+                    let want = control.doc.layer(id).unwrap().surface().unwrap();
+                    assert_eq!(got.read_region(live.bounds()), want.read_region(control.bounds()), "{cmd}");
+                    assert_eq!(got.content_bounds(), want.content_bounds(), "{cmd}");
+                }
+                let st = s.active().unwrap();
+                assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+                assert_eq!((st.revision, st.history.past_len()), (revision, history));
+            }
+        }
+    };
+}
+
+live_coordinate_regression!(
+    live_retouch_rejects_invalid_batches_without_changing_the_preview,
+    LiveRetouch,
+    ["paint.cloneStamp", "paint.healingBrush", "paint.historyBrush"]
+);
+live_coordinate_regression!(
+    live_dab_rejects_invalid_batches_without_changing_the_preview,
+    LiveDab,
+    ["paint.dodge", "paint.burn", "paint.sponge", "paint.blur", "paint.sharpen", "paint.smudge"]
+);
+
 /// The live Dodge shows what the commit paints, also where a stroke doubles back across the
 /// cells that remember each pixel's original colour (the live stroke edits one dab at a time).
 /// 32-bit, so the live working copy isn't quantised between dabs.

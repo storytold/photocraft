@@ -5,11 +5,22 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::state::DialogKind;
 
+/// Shared gate for native menu clicks and control-channel `ui.menu.invoke`.
+/// Dialogs and unsaved-changes prompts block edits, but allow the four view-navigation
+/// commands also usable through shortcuts. Camera Raw blocks menu commands entirely.
+pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
+    if app.camera_raw.is_some() {
+        return false;
+    }
+    (app.ui.dialogs.is_empty() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+}
+
 /// Top-level menus in Photoshop order.
 pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"];
 
 /// UI-level commands (handled by the shell rather than the engine): id, label, menu, shortcut.
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
+    ("ui.symmetryTransform", "Transform Symmetry", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
@@ -57,7 +68,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
-    ("edit.search", "Search…", &["Edit"], Some("Cmd+K")),
+    ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
     ("help.website", "PhotoCraft Website", &["Help"], None),
     ("help.artcraftWebsite", "ArtCraft Website", &["Help"], None),
@@ -114,11 +125,23 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
     }
-    invoke_unguarded(app, ctx, id, params)
+    let r = invoke_unguarded(app, ctx, id, params)?;
+    // The palette's empty-query list (UI-217-7); opening the palette isn't a command to recall.
+    if id != "edit.search" {
+        crate::palette::note_recent(ctx, id);
+    }
+    Ok(r)
 }
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if id == "ui.symmetryTransform" {
+        return crate::symmetry_ui::begin(app).map(|_| Value::Null);
+    }
+    // A pending Pen anchor is gesture state; Edit › Undo must match the keyboard.
+    if id == "edit.undo" && crate::vector_ui::pen_undo_last_point(app) {
+        return Ok(Value::Null);
+    }
     // Help › Discord, website, GitHub, Report an Issue.
     if let Some(url) = crate::links::url_for(id) {
         return Ok(crate::links::open(app, ctx, url));
@@ -328,6 +351,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.ui.dock_tabs.properties = 0;
             Ok(r)
         }
+        // Edit › Stroke…: open its full options dialog when called from menus/context
+        // menus. Explicit params from Actions, CLI, MCP and control channel execute directly.
+        crate::stroke_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+                return Err(why);
+            }
+            Ok(json!({"dialog": crate::stroke_ui::open(app)}))
+        }
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
         "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::color_range_ui::open(app)})),
@@ -474,6 +505,13 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
 }
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    if id == "ui.symmetryTransform" {
+        return crate::symmetry_ui::can_transform(app);
+    }
+    // Draft Pen points can be undone even when the document has no History entries.
+    if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+        return true;
+    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
         return false;
@@ -672,8 +710,14 @@ pub fn is_live(id: &str) -> bool {
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
-const PLACE_AFTER: &[(&str, &str)] =
-    &[("file.newFromClipboard", "file.new"), ("filter.render.relight", "filter.render.lightingEffects"), ("view.resetView", "view.flipHorizontal")];
+/// The command takes that item's submenu path, so it joins Photoshop's submenu even where the
+/// catalogue spells it differently (Filter › "Other…").
+const PLACE_AFTER: &[(&str, &str)] = &[
+    ("file.newFromClipboard", "file.new"),
+    ("filter.render.relight", "filter.render.lightingEffects"),
+    ("view.resetView", "view.flipHorizontal"),
+    ("filter.other.colorToAlpha", "filter.other.offset"),
+];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     // 1) Photoshop's full menu tree, in Photoshop order; live where we implement the command.
@@ -716,13 +760,16 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             color: None,
         });
     }
-    for e in extra {
+    for mut e in extra {
         let dup = items.iter().any(|i| i.id == e.id || (i.path == e.path && i.label.trim_end_matches('…') == e.label.trim_end_matches('…')));
         if !dup {
             // Insert after the item it belongs next to, else after the last item of the same
             // top-level menu, keeping menus contiguous.
             let top = e.path.first().cloned();
             let after = PLACE_AFTER.iter().find(|(id, _)| *id == e.id).and_then(|(_, a)| items.iter().position(|i| i.id == *a));
+            if let Some(path) = after.and_then(|a| items.get(a)).map(|i| i.path.clone()) {
+                e.path = path;
+            }
             let at = after.or_else(|| items.iter().rposition(|i| i.path.first() == top.as_ref())).map_or(items.len(), |p| p + 1);
             items.insert(at, e);
         }
@@ -1215,6 +1262,23 @@ mod tests {
             "keep the Photoshop Modify route"
         );
         assert!(!top.iter().any(|i| i.id == "select.modify.feather"), "no extra top-level Feather");
+    }
+
+    /// Color to Alpha (#1576) has no Photoshop counterpart: it joins Photoshop's own Filter ›
+    /// Other submenu (not a second "Other") right after Offset, enabled on a pixel layer.
+    #[test]
+    fn color_to_alpha_sits_in_filter_other_after_offset() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let items = menu_items(&app);
+        let at = |id: &str| items.iter().position(|i| i.id == id).unwrap_or_else(|| panic!("{id} missing"));
+        let (offset, c2a) = (at("filter.other.offset"), at("filter.other.colorToAlpha"));
+        assert_eq!(c2a, offset + 1);
+        assert_eq!(items[c2a].path, items[offset].path);
+        assert_eq!(items[c2a].label, "Color to Alpha…");
+        assert!(items[c2a].enabled, "the Background becomes a layer when the filter runs");
+        let others: Vec<_> = items.iter().filter(|i| i.path.first().is_some_and(|p| p == "Filter") && i.path.len() == 2).map(|i| &i.path[1]).collect();
+        assert!(!others.iter().any(|p| p.as_str() == "Other"), "no duplicate Other submenu: {others:?}");
     }
 
     #[test]

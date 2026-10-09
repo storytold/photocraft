@@ -172,7 +172,8 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
 /// egui-winit turns ⌘C / ⌘X / ⌘V into `Event::Copy` / `Cut` / `Paste` and drops the key press, and
 /// drops ⌘V entirely when the clipboard holds no text (an image). Outside text fields, give the
 /// pixel commands their key presses back: Copy/Cut/Paste become ⌘C/⌘X/⌘V presses (with ⇧/⌥ as
-/// held, so ⇧⌘C is Copy Merged), and a ⌘V release without a paste event becomes a ⌘V press.
+/// held, so ⇧⌘C is Copy Merged), and a ⌘V release without a ⌘V press (a paste event, or the Mac
+/// menu's key equivalent) becomes a ⌘V press.
 ///
 /// Ctrl+Insert copies and Shift+Insert pastes: egui-winit maps them on Windows (a Shift+Insert
 /// release without a paste event pastes the image, like ⌘V), and we map them here on Linux.
@@ -212,15 +213,28 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
             out.push(press(key, held));
             continue;
         }
-        if let egui::Event::Key { key, pressed: false, modifiers, .. } = &e
-            && let Some(held) = match key {
-                Key::V if modifiers.command => Some(*modifiers),
-                Key::Insert if cfg!(target_os = "windows") && modifiers.shift && !modifiers.ctrl => Some(Modifiers::COMMAND),
-                _ => None,
+        match &e {
+            // A ⌘V press egui-winit didn't swallow (the Mac menu's key equivalent, Shift+Insert on
+            // Linux): its release must not paste a second time (#1638).
+            egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.command => {
+                ctx.data_mut(|d| d.insert_temp(seen, true));
             }
-            && !ctx.data_mut(|d| d.remove_temp::<bool>(seen)).unwrap_or(false)
-        {
-            out.push(press(Key::V, held));
+            // A paste key's release ends that press, with or without ⌘ still held (else a stale
+            // mark would swallow the next image paste); without a press it is the paste itself.
+            egui::Event::Key { key: key @ (Key::V | Key::Insert), pressed: false, modifiers, .. } => {
+                let had_press = ctx.data_mut(|d| d.remove_temp::<bool>(seen)).unwrap_or(false);
+                let held = match key {
+                    Key::V if modifiers.command => Some(*modifiers),
+                    Key::Insert if cfg!(target_os = "windows") && modifiers.shift && !modifiers.ctrl => Some(Modifiers::COMMAND),
+                    _ => None,
+                };
+                if let Some(held) = held
+                    && !had_press
+                {
+                    out.push(press(Key::V, held));
+                }
+            }
+            _ => {}
         }
         out.push(e);
     }
@@ -236,6 +250,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu.
     if crate::menu_nav::is_open(ctx) {
+        return;
+    }
+    let symmetry_editing = app.ui.symmetry_transform.is_some();
+    crate::symmetry_ui::track(app, ctx);
+    if symmetry_editing && (app.ui.symmetry_transform.is_none() || egui::Popup::is_any_open(ctx)) {
         return;
     }
     // Liquify is a full-window custom dialog with focusable sliders. egui can therefore claim
@@ -291,16 +310,28 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Pen path in progress: ↩ finishes (open path), Esc cancels.
-    if app.ui.pen.is_some() {
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
-            crate::vector_ui::pen_commit(app, false);
+    // A Pen path's points are uncommitted gesture state, not History entries (#1466).
+    // Intercept Cmd/Ctrl+Z before the normal Edit › Undo shortcut, as well as unmodified
+    // Backspace/Delete. Once the last anchor is removed, regular Undo works again.
+    if app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+        let mods = ctx.input(|i| i.modifiers);
+        let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+            .and_then(|shortcut| parse(&shortcut))
+            .is_some_and(|shortcut| consume(ctx, &shortcut));
+        let remove = !mods.command
+            && !mods.ctrl
+            && !mods.shift
+            && !mods.alt
+            && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete));
+        if command_undo || remove {
+            crate::vector_ui::pen_undo_last_point(app);
             return;
         }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            app.ui.pen = None;
-            return;
-        }
+    }
+    // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
+    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::vector_ui::pen_commit(app, false);
+        return;
     }
     // Magnetic Lasso: ↩ closes, Esc cancels, ⌫ removes a fastening point (not Edit › Clear),
     // [ ] change the detection width (not the brush size).
@@ -363,6 +394,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
             app.ui.crop_rect = None;
+            app.ui.crop_angle = 0.0;
             app.crop.drag = None;
             return;
         }
@@ -391,6 +423,70 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pen_command_z_and_backspace_retract_points_before_document_undo() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+        app.ui.tool = crate::state::Tool::Pen;
+        app.run("shape.create", serde_json::json!({"kind": "rect", "rect": [10, 10, 40, 40], "fill": "#ff0000"})).unwrap();
+        let history = app.session.active().unwrap().history.past_len();
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0)] {
+            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_up(&mut app);
+        }
+        let ctx = egui::Context::default();
+        let press = |app: &mut PhotocraftApp, key, modifiers| {
+            let raw = egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            };
+            ctx.begin_pass(raw);
+            handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+
+        press(&mut app, Key::Z, Modifiers::COMMAND);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 2);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        press(&mut app, Key::Backspace, Modifiers::NONE);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 1);
+        press(&mut app, Key::Delete, Modifiers::NONE);
+        assert!(app.ui.pen.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        // No unfinished Pen points remain, so regular Undo can now affect the document.
+        app.run("edit.undo", serde_json::json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), history - 1);
+    }
+
+    #[test]
+    fn pen_custom_undo_binding_and_menu_retract_pending_points() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+        app.ui.tool = crate::state::Tool::Pen;
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0)] {
+            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_up(&mut app);
+        }
+        app.session.prefs.edit(|p| p.shortcuts.insert("edit.undo".into(), "Cmd+Shift+Y".into()));
+        let ctx = egui::Context::default();
+        let press = |app: &mut PhotocraftApp, key: Key, modifiers: Modifiers| {
+            ctx.begin_pass(egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            });
+            handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+        // Once rebound, the default key must no longer intercept pending points.
+        press(&mut app, Key::Z, Modifiers::COMMAND);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 2);
+        press(&mut app, Key::Y, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 1);
+        assert!(crate::menus::is_enabled(&app, "edit.undo"));
+        crate::menus::invoke(&mut app, &ctx, "edit.undo", serde_json::json!({})).unwrap();
+        assert!(app.ui.pen.is_none());
+    }
 
     #[test]
     fn parses_registry_shortcuts() {
@@ -491,6 +587,25 @@ mod tests {
         let mut r = raw(vec![egui::Event::Paste("x".into())], Modifiers::COMMAND);
         clipboard_keys(&ctx, true, &mut r);
         assert!(matches!(r.events.as_slice(), [_, egui::Event::Paste(_)]));
+    }
+
+    /// #1638: every ⌘V is one press, however its key-down and key-up arrive.
+    #[test]
+    fn each_paste_key_is_one_press() {
+        let ctx = egui::Context::default();
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+        let presses = |events: Vec<egui::Event>| {
+            let mut r = egui::RawInput { events, ..Default::default() };
+            clipboard_keys(&ctx, false, &mut r);
+            r.events.iter().filter(|e| matches!(e, egui::Event::Key { key: Key::V, pressed: true, .. })).count()
+        };
+        // A ⌘V press that reached us (the Mac menu's key equivalent), then its release.
+        assert_eq!(presses(vec![key(Key::V, true, Modifiers::COMMAND)]), 1);
+        assert_eq!(presses(vec![key(Key::V, false, Modifiers::COMMAND)]), 0, "the release of a press doesn't paste again");
+        // A text paste whose V is released after ⌘: the next image paste still pastes.
+        assert_eq!(presses(vec![egui::Event::Paste("x".into())]), 1);
+        assert_eq!(presses(vec![egui::Event::ModifiersChanged(Modifiers::NONE), key(Key::V, false, Modifiers::NONE)]), 0);
+        assert_eq!(presses(vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), key(Key::V, false, Modifiers::COMMAND)]), 1, "image paste");
     }
 
     /// #530: egui-winit sends Cut for Shift+Delete on Windows; on the canvas it opens Fill.

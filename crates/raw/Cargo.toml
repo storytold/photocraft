@@ -11,7 +11,7 @@ default = []
 # Synthetic raw-file generators (DNG / CR2 / TIFF-EP writers and a lossless-JPEG
 # encoder) for tests and fuzz seeds.
 testgen = []
-# Real-file corpus tests (opt-in; `cargo xtask test-corpus`), defined with the corpus PR.
+# Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 
 [dependencies]

@@ -1402,6 +1402,9 @@
 	Stroke	描边
 	Stroke Catch-up	笔触跟随
 	Stroke:	描边：
+	Location	位置
+	Location:	位置：
+	Preserve Transparency	保留透明区域
 	Style	样式
 	Style Options	样式选项
 	Style Options…	样式选项…
@@ -1970,6 +1973,7 @@ cameraRaw	Blending	混合
 	Patch Tool	修补工具
 	Patch:	修补：
 	Lasso around an area, then drag the selection	用套索圈出区域，然后拖动选区
+	Now drag the selection onto another area	现在将选区拖动到另一个区域
 # Current shell labels and shortcut templates. Keep {key} platform-dependent.
 	Add a mask  (from the selection; {key} inverts)	添加蒙版  （基于选区；{key} 反相）
 	Add to selection  ({key})	添加到选区  （{key}）
@@ -2256,3 +2260,28 @@ fontWeight	Italic	斜体
 	Rotate View Tool	旋转视图工具
 	Reset View	重置视图
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
+
+# Painting symmetry presets.
+	Dual Axis	双轴
+	Diagonal	对角线
+	Transform Symmetry	变换对称轴
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	采样点
+	3 by 3 Average	3 × 3 平均
+	5 by 5 Average	5 × 5 平均
+	11 by 11 Average	11 × 11 平均
+	31 by 31 Average	31 × 31 平均
+	51 by 51 Average	51 × 51 平均
+	101 by 101 Average	101 × 101 平均
+	Sample Size:	采样大小：
+	All Layers No Adjustments	所有图层（不含调整）
+	Current & Below No Adjustments	当前及下方图层（不含调整）
+	Show Sampling Ring	显示采样环
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	超出打印色域：单击使用最接近的可打印颜色
+	Not a web colour: click for the nearest web colour	不是 Web 颜色：单击使用最接近的 Web 颜色
+	Color to Alpha…	颜色转为 Alpha…
+	Transparency Threshold	透明度阈值
+	Opacity Threshold	不透明度阈值

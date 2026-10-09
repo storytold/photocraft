@@ -331,25 +331,87 @@ fn doc_at(h: &Harness<'static, PhotocraftApp>, p: Pos2) -> [f32; 2] {
     [v.center[0] + (p.x - c.x) / v.zoom, v.center[1] + (p.y - c.y) / v.zoom]
 }
 
+/// The whole window (status bar and Navigator included) on a 400 × 300 document.
+fn app_window() -> Harness<'static, PhotocraftApp> {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(s, crate::Services::default())
+    });
+    h.run_steps(8);
+    h
+}
+
+/// Photoshop 25.4: ⌥ + wheel goes on past 3200 % to exactly 12800 %, and further notches there
+/// change nothing. The status bar's zoom field used to stop at 3200 %, clamping the zoom back
+/// every frame: past it, each notch zoomed around the pointer and the field pulled the zoom
+/// back, so the image slid towards the pointer.
 #[test]
-fn alt_scroll_zooms_gently_around_the_pointer() {
+fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
+    let mut h = app_window();
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        (v.zoom, v.center, v.fit_pending) = (40.0, [200.0, 150.0], false);
+    }
+    h.run_steps(4);
+    assert_eq!(zoom(&h), 40.0, "4000 % holds: no zoom control clamps it back");
+    let r = h.state().last_canvas_rect;
+    let p = pos2(r.center().x - 150.0, r.center().y - 90.0);
+    // The document point under `p`, through the canvas inside the rulers.
+    let doc_at = |h: &Harness<'static, PhotocraftApp>, p: Pos2| {
+        let (app, v) = (h.state(), &h.state().ui.views[0]);
+        let c = crate::rulers::content_rect(app, app.last_canvas_rect).center();
+        [v.center[0] + (p.x - c.x) / v.zoom, v.center[1] + (p.y - c.y) / v.zoom]
+    };
+    h.hover_at(p);
+    h.run_steps(2);
+    let d0 = doc_at(&h, p);
+    for _ in 0..14 {
+        wheel(&h, 1.0, Modifiers::ALT);
+        h.run_steps(30);
+    }
+    assert_eq!(zoom(&h), crate::zoom_levels::MAX, "a notch past the limit lands on it exactly");
+    let d1 = doc_at(&h, p);
+    assert!((d1[0] - d0[0]).abs() < 0.02 && (d1[1] - d0[1]).abs() < 0.02, "zoomed around the pointer: {d0:?} -> {d1:?}");
+    let c = h.state().ui.views[0].center;
+    for _ in 0..4 {
+        wheel(&h, 1.0, Modifiers::ALT);
+        h.run_steps(30);
+    }
+    assert_eq!(zoom(&h), crate::zoom_levels::MAX);
+    assert_eq!(h.state().ui.views[0].center, c, "at the limit the image doesn't move");
+    // One notch back: 12800 / 1.1, still around the pointer.
+    wheel(&h, -1.0, Modifiers::ALT);
+    h.run_steps(30);
+    assert!((zoom(&h) - crate::zoom_levels::MAX / 1.1).abs() < 1e-2, "{}", zoom(&h));
+    let d2 = doc_at(&h, p);
+    assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");
+}
+
+#[test]
+fn alt_scroll_zooms_in_steps_around_the_pointer() {
     let mut h = harness();
     let r = h.state().last_canvas_rect;
     let p = pos2(r.center().x + 120.0, r.center().y - 70.0);
     h.hover_at(p);
     h.run_steps(2);
     let (z0, d0) = (zoom(&h), doc_at(&h, p));
-    // One notch with ⌥ held: +5%, the point under the pointer stays put. The modifiers are
-    // released right after the event, while egui still smooths the notch over later frames.
+    // One notch with ⌥ held: ×1.1 (Photoshop), the point under the pointer stays put. The modifiers are
+    // released right after the event, while egui still smooths the notch over later frames, which
+    // must neither ease the zoom nor turn into a pan (#1490).
     wheel(&h, 1.0, Modifiers::ALT);
+    h.run_steps(2);
+    let at_once = zoom(&h);
     h.run_steps(40);
     let (z1, d1) = (zoom(&h), doc_at(&h, p));
-    assert!((z1 / z0 - 1.05).abs() < 1e-3, "one ⌥ notch is 5%: {z0} -> {z1}");
+    assert!((z1 / z0 - 1.1).abs() < 1e-3, "one ⌥ notch is ×1.1: {z0} -> {z1}");
+    assert_eq!(at_once, z1, "the notch is applied the frame it arrives, with no easing");
     assert!((d1[0] - d0[0]).abs() < 0.05 && (d1[1] - d0[1]).abs() < 0.05, "centred on the pointer: {d0:?} -> {d1:?}");
     // Three notches back out.
     wheel(&h, -3.0, Modifiers::ALT);
     h.run_steps(40);
-    assert!((zoom(&h) / z1 - 1.05f32.powi(-3)).abs() < 1e-3, "{z1} -> {}", zoom(&h));
+    assert!((zoom(&h) / z1 - 1.1f32.powi(-3)).abs() < 1e-3, "{z1} -> {}", zoom(&h));
 
     // A plain notch still pans, and does not zoom.
     let (z2, c2) = (zoom(&h), h.state().ui.views[0].center);
@@ -385,7 +447,7 @@ fn alt_scroll_zooms_while_a_temporary_tool_is_held() {
     let z0 = zoom(&h);
     wheel(&h, 2.0, Modifiers::ALT);
     h.run_steps(40);
-    assert!((zoom(&h) / z0 - 1.05f32.powi(2)).abs() < 1e-3, "{z0} -> {}", zoom(&h));
+    assert!((zoom(&h) / z0 - 1.1f32.powi(2)).abs() < 1e-3, "{z0} -> {}", zoom(&h));
     h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert_eq!(h.state().ui.tool, crate::state::Tool::Brush);
@@ -499,4 +561,22 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
     assert_eq!(precise(&mut h), (egui::CursorIcon::Crosshair, windows));
+}
+
+/// Esc while drawing with the Pen ends the path where it is, left open, and keeps it as the work
+/// path, as ↩ does; it used to throw the path away (#1769).
+#[test]
+fn esc_ends_a_pen_path_and_keeps_it() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Pen;
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], ..Default::default() });
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.pen.is_none(), "the Pen leaves drawing state");
+    let doc = &h.state().session.active().unwrap().doc;
+    let path = doc.work_path.as_ref().expect("the path is kept as the work path");
+    assert_eq!(path.subpaths.len(), 1);
+    assert!(!path.subpaths[0].closed, "left open");
+    assert_eq!(path.subpaths[0].knots.len(), 3);
+    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
 }

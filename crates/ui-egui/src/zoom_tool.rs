@@ -12,9 +12,6 @@ use crate::canvas::ViewXform;
 use crate::paint_mouse::Buttons;
 use crate::state::View;
 
-/// Zoom limits of the canvas (1 % … 6400 %).
-pub const MIN_ZOOM: f32 = 0.01;
-pub const MAX_ZOOM: f32 = 64.0;
 /// Horizontal drag (screen points) that doubles, or halves, the zoom.
 pub const DOUBLING: f32 = 100.0;
 
@@ -34,12 +31,12 @@ fn id() -> egui::Id {
     egui::Id::new("pc-zoom-tool-drag")
 }
 
-/// The scrubby zoom for a horizontal drag of `dx` points from a press at zoom `zoom0`.
-pub fn scrub_zoom(zoom0: f32, dx: f32) -> f32 {
+/// The scrubby zoom for a horizontal drag of `dx` points from a press at zoom `zoom0`, on a
+/// document of `size` px (`zoom_levels` sets the range).
+pub fn scrub_zoom(zoom0: f32, dx: f32, size: [u32; 2]) -> f32 {
     // ±40 doublings already span far more than the zoom range; it keeps the power finite.
     let e = if dx.is_finite() { (dx / DOUBLING).clamp(-40.0, 40.0) } else { 0.0 };
-    let z = zoom0 * e.exp2();
-    if z.is_finite() { z.clamp(MIN_ZOOM, MAX_ZOOM) } else { 1.0 }
+    crate::zoom_levels::clamp(zoom0 * e.exp2(), size)
 }
 
 /// Set `view` to `zoom` with document point `doc` shown at screen point `screen`.
@@ -65,7 +62,7 @@ pub fn drag(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, xf: &View
     if let Some(p) = pointer.filter(|_| b.dragged || b.stopped) {
         match z.rect_to.as_mut() {
             Some(to) => *to = p,
-            None => anchor_view(view, xf, z.anchor, z.doc, scrub_zoom(z.zoom0, p.x - z.anchor.x)),
+            None => anchor_view(view, xf, z.anchor, z.doc, scrub_zoom(z.zoom0, p.x - z.anchor.x, view.doc_size)),
         }
         ctx.data_mut(|d| d.insert_temp(id(), z));
     }
@@ -83,11 +80,11 @@ pub fn drag(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, xf: &View
 fn zoom_to_rect(view: &mut View, xf: &ViewXform, r: Rect, anchor: Pos2, out: bool) {
     if out || r.width() < 4.0 || r.height() < 4.0 {
         let doc = xf.to_doc(anchor);
-        anchor_view(view, xf, anchor, doc, crate::canvas::zoom_step(view.zoom, if out { -1 } else { 1 }).clamp(MIN_ZOOM, MAX_ZOOM));
+        anchor_view(view, xf, anchor, doc, crate::zoom_levels::step(view.zoom, if out { -1 } else { 1 }, view.doc_size));
         return;
     }
     let k = (xf.rect.width() / r.width()).min(xf.rect.height() / r.height());
-    let zoom = (view.zoom * k).clamp(MIN_ZOOM, MAX_ZOOM);
+    let zoom = crate::zoom_levels::clamp(view.zoom * k, view.doc_size);
     let c = xf.to_doc(r.center());
     anchor_view(view, xf, xf.rect.center(), c, zoom);
 }
@@ -110,15 +107,16 @@ mod tests {
 
     #[test]
     fn scrub_zoom_is_continuous_and_clamped() {
-        assert_eq!(scrub_zoom(1.0, 0.0), 1.0);
-        assert!((scrub_zoom(1.0, DOUBLING) - 2.0).abs() < 1e-5);
-        assert!((scrub_zoom(1.0, -DOUBLING) - 0.5).abs() < 1e-5);
+        const DOC: [u32; 2] = [400, 300];
+        assert_eq!(scrub_zoom(1.0, 0.0, DOC), 1.0);
+        assert!((scrub_zoom(1.0, DOUBLING, DOC) - 2.0).abs() < 1e-5);
+        assert!((scrub_zoom(1.0, -DOUBLING, DOC) - 0.5).abs() < 1e-5);
         // Monotone: every point of drag to the right zooms in a little more.
-        let zs: Vec<f32> = (0..50).map(|i| scrub_zoom(0.7, i as f32 * 3.0)).collect();
+        let zs: Vec<f32> = (0..50).map(|i| scrub_zoom(0.7, i as f32 * 3.0, DOC)).collect();
         assert!(zs.windows(2).all(|w| w[1] > w[0]));
-        assert_eq!(scrub_zoom(1.0, 1e6), MAX_ZOOM);
-        assert_eq!(scrub_zoom(1.0, -1e6), MIN_ZOOM);
-        assert_eq!(scrub_zoom(2.0, f32::NAN), 2.0);
+        assert_eq!(scrub_zoom(1.0, 1e6, DOC), crate::zoom_levels::MAX);
+        assert_eq!(scrub_zoom(1.0, -1e6, DOC), crate::zoom_levels::min(DOC));
+        assert_eq!(scrub_zoom(2.0, f32::NAN, DOC), 2.0);
     }
 
     fn harness(scrubby: bool) -> Harness<'static, PhotocraftApp> {
@@ -179,7 +177,7 @@ mod tests {
         h.event(Event::PointerMoved(p0 - vec2(60.0, 0.0)));
         h.step();
         let z = h.state().current_zoom();
-        assert!(z < z0 && (z - scrub_zoom(z0, -60.0)).abs() < 1e-4, "{z0} -> {z}");
+        assert!(z < z0 && (z - scrub_zoom(z0, -60.0, h.state().ui.views[0].doc_size)).abs() < 1e-4, "{z0} -> {z}");
         press(&mut h, p0 - vec2(60.0, 0.0), false);
         h.run_steps(2);
         // Release keeps the zoom; nothing was painted or recorded.
@@ -192,7 +190,7 @@ mod tests {
         press(&mut h, p0, true);
         press(&mut h, p0, false);
         h.run_steps(2);
-        assert_eq!(h.state().current_zoom(), crate::canvas::zoom_step(zc, 1));
+        assert_eq!(h.state().current_zoom(), crate::zoom_levels::step(zc, 1, h.state().ui.views[0].doc_size));
     }
 
     #[test]

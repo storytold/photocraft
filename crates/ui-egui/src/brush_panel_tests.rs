@@ -325,7 +325,7 @@ fn airbrush_smoothing_options_and_symmetry_buttons_work() {
     h.run_steps(3);
     h.get_by_label("Work Path").click();
     h.run_steps(3);
-    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry_path.as_ref().map(|a| a.source.clone());
+    let source = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().symmetry.as_ref().and_then(|a| a.path_source().map(str::to_owned));
     assert_eq!(source(&h).as_deref(), Some("work"));
     assert_eq!(last_journal(h.state()).unwrap(), ("paint.symmetryFromPath".to_string(), json!({"name": "work"})));
     h.get_by_label("Set painting symmetry options").click();

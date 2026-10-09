@@ -578,8 +578,9 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             let i = app.session.active_index().ok_or("no document")?;
             // Print Size assumes Photoshop's default 72 ppi screen resolution.
             let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
+            let size = app.session.active().map_or([0, 0], |d| [d.doc.size.width, d.doc.size.height]);
             let z = if id == "view.twoHundredPercent" { 2.0 } else { 72.0 / dpi };
-            app.ui.views[i].zoom = z.clamp(0.01, 64.0);
+            app.ui.views[i].zoom = crate::zoom_levels::clamp(z, size);
             Ok(json!({"zoom": app.ui.views[i].zoom}))
         }
         "view.fitLayersOnScreen" => fit_layers(app),
@@ -601,10 +602,11 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     if b.is_empty() {
         b = st.doc.bounds();
     }
+    let size = [st.doc.size.width, st.doc.size.height];
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
     let v = &mut app.ui.views[i];
-    v.zoom = ((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32).clamp(0.01, 64.0);
+    v.zoom = crate::zoom_levels::clamp(((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32), size);
     v.center = [(b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0];
     v.fit_pending = false;
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))

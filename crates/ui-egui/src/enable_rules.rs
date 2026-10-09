@@ -69,6 +69,11 @@ pub fn disabled_for(doc: &Document, active: Option<&Layer>, id: &str) -> bool {
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     let Some(st) = app.session.active() else { return false };
     let active = st.active_layer.and_then(|a| st.doc.layer(a));
+    // Free Transform Path works on the Background too: it moves the path, not the pixels.
+    let transform = id == "edit.freeTransform" || (id.starts_with("edit.transform.") && id != "edit.transform.again");
+    if transform && crate::vector_ui::free_transform_path(app).is_some() {
+        return false;
+    }
     disabled_for(&st.doc, active, id)
 }
 

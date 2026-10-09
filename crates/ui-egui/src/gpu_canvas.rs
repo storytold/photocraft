@@ -1637,8 +1637,9 @@ impl CanvasCallback {
         let p = &self.params;
         let (origin, scale) = self.placement(ppp);
         let (mode, lod) = filter_mode(scale);
-        // The pixel grid shows above 500% and lightens a dark pixel by about a quarter.
-        let grid = if p.pixel_grid && p.zoom > 5.0 { 0.25 } else { 0.0 };
+        // The pixel grid shows above 500% and lightens a dark pixel by about a quarter (the
+        // constants are shared with the CPU path, pixel_grid.rs).
+        let grid = if p.pixel_grid && crate::pixel_grid::shows_at(p.zoom) { crate::pixel_grid::STRENGTH } else { 0.0 };
         let square = if style.checker_square > 0.0 { (style.checker_square * ppp).round().max(1.0) } else { 0.0 };
         let (l, d, g) = (style.checker_light, style.checker_dark, style.gamut_color);
         // 32-bit preview: linear-light gain 2^exposure (0 = off) and 1 / gamma.

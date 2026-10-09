@@ -1140,3 +1140,36 @@ fn postscript_only_style_shows_actual_subfamily() {
     let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-SemiBold".into()), ..Default::default() };
     assert_eq!(super::selected_style(&style), "SemiBold");
 }
+
+/// A variable face lists every standard weight of its `wght` axis, not only its default instance
+/// (Montserrat from Google Fonts: its default instance is Thin).
+#[test]
+fn variable_faces_list_the_weights_of_their_axis() {
+    let face = |weight: f32, italic: bool, axes: Vec<(String, f32, f32, f32)>| {
+        let base = match weight as i32 {
+            100 => "Thin",
+            300 => "Light",
+            _ => "Bold",
+        };
+        let style = if italic { format!("{base} Italic") } else { base.to_string() };
+        photocraft_text::FaceInfo { family: "Montserrat".into(), style, postscript_name: None, weight, italic, axes }
+    };
+    let full = || vec![("wght".to_string(), 100.0, 100.0, 900.0)];
+    let names = super::style_names(&[face(100.0, false, full()), face(100.0, true, full())]);
+    assert_eq!(names.len(), 18, "{names:?}");
+    assert_eq!(names.first().map(String::as_str), Some("Thin"));
+    for s in ["Regular", "Italic", "Bold", "Bold Italic", "Black Italic"] {
+        assert!(names.iter().any(|n| n == s), "{s}: {names:?}");
+    }
+    // A narrower axis lists only its range; a static face only itself.
+    let names = super::style_names(&[face(300.0, false, vec![("wght".into(), 300.0, 400.0, 700.0)])]);
+    assert_eq!(names, ["Light", "Regular", "Medium", "SemiBold", "Bold"]);
+    assert_eq!(super::style_names(&[face(700.0, false, Vec::new())]), ["Bold"]);
+}
+
+/// Families the host serves are in the font menu before they are fetched.
+#[test]
+fn the_font_menu_lists_served_families() {
+    photocraft_text::served::add_families(["Served Menu Test Serif".to_string()]);
+    assert!(super::families().iter().any(|f| f == "Served Menu Test Serif"));
+}

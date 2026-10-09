@@ -36,13 +36,13 @@ const BIG_HEADER: usize = 16;
 
 /// Byte order of a TIFF structure.
 #[derive(Clone, Copy)]
-enum Order {
+pub(crate) enum Order {
     Little,
     Big,
 }
 
 impl Order {
-    fn u16(self, b: &[u8], at: usize) -> Option<u16> {
+    pub(crate) fn u16(self, b: &[u8], at: usize) -> Option<u16> {
         let s: [u8; 2] = b.get(at..at.checked_add(2)?)?.try_into().ok()?;
         Some(match self {
             Order::Little => u16::from_le_bytes(s),
@@ -50,7 +50,7 @@ impl Order {
         })
     }
 
-    fn u32(self, b: &[u8], at: usize) -> Option<u32> {
+    pub(crate) fn u32(self, b: &[u8], at: usize) -> Option<u32> {
         let s: [u8; 4] = b.get(at..at.checked_add(4)?)?.try_into().ok()?;
         Some(match self {
             Order::Little => u32::from_le_bytes(s),
@@ -58,7 +58,7 @@ impl Order {
         })
     }
 
-    fn u64(self, b: &[u8], at: usize) -> Option<u64> {
+    pub(crate) fn u64(self, b: &[u8], at: usize) -> Option<u64> {
         let s: [u8; 8] = b.get(at..at.checked_add(8)?)?.try_into().ok()?;
         Some(match self {
             Order::Little => u64::from_le_bytes(s),
@@ -68,7 +68,7 @@ impl Order {
 }
 
 /// The TIFF payload of an EXIF block (a JPEG-style `Exif\0\0` prefix is skipped).
-fn tiff_body(b: &[u8]) -> &[u8] {
+pub(crate) fn tiff_body(b: &[u8]) -> &[u8] {
     b.strip_prefix(b"Exif\0\0").unwrap_or(b)
 }
 
@@ -76,7 +76,7 @@ fn tiff_body(b: &[u8]) -> &[u8] {
 ///
 /// The full table and next-IFD pointer must be present, and IFD0 must start
 /// after the corresponding TIFF or BigTIFF header.
-fn ifd0_entries(b: &[u8]) -> Option<(Order, usize, usize, usize, bool)> {
+pub(crate) fn ifd0_entries(b: &[u8]) -> Option<(Order, usize, usize, usize, bool)> {
     let (order, big_tiff) = match b.get(0..4)? {
         [b'I', b'I', 42, 0] => (Order::Little, false),
         [b'M', b'M', 0, 42] => (Order::Big, false),

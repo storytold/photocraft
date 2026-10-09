@@ -176,9 +176,9 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     let p = h.get_by_label("Badge Shape Path").rect().center();
     click_with(&mut h, p, Modifiers::NONE);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("layer"));
-    // Footer: fill, stroke, load as selection, … (24 pt buttons, 2 pt apart).
+    // Footer: fill, stroke, load as selection, … (26 pt buttons, 2 pt apart).
     let footer = crate::vector_ui::paths_footer(&h.ctx).unwrap();
-    let p = pos2(footer.left() + 2.0 * 26.0 + 12.0, footer.center().y);
+    let p = pos2(footer.left() + 2.0 * 28.0 + 13.0, footer.center().y);
     click_with(&mut h, p, Modifiers::NONE);
     let sel = h.state().session.active().unwrap().doc.selection.clone().expect("selection from the shape path");
     let b = sel.content_bounds();
@@ -388,6 +388,34 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null);
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
+}
+
+/// #1765: `\` shows the active layer's mask as a rubylith and hides it again, as in Photoshop;
+/// the mask stays the paint target meanwhile. On a layer without a mask it does nothing, and a
+/// focused text field keeps the key.
+#[test]
+fn backslash_toggles_the_rubylith() {
+    let (s, masked, shape) = dotted();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let doc = h.state().session.active().unwrap().doc.clone();
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), json!({"layer": masked, "mode": "overlay"}), "\\ shows the overlay");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"), "painting paints the mask");
+    let px = canvas_px(&h).unwrap();
+    assert_eq!(px[50 * 200 + 50], egui::Color32::from_rgba_premultiplied(128, 0, 0, 128), "50% red over hidden areas");
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "a view toggle, not an edit");
+    // A layer without a layer mask: nothing happens.
+    h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), serde_json::Value::Null);
+    let sc = crate::shortcuts::parse("\\").unwrap();
+    assert!(!crate::shortcut_dispatch::Focus::Text.allows(&sc), "typing \\ in a text field stays text");
 }
 
 /// #780: clicking the mask thumbnail targets the mask, and ⌘I (Image › Adjustments › Invert)

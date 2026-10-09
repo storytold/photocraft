@@ -1252,52 +1252,31 @@ impl Compositor {
             let view = texture.create_view(&Default::default());
             let default_nonzero = surface.default_pixel().iter().any(|v| *v != 0.0);
             let mut r = Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, doc, last_used: 0, stamp: 0, cmyk };
-            // A new page is assembled straight into a mapped staging buffer and copied in one go
-            // (missing tiles read as the default pixel; the buffer starts zeroed).
-            let bpp = kind.bytes_per_pixel();
-            let (w, h) = (region.width() as usize, region.height() as usize);
-            let staging = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("pc_page_upload"),
-                size: (w * h * bpp) as u64,
-                usage: wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: true,
-            });
-            if let Ok(mut view) = staging.slice(..).get_mapped_range_mut() {
-                let default = default_nonzero.then(|| convert_tile(surface, None, kind, TileCoord::new(0, 0)));
-                let row = TILE_SIZE as usize * bpp;
-                for c in region.tiles() {
-                    let converted;
-                    let bytes = match (surface.tile(c), &default) {
-                        (Some(t), _) => {
-                            converted = convert_tile(surface, Some(t), kind, c);
-                            stats.tiles_uploaded += 1;
-                            stats.bytes_uploaded += converted.len();
-                            r.tiles.insert(c, t.clone());
-                            &converted
-                        }
-                        (None, Some(d)) => d,
-                        (None, None) => continue,
-                    };
-                    let tr = c.rect();
-                    let (ox, oy) = ((tr.x0 - region.x0) as usize, (tr.y0 - region.y0) as usize);
-                    for (y, src) in bytes.chunks_exact(row).enumerate() {
-                        let o = ((oy + y) * w + ox) * bpp;
-                        if o + row <= view.len() {
-                            view.slice(o..o + row).copy_from_slice(src);
-                        }
-                    }
+            // A new texture starts zeroed: write the tiles that are present, and the default pixel
+            // where they are missing if it isn't zero. Coordinates sharing a tile (a solid fill,
+            // the default) take one upload and GPU copies (#1774).
+            let mut present = Vec::new();
+            let mut missing = Vec::new();
+            for c in region.tiles() {
+                match surface.tile(c) {
+                    Some(t) => present.push((c, t.clone())),
+                    None if default_nonzero => missing.push(c),
+                    None => {}
                 }
             }
-            staging.unmap();
-            encoder.copy_buffer_to_texture(
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &staging,
-                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some((w * bpp) as u32), rows_per_image: Some(h as u32) },
-                },
-                wgpu::TexelCopyTextureInfo { texture: &r.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
-            );
-            self.staged += (w * h * bpp) as u64;
+            if !missing.is_empty() {
+                let bytes = convert_tile(surface, None, kind, TileCoord::new(0, 0));
+                self.staged += put_tiles(device, queue, encoder, &r, &missing, &bytes);
+            }
+            let staged = &mut self.staged;
+            convert_tiles(surface, present, kind, |t, cs, bytes| {
+                *staged += put_tiles(device, queue, encoder, &r, cs, bytes);
+                for &c in cs {
+                    stats.tiles_uploaded += 1;
+                    stats.bytes_uploaded += bytes.len();
+                    r.tiles.insert(c, t.clone());
+                }
+            });
             self.residents.insert(key, r);
         }
         // Present: inserted above when it was missing or stale.
@@ -1305,37 +1284,40 @@ impl Compositor {
         r.last_used = self.frame;
         r.stamp = self.stamp;
         r.doc = doc;
-        let mut blank: Option<Vec<u8>> = None;
+        let mut changed = Vec::new();
+        let mut gone = Vec::new();
         for c in region.tiles() {
             match surface.tile(c) {
                 Some(t) => {
-                    if r.tiles.get(&c).is_some_and(|old| Arc::ptr_eq(old, t)) {
-                        continue;
+                    if !r.tiles.get(&c).is_some_and(|old| Arc::ptr_eq(old, t)) {
+                        changed.push((c, t.clone()));
                     }
-                    let bytes = convert_tile(surface, Some(t), kind, c);
-                    write_tile(queue, r, c, &bytes);
-                    stats.tiles_uploaded += 1;
-                    stats.bytes_uploaded += bytes.len();
-                    self.staged += bytes.len() as u64;
-                    r.tiles.insert(c, t.clone());
                 }
                 None => {
-                    if r.tiles.remove(&c).is_none() {
-                        continue;
+                    if r.tiles.remove(&c).is_some() {
+                        gone.push(c);
                     }
-                    // A tile that went away reads as the default pixel again.
-                    let bytes = blank.get_or_insert_with(|| {
-                        if r.default_nonzero {
-                            convert_tile(surface, None, kind, TileCoord::new(0, 0))
-                        } else {
-                            vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * kind.bytes_per_pixel()]
-                        }
-                    });
-                    write_tile(queue, r, c, bytes);
-                    self.staged += bytes.len() as u64;
                 }
             }
         }
+        if !gone.is_empty() {
+            // A tile that went away reads as the default pixel again.
+            let bytes = if r.default_nonzero {
+                convert_tile(surface, None, kind, TileCoord::new(0, 0))
+            } else {
+                vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * kind.bytes_per_pixel()]
+            };
+            self.staged += put_tiles(device, queue, encoder, r, &gone, &bytes);
+        }
+        let staged = &mut self.staged;
+        convert_tiles(surface, changed, kind, |t, cs, bytes| {
+            *staged += put_tiles(device, queue, encoder, r, cs, bytes);
+            for &c in cs {
+                stats.tiles_uploaded += 1;
+                stats.bytes_uploaded += bytes.len();
+                r.tiles.insert(c, t.clone());
+            }
+        });
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 
@@ -1703,6 +1685,89 @@ fn write_tile(queue: &wgpu::Queue, r: &Resident, c: TileCoord, bytes: &[u8]) {
     );
 }
 
+/// Distinct tiles converted per parallel batch: bounds the converted bytes held at once (64 tiles
+/// of a 16-bit page are 32 MiB).
+const CONVERT_BATCH: usize = 64;
+
+/// Write the same tile `bytes` at every coordinate in `cs` of resident `r`; returns the bytes
+/// staged. Several coordinates (a solid fill or a cleared area shares one tile) get one upload to
+/// a scratch tile and GPU copies from it: writing each one from the CPU sent 387 MB per refresh
+/// of a filled 50 MP 16-bit page (#1774).
+fn put_tiles(device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, r: &Resident, cs: &[TileCoord], bytes: &[u8]) -> u64 {
+    if let [c] = cs {
+        write_tile(queue, r, *c, bytes);
+        return bytes.len() as u64;
+    }
+    if cs.is_empty() {
+        return 0;
+    }
+    let extent = wgpu::Extent3d { width: TILE_SIZE as u32, height: TILE_SIZE as u32, depth_or_array_layers: 1 };
+    // Its own texture per call: queued writes land before the encoder runs, so a shared scratch
+    // would hold only the last tile by then.
+    let scratch = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("pc_tile_scratch"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: r.kind.format(),
+        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &scratch, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(TILE_SIZE as u32 * r.kind.bytes_per_pixel() as u32),
+            rows_per_image: Some(TILE_SIZE as u32),
+        },
+        extent,
+    );
+    for c in cs {
+        let tr = c.rect();
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo { texture: &scratch, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &r.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: (tr.x0 - r.region.x0) as u32, y: (tr.y0 - r.region.y0) as u32, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            extent,
+        );
+    }
+    bytes.len() as u64
+}
+
+/// Convert `tiles` of `surface` to `kind` texels and hand each distinct tile, the coordinates
+/// sharing it and its bytes to `put`. Each distinct tile is converted once (a solid fill shares
+/// one `Arc` across every coordinate it covers), in parallel batches. Converting every tile one
+/// after another on the UI thread froze a 50 MP 16-bit document for about 1.4 s after a
+/// full-canvas fill (#1774). Returns how many tiles were converted.
+fn convert_tiles(surface: &Surface, tiles: Vec<(TileCoord, Arc<Tile>)>, kind: TexKind, mut put: impl FnMut(&Arc<Tile>, &[TileCoord], &[u8])) -> usize {
+    let mut groups: Vec<(Arc<Tile>, Vec<TileCoord>)> = Vec::new();
+    let mut index: HashMap<*const Tile, usize> = HashMap::new();
+    for (c, t) in tiles {
+        match index.get(&Arc::as_ptr(&t)).and_then(|&i| groups.get_mut(i)) {
+            Some(g) => g.1.push(c),
+            None => {
+                index.insert(Arc::as_ptr(&t), groups.len());
+                groups.push((t, vec![c]));
+            }
+        }
+    }
+    for batch in groups.chunks(CONVERT_BATCH) {
+        // A tile's content is the same at every coordinate sharing it: convert it at the first.
+        let jobs: Vec<_> = batch.iter().filter_map(|(t, cs)| cs.first().map(|c| (t, *c))).collect();
+        let converted = fx::par_map(jobs, |(t, c)| convert_tile(surface, Some(t), kind, c));
+        for ((t, cs), bytes) in batch.iter().zip(&converted) {
+            put(t, cs, bytes);
+        }
+    }
+    groups.len()
+}
+
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
 fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: TileCoord) -> Vec<u8> {
     if let (Some(t), TexKind::Rgba8Direct | TexKind::R8Direct) = (tile, kind) {
@@ -1711,6 +1776,11 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
     let n = (TILE_SIZE * TILE_SIZE) as usize;
     let fmt = surface.format();
     let ch = fmt.channels();
+    if let (Some(t), TexKind::Rgba16F) = (tile, kind)
+        && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes())
+    {
+        return out;
+    }
     let raw: Vec<f32> = match tile {
         Some(_) => surface.read_region(c.rect()),
         None => surface.default_pixel().repeat(n),
@@ -1733,6 +1803,39 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
         }
     }
     out
+}
+
+/// RGBA16F texels of a 16-bit RGB or grayscale tile, through a table of every 16-bit sample's
+/// half: the same bytes as the general path at a fraction of its cost (a 50 MP 16-bit refresh
+/// converts dozens of tiles). `None` for other formats.
+fn rgb_gray16_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
+    use photocraft_color::ColorMode;
+    static HALF: std::sync::OnceLock<Box<[u16]>> = std::sync::OnceLock::new();
+    if fmt.sample != SampleType::U16 {
+        return None;
+    }
+    let gray = match fmt.mode {
+        ColorMode::Rgb => false,
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => true,
+        _ => return None,
+    };
+    let half = HALF.get_or_init(|| (0..=u16::MAX).map(|v| f32_to_f16(v as f32 / 65535.0)).collect());
+    let one = f32_to_f16(1.0).to_le_bytes();
+    let ch = fmt.channels();
+    let mut out = Vec::with_capacity((TILE_SIZE * TILE_SIZE) as usize * 8);
+    for px in bytes.chunks_exact(ch * 2) {
+        let h = |i: usize| -> [u8; 2] {
+            let v = px.get(i * 2..i * 2 + 2).map_or(0, |b| u16::from_ne_bytes([b[0], b[1]]));
+            half.get(v as usize).copied().unwrap_or(0).to_le_bytes()
+        };
+        let (r, g, b) = if gray { (h(0), h(0), h(0)) } else { (h(0), h(1), h(2)) };
+        let a = if fmt.alpha { h(ch - 1) } else { one };
+        out.extend_from_slice(&r);
+        out.extend_from_slice(&g);
+        out.extend_from_slice(&b);
+        out.extend_from_slice(&a);
+    }
+    Some(out)
 }
 
 fn lut_texture(device: &wgpu::Device, queue: &wgpu::Queue, rows: &[[f32; 4096]]) -> (wgpu::Texture, wgpu::TextureView) {
@@ -1920,6 +2023,86 @@ mod tests {
     fn op_record_fits_the_uniform() {
         let p = plan::Pass::new(Kernel::FxPaint, 0);
         assert_eq!(op_words(&p, None, None, None).len() as u64, OP_UNIFORM);
+    }
+
+    /// #1774: a solid fill shares one tile across every coordinate; it is converted once, and
+    /// every coordinate (shared or not) still gets exactly the bytes `convert_tile` gives it, at
+    /// every depth and texture kind.
+    #[test]
+    fn convert_tiles_converts_each_distinct_tile_once() {
+        let area = Rect::new(0, 0, TILE_SIZE * 9, TILE_SIZE * 9);
+        for (fmt, kind) in [
+            (PixelFormat::RGBA8, TexKind::Rgba8Direct),
+            (PixelFormat { alpha: false, ..PixelFormat::RGBA8 }, TexKind::Rgba8),
+            (PixelFormat::RGBA16, TexKind::Rgba16F),
+            (PixelFormat::RGBA32F, TexKind::Rgba16F),
+            (PixelFormat::GRAY8, TexKind::R8Direct),
+            (PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 }, TexKind::R32F),
+        ] {
+            let mut s = Surface::new(fmt);
+            let px = [0.2, 0.4, 0.6, 1.0];
+            let n = fmt.channels();
+            // Fully covered tiles share one `Arc`; then two tiles get their own pixels.
+            s.fill_rect(area, &px[..n]);
+            s.fill_rect(Rect::new(3, 5, 40, 60), &[0.9, 0.1, 0.3, 0.5][..n]);
+            s.fill_rect(Rect::new(TILE_SIZE * 4 + 7, TILE_SIZE * 2, TILE_SIZE * 4 + 9, TILE_SIZE * 2 + 3), &[0.0; 4][..n]);
+            let tiles: Vec<_> = area.tiles().filter_map(|c| s.tile(c).map(|t| (c, t.clone()))).collect();
+            assert_eq!(tiles.len(), 81, "{fmt:?}");
+            let mut seen = Vec::new();
+            let converted = convert_tiles(&s, tiles, kind, |t, cs, bytes| {
+                for &c in cs {
+                    assert!(s.tile(c).is_some_and(|own| Arc::ptr_eq(own, t)), "{fmt:?} {c:?}");
+                    assert_eq!(bytes, convert_tile(&s, Some(t), kind, c).as_slice(), "{fmt:?} {c:?}");
+                    seen.push(c);
+                }
+            });
+            assert_eq!(converted, 3, "{fmt:?}: the shared tile once, plus the two edited ones");
+            seen.sort_by_key(|c| (c.ty, c.tx));
+            let mut want: Vec<_> = area.tiles().collect();
+            want.sort_by_key(|c| (c.ty, c.tx));
+            assert_eq!(seen, want, "{fmt:?}: every coordinate once");
+        }
+        // More distinct tiles than one batch: all converted, each coordinate once.
+        let mut s = Surface::new(PixelFormat::RGBA16);
+        let wide = Rect::new(0, 0, TILE_SIZE * (CONVERT_BATCH as i32 + 5), TILE_SIZE);
+        for c in wide.tiles() {
+            s.fill_rect(Rect::new(c.rect().x0, 0, c.rect().x0 + 1, 1), &[c.tx as f32 / 100.0, 0.0, 0.0, 1.0]);
+        }
+        let tiles: Vec<_> = wide.tiles().filter_map(|c| s.tile(c).map(|t| (c, t.clone()))).collect();
+        let mut n = 0;
+        let converted = convert_tiles(&s, tiles, TexKind::Rgba16F, |t, cs, bytes| {
+            for &c in cs {
+                assert_eq!(bytes, convert_tile(&s, Some(t), TexKind::Rgba16F, c).as_slice());
+                n += 1;
+            }
+        });
+        assert_eq!((converted, n), (CONVERT_BATCH + 5, CONVERT_BATCH + 5));
+    }
+
+    /// The 16-bit RGB/gray fast path gives exactly the general path's half floats.
+    #[test]
+    fn sixteen_bit_fast_path_matches_the_general_one() {
+        for fmt in [
+            PixelFormat::RGBA16,
+            PixelFormat { alpha: false, ..PixelFormat::RGBA16 },
+            PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 },
+            PixelFormat { sample: SampleType::U16, alpha: true, ..PixelFormat::GRAY8 },
+        ] {
+            let mut s = Surface::new(fmt);
+            let r = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
+            let n = (TILE_SIZE * TILE_SIZE) as usize * fmt.channels();
+            let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32).collect();
+            s.write_region(r, &data);
+            let t = s.tile(TileCoord::new(0, 0)).expect("written").clone();
+            let fast = rgb_gray16_to_f16(&fmt, t.bytes()).expect("fast path");
+            let raw = s.read_region(r);
+            let general: Vec<u8> =
+                raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|x| f32_to_f16(x).to_le_bytes())).flatten().collect();
+            assert_eq!(fast, general, "{fmt:?}");
+            assert_eq!(convert_tile(&s, Some(&t), TexKind::Rgba16F, TileCoord::new(0, 0)), general, "{fmt:?}");
+        }
+        assert!(rgb_gray16_to_f16(&PixelFormat::RGBA8, &[]).is_none());
+        assert!(rgb_gray16_to_f16(&PixelFormat { sample: SampleType::U16, ..PixelFormat::CMYKA8 }, &[]).is_none());
     }
 
     #[test]

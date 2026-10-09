@@ -1,7 +1,6 @@
 //! The wasmi host: loading, instantiating and calling a plug-in under resource limits.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use wasmi::{
     Config, EnforcedLimits, Engine, Instance, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc, TypedResumableCall, WasmParams,
@@ -73,7 +72,7 @@ impl std::fmt::Debug for Plugin {
 pub(crate) struct Deadline {
     #[cfg(not(target_arch = "wasm32"))]
     at: std::time::Instant,
-    abort: Arc<AtomicBool>,
+    abort: Arc<Mutex<Option<Error>>>,
 }
 
 impl Deadline {
@@ -83,20 +82,23 @@ impl Deadline {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             at: std::time::Instant::now() + std::time::Duration::from_millis(limits.wall_time_ms),
-            abort: Arc::new(AtomicBool::new(false)),
+            abort: Arc::new(Mutex::new(None)),
         }
     }
-    pub(crate) fn abort(&self) {
-        self.abort.store(true, Ordering::Relaxed);
+    pub(crate) fn abort(&self, error: Error) {
+        // Publish the cause with the cancellation state so siblings cannot replace it with a
+        // generic cancellation error, even when results are collected in a different order.
+        self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(error);
     }
     fn check(&self) -> Result<()> {
-        if self.abort.load(Ordering::Relaxed) {
-            return Err(Error::Failed("stopped because another band failed".into()));
+        if let Some(error) = self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+            return Err(error);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if std::time::Instant::now() >= self.at {
-            self.abort();
-            return Err(Error::Limit("time budget".into()));
+            let error = Error::Limit("time budget".into());
+            self.abort(error.clone());
+            return Err(error);
         }
         Ok(())
     }

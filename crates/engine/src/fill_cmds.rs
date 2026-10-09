@@ -168,6 +168,21 @@ pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limi
     blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false });
 }
 
+/// Reuse Edit › Fill's compositing for Edit › Stroke. The stroke's rasterized band
+/// is already a grayscale coverage mask; opacity, blend modes and alpha locking
+/// must behave identically for both commands at 8/16/32-bit depth.
+pub(crate) fn blend_color_mask(
+    surf: &mut Surface,
+    area: Rect,
+    color: [f32; 4],
+    coverage: &Surface,
+    mode: BlendMode,
+    opacity: f32,
+    preserve_transparency: bool,
+) {
+    blend_into(surf, area, &Source::Color(color), Some(coverage), Blend { mode, opacity, keep_alpha: preserve_transparency, restore: false });
+}
+
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
 /// RGBA over the sampling window. Only the selected pixels are used.
 fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, color_adaptation: bool, seed: u64) -> Result<Source> {

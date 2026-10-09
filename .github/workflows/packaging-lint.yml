@@ -49,7 +49,7 @@ jobs:
           ./packaging/windows/check-icons.ps1
       - name: XML, desktop entry, AppStream, Flatpak manifest
         run: |
-          xmllint --noout packaging/windows/photocraft.wxs packaging/macos/*.plist* packaging/linux/*.xml*
+          xmllint --noout packaging/windows/photocraft.wxs packaging/windows/photocraft.en-us.wxl packaging/macos/*.plist* packaging/linux/*.xml*
           desktop-file-validate packaging/linux/ai.storyteller.photocraft.desktop
           sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.photocraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"
           appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.photocraft.metainfo.xml"

@@ -562,15 +562,22 @@ pub fn paint_thumbnail(ui: &egui::Ui, layer: LayerId, f: &Fill, rect: Rect) -> b
     true
 }
 
-/// Options-bar swatch of the current gradient. Both modes paint the selected preset (classic
-/// drags no longer replace it with opaque foreground/background colours), so both show it.
-pub fn preset_swatch(app: &PhotocraftApp, ui: &mut egui::Ui) {
+/// Options-bar swatch of the current gradient. Both live and classic modes use the same
+/// engine-owned preset, so its popup reuses the Gradients browser instead of keeping an
+/// independent copy of the chosen gradient in the UI (#1651).
+pub fn preset_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let stops = app.session.presets.gradient.resolve(app.session.tools.foreground, app.session.tools.background);
-    let (r, resp) = ui.allocate_exact_size(vec2(96.0, 20.0), Sense::hover());
+    let (r, resp) = ui.allocate_exact_size(vec2(96.0, 20.0), Sense::click());
     paint_ramp(ui.painter(), r, |u| photocraft_algo::paint::sample_stops(&stops, u));
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    let _ = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
+    let resp = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Gradients")));
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(260.0);
+        ui.set_max_width(330.0);
+        crate::preset_panels::gradients_panel(app, ui);
+    });
 }
 
 /// Live mode: style, reverse, dither and blend mode changes in the options bar also edit the selected
@@ -896,6 +903,24 @@ mod tests {
         let img = thumbnail_image(&rad).unwrap();
         assert!(img.pixels[n / 2 * n + n / 2].r() < img.pixels[0].r());
         assert!(thumbnail_image(&Fill::Solid(Color::WHITE)).is_none());
+    }
+
+    #[test]
+    fn options_bar_swatch_opens_the_real_preset_browser_and_selects_presets() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let app = app_with_gradient("linear");
+        let mut h = Harness::builder().with_size(vec2(440.0, 560.0)).build_ui_state(|ui, app: &mut PhotocraftApp| preset_swatch(app, ui), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.run_steps(2);
+        let original = h.state().session.presets.gradient.name.clone();
+        h.get_by_label("Gradients").click();
+        h.run_steps(2);
+        // The popup uses the existing presets UI, not a detached swatch or an editor-only copy.
+        h.get_by_label("Foreground to Transparent").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.presets.gradient.name, "Foreground to Transparent");
+        assert_ne!(h.state().session.presets.gradient.name, original);
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1, "choosing a tool preset does not edit document layers");
     }
 
     #[test]

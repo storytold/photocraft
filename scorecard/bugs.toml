@@ -93,23 +93,23 @@ note = "crates/engine/tests/prefs_usage.rs every_preference_is_read_or_hidden: e
 [[item]]
 id = "BUG-205-1"
 target = "Free Transform with a selection moves only the selected part of a linked mask"
-status = "missing"
+status = "done"
 issue = 205
-note = "transform_cmds.rs:127-130 warps the whole linked mask even when the selection split pixels"
+note = "linked_mask_with_a_selection_moves_only_the_selected_region (transform_cmds.rs; 5a5facc, #242)"
 
 [[item]]
 id = "BUG-205-2"
 target = "Live transform preview draws the layer with its mask applied"
-status = "missing"
+status = "done"
 issue = 205
-note = "transform_tool.rs:173 preview_image uses the raw surface"
+note = "transform_tool.rs preview_mask + preview_applies_the_linked_mask (5a5facc, #242)"
 
 [[item]]
 id = "BUG-205-3"
 target = "edit.transform honours target mask: transforms only a targeted, unlinked mask"
-status = "missing"
+status = "done"
 issue = 205
-note = "transform_cmds.rs:214-270 never reads a target param"
+note = "targeted_unlinked_mask_transforms_alone and targeted_linked_mask_moves_with_its_layer (transform_cmds.rs) plus the through-the-box tests (transform_tool.rs; 5a5facc, #242)"
 
 [[item]]
 id = "BUG-205-4"
@@ -163,23 +163,23 @@ note = "No kerning round-trip test"
 [[item]]
 id = "BUG-207-1"
 target = "Retouch tools respect the paint target (mask, alpha channel, Quick Mask)"
-status = "missing"
+status = "done"
 issue = 207
-note = "retouch_cmds.rs:83 run_stroke always uses l.surface_mut(); no paint_target() call"
+note = "run_stroke paints channel_cmds::target_surface; retouch_strokes_paint_the_targeted_mask (retouch_ui.rs) and engine retouch_cmds/tests.rs (e2444ce, #234)"
 
 [[item]]
 id = "BUG-207-2"
 target = "Sample All Layers applies to Blur, Sharpen and Smudge"
-status = "missing"
+status = "done"
 issue = 207
-note = "Checkbox at retouch_ui.rs:171-190 is not passed to the stroke commands"
+note = "retouch_ui.rs passes sampleAllLayers to paint.blur/sharpen/smudge; sample_all_layers_reaches_the_command (e2444ce, #234)"
 
 [[item]]
 id = "BUG-207-3"
 target = "Smudge mixes premultiplied RGBA (no dark fringe at transparent edges)"
-status = "missing"
+status = "done"
 issue = 207
-note = "No premultiply in paint/src/retouch.rs"
+note = "paint/src/retouch.rs premultiplies; smudge_into_transparency_leaves_no_dark_fringe (e2444ce, #234)"
 
 [[item]]
 id = "BUG-207-4"

@@ -181,14 +181,10 @@ fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer 
 }
 
 /// Runs `f` with this thread's document blend flags set ([`psblend::LAB_MIX`], [`psblend::HDR`]),
-/// clearing them afterwards.
+/// then restores the values they had (also on unwind): a nested rayon job can run another tile
+/// on this thread mid-composite, and clearing the flags there broke the outer tile (#1112).
 fn in_blend_space<R>(lab: bool, hdr: bool, f: impl FnOnce() -> R) -> R {
-    psblend::LAB_MIX.with(|l| l.set(lab));
-    psblend::HDR.with(|h| h.set(hdr));
-    let r = f();
-    psblend::LAB_MIX.with(|l| l.set(false));
-    psblend::HDR.with(|h| h.set(false));
-    r
+    psblend::with_lab_mix(lab, || psblend::with_hdr(hdr, f))
 }
 
 /// The document's own CMYK profile for reading its CMYK pixels (`None`: not a CMYK document,

@@ -26,7 +26,7 @@ use crate::{PhotocraftApp, icons, widgets};
 /// Width of the picker's contents.
 pub const WIDTH: f32 = 300.0;
 /// The picker's preset list: denser than the Brushes tab's.
-const LIST: ListLayout = ListLayout { id: "brush-picker-presets", max_height: 300.0, cell: 44.0, indent: 4.0 };
+pub(crate) const LIST: ListLayout = ListLayout { id: "brush-picker-presets", max_height: 300.0, cell: 44.0, indent: 4.0 };
 
 /// What the picker asks for beyond the size and hardness edits.
 #[derive(Clone, Debug, PartialEq)]

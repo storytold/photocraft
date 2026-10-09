@@ -28,6 +28,7 @@ pub mod render;
 pub mod replace;
 pub mod retouch;
 pub mod rng;
+pub mod symmetry;
 pub mod tile;
 
 pub use brush::{

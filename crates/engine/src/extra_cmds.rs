@@ -61,20 +61,27 @@ fn step_key(s: &Session, what: &str) -> String {
 
 /// Rewrite the active pixel layer's RGBA over the selection bounds (or the canvas). `f` gets the
 /// area, the pixels, and the selection coverage per pixel; results are blended back by coverage,
-/// and transparency stays locked when the layer locks it.
-fn map_pixels(s: &mut Session, label: &str, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+/// and transparency stays locked when the layer locks it. When `p` targets an alpha channel, the
+/// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
+/// grayscale surface is rewritten instead, as the core filters do (#935).
+fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, &Value::Null)?;
+    let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
         let area = selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
-        let locks = doc.effective_locks(id);
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if locks.pixels || locks.all {
-            return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
-        }
-        let lock_alpha = locks.transparency;
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?;
+        let (surf, lock_alpha) = if channel {
+            let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
+            (surf, false)
+        } else {
+            let locks = doc.effective_locks(id);
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            if locks.pixels || locks.all {
+                return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+            }
+            (l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?, locks.transparency)
+        };
         if area.is_empty() {
             return Ok(());
         }
@@ -116,8 +123,29 @@ fn map_pixels(s: &mut Session, label: &str, f: impl FnOnce(Rect, &mut [[f32; 4]]
 /// Edit › Stroke: a band along the selection edge (or the layer's opaque edge without a selection).
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let width = p.get("width").and_then(Value::as_f64).unwrap_or(1.0).clamp(1.0, 250.0) as f32;
-    let mut color = color_param(p, "color", s.tools.foreground);
-    color[3] *= (p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32 / 100.0).clamp(0.0, 1.0);
+    let color = color_param(p, "color", s.tools.foreground);
+    let mode = match p.get("mode") {
+        None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
+        Some(Value::String(m)) => crate::commands::blend_from_str(m)
+            .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
+            .ok_or_else(|| EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("unknown blend mode `{m}`") })?,
+        Some(v) => return Err(EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("mode must be a blend mode name, not {v}") }),
+    };
+    let opacity = match p.get("opacity") {
+        None | Some(Value::Null) => 1.0,
+        Some(v) => {
+            (v.as_f64()
+                .filter(|x| x.is_finite())
+                .ok_or_else(|| EngineError::BadParams { cmd: "edit.stroke".into(), msg: "opacity must be a finite number from 0 to 100".into() })?
+                .clamp(0.0, 100.0)
+                / 100.0) as f32
+        }
+    };
+    let preserve = match p.get("preserveTransparency") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(EngineError::BadParams { cmd: "edit.stroke".into(), msg: "preserveTransparency must be true or false".into() }),
+    };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
     s.edit("Stroke", |doc, _| {
@@ -144,7 +172,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::pixels::fill_surface(surf, area, color, Some(&band), lock);
+            crate::fill_cmds::blend_color_mask(surf, area, color, &band, mode, opacity, preserve || lock);
             surf.prune();
         }
         Ok(())
@@ -154,8 +182,8 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
 /// the selected pixels, applied to every channel.
-fn equalize(s: &mut Session) -> Result<Value> {
-    map_pixels(s, "Equalize", |_, px, cover| {
+fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
+    map_pixels(s, "Equalize", p, |_, px, cover| {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -186,8 +214,8 @@ fn equalize(s: &mut Session) -> Result<Value> {
 }
 
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
-fn average(s: &mut Session) -> Result<Value> {
-    map_pixels(s, "Average", |_, px, cover| {
+fn average(s: &mut Session, p: &Value) -> Result<Value> {
+    map_pixels(s, "Average", p, |_, px, cover| {
         let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
         for (p, &k) in px.iter().zip(cover) {
             let w = (p[3] * k) as f64;
@@ -240,7 +268,7 @@ fn clouds(s: &mut Session, p: &Value, difference: bool) -> Result<Value> {
     let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(0) as u32;
     let size = s.active().map_or(256.0, |d| d.doc.size.width.max(d.doc.size.height) as f32);
     let base = (size / 4.0).clamp(16.0, 512.0);
-    map_pixels(s, if difference { "Difference Clouds" } else { "Clouds" }, |area, px, _| {
+    map_pixels(s, if difference { "Difference Clouds" } else { "Clouds" }, p, |area, px, _| {
         let w = area.width() as usize;
         for (i, p) in px.iter_mut().enumerate() {
             let (x, y) = ((area.x0 + (i % w) as i32) as f32, (area.y0 + (i / w) as i32) as f32);
@@ -617,7 +645,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Stroke…",
             &["Edit"],
             None,
-            r##"{"width":1..250=1,"color":"#rrggbb|[r,g,b,a]"=foreground,"location":"inside|center|outside"="center","opacity":0..100=100}"##,
+            r##"{"width":1..250=1,"color":"#rrggbb|[r,g,b,a]"=foreground,"location":"inside|center|outside"="center","mode":"any layer blend mode"="normal","opacity":0..100=100,"preserveTransparency":bool=false}"##,
             has_pixels,
             stroke
         ),
@@ -655,7 +683,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, |s, _| equalize(s)),
+        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);
@@ -760,7 +788,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, |s, _| average(s)),
+        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
         spec!("filter.render.clouds", "Clouds", &["Filter", "Render"], None, r##"{"seed":u32=0}"##, has_pixels, |s, p| clouds(s, p, false)),
         spec!("filter.render.differenceClouds", "Difference Clouds", &["Filter", "Render"], None, r##"{"seed":u32=0}"##, has_pixels, |s, p| clouds(s, p, true)),
     ]
@@ -779,6 +807,68 @@ mod tests {
 
     fn doc(s: &Session) -> &Document {
         &s.active().unwrap().doc
+    }
+
+    #[test]
+    fn equalize_average_and_clouds_edit_the_targeted_channel() {
+        // #935: these four ran through `map_pixels`, which always rewrote the active layer, so
+        // with an alpha channel or the Quick Mask targeted they changed the layer and left the
+        // channel alone.
+        let cmds = ["image.adjustments.equalize", "filter.blur.average", "filter.render.clouds", "filter.render.differenceClouds"];
+        for depth in [8, 16, 32] {
+            for target in ["quickMask", "alpha", "mask"] {
+                for cmd in cmds {
+                    let mut s = session(depth);
+                    s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+                    s.tools.background = [1.0, 1.0, 1.0, 1.0];
+                    s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+                    let p = match target {
+                        "quickMask" => {
+                            s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+                            json!({"seed": 1})
+                        }
+                        "alpha" => {
+                            s.execute("channel.new", json!({"fill": "white"})).unwrap();
+                            s.execute("channel.target", json!({"channel": 0})).unwrap();
+                            json!({"seed": 1})
+                        }
+                        _ => {
+                            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                            json!({"seed": 1, "target": "mask"})
+                        }
+                    };
+                    // Two levels in the target, so Equalize and Average have something to change.
+                    let edit_target = json!({ "target": if target == "alpha" { json!({"channel": 0}) } else { json!(target) } });
+                    s.edit("levels", |doc, active| {
+                        let (surf, _) = crate::channel_cmds::target_surface(doc, *active, &edit_target).unwrap();
+                        surf.fill_rect(Rect::new(0, 0, 20, 30), &[0.4]);
+                        surf.fill_rect(Rect::new(20, 0, 40, 30), &[0.5]);
+                        Ok(())
+                    })
+                    .unwrap();
+                    let full = Rect::new(0, 0, 40, 30);
+                    let read = |s: &Session| {
+                        let d = doc(s);
+                        let layer = d.layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+                        let t = match target {
+                            "quickMask" => d.quick_mask.as_ref().unwrap().surface.read_region(full),
+                            "alpha" => d.channels[0].surface.read_region(full),
+                            _ => layer.mask.as_ref().unwrap().surface.read_region(full),
+                        };
+                        (layer.surface().unwrap().read_region(full), t)
+                    };
+                    let ((layer0, target0), past) = (read(&s), s.active().unwrap().history.past_len());
+                    s.execute(cmd, p).unwrap();
+                    let (layer1, target1) = read(&s);
+                    let case = format!("{cmd} on {target} at {depth}");
+                    assert_eq!(layer1, layer0, "{case}: the layer is untouched");
+                    assert_ne!(target1, target0, "{case}: the target changed");
+                    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{case}");
+                    s.undo();
+                    assert_eq!(read(&s).1, target0, "{case}: undo restores the target");
+                }
+            }
+        }
     }
 
     fn active(s: &Session) -> &Layer {
@@ -816,6 +906,52 @@ mod tests {
         s.execute("edit.stroke", json!({"width": 3, "color": "#00ff00", "location": "outside"})).unwrap();
         assert_eq!(pixel(&s, 8, 15), vec![0.0, 1.0, 0.0, 1.0]);
         assert_eq!(pixel(&s, 15, 15), vec![0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn stroke_uses_fill_blending_and_preserves_transparency_at_every_depth() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            paint_square(&mut s, Rect::new(10, 10, 20, 20), [0.5, 0.5, 0.5, 1.0]);
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+
+            let past = s.active().unwrap().history.past_len();
+            s.execute(
+                "edit.stroke",
+                json!({"width": 2, "color": "#ffffff", "location": "inside", "mode": "multiply", "opacity": 100, "preserveTransparency": true}),
+            )
+            .unwrap();
+            assert_eq!(s.active().unwrap().history.past_len(), past + 1, "Stroke is one history step");
+            let edge = pixel(&s, 10, 15);
+            assert!((edge[0] - 0.5).abs() < 0.015, "{depth}-bit Multiply must preserve gray: {edge:?}");
+            assert_eq!(edge[3], 1.0);
+
+            s.execute("edit.stroke", json!({"width": 2, "color": "#ffffff", "location": "outside", "preserveTransparency": true})).unwrap();
+            assert_eq!(pixel(&s, 9, 15)[3], 0.0, "{depth}-bit transparency lock prevents new outer pixels");
+
+            s.execute("edit.stroke", json!({"width": 2, "color": "#ffffff", "location": "outside", "opacity": 50})).unwrap();
+            let out = pixel(&s, 9, 15);
+            assert!((out[3] - 0.5).abs() < 0.015, "{depth}-bit 50% stroke opacity: {out:?}");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(pixel(&s, 9, 15)[3], 0.0);
+        }
+    }
+
+    #[test]
+    fn stroke_rejects_invalid_blending_options_without_modifying_the_document() {
+        let mut s = session(8);
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+        let past = s.active().unwrap().history.past_len();
+        for params in [
+            json!({"mode": "unknown-mode"}),
+            json!({"mode": 42}),
+            json!({"mode": "passThrough"}),
+            json!({"opacity": "lots"}),
+            json!({"preserveTransparency": "true"}),
+        ] {
+            assert!(s.execute("edit.stroke", params.clone()).is_err(), "{params}");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{params} should not create a history step");
+        }
     }
 
     #[test]

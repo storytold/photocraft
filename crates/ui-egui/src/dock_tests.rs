@@ -211,6 +211,33 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
 }
 
 #[test]
+fn a_single_tab_click_expands_a_collapsed_panel() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        for tab_index in [0, 1] {
+            let (mut app, _, _) = app_with_layers();
+            app.ui.dock_tabs.color = 0;
+            app.ui.dock.set_collapsed(Group::Color, true);
+            // Locking prevents rearrangement, not opening an existing panel.
+            app.session.prefs.edit(|p| p.workspace_locked = true);
+            let mut h = harness(app, vec2(1200.0, 800.0), theme);
+            let collapsed_height = rect_of(&h, Group::Color).height();
+            let strips = last_strips(&h.ctx);
+            let strip = strips.iter().find(|s| s.group == Group::Color).unwrap();
+            let tab = strip.tabs.iter().find(|(i, _)| *i == tab_index).unwrap().1.center();
+            h.event(egui::Event::PointerMoved(tab));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+            assert!(!h.state().ui.dock.is_collapsed(Group::Color), "{theme:?}: tab {tab_index}");
+            assert_eq!(h.state().ui.dock_tabs.color, tab_index);
+            assert!(rect_of(&h, Group::Color).height() > collapsed_height);
+        }
+    }
+}
+
+#[test]
 fn double_clicking_a_tab_collapses_and_dragging_a_strip_reorders() {
     let (app, _, _) = app_with_layers();
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);

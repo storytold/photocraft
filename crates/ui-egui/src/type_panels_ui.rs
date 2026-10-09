@@ -509,6 +509,7 @@ fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
         for f in crate::type_tool::families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
             if ui.selectable_label(*f == shown, f).clicked() {
                 *current = f.clone();
+                photocraft_text::served::request(f);
                 changed = true;
                 ui.data_mut(|d| d.remove::<String>(search_id));
             }

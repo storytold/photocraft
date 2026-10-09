@@ -733,3 +733,39 @@ fn convert_to_layers_conforms_the_contents_to_the_document_mode_and_depth() {
     let fmt = s.active().unwrap().doc.pixel_format();
     assert!(matches!(&active_layer(&s).content, LayerContent::Raster(px) if px.format().mode == fmt.mode && px.format().sample == fmt.sample));
 }
+
+#[test]
+fn inspect_reports_the_smart_source() {
+    // A PSD placed layer: its file in the global `lnk2` block, the layer linked to its uuid.
+    let inner = Document::with_background(
+        "in",
+        Size::new(4, 4),
+        photocraft_color::ColorMode::Rgb,
+        photocraft_color::SampleType::U8,
+        photocraft_color::Color::rgba(0.0, 1.0, 0.0, 1.0),
+    );
+    let png = photocraft_io::export(&inner, "png", &Default::default()).unwrap().bytes;
+    let lnk2 = photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile { uuid: "uuid-1".into(), file_name: "in.png".into(), bytes: png });
+    let mut s = session(8);
+    s.edit("place", |doc, active| {
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(lnk2)));
+        let sm = SmartObject::new(SmartSource::Linked { path: "uuid-1".into() }, Affine::IDENTITY, None);
+        *active = Some(doc.insert_above(*active, Layer::new("front", LayerContent::Smart(sm))));
+        Ok(())
+    })
+    .unwrap();
+    let source = |s: &Session| crate::inspect::layer(s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap())["smartSource"].clone();
+    let front = source(&s);
+    assert_eq!(front, json!({"kind": "linked", "path": "uuid-1"}));
+    // A duplicate shares the file; New Smart Object via Copy gets its own.
+    s.execute("layer.duplicate", json!({})).unwrap();
+    assert_eq!(source(&s), front, "a duplicate shares its source");
+    s.execute("layer.smartObjects.newSmartObjectViaCopy", json!({})).unwrap();
+    assert_eq!(source(&s), json!({"kind": "embedded", "fileName": "in.png"}), "via copy embeds its own");
+
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    assert_eq!(source(&s)["kind"], "embedded");
+    assert!(source(&s)["fileName"].is_string());
+}

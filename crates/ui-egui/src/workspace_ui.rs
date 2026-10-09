@@ -307,6 +307,29 @@ pub fn dialog_command(kind: &str, f: &Map<String, Value>) -> Option<(&'static st
     })
 }
 
+/// The title of a dialog kind.
+pub fn title(kind: &str) -> &'static str {
+    match kind {
+        "newWorkspace" => "New Workspace",
+        "deleteWorkspace" => "Delete Workspace",
+        "customPar" => "Save Pixel Aspect Ratio",
+        "preview32" => "32-bit Preview Options",
+        _ => "Show Extras Options",
+    }
+}
+
+/// OK on the open dialog (its button, or `ui.dialog.confirm {"dialog": "shell"}`): runs its
+/// command, then closes it; on an error the dialog stays open.
+pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    let (kind, f) = app.ui.shell.dialog.clone().ok_or("no dialog is open")?;
+    let (id, p) = dialog_command(&kind, &f).ok_or_else(|| format!("unknown dialog `{kind}`"))?;
+    let r = crate::menus::invoke(app, ctx, id, p);
+    if r.is_ok() {
+        app.ui.shell.dialog = None;
+    }
+    r
+}
+
 /// Draws the Modifier Keys panel and the open dialog.
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.shell.modifier_keys {
@@ -336,13 +359,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some((kind, mut f)) = app.ui.shell.dialog.clone() else { return };
     let t = Tokens::get(ctx);
-    let title = match kind.as_str() {
-        "newWorkspace" => "New Workspace",
-        "deleteWorkspace" => "Delete Workspace",
-        "customPar" => "Save Pixel Aspect Ratio",
-        "preview32" => "32-bit Preview Options",
-        _ => "Show Extras Options",
-    };
+    let title = title(&kind);
     let names: Vec<String> = app.session.prefs().workspaces.keys().cloned().collect();
     let mut result: Option<bool> = None;
     egui::Window::new(title).id(egui::Id::new("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
@@ -440,15 +457,10 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     );
     match result {
         Some(true) => {
-            if let Some((id, p)) = dialog_command(&kind, &f) {
-                match crate::menus::invoke(app, ctx, id, p) {
-                    Ok(_) => app.ui.shell.dialog = None,
-                    Err(e) => {
-                        app.ui.status = e;
-                        app.ui.status_error = true;
-                        app.ui.shell.dialog = Some((kind, f));
-                    }
-                }
+            app.ui.shell.dialog = Some((kind, f));
+            if let Err(e) = confirm(app, ctx) {
+                app.ui.status = e;
+                app.ui.status_error = true;
             }
         }
         Some(false) => app.ui.shell.dialog = None,

@@ -74,7 +74,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 22] = [
+pub const UI_SET_FIELDS: [&str; 25] = [
     "tool",
     "panels",
     "dock",
@@ -97,6 +97,9 @@ pub const UI_SET_FIELDS: [&str; 22] = [
     "brushSize",
     "gradientBlendMode",
     "gradientClassic",
+    "eyedropperSampleSize",
+    "eyedropperSample",
+    "eyedropperRing",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -207,6 +210,9 @@ fn screen_point(app: &PhotocraftApp, x: f64, y: f64) -> [f32; 2] {
     [p.x, p.y]
 }
 
+/// The `dialog` id of the shell's own dialog (`workspace_ui`) in `ui.inspect` and `ui.dialog.*`.
+const SHELL_DIALOG: &str = "shell";
+
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let saved = app.session.authorize;
     if let Some(gate) = app.services.automation_authorize {
@@ -239,6 +245,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
+            // A control-channel menu click must respect the same modal gate as the native menu.
+            // engine.execute is deliberately not subject to the UI's menu-click semantics.
+            if req.method == "ui.menu.invoke" && !crate::menus::modal_allows(app, id) {
+                return err("menu command is unavailable while a modal dialog is open");
+            }
             let params = p.get("params").cloned().unwrap_or(json!({}));
             if let Some(authorize) = app.services.automation_command.as_ref()
                 && let Err(error) = authorize(id, &params)
@@ -298,6 +309,23 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     None => None,
                 };
                 let gradient_classic = bool_field(p, "gradientClassic")?;
+                // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
+                let eyedropper_size = match p.get("eyedropperSampleSize") {
+                    Some(v) => Some(
+                        photocraft_engine::sample_cmds::size_param("ui.set", &json!({"size": v}))
+                            .map_err(|_| format!("eyedropperSampleSize must be \"point\" or one of {:?}", photocraft_engine::sample_cmds::SAMPLE_SIZES))?,
+                    ),
+                    None => None,
+                };
+                let eyedropper_sample = match p.get("eyedropperSample") {
+                    Some(v) => {
+                        let ids: Vec<&str> = photocraft_engine::sample_cmds::SampleLayers::ALL.iter().map(|(_, n)| *n).collect();
+                        let id = v.as_str().filter(|id| ids.contains(id)).ok_or_else(|| format!("eyedropperSample must be one of {}", ids.join(", ")))?;
+                        Some(id.to_string())
+                    }
+                    None => None,
+                };
+                let eyedropper_ring = bool_field(p, "eyedropperRing")?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
@@ -389,6 +417,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if gradient_blend.is_some() {
                     crate::gradient_ui::options_changed(app, &gradient_before);
                 }
+                if let Some(size) = eyedropper_size {
+                    app.ui.tool_options.eyedropper_size = size;
+                }
+                if let Some(id) = eyedropper_sample {
+                    app.ui.tool_options.eyedropper_sample = id;
+                }
+                if let Some(ring) = eyedropper_ring {
+                    app.ui.tool_options.eyedropper_ring = ring;
+                }
                 if let Some(v) = panels {
                     app.ui.panels = v;
                 }
@@ -420,7 +457,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(i) = app.session.active_index() {
                     if let Some(z) = zoom {
-                        app.ui.views[i].zoom = (z as f32).clamp(0.01, 64.0);
+                        let size = app.session.documents().get(i).map_or([0, 0], |st| [st.doc.size.width, st.doc.size.height]);
+                        app.ui.views[i].zoom = crate::zoom_levels::clamp(z as f32, size);
                         app.ui.views[i].fit_pending = false;
                         app.ui.views[i].fill_pending = false;
                     }
@@ -493,6 +531,34 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             ok(json!({"dialog": app.ui.open_dialog(kind, fields)}))
         }
+        // The shell's own dialog (Window › Workspace, View › Pixel Aspect Ratio › Custom, Show
+        // Extras Options, 32-bit Preview Options), listed by ui.inspect with the id "shell".
+        "ui.dialog.set" if s("dialog") == Some(SHELL_DIALOG) => {
+            let Some(field) = s("field") else { return err("need `dialog` and `field`") };
+            let value = p.get("value").cloned().unwrap_or(Value::Null);
+            match app.ui.shell.dialog.as_mut() {
+                Some((_, fields)) => {
+                    fields.insert(field.to_string(), value);
+                    ok(Value::Null)
+                }
+                None => err("no shell dialog is open"),
+            }
+        }
+        "ui.dialog.confirm" if s("dialog") == Some(SHELL_DIALOG) => {
+            let Some((kind, fields)) = app.ui.shell.dialog.clone() else { return err("no shell dialog is open") };
+            if let Some((command, params)) = crate::workspace_ui::dialog_command(&kind, &fields)
+                && let Some(authorize) = app.services.automation_command.as_ref()
+                && let Err(error) = authorize(command, &params)
+            {
+                return err(error);
+            }
+            wrap(crate::workspace_ui::confirm(app, ctx))
+        }
+        "ui.dialog.apply" if s("dialog") == Some(SHELL_DIALOG) => err("`ui.dialog.apply` is for Preferences; use `ui.dialog.confirm`"),
+        "ui.dialog.cancel" if s("dialog") == Some(SHELL_DIALOG) => match app.ui.shell.dialog.take() {
+            Some(_) => ok(Value::Null),
+            None => err("no such dialog"),
+        },
         "ui.dialog.set" => {
             let (Some(id), Some(field)) = (u("dialog"), s("field")) else { return err("need `dialog` and `field`") };
             let value = p.get("value").cloned().unwrap_or(Value::Null);
@@ -752,8 +818,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
 /// Snapshot of everything on screen, addressable by id.
 pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let screen = ctx.content_rect();
-    let dialogs: Vec<Value> =
+    let mut dialogs: Vec<Value> =
         app.ui.dialogs.iter().map(|d| json!({"id": d.id, "kind": d.kind, "title": crate::dialogs::title(d), "fields": d.fields})).collect();
+    if let Some((kind, fields)) = &app.ui.shell.dialog {
+        dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
+    }
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
@@ -762,6 +831,10 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
         "layerMenu": app.ui.layer_menu,
+        "brushPicker": app.ui.brush_picker.map(|pos| json!({
+            "pos": pos,
+            "list": app.ui.brush_picker_list,
+        })),
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
             json!({
                 "pos": menu.pos,
@@ -834,6 +907,43 @@ mod tests {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
         }
+    }
+
+    #[test]
+    fn shell_dialogs_are_listed_and_driven_through_ui_dialog() {
+        // #1004: Window › Workspace and View dialogs live in `ui.shell.dialog`, and ui.inspect and
+        // ui.dialog.* only knew `ui.dialogs`.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let shell = |app: &mut PhotocraftApp| {
+            let v = call(app, &ctx, "ui.inspect", json!({}));
+            v["result"]["dialogs"].as_array().unwrap().iter().find(|d| d["id"] == "shell").cloned()
+        };
+        // Listed, then cancelled.
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({})).unwrap();
+        let d = shell(&mut app).expect("the open shell dialog is listed");
+        assert_eq!((d["kind"].as_str(), d["title"].as_str()), (Some("newWorkspace"), Some("New Workspace")));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "shell"}))["ok"], true);
+        assert!(app.ui.shell.dialog.is_none() && shell(&mut app).is_none());
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "shell"}))["ok"], false, "nothing left to cancel");
+        // A field set over control reaches OK.
+        crate::menus::invoke(&mut app, &ctx, "view.show.showExtrasOptions", json!({})).unwrap();
+        assert!(app.ui.view.show.notes);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": "shell", "field": "notes", "value": false}))["ok"], true);
+        assert_eq!(shell(&mut app).unwrap()["fields"]["notes"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "shell"}))["ok"], true);
+        assert!(!app.ui.view.show.notes && app.ui.shell.dialog.is_none());
+        // An OK that fails keeps the dialog open and says why.
+        crate::menus::invoke(&mut app, &ctx, "view.show.showExtrasOptions", json!({})).unwrap();
+        call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": "shell", "field": "bogus", "value": true}));
+        let r = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "shell"}));
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap_or("").contains("bogus"), "{r}");
+        assert!(app.ui.shell.dialog.is_some());
+        // Apply is Preferences-only; numeric ids still address ordinary dialogs only.
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.apply", json!({"dialog": "shell"}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": 0}))["ok"], false);
+        assert!(app.ui.shell.dialog.is_some());
     }
 
     #[test]
@@ -956,6 +1066,38 @@ mod tests {
     }
 
     #[test]
+    fn menu_invoke_cannot_edit_document_behind_an_open_dialog() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+
+        let opened = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "image.imageSize"}));
+        assert_eq!(opened["ok"], true, "{opened}");
+        let dialog = opened["result"]["dialog"].as_u64().unwrap();
+        let revision = app.session.active().unwrap().revision;
+        let before = call(&mut app, &ctx, "ui.inspect", json!({}));
+        let fields = before["result"]["dialogs"][0]["fields"].clone();
+
+        for params in [json!({"id": "image.imageRotation.90cw"}), json!({"id": "image.imageRotation.90cw", "params": {}})] {
+            let blocked = call(&mut app, &ctx, "ui.menu.invoke", params);
+            assert_eq!(blocked["ok"], false, "{blocked}");
+            assert_eq!(app.session.active().unwrap().revision, revision);
+            let snapshot = call(&mut app, &ctx, "ui.inspect", json!({}));
+            assert_eq!(snapshot["result"]["dialogs"][0]["id"], dialog);
+            assert_eq!(snapshot["result"]["dialogs"][0]["fields"], fields);
+        }
+
+        // View navigation stays permitted by the same policy as native menus and shortcuts.
+        assert!(crate::menus::modal_allows(&app, "view.zoomIn"));
+        assert!(!crate::menus::modal_allows(&app, "image.imageRotation.90cw"));
+
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
+        let rotated = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "image.imageRotation.90cw"}));
+        assert_eq!(rotated["ok"], true, "{rotated}");
+        assert!(app.session.active().unwrap().revision > revision);
+    }
+
+    #[test]
     fn ui_set_rejects_unknown_fields_before_changing_anything() {
         use crate::theme::ThemeKind;
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -991,6 +1133,37 @@ mod tests {
     }
 
     #[test]
+    fn ui_set_drives_the_eyedropper_options() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let good = call(
+            &mut app,
+            &ctx,
+            "ui.set",
+            json!({"tool": "eyedropper", "eyedropperSampleSize": 11, "eyedropperSample": "currentAndBelow", "eyedropperRing": false}),
+        );
+        assert_eq!(good["ok"], true, "{good}");
+        let o = &app.ui.tool_options;
+        assert_eq!((o.eyedropper_size, o.eyedropper_sample.as_str(), o.eyedropper_ring), (11, "currentAndBelow", false));
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"eyedropperSampleSize": "point"}))["ok"], true);
+        assert_eq!(app.ui.tool_options.eyedropper_size, 1);
+        for bad in [
+            json!({"eyedropperSampleSize": 4}),
+            json!({"eyedropperSampleSize": "big"}),
+            json!({"eyedropperSample": "below"}),
+            json!({"eyedropperSample": 2}),
+            json!({"eyedropperRing": "yes"}),
+        ] {
+            let r = call(&mut app, &ctx, "ui.set", bad.clone());
+            assert_eq!(r["ok"], false, "{bad}: {r}");
+        }
+        // A rejected call applies none of its fields.
+        let r = call(&mut app, &ctx, "ui.set", json!({"eyedropperSampleSize": 101, "eyedropperSample": "nope"}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(app.ui.tool_options.eyedropper_size, 1);
+    }
+
+    #[test]
     fn ui_set_opens_the_brush_preset_picker_and_sets_its_view() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
@@ -1005,6 +1178,40 @@ mod tests {
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]), "a bad value leaves the picker alone");
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         assert_eq!(app.ui.brush_picker, None);
+    }
+
+    #[test]
+    fn ui_inspect_tracks_brush_picker_open_and_closed() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 128, "height": 128})).unwrap();
+
+        let closed = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert!(closed["result"]["brushPicker"].is_null());
+
+        // A right-click on the canvas with Brush opens the same picker as the options bar.
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "brush"}))["ok"], true);
+        let click = call(
+            &mut app,
+            &ctx,
+            "ui.pointer",
+            json!({
+                "button": "right",
+                "events": [{"kind": "down", "x": 64, "y": 64}, {"kind": "up", "x": 64, "y": 64}]
+            }),
+        );
+        assert_eq!(click["ok"], true, "{click}");
+        let open = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
+        assert_eq!(open["result"]["brushPicker"]["list"]["view"], "grid");
+
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerView": "list"}))["ok"], true);
+        let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert_eq!(changed["result"]["brushPicker"]["list"]["view"], "list");
+
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
+        let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert!(closed_again["result"]["brushPicker"].is_null());
     }
 
     #[test]

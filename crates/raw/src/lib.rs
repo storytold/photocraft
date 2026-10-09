@@ -4,7 +4,7 @@
 //! TIFF/EP (ISO 12234-2), the Adobe DNG Specification 1.7, ITU-T T.81
 //! (lossless JPEG, process 14), the published structure of Canon's CR2
 //! container, published descriptions of Sony's cRAW code, public maker-note
-//! tag tables, Nikon Huffman tables recovered by black-box analysis of CC0
+//! and RAF tag tables, Nikon Huffman tables recovered by black-box analysis of CC0
 //! samples (see `nefc.rs`), observation of sample files, and the demosaicing
 //! papers cited in [`Demosaic`]. No code from dcraw, LibRaw, rawspeed,
 //! rawler, rawloader or darktable was used.
@@ -20,12 +20,16 @@
 //! * Raws that carry no colour description (NEF) take a camera profile we
 //!   measured from the camera's own output when there is one (`cameras.rs`:
 //!   image area, levels, ForwardMatrix, tone curve; the Nikon D4 so far).
+//!   Bodies whose full profile is not measured yet can still carry a measured
+//!   image area (the D800E, the ILCE-7).
 //!
 //! Decoded today: DNG (uncompressed and lossless-JPEG, strips and tiles, CFA
 //! and LinearRaw), CR2 (lossless JPEG with Canon slices), uncompressed or
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
-//! Panasonic RW2 (RawFormat 5) and uncompressed Olympus ORF. Everything else reports [`RawError::Unsupported`].
+//! Panasonic RW2 (RawFormat 5), uncompressed Olympus ORF and uncompressed
+//! Fujifilm RAF (Bayer and X-Trans). Everything else reports
+//! [`RawError::Unsupported`].
 //!
 //! The crate is standalone (no workspace dependencies), does no I/O, builds for
 //! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
@@ -47,6 +51,7 @@ mod opcodes;
 mod orf;
 mod par;
 mod preview;
+mod raf;
 mod rw2;
 mod sensor;
 mod sony;
@@ -175,7 +180,7 @@ pub fn identify(bytes: &[u8]) -> Option<RawFormat> {
     if bytes.get(4..12) == Some(b"ftypcrx ") {
         return Some(RawFormat::Cr3);
     }
-    if bytes.starts_with(b"FUJIFILMCCD-RAW") {
+    if bytes.starts_with(raf::MAGIC) {
         return Some(RawFormat::Raf);
     }
     let t = Tiff::new(bytes)?;
@@ -211,7 +216,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
     let format = identify(bytes).ok_or(RawError::NotRaw)?;
     match format {
         RawFormat::Cr3 => Err(RawError::unsupported("Canon CR3 (ISO BMFF / CRX) is not decoded yet")),
-        RawFormat::Raf => Err(RawError::unsupported("Fujifilm RAF is not decoded yet")),
+        RawFormat::Raf => raf::decode(bytes, limits),
         _ => {
             let t = Tiff::new(bytes).ok_or(RawError::NotRaw)?;
             match format {

@@ -161,9 +161,11 @@ fn read_text_metadata(bytes: &[u8], mut remaining: usize, meta: &mut Metadata) -
         remaining = remaining.checked_sub(keyword_len).and_then(|left| left.checked_sub(text.len())).ok_or_else(text_limit)?;
         let keyword: String = keyword.iter().map(|&b| char::from(b)).collect();
         match kind {
+            // Some writers put XMP in Latin-1 text chunks instead of the usual iTXt.
+            // Treat the reserved keyword consistently, after the same budget checks.
+            _ if keyword == XMP_KEYWORD => meta.xmp = Some(text),
             b"tEXt" => plain.push((keyword, text)),
             b"zTXt" => compressed.push((keyword, text)),
-            _ if keyword == XMP_KEYWORD => meta.xmp = Some(text),
             _ => international.push((keyword, text)),
         }
     }
@@ -261,7 +263,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     if opts.embed_metadata {
         if let Some(exif) = &img.meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::orientation::upright_exif(exif).into_owned().into());
+            info.exif_metadata = Some(crate::resolution::export_exif(exif, img.meta.dpi).into_owned().into());
         }
         if let Some((x, y)) = img.meta.dpi
             && x > 0.0
@@ -294,7 +296,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
                 res.map_err(|e| CodecError::encode(F, e))?;
             }
             if let Some(xmp) = &img.meta.xmp {
-                encoder.add_itxt_chunk(XMP_KEYWORD.into(), crate::orientation::upright_xmp(xmp).into_owned()).map_err(|e| CodecError::encode(F, e))?;
+                encoder
+                    .add_itxt_chunk(XMP_KEYWORD.into(), crate::resolution::export_xmp(xmp, img.meta.dpi).into_owned())
+                    .map_err(|e| CodecError::encode(F, e))?;
             }
         }
         let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;

@@ -82,7 +82,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let shown_colors = if colors > 1 { colors } else { 0 };
     let mut actions: Vec<(String, Value)> = Vec::new();
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
-    let footer = 34.0;
+    let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
     let fill = ui.available_height() > footer + 60.0;
     let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
     let mut mask_click = None;
@@ -270,30 +270,25 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
         }
     });
-    ui.add_space(4.0);
-    widgets::hairline(ui);
-    ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+    // Photoshop's order from the left: Load as selection, Save selection, New, Delete.
+    widgets::panel_footer(ui, |ui| {
         let target_ref = match view.target {
             ChannelTarget::Alpha(i) => json!(i),
             ChannelTarget::Color(k) => json!({ "color": k }),
             ChannelTarget::Composite => json!("composite"),
         };
-        if icons::button(ui, "circle-dashed", 26.0, false, tl!("Load channel as selection")).clicked() {
-            actions.push(("select.loadSelection".into(), json!({ "channel": target_ref })));
+        if icons::button(ui, "trash", 26.0, false, tl!("Delete current channel")).clicked() {
+            actions.push(("channel.delete".into(), json!({})));
+        }
+        if icons::button(ui, "plus", 26.0, false, tl!("Create new channel")).clicked() {
+            actions.push(("channel.new".into(), json!({})));
         }
         if icons::button(ui, "square-dashed", 26.0, false, tl!("Save selection as channel")).clicked() {
             actions.push(("select.saveSelection".into(), json!({})));
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if icons::button(ui, "trash", 26.0, false, tl!("Delete current channel")).clicked() {
-                actions.push(("channel.delete".into(), json!({})));
-            }
-            if icons::button(ui, "plus", 26.0, false, tl!("Create new channel")).clicked() {
-                actions.push(("channel.new".into(), json!({})));
-            }
-        });
+        if icons::button(ui, "circle-dashed", 26.0, false, tl!("Load channel as selection")).clicked() {
+            actions.push(("select.loadSelection".into(), json!({ "channel": target_ref })));
+        }
     });
     ctx.data_mut(|d| d.insert_temp(thumbs_id(), drawn));
     if let Some(on) = mask_click {

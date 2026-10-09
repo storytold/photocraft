@@ -468,3 +468,27 @@ fn batch_reports_inputs_that_share_an_output_name() {
     let px = photocraft_compose::render(&kept, Rect::new(1, 1, 2, 2)).px[0];
     assert!(px[0] > 0.99 && px[1] < 0.01, "the first input's result is kept: {px:?}");
 }
+
+/// `file.revealInFinder` (the document tab's Reveal, UI-217-6) reveals the clicked document's
+/// saved path — the tab menu passes `document`, not just the active one.
+#[test]
+fn reveal_in_finder_reveals_the_documents_saved_path() {
+    let mut s = session(8, 8, 8);
+    assert!(s.is_enabled("file.revealInFinder"));
+    // A new document has no file yet.
+    let err = s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap_err();
+    assert!(err.to_string().contains("no saved file"), "{err}");
+    let path = "/tmp/pics/a.psd";
+    s.active_mut().unwrap().path = Some(path.into());
+    let r = s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap();
+    let (program, args) = crate::layer_menu_cmds::reveal_command(path);
+    assert_eq!(r["program"], json!(program));
+    assert_eq!(r["args"], json!(args));
+    // The tab menu names a background tab: the active document is not the one revealed.
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "other"})).unwrap();
+    let err = s.execute("file.revealInFinder", json!({"document": 1, "dryRun": true})).unwrap_err();
+    assert!(err.to_string().contains("no saved file"), "{err}");
+    let r = s.execute("file.revealInFinder", json!({"document": 0, "dryRun": true})).unwrap();
+    assert_eq!(r["program"], json!(program));
+    assert_eq!(r["args"], json!(args));
+}

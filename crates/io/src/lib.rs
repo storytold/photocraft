@@ -120,16 +120,16 @@ pub struct ExportResult {
     pub warnings: Vec<String>,
 }
 
-/// Which part of the document's XMP packet a flat export embeds. Layered saves (PSD, PSB,
-/// `.pcraft`) always keep everything. Save As and conversions keep the whole packet, as
+/// Which part of the document's XMP packet and free-form text a flat export embeds.
+/// PSD/PSB always keep XMP; `.pcraft` keeps both. Save As and conversions keep the whole packet, as
 /// Photoshop's Save As does; Export As starts at `None`, because the packet lists the text of
 /// every type layer and one id per placed document (#647).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum XmpEmbed {
-    /// Embed the document's whole XMP packet.
+    /// Embed the document's whole XMP packet and free-form text.
     #[default]
     All,
-    /// Embed no XMP.
+    /// Embed no XMP or free-form text.
     None,
 }
 
@@ -145,8 +145,9 @@ pub struct ExportOptions {
     /// Save As sets it from its Layers option, which keeps them as Photoshop does. `false` is
     /// Photoshop's "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
-    /// Which part of the document's XMP packet a flat export embeds (PSD/PSB/`.pcraft`
-    /// always keep everything). Everything by default, as Save As does; Export As offers None.
+    /// Which part of the document's XMP packet and free-form text a flat export embeds.
+    /// PSD/PSB always keep XMP; `.pcraft` keeps both. Everything by default, as Save As does;
+    /// Export As offers None.
     pub xmp: XmpEmbed,
 }
 
@@ -233,6 +234,9 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
     if ext == "psd" || ext == "psb" {
         let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", ..Default::default() };
         let (mut file, mut warnings) = document_to_psd_with(doc, &o);
+        if !doc.metadata.text.is_empty() {
+            warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into());
+        }
         warnings.extend(tiff_layers::strip_foreign_order_blocks(&mut file));
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;

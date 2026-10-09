@@ -24,8 +24,8 @@ use crate::file_open::display_name;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
-    /// scripts, notes, presets).
-    Open { multiple: bool },
+    /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
+    Open { multiple: bool, initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
 }
@@ -106,7 +106,15 @@ impl PhotocraftApp {
 
     /// Ask where to save: `then` gets the chosen path.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string() }, move |app, answer| match answer {
+        let mut suggested = std::path::PathBuf::from(suggested);
+        // Export dialogs usually provide only a file name. Start beside the source document,
+        // while preserving a caller's explicit directory and the untitled-document fallback.
+        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
+            && let Some(dir) = self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent())
+        {
+            suggested = dir.join(suggested);
+        }
+        self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),
         })
@@ -116,7 +124,8 @@ impl PhotocraftApp {
     /// name (the full path on the desktop) and bytes. A file that can't be read fails with
     /// "<file name>: <why>".
     pub(crate) fn pick_file_bytes(&mut self, then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: false }, move |app, answer| {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir }, move |app, answer| {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
@@ -124,7 +133,8 @@ impl PhotocraftApp {
 
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: true }, |app, answer| {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);
@@ -190,6 +200,12 @@ impl PhotocraftApp {
             self.ui.status_error = true;
         }
     }
+}
+
+/// The folder an open dialog starts in: the directory of the most recent file (UI-217-3).
+fn last_used_dir(recent: &[String]) -> Option<String> {
+    let dir = std::path::Path::new(recent.first()?).parent()?;
+    (!dir.as_os_str().is_empty()).then(|| dir.to_string_lossy().into_owned())
 }
 
 /// The name and bytes of the single file an open dialog answered with.
