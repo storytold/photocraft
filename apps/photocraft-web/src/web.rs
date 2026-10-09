@@ -298,11 +298,16 @@ fn services(inbox: Inbox) -> Services {
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        load_documentation: Some(Box::new(|| local_storage()?.get_item(DOCUMENTATION_KEY).ok().flatten())),
+        save_documentation: Some(Box::new(|text: &str| {
+            local_storage().ok_or("no localStorage")?.set_item(DOCUMENTATION_KEY, text).map_err(|e| format!("{e:?}"))
+        })),
         ..Default::default()
     }
 }
 
 const PREFS_KEY: &str = "photocraft.preferences";
+const DOCUMENTATION_KEY: &str = "photocraft.documentation";
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()

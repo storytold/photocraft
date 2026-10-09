@@ -139,6 +139,9 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let sel = slot.contains(&app.ui.tool);
                             let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
                             let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
+                            for target_tool in slot {
+                                crate::help_search::register_target(ui.ctx(), format!("tool:{target_tool:?}"), resp.rect);
+                            }
                             if slot.len() > 1 {
                                 let r = resp.rect;
                                 let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
