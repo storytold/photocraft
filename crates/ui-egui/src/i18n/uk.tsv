@@ -38,7 +38,7 @@
 	Both	Обидва
 	Left	Лівий
 	Right	Правий
-	Open Recent	Нещодавні файли
+	Open as Deep…	Відкрити як deep…	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
@@ -2610,6 +2610,7 @@ fontWeight	Italic	Курсивний
 	Enable airbrush-style build-up effects	Увімкнути ефекти накопичення як в аерографі
 	Filter for adjustment layers	Фільтрувати коригувальні шари
 	Filter for pixel layers	Фільтрувати піксельні шари
+	Filter for deep layers	Фільтр по глибоким шарам
 	Filter for shape layers	Фільтрувати шари фігур
 	Filter for smart objects	Фільтрувати смартоб'єкти
 	Filter for type layers	Фільтрувати текстові шари

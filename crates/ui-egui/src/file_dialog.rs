@@ -197,7 +197,8 @@ impl PhotocraftApp {
     /// depth. Web dialogs hand over contents, which the deep importer has no bytes path for.
     pub(crate) fn open_dialog_file_deep(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir }, |app, answer| {
+        let extensions = Some(vec!["exr".to_string()]);
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     for path in paths {

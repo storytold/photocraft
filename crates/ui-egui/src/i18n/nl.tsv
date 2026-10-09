@@ -33,7 +33,7 @@
 	Both	Beide
 	Left	Links
 	Right	Rechts
-	Open Recent	Recent geopend
+	Open as Deep…	Openen als deep…	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
 	Remove from Recent	Verwijderen uit recente bestanden
 	Remove {name} from Recent	{name} verwijderen uit recente bestanden
@@ -1031,6 +1031,7 @@
 	Fill:	Vulling:
 	Filter for adjustment layers	Filter op aanpassingslagen
 	Filter for pixel layers	Filter op pixellagen
+	Filter for deep layers	Filter op dieptelagen
 	Filter for shape layers	Filter op vormlagen
 	Filter for smart objects	Filter op slimme objecten
 	Filter for type layers	Filter op tekstlagen
