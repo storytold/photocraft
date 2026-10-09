@@ -304,7 +304,12 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
             auto_align
         ),
-        spec!("edit.autoBlendLayers", "Auto-Blend Layers…", r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##, auto_blend),
+        spec!(
+            "edit.autoBlendLayers",
+            "Auto-Blend Layers…",
+            r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##,
+            auto_blend
+        ),
     ]
 }
 

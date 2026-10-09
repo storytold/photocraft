@@ -811,15 +811,16 @@ impl WlsSolver {
 const CG_ITERS: usize = 200;
 
 /// Depth from focus over the `n` layers' luminance planes `luma` (`w × h`, aligned), guided by
-/// the all-in-focus luminance `guide` of the same size.
+/// the all-in-focus luminance `guide` of the same size. Without layers, or when `guide` or a
+/// plane is not `w × h` long, the map is empty: depth 0 and confidence 0 everywhere.
 pub fn depth_from_focus(luma: &[&[f32]], guide: &[f32], w: usize, h: usize, p: &DepthParams) -> DepthMap {
     let n = luma.len();
-    let k = 1usize << p.scale.min(8);
-    let (g, dw, dh) = block_mean(guide, w, h, k);
-    let empty = n == 0 || w == 0 || h == 0;
+    let empty = n == 0 || w == 0 || h == 0 || guide.len() != w * h || luma.iter().any(|l| l.len() != w * h);
     if empty {
         return DepthMap { depth: vec![0.0; w * h], conf: vec![0.0; w * h], w, h };
     }
+    let k = 1usize << p.scale.min(8);
+    let (g, dw, dh) = block_mean(guide, w, h, k);
     let gf = GuidedFilter::new(g.clone(), dw, dh, p.agg_radius, p.agg_eps);
     let mut tracker = PeakTracker::new(dw * dh);
     for l in luma {
@@ -977,6 +978,12 @@ mod tests {
         assert!(dm.depth.iter().all(|v| (0.0..=2.0).contains(v)));
         // Degenerate inputs are fine.
         assert_eq!(depth_from_focus(&[], &guide, w, h, &DepthParams::default()).depth, vec![0.0; w * h]);
+        // A guide or a plane of the wrong length is no input: the empty map, never a panic.
+        let empty = DepthMap { depth: vec![0.0; w * h], conf: vec![0.0; w * h], w, h };
+        assert_eq!(depth_from_focus(&refs, &guide[1..], w, h, &DepthParams::default()), empty);
+        let short = &refs[0][..w * h - 1];
+        assert_eq!(depth_from_focus(&[refs[0], short], &guide, w, h, &DepthParams::default()), empty);
+        assert_eq!(depth_from_focus(&refs, &guide, w + 1, h, &DepthParams::default()).w, w + 1);
         let one = depth_from_focus(&refs[..1], &guide, w, h, &DepthParams::default());
         assert!(one.depth.iter().all(|v| *v == 0.0));
     }
