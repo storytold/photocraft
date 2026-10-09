@@ -808,7 +808,8 @@ fn automation_smart_contents_refuses_disk_sources_before_changes() {
         let revision = s.active().unwrap().revision;
         let history = s.active().unwrap().history.entries().len();
         let error = s.execute(cmd, json!({"layer": id})).unwrap_err().to_string();
-        assert!(error.contains("source path refused") && error.contains(path.to_str().unwrap()), "{error}");
+        // The error Debug-quotes the path (doubled backslashes on Windows), so match its file name.
+        assert!(error.contains("source path refused") && error.contains(path.file_name().unwrap().to_str().unwrap()), "{error}");
         assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
         assert_eq!((s.documents().len(), s.active().unwrap().revision, s.active().unwrap().history.entries().len()), (1, revision, history));
 
