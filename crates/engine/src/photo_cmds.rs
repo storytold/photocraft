@@ -147,6 +147,76 @@ pub(crate) fn register(images: &[(&Surface, Rect)], layout: Layout, reference: O
     Some(Alignment { placements: a.placements.iter().map(|p| p.as_ref().map(|p| p.scaled(kf))).collect(), focal: a.focal * kf, rms: a.rms * kf, ..a })
 }
 
+/// The finest pyramid level the intensity registration searches is at most this many pixels
+/// across: the pose is resolution independent, so the fit still applies at full resolution.
+pub(crate) const DIRECT_SIDE: usize = 2048;
+
+/// Registers `images` (surface, content area, all of one size) by intensity
+/// ([`photocraft_algo::direct`]), for layers that nearly coincide (a focus or exposure bracket,
+/// a burst): outward from the reference, each layer to the previous one aligned, starting from
+/// its pose. Planar layouts only; Auto means a similarity (Collage).
+pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, reference: usize) -> std::result::Result<Alignment, String> {
+    use photocraft_algo::direct::{self, Plane, Pose};
+    use photocraft_algo::transform::Homography;
+    let (motion, layout) = match layout {
+        Layout::Reposition => (panorama::Motion::Translation, Layout::Reposition),
+        Layout::Auto | Layout::Collage => (panorama::Motion::Similarity, Layout::Collage),
+        Layout::Perspective => (panorama::Motion::Homography, Layout::Perspective),
+        Layout::Cylindrical | Layout::Spherical => {
+            return Err("the intensity registration supports the auto, perspective, collage and reposition projections".into());
+        }
+    };
+    let n = images.len();
+    if n == 0 {
+        return Err("no layers to align".into());
+    }
+    let planes: Vec<panorama::PreparedImage> = images
+        .iter()
+        .map(|(s, r)| {
+            let (w, h, l, a) = luma_alpha(s, *r, 1);
+            let valid = a.iter().any(|v| *v < 0.5).then(|| a.iter().map(|v| *v > 0.5).collect());
+            (w, h, l, valid)
+        })
+        .collect();
+    let (w, h) = (planes[reference.min(n - 1)].0, planes[reference.min(n - 1)].1);
+    if planes.iter().any(|p| (p.0, p.1) != (w, h)) {
+        return Err("the layers to align have different sizes".into());
+    }
+    let mut coarsen = 0;
+    let mut side = w.max(h);
+    while side > DIRECT_SIDE {
+        side = side.div_ceil(2);
+        coarsen += 1;
+    }
+    let mut regs: Vec<Option<direct::Registration>> = (0..n).map(|_| None).collect();
+    let mut pairs = Vec::new();
+    for dir in [1i64, -1] {
+        let (mut prev_luma, mut prev_valid) = (planes[reference].2.clone(), planes[reference].3.clone());
+        let mut init = Pose::IDENTITY;
+        let mut i = reference as i64 + dir;
+        while i >= 0 && (i as usize) < n {
+            let k = i as usize;
+            let (_, _, l, v) = &planes[k];
+            let target = Plane { w, h, luma: l, valid: v.as_deref() };
+            let reg = direct::register(&Plane { w, h, luma: &prev_luma, valid: prev_valid.as_deref() }, &target, motion, init, coarsen);
+            init = reg.pose;
+            let (wl, wv) = direct::warp(&target, &reg.pose);
+            (prev_luma, prev_valid) = (wl, Some(wv));
+            pairs.push(((k as i64 - dir) as usize, k, reg.overlap));
+            regs[k] = Some(reg);
+            i += dir;
+        }
+    }
+    let center = [w as f64 / 2.0, h as f64 / 2.0];
+    let to_center = Homography([1.0, 0.0, center[0], 0.0, 1.0, center[1], 0.0, 0.0, 1.0]);
+    let placement = |hm: &Homography| Placement { projection: panorama::Projection::Plane, focal: w.max(h) as f64, center, k1: 0.0, h: hm.mul(&to_center) };
+    let placements: Vec<Option<Placement>> =
+        (0..n).map(|k| if k == reference { Some(placement(&Homography::IDENTITY)) } else { regs[k].as_ref().map(|r| placement(&r.h)) }).collect();
+    let fitted: Vec<f64> = regs.iter().flatten().map(|r| r.rms).collect();
+    let rms = if fitted.is_empty() { 0.0 } else { fitted.iter().sum::<f64>() / fitted.len() as f64 };
+    Ok(Alignment { layout, reference, placements, focal: 0.0, k1: 0.0, pairs, rms })
+}
+
 /// The 35 mm focal length agreed by the sources' EXIF (median), if any.
 fn exif_focal(srcs: &[Source]) -> Option<f64> {
     let mut f: Vec<f64> = srcs.iter().filter_map(|s| s.exif.focal_length_35mm).collect();
