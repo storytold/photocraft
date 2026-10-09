@@ -1,4 +1,4 @@
-PhotoCraft's Korean, German, Brazilian Portuguese and Italian UI translation catalogs are
+PhotoCraft's Korean, German, Brazilian Portuguese, Italian and Dutch UI translation catalogs are
 licensed under MIT OR Apache-2.0, at your option. The full license texts are in ../../../../LICENSE-MIT
 and ../../../../LICENSE-APACHE.
 
@@ -12,4 +12,7 @@ Brazilian Portuguese translations: PhotoCraft contributors, original translation
 PhotoCraft's English labels; no proprietary translation resources were used.
 
 Italian translations: PhotoCraft contributors, original translations of
+PhotoCraft's English labels; no proprietary translation resources were used.
+
+Dutch translations: PhotoCraft contributors, original translations of
 PhotoCraft's English labels; no proprietary translation resources were used.
