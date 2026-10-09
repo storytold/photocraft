@@ -398,6 +398,44 @@ fn vertical_type_caret_selection_and_arrows_follow_the_columns() {
     assert_eq!(super::flow_key(egui::Key::ArrowUp, false), egui::Key::ArrowUp);
 }
 
+/// ←/→ and Delete step over a letter together with its marks (one grapheme); Backspace still
+/// removes a single code point, so it takes the haraka off before the letter.
+#[test]
+fn arrows_and_delete_step_over_a_letter_and_its_marks() {
+    let edit_at = |s: &str, caret: usize| {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text": s, "size": 40, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id.0,
+            caret,
+            anchor: caret,
+            session: "s".into(),
+            created: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        (harness(1.0, app), id)
+    };
+    let kataba = "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E}";
+    let (mut h, _) = edit_at(kataba, 0);
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (2, 2), "→ over كَ");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (4, 4), "→ over تَ");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(selection(&h), (2, 2), "← back over تَ");
+    let (mut h, id) = edit_at(kataba, 0);
+    key(&mut h, egui::Key::Delete);
+    assert_eq!(text(h.state(), id).text, "\u{62A}\u{64E}\u{628}\u{64E}", "Delete removes كَ whole");
+    let (mut h, id) = edit_at(kataba, 2);
+    key(&mut h, egui::Key::Backspace);
+    assert_eq!(text(h.state(), id).text, "\u{643}\u{62A}\u{64E}\u{628}\u{64E}", "Backspace removes only the fatha");
+    let (mut h, _) = edit_at("e\u{301}x", 0);
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (2, 2), "→ over é");
+}
+
 fn rgb_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> [u8; 4] {
     let t = text(app, id);
     let b = t.text.char_indices().nth(ci).map_or(t.text.len(), |(b, _)| b);

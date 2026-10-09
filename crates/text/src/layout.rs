@@ -357,6 +357,16 @@ pub fn word_boundary(text: &str, idx: usize, forward: bool) -> usize {
     i
 }
 
+/// Character index of the grapheme boundary after (`forward`) or before `idx`, so the caret
+/// steps over a letter and its marks together (UAX #29).
+pub fn grapheme_step(text: &str, idx: usize, forward: bool) -> usize {
+    let byte = byte_index(text, idx);
+    let bounds = crate::segment::grapheme_boundaries(text);
+    let to =
+        if forward { bounds.iter().copied().find(|&b| b > byte).unwrap_or(text.len()) } else { bounds.iter().rev().copied().find(|&b| b < byte).unwrap_or(0) };
+    char_index(text, to)
+}
+
 /// Caret on the neighbouring line (`dir` < 0 previous, otherwise next), keeping `x`
 /// (line space: the position along the line). Past the first or last line the caret
 /// goes to the start or end of the text. Line space is the same for both orientations,
@@ -1249,7 +1259,7 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClusterInfo, SmallCapsMode, feature_list, fold_graphemes, small_caps_mode};
+    use super::{ClusterInfo, SmallCapsMode, feature_list, fold_graphemes, grapheme_step, small_caps_mode};
     use photocraft_doc::text::{Caps, CharStyle};
 
     fn piece(range: std::ops::Range<usize>, x: f32, advance: f32) -> ClusterInfo {
@@ -1311,5 +1321,22 @@ mod tests {
         assert!(feature_list(&style, real).iter().any(|feature| feature == "\"smcp\" 1"));
         assert_eq!(synthetic, SmallCapsMode::Synthetic);
         assert!(!feature_list(&style, synthetic).iter().any(|feature| feature == "\"smcp\" 1"));
+    }
+
+    #[test]
+    fn grapheme_step_moves_over_a_letter_and_its_marks() {
+        let t = "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E}";
+        assert_eq!(grapheme_step(t, 0, true), 2);
+        assert_eq!(grapheme_step(t, 2, true), 4);
+        assert_eq!(grapheme_step(t, 6, true), 6);
+        assert_eq!(grapheme_step(t, 6, false), 4);
+        assert_eq!(grapheme_step(t, 0, false), 0);
+        assert_eq!(grapheme_step(t, 1, true), 2);
+        assert_eq!(grapheme_step(t, 1, false), 0);
+        assert_eq!(grapheme_step(t, 99, false), 4);
+        assert_eq!(grapheme_step("e\u{301}x", 0, true), 2);
+        assert_eq!(grapheme_step("\u{644}\u{627}", 0, true), 1);
+        assert_eq!(grapheme_step("", 0, true), 0);
+        assert_eq!(grapheme_step("", 0, false), 0);
     }
 }

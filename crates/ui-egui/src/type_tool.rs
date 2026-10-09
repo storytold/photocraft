@@ -364,6 +364,10 @@ fn word_boundary(text: &str, from: usize, forward: bool) -> usize {
     photocraft_text::word_boundary(text, from, forward)
 }
 
+fn grapheme_step(text: &str, from: usize, forward: bool) -> usize {
+    photocraft_text::grapheme_step(text, from, forward)
+}
+
 /// Double-click: select the word under the caret.
 pub fn select_word(app: &mut PhotocraftApp) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
@@ -480,7 +484,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                                 (false, true, _) => word_boundary(&text, a, false),
                                 (false, _, _) => a.saturating_sub(1),
                                 (true, true, _) => word_boundary(&text, a, true),
-                                (true, _, _) => (a + 1).min(n),
+                                (true, _, _) => grapheme_step(&text, a, true),
                             };
                             if to != a {
                                 if let Some(e) = app.ui.text_edit.as_mut() {
@@ -506,10 +510,8 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                             word_boundary(&text, ed.caret, fwd)
                         } else if a != b && !m.shift {
                             if fwd { b } else { a }
-                        } else if fwd {
-                            ed.caret + 1
                         } else {
-                            ed.caret.saturating_sub(1)
+                            grapheme_step(&text, ed.caret, fwd)
                         };
                         set(app, to, m.shift);
                     }
