@@ -301,6 +301,11 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
         // Free-form descriptions can contain the same sensitive text as an XMP packet.
         img.meta.text.clear();
     }
+    if format == Format::Tga
+        && let Some(i) = with_first_alpha_channel(doc, &img, &mut warnings)?
+    {
+        img = i;
+    }
     if img.layout().has_alpha() && !format.caps().alpha {
         // Flattened over white, as saving a transparent document without transparency does.
         img = matte_over_white(&img)?;
@@ -354,6 +359,52 @@ fn map_bands(img: &Image, layout: ChannelLayout, sample: CSample, f: impl Fn(Vec
         data.extend_from_slice(Image::from_normalized(w, n, layout, sample, &vals)?.data());
     }
     Ok(Image::from_raw(w, h, layout, sample, data)?.with_icc(img.icc.clone()).with_meta(img.meta.clone()))
+}
+
+/// Targa's alpha is the document's first alpha channel, as Photoshop writes a 32-bit TGA: game
+/// pipelines paint it in the Channels panel and expect it in the file (#2124). Layer transparency
+/// can't share the one alpha slot, so it is matted over white. `None` without an alpha channel.
+fn with_first_alpha_channel(doc: &Document, img: &Image, warnings: &mut Vec<String>) -> Result<Option<Image>, IoError> {
+    let mut alphas = doc.channels.iter().filter(|c| c.spot.is_none());
+    let Some(channel) = alphas.next() else { return Ok(None) };
+    let extra = alphas.count();
+    if extra > 0 {
+        warnings.push(format!("only the first alpha channel (\"{}\") is written; {extra} more dropped", channel.name));
+    }
+    let colour = if img.layout().has_alpha() {
+        warnings.push(format!("transparency composited over white; alpha channel \"{}\" is the file's alpha", channel.name));
+        matte_over_white(img)?
+    } else {
+        img.clone()
+    };
+    let layout = match colour.layout() {
+        ChannelLayout::Gray => ChannelLayout::GrayA,
+        ChannelLayout::Rgb => ChannelLayout::Rgba,
+        ChannelLayout::Cmyk => ChannelLayout::CmykA,
+        _ => return Ok(None),
+    };
+    let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+    let mask = if channel.surface.format() != fmt { channel.surface.convert(fmt) } else { channel.surface.clone() };
+    let (w, h) = colour.dimensions();
+    let cc = colour.layout().channels();
+    let row = colour.data().len() / (h.max(1) as usize);
+    let band = row.max(1) * (BAND_BYTES / row.max(1)).max(1);
+    let sample = colour.sample_type();
+    let mut data = try_buffer(colour.pixel_count(), layout.channels() * sample.bytes())?;
+    let mut y = 0i32;
+    for rows in colour.data().chunks(band) {
+        let n = (rows.len() / row.max(1)) as u32;
+        let vals = Image::from_raw(w, n, colour.layout(), sample, rows.to_vec())?.to_normalized();
+        let a = mask.read_region(Rect::new(0, y, w as i32, y.saturating_add(n as i32)));
+        let mut out = Vec::with_capacity(vals.len() + a.len());
+        for (px, a) in vals.chunks_exact(cc.max(1)).zip(&a) {
+            out.extend_from_slice(px);
+            out.push(a.clamp(0.0, 1.0));
+        }
+        data.extend_from_slice(Image::from_normalized(w, n, layout, sample, &out)?.data());
+        y = y.saturating_add(n as i32);
+    }
+    Ok(Some(Image::from_raw(w, h, layout, sample, data)?.with_icc(colour.icc.clone()).with_meta(colour.meta.clone())))
 }
 
 /// Straight-alpha pixels composited over white (no ink for CMYK), without the alpha channel.

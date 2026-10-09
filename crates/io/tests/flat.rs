@@ -429,3 +429,89 @@ fn animation_imports_the_first_frame_with_a_warning() {
     assert_eq!(three.warnings, ["only the first of 3 frames was imported"]);
     pixels_eq(&one.document, &three.document, 0.0);
 }
+
+/// A grayscale channel surface at the document depth with a per-pixel ramp, distinct from the
+/// layer pattern so a mix-up between them shows.
+fn alpha_channel(d: &photocraft_doc::Document, name: &str, seed: u32) -> photocraft_doc::AlphaChannel {
+    let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, d.depth, false);
+    let r = d.bounds();
+    let vals: Vec<f32> = (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| ((x * 29 + y * 11) as u32 + seed) % 256)).map(|v| v as f32 / 255.0).collect();
+    let mut s = photocraft_raster::Surface::new(fmt);
+    s.write_region(r, &vals);
+    photocraft_doc::AlphaChannel::new(name, s)
+}
+
+/// The exported TGA's alpha, read back through the importer (which opens it as layer transparency).
+fn tga_alpha(back: &photocraft_doc::Document) -> Vec<f32> {
+    let s = back.layers[0].surface().unwrap();
+    let ch = s.format().channels();
+    s.read_region(back.bounds()).chunks_exact(ch).map(|p| p[ch - 1]).collect()
+}
+
+fn channel_values(c: &photocraft_doc::AlphaChannel, r: photocraft_geom::Rect) -> Vec<f32> {
+    c.surface.read_region(r)
+}
+
+/// #2124: an alpha channel painted in the Channels panel is the TGA's alpha, as in Photoshop.
+#[test]
+fn tga_writes_first_alpha_channel() {
+    for (mode, depth) in [(ColorMode::Rgb, SampleType::U8), (ColorMode::Grayscale, SampleType::U8), (ColorMode::Rgb, SampleType::U16)] {
+        let mut d = single(mode, depth, false);
+        d.channels.push(alpha_channel(&d, "Alpha 1", 0));
+        let r = export(&d, "tga", &ExportOptions::default()).expect("export");
+        let back = import("x.tga", &r.bytes).expect("import").document;
+        let want = channel_values(&d.channels[0], d.bounds());
+        let got = tga_alpha(&back);
+        assert_eq!(got.len(), want.len());
+        let max = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(max <= 0.5 / 255.0 + 1e-6, "{mode:?} {depth:?}: alpha differs by {max}");
+        // The colour is the opaque layer, untouched (compare colour channels only).
+        let ch = back.layers[0].surface().unwrap().format().channels();
+        let src = d.layers[0].surface().unwrap();
+        let sch = src.format().channels();
+        let (a, b) = (src.read_region(d.bounds()), back.layers[0].surface().unwrap().read_region(d.bounds()));
+        for (pa, pb) in a.chunks_exact(sch).zip(b.chunks_exact(ch)) {
+            for c in 0..ch - 1 {
+                assert!((pa[c] - pb[c]).abs() <= 0.5 / 255.0 + 1e-6, "{mode:?} {depth:?}: colour changed");
+            }
+        }
+    }
+}
+
+/// Layer transparency can't share the alpha slot with the channel: it is matted over white, the
+/// channel wins, and both facts are reported. Spot channels are not alpha; extra alphas are dropped.
+#[test]
+fn tga_alpha_channel_mattes_transparency_and_skips_spots() {
+    let mut d = single(ColorMode::Rgb, SampleType::U8, true);
+    let mut spot = alpha_channel(&d, "Spot", 90);
+    spot.spot = Some((photocraft_doc::Color::rgb(0.0, 1.0, 0.0), 1.0));
+    d.channels.push(spot);
+    d.channels.push(alpha_channel(&d, "Alpha 1", 0));
+    d.channels.push(alpha_channel(&d, "Alpha 2", 40));
+    let r = export(&d, "tga", &ExportOptions::default()).expect("export");
+    assert!(r.warnings.iter().any(|w| w.contains("composited over white") && w.contains("Alpha 1")), "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|w| w.contains("1 more dropped")), "{:?}", r.warnings);
+    let back = import("x.tga", &r.bytes).expect("import").document;
+    let want = channel_values(&d.channels[1], d.bounds());
+    assert_eq!(tga_alpha(&back), want.iter().map(|v| (v * 255.0).round() / 255.0).collect::<Vec<_>>());
+    // Colour is the layer over white: a pixel at layer alpha a has c*a + (1-a).
+    let src = d.layers[0].surface().unwrap().read_region(d.bounds());
+    let out = back.layers[0].surface().unwrap().read_region(d.bounds());
+    for (p, q) in src.chunks_exact(4).zip(out.chunks_exact(4)) {
+        let want = p[0] * p[3] + (1.0 - p[3]);
+        assert!((want - q[0]).abs() <= 1.0 / 255.0, "matte: want {want}, got {}", q[0]);
+    }
+}
+
+/// Without an alpha channel a TGA still carries layer transparency (unchanged behaviour), and a
+/// spot channel alone doesn't replace it.
+#[test]
+fn tga_without_alpha_channel_keeps_transparency() {
+    let mut d = single(ColorMode::Rgb, SampleType::U8, true);
+    let mut spot = alpha_channel(&d, "Spot", 90);
+    spot.spot = Some((photocraft_doc::Color::rgb(0.0, 1.0, 0.0), 1.0));
+    d.channels.push(spot);
+    let r = export(&d, "tga", &ExportOptions::default()).expect("export");
+    let back = import("x.tga", &r.bytes).expect("import").document;
+    pixels_eq(&d, &back, 0.0);
+}
