@@ -405,8 +405,78 @@ fn sharp_edges(s: &Map) -> Vec<Option<SharpEdge>> {
             out[i] = Some(SharpEdge { offset: edge_offset(n, c), normal });
         }
     }
+    refine_edge_normals(&mut out, &cov);
     out
 }
+
+/// How far (in pixels) around an edge pixel [`refine_edge_normals`] looks for its neighbours.
+const NORMAL_RADIUS: i64 = 3;
+
+/// The 3×3 gradient of the coverage gives an edge's direction to 1-2 degrees, and its error is
+/// systematic, so it tilts the distance of every pixel the same way and shows as a faint ripple.
+/// The edge points of a straight edge's pixels (each pixel's centre moved to its edge) lie on one
+/// line, and the line through the points of the pixels around one gives the direction to a fraction
+/// of a degree. Where those points are not on a line (corners, tight curves) the gradient's normal
+/// stays.
+fn refine_edge_normals(sharp: &mut [Option<SharpEdge>], cov: &Map) {
+    let (w, h) = (cov.w as i64, cov.h as i64);
+    let points: Vec<Option<[f32; 2]>> = sharp
+        .iter()
+        .enumerate()
+        .map(|(i, e)| e.map(|e| [(i as i64 % w) as f32 - e.offset * e.normal[0], (i as i64 / w) as f32 - e.offset * e.normal[1]]))
+        .collect();
+    let before = sharp.to_vec();
+    for (i, edge) in sharp.iter_mut().enumerate() {
+        let Some(e) = edge else { continue };
+        let (x, y) = (i as i64 % w, i as i64 / w);
+        let (mut n, mut sum) = (0.0f32, [0.0f32; 2]);
+        let mut near = Vec::new();
+        for (dx, dy) in (-NORMAL_RADIUS..=NORMAL_RADIUS).flat_map(|dy| (-NORMAL_RADIUS..=NORMAL_RADIUS).map(move |dx| (dx, dy))) {
+            let (nx, ny) = (x + dx, y + dy);
+            if dx * dx + dy * dy > NORMAL_RADIUS * NORMAL_RADIUS || nx < 0 || ny < 0 || nx >= w || ny >= h {
+                continue;
+            }
+            let j = (ny * w + nx) as usize;
+            if let (Some(o), Some(p)) = (before[j], points[j])
+                && o.normal[0] * e.normal[0] + o.normal[1] * e.normal[1] > 0.9
+            {
+                near.push(p);
+                sum = [sum[0] + p[0], sum[1] + p[1]];
+                n += 1.0;
+            }
+        }
+        if near.len() < 3 {
+            continue;
+        }
+        let mean = [sum[0] / n, sum[1] / n];
+        let (mut sxx, mut sxy, mut syy) = (0.0f32, 0.0f32, 0.0f32);
+        for p in &near {
+            let (dx, dy) = (p[0] - mean[0], p[1] - mean[1]);
+            sxx += dx * dx;
+            sxy += dx * dy;
+            syy += dy * dy;
+        }
+        // Spread along and across the best line through the points.
+        let half = 0.5 * (sxx + syy);
+        let root = (0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy).sqrt();
+        let (along, across) = (((half + root) / n).max(0.0).sqrt(), ((half - root) / n).max(0.0).sqrt());
+        if !(along > EDGE_LINE_MIN_SPREAD && across < EDGE_LINE_MAX_OFF) {
+            continue;
+        }
+        let angle = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+        let mut normal = [-angle.sin(), angle.cos()];
+        if normal[0] * e.normal[0] + normal[1] * e.normal[1] < 0.0 {
+            normal = [-normal[0], -normal[1]];
+        }
+        e.normal = normal;
+        e.offset = edge_offset(normal, cov.v[i]);
+    }
+}
+
+/// The edge points around a pixel must spread at least this far (px, standard deviation) along
+/// their line to give it a direction, and stay within [`EDGE_LINE_MAX_OFF`] of it.
+const EDGE_LINE_MIN_SPREAD: f32 = 0.7;
+const EDGE_LINE_MAX_OFF: f32 = 0.1;
 
 /// How far from the foot of the perpendicular (in pixels) [`edge_distance`] looks for edge pixels.
 const FOOT_RADIUS: i64 = 2;
@@ -437,30 +507,37 @@ fn edge_distance(sharp: &[Option<SharpEdge>], w: usize, h: usize, p: [usize; 2],
 }
 
 /// [`dist_inside`] for chiselled bevels. A sharp edge pixel puts the edge where its coverage says,
-/// at any angle, and the pixels it is nearest to measure to that edge ([`edge_distance`]), so the
-/// distance ramps stay planar along an oblique edge instead of following the pixel staircase. A
-/// hard-edged mask gives exactly [`dist_inside`]. Values past `reach` pixels are not refined.
+/// at any angle, and the pixels near it measure to that edge ([`edge_distance`]), so the distance
+/// ramps stay planar along an oblique edge instead of following the pixel staircase. The plain
+/// distance (to the nearest empty pixel, less half a pixel) never falls short of the true one, so
+/// it caps the result where an edge lies exactly on a pixel boundary and has no sharp pixel; a mask
+/// without sharp pixels gives exactly [`dist_inside`]. Values past `reach` pixels are not refined.
 fn bevel_dist_inside(s: &Map, sharp: &[Option<SharpEdge>], reach: f32) -> Vec<f32> {
-    // Seeds: the empty pixels (the edge half a pixel from their centre) and the sharp edge pixels.
-    let seeds: Vec<bool> = s.v.iter().zip(sharp).map(|(&a, e)| a <= INSIDE_EPS || e.is_some()).collect();
-    let (d, near) = edt_nearest(&seeds, s.w, s.h);
+    let empty: Vec<bool> = s.v.iter().map(|&a| a <= INSIDE_EPS).collect();
+    let (d, near) = edt_nearest(&empty, s.w, s.h);
     (0..d.len())
         .map(|i| {
-            if s.v[i] <= INSIDE_EPS {
+            if empty[i] {
                 return -0.5;
             }
             if let Some(e) = sharp[i] {
                 return e.offset;
             }
-            let q = near[i];
-            let Some(e) = sharp[q] else { return d[i] - 0.5 };
-            let (p, qp) = ([i % s.w, i / s.w], [q % s.w, q / s.w]);
-            let measured = if d[i] <= reach + EDGE_MARGIN {
-                edge_distance(sharp, s.w, s.h, p, qp, true)
-            } else {
-                e.distance(p[0] as f32 - qp[0] as f32, p[1] as f32 - qp[1] as f32, true)
-            };
-            measured.unwrap_or(d[i] + e.offset)
+            let plain = d[i] - 0.5;
+            if d[i] > reach + EDGE_MARGIN {
+                return plain;
+            }
+            // The sharp pixel next to the nearest empty one that is nearest to this pixel.
+            let (px, py) = ((i % s.w) as i64, (i / s.w) as i64);
+            let (ox, oy) = ((near[i] % s.w) as i64, (near[i] / s.w) as i64);
+            let q = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (ox + dx, oy + dy)))
+                .filter(|&(x, y)| x >= 0 && y >= 0 && x < s.w as i64 && y < s.h as i64 && sharp[y as usize * s.w + x as usize].is_some())
+                .min_by_key(|&(x, y)| (x - px) * (x - px) + (y - py) * (y - py));
+            match q.and_then(|(x, y)| edge_distance(sharp, s.w, s.h, [px as usize, py as usize], [x as usize, y as usize], true)) {
+                Some(refined) => refined.min(plain),
+                None => plain,
+            }
         })
         .collect()
 }
@@ -2140,12 +2217,76 @@ mod tests {
             let inside = bar_ripple(&bevel_dist_inside(&bar, &sharp, 40.0), w, h, deg, 40.0, true);
             let outside = bar_ripple(&bevel_dist_outside(&bar, &sharp, 40.0), w, h, deg, 40.0, false);
             for (what, (ripple, bias)) in [("inside", inside), ("outside", outside)] {
-                assert!(ripple < 0.03 && bias < 0.06, "{deg} deg {what}: ripple {ripple}, bias {bias}");
+                assert!(ripple < 0.008 && bias < 0.01, "{deg} deg {what}: ripple {ripple}, bias {bias}");
             }
         }
         let plain = aa_bar(w, h, 60.0, 120.0, 40.0);
         let (ripple, _) = bar_ripple(&dist_inside(&plain), w, h, 60.0, 40.0, true);
         assert!(ripple > 0.1, "the plain field still ripples ({ripple}), so the test above means something");
+    }
+
+    #[test]
+    fn edge_normals_follow_straight_edges_to_a_fraction_of_a_degree() {
+        // The 3x3 gradient is 1-3 degrees off and the error is systematic; the line through the edge
+        // points of the pixels around one is not.
+        let (w, h, wid) = (160usize, 160usize, 40.0f32);
+        for deg in [30.0f32, 60.0, 75.0, 120.0, 150.0] {
+            let sharp = sharp_edges(&aa_bar(w, h, deg, 120.0, wid));
+            let (sn, cs) = deg.to_radians().sin_cos();
+            let (mut worst, mut seen) = (0.0f32, 0);
+            for (i, e) in sharp.iter().enumerate() {
+                let Some(e) = e else { continue };
+                let (px, py) = ((i % w) as f32 + 0.5 - w as f32 / 2.0, (i / w) as f32 + 0.5 - h as f32 / 2.0);
+                let (u, v) = (px * cs + py * sn, -px * sn + py * cs);
+                if u.abs() > 40.0 || (wid / 2.0 - v.abs()).abs() > 1.5 {
+                    continue;
+                }
+                let into = if v > 0.0 { [sn, -cs] } else { [-sn, cs] };
+                worst = worst.max((e.normal[0] * into[0] + e.normal[1] * into[1]).clamp(-1.0, 1.0).acos().to_degrees());
+                seen += 1;
+            }
+            assert!(seen > 100 && worst < 0.6, "{deg} deg: {seen} edge pixels, normal off by up to {worst} deg");
+        }
+    }
+
+    #[test]
+    fn chisel_distance_is_close_on_round_shapes() {
+        // Circles (a hard stretch of edge at each pole, where the edge lies on a pixel boundary) and
+        // rounded rectangles on whole pixels (straight hard edges joined to anti-aliased arcs): the
+        // distance to the sharp pixels alone is up to 0.3 px too long there, so the plain distance
+        // caps it. Errors are against the exact distance to the shape, 0.6..8 px from its edge.
+        let worst = |f: &[f32], w: usize, h: usize, sdf: &dyn Fn(f32, f32) -> f32, inside: bool| {
+            let mut mx = 0.0f32;
+            for y in 0..h {
+                for x in 0..w {
+                    let t = sdf(x as f32 + 0.5, y as f32 + 0.5);
+                    let truth = if inside { -t } else { t };
+                    if (0.6..8.0).contains(&truth) {
+                        mx = mx.max((f[y * w + x] - truth).abs());
+                    }
+                }
+            }
+            mx
+        };
+        for r in [20.0f32, 40.0, 70.0] {
+            let (w, h) = (200usize, 200usize);
+            let m = aa_disc(w, h, r);
+            let sharp = sharp_edges(&m);
+            let sdf = |x: f32, y: f32| (x - 100.0).hypot(y - 100.0) - r;
+            let (i, o) = (worst(&bevel_dist_inside(&m, &sharp, 12.0), w, h, &sdf, true), worst(&bevel_dist_outside(&m, &sharp, 12.0), w, h, &sdf, false));
+            assert!(i < 0.05 && o < 0.07, "disc {r}: inside off by {i}, outside by {o}");
+        }
+        for rad in [6.0f32, 12.0, 24.0] {
+            let (w, h) = (200usize, 160usize);
+            let m = aa_round_rect(w, h, 20.0, 20.0, 180.0, 140.0, rad);
+            let sharp = sharp_edges(&m);
+            let sdf = |x: f32, y: f32| {
+                let (qx, qy) = ((x - 100.0).abs() - (80.0 - rad), (y - 80.0).abs() - (60.0 - rad));
+                qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad
+            };
+            let (i, o) = (worst(&bevel_dist_inside(&m, &sharp, 12.0), w, h, &sdf, true), worst(&bevel_dist_outside(&m, &sharp, 12.0), w, h, &sdf, false));
+            assert!(i < 0.08 && o < 0.2, "rounded rect, radius {rad}: inside off by {i}, outside by {o}");
+        }
     }
 
     #[test]
@@ -2180,6 +2321,47 @@ mod tests {
             m.v[y * 8 + 6] = 0.5;
         }
         let _ = (bevel_dist_inside(&m, &sharp_edges(&m), 4.0), bevel_dist_outside(&m, &sharp_edges(&m), 4.0));
+    }
+
+    fn aa_disc(w: usize, h: usize, r: f32) -> Map {
+        let mut m = Map::new(w, h, 0.0);
+        const N: usize = 16;
+        for y in 0..h {
+            for x in 0..w {
+                let mut hit = 0;
+                for sy in 0..N {
+                    for sx in 0..N {
+                        let (px, py) = (x as f32 + (sx as f32 + 0.5) / N as f32 - w as f32 / 2.0, y as f32 + (sy as f32 + 0.5) / N as f32 - h as f32 / 2.0);
+                        hit += usize::from(px * px + py * py <= r * r);
+                    }
+                }
+                m.v[y * w + x] = hit as f32 / (N * N) as f32;
+            }
+        }
+        m
+    }
+
+    /// Integer-aligned rounded rectangle (x0..x1 x y0..y1, corner radius `rad`), anti-aliased by supersampling.
+    fn aa_round_rect(w: usize, h: usize, x0: f32, y0: f32, x1: f32, y1: f32, rad: f32) -> Map {
+        let sdf = |px: f32, py: f32| {
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let (qx, qy) = ((px - cx).abs() - ((x1 - x0) / 2.0 - rad), (py - cy).abs() - ((y1 - y0) / 2.0 - rad));
+            qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad
+        };
+        let mut m = Map::new(w, h, 0.0);
+        const N: usize = 16;
+        for y in 0..h {
+            for x in 0..w {
+                let mut hit = 0;
+                for sy in 0..N {
+                    for sx in 0..N {
+                        hit += usize::from(sdf(x as f32 + (sx as f32 + 0.5) / N as f32, y as f32 + (sy as f32 + 0.5) / N as f32) <= 0.0);
+                    }
+                }
+                m.v[y * w + x] = hit as f32 / (N * N) as f32;
+            }
+        }
+        m
     }
 
     #[test]
