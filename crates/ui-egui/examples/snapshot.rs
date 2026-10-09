@@ -6,6 +6,8 @@
 //!     --script '[["ui.set", {"tool": "type"}], ["ui.menu.invoke", {"id": "image.imageSize"}]]'
 //! ```
 //!
+//! `--system-theme light|dark|none` supplies a deterministic OS appearance for theme captures.
+//!
 //! `--safe-gpu` draws the canvas on the CPU path, like the app's `--safe-gpu` launch.
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
@@ -92,6 +94,17 @@ fn main() {
         v.monitor_size = Some(egui::vec2(mw, mh));
         v.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, top), egui::vec2(w, h)));
         v.maximized = Some(false);
+    }
+    if let Some(appearance) = arg(&args, "--system-theme") {
+        harness.input_mut().system_theme = match appearance.as_str() {
+            "light" => Some(egui::Theme::Light),
+            "dark" => Some(egui::Theme::Dark),
+            "none" => None,
+            _ => {
+                eprintln!("--system-theme must be light, dark or none");
+                std::process::exit(2);
+            }
+        };
     }
     harness.run_steps(4);
     let ctx = harness.ctx.clone();

@@ -828,10 +828,18 @@ mod tests {
         assert_eq!(themes.last().map(String::as_str), Some("window.theme.toggle"));
         assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.classic".to_string()));
         assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
+        assert_eq!(l.bar.find("window.theme.system").unwrap().checked, Some(false));
+        assert_eq!(l.bar.find("window.theme.system").unwrap().label, "System");
         assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
         assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Theme");
         let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
         assert!(!window.iter().any(|id| id.starts_with("window.theme.") || id == "[Theme]"), "{window:?}");
+        a.ui.theme = crate::theme::ThemeKind::System;
+        let system = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+        assert_eq!(system.bar.find("window.theme.system").unwrap().checked, Some(true));
+        assert_eq!(system.bar.find("window.theme.classic").unwrap().checked, Some(false));
+        assert_eq!(system.bar.find("window.theme.studioLight").unwrap().checked, Some(false));
+        assert_eq!(system.bar.find("window.theme.proMedium").unwrap().checked, Some(false));
     }
 
     /// Language follows Settings in the app menu: Auto and every UI language in its own name,

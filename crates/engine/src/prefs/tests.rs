@@ -23,6 +23,24 @@ fn defaults_match_photoshop() {
 }
 
 #[test]
+fn system_theme_round_trips_without_changing_default_or_accepting_unknown_choices() {
+    let mut s = Session::new();
+    assert_eq!(s.prefs().interface.theme, Theme::ProMedium);
+    assert!(choices("interface.theme").unwrap().contains(&"system"));
+    s.execute("prefs.set", json!({"path": "interface.theme", "value": "system"})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("system"));
+    let mut restarted = Session::new();
+    restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restarted.prefs().interface.theme, Theme::System);
+    let saved = s.prefs_value();
+    assert!(s.execute("prefs.set", json!({"path": "interface.theme", "value": "unknownAppearance"})).is_err());
+    assert_eq!(s.prefs().interface.theme, Theme::System);
+    assert_eq!(s.prefs_value(), saved);
+    s.execute("prefs.reset", json!({"path": "interface.theme"})).unwrap();
+    assert_eq!(s.prefs().interface.theme, Theme::ProMedium);
+}
+
+#[test]
 fn get_set_reset_by_path() {
     let mut s = session();
     assert_eq!(s.execute("prefs.get", json!({"path": "performance.historyStates"})).unwrap(), json!(50));

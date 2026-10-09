@@ -23,10 +23,12 @@ pub enum ThemeKind {
     Studio,
     StudioLight,
     Classic,
+    /// Follow the OS appearance without replacing the saved choice.
+    System,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 5] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic];
+    pub const ALL: [ThemeKind; 6] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic, ThemeKind::System];
     pub fn label(self) -> &'static str {
         match self {
             ThemeKind::Pro => "Pro (Dark)",
@@ -34,6 +36,7 @@ impl ThemeKind {
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
             ThemeKind::Classic => "Classic",
+            ThemeKind::System => "System",
         }
     }
     /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
@@ -45,8 +48,18 @@ impl ThemeKind {
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
             ThemeKind::Classic => "classic",
+            ThemeKind::System => "system",
         }
     }
+    /// System uses Studio Light for Light, and Pro Medium for Dark or unknown appearance.
+    pub fn resolved(self, appearance: Option<egui::Theme>) -> Self {
+        match (self, appearance) {
+            (Self::System, Some(egui::Theme::Light)) => Self::StudioLight,
+            (Self::System, _) => Self::ProMedium,
+            _ => self,
+        }
+    }
+
     pub fn next(self) -> Self {
         let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
@@ -58,6 +71,7 @@ impl ThemeKind {
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" | "light" => Some(ThemeKind::StudioLight),
             "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
+            "system" => Some(ThemeKind::System),
             _ => None,
         }
     }
@@ -127,6 +141,7 @@ impl Tokens {
 
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
+            ThemeKind::System => Self::for_kind(kind.resolved(None)),
             // Sampled from Photoshop 2026's default brightness (raw display values).
             ThemeKind::ProMedium => Tokens {
                 kind,
@@ -504,7 +519,16 @@ pub fn mono(size: f32) -> FontId {
 
 /// Apply a theme to egui's global style and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
-    let t = Tokens::for_kind(kind);
+    // An integration or restored egui state can pin its own theme. Keep native window
+    // appearance at SystemDefault so macOS continues sending appearance changes.
+    ctx.set_theme(egui::ThemePreference::System);
+    let mut t = Tokens::for_kind(kind.resolved(ctx.system_theme()));
+    if kind == ThemeKind::System {
+        // Appearance changes affect interface chrome only, not the image surround.
+        let canvas = Tokens::for_kind(ThemeKind::ProMedium);
+        t.canvas = canvas.canvas;
+        t.canvas_dot = canvas.canvas_dot;
+    }
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
@@ -570,6 +594,12 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
         s.spacing.tooltip_width = 280.0;
     });
+    // egui follows the OS by choosing its light/dark style branch. Both must contain the
+    // PhotoCraft palette, including for manual themes that stay fixed when the OS changes.
+    // Keep ThemePreference::System so native windows continue reporting appearance changes.
+    let style = ctx.global_style();
+    ctx.set_style_of(egui::Theme::Light, Arc::clone(&style));
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 /// Seconds the pointer rests on a control before its tooltip shows.
@@ -676,6 +706,7 @@ mod tests {
     #[test]
     fn theme_names_parse() {
         assert_eq!(ThemeKind::from_name("Classic"), Some(ThemeKind::Classic));
+        assert_eq!(ThemeKind::from_name("System"), Some(ThemeKind::System));
         assert_eq!(ThemeKind::from_name("studio (light)"), Some(ThemeKind::StudioLight));
         assert_eq!(ThemeKind::from_name("dark"), Some(ThemeKind::Pro));
         assert_eq!(ThemeKind::from_name("studio"), Some(ThemeKind::Studio));

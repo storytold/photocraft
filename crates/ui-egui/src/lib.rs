@@ -1340,7 +1340,13 @@ impl PhotocraftApp {
     pub fn set_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
         self.ui.theme = kind;
         theme::apply(ctx, kind);
+        self.prefs_rt.resolved_theme = Some(theme::Tokens::get(ctx).kind);
         self.checker = None;
+    }
+
+    /// The active palette, distinct from the saved System choice.
+    pub(crate) fn resolved_theme(&self) -> theme::ThemeKind {
+        if self.ui.theme == theme::ThemeKind::System { self.prefs_rt.resolved_theme.unwrap_or_else(|| self.ui.theme.resolved(None)) } else { self.ui.theme }
     }
 
     /// Cached 64px thumbnail of a pixel-ish layer, laid out in document space.

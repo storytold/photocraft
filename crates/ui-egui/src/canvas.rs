@@ -1992,7 +1992,13 @@ pub fn mode_label(doc: &Document) -> &'static str {
 fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
-    paint_dots(ui, area);
+    if app.ui.theme == crate::theme::ThemeKind::System {
+        // Home is interface content, not a document pasteboard. Its light text palette
+        // needs the matching background even though System keeps document surrounds fixed.
+        ui.painter().rect_filled(area, 0.0, crate::theme::Tokens::for_kind(t.kind).canvas);
+    } else {
+        paint_dots(ui, area);
+    }
     // File › Open Recent, newest first (on the web there are no paths to reopen).
     let recent: Vec<String> = if cfg!(target_arch = "wasm32") { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
     let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
@@ -4171,6 +4177,28 @@ mod tabs_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn system_theme_home_uses_its_interface_background_without_changing_canvas_tokens() {
+        use crate::theme::{ThemeKind, Tokens};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.prefs.edit(|p| p.interface.theme = photocraft_engine::prefs::Theme::System);
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, ThemeKind::System);
+        for (appearance, palette) in [(egui::Theme::Light, ThemeKind::StudioLight), (egui::Theme::Dark, ThemeKind::ProMedium)] {
+            let mut area = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput { system_theme: Some(appearance), ..Default::default() }, |ui| {
+                crate::prefs_ui::tick(&mut app, ui.ctx());
+                area = ui.available_rect_before_wrap();
+                start_screen(&mut app, ui);
+            });
+            output.textures_delta.clear();
+            let background = Tokens::for_kind(palette).canvas;
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == area && r.fill == background)));
+            assert_eq!(Tokens::get(&ctx).canvas, Tokens::for_kind(ThemeKind::ProMedium).canvas);
+            assert_eq!(app.session.prefs().interface.theme, photocraft_engine::prefs::Theme::System);
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {

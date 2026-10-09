@@ -29,6 +29,8 @@ pub struct Runtime {
     saved_value: Option<Value>,
     save_retry: SaveRetry,
     theme_pref: Option<Theme>,
+    /// Concrete palette applied for the selected theme, never persisted.
+    pub(crate) resolved_theme: Option<ThemeKind>,
     next_autosave_ms: f64,
     /// Last revision whose recovery file was actually written successfully.
     autosaved: HashMap<DocId, u64>,
@@ -81,6 +83,7 @@ fn theme_kind(t: Theme) -> ThemeKind {
         Theme::Studio => ThemeKind::Studio,
         Theme::StudioLight => ThemeKind::StudioLight,
         Theme::Classic => ThemeKind::Classic,
+        Theme::System => ThemeKind::System,
     }
 }
 
@@ -91,6 +94,7 @@ fn theme_pref(k: ThemeKind) -> Theme {
         ThemeKind::Studio => Theme::Studio,
         ThemeKind::StudioLight => Theme::StudioLight,
         ThemeKind::Classic => Theme::Classic,
+        ThemeKind::System => Theme::System,
     }
 }
 
@@ -216,6 +220,10 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let t = theme_pref(app.ui.theme);
         app.session.prefs.edit(|p| p.interface.theme = t);
         app.prefs_rt.theme_pref = Some(t);
+    }
+    // OS changes resolve the selected choice again without editing the preferences revision.
+    if app.prefs_rt.resolved_theme != Some(app.ui.theme.resolved(ctx.system_theme())) {
+        app.set_theme(ctx, app.ui.theme);
     }
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
     presets_store(app);
@@ -1728,6 +1736,132 @@ mod tests {
         }
         assert_eq!(display_scale(Auto, None, None), 1.0);
         assert_eq!(display_scale(Auto, Some(f32::NAN), Some(vec2(f32::INFINITY, 2160.0))), 1.0);
+    }
+
+    fn appearance_frame(app: &mut PhotocraftApp, ctx: &egui::Context, appearance: Option<egui::Theme>) {
+        ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |ui| tick(app, ui.ctx())).textures_delta.clear();
+    }
+
+    fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
+        let t = Tokens::get(ctx);
+        assert_eq!(t.kind, kind);
+        for style in [ctx.global_style(), ctx.style_of(egui::Theme::Light), ctx.style_of(egui::Theme::Dark)] {
+            assert_eq!(style.visuals.panel_fill, t.chrome);
+            assert_eq!(style.visuals.window_fill, t.card);
+            assert_eq!(style.visuals.override_text_color, Some(t.text));
+            assert_eq!(style.visuals.widgets.inactive.bg_fill, t.field);
+            assert_eq!(style.visuals.dark_mode, t.dark());
+            assert_eq!(style.text_styles[&egui::TextStyle::Body].size, if t.pro { 12.0 } else { 12.5 });
+        }
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+    }
+
+    #[test]
+    fn system_theme_follows_live_appearance_without_saving_resolved_palettes() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        app.run("prefs.set", json!({"values": {"interface.theme": "system"}})).unwrap();
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        let revision = app.session.prefs.rev();
+        let saved = store.lock().unwrap().clone().unwrap();
+        assert_eq!(stored(&store)["interface"]["theme"], "system");
+        let canvas = Tokens::for_kind(ThemeKind::ProMedium);
+        let gpu_style = canvas_style(&app);
+        for (appearance, expected) in [
+            (Some(egui::Theme::Light), ThemeKind::StudioLight),
+            (Some(egui::Theme::Dark), ThemeKind::ProMedium),
+            (Some(egui::Theme::Light), ThemeKind::StudioLight),
+            (None, ThemeKind::ProMedium),
+        ] {
+            appearance_frame(&mut app, &ctx, appearance);
+            assert_palette(&ctx, expected);
+            assert_eq!(app.ui.theme, ThemeKind::System);
+            assert_eq!(app.resolved_theme(), expected);
+            assert_eq!(app.session.prefs().interface.theme, Theme::System);
+            assert_eq!(app.session.prefs.rev(), revision);
+            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+            assert_eq!(Tokens::get(&ctx).canvas, canvas.canvas);
+            assert_eq!(Tokens::get(&ctx).canvas_dot, canvas.canvas_dot);
+            assert_eq!(canvas_style(&app), gpu_style);
+            assert_eq!(pasteboard_color(&app), None);
+        }
+        // Launch resolves System against the fresh OS input, not the last displayed palette.
+        for (appearance, expected) in
+            [(Some(egui::Theme::Light), ThemeKind::StudioLight), (Some(egui::Theme::Dark), ThemeKind::ProMedium), (None, ThemeKind::ProMedium)]
+        {
+            let (mut restarted, store) = app_with_saved(Some(saved.clone()));
+            let fresh = egui::Context::default();
+            appearance_frame(&mut restarted, &fresh, appearance);
+            assert_palette(&fresh, expected);
+            assert_eq!(restarted.ui.theme, ThemeKind::System);
+            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+        }
+        app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": "#123456"}})).unwrap();
+        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+            appearance_frame(&mut app, &ctx, appearance);
+            assert_eq!(pasteboard_color(&app), Some(Color32::from_rgb(0x12, 0x34, 0x56)));
+            assert_eq!(canvas_style(&app), gpu_style);
+        }
+    }
+
+    #[test]
+    fn manual_theme_tokens_and_global_styles_stay_fixed_across_os_changes() {
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        for kind in ThemeKind::ALL.into_iter().filter(|k| *k != ThemeKind::System) {
+            app.run("prefs.set", json!({"values": {"interface.theme": kind.id()}})).unwrap();
+            for appearance in [Some(egui::Theme::Dark), Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+                appearance_frame(&mut app, &ctx, appearance);
+                assert_palette(&ctx, kind);
+                assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
+                assert_eq!(app.ui.theme, kind);
+                assert_eq!(app.session.prefs_value()["interface"]["theme"], kind.id());
+            }
+        }
+    }
+
+    #[test]
+    fn system_theme_menu_choice_stays_checked_as_the_appearance_changes() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        crate::menus::invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+            appearance_frame(&mut app, &ctx, appearance);
+            let items = crate::menus::menu_items(&app);
+            let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
+            assert_eq!(item("window.theme.system").checked, Some(true));
+            assert!(item("window.theme.system").enabled);
+            assert_eq!(item("window.theme.system").path, ["Window", "Theme"]);
+            assert_eq!(item("window.theme.studioLight").checked, Some(false));
+            assert_eq!(item("window.theme.proMedium").checked, Some(false));
+            assert_eq!(stored(&store)["interface"]["theme"], "system");
+        }
+    }
+
+    #[test]
+    fn preferences_interface_offers_and_applies_system_theme() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.input_mut().system_theme = Some(egui::Theme::Light);
+        h.run_steps(4);
+        h.get_by_value("Pro medium").click();
+        h.run_steps(2);
+        h.get_by_label("System").click();
+        h.run_steps(2);
+        h.get_by_label("Apply").click();
+        h.run_steps(4);
+        assert_eq!(h.state().ui.theme, ThemeKind::System);
+        assert_palette(&h.ctx, ThemeKind::StudioLight);
+        assert_eq!(stored(&store)["interface"]["theme"], "system");
     }
 
     #[test]

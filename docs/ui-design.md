@@ -4,12 +4,20 @@
 
 | Theme | Intent |
 |---|---|
-| **Pro** (default) | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| **Pro** | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| Pro Medium Gray (default) | Photoshop's second interface brightness, #535353 panels and #282828 canvas |
+| System | Follows the OS appearance live: Studio Light for Light, Pro Medium Gray for Dark or when the OS reports no appearance |
 | Studio | Dark studio style: near-black, rounded cards, pill tabs, violet accent, toggles |
 | Studio Light | Studio on light surfaces |
 | Classic | Windows-2000 bevels, square corners, navy selection |
 
 Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"}` over the control channel.
+
+System remains the saved choice as the displayed palette changes. Select it in Preferences →
+Interface, Window → Theme, macOS PhotoCraft → Appearance, or `ui.set {"theme":"system"}`.
+The existing default and manual themes stay fixed. System keeps the Pro Medium Gray document canvas
+surround and grid colours in both appearances; explicit canvas and transparency preferences
+also stay unchanged. The Home screen uses the resolved interface background so its text stays readable.
 
 ## Rules
 
