@@ -32,9 +32,14 @@ pub static BUNDLED: &[(&str, &[u8])] = &[
     ("JetBrainsMono-Regular.ttf", JETBRAINS_MONO_REGULAR),
 ];
 
-/// Families tried (if installed) after the requested one, for missing glyphs. The CJK families
-/// ([`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
+/// Families tried (if installed) after the requested one, for missing glyphs. The Thai and CJK
+/// families ([`THAI_FAMILIES`], [`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
 const FALLBACK_CANDIDATES: &[&str] = &["Noto Sans", "Segoe UI", "DejaVu Sans", "Geeza Pro", "Arial Hebrew", "Noto Sans Arabic", "Noto Sans Hebrew"];
+/// Thai-capable families: Windows (Leelawadee UI since Windows 8; Tahoma and Leelawadee on
+/// older systems), macOS (Thonburi, Sukhumvit Set) and Linux (Noto). Text in a font without Thai
+/// glyphs falls back to these, as with Photoshop's missing glyph protection (#1909).
+pub const THAI_FAMILIES: &[&str] =
+    &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Sukhumvit Set", "Noto Sans Thai", "Noto Sans Thai Looped", "Noto Sans Thai UI"];
 /// Broad-coverage and emoji fonts, tried after the CJK script fonts so shared Han characters get
 /// the locale's forms instead of Arial Unicode's.
 const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"];
@@ -42,6 +47,7 @@ const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe
 /// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]).
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
+    v.extend_from_slice(THAI_FAMILIES);
     for s in order {
         // craft-fonts' Japanese fonts (if built in) go ahead of the installed Japanese fonts, in
         // the Japanese slot of the locale order, so shared Han keeps the locale's forms.

@@ -102,7 +102,9 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         && let Some(first) = names.first()
         && let Some(pr) = photocraft_paint::presets::find(&s.tools.presets, first)
     {
-        s.tools.brush = pr.brush.clone().picked_over(&s.tools.brush);
+        let mut b = pr.brush.clone().picked_over(&s.tools.brush);
+        s.load_brush_tips(&mut b).map_err(|e| bad("brush.presets.importAbr", e))?;
+        s.tools.brush = b;
     }
     Ok(json!({ "group": group, "imported": names, "count": names.len(), "version": imp.version, "warnings": imp.warnings }))
 }
@@ -193,7 +195,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         None if !stem.is_empty() => stem,
         None => "Imported Gradients".to_string(),
     };
-    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable Photoshop gradient file: {e}")))?;
+    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
     let mut warnings = Vec::new();
     let mut items = Vec::new();
     let (mut noise, mut midpoints) = (0, false);

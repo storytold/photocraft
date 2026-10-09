@@ -592,7 +592,7 @@
 	Additional plugins folder	Дополнительная папка плагинов
 	Install Plug-in…	Установить плагин…
 	Export Presets	Экспортировать наборы
-	Import Photoshop brushes (.abr)	Импортировать кисти Photoshop (.abr)
+	Import brushes (.abr)	Импортировать кисти (.abr)
 	Migrate Presets	Перенести наборы
 	Thumbnail size (smallest: list)	Размер миниатюр (минимальный: список)
 	Reset GPU Backend	Сбросить GPU-бэкенд
@@ -1404,7 +1404,7 @@
 	Art & Illustration	Искусство и иллюстрация
 	Mobile	Мобильные
 	Film & Video	Кино и видео
-	Default Photoshop Size	Размер Photoshop по умолчанию
+	Default PhotoCraft Size	Размер PhotoCraft по умолчанию
 	Clipboard	Буфер обмена
 	Photo (2 × 3 in)	Фото (2 × 3 дюйма)
 	Photo (4 × 6 in)	Фото (4 × 6 дюйма)
@@ -1571,7 +1571,7 @@
 	Yes	Да
 	These settings aren't available in PhotoCraft yet.	Эти параметры пока недоступны в PhotoCraft.
 	Shortcut removed.	Комбинация клавиш удалена.
-	All shortcuts reset to Photoshop defaults.	Все комбинации клавиш сброшены к стандартным Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Все комбинации клавиш сброшены к стандартным PhotoCraft.
 	Delete Shortcut	Удалить комбинацию
 	Press keys…	Нажмите клавиши…
 	shortcut	комбинация
@@ -2457,6 +2457,10 @@ cameraRaw	Roughness	Неровность
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Палитра цветов (Цвет текста)
+	Color Picker (Fill Color)	Палитра цветов (Цвет заливки)
+	Fill color	Цвет заливки
+	Color Picker (Stroke Color)	Палитра цветов (Цвет обводки)
+	Stroke color	Цвет обводки
 	Pick screen color	Выбрать цвет на экране
 	Sample a pixel anywhere on the screen	Выберите пиксель в любом месте экрана
 	Click to pick · Esc to cancel	Щелчок — выбрать · Esc — отменить
@@ -2563,3 +2567,18 @@ fontWeight	Italic	Курсив
 	Cycle Orientation	Сменить ориентацию
 	Set the overlay options for the Crop tool	Задать параметры перекрытия для инструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+щелчок перехватило окружение рабочего стола: оно перемещает окна через Alt+перетаскивание. Назначьте для перемещения окон клавишу Super или зафиксируйте Alt в меню Окно › Клавиши-модификаторы.
+	Straighten the image by drawing a line on it	Выровнять изображение, нарисовав на нем линию
+	Set additional Crop options	Задать дополнительные параметры кадрирования
+	Show Cropped Area	Показать отсекаемую область
+	Enable Crop Shield	Включить экран кадрирования
+	Match Canvas	Как у холста
+	Auto Adjust Opacity	Автоматически настраивать непрозрачность
+	Crop Shield color	Цвет экрана кадрирования
+	Color Picker (Crop Shield Color)	Палитра цветов (Цвет экрана кадрирования)
+	From Center	От центра
+	Link radii	Связать радиусы
+	Star Ratio:	Коэффициент звезды:
+	Create Rectangle	Создать прямоугольник
+	Create Ellipse	Создать эллипс
+	Create Triangle	Создать треугольник
+	Create Polygon	Создать многоугольник

@@ -759,7 +759,7 @@
 	All Caps	全部大写
 	All Slices	所有切片
 	All User Slices	所有用户切片
-	All shortcuts reset to Photoshop defaults.	所有快捷键已重置为 Photoshop 默认值。
+	All shortcuts reset to PhotoCraft defaults.	所有快捷键已重置为 PhotoCraft 默认值。
 	Alt	Alt
 	Alt-click to define a source point to clone from	按 Alt 单击以定义仿制源点
 	Always use pressure for opacity	始终用压感控制不透明度
@@ -1084,7 +1084,7 @@
 	Ignore All	全部忽略
 	Image Size	图像大小
 	Import Brushes…	导入画笔…
-	Import Photoshop brushes (.abr)	导入 Photoshop 画笔（.abr）
+	Import brushes (.abr)	导入画笔（.abr）
 	Import Presets	导入预设
 	Imported	已导入
 	Indent First	首行缩进
@@ -1134,7 +1134,6 @@
 	Liquify is not open	尚未打开液化
 	Load	载入
 	Load 3D LUT…	载入 3D LUT…
-	Load Photoshop brushes (.abr)	载入 Photoshop 画笔（.abr）
 	Load channel as selection	将通道载入为选区
 	Load…	载入…
 	Localized Color Clusters	局部颜色簇
@@ -1535,7 +1534,7 @@
 	Current Tool	当前工具
 	Custom Shape Tool	自定形状工具
 	Cyans	青色
-	Default Photoshop Size	默认 Photoshop 大小
+	Default PhotoCraft Size	默认 PhotoCraft 大小
 	Delete Workspace	删除工作区
 	Diamond	菱形
 	Dimensions:	尺寸：
@@ -2191,6 +2190,10 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	拾色器（文字颜色）
+	Color Picker (Fill Color)	拾色器（填充颜色）
+	Fill color	填充颜色
+	Color Picker (Stroke Color)	拾色器（描边颜色）
+	Stroke color	描边颜色
 	Pick screen color	选取屏幕颜色
 	Sample a pixel anywhere on the screen	在屏幕任意位置采样像素
 	Click to pick · Esc to cancel	单击选取 · Esc 取消
@@ -2298,3 +2301,18 @@ fontWeight	Italic	斜体
 	Cycle Orientation	循环切换取向
 	Set the overlay options for the Crop tool	设置裁剪工具的叠加选项
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 单击被桌面环境截获了，它用 Alt 拖动来移动窗口。请把桌面的窗口移动键改为 Super，或在 窗口 › 修饰键 中锁定 Alt。
+	Straighten the image by drawing a line on it	通过在图像上画一条线来拉直图像
+	Set additional Crop options	设置其他裁剪选项
+	Show Cropped Area	显示裁剪区域
+	Enable Crop Shield	启用裁剪屏蔽
+	Match Canvas	匹配画布
+	Auto Adjust Opacity	自动调整不透明度
+	Crop Shield color	裁剪屏蔽颜色
+	Color Picker (Crop Shield Color)	拾色器（裁剪屏蔽颜色）
+	From Center	从中心
+	Link radii	链接半径
+	Star Ratio:	星形比例：
+	Create Rectangle	创建矩形
+	Create Ellipse	创建椭圆
+	Create Triangle	创建三角形
+	Create Polygon	创建多边形

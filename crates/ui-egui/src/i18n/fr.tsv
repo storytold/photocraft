@@ -746,7 +746,7 @@
 	All Caps	Tout en capitales
 	All Slices	Toutes les tranches
 	All User Slices	Toutes les tranches utilisateur
-	All shortcuts reset to Photoshop defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Toujours utiliser la pression pour l'opacité
 	Always use pressure for size	Toujours utiliser la pression pour la taille
@@ -1061,7 +1061,7 @@
 	Ignore All	Tout ignorer
 	Image Size	Taille de l'image
 	Import Brushes…	Importer des pinceaux…
-	Import Photoshop brushes (.abr)	Importer des pinceaux Photoshop (.abr)
+	Import brushes (.abr)	Importer des pinceaux (.abr)
 	Import Presets	Importer des préréglages
 	Imported	Importé
 	Indent First	Retrait de première ligne
@@ -1111,7 +1111,6 @@
 	Liquify is not open	Liquéfier n'est pas ouvert
 	Load	Charger
 	Load 3D LUT…	Charger une LUT 3D…
-	Load Photoshop brushes (.abr)	Charger des pinceaux Photoshop (.abr)
 	Load channel as selection	Charger le canal comme sélection
 	Load…	Charger…
 	Localized Color Clusters	Groupes de couleurs localisés
@@ -1502,7 +1501,7 @@
 	Current Tool	Outil actif
 	Custom Shape Tool	Outil Forme personnalisée
 	Cyans	Cyans
-	Default Photoshop Size	Taille Photoshop par défaut
+	Default PhotoCraft Size	Taille PhotoCraft par défaut
 	Delete Workspace	Supprimer l'espace de travail
 	Diamond	Losange
 	Dimensions:	Dimensions :
@@ -2609,6 +2608,10 @@ cameraRaw	Blending	Fusion
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
+	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)
+	Fill color	Couleur de remplissage
+	Color Picker (Stroke Color)	Sélecteur de couleurs (Couleur du contour)
+	Stroke color	Couleur du contour
 	Pick screen color	Choisir une couleur à l’écran
 	Sample a pixel anywhere on the screen	Prélever un pixel n’importe où sur l’écran
 	Click to pick · Esc to cancel	Cliquer pour choisir · Échap pour annuler
@@ -2711,3 +2714,18 @@ fontWeight	Italic	Italique
 	Cycle Orientation	Changer d’orientation
 	Set the overlay options for the Crop tool	Définir les options de superposition de l’outil Recadrage
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-clic a été intercepté par le bureau, qui déplace les fenêtres avec Alt-glisser. Réglez sa touche de déplacement des fenêtres sur Super, ou verrouillez Alt dans Fenêtre › Touches de modification.
+	Straighten the image by drawing a line on it	Redresser l’image en traçant une ligne dessus
+	Set additional Crop options	Définir d’autres options de recadrage
+	Show Cropped Area	Afficher la zone recadrée
+	Enable Crop Shield	Activer le masque de recadrage
+	Match Canvas	Identique à la zone de travail
+	Auto Adjust Opacity	Réglage automatique de l’opacité
+	Crop Shield color	Couleur du masque de recadrage
+	Color Picker (Crop Shield Color)	Sélecteur de couleurs (Couleur du masque de recadrage)
+	From Center	À partir du centre
+	Link radii	Lier les rayons
+	Star Ratio:	Proportion de l'étoile :
+	Create Rectangle	Créer un rectangle
+	Create Ellipse	Créer une ellipse
+	Create Triangle	Créer un triangle
+	Create Polygon	Créer un polygone

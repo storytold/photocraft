@@ -343,11 +343,31 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     out
 }
 
+fn first_field_id() -> egui::Id {
+    egui::Id::new("pc-focus-first-field")
+}
+
+/// While `on`, the next number field drawn takes the keyboard focus with its text selected (a
+/// dialog opening on its first value, as in Photoshop). Turn it off once the body is laid out.
+pub fn focus_first_field(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| {
+        if on {
+            d.insert_temp(first_field_id(), true);
+        } else {
+            d.remove::<bool>(first_field_id());
+        }
+    });
+}
+
 /// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
 fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, fine: bool) -> Response {
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
+    // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
+    if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
@@ -1479,6 +1499,17 @@ fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
     ui.painter().rect_filled(rect.shrink(1.0), t.radius_sm, color);
     ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     response
+}
+/// A colour swatch that only reports clicks (no popup): for colours edited in PhotoCraft's own
+/// Color Picker dialog. `label` names it for hover text and accessibility.
+pub fn color_swatch_button(ui: &mut Ui, color: Color32, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, label));
+    checker(ui.painter(), rect, 4.0);
+    ui.painter().rect_filled(rect.shrink(1.0), t.radius_sm, color);
+    ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+    response.on_hover_text(label)
 }
 fn color_edit_button(ui: &mut Ui, color: &mut Color32, alpha: egui::color_picker::Alpha) -> Response {
     let mut response = color_swatch(ui, *color);

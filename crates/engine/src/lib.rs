@@ -45,6 +45,7 @@ pub mod gallery_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod hidden_target;
+pub mod history_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
@@ -643,4 +644,9 @@ pub(crate) fn fix_selection(st: &mut DocState) {
 #[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
+mod pattern_mode_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fx_mode_tests;

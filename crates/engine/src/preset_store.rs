@@ -5,12 +5,21 @@
 //!
 //! - `<group>-<hash>.pcbrushes`: one JSON file per preset group (folder) holding the presets'
 //!   settings with every bitmap (sampled tip, Dual Brush tip, texture tile) replaced by a
-//!   reference to a tip file;
+//!   reference to a tip file, plus each tip's size and the tip file of its small preview;
 //! - `tips/<hash>.pctip`: content-addressed bitmaps, deflated, stored at 8 bits per sample when
 //!   the tip came from 8-bit data and 16 bits otherwise. Renaming or re-grouping a preset only
 //!   rewrites a small JSON file; a tip no group references any more is deleted;
 //! - `index.json`: group order, the order of every preset (built-ins included, so drag and drop
 //!   in the Brushes panel persists) and the built-in presets the user deleted.
+//!
+//! Full tips load on demand (#1843): a stored preset's bitmaps are [`StoredTile`]s holding only a
+//! preview ([`GrayTile::preview`], at most [`PREVIEW_SIDE`] px), which the Brushes panel and the
+//! picker draw. Opening the store reads previews, never a full tip, and once a group is written
+//! its presets drop their bitmaps the same way. A tip is decoded when its brush is used
+//! ([`Session::load_brush_tips`]: picking a preset, a stroke naming one, exporting), and kept in a
+//! byte-capped least-recently-used cache ([`TIP_CACHE_BYTES`]), so memory grows with the brushes
+//! in use, not with the size of the library. Stores written before #1843 have no previews: their
+//! tips are decoded once at the next start, a few at a time, and the groups rewritten.
 //!
 //! Built-in presets are never written (they are regenerated on start). The store syncs after
 //! every command that changes the brush presets ([`Session::brush_presets_changed`]); only groups
@@ -29,10 +38,12 @@
 //! A missing file is an empty list. A corrupt or oversized file is skipped with a warning.
 //! Headless and web sessions have no store, so their actions stay in memory.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, TipShape};
+use photocraft_paint::tile::PREVIEW_SIDE;
+use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, StoredTile, TipShape};
 use serde::{Deserialize, Serialize};
 
 use crate::Session;
@@ -255,6 +266,11 @@ pub fn encode_tip(t: &GrayTile) -> Vec<u8> {
 
 /// Inverse of [`encode_tip`]; any malformed, truncated or oversized input is an error.
 pub fn decode_tip(bytes: &[u8]) -> Result<GrayTile, String> {
+    decode_tip_max(bytes, MAX_TIP_SIDE)
+}
+
+/// [`decode_tip`] refusing (before inflating anything) a bitmap with a side over `max_side`.
+fn decode_tip_max(bytes: &[u8], max_side: u32) -> Result<GrayTile, String> {
     let head = bytes.get(..TIP_HEADER).ok_or("truncated tip header")?;
     if &head[..6] != TIP_MAGIC {
         return Err("not a PhotoCraft tip".into());
@@ -262,7 +278,7 @@ pub fn decode_tip(bytes: &[u8]) -> Result<GrayTile, String> {
     let bits = head[6];
     let u32_at = |i: usize| u32::from_le_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]);
     let (w, h) = (u32_at(7), u32_at(11));
-    if w == 0 || h == 0 || w > MAX_TIP_SIDE || h > MAX_TIP_SIDE {
+    if w == 0 || h == 0 || w > MAX_TIP_SIDE.min(max_side) || h > MAX_TIP_SIDE.min(max_side) {
         return Err(format!("bad tip size {w}×{h}"));
     }
     let n = u64::from(w) * u64::from(h);
@@ -314,6 +330,16 @@ struct StoredPreset {
     tips: TipRefs,
 }
 
+/// What a group file records about each tip it references, so loading needs only the preview.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TipInfo {
+    width: u32,
+    height: u32,
+    /// Hash of the preview's tip file ([`GrayTile::preview`], at most [`PREVIEW_SIDE`] px).
+    preview: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GroupFile {
@@ -321,6 +347,10 @@ struct GroupFile {
     version: u32,
     group: String,
     presets: Vec<StoredPreset>,
+    /// Tip hash → size and preview. Missing in stores written before #1843: those tips are
+    /// decoded once at the next start to make their previews, then the group is rewritten.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    tips: BTreeMap<String, TipInfo>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -347,37 +377,71 @@ pub fn group_file_name(group: &str) -> String {
     format!("{stem}-{}.{GROUP_EXT}", &h[..8])
 }
 
-/// Take the bitmaps out of a preset's settings (they are stored as tip files).
-fn split_tips(mut b: BrushSettings) -> (BrushSettings, [Option<GrayTile>; 3]) {
-    let tip = match std::mem::take(&mut b.tip) {
-        TipShape::Sampled(t) => Some(t),
-        TipShape::Round => None,
-    };
-    let dual = match std::mem::take(&mut b.dual_brush.tip) {
-        TipShape::Sampled(t) => Some(t),
-        TipShape::Round => None,
-    };
-    let texture = match std::mem::take(&mut b.texture.pattern) {
-        Pattern::Tile(t) => Some(t),
-        other => {
-            b.texture.pattern = other;
-            None
-        }
-    };
-    (b, [tip, dual, texture])
+/// A preset bitmap as the settings hold it: embedded, or already a store reference.
+enum Bitmap<'a> {
+    Full(&'a GrayTile),
+    Stored(&'a StoredTile),
 }
 
-/// The opposite of [`split_tips`]: `None` when a referenced tip is missing.
-fn join_tips(mut b: BrushSettings, refs: &TipRefs, tips: &HashMap<String, GrayTile>) -> Option<BrushSettings> {
-    if let Some(h) = &refs.tip {
-        b.tip = TipShape::Sampled(tips.get(h)?.clone());
+/// The bitmaps of a preset's settings: sampled tip, Dual Brush tip, texture tile.
+fn bitmaps(b: &BrushSettings) -> [Option<Bitmap<'_>>; 3] {
+    fn tip(t: &TipShape) -> Option<Bitmap<'_>> {
+        match t {
+            TipShape::Round => None,
+            TipShape::Sampled(g) => Some(Bitmap::Full(g)),
+            TipShape::Stored(r) => Some(Bitmap::Stored(r)),
+        }
     }
-    if let Some(h) = &refs.dual_tip {
-        b.dual_brush.tip = TipShape::Sampled(tips.get(h)?.clone());
+    let texture = match &b.texture.pattern {
+        Pattern::Procedural { .. } => None,
+        Pattern::Tile(g) => Some(Bitmap::Full(g)),
+        Pattern::Stored(r) => Some(Bitmap::Stored(r)),
+    };
+    [tip(&b.tip), tip(&b.dual_brush.tip), texture]
+}
+
+/// A copy of `b` without its bitmaps (stored as tip files): no bitmap is cloned.
+fn settings_only(b: &mut BrushSettings) -> BrushSettings {
+    let tip = std::mem::take(&mut b.tip);
+    let dual = std::mem::take(&mut b.dual_brush.tip);
+    let texture = match b.texture.pattern {
+        Pattern::Procedural { .. } => None,
+        _ => Some(std::mem::take(&mut b.texture.pattern)),
+    };
+    let out = b.clone();
+    b.tip = tip;
+    b.dual_brush.tip = dual;
+    if let Some(t) = texture {
+        b.texture.pattern = t;
     }
-    if let Some(h) = &refs.texture {
-        b.texture.pattern = Pattern::Tile(tips.get(h)?.clone());
+    out
+}
+
+/// Point `b`'s bitmaps at stored tiles (`refs` in [`bitmaps`] order); a `None` leaves a slot.
+fn set_stored(b: &mut BrushSettings, refs: [Option<StoredTile>; 3]) {
+    let [tip, dual, texture] = refs;
+    if let Some(r) = tip {
+        b.tip = TipShape::Stored(r);
     }
+    if let Some(r) = dual {
+        b.dual_brush.tip = TipShape::Stored(r);
+    }
+    if let Some(r) = texture {
+        b.texture.pattern = Pattern::Stored(r);
+    }
+}
+
+/// Settings read from a group file with their tip references resolved: `None` when a referenced
+/// tip is missing.
+fn join_tips(mut b: BrushSettings, refs: &TipRefs, tiles: &HashMap<String, StoredTile>) -> Option<BrushSettings> {
+    let get = |h: &Option<String>| -> Option<Option<StoredTile>> {
+        match h {
+            None => Some(None),
+            Some(h) => tiles.get(h).cloned().map(Some),
+        }
+    };
+    let r = [get(&refs.tip)?, get(&refs.dual_tip)?, get(&refs.texture)?];
+    set_stored(&mut b, r);
     Some(b)
 }
 
@@ -388,8 +452,71 @@ fn tip_file(hash: &str) -> String {
 /// What a group looked like when it was last written (or loaded).
 struct Synced {
     presets: Vec<BrushPreset>,
+    /// Tip files the group uses (full tips and previews).
     tips: Vec<String>,
     bytes: u64,
+    /// Loaded from a file that lacks tip previews: rewrite it at the next sync.
+    stale: bool,
+}
+
+/// The default byte budget of decoded full-size tips kept for reuse ([`PresetStore::load_tile`]).
+pub const TIP_CACHE_BYTES: u64 = 256 << 20;
+
+/// Full-size tips decoded on demand, least recently used evicted first once over budget.
+#[derive(Default)]
+struct TipCache {
+    limit: u64,
+    tick: u64,
+    bytes: u64,
+    decodes: u64,
+    entries: HashMap<String, (Arc<GrayTile>, u64)>,
+}
+
+impl TipCache {
+    fn get(&mut self, key: &str) -> Option<Arc<GrayTile>> {
+        self.tick += 1;
+        let tick = self.tick;
+        self.entries.get_mut(key).map(|(t, used)| {
+            *used = tick;
+            t.clone()
+        })
+    }
+    fn insert(&mut self, key: &str, t: Arc<GrayTile>) {
+        self.tick += 1;
+        self.bytes += tile_bytes(&t);
+        if let Some((old, _)) = self.entries.insert(key.to_string(), (t, self.tick)) {
+            self.bytes = self.bytes.saturating_sub(tile_bytes(&old));
+        }
+        self.evict(key);
+    }
+    /// Drop least recently used tips until within the limit (never `keep`, the one just used).
+    fn evict(&mut self, keep: &str) {
+        while self.bytes > self.limit {
+            let Some(oldest) = self.entries.iter().filter(|(k, _)| k.as_str() != keep).min_by_key(|(_, (_, used))| *used).map(|(k, _)| k.clone()) else {
+                break;
+            };
+            if let Some((t, _)) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(tile_bytes(&t));
+            }
+        }
+    }
+}
+
+fn tile_bytes(t: &GrayTile) -> u64 {
+    t.data.len() as u64 * 2
+}
+
+/// The decoded-tip cache's state ([`PresetStore::tip_cache`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TipCacheStats {
+    /// Tips held.
+    pub tips: usize,
+    /// Bytes of the tips held.
+    pub bytes: u64,
+    /// Full tips decoded since the store opened (cache misses).
+    pub decodes: u64,
+    /// The byte budget.
+    pub limit: u64,
 }
 
 /// The persistent brush preset store attached to a session (see the module docs).
@@ -405,6 +532,8 @@ pub struct PresetStore {
     /// [`crate::actions_cmds::ActionState::rev`] last written (or loaded).
     actions_rev: u64,
     warnings: Vec<String>,
+    /// Full tips loaded for brushes in use (behind a lock so `&Session` paths can load).
+    cache: Mutex<TipCache>,
 }
 
 /// A loaded store: the presets on disk plus what the session should hide.
@@ -477,33 +606,47 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
             }
         }
     }
-    // Decode every referenced tip once.
+    // Every referenced tip as a stored tile: its size and preview come from the group files, so
+    // no full tip is decoded here (they load when a brush is used, `PresetStore::load_tile`).
     let wanted: Vec<String> = {
         let mut seen = HashSet::new();
         parsed.iter().flat_map(|(_, _, g)| g.presets.iter().flat_map(|p| p.tips.hashes())).filter(|h| seen.insert(h.as_str())).cloned().collect()
     };
-    let decoded = decode_tips(backend.as_ref(), &wanted, &tip_sizes);
-    let mut tips: HashMap<String, GrayTile> = HashMap::with_capacity(decoded.len());
-    for (h, r) in wanted.iter().zip(decoded) {
-        match r {
-            Ok(t) => {
-                tips.insert(h.clone(), t);
-            }
-            Err(e) => warnings.push(format!("brush presets: tip {h} skipped: {e}")),
+    let mut info: HashMap<String, TipInfo> = HashMap::new();
+    for (_, _, g) in &parsed {
+        for (h, i) in &g.tips {
+            info.entry(h.clone()).or_insert_with(|| i.clone());
         }
     }
+    let (tiles, regenerated) = load_tiles(backend.as_ref(), &wanted, &tip_sizes, &info, &mut warnings);
 
     let actions = load_actions(backend.as_ref(), &mut warnings);
-    let mut store = PresetStore { backend, synced_rev: None, groups: HashMap::new(), tips: HashMap::new(), index: None, actions_rev: 0, warnings: Vec::new() };
+    let mut store = PresetStore {
+        backend,
+        synced_rev: None,
+        groups: HashMap::new(),
+        tips: HashMap::new(),
+        index: None,
+        actions_rev: 0,
+        warnings: Vec::new(),
+        cache: Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() }),
+    };
     let mut presets = Vec::new();
     for (file, size, g) in parsed {
         let mut items = Vec::with_capacity(g.presets.len());
         let mut hashes = Vec::new();
         let mut missing = 0;
+        let mut stale = false;
         for sp in g.presets {
-            match join_tips(sp.brush, &sp.tips, &tips) {
+            match join_tips(sp.brush, &sp.tips, &tiles) {
                 Some(brush) => {
-                    hashes.extend(sp.tips.hashes().cloned());
+                    for h in sp.tips.hashes() {
+                        stale |= regenerated.contains(h) || !g.tips.contains_key(h);
+                        hashes.push(h.clone());
+                        if let Some(i) = info.get(h).filter(|i| tip_sizes.contains_key(&i.preview)) {
+                            hashes.push(i.preview.clone());
+                        }
+                    }
                     items.push(BrushPreset { name: sp.name, brush, builtin: false, group: g.group.clone() });
                 }
                 None => missing += 1,
@@ -521,7 +664,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
             }
         }
         presets.extend(items.iter().cloned());
-        store.groups.insert(file, Synced { presets: items, tips: hashes, bytes: size });
+        store.groups.insert(file, Synced { presets: items, tips: hashes, bytes: size, stale });
     }
     // Tip files nothing references are garbage (e.g. left by a crash), unless a group failed to
     // load: its tips must survive so a fixed file still works.
@@ -564,26 +707,66 @@ fn missing_file(err: &str) -> bool {
     lower.contains("not found") || lower.contains("no such file") || lower.contains("os error 2")
 }
 
-/// Read and decode tips, in parallel on native targets.
-fn decode_tips(backend: &dyn PresetBackend, hashes: &[String], sizes: &HashMap<String, u64>) -> Vec<Result<GrayTile, String>> {
-    let read = |h: &String| -> Result<Vec<u8>, String> {
+/// Largest preview tip file read.
+const MAX_PREVIEW_BYTES: u64 = 1 << 20;
+/// Tips decoded at a time when making missing previews (bounds the memory of that one-off pass).
+const PREVIEW_BATCH: usize = 8;
+
+/// The stored tiles for `hashes` (tip files that are missing or unreadable become warnings), and
+/// the hashes whose preview had to be made from the full tip: stores written before #1843 have
+/// none, so their tips are decoded once, a few at a time, and the groups rewritten at the next sync.
+fn load_tiles(
+    backend: &dyn PresetBackend,
+    hashes: &[String],
+    sizes: &HashMap<String, u64>,
+    info: &HashMap<String, TipInfo>,
+    warnings: &mut Vec<String>,
+) -> (HashMap<String, StoredTile>, HashSet<String>) {
+    let mut tiles = HashMap::with_capacity(hashes.len());
+    let mut todo = Vec::new();
+    let sane = |w: u32, h: u32| w > 0 && h > 0 && w <= MAX_TIP_SIDE && h <= MAX_TIP_SIDE && u64::from(w) * u64::from(h) <= MAX_TIP_SAMPLES;
+    for h in hashes {
         if !sizes.contains_key(h) {
-            return Err("file missing".into());
+            warnings.push(format!("brush presets: tip {h} skipped: file missing"));
+            continue;
         }
-        backend.read(&tip_file(h), MAX_TIP_BYTES)
-    };
-    // Reads stay sequential (the backend need not be Sync); decoding is the expensive part.
-    let raw: Vec<Result<Vec<u8>, String>> = hashes.iter().map(read).collect();
-    let dec = |r: &Result<Vec<u8>, String>| r.as_ref().map_err(Clone::clone).and_then(|b| decode_tip(b));
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        raw.par_iter().map(dec).collect()
+        let preview = info.get(h).filter(|i| sane(i.width, i.height) && sizes.contains_key(&i.preview)).and_then(|i| {
+            let bytes = backend.read(&tip_file(&i.preview), MAX_PREVIEW_BYTES).ok()?;
+            Some((i, decode_tip_max(&bytes, PREVIEW_SIDE).ok()?))
+        });
+        match preview {
+            Some((i, p)) => {
+                tiles.insert(h.clone(), StoredTile { key: h.clone(), width: i.width, height: i.height, preview: Arc::new(p), full: None });
+            }
+            None => todo.push(h.clone()),
+        }
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        raw.iter().map(dec).collect()
+    let mut regenerated = HashSet::new();
+    for batch in todo.chunks(PREVIEW_BATCH) {
+        // Reads stay sequential (the backend need not be Sync); decoding is the expensive part.
+        let raw: Vec<Result<Vec<u8>, String>> = batch.iter().map(|h| backend.read(&tip_file(h), MAX_TIP_BYTES)).collect();
+        let make = |r: &Result<Vec<u8>, String>| -> Result<(u32, u32, GrayTile), String> {
+            let t = decode_tip(r.as_ref().map_err(Clone::clone)?)?;
+            Ok((t.width, t.height, t.preview(PREVIEW_SIDE)))
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let made: Vec<_> = {
+            use rayon::prelude::*;
+            raw.par_iter().map(make).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let made: Vec<_> = raw.iter().map(make).collect();
+        for (h, r) in batch.iter().zip(made) {
+            match r {
+                Ok((w, ht, p)) => {
+                    tiles.insert(h.clone(), StoredTile { key: h.clone(), width: w, height: ht, preview: Arc::new(p), full: None });
+                    regenerated.insert(h.clone());
+                }
+                Err(e) => warnings.push(format!("brush presets: tip {h} skipped: {e}")),
+            }
+        }
     }
+    (tiles, regenerated)
 }
 
 /// Open a store directory (desktop). Never fails: problems become warnings.
@@ -617,26 +800,69 @@ impl PresetStore {
         self.groups.values().map(|g| g.bytes).sum::<u64>() + self.tips.values().sum::<u64>()
     }
 
+    /// The decoded-tip cache: tips held, their bytes, decodes so far and the budget.
+    pub fn tip_cache(&self) -> TipCacheStats {
+        let c = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        TipCacheStats { tips: c.entries.len(), bytes: c.bytes, decodes: c.decodes, limit: c.limit }
+    }
+
+    /// Change the decoded-tip cache's byte budget (evicting down to it at once).
+    pub fn set_tip_cache_limit(&self, bytes: u64) {
+        let mut c = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        c.limit = bytes;
+        c.evict("");
+    }
+
+    /// The full bitmap of a stored tile: the tile's own when loaded, else from the cache, else
+    /// read and decoded from its tip file (then cached; least recently used tips are dropped once
+    /// the cache is over budget). A missing, corrupt or mismatched tip file is an error.
+    pub fn load_tile(&self, t: &StoredTile) -> Result<Arc<GrayTile>, String> {
+        if let Some(f) = &t.full {
+            return Ok(f.clone());
+        }
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(f) = cache.get(&t.key) {
+            return Ok(f);
+        }
+        if !self.tips.contains_key(&t.key) {
+            return Err(format!("brush tip {} is not in the preset store", t.key));
+        }
+        let bytes = self.backend.read(&tip_file(&t.key), MAX_TIP_BYTES)?;
+        let full = decode_tip(&bytes).map_err(|e| format!("brush tip {}: {e}", t.key))?;
+        if (full.width, full.height) != (t.width, t.height) {
+            return Err(format!("brush tip {} is {}×{} px, expected {}×{}", t.key, full.width, full.height, t.width, t.height));
+        }
+        let full = Arc::new(full);
+        cache.decodes += 1;
+        cache.insert(&t.key, full.clone());
+        Ok(full)
+    }
+
     /// Bring the files in line with `presets` (built-ins skipped): write changed groups, delete
-    /// removed ones and their unreferenced tips, update the index.
-    pub fn sync(&mut self, presets: &[BrushPreset]) {
+    /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
+    /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
+    pub fn sync(&mut self, presets: &mut [BrushPreset]) {
         // User presets by group, in first-appearance order.
-        let mut order: Vec<(String, Vec<&BrushPreset>)> = Vec::new();
-        for p in presets.iter().filter(|p| !p.builtin) {
+        let mut order: Vec<(String, Vec<usize>)> = Vec::new();
+        for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
             match order.iter_mut().find(|(g, _)| *g == p.group) {
-                Some((_, v)) => v.push(p),
-                None => order.push((p.group.clone(), vec![p])),
+                Some((_, v)) => v.push(i),
+                None => order.push((p.group.clone(), vec![i])),
             }
         }
         let mut files = Vec::with_capacity(order.len());
-        for (group, items) in &order {
+        for (group, idx) in &order {
             let file = group_file_name(group);
             files.push(file.clone());
-            let unchanged = self.groups.get(&file).is_some_and(|s| s.presets.len() == items.len() && s.presets.iter().zip(items).all(|(a, b)| a == *b));
+            let unchanged = self
+                .groups
+                .get(&file)
+                .is_some_and(|s| !s.stale && s.presets.len() == idx.len() && s.presets.iter().zip(idx).all(|(a, &i)| presets.get(i) == Some(a)));
             if unchanged {
                 continue;
             }
-            if let Err(e) = self.write_group(&file, group, items) {
+            let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
+            if let Err(e) = self.write_group(&file, group, &mut items) {
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
         }
@@ -690,39 +916,68 @@ impl PresetStore {
         }
     }
 
-    fn write_group(&mut self, file: &str, group: &str, items: &[&BrushPreset]) -> Result<(), String> {
+    /// Write one tip file (`others` bytes are already used by the rest of the store).
+    fn put_tip(&mut self, h: &str, t: &GrayTile, others: u64, new_bytes: &mut u64, name: &str) -> Result<(), String> {
+        let bytes = encode_tip(t);
+        if bytes.is_empty() || bytes.len() as u64 > MAX_TIP_BYTES {
+            return Err(format!("the tip of `{name}` is too large to save"));
+        }
+        *new_bytes += bytes.len() as u64;
+        if others + *new_bytes > MAX_STORE_BYTES {
+            return Err(format!("the preset store is full ({} MB limit)", MAX_STORE_BYTES >> 20));
+        }
+        self.backend.write(&tip_file(h), &bytes)?;
+        self.tips.insert(h.to_string(), bytes.len() as u64);
+        Ok(())
+    }
+
+    /// Write a group file (and any tip or preview file it needs that isn't on disk yet). Once it
+    /// is written, the presets' bitmaps become stored tiles without their full bitmaps; on an
+    /// error the presets are left unchanged.
+    fn write_group(&mut self, file: &str, group: &str, items: &mut [&mut BrushPreset]) -> Result<(), String> {
         let others: u64 = self.groups.iter().filter(|(f, _)| f.as_str() != file).map(|(_, g)| g.bytes).sum::<u64>() + self.tips.values().sum::<u64>();
         let mut stored = Vec::with_capacity(items.len());
+        let mut tiles = Vec::with_capacity(items.len());
         let mut hashes = Vec::new();
+        let mut infos = BTreeMap::new();
         let mut new_bytes = 0u64;
-        for p in items {
-            let (brush, bitmaps) = split_tips(p.brush.clone());
-            let mut refs = [None, None, None];
-            for (slot, t) in refs.iter_mut().zip(bitmaps) {
-                let Some(t) = t else { continue };
-                if !t.is_valid() {
-                    return Err(format!("preset `{}` has an invalid tip", p.name));
-                }
-                let h = tip_hash(&t);
-                if !self.tips.contains_key(&h) {
-                    let bytes = encode_tip(&t);
-                    if bytes.is_empty() || bytes.len() as u64 > MAX_TIP_BYTES {
-                        return Err(format!("the tip of `{}` is too large to save", p.name));
+        for p in items.iter_mut() {
+            let mut refs: [Option<StoredTile>; 3] = [None, None, None];
+            for (slot, bm) in refs.iter_mut().zip(bitmaps(&p.brush)) {
+                let tile = match bm {
+                    None => continue,
+                    Some(Bitmap::Full(t)) => {
+                        if !t.is_valid() {
+                            return Err(format!("preset `{}` has an invalid tip", p.name));
+                        }
+                        let h = tip_hash(t);
+                        if !self.tips.contains_key(&h) {
+                            self.put_tip(&h, t, others, &mut new_bytes, &p.name)?;
+                        }
+                        StoredTile { key: h, width: t.width, height: t.height, preview: Arc::new(t.preview(PREVIEW_SIDE)), full: None }
                     }
-                    new_bytes += bytes.len() as u64;
-                    if others + new_bytes > MAX_STORE_BYTES {
-                        return Err(format!("the preset store is full ({} MB limit)", MAX_STORE_BYTES >> 20));
+                    Some(Bitmap::Stored(r)) => {
+                        if !self.tips.contains_key(&r.key) {
+                            return Err(format!("the tip of `{}` is missing from the preset store", p.name));
+                        }
+                        StoredTile { full: None, ..r.clone() }
                     }
-                    self.backend.write(&tip_file(&h), &bytes)?;
-                    self.tips.insert(h.clone(), bytes.len() as u64);
+                };
+                let ph = tip_hash(&tile.preview);
+                if !self.tips.contains_key(&ph) {
+                    self.put_tip(&ph, &tile.preview, others, &mut new_bytes, &p.name)?;
                 }
-                hashes.push(h.clone());
-                *slot = Some(h);
+                hashes.push(tile.key.clone());
+                hashes.push(ph.clone());
+                infos.insert(tile.key.clone(), TipInfo { width: tile.width, height: tile.height, preview: ph });
+                *slot = Some(tile);
             }
-            let [tip, dual_tip, texture] = refs;
-            stored.push(StoredPreset { name: p.name.clone(), brush, tips: TipRefs { tip, dual_tip, texture } });
+            let key = |r: &Option<StoredTile>| r.as_ref().map(|t| t.key.clone());
+            let tips = TipRefs { tip: key(&refs[0]), dual_tip: key(&refs[1]), texture: key(&refs[2]) };
+            stored.push(StoredPreset { name: p.name.clone(), brush: settings_only(&mut p.brush), tips });
+            tiles.push(refs);
         }
-        let gf = GroupFile { format: GROUP_FORMAT.into(), version: 1, group: group.to_string(), presets: stored };
+        let gf = GroupFile { format: GROUP_FORMAT.into(), version: 1, group: group.to_string(), presets: stored, tips: infos };
         let bytes = serde_json::to_vec(&gf).map_err(|e| e.to_string())?;
         if bytes.len() as u64 > MAX_GROUP_BYTES {
             return Err(format!("the group is too large to save ({} MB limit)", MAX_GROUP_BYTES >> 20));
@@ -731,7 +986,11 @@ impl PresetStore {
             return Err(format!("the preset store is full ({} MB limit)", MAX_STORE_BYTES >> 20));
         }
         self.backend.write(file, &bytes)?;
-        self.groups.insert(file.to_string(), Synced { presets: items.iter().map(|p| (*p).clone()).collect(), tips: hashes, bytes: bytes.len() as u64 });
+        for (p, refs) in items.iter_mut().zip(tiles) {
+            set_stored(&mut p.brush, refs);
+        }
+        let presets = items.iter().map(|p| (**p).clone()).collect();
+        self.groups.insert(file.to_string(), Synced { presets, tips: hashes, bytes: bytes.len() as u64, stale: false });
         Ok(())
     }
 
@@ -825,11 +1084,66 @@ impl Session {
         let actions_rev = self.actions.rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(&self.tools.presets);
+                st.sync(&mut self.tools.presets);
                 st.synced_rev = Some(rev);
+                link_stored_tips(st, &mut self.tools.brush);
             }
             st.sync_actions(&self.actions.list, actions_rev);
         }
+    }
+
+    /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so
+    /// it paints with its full bitmaps. Tips already loaded or embedded are left alone. Fails when
+    /// a tip can't be loaded: its file is missing or corrupt, or there is no preset store.
+    pub fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
+        let load = |r: &mut StoredTile| -> Result<(), String> {
+            if r.full.is_none() {
+                let st = self.preset_store.as_ref().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;
+                r.full = Some(st.load_tile(r)?);
+            }
+            Ok(())
+        };
+        if let TipShape::Stored(r) = &mut b.tip {
+            load(r)?;
+        }
+        if let TipShape::Stored(r) = &mut b.dual_brush.tip {
+            load(r)?;
+        }
+        if let Pattern::Stored(r) = &mut b.texture.pattern {
+            load(r)?;
+        }
+        Ok(())
+    }
+}
+
+/// After a sync, an embedded bitmap of the tool's brush that the store now holds (the brush was
+/// just saved as a preset) becomes the stored tile, keeping its bitmap: the brush then matches its
+/// preset (Brushes panel highlight) like a preset picked from the library.
+fn link_stored_tips(st: &PresetStore, b: &mut BrushSettings) {
+    let link = |g: &GrayTile| -> Option<StoredTile> {
+        if !g.is_valid() {
+            return None;
+        }
+        let h = tip_hash(g);
+        st.tips.contains_key(&h).then(|| StoredTile { key: h, width: g.width, height: g.height, preview: Arc::new(g.preview(PREVIEW_SIDE)), full: None })
+    };
+    if let TipShape::Sampled(g) = &b.tip
+        && let Some(r) = link(g)
+        && let TipShape::Sampled(g) = std::mem::take(&mut b.tip)
+    {
+        b.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(g)), ..r });
+    }
+    if let TipShape::Sampled(g) = &b.dual_brush.tip
+        && let Some(r) = link(g)
+        && let TipShape::Sampled(g) = std::mem::take(&mut b.dual_brush.tip)
+    {
+        b.dual_brush.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(g)), ..r });
+    }
+    if let Pattern::Tile(g) = &b.texture.pattern
+        && let Some(r) = link(g)
+        && let Pattern::Tile(g) = std::mem::take(&mut b.texture.pattern)
+    {
+        b.texture.pattern = Pattern::Stored(StoredTile { full: Some(Arc::new(g)), ..r });
     }
 }
 

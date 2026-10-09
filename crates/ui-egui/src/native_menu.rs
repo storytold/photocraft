@@ -396,7 +396,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
             if free {
                 hide.shortcut = Some("Ctrl+Cmd+H".into());
             }
-            let resolution = if free { "Hide moves to ⌃⌘H, as in Photoshop" } else { "Hide has no shortcut" };
+            let resolution = if free { "Hide moves to ⌃⌘H" } else { "Hide has no shortcut" };
             clashes.push(Clash { shortcut: "Cmd+H", system: "Hide", command, resolution });
         }
         None => hide.shortcut = Some("Cmd+H".into()),
@@ -440,7 +440,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
             if free {
                 it.shortcut = Some("Ctrl+Cmd+M".into());
             }
-            let resolution = if free { "Minimize moves to ⌃⌘M, as in Photoshop" } else { "Minimize has no shortcut" };
+            let resolution = if free { "Minimize moves to ⌃⌘M" } else { "Minimize has no shortcut" };
             clashes.push(Clash { shortcut: "Cmd+M", system: "Minimize", command, resolution });
             Node::Item(it)
         }

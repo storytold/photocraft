@@ -240,8 +240,7 @@
 	Filter for shape layers	Φιλτράρισμα επιπέδων σχημάτων
 	Filter for type layers	Φιλτράρισμα επιπέδων κειμένου
 	Import Brushes…	Εισαγωγή πινέλων…
-	Import Photoshop brushes (.abr)	Εισαγωγή πινέλων Photoshop (.abr)
-	Load Photoshop brushes (.abr)	Φόρτωση πινέλων Photoshop (.abr)
+	Import brushes (.abr)	Εισαγωγή πινέλων (.abr)
 	Mask All	Απόκρυψη όλων με μάσκα
 	Mask Options	Επιλογές μάσκας
 	Masking	Χρήση μασκών
@@ -270,6 +269,10 @@
 	Foreground	Προσκήνιο
 	Background	Φόντο
 	Color Picker	Επιλογέας χρώματος
+	Color Picker (Fill Color)	Επιλογέας χρώματος (Χρώμα γεμίσματος)
+	Fill color	Χρώμα γεμίσματος
+	Color Picker (Stroke Color)	Επιλογέας χρώματος (Χρώμα περιγράμματος)
+	Stroke color	Χρώμα περιγράμματος
 	Color Swatches	Δείγματα χρωμάτων
 	Angle	Γωνία
 	Scale	Κλίμακα
@@ -1930,7 +1933,7 @@
 	All Caps	Όλα κεφαλαία
 	All Slices	Όλες οι τομές
 	All User Slices	Όλες οι τομές χρήστη
-	All shortcuts reset to Photoshop defaults.	Όλες οι συντομεύσεις επανήλθαν στις προεπιλογές του Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Όλες οι συντομεύσεις επανήλθαν στις προεπιλογές του PhotoCraft.
 	Alternates for Current Selection	Εναλλακτικοί χαρακτήρες για την τρέχουσα επιλογή
 	Altitude	Υψόμετρο
 	Always	Πάντα
@@ -3306,7 +3309,7 @@ cameraRaw	Yellow	Κίτρινο
 	Color…	Χρώμα…
 	Cone (Inverted)	Κώνος (αντεστραμμένος)
 	Could not open	Δεν ήταν δυνατό το άνοιγμα
-	Default Photoshop Size	Προεπιλεγμένο μέγεθος Photoshop
+	Default PhotoCraft Size	Προεπιλεγμένο μέγεθος PhotoCraft
 	Diagonal (Descending)	Διαγώνιος (φθίνουσα)
 	DirectX 12	DirectX 12
 	Display p3	Display P3
@@ -3399,3 +3402,18 @@ fontWeight	Thin	Πολύ λεπτά
 	Cycle Orientation	Εναλλαγή προσανατολισμού
 	Set the overlay options for the Crop tool	Ορισμός επιλογών επικάλυψης για το εργαλείο Περικοπή
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Το Alt-κλικ πήγε στο περιβάλλον εργασίας, που μετακινεί παράθυρα με Alt-σύρσιμο. Ορίστε το πλήκτρο μετακίνησης παραθύρων του σε Super ή κλειδώστε το Alt στο Παράθυρο › Πλήκτρα τροποποίησης.
+	Straighten the image by drawing a line on it	Ευθυγράμμιση της εικόνας σχεδιάζοντας μια γραμμή πάνω της
+	Set additional Crop options	Ορισμός πρόσθετων επιλογών περικοπής
+	Show Cropped Area	Εμφάνιση περιοχής περικοπής
+	Enable Crop Shield	Ενεργοποίηση ασπίδας περικοπής
+	Match Canvas	Ταίριασμα με τον καμβά
+	Auto Adjust Opacity	Αυτόματη προσαρμογή αδιαφάνειας
+	Crop Shield color	Χρώμα ασπίδας περικοπής
+	Color Picker (Crop Shield Color)	Επιλογέας χρώματος (Χρώμα ασπίδας περικοπής)
+	From Center	Από το κέντρο
+	Link radii	Σύνδεση ακτίνων
+	Star Ratio:	Αναλογία αστεριού:
+	Create Rectangle	Δημιουργία ορθογωνίου
+	Create Ellipse	Δημιουργία έλλειψης
+	Create Triangle	Δημιουργία τριγώνου
+	Create Polygon	Δημιουργία πολυγώνου

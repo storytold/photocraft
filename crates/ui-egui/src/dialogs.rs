@@ -182,6 +182,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
+                DialogKind::Command if crate::shape_dialog::owns(&fields) => crate::shape_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
@@ -202,7 +203,16 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // Long parameter lists (Flame, Lighting Effects) scroll, so the title and the
                     // OK / Cancel buttons stay inside a small window.
                     let room = (ctx.content_rect().height() - DIALOG_CHROME).max(120.0);
+                    // Photoshop opens a value dialog on its first number, selected: typing
+                    // replaces it and Enter applies it (#1757). Once, on the first laid-out frame.
+                    let focused = id.with("first-field");
+                    let first = !ui.is_sizing_pass() && !ctx.data(|m| m.get_temp::<bool>(focused).unwrap_or(false));
+                    if first {
+                        ctx.data_mut(|m| m.insert_temp(focused, true));
+                    }
+                    crate::widgets::focus_first_field(ctx, first);
                     egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| crate::filter_dialog::body(ui, &mut fields));
+                    crate::widgets::focus_first_field(ctx, false);
                 }
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
@@ -288,6 +298,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         if let Some(dm) = app.ui.dialog_mut(d.id) {
             dm.fields = fields;
+        }
+        // A colour swatch (Edit › Fill, Edit › Stroke) opens the Color Picker over the dialog.
+        if outcome.is_none() {
+            crate::color_picker_ui::open_requested(app, d.id);
         }
         if apply_requested && outcome.is_none() {
             let _ = crate::prefs_ui::apply(app, d.id);
@@ -377,6 +391,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         }
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::stroke_ui::owns(&d.fields) => crate::stroke_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
@@ -642,5 +657,38 @@ mod tests {
         h.run_steps(4);
         let other = h.get_by_label("Motion Blur").rect();
         assert!(other.min.x > moved.min.x + 100.0, "Motion Blur opened centred: {other:?}");
+    }
+
+    /// #1757: like Photoshop, a value dialog opens on its first number with the text selected, so
+    /// typing replaces it and Enter applies it; it reopens with the value applied last time, and a
+    /// cancelled edit is not remembered.
+    #[test]
+    fn a_value_dialog_opens_on_its_first_number_selected_and_remembers_it() {
+        use egui_kittest::kittest::Queryable;
+        const BLUR: &str = "filter.blur.gaussianBlur";
+        let mut h = dialog_harness(egui::vec2(1280.0, 800.0), BLUR);
+        let radius = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.state().ui.dialogs.last().and_then(|d| d.fields["radius"].as_f64());
+        assert_eq!(radius(&h), Some(1.0), "the default the first time");
+        assert!(h.get_by_role(egui::accesskit::Role::SpinButton).is_focused(), "the Radius field has focus");
+        h.event(egui::Event::Text("5".into()));
+        h.run_steps(1);
+        assert_eq!(radius(&h), Some(5.0), "typing replaced the selected 1");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty(), "Enter is OK");
+        assert_eq!(h.state().session.journal.last(), Some(&(BLUR.to_string(), json!({"radius": 5.0}))));
+
+        crate::filter_dialog::open(h.state_mut(), BLUR).unwrap();
+        h.run_steps(4);
+        assert_eq!(radius(&h), Some(5.0), "reopens with the last value");
+        assert!(h.get_by_role(egui::accesskit::Role::SpinButton).is_focused(), "focused again");
+        h.event(egui::Event::Text("9".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty(), "Esc is Cancel");
+        crate::filter_dialog::open(h.state_mut(), BLUR).unwrap();
+        h.run_steps(2);
+        assert_eq!(radius(&h), Some(5.0), "a cancelled 9 is not remembered");
     }
 }

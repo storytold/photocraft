@@ -752,7 +752,7 @@
 	All Caps	Großbuchstaben
 	All Slices	Alle Slices
 	All User Slices	Alle Benutzer-Slices
-	All shortcuts reset to Photoshop defaults.	Alle Kurzbefehle wurden auf die Photoshop-Standards zurückgesetzt.
+	All shortcuts reset to PhotoCraft defaults.	Alle Kurzbefehle wurden auf die PhotoCraft-Standards zurückgesetzt.
 	Alt	Alt
 	Always use pressure for opacity	Druck immer für Deckkraft verwenden
 	Always use pressure for size	Druck immer für Größe verwenden
@@ -1076,7 +1076,7 @@
 	Ignore All	Alle ignorieren
 	Image Size	Bildgröße
 	Import Brushes…	Pinsel importieren…
-	Import Photoshop brushes (.abr)	Photoshop-Pinsel (.abr) importieren
+	Import brushes (.abr)	Pinsel (.abr) importieren
 	Import Presets	Vorgaben importieren
 	Imported	Importiert
 	Indent First	Erste Zeile einrücken
@@ -1126,7 +1126,6 @@
 	Liquify is not open	Verflüssigen ist nicht geöffnet
 	Load	Laden
 	Load 3D LUT…	3D-LUT laden…
-	Load Photoshop brushes (.abr)	Photoshop-Pinsel (.abr) laden
 	Load channel as selection	Kanal als Auswahl laden
 	Load…	Laden…
 	Localized Color Clusters	Lokalisierte Farbcluster
@@ -1519,7 +1518,7 @@
 	Current Tool	Aktuelles Werkzeug
 	Custom Shape Tool	Werkzeug für benutzerdefinierte Formen
 	Cyans	Cyantöne
-	Default Photoshop Size	Standard-Photoshop-Größe
+	Default PhotoCraft Size	Standard-PhotoCraft-Größe
 	Delete Workspace	Arbeitsbereich löschen
 	Diamond	Raute
 	Dimensions:	Abmessungen:
@@ -2221,6 +2220,10 @@
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Farbwähler (Textfarbe)
+	Color Picker (Fill Color)	Farbwähler (Füllfarbe)
+	Fill color	Füllfarbe
+	Color Picker (Stroke Color)	Farbwähler (Konturfarbe)
+	Stroke color	Konturfarbe
 	Pick screen color	Bildschirmfarbe auswählen
 	Sample a pixel anywhere on the screen	Ein Pixel an beliebiger Stelle auf dem Bildschirm auswählen
 	Click to pick · Esc to cancel	Klicken zum Auswählen · Esc zum Abbrechen
@@ -2328,3 +2331,18 @@ fontWeight	Italic	Kursiv
 	Cycle Orientation	Ausrichtung wechseln
 	Set the overlay options for the Crop tool	Überlagerungsoptionen für das Freistellungswerkzeug festlegen
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Der Alt-Klick ging an die Arbeitsumgebung, die Fenster mit Alt-Ziehen verschiebt. Stelle dort die Taste zum Verschieben von Fenstern auf Super oder raste Alt unter Fenster › Modifikatortasten ein.
+	Straighten the image by drawing a line on it	Bild durch Ziehen einer Linie gerade ausrichten
+	Set additional Crop options	Zusätzliche Freistellungsoptionen festlegen
+	Show Cropped Area	Freigestellten Bereich anzeigen
+	Enable Crop Shield	Freistellungsschutz aktivieren
+	Match Canvas	An Arbeitsfläche anpassen
+	Auto Adjust Opacity	Deckkraft automatisch anpassen
+	Crop Shield color	Farbe des Freistellungsschutzes
+	Color Picker (Crop Shield Color)	Farbwähler (Farbe des Freistellungsschutzes)
+	From Center	Vom Mittelpunkt aus
+	Link radii	Radien verknüpfen
+	Star Ratio:	Sternverhältnis:
+	Create Rectangle	Rechteck erstellen
+	Create Ellipse	Ellipse erstellen
+	Create Triangle	Dreieck erstellen
+	Create Polygon	Polygon erstellen

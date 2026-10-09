@@ -23,8 +23,8 @@
 //!   Bodies whose full profile is not measured yet can still carry a measured
 //!   image area (the D800E, the ILCE-7).
 //!
-//! Decoded today: DNG (uncompressed and lossless-JPEG, strips and tiles, CFA
-//! and LinearRaw), CR2 (lossless JPEG with Canon slices), uncompressed or
+//! Decoded today: DNG (uncompressed, lossless-JPEG and JPEG XL, strips and
+//! tiles, CFA and LinearRaw), CR2 (lossless JPEG with Canon slices), uncompressed or
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
 //! Panasonic RW2 (RawFormat 5), uncompressed Olympus ORF and uncompressed
@@ -45,6 +45,7 @@ mod demosaic;
 mod develop;
 mod dng;
 mod error;
+mod jxl;
 mod ljpeg;
 mod nefc;
 mod opcodes;

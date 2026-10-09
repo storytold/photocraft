@@ -19,6 +19,21 @@ pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
     }
 }
 
+/// What the Layers panel "Add a mask" button does for `layer` (#2075). Like Photoshop it never
+/// replaces a mask: a layer without a layer mask gets one ([`add_mask_command`]); a layer that
+/// already has one gets a vector mask instead (⌥: Hide All); a layer with both (or a shape layer,
+/// whose path is already its vector mask, with a layer mask) gets nothing (`None`).
+pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool) -> Option<&'static str> {
+    let l = layer?;
+    if l.mask.is_none() {
+        Some(add_mask_command(has_selection, alt))
+    } else if l.vector_mask.is_none() && !matches!(l.content, LayerContent::Shape(_)) {
+        Some(if alt { "layer.vectorMask.hideAll" } else { "layer.vectorMask.revealAll" })
+    } else {
+        None
+    }
+}
+
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
 pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
@@ -328,6 +343,56 @@ mod tests {
         let st = s.active().unwrap();
         let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
         assert!(mask.pixel(1, 5)[0] > 0.99 && mask.pixel(8, 5)[0] < 0.01);
+    }
+
+    /// #2075: clicking the mask button again (with or without ⌥) used to replace the layer's
+    /// mask, discarding what was painted into it. Like Photoshop, it now adds a vector mask, and
+    /// does nothing once the layer has both.
+    #[test]
+    fn mask_button_never_replaces_a_mask() {
+        for alt in [false, true] {
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            let layer = |s: &photocraft_engine::Session| {
+                let st = s.active().unwrap();
+                st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+            };
+            let first = mask_button_command(Some(&layer(&s)), false, alt).unwrap();
+            assert_eq!(first, if alt { "layer.layerMask.hideAll" } else { "layer.layerMask.revealAll" });
+            s.execute(first, json!({})).unwrap();
+            // Paint a stroke into the mask.
+            s.edit("paint mask", |doc, active| {
+                let id = (*active).ok_or(photocraft_engine::EngineError::NoDocument)?;
+                let m = doc.layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or(photocraft_engine::EngineError::NoDocument)?;
+                m.surface.fill_rect(photocraft_geom::Rect::new(2, 2, 5, 5), &[0.5]);
+                Ok(())
+            })
+            .unwrap();
+            let painted = layer(&s).mask.unwrap().surface.pixel(3, 3)[0];
+            assert!((painted - 0.5).abs() < 0.01);
+            // Second click: a vector mask (⌥ hides all), the layer mask is untouched.
+            let second = mask_button_command(Some(&layer(&s)), false, alt).unwrap();
+            assert_eq!(second, if alt { "layer.vectorMask.hideAll" } else { "layer.vectorMask.revealAll" });
+            s.execute(second, json!({})).unwrap();
+            let l = layer(&s);
+            assert!(l.vector_mask.is_some(), "alt={alt}");
+            let mask = l.mask.as_ref().unwrap();
+            assert!((mask.surface.pixel(3, 3)[0] - painted).abs() < 1e-6, "alt={alt}: the painted mask was replaced");
+            // Third click: nothing left to add.
+            assert_eq!(mask_button_command(Some(&l), false, alt), None);
+            assert_eq!(mask_button_command(Some(&l), true, alt), None);
+        }
+        // No layer: nothing to do.
+        assert_eq!(mask_button_command(None, false, false), None);
+        // A shape layer's path is already its vector mask: after the layer mask, nothing more.
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [0, 0, 5, 5]})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(mask_button_command(Some(l), false, false), None);
     }
 
     #[test]

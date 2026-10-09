@@ -151,7 +151,13 @@ the same.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
   the file could pass 4 GiB.
 * **EXR**
-  * Reads the first valid layer at full resolution, from its data window.
+  * Multi-part files (a Maya/Arnold render writes one part per AOV) open the part that
+    looks most like a colour image — RGBA beats RGB beats YA beats a single channel, so a
+    depth-only part no longer fails the file — with `DecodeWarning::MoreParts` naming how
+    many parts exist. `exr_info` lists every part (name, view, size, channels, deep/tiled)
+    without decoding pixels, and `decode_exr_part` decodes a chosen one. Deep parts stay
+    with the deep decoder: a file that has any is refused here with a pointer to it.
+  * Reads at full resolution, from the data window.
   * Channel names are matched by suffix, so `layer.R` counts as `R`.
   * Subsampled channels are unsupported.
   * Deep data (scanlines or single-level tiles, compressed NONE, RLE or ZIPS) opens as a flat
