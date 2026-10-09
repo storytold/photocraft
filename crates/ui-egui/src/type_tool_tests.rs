@@ -1142,3 +1142,10 @@ fn variable_faces_list_the_weights_of_their_axis() {
     assert_eq!(names, ["Light", "Regular", "Medium", "SemiBold", "Bold"]);
     assert_eq!(super::style_names(&[face(700.0, false, Vec::new())]), ["Bold"]);
 }
+
+/// Families the host serves are in the font menu before they are fetched.
+#[test]
+fn the_font_menu_lists_served_families() {
+    photocraft_text::served::add_families(["Served Menu Test Serif".to_string()]);
+    assert!(super::families().iter().any(|f| f == "Served Menu Test Serif"));
+}

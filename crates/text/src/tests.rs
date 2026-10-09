@@ -40,6 +40,14 @@ fn bundled_fonts_cover_latin() {
 }
 
 #[test]
+fn registering_fonts_moves_the_generation() {
+    let mut e = TextEngine::new();
+    let g = fonts::generation();
+    e.fonts.register_font_data(fonts::INTER_REGULAR.to_vec());
+    assert!(fonts::generation() > g);
+}
+
+#[test]
 fn metrics_are_stable_and_scale_with_dpi() {
     let mut e = TextEngine::new();
     let a = e.layout(&point("Hamburgefonstiv", 12.0), 72.0);

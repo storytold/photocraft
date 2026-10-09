@@ -1,11 +1,13 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_engine::Session;
+use photocraft_ui_egui::served_fonts;
 use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
 use wasm_bindgen::JsCast as _;
@@ -20,6 +22,23 @@ const OPEN_EXTS: &[&str] = &[
     "afdesign", "afphoto", "afpub",
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
+
+/// Fonts the host serves next to the page (`photocraft_ui_egui::served_fonts`): craft-fonts' manifest
+/// format, each file relative to the site root. No manifest (a 404) means no served fonts.
+const FONTS_MANIFEST: &str = "fonts/manifest.txt";
+
+/// The served fonts: the manifest once read, and what the network has delivered.
+#[derive(Default)]
+struct ServedFonts {
+    /// Font files by family.
+    files: HashMap<String, Vec<String>>,
+    /// Families fetched or being fetched: each one once per page load.
+    fetched: HashSet<String>,
+    /// Downloaded files waiting for the next frame: (family, bytes).
+    arrived: Vec<(String, Vec<u8>)>,
+}
+
+type Served = Arc<Mutex<ServedFonts>>;
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
@@ -49,6 +68,8 @@ pub fn start() {
                 Box::new(move |cc| {
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
                     let inbox: Inbox = Arc::default();
+                    let served: Served = Arc::default();
+                    load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone()));
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
@@ -60,7 +81,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, unsaved }))
+                    Ok(Box::new(WebShell { app, inbox, unsaved, served }))
                 }),
             )
             .await;
@@ -125,6 +146,45 @@ fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
+/// Reads the served font manifest, if the host has one, and lists its families in the font menus.
+fn load_font_manifest(served: Served, ctx: egui::Context) {
+    wasm_bindgen_futures::spawn_local(async move {
+        // Most hosts serve no fonts: a missing manifest is the normal case, not an error.
+        let Ok(bytes) = fetch_bytes(FONTS_MANIFEST).await else { return };
+        let text = String::from_utf8_lossy(&bytes);
+        // A host that answers unknown paths with its HTML page (single-page app fallback).
+        if text.trim_start().starts_with('<') {
+            return;
+        }
+        let (fonts, skipped) = served_fonts::parse_manifest(&text);
+        for s in skipped {
+            log::warn!("{FONTS_MANIFEST}: skipped {s}");
+        }
+        let mut files: HashMap<String, Vec<String>> = HashMap::new();
+        for f in fonts {
+            files.entry(f.family).or_default().push(f.file);
+        }
+        log::info!("photocraft-web: {} served font families", files.len());
+        let families: Vec<String> = files.keys().cloned().collect();
+        served.lock().unwrap_or_else(|e| e.into_inner()).files = files;
+        served_fonts::add_families(families);
+        ctx.request_repaint();
+    });
+}
+
+/// GET `url` (relative to the page) and read the whole body.
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    use wasm_bindgen_futures::JsFuture;
+    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url)).await.map_err(js)?.dyn_into().map_err(|_| "not a Response")?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let body = JsFuture::from(resp.array_buffer().map_err(js)?).await.map_err(js)?;
+    Ok(js_sys::Uint8Array::new(&body).to_vec())
+}
+
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
 /// so the app's own drop path can't handle them) and feed them through the inbox.
 struct WebShell {
@@ -132,6 +192,41 @@ struct WebShell {
     inbox: Inbox,
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
+    served: Served,
+}
+
+impl WebShell {
+    /// Fetches the served families asked for (picked in a font menu, or needed by a layout) and
+    /// installs the files that arrived.
+    fn serve_fonts(&mut self, ctx: &egui::Context) {
+        let requested = served_fonts::take_requests();
+        let (fetch, arrived) = {
+            let mut s = self.served.lock().unwrap_or_else(|e| e.into_inner());
+            let mut fetch = Vec::new();
+            for family in requested {
+                if let Some(files) = s.files.get(&family).cloned()
+                    && s.fetched.insert(family.clone())
+                {
+                    fetch.extend(files.into_iter().map(|file| (family.clone(), file)));
+                }
+            }
+            (fetch, std::mem::take(&mut s.arrived))
+        };
+        for (family, file) in fetch {
+            let served = self.served.clone();
+            let ctx = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_bytes(&file).await {
+                    Ok(bytes) => {
+                        served.lock().unwrap_or_else(|e| e.into_inner()).arrived.push((family, bytes));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => log::error!("couldn't fetch served font {file}: {e}"),
+                }
+            });
+        }
+        served_fonts::install(&mut self.app, arrived);
+    }
 }
 
 impl eframe::App for WebShell {
@@ -151,6 +246,7 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        self.serve_fonts(ctx);
         self.app.logic(ctx, frame);
         self.unsaved.store(self.app.has_unsaved_work(), Ordering::Relaxed);
     }

@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
@@ -51,6 +52,16 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
     }
     v.extend_from_slice(FALLBACK_LAST);
     v
+}
+
+/// Bumped whenever font data is registered: fonts can arrive after start (the web build fetches
+/// served fonts on demand, [`crate::served`]), so lists derived from the database, such as font
+/// menus, compare it to know when to refresh.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Changes whenever font data is registered in any [`FontDb`].
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
 }
 
 /// One face in the database (for font menus).
@@ -169,6 +180,7 @@ impl FontDb {
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
         self.ps_cache.clear();
         self.refresh_generics();
+        GENERATION.fetch_add(1, Ordering::Relaxed);
         names
     }
 

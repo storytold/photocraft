@@ -427,6 +427,10 @@ impl Layouter {
                     s.italic = f.italic;
                 }
             }
+            // Drawn with a fallback for now; a host that serves this family fetches it (`served`).
+            if !fonts.has_family(&s.font_family) {
+                crate::served::request(&s.font_family);
+            }
             out.styles.push(s);
         }
         let run_starts: Vec<usize> = runs

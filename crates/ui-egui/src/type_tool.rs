@@ -74,7 +74,7 @@ fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
 /// True when the layer's pixels are what our engine draws for it. A PSD's type layer keeps
 /// Photoshop's pixels until it is edited, and with substituted fonts or a different line layout
 /// they sit somewhere else than the glyphs the caret and selection are placed on.
-fn shows_own_layout(doc: &Document, t: &TextLayer) -> bool {
+pub(crate) fn shows_own_layout(doc: &Document, t: &TextLayer) -> bool {
     let Some(cache) = &t.cache else { return false };
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
     let ours = eng.render(t, doc.resolution_dpi, doc.pixel_format()).1.surface.content_bounds();
@@ -676,10 +676,28 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     }
 }
 
-/// Font families (bundled + system), cached for the process.
-pub fn families() -> &'static [String] {
-    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    FAMILIES.get_or_init(|| photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default())
+/// Font families: bundled, system, and those the host serves (`photocraft_text::served`, fetched
+/// when picked). Cached until fonts are registered or the served catalog changes.
+pub fn families() -> Arc<Vec<String>> {
+    type Cached = Option<((u64, u64), Arc<Vec<String>>)>;
+    static FAMILIES: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
+    let key = (photocraft_text::fonts::generation(), photocraft_text::served::generation());
+    let mut cached = FAMILIES.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((k, v)) = cached.as_ref()
+        && *k == key
+    {
+        return v.clone();
+    }
+    let mut v = photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default();
+    for f in photocraft_text::served::families() {
+        if !v.contains(&f) {
+            v.push(f);
+        }
+    }
+    v.sort_by_key(|s| s.to_lowercase());
+    let v = Arc::new(v);
+    *cached = Some((key, v.clone()));
+    v
 }
 
 fn weight_name(w: f32) -> &'static str {
@@ -735,7 +753,7 @@ pub fn style_label(style: &str) -> String {
 
 /// Searchable font-family combo box.
 fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    font_picker_in(ui, current, width, families())
+    font_picker_in(ui, current, width, &families())
 }
 
 /// Maximum height of the font menu.
@@ -777,6 +795,8 @@ fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families:
         for f in families.iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
             if ui.selectable_label(f == current, f).clicked() {
                 *current = f.clone();
+                // A served family not fetched yet: start now, before any text needs it.
+                photocraft_text::served::request(f);
                 changed = true;
                 ui.data_mut(|d| d.remove::<String>(search_id));
                 ui.close();

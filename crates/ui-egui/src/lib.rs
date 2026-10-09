@@ -115,6 +115,7 @@ pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
 pub mod scrollbars;
+pub mod served_fonts;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;

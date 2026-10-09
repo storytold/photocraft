@@ -9,6 +9,7 @@ static site in `photocraft-web-<version>/`:
 | `photocraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `photocraft-web-<hash>_bg.wasm` | The app: about 19 MiB raw, 8 MiB with gzip, 5.6 MiB with Brotli (see [Sizes](#sizes)) |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
+| `fonts/` (optional) | Fonts loaded on demand, listed in `fonts/manifest.txt` (see [Fonts](#fonts)) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
@@ -124,6 +125,41 @@ location /photocraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+## Fonts
+
+The app has two fonts of its own, Inter and JetBrains Mono: a browser offers no system fonts, and
+embedding more would push the wasm over the size gate. A host can serve more fonts next to the
+app. They show in the font menus straight away, and a family's files are downloaded the first time
+it is picked or a document's text needs it, so starting the app costs one small text file.
+
+1. Put the font files (`.ttf`, `.otf`, `.ttc`) anywhere under `fonts/` next to `index.html`.
+2. List them in `fonts/manifest.txt`, one file per line, in the format of
+   [craft-fonts](https://github.com/storytold/craft-fonts)' own `fonts/manifest.txt`:
+
+   ```text
+   # family | style | file (relative to the site root) | scripts | licence | licence file | sha256 | source
+   Open Sans | Regular | fonts/open-sans/OpenSans[wdth,wght].ttf
+   Open Sans | Italic | fonts/open-sans/OpenSans-Italic[wdth,wght].ttf
+   Lobster | Regular | fonts/lobster/Lobster-Regular.ttf | Latn,Cyrl | OFL-1.1 | fonts/lobster/OFL.txt
+   ```
+
+   The app reads the first three fields; the others are optional here. `family` must be the font's
+   own family name (the typographic family in its `name` table, else the family), which is what the
+   font menu shows once the file is in. The path is relative to the site root and can't leave it
+   (no `..`, no `/` at the start, no other host). A variable font is one line: the style menu offers
+   the weights of its `wght` axis.
+3. Put each font's licence next to it; the SIL Open Font License, for one, requires that.
+
+A craft-fonts checkout is already laid out this way, and so is any folder with a
+`fonts/manifest.txt` and the files it lists: `PHOTOCRAFT_WEB_FONTS_DIR=<that folder>
+packaging/web/package.sh` copies the manifest, the fonts and their licences into the zip, keeping
+their paths. Without `fonts/manifest.txt` (a 404) nothing changes.
+
+Serving: let `fonts/manifest.txt` revalidate (`Cache-Control: no-cache`) so edits show up; cache
+the font files for long only if their names change with their contents. Serve `.ttf` as `font/ttf`
+and `.otf` as `font/otf`, and compress them (Brotli roughly halves a TrueType file). The app
+fetches them with `fetch()`, so a Content Security Policy needs them allowed by `connect-src`.
 
 ## Embedding in a page (iframe)
 
