@@ -1310,6 +1310,10 @@
 	Rename…	重命名…
 	Resample	重新采样
 	Reset All to Defaults	全部重置为默认值
+	Import Photoshop Shortcuts…	导入 Photoshop 快捷键…
+	Load a shortcut set saved by Photoshop (.kys)	载入 Photoshop 保存的快捷键集 (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	已从 {file} 导入 {n} 个快捷键。点击“确定”保留。
+	{n} commands are not in PhotoCraft.	{n} 个命令在 PhotoCraft 中不存在。
 	Reset Section	重置此部分
 	Reset Transform	重置变换
 	Reset to defaults	重置为默认值

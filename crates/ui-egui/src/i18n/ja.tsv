@@ -1306,6 +1306,10 @@
 	Rename…	名前を変更…
 	Resample	再サンプル
 	Reset All to Defaults	すべて既定に戻す
+	Import Photoshop Shortcuts…	Photoshop のショートカットを読み込む…
+	Load a shortcut set saved by Photoshop (.kys)	Photoshop が保存したショートカットセット (.kys) を読み込みます
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file} から {n} 個のショートカットを読み込みました。OK をクリックすると保持されます。
+	{n} commands are not in PhotoCraft.	{n} 個のコマンドは PhotoCraft にありません。
 	Reset Section	セクションをリセット
 	Reset Transform	変形をリセット
 	Reset to defaults	既定に戻す

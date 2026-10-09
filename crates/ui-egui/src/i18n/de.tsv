@@ -1300,6 +1300,10 @@
 	Rename…	Umbenennen…
 	Resample	Neu berechnen
 	Reset All to Defaults	Alles auf Standardwerte zurücksetzen
+	Import Photoshop Shortcuts…	Photoshop-Tastaturbefehle importieren…
+	Load a shortcut set saved by Photoshop (.kys)	Einen von Photoshop gespeicherten Tastaturbefehlssatz laden (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} Tastaturbefehle aus {file} importiert. Mit OK übernehmen.
+	{n} commands are not in PhotoCraft.	{n} Befehle gibt es in PhotoCraft nicht.
 	Reset Section	Abschnitt zurücksetzen
 	Reset Transform	Transformation zurücksetzen
 	Reset to defaults	Auf Standardwerte zurücksetzen

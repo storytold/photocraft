@@ -1300,6 +1300,10 @@
 	Rename…	Rinomina…
 	Resample	Ricampiona
 	Reset All to Defaults	Ripristina tutto ai predefiniti
+	Import Photoshop Shortcuts…	Importa scelte rapide di Photoshop…
+	Load a shortcut set saved by Photoshop (.kys)	Carica un set di scelte rapide salvato da Photoshop (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Importate {n} scelte rapide da {file}. Fai clic su OK per conservarle.
+	{n} commands are not in PhotoCraft.	{n} comandi non esistono in PhotoCraft.
 	Reset Section	Reimposta sezione
 	Reset Transform	Reimposta trasformazione
 	Reset to defaults	Ripristina predefiniti

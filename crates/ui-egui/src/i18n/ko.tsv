@@ -1277,6 +1277,10 @@
 	Rename…	이름 바꾸기…
 	Resample	리샘플링
 	Reset All to Defaults	모두 기본값으로 초기화
+	Import Photoshop Shortcuts…	Photoshop 단축키 가져오기…
+	Load a shortcut set saved by Photoshop (.kys)	Photoshop에서 저장한 단축키 세트(.kys) 불러오기
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file}에서 단축키 {n}개를 가져왔습니다. 유지하려면 확인을 클릭하세요.
+	{n} commands are not in PhotoCraft.	명령 {n}개는 PhotoCraft에 없습니다.
 	Reset Section	섹션 초기화
 	Reset Transform	변형 초기화
 	Reset to defaults	기본값으로 초기화

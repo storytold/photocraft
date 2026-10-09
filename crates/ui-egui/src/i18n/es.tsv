@@ -1301,6 +1301,10 @@
 	Rename…	Cambiar nombre…
 	Resample	Remuestrear
 	Reset All to Defaults	Restablecer todo a los valores predeterminados
+	Import Photoshop Shortcuts…	Importar atajos de Photoshop…
+	Load a shortcut set saved by Photoshop (.kys)	Cargar un conjunto de atajos guardado por Photoshop (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Se importaron {n} atajos de {file}. Haz clic en OK para conservarlos.
+	{n} commands are not in PhotoCraft.	{n} comandos no existen en PhotoCraft.
 	Reset Section	Restablecer sección
 	Reset Transform	Restablecer transformación
 	Reset to defaults	Restablecer a los valores predeterminados

@@ -2782,6 +2782,10 @@
 	Resample	Επαναδειγματοληψία
 	Reselect	Επαναφορά προηγούμενης επιλογής
 	Reset All to Defaults	Επαναφορά όλων στις προεπιλογές
+	Import Photoshop Shortcuts…	Εισαγωγή συντομεύσεων Photoshop…
+	Load a shortcut set saved by Photoshop (.kys)	Φόρτωση ενός σετ συντομεύσεων που αποθήκευσε το Photoshop (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Εισήχθησαν {n} συντομεύσεις από το {file}. Πατήστε OK για να τις κρατήσετε.
+	{n} commands are not in PhotoCraft.	{n} εντολές δεν υπάρχουν στο PhotoCraft.
 	Reset GPU Backend	Επαναφορά συστήματος απόδοσης GPU
 	Reset Section	Επαναφορά ενότητας
 	Reset Transform	Επαναφορά μετασχηματισμού

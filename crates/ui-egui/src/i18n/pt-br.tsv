@@ -1284,6 +1284,10 @@
 	Rename…	Renomear…
 	Resample	Reamostrar
 	Reset All to Defaults	Redefinir tudo para os padrões
+	Import Photoshop Shortcuts…	Importar atalhos do Photoshop…
+	Load a shortcut set saved by Photoshop (.kys)	Carregar um conjunto de atalhos salvo pelo Photoshop (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} atalhos importados de {file}. Clique em OK para mantê-los.
+	{n} commands are not in PhotoCraft.	{n} comandos não existem no PhotoCraft.
 	Reset Section	Redefinir seção
 	Reset Transform	Redefinir transformação
 	Reset to defaults	Redefinir para os padrões

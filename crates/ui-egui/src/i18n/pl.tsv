@@ -1301,6 +1301,10 @@
 	Rename…	Zmień nazwę…
 	Resample	Przepróbkuj
 	Reset All to Defaults	Przywróć wszystko do wartości domyślnych
+	Import Photoshop Shortcuts…	Importuj skróty z Photoshopa…
+	Load a shortcut set saved by Photoshop (.kys)	Wczytaj zestaw skrótów zapisany przez Photoshopa (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Zaimportowano skrótów: {n} z pliku {file}. Kliknij OK, aby je zachować.
+	{n} commands are not in PhotoCraft.	Poleceń, których nie ma w PhotoCraft: {n}.
 	Reset Section	Resetuj sekcję
 	Reset Transform	Resetuj przekształcenie
 	Reset to defaults	Przywróć wartości domyślne

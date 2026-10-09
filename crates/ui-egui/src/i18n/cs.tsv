@@ -1316,6 +1316,10 @@
 	Rename…	Přejmenovat…
 	Resample	Převzorkovat
 	Reset All to Defaults	Obnovit vše na výchozí
+	Import Photoshop Shortcuts…	Importovat zkratky z Photoshopu…
+	Load a shortcut set saved by Photoshop (.kys)	Načíst sadu zkratek uloženou Photoshopem (.kys)
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Importováno zkratek: {n} ze souboru {file}. Klepnutím na OK je ponecháte.
+	{n} commands are not in PhotoCraft.	Příkazů, které v PhotoCraftu nejsou: {n}.
 	Reset Section	Obnovit sekci
 	Reset Transform	Obnovit transformaci
 	Reset to defaults	Obnovit výchozí

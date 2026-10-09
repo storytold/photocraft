@@ -73,6 +73,7 @@ pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
+pub mod kys_import;
 pub mod lasso_ui;
 pub mod layer_menu_ui;
 pub mod layer_pick_ui;
