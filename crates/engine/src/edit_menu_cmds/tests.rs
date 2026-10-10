@@ -219,6 +219,22 @@ fn delete_and_fill_selection_removes_the_object_in_one_step() {
 }
 
 #[test]
+fn content_aware_fill_samples_photoshops_window() {
+    // A 50 px selection samples the 200 px square centred on it (Photoshop 25.4's overlay);
+    // at the canvas edge the square slides inwards. Edit › Fill uses the same window.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "background": "white"})).unwrap();
+    for (x, y, want) in [(275, 175, [200, 100, 200, 200]), (10, 10, [0, 0, 200, 200])] {
+        s.execute("select.rect", json!({"x": x, "y": y, "width": 50, "height": 50})).unwrap();
+        for sampling in ["auto", "rectangular"] {
+            let r = s.execute("edit.contentAwareFill", json!({"sampling": sampling})).unwrap();
+            assert_eq!(r["window"], json!(want), "{sampling} at {x},{y}");
+            s.undo();
+        }
+    }
+}
+
+#[test]
 fn content_aware_fill_outputs_and_sampling() {
     let mut s = blob_session(8);
     let base = s.active().unwrap().active_layer.unwrap();

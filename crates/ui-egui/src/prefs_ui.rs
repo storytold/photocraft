@@ -136,6 +136,7 @@ pub fn load(app: &mut PhotocraftApp) {
         app.ui.status = format!("Preferences were reset: {e}");
     }
     crate::dock::restore(app);
+    crate::brush_picker::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
@@ -1026,10 +1027,8 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     section_fields(ui, &section, obj, &order, lang, system);
                     if section == "fileHandling" {
                         ui.label(
-                            RichText::new(tl!(
-                                "0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."
-                            ))
-                            .color(t.text_faint),
+                            RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
+                                .color(t.text_faint),
                         );
                     }
                     if section == "performance" {
@@ -2327,6 +2326,32 @@ mod tests {
         app2.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
         app2.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);
         assert_eq!(app2.recent_cap(), 100);
+    }
+
+    #[test]
+    fn brush_picker_view_survives_a_restart() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        app.ui.brush_picker_list.show_stroke = false;
+        app.ui.brush_picker_list.scale = 0.4;
+        crate::brush_picker::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["brushPicker"]["showStroke"], json!(false));
+        // A restart gets the view back at startup, before the picker is ever opened.
+        let saved = store.lock().unwrap().clone().unwrap();
+        let (mut app2, _) = app_with_saved(Some(saved));
+        tick(&mut app2, &ctx);
+        assert!(!app2.ui.brush_picker_list.show_stroke);
+        assert!(app2.ui.brush_picker_list.show_name && app2.ui.brush_picker_list.show_tip);
+        assert!((app2.ui.brush_picker_list.scale - 0.4).abs() < 1e-6);
+        // A hand-edited file: the scale is clamped to the slider's range and the last part comes
+        // back on — an empty card would show no brush at all.
+        let bad = json!({"brushPicker": {"showName": false, "showStroke": false, "showTip": false, "scale": 9.0}}).to_string();
+        let (mut app3, _) = app_with_saved(Some(bad));
+        tick(&mut app3, &ctx);
+        assert_eq!(app3.ui.brush_picker_list.scale, *crate::brush_picker::SCALE_RANGE.end());
+        assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && app3.ui.brush_picker_list.show_tip);
     }
 
     #[test]

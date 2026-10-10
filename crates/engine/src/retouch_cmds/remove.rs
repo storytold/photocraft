@@ -8,7 +8,7 @@
 //! runs as a background job (#210): with progress, cancellable, and the document unchanged until
 //! it applies, in one undo step.
 
-use super::content_aware_move::replace;
+use super::content_aware_move::{Target, replace};
 use super::patch::coverage;
 use super::*;
 
@@ -27,6 +27,13 @@ const GROW: usize = 2;
 
 /// Seed of the completion, so a removal is reproducible.
 const SEED: u64 = 0x0052_e30e;
+
+/// The sampling margin around the stroke: three quarters of its larger side, at least 32 pixels
+/// (in u64, so a huge extent can't overflow; a margin beyond i32 saturates).
+fn sampling_margin(area: Rect) -> i32 {
+    let ext = u64::from(area.width().max(area.height()));
+    i32::try_from(ext * 3 / 4).unwrap_or(i32::MAX).max(32)
+}
 
 /// What a removal does, checked before any work starts.
 struct Plan {
@@ -62,7 +69,7 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
     if area.is_empty() {
         return Err(bad(CMD, "the stroke is outside the canvas"));
     }
-    let window = area.inflate(crate::fill_cmds::sampling_margin(area).min(MAX_MARGIN)).intersect(&canvas);
+    let window = area.inflate(sampling_margin(area).min(MAX_MARGIN)).intersect(&canvas);
     let close_loops = flag(p, "closeLoops", true);
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
     Ok(Plan { id, stroke, window, close_loops, all_layers })
@@ -143,7 +150,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
             }
         },
         move |s, (out, hole)| {
-            let damage = s.edit(label, |doc, _| replace(doc, id, &p, &out, &hole))?;
+            let damage = s.edit(label, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
             if let Some(st) = s.active_mut() {
                 st.last_damage = Some(damage);
             }
