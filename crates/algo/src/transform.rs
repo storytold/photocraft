@@ -170,14 +170,47 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
     let a = n - 1;
     let tiles: Vec<Rect> = dst.tiles().map(|tc| tc.rect().intersect(&dst)).filter(|r| !r.is_empty()).collect();
     let src_ref: &Surface = src;
+    // A sampled pixel's inverse w is 1 / (forward w at its source point). While the forward w keeps one sign over the source
+    // (plus the margin the sampler reads), every sampled pixel lies at least `w_lo` from the inverse horizon, so clipping a tile
+    // there keeps its footprint exact and bounded even when a steep Distort brings that horizon into the tile (#2271).
+    let (sx0, sy0, sx1, sy1) = (src_rect.x0 as f64 - 1.0, src_rect.y0 as f64 - 1.0, src_rect.x1 as f64 + 1.0, src_rect.y1 as f64 + 1.0);
+    let fwd_w = [(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1)].map(|(x, y)| h.0[6] * x + h.0[7] * y + h.0[8]);
+    let side = [1.0, -1.0].into_iter().find(|&s| fwd_w.iter().all(|&c| s * c > 0.0));
+    let w_lo = 1.0 / fwd_w.iter().fold(0.0f64, |m, c| m.max(c.abs()));
     let work = |t: &Rect| -> Option<(Rect, Vec<f32>)> {
-        // Source footprint of this tile (inverse-mapped corners), padded for the filter.
-        let tc = [(t.x0, t.y0), (t.x1, t.y0), (t.x1, t.y1), (t.x0, t.y1)].map(|(x, y)| inv.apply(x as f64, y as f64));
-        let fx0 = tc.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i32 - 3;
-        let fy0 = tc.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i32 - 3;
-        let fx1 = tc.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i32 + 3;
-        let fy1 = tc.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i32 + 3;
-        let foot = Rect::new(fx0, fy0, fx1, fy1).intersect(&src_rect);
+        // Source footprint of this tile (inverse-mapped corners of its sampled part), padded for the filter.
+        let tc = [(t.x0, t.y0), (t.x1, t.y0), (t.x1, t.y1), (t.x0, t.y1)].map(|(x, y)| (x as f64, y as f64));
+        let wc = tc.map(|(x, y)| inv.0[6] * x + inv.0[7] * y + inv.0[8]);
+        let poly = match side {
+            // Sutherland-Hodgman against `s * w >= w_lo`.
+            Some(s) => {
+                let d = wc.map(|w| s * w - w_lo);
+                let mut poly = Vec::with_capacity(5);
+                for (i, (&p, &dp)) in tc.iter().zip(&d).enumerate() {
+                    let (q, dq) = (tc[(i + 1) % 4], d[(i + 1) % 4]);
+                    if dp >= 0.0 {
+                        poly.push(p);
+                    }
+                    if (dp >= 0.0) != (dq >= 0.0) {
+                        let k = dp / (dp - dq);
+                        poly.push((p.0 + (q.0 - p.0) * k, p.1 + (q.1 - p.1) * k));
+                    }
+                }
+                poly
+            }
+            None => tc.to_vec(),
+        };
+        if poly.is_empty() {
+            return None;
+        }
+        let fp: Vec<(f64, f64)> = poly.iter().map(|&(x, y)| inv.apply(x, y)).collect();
+        let fx0 = fp.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i32 - 3;
+        let fy0 = fp.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i32 - 3;
+        let fx1 = fp.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i32 + 3;
+        let fy1 = fp.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i32 + 3;
+        // Without a one-signed forward w, a tile straddling the inverse horizon has no bounded footprint.
+        let straddles = side.is_none() && wc.iter().any(|w| *w <= 0.0) && wc.iter().any(|w| *w >= 0.0);
+        let foot = if straddles { src_rect } else { Rect::new(fx0, fy0, fx1, fy1).intersect(&src_rect) };
         if foot.is_empty() || !src_ref.has_tiles_in(foot) {
             return None;
         }
@@ -290,6 +323,24 @@ mod tests {
         let (bx, by) = h.apply(x, y);
         assert!((bx - 90.0).abs() < 1e-9 && (by - 60.0).abs() < 1e-9);
         assert!(Homography::rect_to_quad(r, [[0.0, 0.0]; 4]).is_none() || Homography::rect_to_quad(r, [[0.0, 0.0]; 4]).unwrap().inverse().is_none());
+    }
+
+    #[test]
+    fn steep_distort_keeps_every_pixel_inside_the_quad() {
+        // Corner C is almost flat, so the horizon of the inverse map crosses the 256-px tiles that
+        // also hold quad pixels; those tiles must still read every source pixel that lands in them.
+        let mut s = rgba();
+        s.fill_rect(Rect::new(0, 0, 100, 100), &[1.0, 0.0, 0.0, 1.0]);
+        let r = s.content_bounds();
+        let h = Homography::rect_to_quad([0.0, 0.0, 100.0, 100.0], [[0.0, 0.0], [300.0, 0.0], [155.0, 155.0], [0.0, 300.0]]).unwrap();
+        let w = warp_surface(&s, r, &h, Interp::Nearest);
+        for (x, y) in [(20, 20), (252, 14), (252, 42), (14, 252), (42, 252)] {
+            let a = w.read_region(Rect::new(x, y, x + 1, y + 1))[3];
+            assert!(a > 0.99, "({x},{y}) inside the quad is transparent: {a}");
+        }
+        for (x, y) in [(200, 200), (280, 100), (100, 280)] {
+            assert_eq!(w.read_region(Rect::new(x, y, x + 1, y + 1))[3], 0.0, "({x},{y}) outside the quad is painted");
+        }
     }
 
     #[test]
