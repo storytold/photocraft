@@ -363,34 +363,139 @@ pub fn focus_first_field(ctx: &egui::Context, on: bool) {
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
 fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, fine: bool) -> Response {
-    let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
-    // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
+    let id = ui.next_auto_id();
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
         ui.memory_mut(|m| m.request_focus(id));
     }
+    let editing = ui.is_enabled()
+        && ui.memory_mut(|m| {
+            m.interested_in_focus(id, ui.layer_id());
+            m.has_focus(id)
+        });
     let held = id.with("arithmetic");
-    let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
+    let math = editing && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
     let before = *value;
-    let mut resp = ui.add(
-        egui::DragValue::new(value)
-            .range(range)
-            .speed(if fine { 0.01 } else { 0.5 })
-            .custom_formatter(move |v, _| if fine { fmt_num2(v) } else { fmt_num(v) })
-            .update_while_editing(!math)
-            // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
-            .custom_parser(move |s| {
-                let v = parse_num(s);
-                if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
-                    // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
-                    ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
-                    return None;
+    let speed = if fine { 0.01 } else { 0.5 };
+    let state_id = id.with("number-edit");
+    let mut state = ui.data_mut(|d| d.remove_temp::<NumberEditState>(state_id));
+    let select_all = state.is_none();
+    state = state.filter(|s| s.value == before);
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if !editing
+        && !escape
+        && let Some(parsed) = state.take().and_then(|s| parse_num(&s.text))
+    {
+        *value = clamp_number(parsed, &range);
+    }
+    let mut resp = if editing {
+        // A generous number/arithmetic capacity bounds both text layout and retained undo text.
+        // Reject large events before TextEdit clones or normalizes them; char_limit also bounds
+        // accumulation from short events, selection replacement, and IME composition.
+        const TEXT_LIMIT: usize = 128;
+        ui.input_mut(|input| {
+            input.events.retain(|event| {
+                let text = match event {
+                    egui::Event::Text(text) | egui::Event::Paste(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => text,
+                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => text,
+                    _ => return true,
+                };
+                text.chars().nth(TEXT_LIMIT).is_none()
+            });
+        });
+        use egui::accesskit::{Action, ActionData};
+        let change = ui.input(|input| {
+            input.num_accesskit_action_requests(id, Action::Increment) as f64 - input.num_accesskit_action_requests(id, Action::Decrement) as f64
+        });
+        ui.input(|input| {
+            for request in input.accesskit_action_requests(id, Action::SetValue) {
+                if let Some(ActionData::NumericValue(v)) = request.data {
+                    *value = v as f32;
                 }
-                v
-            }),
-    );
+            }
+        });
+        *value = clamp_number(f64::from(*value) + speed * change, &range);
+        state = state.filter(|s| s.value == *value);
+        let mut text = state.map_or_else(|| if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) }, |s| s.text);
+        if select_all {
+            let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::default(), egui::text::CCursor::new(text.chars().count()))));
+            state.store(ui.ctx(), id);
+        }
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .char_limit(TEXT_LIMIT)
+                .clip_text(false)
+                .horizontal_align(ui.layout().horizontal_align())
+                .vertical_align(ui.layout().vertical_align())
+                .margin(ui.spacing().button_padding)
+                .min_size(ui.spacing().interact_size)
+                .id(id)
+                .desired_width(ui.spacing().interact_size.x - 2.0 * ui.spacing().button_padding.x)
+                .font(ui.style().drag_value_text_style.clone()),
+        );
+        if response.lost_focus() && !escape {
+            if let Some(parsed) = parse_num(&text) {
+                *value = clamp_number(parsed, &range);
+            }
+        } else if response.changed() && !math {
+            let parsed = parse_num(&text);
+            if plain(&text).is_some() {
+                if let Some(parsed) = parsed {
+                    *value = clamp_number(parsed, &range);
+                }
+            } else {
+                ui.data_mut(|d| d.insert_temp(held, parsed.is_some()));
+            }
+        }
+        if response.has_focus() {
+            ui.data_mut(|d| d.insert_temp(state_id, NumberEditState { text, value: *value }));
+        }
+        response.widget_info(|| egui::WidgetInfo::drag_value(ui.is_enabled(), f64::from(*value)));
+        ui.ctx().accesskit_node_builder(response.id, |node| {
+            if range.start().is_finite() {
+                node.set_min_numeric_value(f64::from(*range.start()));
+            }
+            if range.end().is_finite() {
+                node.set_max_numeric_value(f64::from(*range.end()));
+            }
+            node.set_numeric_value_step(speed);
+            node.add_action(Action::SetValue);
+            if *value < *range.end() {
+                node.add_action(Action::Increment);
+            }
+            if *value > *range.start() {
+                node.add_action(Action::Decrement);
+            }
+            node.clear_label();
+        });
+        response
+    } else {
+        ui.add(egui::DragValue::new(value).range(range).speed(speed).custom_formatter(move |v, _| if fine { fmt_num2(v) } else { fmt_num(v) }))
+    };
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp
+}
+
+#[derive(Clone, Default)]
+struct NumberEditState {
+    text: String,
+    value: f32,
+}
+
+/// Match DragValue's ordering for reversed ranges, signed zero, and NaN endpoints.
+fn clamp_number(value: f64, range: &std::ops::RangeInclusive<f32>) -> f32 {
+    let (mut lo, mut hi) = (f64::from(*range.start()), f64::from(*range.end()));
+    if lo.total_cmp(&hi).is_gt() {
+        (lo, hi) = (hi, lo);
+    }
+    if value.total_cmp(&lo).is_le() {
+        lo as f32
+    } else if value.total_cmp(&hi).is_ge() {
+        hi as f32
+    } else {
+        value as f32
+    }
 }
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
@@ -1658,3 +1763,7 @@ mod screen_color_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "widgets/numeric_input_tests.rs"]
+mod numeric_input_tests;
