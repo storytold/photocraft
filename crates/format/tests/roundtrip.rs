@@ -226,7 +226,7 @@ fn directory_save_rejects_object_symlink_without_overwriting_target() {
 
 #[cfg(unix)]
 #[test]
-fn directory_save_rejects_root_and_preview_symlinks() {
+fn directory_save_accepts_chosen_root_symlink_but_rejects_preview_symlink() {
     use std::os::unix::fs::symlink;
 
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
@@ -234,10 +234,11 @@ fn directory_save_rejects_root_and_preview_symlinks() {
     let root_link_parent = temp_dir("symlink-root-parent");
     let root_link = root_link_parent.join("linked.pcraft");
     symlink(&outside, &root_link).unwrap();
-    assert!(PcraftWriter::new().save_dir(&doc, &root_link, &SaveOptions::default()).is_err());
+    PcraftWriter::new().save_dir(&doc, &root_link, &SaveOptions::default()).unwrap();
+    assert_eq!(load_path(&root_link).unwrap(), doc);
     let trailing_separator = std::path::PathBuf::from(format!("{}/", root_link.display()));
-    assert!(PcraftWriter::new().save_dir(&doc, &trailing_separator, &SaveOptions::default()).is_err());
-    assert!(!outside.join("manifest.json").exists());
+    PcraftWriter::new().save_dir(&doc, &trailing_separator, &SaveOptions::default()).unwrap();
+    assert!(outside.join("manifest.json").is_file());
 
     let dir = temp_dir("symlink-preview");
     let external_preview = outside.join("preview.png");

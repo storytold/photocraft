@@ -135,6 +135,22 @@ fn platform_writer_receives_slices_spacer_and_html_with_sibling_references() {
 }
 
 #[test]
+fn reserved_document_and_slice_names_export_with_portable_names() {
+    let dir = tmp("reserved-slice-names");
+    let mut s = session(8);
+    s.edit("rename", |doc, _| {
+        doc.name = "aux.psd".into();
+        Ok(())
+    })
+    .unwrap();
+    s.execute("slice.new", json!({"rect": [0, 0, 16, 16], "name": "con"})).unwrap();
+    let result = s.execute("file.export.saveForWebLegacy", json!({"dir": dir, "format": "png24", "html": true})).unwrap();
+    assert!(result["html"].as_str().unwrap().ends_with("/aux_.html"));
+    assert!(result["files"].as_array().unwrap().iter().any(|f| f.as_str().unwrap().ends_with("/con_.png")));
+    assert!(std::path::Path::new(result["html"].as_str().unwrap()).is_file());
+}
+
+#[test]
 fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     let mut s = session(8);
     let saved = json!({"format": "png24", "path": "saved.png"});
@@ -525,10 +541,14 @@ fn image_assets_reject_existing_symlinks_in_folders_and_files() {
     std::os::unix::fs::symlink(&outside, &linked_root).unwrap();
     d.layer_mut(id).unwrap().name = "root.png".into();
     let (files, errors) = generate_assets(&d, &format!("{linked_root}/"));
-    assert!(files.is_empty());
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(errors[0]["error"].as_str().unwrap().contains("symlink"), "{errors:?}");
-    assert!(!std::path::Path::new(&format!("{outside}/root.png")).exists());
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(files, vec![format!("{linked_root}/root.png")]);
+    assert!(std::path::Path::new(&format!("{outside}/root.png")).is_file());
+
+    let mut s = session(8);
+    let exported = s.execute("file.export.saveForWebLegacy", json!({"dir": linked_root, "format": "png24", "html": true})).unwrap();
+    assert!(exported["html"].as_str().unwrap().ends_with("/rootlink/web.html"));
+    assert!(std::path::Path::new(&format!("{outside}/web.html")).is_file());
 }
 
 #[test]

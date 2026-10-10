@@ -179,6 +179,16 @@ fn print_dry_run_without_output_creates_no_spool_pdf() {
 }
 
 #[test]
+fn print_without_sending_requires_an_output_unless_dry_run() {
+    let mut s = session("rgb", 8);
+    let before = s.file_menu.last_print.clone();
+    let err = do_print_with_spooler(&mut s, &json!({"send": false}), "file.print", |_| Err(other("unexpected spooler call"))).unwrap_err();
+    assert!(err.to_string().contains("needs an output path"), "{err}");
+    assert_eq!(s.file_menu.last_print, before, "a rejected print must not become a remembered successful print");
+    assert!(do_print_with_spooler(&mut s, &json!({"send": false, "dryRun": true}), "file.print", |_| Err(other("dry run invoked spooler"))).is_ok());
+}
+
+#[test]
 fn package_copies_links_and_relinks() {
     let dir = tmp("package");
     let link = format!("{dir}/art.png");

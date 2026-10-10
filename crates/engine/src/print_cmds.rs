@@ -335,6 +335,12 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 }
 
 fn do_print_with_spooler(s: &mut Session, p: &Value, cmd: &str, spooler: impl FnOnce(&[String]) -> Result<String>) -> Result<Value> {
+    let output = p.get("output").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
+    let send = p.get("send").and_then(Value::as_bool).unwrap_or(output.is_none());
+    let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    if !dry && !send && output.is_none() {
+        return Err(bad(cmd, "send: false needs an output path or dryRun: true"));
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks } = layout(&doc, p, cmd)?;
@@ -347,9 +353,6 @@ fn do_print_with_spooler(s: &mut Session, p: &Value, cmd: &str, spooler: impl Fn
     let label = p.get("labels").and_then(Value::as_bool).unwrap_or(false).then(|| doc.name.clone());
     let page = PrintPage { paper: (pw, ph), image: img, rect: (x, y, w, h), marks, description, label };
     let pdf = print_pdf(&page);
-    let output = p.get("output").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
-    let send = p.get("send").and_then(Value::as_bool).unwrap_or(output.is_none());
-    let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
     if let Some(path) = &output {
         // An explicit output is the caller's requested artifact, including for dry runs.
         write_file(path, &pdf)?;

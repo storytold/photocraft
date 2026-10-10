@@ -452,17 +452,13 @@ fn plain_directory_or_missing(path: &Path) -> Result<()> {
 }
 
 /// Use the canonical root after creation so a later replacement of the caller's path cannot
-/// redirect subsequent bundle operations. Reject symlinked managed subdirectories and files.
+/// redirect subsequent bundle operations. The caller may choose a symlinked root, but managed
+/// subdirectories and files below its resolved target must not be symlinks.
 fn bundle_root(dir: &Path) -> Result<PathBuf> {
-    // A trailing separator would make symlink_metadata follow the final symlink on Unix.
     let dir: PathBuf = dir.components().collect();
-    plain_directory_or_missing(&dir)?;
-    for sub in ["tiles", "blobs", "composite"] {
-        plain_directory_or_missing(&dir.join(sub))?;
-    }
     std::fs::create_dir_all(&dir)?;
-    plain_directory_or_missing(&dir)?;
     let root = std::fs::canonicalize(&dir)?;
+    plain_directory_or_missing(&root)?;
     for sub in ["tiles", "blobs", "composite"] {
         let path = root.join(sub);
         plain_directory_or_missing(&path)?;
@@ -728,7 +724,9 @@ impl PcraftWriter {
         let recheck = self.rolling_recheck(&p.objects);
         for (path, obj) in &p.objects {
             let object_path = dir.join(path);
-            validate_bundle_file(dir, &object_path)?;
+            // bundle_root and list_objects validated the fixed parent directories once. Check
+            // each leaf here; write_bundle_file rechecks its parent around every mutation.
+            plain_file_or_missing(&object_path)?;
             let signature = path_signature(&object_path)?;
             let already_verified = !recheck.contains(path)
                 && signature.is_some_and(|signature| {

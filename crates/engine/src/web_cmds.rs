@@ -626,7 +626,14 @@ fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither,
 /// A file-name-safe slice name.
 fn slice_file(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' }).collect();
-    if s.is_empty() { "slice".into() } else { s }
+    let s = if s.is_empty() { "slice".into() } else { s };
+    portable_generated_stem(s)
+}
+
+/// Generated filenames should remain usable on Windows even when a document or slice is named
+/// after a reserved device. Caller-supplied path components are still rejected below.
+fn portable_generated_stem(stem: String) -> String {
+    if is_windows_device_asset_name(&stem) { format!("{stem}_") } else { stem }
 }
 
 fn html_escape(s: &str) -> String {
@@ -818,7 +825,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
-    let base = single.map(stem).unwrap_or_else(|| slices::base_name(&doc));
+    let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
     let mut files = Vec::new();
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
     let mut total = 0usize;
@@ -1195,10 +1202,8 @@ fn asset_output_path(dir: &str, relative: &str) -> Result<(String, String)> {
     let file = parts.pop().ok_or_else(|| other(format!("asset path {relative:?} is empty")))?;
     let chosen_root: std::path::PathBuf = std::path::Path::new(dir).components().collect();
     std::fs::create_dir_all(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
-    let root_meta = std::fs::symlink_metadata(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
-    if root_meta.file_type().is_symlink() {
-        return Err(other(format!("asset output directory {dir:?} is a symlink")));
-    }
+    // The caller chose this root, so a symlink to an existing directory is intentional. All
+    // document-derived components below it are checked against its canonical target.
     let root = std::fs::canonicalize(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
     let mut parent = root.clone();
     for part in parts {

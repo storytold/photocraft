@@ -442,7 +442,7 @@ mod tests {
         assert!(blacks > 300 && blacks < 900, "{blacks}");
         assert!((0..40).all(|x| {
             let v = surf.rgba(x, 3)[0];
-            !(0.01..=0.99).contains(&v)
+            v.is_finite() && !(0.01..=0.99).contains(&v)
         }));
     }
 
