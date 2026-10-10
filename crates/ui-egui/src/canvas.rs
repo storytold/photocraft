@@ -217,6 +217,47 @@ pub fn marquee_px(a: [f64; 2], b: [f64; 2]) -> [f64; 4] {
     [a[0].min(b[0]).floor(), a[1].min(b[1]).floor(), a[0].max(b[0]).ceil(), a[1].max(b[1]).ceil()]
 }
 
+/// The marching ants of a marquee drag: its rectangle, or the ellipse inscribed in it, built in
+/// document space and mapped point by point through the view, so the hinting lands where the
+/// release commits the selection.
+///
+/// A rotated view projects the rectangle onto a rotated one, and an axis-aligned screen box
+/// through two of its corners is a different shape in a different place: the commit was always
+/// right, only the hinting was drawn elsewhere (#2512). Every point is snapped to the half-pixel
+/// grid like every other ants outline (`marching_ants_segments`), so the lines stay crisp at any
+/// zoom (#172).
+pub(crate) fn marquee_ants(xf: &ViewXform, tool: Tool, a: [f64; 2], b: [f64; 2]) -> Vec<Pos2> {
+    let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
+    let (y0, y1) = (a[1].min(b[1]), a[1].max(b[1]));
+    let at = |x: f64, y: f64| {
+        let p = xf.to_screen(x as f32, y as f32);
+        pos2(p.x.round() + 0.5, p.y.round() + 0.5)
+    };
+    if tool != Tool::EllipseMarquee {
+        return vec![at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)];
+    }
+    // As many vertices as the same ellipse would get drawn on screen (`ellipse_points`).
+    let scr = Rect::from_points(&[xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32)]);
+    let n = (((scr.width() + scr.height()) * 0.25) as usize).clamp(16, 256);
+    let (cx, cy, rx, ry) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5, (x1 - x0) * 0.5, (y1 - y0) * 0.5);
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64 * std::f64::consts::TAU;
+            at(cx + rx * t.cos(), cy + ry * t.sin())
+        })
+        .collect()
+}
+
+/// The ants of the marquee being drawn: `marquee` when the drag has one (the options-bar style
+/// and the modifiers applied), the raw press and pointer corners otherwise. This is the whole of
+/// what the hinting draws for the selection tools, so the test in `marquee_tests` checks it
+/// against the selection the release commits (#2512).
+pub(crate) fn marquee_drag_ants(d: &Drag, xf: &ViewXform, marquee: Option<[f64; 4]>) -> Vec<Pos2> {
+    let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
+    let (a, b) = marquee.map_or((d.start, last), |[x0, y0, x1, y1]| ([x0, y0], [x1, y1]));
+    marquee_ants(xf, d.tool, a, b)
+}
+
 /// The size readout shown beside the cursor while dragging a marquee: the width and height values.
 pub fn marquee_readout(r: [f64; 4]) -> [String; 2] {
     [format!("{} px", r[2] - r[0]), format!("{} px", r[3] - r[1])]
@@ -3523,15 +3564,9 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         // Nothing selected yet: no outline, as the release would deselect.
         Tool::RectMarquee | Tool::EllipseMarquee if marquee.is_none() => {}
         Tool::RectMarquee | Tool::EllipseMarquee | Tool::ObjectSelection => {
-            // Marching ants, visible on any pixels (#172).
-            let (a, b) = marquee.map_or((d.start, last), |[x0, y0, x1, y1]| ([x0, y0], [x1, y1]));
-            let r = Rect::from_two_pos(xf.to_screen(a[0] as f32, a[1] as f32), xf.to_screen(b[0] as f32, b[1] as f32));
-            let r = Rect::from_min_max(r.min.round() + vec2(0.5, 0.5), r.max.round() + vec2(0.5, 0.5));
-            let pts = if d.tool == Tool::EllipseMarquee {
-                crate::tool_feedback::ellipse_points(r)
-            } else {
-                vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()]
-            };
+            // Marching ants, visible on any pixels (#172): built in document space and mapped
+            // corner by corner, so a rotated view shows them where the release commits (#2512).
+            let pts = marquee_drag_ants(d, xf, marquee);
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
         // Patch / Content-Aware Move dragging the selection: its outline follows the pointer.
