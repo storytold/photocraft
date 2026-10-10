@@ -7,6 +7,11 @@
 //!   JSON says the entry was verified (`people_entry`).
 //!
 //! A missing or malformed file gives empty tables (or no names) and a warning.
+//!
+//! Also deflates the translation catalogs (`src/i18n/*.tsv`) into `OUT_DIR/i18n/<code>.tsv.deflate`
+//! for `i18n::LANGUAGES`: stored compressed they take ~0.65 MB of the binary instead of ~1.9 MB,
+//! which keeps the web build under its 24 MiB size gate (packaging/web/package.sh). A catalog is
+//! inflated the first time its language is used.
 
 use std::fmt::Write as _;
 
@@ -21,6 +26,31 @@ fn main() {
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("credits.rs");
     if let Err(e) = std::fs::write(&out, generate(&json, &people)) {
         println!("cargo::warning=writing {}: {e}", out.display());
+    }
+    deflate_catalogs();
+}
+
+/// Deflate every `src/i18n/*.tsv` into `OUT_DIR/i18n/`. A catalog that can't be written is a
+/// build error (`include_bytes!` would fail on it anyway, with a less helpful message).
+fn deflate_catalogs() {
+    use std::io::Write as _;
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/i18n");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("i18n");
+    println!("cargo::rerun-if-changed={}", src.display());
+    let result = (|| -> std::io::Result<()> {
+        std::fs::create_dir_all(&out)?;
+        for entry in std::fs::read_dir(&src)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()).filter(|n| n.ends_with(".tsv")) else { continue };
+            println!("cargo::rerun-if-changed={}", path.display());
+            let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            z.write_all(&std::fs::read(&path)?)?;
+            std::fs::write(out.join(format!("{name}.deflate")), z.finish()?)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        println!("cargo::error=deflating the translation catalogs in {}: {e}", src.display());
     }
 }
 

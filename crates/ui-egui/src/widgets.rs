@@ -1491,7 +1491,7 @@ mod tests {
 pub fn color_edit_button_srgba(ui: &mut Ui, color: &mut Color32) -> Response {
     color_edit_button(ui, color, egui::color_picker::Alpha::BlendOrAdditive)
 }
-fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
+pub(crate) fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
     response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));

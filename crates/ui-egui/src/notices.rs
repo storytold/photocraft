@@ -30,6 +30,10 @@ pub struct Notice {
     /// `{name}` values filled into the title and lines after they are translated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<(String, String)>,
+    /// egui input time (seconds) this notice was first drawn; the auto-hide timer runs from here
+    /// and is reset while the pointer rests on the stack (issue #2022). `None` until first shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown_at: Option<f64>,
 }
 
 impl Notice {
@@ -43,7 +47,7 @@ impl Notice {
 /// Show a notice (newest last); returns its id.
 pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String>, error: bool, dismiss_pref: Option<&str>) -> u64 {
     let id = app.ui.alloc_id();
-    app.ui.notices.push(Notice { id, title: title.into(), lines, error, dismiss_pref: dismiss_pref.map(str::to_owned), args: Vec::new() });
+    app.ui.notices.push(Notice { id, title: title.into(), lines, error, dismiss_pref: dismiss_pref.map(str::to_owned), args: Vec::new(), shown_at: None });
     cap_notices(app);
     id
 }
@@ -139,15 +143,53 @@ pub fn error(app: &mut PhotocraftApp, message: String) {
     post(app, message, Vec::new(), true, None);
 }
 
-/// Draw the notices; each has a close button.
+/// Auto-hide (issue #2022): drop notices whose delay has elapsed, pausing the timers of any the
+/// pointer is resting on. `hovered` is true when the pointer is over the notice stack; `just_left`
+/// is true on the frame it moves away. In both cases the timers restart from `now`, so a long
+/// stationary hover is never counted as elapsed time. Returns the seconds until the next notice
+/// would expire, so the caller can request a repaint then.
+fn expire(app: &mut PhotocraftApp, now: f64, hovered: bool, just_left: bool, auto_hide: bool, duration: f64) -> Option<f64> {
+    if !auto_hide {
+        return None;
+    }
+    let mut expired = Vec::new();
+    let mut next = f64::INFINITY;
+    for n in &mut app.ui.notices {
+        if n.shown_at.is_none() {
+            n.shown_at = Some(now);
+        }
+        if hovered {
+            n.shown_at = Some(now);
+            continue;
+        }
+        if just_left {
+            n.shown_at = Some(now);
+        }
+        let shown_at = n.shown_at.unwrap_or(now);
+        let elapsed = (now - shown_at).max(0.0);
+        if elapsed >= duration {
+            expired.push(n.id);
+        } else {
+            next = next.min(duration - elapsed);
+        }
+    }
+    if !expired.is_empty() {
+        app.ui.notices.retain(|n| !expired.contains(&n.id));
+    }
+    next.is_finite().then_some(next)
+}
+
+/// Draw the notices; each has a close button. When Interface › Notification › Auto Hide Notices
+/// is on, a notice disappears once its delay is up unless the pointer rests on the stack.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.notices.is_empty() {
+        app.notices_hovered = false;
         return;
     }
     let t = crate::theme::Tokens::get(ctx);
     let mut dismiss_id = None;
     // Clear the status bar (~24 px) and leave the dock's edge some air.
-    egui::Area::new(egui::Id::new("photocraft-notices"))
+    let area = egui::Area::new(egui::Id::new("photocraft-notices"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0))
         .interactable(true)
@@ -185,6 +227,25 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     if let Some(id) = dismiss_id {
         dismiss(app, id);
+    }
+    let (auto_hide, duration) = {
+        let i = &app.session.prefs().interface;
+        (i.notification_auto_hide, f64::from(i.notification_duration_seconds.max(1)))
+    };
+    let now = ctx.input(|input| input.time);
+    let hovered = ctx.pointer_hover_pos().is_some_and(|p| area.response.rect.contains(p));
+    // The frame the pointer leaves the stack starts a fresh delay, so time spent hovering never
+    // counts towards the auto-hide (#2022).
+    let just_left = std::mem::replace(&mut app.notices_hovered, hovered) && !hovered;
+    let before = app.ui.notices.len();
+    let next = expire(app, now, hovered, just_left, auto_hide, duration);
+    if app.ui.notices.len() < before {
+        // The cards dropped this frame were already painted by it: ask for another frame at once
+        // so the refreshed stack is drawn without waiting for unrelated input.
+        ctx.request_repaint();
+    }
+    if let Some(wait) = next {
+        ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait).unwrap_or_default());
     }
 }
 
@@ -317,5 +378,70 @@ mod tests {
         let id = app.ui.notices[0].id;
         dismiss(&mut app, id);
         assert_eq!(app.session.prefs().dialogs.get("ui.testNoticeDismissed").and_then(serde_json::Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn notices_auto_hide_after_their_delay() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        post(&mut app, "Transient", Vec::new(), false, None);
+        // The first draw stamps the timer and schedules the hide.
+        assert_eq!(expire(&mut app, 100.0, false, false, true, 6.0), Some(6.0));
+        assert_eq!(app.ui.notices.len(), 1);
+        // Still there just before the delay, the next repaint a second away.
+        assert_eq!(expire(&mut app, 105.0, false, false, true, 6.0), Some(1.0));
+        assert_eq!(app.ui.notices.len(), 1);
+        // Gone once the delay has elapsed.
+        assert_eq!(expire(&mut app, 106.0, false, false, true, 6.0), None);
+        assert!(app.ui.notices.is_empty());
+    }
+
+    #[test]
+    fn hover_pauses_the_autohide_timer() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        post(&mut app, "Transient", Vec::new(), false, None);
+        // While the pointer rests on the stack the timer keeps resetting: it never expires.
+        for t in [5.0, 6.0, 7.0, 100.0] {
+            assert_eq!(expire(&mut app, t, true, false, true, 6.0), None, "paused at {t}");
+            assert_eq!(app.ui.notices.len(), 1, "still shown at {t}");
+        }
+    }
+
+    #[test]
+    fn leaving_a_long_hover_gives_a_fresh_delay() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        post(&mut app, "Transient", Vec::new(), false, None);
+        // Hovering starts the pause...
+        assert_eq!(expire(&mut app, 0.0, true, false, true, 6.0), None);
+        // ...and the pointer then rests still for far longer than the delay, so no frame
+        // refreshes the stamp. The leave frame must restart the timer, not expire at once.
+        assert_eq!(expire(&mut app, 10.0, false, true, true, 6.0), Some(6.0));
+        assert_eq!(app.ui.notices.len(), 1, "leaving a hover is not elapsed time");
+    }
+
+    #[test]
+    fn autohide_can_be_switched_off() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        post(&mut app, "Persistent", Vec::new(), false, None);
+        assert_eq!(expire(&mut app, 0.0, false, false, false, 6.0), None);
+        assert_eq!(expire(&mut app, 1_000_000.0, false, false, false, 6.0), None);
+        assert_eq!(app.ui.notices.len(), 1, "off: the notice stays until dismissed");
+    }
+
+    /// #2022 review: the frame that drops a notice has already painted it, so it must ask for
+    /// another frame at once; otherwise the card lingers until unrelated input.
+    #[test]
+    fn expiring_a_notice_requests_a_frame_to_clear_it() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        post(&mut app, "Transient", Vec::new(), false, None);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert_eq!(app.ui.notices.len(), 1);
+        // Past the 6 s default: the notice is dropped and a repaint is requested in the same frame.
+        let input = egui::RawInput { time: Some(10.0), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert!(app.ui.notices.is_empty());
+        assert!(ctx.has_requested_repaint(), "the frame that drops a notice asks for another");
     }
 }

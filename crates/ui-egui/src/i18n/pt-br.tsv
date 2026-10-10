@@ -659,7 +659,11 @@
 	Pro Medium Gray Theme	Tema Pro cinza médio
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio claro
+	Adwaita Light Theme	Tema Adwaita claro
+	Adwaita Dark Theme	Tema Adwaita escuro
 	Classic Theme	Tema clássico
+	Solarized dark	Solarized escuro
+	Solarized Dark Theme	Tema Solarized Escuro
 	Next Theme	Próximo tema
 	Actions	Ações
 	Brush Settings	Configurações do pincel
@@ -1296,6 +1300,12 @@
 	Rename…	Renomear…
 	Resample	Reamostrar
 	Reset All to Defaults	Redefinir tudo para os padrões
+	Import Shortcuts…	Importar atalhos…
+	Load a keyboard shortcut set saved as .kys	Carregar um conjunto de atalhos de teclado salvo como .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} atalhos importados de {file}. Clique em OK para mantê-los.
+	{n} commands are not in PhotoCraft.	{n} comandos não existem no PhotoCraft.
+	Keyboard shortcuts imported	Atalhos de teclado importados
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Seu conjunto de atalhos de teclado {set} está em uso aqui: {n} atalhos diferem dos padrões. Editar › Atalhos de teclado os mostra; Redefinir tudo para o padrão desfaz isso.
 	Reset Section	Redefinir seção
 	Reset Transform	Redefinir transformação
 	Reset to defaults	Redefinir para os padrões
@@ -1852,6 +1862,8 @@
 	Standard	Padrão
 	Studio	Studio
 	Studio light	Studio claro
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita escuro
 	Subdivisions	Subdivisões
 	System	Sistema
 	Text engine	Mecanismo de texto
@@ -2743,6 +2755,19 @@ fontWeight	Italic	Itálico
 	Cycle Orientation	Alternar orientação
 	Set the overlay options for the Crop tool	Definir as opções de sobreposição da ferramenta Corte demarcado
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	O Alt-clique foi para o desktop, que move janelas com Alt-arrastar. Mude a tecla de mover janelas dele para Super ou trave o Alt em Janela › Teclas modificadoras.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Seletor de cores (cor do estilo de camada)
+	Auto Hide Notifications	Ocultar notificações automaticamente
+	Notification Duration (seconds)	Duração da notificação (segundos)
+	Appearance Mode	Modo de aparência
+	Dark Theme	Tema escuro
+	Light Theme	Tema claro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Próximo modo de aparência
+	Sync with system	Sincronizar com o sistema
+	Active	Ativo
 	Color Picker (Solid Color)	Seletor de Cores (Cor sólida)
 	Straighten the image by drawing a line on it	Endireitar a imagem desenhando uma linha sobre ela
 	Set additional Crop options	Definir opções adicionais de corte
@@ -2765,3 +2790,13 @@ fontWeight	Italic	Itálico
 	Keep this tab open to retain your brushes.	Mantenha esta aba aberta para manter seus pincéis.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	O armazenamento do navegador não está disponível; os pincéis valem apenas para esta sessão. Mantenha esta aba aberta para mantê-los.
 	Saving brush presets… Keep this tab open until saving finishes.	Salvando predefinições de pincel… Mantenha esta aba aberta até o salvamento terminar.
+	Reflect	Refletir
+	Glow	Brilho
+	Negation	Negação
+	XOR	XOR
+	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
+	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Nenhum assunto encontrado — tente Seleção de objeto ou o Laço
+	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
+	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
+	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto

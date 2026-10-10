@@ -77,7 +77,10 @@ fn place_id(d: &Dialog) -> egui::Id {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    crate::layer_style::color_picker::prune(app);
+    crate::type_panels_ui::color_picker::prune(app);
     let dialogs = app.ui.dialogs.clone();
+    let top = dialogs.last().map(|d| d.id);
     let mut shown = Vec::new();
     for d in dialogs {
         let lang = if crate::prefs_ui::is_preferences(&d.fields) {
@@ -86,6 +89,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::i18n::current()
         };
         let _language = crate::i18n::language_scope(lang);
+        let interactive = top == Some(d.id);
         let mut fields = d.fields.clone();
         let mut outcome: Option<bool> = None; // Some(true)=OK, Some(false)=Cancel
         let mut apply_requested = false;
@@ -111,6 +115,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let modal = modal.show(ctx, |ui| {
+            if !interactive {
+                ui.disable();
+            }
             sizing = ui.is_sizing_pass();
             ui.set_min_width(380.0);
             let wide = crate::prefs_ui::width(&d.fields);
@@ -223,7 +230,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             }
             if crate::color_picker_ui::owns(&fields) {
-                if outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }
             } else {
@@ -268,7 +275,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             Some(ButtonRole::Cancel) => outcome = Some(false),
                             Some(ButtonRole::Apply) => apply_requested = true,
                             Some(_) => outcome = Some(true),
-                            None if ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+                            None if interactive && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
                             None => {}
                         }
                     }
@@ -293,7 +300,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         // Esc cancels (topmost dialog, no popup open). A click outside does nothing: Photoshop keeps
         // the dialog, and the pointer may be panning or zooming the canvas under it.
-        if outcome.is_none()
+        if interactive
+            && outcome.is_none()
             && (modal.response.should_close()
                 || (modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))))
         {
@@ -311,14 +319,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         match outcome {
             Some(true) => {
-                let _ = confirm(app, d.id);
+                if let Err(error) = confirm(app, d.id) {
+                    app.ui.status = error;
+                }
             }
             Some(false) => {
-                app.ui.close_dialog(d.id);
-                app.filter_preview = None;
-                app.color_range = None;
+                let _ = cancel(app, d.id);
             }
-            None => {}
+            None => {
+                if let Err(error) = crate::layer_style::color_picker::take_request(app, d.id) {
+                    app.ui.status = error;
+                }
+            }
         }
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::new(RECTS), shown));
@@ -336,7 +348,7 @@ fn about_tab(fields: &serde_json::Map<String, Value>) -> &'static str {
 /// One About tab's contents: the credits lists, or the product blurb and links.
 fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
     match tab {
-        "contributors" => crate::credits::contributors_ui(ui),
+        "contributors" => crate::credits::contributors_ui(app, ui),
         "models" => crate::credits::models_ui(ui),
         _ => {
             ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
@@ -380,6 +392,9 @@ pub fn title(d: &Dialog) -> String {
 
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    if crate::layer_style::color_picker::has_child(app, id) {
+        return Err("confirm or cancel the Layer Style color picker first".into());
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -431,6 +446,16 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::LayerStyle => crate::layer_style::confirm(app, &d.fields),
         DialogKind::About | DialogKind::Error => Ok(Value::Null),
     }
+}
+
+/// Cancel a dialog and its dependent Layer Style picker, without applying edits.
+pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
+    app.filter_preview = None;
+    app.color_range = None;
+    crate::type_panels_ui::color_picker::prune(app);
+    Ok(Value::Null)
 }
 
 /// Open the parameter dialog of `command`: the adjustment editor for `image.adjustments.*`, the
