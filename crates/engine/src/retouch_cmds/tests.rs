@@ -311,7 +311,8 @@ fn blur_reduces_local_variance_and_sharpen_increases_it() {
         let v0 = var(&s, 10);
         s.execute("paint.sharpen", json!({"points": [[5, 15], [25, 15]], "size": 20, "hardness": 100, "strength": 100, "protectDetail": false})).unwrap();
         assert!(var(&s, 10) > v0 * 1.5, "depth {depth}: {v0} → {}", var(&s, 10));
-        s.execute("paint.sharpen", json!({"points": [[35, 15], [55, 15]], "size": 20, "hardness": 100, "strength": 100})).unwrap();
+        // Pinned at 25%: Protect Detail clamps per dab, so denser dabs creep past the range.
+        s.execute("paint.sharpen", json!({"points": [[35, 15], [55, 15]], "size": 20, "hardness": 100, "strength": 100, "spacing": 25})).unwrap();
         let hi = (10..20).flat_map(|y| (40..50).map(move |x| (x, y))).map(|(x, y)| rgba(&s, x, y)[0]).fold(0.0, f32::max);
         assert!(hi <= 0.55 + tol(depth), "protect detail: {hi}");
     }
@@ -331,6 +332,32 @@ fn smudge_moves_colour_along_the_stroke() {
         s.execute("paint.smudge", json!({"points": [[80, 25], [95, 25]], "size": 6, "hardness": 100, "fingerPainting": true})).unwrap();
         assert!(rgba(&s, 81, 25)[0] < 0.7, "finger painting lays down the foreground colour");
     }
+}
+
+#[test]
+fn smudge_uses_the_brush_settings_spacing() {
+    // #2140: the Brush Settings spacing (the session brush) drives Smudge dabs when the stroke
+    // has no `spacing` param, as it drives the Brush.
+    let run = |spacing: f32, p: Value| {
+        let mut s = session(100, 30, 8, "rgb");
+        paint_layer(&mut s, |x, _| if x < 30 { [1.0, 0.0, 0.0, 1.0] } else { [1.0, 1.0, 1.0, 1.0] });
+        s.tools.brush.spacing = spacing;
+        let mut p = p;
+        p["points"] = json!([[20, 15], [90, 15]]);
+        s.execute("paint.smudge", p).unwrap();
+        (30..95).map(|x| rgba(&s, x, 15)[1]).collect::<Vec<_>>()
+    };
+    let base = json!({"size": 12, "hardness": 100, "strength": 80});
+    let dense = run(0.01, base.clone());
+    let sparse = run(10.0, base.clone());
+    // 1000% of 12 px puts the next dab 120 px away: only the first dab, behind the edge, lands.
+    assert!(sparse.iter().all(|g| *g > 0.99), "1000% spacing: nothing dragged past the edge");
+    assert!(dense.first().is_some_and(|g| *g < 0.6), "1% spacing: red dragged right ({:?})", dense.first());
+    assert_ne!(dense, run(0.25, base.clone()), "1% and 25% differ");
+    // An explicit `spacing` param still wins over the Brush Settings value.
+    let mut explicit = base;
+    explicit["spacing"] = json!(1000);
+    assert_eq!(run(0.01, explicit), sparse);
 }
 
 #[test]
@@ -373,6 +400,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
         "paint.sharpen",
         "paint.smudge",
         "paint.historyBrush",
+        "paint.remove",
     ];
     for id in ids {
         let spec = crate::commands::find(id).unwrap_or_else(|| panic!("{id} missing"));
@@ -389,7 +417,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
 // Paint target (#207): mask, alpha channel, Quick Mask
 // ---------------------------------------------------------------------------------------------
 
-const RETOUCH_IDS: [&str; 11] = [
+const RETOUCH_IDS: [&str; 12] = [
     "paint.cloneStamp",
     "paint.patternStamp",
     "paint.healingBrush",
@@ -401,6 +429,7 @@ const RETOUCH_IDS: [&str; 11] = [
     "paint.sharpen",
     "paint.smudge",
     "paint.historyBrush",
+    "paint.remove",
 ];
 
 /// Grey noise in 0.3..0.7 (no period along the clone offset used below).
@@ -457,10 +486,11 @@ fn retouch_params(id: &str, history_state: usize, target: Value) -> Value {
     p
 }
 
-/// Tools whose stroke must visibly change grey noise (Sponge has no colour to change on grey, and
-/// healing a noise texture with itself may land on the same values).
+/// Tools whose stroke must visibly change grey noise (Sponge has no colour to change on grey,
+/// healing a noise texture with itself may land on the same values, and Remove completes this
+/// periodic noise exactly).
 fn changes_gray(id: &str) -> bool {
-    !matches!(id, "paint.sponge" | "paint.healingBrush" | "paint.spotHealing")
+    !matches!(id, "paint.sponge" | "paint.healingBrush" | "paint.spotHealing" | "paint.remove")
 }
 
 #[test]
@@ -678,6 +708,39 @@ fn patch_source_repairs_the_selection_with_texture_from_the_drag_target() {
 }
 
 #[test]
+fn patch_content_aware_copies_the_dragged_to_content_into_the_selection() {
+    // Photoshop's Patch: Content-Aware (measured on 25.4): only the selection changes; its middle
+    // is the dragged-to content (Color 0 keeps its level), the edge band blends.
+    for depth in [8, 16] {
+        let mut s = session(128, 64, depth, "rgb");
+        paint_layer(&mut s, blemished(40));
+        s.execute("select.rect", json!({"x": 32, "y": 12, "width": 24, "height": 24})).unwrap();
+        let r = s.execute("paint.patch", json!({"offset": [-30, 2], "contentAware": true, "structure": 7, "color": 0})).unwrap();
+        assert_eq!(r["contentAware"], json!(true));
+        for (x, y) in [(42, 22), (44, 24), (46, 26)] {
+            let (got, want) = (rgba(&s, x, y), texture(x - 30, y + 2));
+            for c in 0..4 {
+                assert!((got[c] - want[c]).abs() <= tol(depth), "depth {depth}: middle copied at {x},{y}: {got:?} vs {want:?}");
+            }
+        }
+        for (x, y) in [(31, 20), (56, 25), (12, 20), (44, 40)] {
+            let (got, want) = (rgba(&s, x, y), texture(x, y));
+            assert!((got[0] - want[0]).abs() <= tol(depth), "depth {depth}: untouched {x},{y}: {got:?}");
+        }
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch (Content-Aware)"));
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(rgba(&s, 44, 24)[1], 0.0, "depth {depth}: undo brings the blemish back");
+    }
+    // Bad options are refused before any work.
+    let mut s = session(96, 48, 8, "rgb");
+    paint_layer(&mut s, blemished(40));
+    s.execute("select.rect", json!({"x": 36, "y": 16, "width": 16, "height": 16})).unwrap();
+    for p in [json!({"offset": [-30, 0], "contentAware": true, "structure": 9}), json!({"offset": [-30, 0], "contentAware": true, "color": -1})] {
+        assert!(s.execute("paint.patch", p.clone()).is_err(), "{p}");
+    }
+}
+
+#[test]
 fn patch_destination_repairs_the_drag_target_from_the_selection() {
     let mut s = session(96, 48, 16, "rgb");
     paint_layer(&mut s, blemished(40));
@@ -834,40 +897,55 @@ fn content_aware_extend_keeps_the_original() {
 
 #[test]
 fn content_aware_move_structure_and_color_shape_the_result() {
-    // Structure 7, Color 0: the content is copied exactly, edge to edge.
-    let mut s = session(128, 64, 16, "rgb");
-    paint_layer(&mut s, texture);
-    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 24})).unwrap();
-    s.execute("paint.contentAwareMove", json!({"offset": [70, 20], "structure": 7, "mode": "extend"})).unwrap();
-    for (x, y) in [(10, 10), (22, 22), (33, 33)] {
+    // Structure 7, Color 0: the content is copied exactly but for a band about a patch wide along
+    // its edge, which blends into the new surroundings; Structure 3 gives the same, bit for bit
+    // (as in Photoshop).
+    let moved = |structure: u64| {
+        let mut s = session(128, 64, 16, "rgb");
+        paint_layer(&mut s, texture);
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 24})).unwrap();
+        s.execute("paint.contentAwareMove", json!({"offset": [70, 20], "structure": structure, "mode": "extend"})).unwrap();
+        s
+    };
+    let s = moved(7);
+    for (x, y) in [(16, 16), (22, 22), (27, 27)] {
         let (got, want) = (rgba(&s, x + 70, y + 20), texture(x, y));
         for c in 0..4 {
             assert!((got[c] - want[c]).abs() <= tol(16), "strict copy at {x},{y}: {got:?} vs {want:?}");
         }
     }
-    // A lower Structure re-synthesises an edge band: the edge differs from a plain copy, the
-    // centre doesn't.
-    let mut s = session(128, 64, 16, "rgb");
-    paint_layer(&mut s, texture);
+    let s3 = moved(3);
+    for y in 30..54 {
+        for x in 80..104 {
+            assert_eq!(rgba(&s, x, y), rgba(&s3, x, y), "structure 3 and 7 agree at {x},{y}");
+        }
+    }
+    // Structure 2 widens the re-synthesised band: the edge differs from a plain copy, the centre
+    // doesn't. Structure 1 re-synthesises the content too, its centre included.
     let copy = |s: &Session, x: i32, y: i32| (rgba(s, x + 70, y + 20), rgba(s, x, y));
-    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 24})).unwrap();
-    s.execute("paint.contentAwareMove", json!({"offset": [70, 20], "structure": 1, "mode": "extend"})).unwrap();
+    let s = moved(2);
     let (centre, orig) = copy(&s, 22, 22);
     assert_eq!(centre, orig, "the centre is kept");
     let edge = (0..24).filter(|i| copy(&s, 10 + i, 10).0 != copy(&s, 10 + i, 10).1).count();
     assert!(edge > 12, "the top edge row is blended in ({edge} of 24 pixels differ)");
+    let s = moved(1);
+    let (centre, orig) = copy(&s, 22, 22);
+    assert_ne!(centre, orig, "structure 1 re-synthesises the centre too");
 
     // Color 10 fits a bright patch to a dark place; Color 0 keeps it bright.
     let mean = |color: u64| {
         let mut s = session(128, 64, 32, "rgb");
         paint_layer(&mut s, |x, _| if x < 64 { [0.8, 0.8, 0.8, 1.0] } else { [0.2, 0.2, 0.2, 1.0] });
-        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 16, "height": 16})).unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 24, "height": 24})).unwrap();
         s.execute("paint.contentAwareMove", json!({"offset": [70, 0], "structure": 7, "color": color, "mode": "extend"})).unwrap();
-        (94..102).map(|x| rgba(&s, x, 28)[0]).sum::<f32>() / 8.0
+        // The copied middle (the edge band is re-synthesised from the dark surroundings).
+        (98..106).map(|x| rgba(&s, x, 32)[0]).sum::<f32>() / 8.0
     };
-    let (kept, fitted) = (mean(0), mean(10));
+    let (kept, some, fitted) = (mean(0), mean(3), mean(10));
     assert!((kept - 0.8).abs() < 1e-3, "color 0 keeps the colour: {kept}");
-    assert!(fitted < 0.3, "color 10 adapts to the dark surroundings: {fitted}");
+    // Photoshop shifts by up to about 0.04 per step of Color.
+    assert!((some - 0.68).abs() < 0.03, "color 3 adapts part of the way: {some}");
+    assert!((fitted - 0.4).abs() < 0.03, "color 10 adapts most of the way: {fitted}");
 }
 
 #[test]
@@ -1274,6 +1352,7 @@ fn retouch_strokes_refuse_absurd_point_coordinates() {
         "paint.spotHealing",
         "paint.historyBrush",
         "paint.patternStamp",
+        "paint.remove",
     ];
     // A single far point first: cheap even without the bound, so a regression fails fast.
     let far = [json!([[1_000_001, 0]]), json!([[0, 0], [0, -2_000_000]]), json!([[0, 0], [1e300, 0]]), json!([[1e300, 1e300]])];
@@ -1293,4 +1372,92 @@ fn retouch_strokes_refuse_absurd_point_coordinates() {
         s.execute("paint.dodge", json!({"points": [[4, 16], [28, 16]], "size": 8})).unwrap();
         assert_ne!(rgba(&s, 16, 16), before, "{depth}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Remove Tool
+// ---------------------------------------------------------------------------------------------
+
+/// A flat grey layer with a dark square at 40..52 × 24..36.
+fn square_session(depth: u64, mode: &str) -> Session {
+    let mut s = session(96, 64, depth, mode);
+    paint_layer(&mut s, |x, y| if (40..52).contains(&x) && (24..36).contains(&y) { [0.05, 0.05, 0.05, 1.0] } else { [0.5, 0.5, 0.5, 1.0] });
+    s
+}
+
+/// A ring of points around the square.
+fn ring() -> Vec<[f64; 2]> {
+    (0..=64).map(|i| f64::from(i) / 64.0 * std::f64::consts::TAU).map(|t| [46.0 + 13.0 * t.cos(), 30.0 + 13.0 * t.sin()]).collect()
+}
+
+fn near(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol)
+}
+
+#[test]
+fn remove_a_ring_around_an_object_removes_it_in_one_undo_step() {
+    for (depth, mode) in [(8, "rgb"), (16, "gray"), (32, "rgb"), (8, "cmyk"), (16, "lab")] {
+        let mut s = square_session(depth, mode);
+        let bg = rgba(&s, 10, 10);
+        assert!(!near(rgba(&s, 46, 30), bg, 0.05), "{mode}/{depth}: the square is there");
+        let past = s.active().unwrap().history.past_len();
+        let r = s.execute("paint.remove", json!({"points": ring(), "size": 4})).unwrap();
+        assert!(r["damage"].is_array(), "{r}");
+        for (x, y) in [(46, 30), (40, 24), (51, 35)] {
+            assert!(near(rgba(&s, x, y), bg, 0.03), "{mode}/{depth} ({x}, {y}): {:?} vs {bg:?}", rgba(&s, x, y));
+        }
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{mode}/{depth}: one undo step");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(!near(rgba(&s, 46, 30), bg, 0.05), "{mode}/{depth}: undo brings the square back");
+    }
+}
+
+#[test]
+fn remove_open_strokes_and_the_selection_limit_what_changes() {
+    let mut s = square_session(8, "rgb");
+    let bg = rgba(&s, 10, 10);
+    // Without closeLoops a ring leaves its inside alone.
+    s.execute("paint.remove", json!({"points": ring(), "size": 4, "closeLoops": false})).unwrap();
+    assert!(!near(rgba(&s, 46, 30), bg, 0.05));
+    // A stroke straight over the square removes it.
+    s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16})).unwrap();
+    assert!(near(rgba(&s, 46, 30), bg, 0.03), "{:?}", rgba(&s, 46, 30));
+    // Selected elsewhere, a stroke over the square changes nothing.
+    let mut s = square_session(8, "rgb");
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    let err = s.execute("paint.remove", json!({"points": [[46, 30]], "size": 20})).unwrap_err().to_string();
+    assert!(err.contains("check the selection"), "{err}");
+    assert!(!near(rgba(&s, 46, 30), bg, 0.05));
+}
+
+#[test]
+fn remove_thin_scratches_take_their_surroundings() {
+    let mut s = session(80, 40, 16, "rgb");
+    paint_layer(&mut s, |x, y| if y == 20 { [1.0, 1.0, 1.0, 1.0] } else { [x as f32 / 80.0, 0.4, 0.6, 1.0] });
+    s.execute("paint.remove", json!({"points": [[5, 20], [75, 20]], "size": 2})).unwrap();
+    for x in [10, 40, 70] {
+        assert!(near(rgba(&s, x, 20), [x as f32 / 80.0, 0.4, 0.6, 1.0], 0.02), "x {x}: {:?}", rgba(&s, x, 20));
+    }
+}
+
+#[test]
+fn remove_bad_params_are_errors() {
+    assert!(Session::new().execute("paint.remove", json!({"points": [[1, 1]]})).is_err(), "no document");
+    let mut s = square_session(8, "rgb");
+    for p in [
+        json!({}),
+        json!({"points": []}),
+        json!({"points": "x"}),
+        json!({"points": [[1, 1]], "size": "big", "closeLoops": "yes", "sampleAllLayers": 3}),
+        json!({"points": [[1, 1]], "layer": 999_999}),
+    ] {
+        let _ = s.execute("paint.remove", p);
+    }
+    let err = s.execute("paint.remove", json!({"points": [[-500, -500]], "size": 10})).unwrap_err().to_string();
+    assert!(err.contains("outside the canvas"), "{err}");
+    // A stroke far off the canvas is refused before its coverage (its whole bounding box) is rendered.
+    let err = s.execute("paint.remove", json!({"points": [[0, 0], [99_999, 99_999]], "size": 5000})).unwrap_err().to_string();
+    assert!(err.contains("too large"), "{err}");
+    let err = s.execute("paint.remove", json!({"points": [[48, 32]], "size": 3000})).unwrap_err().to_string();
+    assert!(err.contains("nothing is left"), "{err}");
 }

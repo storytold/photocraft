@@ -8,7 +8,7 @@
 //! - `engine.commands`: list commands with enablement
 //! - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size); the menu
 //!   tree is `ui.menu.list`
-//! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, brushSize?}`:
+//! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerName?, brushPickerStroke?, brushPickerTip?, brushPickerScale?, brushSize?}`:
 //!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
@@ -74,7 +74,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 29] = [
+pub const UI_SET_FIELDS: [&str; 33] = [
     "tool",
     "panels",
     "dock",
@@ -93,7 +93,10 @@ pub const UI_SET_FIELDS: [&str; 29] = [
     "brushTab",
     "brushesView",
     "brushPicker",
-    "brushPickerView",
+    "brushPickerName",
+    "brushPickerStroke",
+    "brushPickerTip",
+    "brushPickerScale",
     "brushSize",
     "gradientBlendMode",
     "gradientClassic",
@@ -104,6 +107,7 @@ pub const UI_SET_FIELDS: [&str; 29] = [
     "cropOverlayShow",
     "cropOverlayOrientation",
     "cropShield",
+    "shapeStroke",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -308,6 +312,20 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             // rejected call applies none of its fields (#412's guarantee, down to the values
             // and nested keys).
             let applied = (|| -> std::result::Result<Value, String> {
+                let shape_stroke = match p.get("shapeStroke") {
+                    Some(v) => {
+                        if let Some(object) = v.as_object() {
+                            let keys = ["width", "opacity", "align", "cap", "join", "miterLimit", "dashes", "dashOffset"];
+                            if let Some(key) = object.keys().find(|key| !keys.contains(&key.as_str())) {
+                                return Err(format!("unknown shapeStroke field `{key}`"));
+                            }
+                        }
+                        let o = &app.ui.tool_options;
+                        let base = o.shape_stroke.stroke(o.stroke_width, photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK));
+                        Some(photocraft_engine::vector_cmds::parse_stroke(v, Some(base), photocraft_doc::Color::BLACK)?)
+                    }
+                    None => None,
+                };
                 let tool = match s("tool") {
                     Some(t) => Tool::from_name(t).map(Some).ok_or_else(|| format!("unknown tool `{t}`"))?,
                     None => None,
@@ -400,8 +418,26 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, grid)"))?,
                     None => None,
                 };
-                let brush_picker_view = match p.get("brushPickerView") {
-                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushPickerView: {e} (list, grid)"))?,
+                // The three parts of the picker's cards. At least one stays on (a rejected call
+                // leaves them all alone).
+                let brush_picker_name = bool_field(p, "brushPickerName")?;
+                let brush_picker_stroke = bool_field(p, "brushPickerStroke")?;
+                let brush_picker_tip = bool_field(p, "brushPickerTip")?;
+                if [brush_picker_name, brush_picker_stroke, brush_picker_tip].iter().any(Option::is_some) {
+                    let on = [
+                        brush_picker_name.unwrap_or(app.ui.brush_picker_list.show_name),
+                        brush_picker_stroke.unwrap_or(app.ui.brush_picker_list.show_stroke),
+                        brush_picker_tip.unwrap_or(app.ui.brush_picker_list.show_tip),
+                    ];
+                    if !on.iter().any(|b| *b) {
+                        return Err("brushPickerName, brushPickerStroke and brushPickerTip: at least one must stay on".into());
+                    }
+                }
+                // The picker footer slider: the preset cards' size scale (1 standard; 0.30 and
+                // below the tips drop their size numbers).
+                let brush_picker_scale = match num_field(p, "brushPickerScale")? {
+                    Some(s) if !(0.15..=2.0).contains(&s) => return Err("brushPickerScale must be between 0.15 and 2".into()),
+                    Some(s) => Some(s as f32),
                     None => None,
                 };
                 // `Some(None)` is an explicit null, which closes the picker (a missing field
@@ -431,6 +467,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
 
                 // Apply (nothing below can fail).
+                if let Some(stroke) = shape_stroke {
+                    if let Some(stroke) = stroke {
+                        app.ui.tool_options.stroke_width = stroke.width;
+                        app.ui.tool_options.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from(&stroke);
+                    } else {
+                        app.ui.tool_options.stroke_width = 0.0;
+                    }
+                }
                 if let Some(t) = tool {
                     app.ui.tool = t;
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
@@ -529,8 +573,17 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(v) = brushes_view {
                     app.ui.brushes_panel.view = v;
                 }
-                if let Some(v) = brush_picker_view {
-                    app.ui.brush_picker_list.view = v;
+                if let Some(v) = brush_picker_name {
+                    app.ui.brush_picker_list.show_name = v;
+                }
+                if let Some(v) = brush_picker_stroke {
+                    app.ui.brush_picker_list.show_stroke = v;
+                }
+                if let Some(v) = brush_picker_tip {
+                    app.ui.brush_picker_list.show_tip = v;
+                }
+                if let Some(v) = brush_picker_scale {
+                    app.ui.brush_picker_list.scale = v;
                 }
                 if let Some(at) = brush_picker {
                     app.ui.brush_picker = at;
@@ -557,6 +610,37 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     };
                 }
                 "colorPicker" | "ColorPicker" => {
+                    if let Some(style) = p.get("textStyle") {
+                        if ["parent", "effect", "field", "target"].iter().any(|key| p.get(*key).is_some()) {
+                            return err("textStyle cannot be combined with another picker target");
+                        }
+                        let Some(style) = style.as_object().filter(|s| s.keys().all(|k| k == "kind" || k == "id")) else {
+                            return err("textStyle needs kind and id only");
+                        };
+                        let Some(kind) = style.get("kind").cloned().and_then(|v| serde_json::from_value::<crate::type_panels_ui::color_picker::Kind>(v).ok())
+                        else {
+                            return err("textStyle kind must be character or paragraph");
+                        };
+                        let Some(id) = style.get("id").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) else {
+                            return err("textStyle id must be a u32 integer");
+                        };
+                        return match crate::type_panels_ui::color_picker::open(app, kind, id) {
+                            Ok(id) => ok(json!({"dialog": id})),
+                            Err(error) => err(error),
+                        };
+                    }
+                    if p.get("parent").is_some() {
+                        let (Some(parent), Some(effect), Some(field)) = (u("parent"), s("effect"), s("field")) else {
+                            return err("need integer `parent` and string `effect` and `field`");
+                        };
+                        return match crate::layer_style::color_picker::open(app, parent, effect, field) {
+                            Ok(id) => ok(json!({"dialog": id})),
+                            Err(error) => err(error),
+                        };
+                    }
+                    if p.get("effect").is_some() || p.get("field").is_some() {
+                        return err("Layer Style color pickers need `parent`");
+                    }
                     let target = if s("target") == Some("background") { "background" } else { "foreground" };
                     return ok(json!({"dialog": crate::color_picker_ui::open(app, target)}));
                 }
@@ -632,9 +716,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             None => err("missing `dialog`"),
         },
-        "ui.dialog.cancel" => match u("dialog").and_then(|id| app.ui.close_dialog(id)) {
-            Some(_) => ok(Value::Null),
-            None => err("no such dialog"),
+        "ui.dialog.cancel" => match u("dialog") {
+            Some(id) => match crate::dialogs::cancel(app, id) {
+                Ok(value) => ok(value),
+                Err(error) => err(error),
+            },
+            None => err("missing `dialog`"),
         },
         "ui.window.open" => {
             if let Some(d) = u("document")
@@ -869,13 +956,26 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
+        "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
         "layerMenu": app.ui.layer_menu,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
-            "list": app.ui.brush_picker_list,
+            // The picker's content size once its corner grip was dragged (null: the default).
+            "size": app.ui.brush_picker_size,
+            "list": {
+                "collapsed": app.ui.brush_picker_list.collapsed,
+                "filter": app.ui.brush_picker_list.filter,
+                "renaming": app.ui.brush_picker_list.renaming,
+                // The card's parts (`view` is the Brushes panel's listing and doesn't apply).
+                "showName": app.ui.brush_picker_list.show_name,
+                "showStroke": app.ui.brush_picker_list.show_stroke,
+                "showTip": app.ui.brush_picker_list.show_tip,
+                // The footer slider: the cards' width scale.
+                "scale": app.ui.brush_picker_list.scale,
+            },
         })),
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
             json!({
@@ -897,6 +997,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "statusError": app.ui.status_error,
         "notices": app.ui.notices,
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
+        "kysOffer": app.ui.kys_offer,
         "frame": app.frame,
         "session": photocraft_engine::inspect::session(&app.session),
         "document": app.session.active().map(photocraft_engine::inspect::document),
@@ -949,6 +1050,109 @@ mod tests {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
         }
+    }
+
+    #[test]
+    fn layer_style_picker_control_binds_previews_confirms_and_cancels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        let parent = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"layerStyle","effect":"gradientOverlay"}))["result"]["dialog"].as_u64();
+        let parent = parent.unwrap();
+        let before = app.ui.dialogs[0].fields.clone();
+        for field in ["from", "to"] {
+            let reply = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":field}));
+            assert_eq!(reply["ok"], true, "{reply}");
+            let picker = app.ui.dialogs.last().unwrap().id;
+            let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
+            assert!(inspected.to_string().contains("__layerStyleColor"));
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":parent}))["ok"], false);
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":picker,"field":"color","value":"#123456"}))["ok"], true);
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":picker}))["ok"], true);
+            assert_eq!(app.ui.dialogs[0].fields["effects"][0]["params"][field], "#123456");
+        }
+        assert_ne!(app.ui.dialogs[0].fields, before);
+        call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":"to"}));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":parent}))["ok"], true);
+        assert!(app.ui.dialogs.is_empty());
+    }
+
+    #[test]
+    fn text_style_picker_control_uses_bound_target_and_rejects_invalid_requests_atomically() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        let id = app.run("type.characterStyle.new", json!({"fromSelection":false,"attrs":{"color":"#123456"}})).unwrap()["id"].as_u64().unwrap();
+        for style in [
+            Value::Null,
+            json!({"kind":"wrong","id":id}),
+            json!({"kind":"character","id":"bad"}),
+            json!({"kind":"paragraph","id":u64::MAX}),
+            json!({"kind":"character","id":0}),
+            json!({"kind":"character","id":id,"extra":1}),
+        ] {
+            let panels = app.ui.type_panels.clone();
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":style}))["ok"], false);
+            assert_eq!(app.ui.type_panels, panels);
+            assert!(app.ui.dialogs.is_empty());
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":{"kind":"character","id":id},"parent":1}))["ok"], false);
+        let doc = app.session.active().unwrap().doc.clone();
+        let r = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":{"kind":"character","id":id}}));
+        assert_eq!(r["ok"], true);
+        let picker = r["result"]["dialog"].as_u64().unwrap();
+        assert_eq!(app.ui.dialogs[0].fields["__textStyleColor"]["id"], id);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":picker,"field":"color","value":"#00ff00"}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":picker}))["ok"], true);
+        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+        let r = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":{"kind":"character","id":id}}));
+        let picker = r["result"]["dialog"].as_u64().unwrap();
+        call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":picker,"field":"color","value":"#00ff00"}));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":picker}))["ok"], true);
+        assert_ne!(app.session.active().unwrap().doc.text_styles, doc.text_styles);
+    }
+
+    #[test]
+    fn layer_style_picker_control_rejects_bad_targets_without_opening_tool_picker() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        let parent = crate::layer_style::open(&mut app, Some("colorOverlay")).unwrap();
+        for params in [
+            json!({"kind":"colorPicker","parent":null,"effect":"fx1","field":"color"}),
+            json!({"kind":"colorPicker","parent":"bad","effect":"fx1","field":"color"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":3,"field":"color"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":"missing","field":"color"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":"opacity"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":"to"}),
+            json!({"kind":"colorPicker","effect":"fx1","field":"color"}),
+        ] {
+            let before = app.ui.dialogs.clone();
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.open", params)["ok"], false);
+            assert_eq!(app.ui.dialogs, before);
+        }
+    }
+
+    #[test]
+    fn shape_stroke_defaults_are_drivable_and_validate_atomically() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let result = call(
+            &mut app,
+            &ctx,
+            "ui.set",
+            json!({"tool":"Triangle", "shapeStroke":{"width":5,"cap":"round","join":"bevel","dashes":[0,2,4,1],"dashOffset":-0.5}}),
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(app.ui.tool_options.stroke_width, 5.0);
+        assert_eq!(app.ui.tool_options.shape_stroke.dashes, [0.0, 2.0, 4.0, 1.0]);
+        let before = app.ui.clone();
+        let bad = call(&mut app, &ctx, "ui.set", json!({"tool":"Rectangle","shapeStroke":{"dashes":[0,0]}}));
+        assert_eq!(bad["ok"], false);
+        assert_eq!(app.ui, before);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":{"colour":"#ff0000"}}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":null}))["ok"], true);
+        assert_eq!(app.ui.tool_options.stroke_width, 0.0);
     }
 
     #[test]
@@ -1287,18 +1491,25 @@ mod tests {
     }
 
     #[test]
-    fn ui_set_opens_the_brush_preset_picker_and_sets_its_view() {
+    fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
-        assert_eq!(app.ui.brush_picker_list.view, crate::brush_panel::BrushesView::Grid, "tip thumbnails by default");
-        let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerView": "list"}));
+        let list = &app.ui.brush_picker_list;
+        assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
+        let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
-        assert_eq!(app.ui.brush_picker_list.view, crate::brush_panel::BrushesView::List);
-        for bad in [json!({"brushPicker": [1]}), json!({"brushPicker": "here"}), json!({"brushPickerView": "tiles"})] {
+        assert!(!app.ui.brush_picker_list.show_stroke);
+        for bad in [
+            json!({"brushPicker": [1]}),
+            json!({"brushPicker": "here"}),
+            json!({"brushPickerStroke": "nope"}),
+            json!({"brushPickerName": false, "brushPickerStroke": false, "brushPickerTip": false}),
+        ] {
             assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
         }
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]), "a bad value leaves the picker alone");
+        assert!(app.ui.brush_picker_list.show_name, "a rejected call leaves the card parts alone");
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         assert_eq!(app.ui.brush_picker, None);
     }
@@ -1326,11 +1537,13 @@ mod tests {
         assert_eq!(click["ok"], true, "{click}");
         let open = call(&mut app, &ctx, "ui.inspect", json!({}));
         assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
-        assert_eq!(open["result"]["brushPicker"]["list"]["view"], "grid");
+        assert_eq!(open["result"]["brushPicker"]["list"]["showName"], true);
+        assert_eq!(open["result"]["brushPicker"]["list"]["showStroke"], true);
+        assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], true);
 
-        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerView": "list"}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": false}))["ok"], true);
         let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
-        assert_eq!(changed["result"]["brushPicker"]["list"]["view"], "list");
+        assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], false);
 
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
@@ -1530,7 +1743,7 @@ mod tests {
         let written: Rc<RefCell<Vec<String>>> = Rc::default();
         let w = written.clone();
         let services = crate::Services {
-            import: Some(Box::new(|name: &str, _b: &[u8]| {
+            import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
                 Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),

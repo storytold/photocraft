@@ -1111,12 +1111,13 @@ pub fn fmt_num2(v: f64) -> String {
     format!("{r:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// Parses a typed number or simple arithmetic such as `1280*2` or `20*2+5-2` (`+ - * /`,
-/// `*` and `/` first). Like egui's own parser it ignores whitespace and reads `−` as `-`.
-/// `None` for anything else, including a division by zero.
+/// Parses a typed number or bounded arithmetic, including parentheses and powers.
+/// Preserves egui-compatible whitespace and Unicode minus handling.
 pub fn parse_num(text: &str) -> Option<f64> {
-    let s = clean(text);
-    s.parse().ok().or_else(|| sum(&s)).filter(|v: &f64| v.is_finite())
+    if text.len() > 1024 {
+        return None;
+    }
+    crate::numeric_expression::parse(&clean(text))
 }
 
 /// A plain typed number, no arithmetic.
@@ -1126,30 +1127,6 @@ fn plain(text: &str) -> Option<f64> {
 
 fn clean(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect()
-}
-
-/// `a+b-c…`: a `+` or `-` right after an operand splits terms; anywhere else it is a sign.
-fn sum(s: &str) -> Option<f64> {
-    let (mut total, mut sign, mut start, mut prev) = (0.0, 1.0, 0, ' ');
-    for (i, c) in s.char_indices() {
-        if matches!(c, '+' | '-') && i > start && !matches!(prev, '*' | '/' | 'e' | 'E') {
-            total += sign * product(s.get(start..i)?)?;
-            sign = if c == '-' { -1.0 } else { 1.0 };
-            start = i + 1;
-        }
-        prev = c;
-    }
-    Some(total + sign * product(s.get(start..)?)?)
-}
-
-/// `a*b/c…`, left to right.
-fn product(s: &str) -> Option<f64> {
-    let mut factors = s.split(['*', '/']).map(str::parse::<f64>);
-    let mut acc = factors.next()?.ok()?;
-    for (op, x) in s.matches(['*', '/']).zip(factors) {
-        acc = if op == "*" { acc * x.ok()? } else { acc / x.ok()? };
-    }
-    Some(acc)
 }
 
 #[cfg(test)]
@@ -1308,10 +1285,13 @@ mod tests {
             ("−4", -4.0),
             ("1 234", 1234.0),
             ("1e3/2", 500.0),
+            ("(2+3)*4", 20.0),
+            ("2^3", 8.0),
+            ("10%3", 1.0),
         ] {
             assert_eq!(parse_num(text), Some(want), "{text}");
         }
-        for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3)", "1e400"] {
+        for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400"] {
             assert_eq!(parse_num(text), None, "{text}");
         }
     }
@@ -1491,7 +1471,7 @@ mod tests {
 pub fn color_edit_button_srgba(ui: &mut Ui, color: &mut Color32) -> Response {
     color_edit_button(ui, color, egui::color_picker::Alpha::BlendOrAdditive)
 }
-fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
+pub(crate) fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
     response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));

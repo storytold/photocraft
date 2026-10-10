@@ -39,6 +39,14 @@ approximated or left out, each with a warning; damaged or unknown files fall bac
 preview. Affinity writing is not implemented: no Affinity installation was available to check
 written files, so `.af` export stays unsupported.
 
+2026-10-09: `corpus/affinity/` now has 39 pinned documents and 21 PNGs (20 rendered references and
+one bitmap-fill texture): the prior 21 public documents plus 18 CC0 samples for #1606. The new
+samples compare against their exported PNGs;
+mean differences range from 0.44/255 (conical gradients) to 86.05/255 (RGB/32 reduced to 8-bit).
+Clouds, hearts, cogs, callouts, arrows, double stars, tears, crescents, diamonds and circular segments
+now import as parametric shapes; the special-shapes sample measures 5.68/255 against its PNG. The
+remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
+
 ## Honest parity assessment (2026-10-05)
 
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it
@@ -63,6 +71,12 @@ i7-9750H, 12 workers, 24 MP RGBA8, Good quality, amount 1: Spin 66.10 → 16.43 
 (4.02×), Zoom 19.19 → 5.35 s (3.59×), one paired run each, exact output equality.
 These are local measurements at amount 1; see [method and limits](radial-blur-performance.md).
 
+2026-10-10: native selection distance transforms measured 7.59–10.57x faster on six
+24–36 MP synthetic masks on an AWS c7i.4xlarge (16 workers, three paired release runs).
+The transform also corrects f32 envelope errors past coordinate 4096, including nonzero
+distances at selected pixels. The parallel path needs an additional four bytes per pixel;
+see [measurements, correctness and limits](selection-distance-performance.md).
+
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
 workflow depth and the plug-in ecosystem. Most fixes since 0.2.0 have passed our tests but have
@@ -78,11 +92,19 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: [Shape stroke controls](shape-strokes.md) expose existing Solid/Dashed/Dotted,
+custom dash/gap, offset, caps, joins, alignment, miter-limit and opacity capabilities in
+Shape/Pen options and Properties. Properties stages a cached canvas preview before one
+undoable edit. Gradient fill controls from #1053 remain open; the Line tool still draws a
+filled bar. This extends UI reachability and does not claim Photoshop-authored stroke parity.
+
 | Dimension | Measured / evidence (2026-10-05) | Grade | Notes |
 |---|---|---|---|
 | Menu wiring | 626/626 menu items dispatch a command (`parity.md`) | high but shallow | Says nothing about behaviour. |
 | PSD fidelity (rendering) | Corpus oracle 115/170 (68%): 30 differ, 26 have no usable reference, 1 import error. 2026-10-07: io corpus 146/170, psd-tools corpus 236/309 (was 229: Advanced Blending knockouts), Photoshop oracles 132/258 | medium | Push to 170/170 under way (effects/strokes, multi-instance effects, 16/32-bit and colour modes, references for skipped files). |
 | PSD round trip | 169/169 re-import identically; every adjustment layer and blend mode round-trips | high (within corpus) | Floors in `crates/io/tests/corpus.rs`; raise, never lower. Corpora: `cargo xtask corpus --all` (ours: https://github.com/storytold/photocraft-corpus). |
+| OpenRaster read/write | 2026-10-09: 34 Krita 5.2.9-authored `.ora` files (27 blend modes, groups, pass-through, offsets, opacity, visibility, masks, 16-bit, gray) render within 3/255 of Krita's merged image (30) or differ for known reasons (4: Krita's lighter/darker-colour tie-break, Hard Mix at exactly 1, a linear-light 16-bit document); Krita re-opens our exports and renders them identically to its originals (33/34; Soft Light is written as `svg:soft-light`) | medium (one authoring app) | MyPaint and GIMP files untested. Masks are applied to pixels and layer styles dropped on save (reported). See [OpenRaster](ora.md). |
+| Paint.NET import | 2026-10-09: 14/14 local PDN3 textures preserve editable layers exactly through `.pcraft` and render within 2.142/255 of full-size previews; a supplied 5.x document (1280×720, 11 layers) passes editing/history/native saves and matches its thumbnail within 0.418/255 mean; all 14 blend modes exercised synthetically | medium (limited corpus) | Import only; metadata omitted. More current-version files and full-size exports needed. See [PDN support](pdn.md). |
 | Smart filters / text / effect shapes in PSDs | Measured on our Photoshop-authored set (https://github.com/storytold/photocraft-corpus, `corpus/photoshop`, 258 files): see the per-group floors in `crates/io/tests/corpus.rs` and `crates/engine/tests/photoshop_oracles.rs`. Smart objects and smart filters now survive PSD save and open (41 corpus files, 206 smart objects, round trip strict; Photoshop opens our exports with live filters); re-rendering Photoshop's smart filters with ours matches 5/30 (was 1/30) | low–medium | Remaining re-render gaps are filter maths (Gaussian/Motion Blur, Unsharp Mask, Emboss, Add Noise RNG) and bicubic placement. |
 | Core editing (layers, masks, selections, adjustments, filters, transforms) | Broad engine coverage; many interaction bugs fixed after 0.2.0 (adjustment dialogs, Curves, crop, Move/Transform modifiers, gesture origin) | medium | Fixes not yet user-validated. |
 | UI / UX polish | Shortcut audit 214 → 0 failures; dock, Layers rows and menus reworked; first visual-QA sweep found 14 defects (#147–#157). 2026-10-07: the keyboard-only shortcuts with no menu item (⌥[ ⌥] ⌥, ⌥. layer navigation, ⇧⌥[ ⇧⌥] to extend the selection, 1–0 for opacity and ⇧ for flow or fill, ⇧[ ⇧] hardness, ⌥⌘T to transform a copy and ⌥⇧⌘T to step and repeat), ⌥-click colour sampling with painting tools, double-click a Layers row for Layer Style, File › New from Clipboard, a centred main window and remembered Liquify settings (#352, #417, #350, #368, #419, #418). 2026-10-09: canvas zoom is physical at any display scale — 100% is one document pixel per physical display pixel, and every screen-space overlay, cursor, scrollbar, navigator and fit follows it (#1943) | low–medium | Needs recurring visual QA with realistic documents. |
@@ -111,6 +133,22 @@ a conservative 512 MiB working-set estimate, excluding stored Surface tiles and 
 memory. The crossover is a heuristic; images dominated by near-cutoff alpha can need extra
 scalar work. These measurements do not establish Photoshop filter parity.
 
+2026-10-10: Proximity Match search medians on an AWS c7i.4xlarge improved 1.54–3.82x
+for four synthetic stroke regions (50–300 px holes), with identical source displacements.
+Bounding the mask table to the hole and pruning losing SSD candidates reduced table storage
+by about 90–93 percent there. Full 24–36 MP kernel inputs improved 4.60–6.24x, but normal
+engine strokes already use a cropped region. See [method and limits](proximity-match-performance.md).
+
+2026-10-09: the Remove tool is in the J flyout (`paint.remove`, a background job). A stroke
+around an object also removes what it encloses. The fill is non-local patch completion with
+texture features (A. Newson et al., IPOL 2017: `crates/algo/src/nonlocal.rs`), finished by a
+best-patch copy and gradient-domain seam hiding. On 20 holes in public-domain photos
+(`remove_quality`, `docs/development.md` › Remove Tool quality) the fill keeps 0.89 of the
+original's texture (Wexler/PatchMatch completion as Content-Aware Fill uses it: 0.54). On a 24 MP
+document a 100 px ring takes 120 ms and a 1000 px ring 2.5 s (`remove_bench`). It is not
+generative: large objects over complex structure fill less convincingly than Photoshop's AI mode
+(#41).
+
 2026-10-08: the tools update above is checked against the current toolbar groups in
 [`panels.rs`](../crates/ui-egui/src/panels.rs), the Pencil and tool-cycle tests in
 [`pencil_tests.rs`](../crates/ui-egui/src/pencil_tests.rs), Patch's live-preview test in
@@ -129,6 +167,19 @@ Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filt
 undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
 acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
 unchanged.
+
+2026-10-10: Select and Mask's Shift Edge now computes the exact octagonal footprint
+with a square window extreme plus a dyadically built Manhattan ball. On a c7i.4xlarge
+(16 vCPUs), full tiled CPU refinement at radius 64 / Shift Edge +100% takes
+3.019 s -> 0.762 s at 24 MP (3.96x),
+3.706 s -> 0.921 s at 36 MP (4.02x).
+Three alternating paired release runs include guide sampling, guided filtering,
+boundary distances, quantization and assembly. Every output mask matches exactly.
+The dense fractional 24 MP radius-64 dilation kernel improves 36.00x;
+circular soft-mask kernels improve 20.76-172.16x at 24-36 MP, radii 4-64.
+Bounded halo tiles reduce the large-mask workspace allocation bound from 192/288 MB
+to about 115/163 MB, including output and 16 workers' scratch, excluding the source.
+See [method and results](octagonal-mask-performance.md).
 
 ### Where we're going (priority order)
 

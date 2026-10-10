@@ -27,3 +27,7 @@ flate2 = { workspace = true }
 # to the generic Unicode rules for those scripts.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
+
+[build-dependencies]
+# Deflates the bundled fonts (build.rs); `flate2` above inflates them.
+flate2 = { workspace = true }

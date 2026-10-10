@@ -48,7 +48,7 @@ pub struct DocIndex {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpenParams {
-    /// Forward-slash relative path beneath the configured automation read root.
+    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
 }
 
@@ -75,7 +75,7 @@ pub struct NewParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SaveParams {
-    /// Forward-slash relative target beneath the configured automation write root.
+    /// Target beneath the configured automation write root: relative (forward slashes) or absolute.
     /// The extension selects the format. Omit to write back to the document's own file, which
     /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.
@@ -229,15 +229,20 @@ pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
-    /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
-    /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
+    /// studioLight, classic, solarizedDark, adwaita, adwaitaDark), brushSection, brushTab,
+    /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
+    /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
+    /// on), brushPickerScale (the picker footer's card-scale slider, 0.15 to 2, 1 the standard),
+    /// brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool), eyedropperSampleSize
     /// ("point" or 1, 3, 5, 11, 31, 51, 101), eyedropperSample (current, currentAndBelow, all,
     /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool), cropOverlay (thirds,
     /// grid, diagonal, triangle, goldenRatio, goldenSpiral), cropOverlayShow (auto, always, never),
     /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
     /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100) and
-    /// auto_adjust). Other fields are an error.
+    /// auto_adjust), shapeStroke (an object patching width, align, cap, join, miterLimit,
+    /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
+    /// `shape.edit` names and units; colour comes from `tools.setColors`. Other fields are an error.
     pub fields: Value,
 }
 
@@ -892,6 +897,27 @@ mod tests {
         assert!(downscale_png(b"not a png", 32).is_err());
         assert!(downscale_png(&png, 0).is_err());
         assert!(downscale_png(&png, 1024).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_reports_invalid_filter_parameters_without_changing_history() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width":8,"height":8}))).await.unwrap().unwrap();
+        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        for (params, key) in
+            [(json!({"radius":"big"}), "radius"), (json!({"radus":3}), "radus"), (json!({"radius":5000}), "radius"), (json!({"radius":-4}), "radius")]
+        {
+            for wait in [true, false] {
+                let result = mcp
+                    .command_run(Parameters(RunParams { id: "filter.blur.gaussianBlur".into(), params: Some(params.clone()), wait: Some(wait) }))
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_error, Some(true));
+                let error = &result.content.first().and_then(|c| c.as_text()).unwrap().text;
+                assert!(error.contains("filter.blur.gaussianBlur") && error.contains(key), "{error}");
+                assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

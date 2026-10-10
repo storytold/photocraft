@@ -661,6 +661,12 @@
 	Studio Theme	Studio-thema
 	Studio Light Theme	Studio-thema licht
 	Classic Theme	Klassiek thema
+	Solarized dark	Solarized donker
+	Solarized Dark Theme	Solarized-thema donker
+	Adwaita Light Theme	Adwaita-thema licht
+	Adwaita Dark Theme	Adwaita-thema donker
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita donker
 	Next Theme	Volgend thema
 	Actions	Acties
 	Brush Settings	Penseelinstellingen
@@ -935,6 +941,17 @@
 	Delete current channel	Huidig kanaal verwijderen
 	Delete current state	Huidige staat verwijderen
 	Delete effect layer	Effectlaag verwijderen
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Laag ‘{name}’ verwijderen?
+	Delete {count} layers? {names}	{count} lagen verwijderen? {names}
+	Delete layer?	Laag verwijderen?
+	The document is closed	Het document is gesloten
+	The document or selected layers changed. Please request deletion again.	Het document of de geselecteerde lagen zijn gewijzigd. Vraag de verwijdering opnieuw aan.
+	Missing delete command	Verwijderopdracht ontbreekt
+	Invalid delete command	Ongeldige verwijderopdracht
+	Layer deleted, but confirmation preference could not be saved: {error}	De laag is verwijderd, maar de bevestigingsvoorkeur kon niet worden opgeslagen: {error}
+
 	Delete layer	Laag verwijderen
 	Delete layer comp	Laagcompositie verwijderen
 	Delete note	Notitie verwijderen
@@ -1293,6 +1310,17 @@
 	Rename…	Hernoemen…
 	Resample	Opnieuw bemonsteren
 	Reset All to Defaults	Alles terugzetten naar standaardwaarden
+	Import Shortcuts…	Sneltoetsen importeren…
+	Load a keyboard shortcut set saved as .kys	Een als .kys opgeslagen sneltoetsenset laden
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} sneltoetsen geïmporteerd uit {file}. Klik op OK om ze te behouden.
+	{n} commands are not in PhotoCraft.	{n} opdrachten bestaan niet in PhotoCraft.
+	Keyboard shortcuts imported	Sneltoetsen geïmporteerd
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Je sneltoetsenset {set} wordt hier gebruikt: {n} sneltoetsen wijken af van de standaardwaarden. Bewerken › Sneltoetsen toont ze; Alles terugzetten naar standaard maakt dit ongedaan.
+	Import keyboard shortcuts?	Sneltoetsen importeren?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft heeft op deze computer je sneltoetsenset {set} van een andere beeldbewerker gevonden: {n} van de sneltoetsen wijken af van die van PhotoCraft. Importeren?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Bewerken › Sneltoetsen › Alles terugzetten naar standaard maakt een import ongedaan.
+	Don't Import	Niet importeren
+	The keyboard shortcut set was not imported: {error}	De sneltoetsenset is niet geïmporteerd: {error}
 	Reset Section	Sectie herstellen
 	Reset Transform	Transformatie herstellen
 	Reset to defaults	Terugzetten naar standaardwaarden
@@ -1585,6 +1613,7 @@
 	Millimeters	Millimeter
 	Mobile	Mobiel
 	Move Tool	Verplaatsgereedschap
+	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
 	Multiply	Vermenigvuldigen
 	My Brushes	Mijn penselen
 	Neutrals	Neutrale tinten
@@ -1629,6 +1658,7 @@
 	Quick Selection Tool	Snelle selectie
 	Radial	Radiaal
 	Rasterize Layer	Laag rasteren
+	Rasterize Layers	Lagen rasteren
 	Ratio	Verhouding
 	Recent	Recent
 	Rectangle Tool	Rechthoekgereedschap
@@ -1902,6 +1932,7 @@
 	Collapse group  ({key}-click: all groups)	Groep samenvouwen  ({key}-klik: alle groepen)
 	Create new brush from the current settings	Nieuw penseel maken van de huidige instellingen
 	Create new brush from these settings	Nieuw penseel maken van deze instellingen
+	Update the current brush with these settings	Huidig penseel bijwerken met deze instellingen
 	Delete brush	Penseel verwijderen
 	Drag the arrow to set the angle, the dots to set the roundness	Sleep de pijl om de hoek in te stellen, de stippen om de rondheid in te stellen
 	Expand	Uitvouwen
@@ -1956,8 +1987,7 @@
 	Brush Preset Options	Opties penseelvoorinstelling
 	Group name	Groepsnaam
 	Brush name	Penseelnaam
-	Grid view	Rasterweergave
-	List view	Lijstweergave
+	Brush Name	Penseelnaam
 	Off: the speed of the pointer sets the spacing	Uit: de snelheid van de aanwijzer bepaalt de tussenruimte
 	Tilt Scale	Kantelschaal
 	Brush Projection	Penseelprojectie
@@ -1977,6 +2007,13 @@
 	Align with layer	Uitlijnen met laag
 	Reset Alignment	Uitlijning herstellen
 	Centre the gradient (offset 0, 0)	Het verloop centreren (verschuiving 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Verloopeditor
+	Gradient picker	Verloopkiezer
+	Gradient stops	Verloopstops
+	Save As Preset	Opslaan als voorinstelling
+	The gradient the Gradient tool paints with	Het verloop waarmee het gereedschap Verloop tekent
+	Adds the current gradient to the Gradients panel	Voegt het huidige verloop toe aan het paneel Verlopen
 	The current gradient (pick one in Window › Gradients)	Het huidige verloop (kies er een via Venster › Verlopen)
 	Select a type layer to edit its character and paragraph settings.	Selecteer een tekstlaag om de teken- en alinea-instellingen te bewerken.
 	Text color	Tekstkleur
@@ -2009,6 +2046,9 @@
 	Cancelled {label}	{label} geannuleerd
 	Esc to cancel	Esc om te annuleren
 	Opening {name}	{name} openen
+	Saving {name}	{name} opslaan
+	A save to {name} is still running; try again when it finishes	Er wordt nog opgeslagen naar {name}; probeer het opnieuw zodra dat klaar is
+	{label} is writing the file and can no longer be cancelled	{label} schrijft het bestand en kan niet meer worden geannuleerd
 	Opening {name}…	{name} openen…
 	Opening…	Openen…
 	Reading…	Lezen…
@@ -2792,6 +2832,7 @@ cameraRaw	Color	Kleur
 	Reduce Color Noise	Kleurruis verminderen
 	Sharpen Details	Details verscherpen
 	Remove Jpeg Artifact	JPEG-artefacten verwijderen
+	Remove Tool	Verwijdergereedschap
 	Blade Curvature	Kromming lamellen
 	Depth Map	Dieptekaart
 	Focal Distance	Scherpstelafstand
@@ -3467,6 +3508,9 @@ cameraRaw	Whites	Witten
 	Dual Axis	Dubbele as
 	Diagonal	Diagonaal
 	Transform Symmetry	Symmetrie transformeren
+
+	Rasterize svg groups deeper than	SVG-groepen rasteriseren dieper dan deze grens
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schakelt deze drempel uit; SVG-groepen die dieper dan 100 niveaus zijn genest, worden altijd gerasterd.
 	Rule of Thirds	Regel van derden
 	Golden Ratio	Gulden snede
 	Golden Spiral	Gulden spiraal
@@ -3477,6 +3521,16 @@ cameraRaw	Whites	Witten
 	Cycle Orientation	Oriëntatie wisselen
 	Set the overlay options for the Crop tool	Overlay-opties voor het gereedschap Uitsnijden instellen
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	De Alt-klik ging naar het bureaublad, dat vensters verplaatst met Alt-slepen. Stel daar de toets voor het verplaatsen van vensters in op Super, of vergrendel Alt via Venster › Wijzigingstoetsen.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Kleurkiezer (kleur van laagstijl)
+	Auto Hide Notifications	Meldingen automatisch verbergen
+	Notification Duration (seconds)	Duur van melding (seconden)
+	Appearance Mode	Weergavemodus
+	Next Appearance Mode	Volgende weergavemodus
+	Sync with system	Synchroniseren met systeem
+	Active	Actief
+	Color Picker (Solid Color)	Kleurkiezer (effen kleur)
 	Straighten the image by drawing a line on it	Recht de afbeelding uit door er een lijn op te tekenen
 	Set additional Crop options	Aanvullende uitsnijopties instellen
 	Show Cropped Area	Uitgesneden gebied tonen
@@ -3492,3 +3546,42 @@ cameraRaw	Whites	Witten
 	Create Ellipse	Ellips maken
 	Create Triangle	Driehoek maken
 	Create Polygon	Veelhoek maken
+	Pressure curve	Drukcurve
+	Click to add a point, right-click to remove	Klik om een punt toe te voegen, rechtsklik om het te verwijderen
+	Some brush presets could not be loaded	Sommige penseelvoorinstellingen konden niet worden geladen
+	Retry saving presets	Opslaan van voorinstellingen opnieuw proberen
+	Brush preset changes are not saved: {error}	Wijzigingen in penseelvoorinstellingen zijn niet opgeslagen: {error}
+	Keep this tab open to retain your brushes.	Houd dit tabblad open om je penselen te behouden.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Browseropslag is niet beschikbaar; penselen gelden alleen voor deze sessie. Houd dit tabblad open om ze te behouden.
+	Saving brush presets… Keep this tab open until saving finishes.	Penseelvoorinstellingen opslaan… Houd dit tabblad open tot het opslaan klaar is.
+	Reflect	Reflecteren
+	Glow	Gloed
+	Negation	Negatie
+	XOR	XOR
+	Color Burn (Paint.NET)	Kleur doordrukken (Paint.NET)
+	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Stroke Options	Lijnopties
+	Solid	Ononderbroken
+	Dashed	Gestreept
+	Dotted	Gestippeld
+	Caps	Uiteinden
+	Butt / Flat	Plat
+	Miter	Verstek
+	Round	Rond
+	Bevel	Afgeschuind
+	Miter limit	Versteklimiet
+	Dashed line	Gestreepte lijn
+	Dash	Streep
+	Gap	Ruimte
+	Dash / gap lengths × stroke width	Streep- / ruimtelengte × lijnbreedte
+	Add pair	Paar toevoegen
+	Remove pair	Paar verwijderen
+	Dash offset	Streepverschuiving
+	Open paths use centered strokes	Open paden gebruiken gecentreerde lijnen
+	Use finite lengths and a positive pattern total	Gebruik eindige lengtes en een positief patroontotaal
+	No subject found — try Object Selection or the Lasso	Geen onderwerp gevonden — probeer Objectselectie of de Lasso
+	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
+	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
+	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object

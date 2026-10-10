@@ -221,6 +221,73 @@ fn file_info_round_trips_through_xmp_and_psd() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+const MULTILINGUAL_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/"
+ xmp:CreatorTool="Other App" xmpRights:Marked="True" xmpRights:WebStatement="https://example.com/license">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Sun</rdf:li><rdf:li xml:lang="fr">Soleil</rdf:li><rdf:li xml:lang="ar">الشمس</rdf:li></rdf:Alt></dc:title>
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Sunrise</rdf:li><rdf:li xml:lang="fr">Lever du soleil</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">All rights reserved</rdf:li><rdf:li xml:lang="fr">Tous droits réservés</rdf:li></rdf:Alt></dc:rights>
+<dc:subject><rdf:Bag><rdf:li>sky</rdf:li></rdf:Bag></dc:subject>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+fn assert_translations_kept(xmp: &str) {
+    for prop in ["dc:title", "dc:description", "dc:rights"] {
+        assert_eq!(find_element(xmp, prop).unwrap().2, find_element(MULTILINGUAL_XMP, prop).unwrap().2, "{prop}");
+        assert_eq!(xmp.matches(&format!("<{prop}>")).count(), 1);
+    }
+    assert!(xmp.contains("xmp:CreatorTool=\"Other App\""));
+    assert!(xmp.contains("xmpRights:Marked=\"True\""));
+    assert!(xmp.contains("xmpRights:WebStatement=\"https://example.com/license\""));
+}
+
+#[test]
+fn file_info_keeps_translations_when_editing_keywords() {
+    let partial = json!({"keywords": ["sky", "sunrise"]});
+    let mut dialog = read_file_info(Some(MULTILINGUAL_XMP));
+    dialog["keywords"] = json!("sky; sunrise");
+    for params in [partial, dialog] {
+        let out = write_file_info(Some(MULTILINGUAL_XMP), &params);
+        assert_translations_kept(&out);
+        assert_eq!(read_file_info(Some(&out))["keywords"], json!(["sky", "sunrise"]));
+    }
+    let unchanged = read_file_info(Some(MULTILINGUAL_XMP));
+    assert_eq!(write_file_info(Some(MULTILINGUAL_XMP), &unchanged), MULTILINGUAL_XMP);
+    assert_eq!(write_file_info(Some(MULTILINGUAL_XMP), &json!({})), MULTILINGUAL_XMP);
+}
+
+#[test]
+fn file_info_clears_only_the_requested_field() {
+    let out = write_file_info(Some(MULTILINGUAL_XMP), &json!({"keywords": []}));
+    assert_translations_kept(&out);
+    assert!(find_element(&out, "dc:subject").is_none());
+    assert_eq!(read_file_info(Some(&out))["keywords"], json!([]));
+}
+
+#[test]
+fn file_info_translations_survive_undo_and_psd_round_trip() {
+    for depth in [8, 16, 32] {
+        let mut s = session(8, 8, depth);
+        s.edit("Set metadata", |doc, _| {
+            doc.metadata.xmp = Some(MULTILINGUAL_XMP.to_string());
+            Ok(())
+        })
+        .unwrap();
+        s.execute("file.fileInfo", json!({"keywords": ["sunrise"]})).unwrap();
+        let edited = doc(&s).metadata.xmp.clone().unwrap();
+        assert_translations_kept(&edited);
+        assert!(s.undo());
+        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(MULTILINGUAL_XMP));
+        assert!(s.redo());
+        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(edited.as_str()));
+        let (bytes, _) = encode(doc(&s), "x.psd", None).unwrap();
+        let back = photocraft_io::import("x.psd", &bytes).unwrap().document;
+        assert_translations_kept(back.metadata.xmp.as_deref().unwrap());
+        assert_eq!(read_file_info(back.metadata.xmp.as_deref())["keywords"], json!(["sunrise"]));
+    }
+}
+
 #[test]
 fn fit_image_and_conditional_mode_change() {
     let mut s = session(400, 200, 8);
@@ -476,11 +543,11 @@ fn guide_layouts() {
 
 #[test]
 fn only_layered_files_save_in_place() {
-    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd"] {
+    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd", "a.ora", "dir/A.ORA"] {
         assert!(saves_in_place(path), "{path}");
     }
     // Flat formats, no extension, a dotted folder with an extensionless file, a dot file.
-    for path in ["a.png", "a.jpg", "a", "my.psd/a", ".psd", "a.", ""] {
+    for path in ["a.png", "a.jpg", "a.pdn", "a.PDN", "a", "my.psd/a", ".psd", "a.", ""] {
         assert!(!saves_in_place(path), "{path}");
     }
     assert_eq!(extension("dir/Photo.JPEG").as_deref(), Some("jpeg"));

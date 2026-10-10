@@ -642,4 +642,8 @@ pub struct BrushPreset {
     /// Preset group (folder) in the Brushes panel, e.g. "General" or an imported file's name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub group: String,
+    /// Folders inside `group`, outermost first (empty = directly in the group), like the nested
+    /// folders of Photoshop's Brushes panel; e.g. an imported `.abr` file's own folders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder: Vec<String>,
 }
