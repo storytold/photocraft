@@ -456,9 +456,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 if crate::icons::button(ui, eye, 22.0, false, tl!("Toggle count group visibility")).clicked() {
                     let _ = app.run("count.setGroup", json!({"group": gi, "visible": !g.visible}));
                 }
-                let mut rgb = g.color.to_rgb();
-                if crate::widgets::color_edit_button_rgb(ui, &mut rgb).changed() {
-                    let _ = app.run("count.setGroup", json!({"group": gi, "color": [rgb[0], rgb[1], rgb[2]], "coalesce": "count-color"}));
+                let rgb = g.color.to_rgb();
+                // PhotoCraft's Color Picker (sRGB), as everywhere else (#2144).
+                if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
+                    crate::color_picker_ui::open_for_command(
+                        app,
+                        &crate::color_picker_ui::title_for(tl!("Color")),
+                        rgb,
+                        "count.setGroup",
+                        json!({"group": gi}),
+                    );
                 }
                 if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete count group")).clicked() {
                     let _ = app.run("count.deleteGroup", json!({"group": gi}));
@@ -488,7 +495,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             ui.label(RichText::new(tl!("Author:")).color(t.text_dim).size(11.0));
             ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0));
             ui.label(RichText::new(tl!("Color:")).color(t.text_dim).size(11.0));
-            crate::widgets::color_edit_button_rgb(ui, &mut app.ui.analysis.note_color);
+            let rgb = app.ui.analysis.note_color;
+            if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
+                crate::color_picker_ui::open_for_target(app, "noteColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb);
+            }
             if ui.add_enabled_ui(!doc.notes.is_empty(), |ui| crate::widgets::secondary_button(ui, tl!("Clear All"), 0.0)).inner.clicked() {
                 let _ = app.run("notes.delete", json!({"all": true}));
                 app.ui.analysis.note_selected = None;

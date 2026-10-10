@@ -217,35 +217,14 @@ pub fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     out
 }
 
-/// Grey dilation (`grow`) or erosion by about `r` pixels: alternating 3×3 square and cross steps
-/// (an octagonal structuring element).
+/// Grey dilation (`grow`) or erosion with the octagonal element of `r` alternating
+/// 3×3 square/cross steps. Masks without NaNs or negative zero use O(w*h*log(r+1))
+/// work; those values retain the original comparison order. Invalid sizes return an empty buffer.
 pub fn morph(src: &[f32], w: usize, h: usize, r: usize, grow: bool) -> Vec<f32> {
-    let mut cur = src.to_vec();
-    let mut nxt = cur.clone();
-    let pick = |a: f32, b: f32| if grow { a.max(b) } else { a.min(b) };
-    for k in 0..r {
-        let square = k % 2 == 0;
-        for y in 0..h {
-            for x in 0..w {
-                let mut v = cur[y * w + x];
-                for dy in -1i32..=1 {
-                    for dx in -1i32..=1 {
-                        if (dx != 0 && dy != 0 && !square) || (dx == 0 && dy == 0) {
-                            continue;
-                        }
-                        let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
-                            v = pick(v, cur[ny as usize * w + nx as usize]);
-                        }
-                    }
-                }
-                nxt[y * w + x] = v;
-            }
-        }
-        std::mem::swap(&mut cur, &mut nxt);
-    }
-    cur
+    morphology::morph(src, w, h, r, grow)
 }
+
+mod morphology;
 
 /// Running max (or min) over a window of radius `r` (edge-clipped), van Herk / Gil–Werman:
 /// three comparisons per sample whatever the radius.
@@ -276,7 +255,7 @@ fn max_square(src: &[f32], w: usize, h: usize, r: usize, max: bool) -> Vec<f32> 
     let (mut g, mut hb) = (Vec::new(), Vec::new());
     let mut tmp = vec![0.0f32; w * h];
     for y in 0..h {
-        running_extreme(&src[y * w..(y + 1) * w], &mut tmp[y * w..(y + 1) * w], r, max, &mut g, &mut hb);
+        running_extreme(&src[y * w..(y + 1) * w], &mut tmp[y * w..(y + 1) * w], r.min(w.saturating_sub(1)), max, &mut g, &mut hb);
     }
     let mut out = vec![0.0f32; w * h];
     let (mut col, mut res) = (vec![0.0f32; h], vec![0.0f32; h]);
@@ -284,7 +263,7 @@ fn max_square(src: &[f32], w: usize, h: usize, r: usize, max: bool) -> Vec<f32> 
         for y in 0..h {
             col[y] = tmp[y * w + x];
         }
-        running_extreme(&col, &mut res, r, max, &mut g, &mut hb);
+        running_extreme(&col, &mut res, r.min(h.saturating_sub(1)), max, &mut g, &mut hb);
         for y in 0..h {
             out[y * w + x] = res[y];
         }
@@ -314,6 +293,13 @@ pub fn edge_width(img: &RgbImage, r: usize) -> Vec<f32> {
 
 /// Refines a soft mask buffer `m` (`w × h`) with `img` as guide (required when `radius > 0`).
 pub fn refine_buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &RefineParams) -> Vec<f32> {
+    refine_buffer_with(img, m, w, h, p, morph)
+}
+
+fn refine_buffer_with<F>(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &RefineParams, morphology: F) -> Vec<f32>
+where
+    F: Fn(&[f32], usize, usize, usize, bool) -> Vec<f32> + Copy,
+{
     let mut a = m.to_vec();
     if let (true, Some(img)) = (p.uses_image(), img) {
         let bin: Vec<bool> = m.iter().map(|v| *v >= 0.5).collect();
@@ -362,7 +348,7 @@ pub fn refine_buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &
     }
     let d = p.shift_px();
     if d != 0 {
-        a = morph(&a, w, h, d.unsigned_abs() as usize, d > 0);
+        a = morphology(&a, w, h, d.unsigned_abs() as usize, d > 0);
     }
     a
 }
@@ -371,6 +357,20 @@ pub fn refine_buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &
 /// its non-zero pixels; the result is clipped to `canvas`. `sampler` supplies the guide image
 /// (only read when `radius > 0`). Returns `None` when nothing remains selected.
 pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Sync), content: Rect, canvas: Rect, p: &RefineParams) -> Option<Region> {
+    refine_mask_with(sampler, mask, content, canvas, p, morph)
+}
+
+fn refine_mask_with<F>(
+    sampler: &dyn Sampler,
+    mask: &(dyn Fn(Rect) -> Vec<f32> + Sync),
+    content: Rect,
+    canvas: Rect,
+    p: &RefineParams,
+    morphology: F,
+) -> Option<Region>
+where
+    F: Fn(&[f32], usize, usize, usize, bool) -> Vec<f32> + Copy + Sync + Send,
+{
     let content = content.intersect(&canvas);
     if content.is_empty() {
         return None;
@@ -405,7 +405,7 @@ pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Syn
             return (*t, vec![q(first); cw * ch]);
         }
         let img = p.uses_image().then(|| sampler.rgb(r));
-        let out = refine_buffer(img.as_ref(), &m, rw, rh, p);
+        let out = refine_buffer_with(img.as_ref(), &m, rw, rh, p, morphology);
         (*t, core(&out))
     };
     #[cfg(not(target_arch = "wasm32"))]

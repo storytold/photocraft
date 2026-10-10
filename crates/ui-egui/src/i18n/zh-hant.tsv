@@ -40,6 +40,11 @@
 	New from Clipboard	從剪貼簿新增
 	Open…	開啟…
 	Open As…	開啟為…
+	Open EXR Parts…	開啟 EXR 分段…
+	Add beauty precomp from the AOVs	從 AOV 預合成美麗通道
+	Both	兩者
+	Left	左
+	Right	右
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
 	Close	關閉
@@ -89,6 +94,8 @@
 	Import	匯入
 	Browse…	瀏覽…
 	Reveal in Finder	在 Finder 中顯示
+	Show in Explorer	在檔案總管中顯示
+	Show in Folder	在資料夾中顯示
 	File Info…	檔案資訊…
 	Print…	列印…
 	Print One Copy	列印一份拷貝
@@ -814,7 +821,6 @@
 	Blending Options	混合選項
 	Blue	藍色
 	Blue, Red, Yellow	藍色、紅色、黃色
-	Both	兩者
 	Both Axes	兩軸
 	Bottom	下
 	Brightness	亮度
@@ -1133,7 +1139,6 @@
 	Leading	行距
 	Leading (set to the font size × auto-leading when Auto)	行距 (自動時設為字體大小 × 自動行距)
 	Leave as is (don't color manage)	保持原樣 (不進行色彩管理)
-	Left	左
 	Left align text	文字靠左對齊
 	Length:	長度：
 	Level	層級
@@ -1305,6 +1310,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	錄製 ● 一連串編輯，然後在任何文件上播放 ▶。
 	Red	紅色
 	Redefine style by current selection	依目前選取項目重新定義樣式
+	Refine	調整
 	Reflected Gradient	反射性漸層
 	Registration Marks	對齊標記
 	Regular	標準
@@ -1330,6 +1336,11 @@
 	{n} commands are not in PhotoCraft.	{n} 個命令在 PhotoCraft 中不存在。
 	Keyboard shortcuts imported	已匯入鍵盤快速鍵
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此處正在使用你的鍵盤快速鍵集 {set}：{n} 個快速鍵與預設值不同。可在「編輯 › 鍵盤快速鍵」中查看；「全部重設為預設值」可復原。
+	Import keyboard shortcuts?	匯入鍵盤快速鍵？
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft 在這台電腦上找到你在其他影像編輯器中的鍵盤快速鍵集 {set}：其中 {n} 個快速鍵與 PhotoCraft 不同。要匯入嗎？
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	「編輯 › 鍵盤快速鍵 › 全部重設為預設值」可復原匯入。
+	Don't Import	不匯入
+	The keyboard shortcut set was not imported: {error}	未匯入鍵盤快速鍵集：{error}
 	Reset Section	重設區段
 	Reset Transform	重設變形
 	Reset to defaults	重設為預設值
@@ -1338,7 +1349,6 @@
 	Restore All	全部還原
 	Restore Defaults	還原預設值
 	Restrictive (Web)	限制 (網頁)
-	Right	右
 	Right align text	文字靠右對齊
 	Rigid	剛性
 	Rotate:	旋轉：
@@ -1628,6 +1638,7 @@
 	Mobile	行動裝置
 	Move Tool	移動工具
 	Could not use the move tool because the layer is locked.	無法使用移動工具，因為圖層已鎖定。
+	Could not complete the Free Transform command because the layer is locked.	無法完成「任意變形」指令，因為圖層已鎖定。
 	Multiply	色彩增值
 	My Brushes	我的筆刷
 	Neutrals	中間色
@@ -2003,8 +2014,9 @@
 	Brush Preset Options	筆刷預設集選項
 	Group name	群組名稱
 	Brush name	筆刷名稱
-	Grid view	格狀檢視
-	List view	清單檢視
+	Brush Name	筆刷名稱
+	Brush Stroke	筆刷筆畫
+	Brush Tip	筆刷筆尖
 	Off: the speed of the pointer sets the spacing	關：由指標速度決定間距
 	Tilt Scale	傾斜縮放
 	Brush Projection	筆刷投影
@@ -2195,6 +2207,7 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	檢色器（文字顏色）
+	Color Picker ({name})	檢色器（{name}）
 	Color Picker (Fill Color)	檢色器（填滿顏色）
 	Fill color	填滿顏色
 	Color Picker (Stroke Color)	檢色器（筆畫顏色）
@@ -2352,7 +2365,34 @@ fontWeight	Italic	斜體
 	XOR	XOR
 	Color Burn (Paint.NET)	加深顏色 (Paint.NET)
 	Color Dodge (Paint.NET)	加亮顏色 (Paint.NET)
+	Stroke Options	筆畫選項
+	Solid	實線
+	Dashed	虛線
+	Dotted	點線
+	Alignment	對齊
+	Caps	端點
+	Butt / Flat	平頭
+	Corners	轉角
+	Miter	斜接
+	Round	圓角
+	Bevel	斜角
+	Miter limit	斜接限制
+	Dashed line	虛線
+	Dash	線段
+	Gap	間隔
+	Dash / gap lengths × stroke width	線段 / 間隔長度 × 筆畫寬度
+	Add pair	新增一對
+	Remove pair	移除一對
+	Dash offset	虛線偏移
+	Open paths use centered strokes	開放路徑使用置中筆畫
+	Use finite lengths and a positive pattern total	請使用有限長度和正數圖樣總長度
 	No subject found — try Object Selection or the Lasso	找不到主體 — 請嘗試物件選取工具或套索工具
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Use Classic Mode	使用傳統模式
+	Auto Center Preview	自動置中預視
+	Next Document	下一個文件
+	Previous Document	上一個文件
+	W x H x Resolution	寬 x 高 x 解析度
+	Front Image	前面的影像

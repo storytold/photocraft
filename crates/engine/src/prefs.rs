@@ -149,12 +149,15 @@ impl Unit {
             Unit::Percent => "%",
         }
     }
-    /// Decimal places a readout in this unit needs.
+    /// Decimal places a readout in this unit needs, following Photoshop: whole pixels, one place
+    /// for points and percent, two for millimetres, centimetres and picas, three for inches
+    /// (#2434). [`fmt_decimals`] rounds to this many places and drops trailing zeros.
     pub fn decimals(self) -> usize {
         match self {
             Unit::Pixels => 0,
-            Unit::Points | Unit::Percent | Unit::Millimeters => 1,
-            _ => 2,
+            Unit::Points | Unit::Percent => 1,
+            Unit::Millimeters | Unit::Centimeters | Unit::Picas => 2,
+            Unit::Inches => 3,
         }
     }
 }
@@ -698,11 +701,27 @@ impl Default for UnitsAndRulers {
     }
 }
 
+/// Rounds `v` to `decimals` places (half away from zero) and drops trailing zeros, so a readout
+/// never shows more precision than it has: 0.7995 at three places is `0.8`, never `0.799` or
+/// `0.800`, and a whole number keeps no `.0` (#2434).
+pub fn fmt_decimals(v: f64, decimals: usize) -> String {
+    let p = 10f64.powi(decimals as i32);
+    let r = (v * p).round() / p;
+    // -0.0 would format as "-0".
+    let r = if r == 0.0 { 0.0 } else { r };
+    let s = format!("{r:.*}", decimals);
+    // Only a fractional part may lose zeros: "550" must not become "55".
+    if !s.contains('.') {
+        return s;
+    }
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 impl UnitsAndRulers {
-    /// Format a length in document pixels in the ruler unit, e.g. `"2.50 in"`.
+    /// Format a length in document pixels in the ruler unit, e.g. `"2.5 in"`.
     pub fn format(&self, px: f64, dpi: f64, extent: f64) -> String {
         let v = self.rulers.from_px(px, dpi, extent, self.point_size.per_inch());
-        format!("{:.*}", self.rulers.decimals(), v)
+        fmt_decimals(v, self.rulers.decimals())
     }
 }
 
@@ -914,6 +933,10 @@ pub struct Preferences {
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,
+    /// The Brush Preset picker's remembered view: which card parts show (name, stroke, tip) and
+    /// the footer slider's card scale, saved as the user changes them and restored at launch.
+    /// JSON owned by the shell.
+    pub brush_picker: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
 }
@@ -1651,6 +1674,38 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
             _ => {}
         }
     }
+    // A Photoshop `.kys` set (`importKys`, its XML text) becomes `set` entries, matched by label
+    // (`crate::kys`); a key equal to the command's default restores the default, and keys given
+    // in `set` as well win over the file's.
+    let imported;
+    let mut import = None;
+    let p = match p.get("importKys") {
+        Some(xml) => {
+            let xml = xml.as_str().ok_or_else(|| bad(cmd, "`importKys` is the text of a .kys file"))?;
+            let set = crate::kys::parse(xml).map_err(|e| bad(cmd, e))?;
+            let plan = crate::kys::plan(crate::kys::command_candidates(), &set);
+            let mut merged = serde_json::Map::new();
+            for (id, sc) in &plan.set {
+                let default = crate::command_specs().iter().find(|c| c.id == id).and_then(|c| c.shortcut).and_then(normalize_shortcut);
+                merged.insert(id.clone(), if default.as_deref() == Some(sc.as_str()) { Value::Null } else { json!(sc) });
+            }
+            merged.extend(p.get("set").and_then(Value::as_object).cloned().unwrap_or_default());
+            import = Some(json!({
+                "name": set.name,
+                "imported": plan.set.len(),
+                "set": plan.set,
+                "unknown": plan.unknown,
+                "unreadable": plan.unreadable,
+                "alternates": plan.alternates,
+                "toolKeys": set.tool_keys,
+            }));
+            let mut next = p.clone();
+            next["set"] = Value::Object(merged);
+            imported = next;
+            &imported
+        }
+        None => p,
+    };
     if let Some(m) = p.get("set").and_then(Value::as_object) {
         let mut next = s.prefs().clone();
         for (id, v) in m {
@@ -1698,7 +1753,11 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let bindings: Vec<(&str, &str)> = bindable().filter_map(|(id, def)| Some((id, prefs.shortcut(id, def)?))).collect();
     let conflicts: Vec<Value> = conflicts(bindings).into_iter().map(|(sc, ids)| json!({"shortcut": sc, "commands": ids})).collect();
-    Ok(json!({"overrides": prefs.shortcuts, "commands": list, "conflicts": conflicts}))
+    let mut out = json!({"overrides": prefs.shortcuts, "commands": list, "conflicts": conflicts});
+    if let Some(import) = import {
+        out["import"] = import;
+    }
+    Ok(out)
 }
 
 /// Edit › Menus: hide/show items and give them colours.
@@ -1823,7 +1882,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
-            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false}"##,
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"?}"##,
             keyboard_shortcuts,
             true
         ),

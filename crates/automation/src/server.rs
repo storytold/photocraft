@@ -229,15 +229,20 @@ pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
-    /// studioLight, classic, solarizedDark, adwaita, adwaitaDark), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
-    /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
+    /// studioLight, classic, solarizedDark, adwaita, adwaitaDark), brushSection, brushTab,
+    /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
+    /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
+    /// on), brushPickerScale (the picker footer's card-scale slider, 0.15 to 2, 1 the standard),
+    /// brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool), eyedropperSampleSize
     /// ("point" or 1, 3, 5, 11, 31, 51, 101), eyedropperSample (current, currentAndBelow, all,
     /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool), cropOverlay (thirds,
     /// grid, diagonal, triangle, goldenRatio, goldenSpiral), cropOverlayShow (auto, always, never),
     /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
-    /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100) and
-    /// auto_adjust). Other fields are an error.
+    /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100),
+    /// auto_adjust, classic_mode and auto_center_preview), shapeStroke (an object patching width, align, cap, join, miterLimit,
+    /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
+    /// `shape.edit` names and units; colour comes from `tools.setColors`. Other fields are an error.
     pub fields: Value,
 }
 

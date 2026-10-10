@@ -489,6 +489,8 @@ fn command_t_while_typing_toggles_the_character_panel() {
 fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     let mut app = new_app();
     let id = LayerId(app.run("type.create", json!({"text":"Hello world","size":40,"color":"#000000"})).unwrap()["layer"].as_u64().unwrap());
+    let peer = LayerId(app.run("type.create", json!({"text":"Selected peer","color":"#000000"})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: id.0,
         caret: 11,
@@ -523,6 +525,7 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#0000ff"));
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "one editing-session undo step");
+    assert_eq!(rgb_at(&app, peer, 0), [0, 0, 0, 255], "a selected peer is outside the active text edit");
 }
 
 #[test]
@@ -1193,4 +1196,270 @@ fn variable_faces_list_the_weights_of_their_axis() {
 fn the_font_menu_lists_served_families() {
     photocraft_text::served::add_families(["Served Menu Test Serif".to_string()]);
     assert!(super::families().iter().any(|f| f == "Served Menu Test Serif"));
+}
+
+/// #2236: formatting applies to the selected type layers, while an active text edit stays local.
+mod multi_layer_formatting {
+    use super::*;
+    use egui::accesskit::Role;
+    use photocraft_doc::text::{AntiAlias, CharStyle, Orientation, TextAlign};
+
+    fn selected(app: &mut PhotocraftApp, ids: &[LayerId]) {
+        for (i, id) in ids.iter().enumerate() {
+            app.run("layer.select", json!({"layer": id.0, "mode": if i == 0 { "replace" } else { "add" }})).unwrap();
+        }
+    }
+
+    fn fixture() -> (PhotocraftApp, [LayerId; 3]) {
+        let mut app = new_app();
+        let ids = std::array::from_fn(|i| {
+            LayerId(
+                app.run("type.create", json!({"text": "AéBCD", "font": "Inter", "size": 12 + i * 4, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap(),
+            )
+        });
+        app.run("type.setStyle", json!({"layer": ids[0].0, "fontStyle": "Bold Italic", "tracking": 20})).unwrap();
+        selected(&mut app, &ids[..2]);
+        (app, ids)
+    }
+
+    fn style(app: &PhotocraftApp, id: LayerId, ci: usize) -> CharStyle {
+        let t = text(app, id);
+        let byte = t.text.char_indices().nth(ci).unwrap().0;
+        let mut end = 0;
+        t.char_runs()
+            .into_iter()
+            .find(|r| {
+                end += r.len;
+                byte < end
+            })
+            .unwrap()
+            .style
+    }
+
+    fn controls(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+            move |ui, app| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    if properties {
+                        ui.set_width(340.0);
+                        super::super::type_properties(app, ui);
+                    } else {
+                        ui.horizontal(|ui| super::super::options_bar(app, ui));
+                    }
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    fn number(h: &mut Harness<'static, PhotocraftApp>, index: usize, value: &str) {
+        h.get_all_by_role(Role::SpinButton).nth(index).expect("numeric field").click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.into()));
+        h.key_press(egui::Key::Enter);
+        h.run();
+    }
+
+    fn editing(app: &mut PhotocraftApp, id: LayerId) {
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id.0,
+            caret: 3,
+            anchor: 1,
+            session: "batch-type-edit".into(),
+            created: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+    }
+
+    #[test]
+    fn options_font_family_preserves_peer_faces_and_batches_layer_flags() {
+        let (app, ids) = fixture();
+        let before = ids.map(|id| style(&app, id, 0));
+        let mut h = controls(app, false);
+        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.run();
+        h.get_by_role(Role::TextInput).type_text("JetBrains");
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        for i in 0..2 {
+            let mut expected = before[i].clone();
+            expected.font_family = "JetBrains Mono".into();
+            expected.postscript_name = None;
+            assert_eq!(style(h.state(), ids[i], 0), expected, "family changes preserve each peer's face and metrics");
+        }
+        assert_eq!(style(h.state(), ids[2], 0), before[2]);
+        h.get_all_by_role(Role::ComboBox).nth(2).unwrap().click();
+        h.run();
+        h.get_by_label("Sharp").click();
+        h.run();
+        // The options bar's leading orientation icon has a tooltip but no accessibility label.
+        h.get_all_by_role(Role::Unknown).next().expect("orientation icon").click();
+        h.run();
+        for id in &ids[..2] {
+            let t = text(h.state(), *id);
+            assert_eq!(t.antialias, AntiAlias::Sharp);
+            assert_eq!(t.orientation, Orientation::Vertical);
+        }
+        assert_eq!(text(h.state(), ids[2]).orientation, Orientation::Horizontal);
+        assert_ne!(text(h.state(), ids[2]).antialias, AntiAlias::Sharp);
+    }
+
+    #[test]
+    fn properties_edit_shown_metrics_and_paragraphs_with_a_non_type_primary() {
+        let (mut app, ids) = fixture();
+        let untouched = style(&app, ids[2], 0);
+        for (id, scale) in [(ids[0], 2.0), (ids[1], 4.0)] {
+            app.run("type.edit", json!({"layer": id.0, "transform": [scale, 0.0, 0.0, scale, 0.0, 0.0]})).unwrap();
+        }
+        let raster = LayerId(app.run("layer.new.layer", json!({"name": "Selected raster"})).unwrap()["layer"].as_u64().unwrap());
+        selected(&mut app, &[ids[0], ids[1], raster]);
+        let mut h = controls(app, true);
+        number(&mut h, 0, "60");
+        // Differ from the automatic 72 pt leading so this is an actual property change.
+        number(&mut h, 1, "84");
+        h.get_by_label("Faux Bold").click();
+        h.run();
+        h.get_by_label("Center text").click();
+        h.run();
+        h.get_by_label("Hyphenate").click();
+        h.run();
+        number(&mut h, 6, "9");
+        for (id, scale) in [(ids[0], 2.0), (ids[1], 4.0)] {
+            let c = style(h.state(), id, 0);
+            assert_eq!(c.size_pt * scale, 60.0);
+            assert_eq!(c.leading_pt.unwrap() * scale, 84.0);
+            assert!(c.faux_bold);
+            let p = text(h.state(), id).paragraph_runs()[0].style.clone();
+            assert_eq!(p.align, TextAlign::Center);
+            assert!(p.hyphenate);
+            assert_eq!(p.start_indent_pt, 9.0);
+        }
+        assert_eq!(style(h.state(), ids[2], 0), untouched);
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(raster));
+        // The same controls edit only the selected Unicode span during a text session.
+        let peer = text(h.state(), ids[1]).char_runs();
+        editing(h.state_mut(), ids[0]);
+        h.run();
+        number(&mut h, 0, "40");
+        assert_eq!((size_at(h.state(), ids[0], 0), size_at(h.state(), ids[0], 1), size_at(h.state(), ids[0], 3)), (30.0, 20.0, 30.0));
+        assert_eq!(text(h.state(), ids[1]).char_runs(), peer);
+    }
+
+    #[test]
+    fn formatting_menus_isolate_the_edit_layer_and_range_but_honor_explicit_targets() {
+        let (mut app, ids) = fixture();
+        let ctx = egui::Context::default();
+        let peer = text(&app, ids[1]);
+        editing(&mut app, ids[0]);
+        for command in ["type.antiAlias.sharp", "type.orientation.vertical", "type.openType.discretionaryLigatures"] {
+            crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        }
+        assert_eq!(text(&app, ids[0]).antialias, AntiAlias::Sharp);
+        assert_eq!(text(&app, ids[0]).orientation, Orientation::Vertical);
+        assert!(!style(&app, ids[0], 0).discretionary_ligatures);
+        assert!(style(&app, ids[0], 1).discretionary_ligatures);
+        assert!(!style(&app, ids[0], 3).discretionary_ligatures);
+        assert_eq!(text(&app, ids[1]).char_runs(), peer.char_runs());
+        assert_eq!(text(&app, ids[1]).antialias, peer.antialias);
+        assert_eq!(text(&app, ids[1]).orientation, peer.orientation);
+        crate::menus::invoke(&mut app, &ctx, "type.antiAlias.crisp", json!({"layer": ids[1].0})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "type.orientation.vertical", json!({"layers": [ids[2].0]})).unwrap();
+        assert_eq!(text(&app, ids[1]).antialias, AntiAlias::Crisp);
+        assert_eq!(text(&app, ids[2]).orientation, Orientation::Vertical);
+        assert_eq!(text(&app, ids[0]).antialias, AntiAlias::Sharp);
+    }
+
+    #[test]
+    fn warp_dialog_captures_layer_selection_or_inline_edit_before_confirmation() {
+        for inline in [false, true] {
+            let (mut app, ids) = fixture();
+            if inline {
+                editing(&mut app, ids[0]);
+            }
+            let styles = ids.map(|id| text(&app, id).char_runs());
+            let steps = app.session.active().unwrap().history.entries().len();
+            crate::menus::invoke(&mut app, &egui::Context::default(), "type.warpText", json!({})).unwrap();
+            let dialog = app.ui.dialogs.last().unwrap().id;
+            let fields = &app.ui.dialogs.last().unwrap().fields;
+            if inline {
+                assert_eq!(fields["layer"], ids[0].0);
+                assert_eq!(fields["coalesce"], "batch-type-edit");
+            } else {
+                let targets = fields["layers"].as_array().unwrap();
+                assert_eq!(targets.len(), 2);
+                assert!(targets.contains(&json!(ids[0].0)) && targets.contains(&json!(ids[1].0)));
+            }
+            let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        crate::dialogs::show(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(4);
+            assert!(h.query_by_label("Bend").is_some(), "the actual Warp form is visible");
+            for label in ["Layer", "Layers", "Range", "Coalesce"] {
+                assert!(h.query_by_label(label).is_none(), "target metadata must not become a form field: {label}");
+            }
+            h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("style".into(), json!("arc"));
+            h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("bend".into(), json!(25.0));
+            selected(h.state_mut(), &[ids[2]]);
+            h.get_by_label("OK").click();
+            h.run_steps(3);
+            assert!(h.state().ui.dialogs.is_empty());
+            for (i, id) in ids.into_iter().enumerate() {
+                let t = text(h.state(), id);
+                assert_eq!(t.warp.as_ref().map(|w| w.value), (i == 0 || (!inline && i == 1)).then_some(25.0), "inline={inline}, layer={i}");
+                assert_eq!(t.char_runs(), styles[i], "Warp leaves character formatting intact");
+            }
+            assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+            if inline {
+                assert_eq!(h.state().session.active().unwrap().coalesce.as_deref(), Some("batch-type-edit"));
+            }
+        }
+    }
+
+    #[test]
+    fn text_swatch_captures_selected_targets_and_cancel_does_not_edit() {
+        let (app, ids) = fixture();
+        let originals = ids.map(|id| style(&app, id, 0));
+        let mut h = controls(app, false);
+        let steps = h.state().session.active().unwrap().history.entries().len();
+        for confirm in [false, true] {
+            selected(h.state_mut(), &ids[..2]);
+            h.run();
+            h.get_by_label("Set the text color").click();
+            h.run();
+            let dialog = h.state().ui.dialogs.last().unwrap().id;
+            h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#00ff00"));
+            selected(h.state_mut(), &[ids[2]]);
+            if confirm {
+                crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+            } else {
+                h.state_mut().ui.close_dialog(dialog).unwrap();
+            }
+            for i in 0..3 {
+                let mut expected = originals[i].clone();
+                if confirm && i < 2 {
+                    expected.color = photocraft_color::Color::rgb(0.0, 1.0, 0.0);
+                }
+                assert_eq!(style(h.state(), ids[i], 0), expected);
+            }
+            assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + usize::from(confirm));
+        }
+        assert!(h.state_mut().session.undo());
+        for (id, expected) in ids.into_iter().zip(originals) {
+            assert_eq!(style(h.state(), id, 0), expected);
+        }
+    }
 }

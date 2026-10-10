@@ -238,6 +238,23 @@ fn a_running_job_locks_its_document_but_not_others() {
 }
 
 #[test]
+fn jobs_list_puts_running_jobs_before_ended_ones() {
+    let mut s = session(64, 64);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let done = gated_job(&mut s, &gate);
+    assert!(matches!(wait_event(&mut s, done).outcome, JobOutcome::Done(_)));
+    // A second document, so the next job doesn't wait on the first one's.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let running = gated_job(&mut s, &gate);
+    let r = s.execute("jobs.list", json!({})).unwrap();
+    let listed: Vec<_> = r["jobs"].as_array().unwrap().iter().map(|j| (j["id"].clone(), j["state"].clone())).collect();
+    assert_eq!(listed, [(json!(running.0), json!("running")), (json!(done.0), json!("done"))], "{r}");
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    wait_event(&mut s, running);
+}
+
+#[test]
 fn background_job_finishes_bookkeeping_on_edited_document_after_tab_switch() {
     let mut s = session(64, 64);
     let edited_doc = s.active().unwrap().doc.id;

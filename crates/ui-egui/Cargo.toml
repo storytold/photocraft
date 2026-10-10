@@ -34,9 +34,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 base64 = "0.22"
-# Edit › Keyboard Shortcuts › Import Photoshop Shortcuts… reads Photoshop's `.kys` XML
-# (already in the tree through egui_extras → resvg → usvg).
-roxmltree = "0.20"
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
 flate2 = { workspace = true }
 
