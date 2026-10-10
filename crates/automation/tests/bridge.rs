@@ -1,6 +1,6 @@
 //! Bridge client behavior against a scripted fake control server: reconnect before
-//! idle sockets die, retry idempotent reads once, never resend edits (#1007), never
-//! retry timeouts.
+//! idle sockets die, retry only caller-vouched reads, never resend edits (#1007),
+//! never retry timeouts.
 
 use std::time::Duration;
 
@@ -81,18 +81,18 @@ async fn authenticate(socket: &mut TcpStream) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn read_retries_on_a_dropped_connection_and_edits_do_not() {
-    // Connection 1 serves one read then dies; the next read retries on connection 2.
-    // The edit, sent after connection 2 also died, must fail with the #1007 wording
-    // and never open connection 3.
+    // Connection 1 serves one read then dies; the next vouched read retries on
+    // connection 2. The edit, sent after connection 2 also died, must fail with the
+    // #1007 wording and never open connection 3.
     let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
     let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let addr = fake_server(2, After::Close, seen_tx, accepted).await;
     let bridge = BridgeClient::new(&addr, CONTROL_TOKEN).unwrap();
 
-    let first = bridge.call("document.inspect", json!({})).await.expect("read served before the connection dies");
+    let first = bridge.call_read("document.inspect", json!({})).await.expect("read served before the connection dies");
     assert_eq!(first["served"], 1);
 
-    let retried = bridge.call("document.inspect", json!({})).await.expect("idempotent read retried on a fresh connection");
+    let retried = bridge.call_read("document.inspect", json!({})).await.expect("a vouched read retried on a fresh connection");
     assert_eq!(retried["served"], 1, "connection 2 sees it as its own first request");
 
     let edit = bridge.call("engine.execute", json!({"command": "layer.new.layer", "params": {}})).await;
@@ -118,9 +118,9 @@ async fn an_idle_connection_is_replaced_before_the_next_call() {
     let addr = fake_server(2, After::KeepOpen, seen_tx, std::sync::Arc::clone(&accepted)).await;
     let bridge = BridgeClient::new(&addr, CONTROL_TOKEN).unwrap().with_idle_reconnect(Duration::from_millis(100));
 
-    bridge.call("document.inspect", json!({})).await.expect("first call connects");
+    bridge.call_read("document.inspect", json!({})).await.expect("first call connects");
     tokio::time::sleep(Duration::from_millis(250)).await;
-    bridge.call("document.inspect", json!({})).await.expect("second call reconnects after idling");
+    bridge.call_read("document.inspect", json!({})).await.expect("second call reconnects after idling");
 
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2, "the idle connection was replaced, not reused");
     let first = seen_rx.try_recv().expect("the replaced connection closed, reporting what it served");
@@ -154,12 +154,13 @@ async fn a_timed_out_call_is_not_retried() {
     });
 
     let bridge = BridgeClient::new(&addr, CONTROL_TOKEN).unwrap().with_timeout(Duration::from_millis(300));
-    let error = match bridge.call("document.inspect", json!({})).await {
+    let error = match bridge.call_read("document.inspect", json!({})).await {
         Err(e @ AutomationError::Bridge(_)) => e.to_string(),
         other => panic!("expected the bridge timeout, got {other:?}"),
     };
     assert!(error.contains("timed out after"), "{error}");
     assert!(error.contains("not drawing frames"), "{error}");
-    assert!(!error.contains("retried"), "{error}");
+    assert!(error.contains("a read may be retried safely"), "{error}");
+    assert!(!error.contains("may have completed"), "a read timeout never claims an applied edit: {error}");
     assert_eq!(requests.lock().unwrap().len(), 1, "a timed-out call is not resent");
 }
