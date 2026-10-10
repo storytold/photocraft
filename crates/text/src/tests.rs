@@ -1041,6 +1041,17 @@ fn craft_family_of(l: &crate::TextLayout) -> Vec<&'static str> {
 }
 
 #[test]
+fn arabic_in_a_latin_font_falls_back_to_a_craft_arabic_font() {
+    if !crate::CRAFT_FONTS.iter().any(|f| f.family == "Noto Sans Arabic") {
+        eprintln!("skipping: built without craft-fonts' Noto Sans Arabic");
+        return;
+    }
+    let mut e = TextEngine::new();
+    let l = e.layout(&point("مرحبا", 20.0), 72.0);
+    assert!(!l.glyphs.is_empty() && l.glyphs.iter().all(|g| g.id != 0), "notdef glyphs: Arabic did not fall back");
+}
+
+#[test]
 fn craft_fonts_cover_japanese_without_system_fonts() {
     if !crate::CRAFT_FONTS.iter().any(|f| f.is_japanese()) {
         eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");

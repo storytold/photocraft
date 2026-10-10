@@ -1,8 +1,9 @@
 //! Fonts from the optional craft-fonts build input (https://github.com/storytold/craft-fonts).
 //!
 //! `CRAFT_FONTS` is empty unless the app was built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`
-//! (see `build.rs`); every user of it must work when it is empty. Today it carries the Japanese
-//! fonts: BIZ UDPGothic (UI) and Shippori Mincho / BIZ UDMincho (serif document text). The web
+//! (see `build.rs`); every user of it must work when it is empty. It carries the Japanese
+//! fonts, BIZ UDPGothic (UI) and Shippori Mincho / BIZ UDMincho (serif document text), and the
+//! Arabic fonts (Noto Sans Arabic and the other families craft-fonts ships for Arabic). The web
 //! build (wasm32) embeds none of them: they don't fit its size cap (see `build.rs`).
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
@@ -23,6 +24,11 @@ impl CraftFont {
     /// True for a font meant for Japanese text.
     pub fn is_japanese(&self) -> bool {
         self.scripts.contains(&"Jpan")
+    }
+
+    /// True for a font meant for Arabic text.
+    pub fn is_arabic(&self) -> bool {
+        self.scripts.contains(&"Arab")
     }
 
     /// True for a Mincho (serif) face.
@@ -146,5 +152,25 @@ mod tests {
         };
         assert_eq!((first.family, first.style), (UI_JAPANESE_FAMILY, "Regular"));
         assert!(v.iter().all(|f| f.is_japanese() && !f.bytes.is_empty()));
+    }
+
+    #[test]
+    fn only_fonts_for_scripts_photocraft_registers_are_embedded() {
+        for f in CRAFT_FONTS {
+            assert!(f.is_japanese() || f.is_arabic(), "{} ({:?}) is embedded but never registered", f.family, f.scripts);
+        }
+    }
+
+    #[test]
+    fn arabic_craft_fonts_are_registered() {
+        let arabic: Vec<_> = CRAFT_FONTS.iter().filter(|f| f.is_arabic()).collect();
+        if arabic.is_empty() {
+            eprintln!("skipping: built without craft-fonts Arabic fonts (CRAFT_FONTS has none)");
+            return;
+        }
+        let mut db = crate::FontDb::new();
+        for f in arabic {
+            assert!(db.has_family(f.family), "{} is in CRAFT_FONTS but not registered", f.family);
+        }
     }
 }
