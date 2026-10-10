@@ -1187,6 +1187,21 @@ fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut Strin
         });
 }
 
+/// Interface › Language: `auto` or a language code, each language named in itself.
+fn language_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    let Some(Value::String(s)) = obj.get("language") else { return };
+    let mut cur = s.clone();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tl!("Language")).color(t.text_dim));
+        let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
+        pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
+        crate::widgets::dropdown(ui, "pref-interface.language", &mut cur, &pairs, 220.0);
+    });
+    obj.insert("language".into(), json!(cur));
+    ui.add_space(8.0);
+}
+
 fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Appearance")).strong().color(t.text));
@@ -1252,6 +1267,9 @@ fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
 fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
     if section == "interface" {
+        // First, above the tall theme cards: someone who can't read the current language must
+        // find it without scrolling (#2532).
+        language_row(ui, obj);
         appearance_rows(ui, obj, system);
     }
     if section == "performance" {
@@ -1264,7 +1282,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
             let path = format!("{section}.{k}");
             // Settings nothing reads yet stay out of the dialog (issue #204); their stored values
             // pass through untouched.
-            if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme"))
+            if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme" | "language"))
                 || prefs::is_hidden(&path)
                 || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
                 || (section == "export" && !export_field_visible(obj, &k))
@@ -1287,14 +1305,6 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                         crate::widgets::checkbox(ui, &mut b, &label);
                     }
                     obj.insert(k, json!(b));
-                }
-                Value::String(s) if path == "interface.language" => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
-                    pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
-                    let mut cur = s.clone();
-                    crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
-                    obj.insert(k, json!(cur));
                 }
                 Value::String(s) if prefs::choices(&path).is_some() => {
                     ui.label(RichText::new(tl!(&label)).color(t.text_dim));
@@ -2026,6 +2036,24 @@ mod tests {
             assert_eq!(stored(&store)["interface"]["appearanceMode"], "dark");
             assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Adwaita);
         }
+    }
+
+    #[test]
+    fn preferences_interface_shows_language_above_the_theme_cards() {
+        // #2532: in a small window the theme cards filled the page and Language sat below them.
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, _) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1000.0, 750.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let language = h.get_by_label("Language").rect();
+        let light = h.get_by_label("Light Theme").rect();
+        assert!(language.bottom() < light.top(), "Language {language:?} should sit above the theme cards {light:?}");
+        assert!(language.bottom() < 750.0, "Language {language:?} must be visible without scrolling");
     }
 
     #[test]
