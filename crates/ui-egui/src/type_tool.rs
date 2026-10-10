@@ -918,6 +918,17 @@ fn shown_scale(app: &PhotocraftApp) -> f32 {
     if k.is_finite() && k > 1e-3 { k } else { 1.0 }
 }
 
+/// The display unit for type metrics (Preferences ▸ Units & Rulers ▸ Type): the multiplier from
+/// the model's points to the unit, and its label. Pixels follow the document's resolution.
+pub(crate) fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
+    let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
+    match app.session.prefs().units_and_rulers.type_units {
+        photocraft_engine::prefs::TypeUnit::Points => (1.0, "pt"),
+        photocraft_engine::prefs::TypeUnit::Pixels => (dpi / 72.0, "px"),
+        photocraft_engine::prefs::TypeUnit::Millimeters => (25.4 / 72.0, "mm"),
+    }
+}
+
 /// Coalesce key while a field is being scrubbed: every step of one drag shares one history step
 /// (Photoshop's single step per scrub, #124). Unique per press, so two drags are two steps.
 fn drag_key(ctx: &egui::Context) -> Option<String> {
@@ -972,7 +983,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some((tl.font_family.clone(), run.as_ref().map(selected_style).unwrap_or_default(), size, styles_at(app).map_or(tl.color, |(c, _)| c.color)))
     });
     let o = app.ui.tool_options.clone();
-    let (mut fam, mut style, mut size) = match &shown {
+    let (mut fam, mut style, size) = match &shown {
         Some((f, s, z, _)) => (f.clone(), if s.is_empty() { "Regular".into() } else { s.clone() }, *z),
         None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
     };
@@ -1001,7 +1012,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
-    if crate::widgets::value_field(ui, &mut size, 1.0..=1296.0, "pt", 66.0).changed() {
+    let (unit, label) = type_unit(app);
+    let mut display = size * unit;
+    if crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 66.0).changed() {
+        let size = display / unit;
         app.ui.tool_options.type_size = size;
         apply(app, ui.ctx(), json!({"size": size, "metricsAsShown": true}));
     }
@@ -1584,6 +1598,20 @@ mod tests {
         let doc = &app.session.active().unwrap().doc;
         assert_eq!(doc.layers.last().unwrap().name, "Héllo world");
         assert!(app.ui.text_edit.is_none());
+    }
+
+    /// Preferences ▸ Units & Rulers ▸ Type switches the display unit of type metrics: points by
+    /// default, pixels by the document's resolution, or millimetres.
+    #[test]
+    fn type_unit_follows_the_units_and_rulers_preference() {
+        let mut app = app();
+        assert_eq!(type_unit(&app), (1.0, "pt"));
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "pixels"})).unwrap();
+        assert_eq!(type_unit(&app), (1.0, "px"), "a 72 ppi document: 1 pt is 1 px");
+        app.run("image.imageSize", json!({"resolution": 144, "resample": "none"})).unwrap();
+        assert_eq!(type_unit(&app), (2.0, "px"), "144 ppi: a point is two pixels");
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "mm"})).unwrap();
+        assert!((type_unit(&app).0 - 25.4 / 72.0).abs() < 1e-6, "millimetres ignore the resolution");
     }
 
     /// Preferences ▸ Type ▸ Fill new type layers with placeholder text: off, a click creates an

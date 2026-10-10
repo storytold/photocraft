@@ -371,6 +371,9 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
         }
     });
     let defined = |attrs: &Value, k: &str| attrs.get(k).is_some();
+    // Preferences ▸ Units & Rulers ▸ Type: the model stores points; the fields may show pixels
+    // (by the document's resolution) or millimetres.
+    let (type_unit, unit_label) = crate::type_tool::type_unit(app);
     egui::Grid::new(("style-opts", paragraph, id)).num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
         // (label, model key, panel key, kind)
         let rows: &[(&str, &str, &str, &str)] = &[
@@ -457,9 +460,9 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                         }
                     }
                     "pt" => {
-                        let mut x = v.as_f64().unwrap_or(0.0) as f32;
-                        if crate::widgets::value_field(ui, &mut x, -1296.0..=1296.0, " pt", 70.0).changed() {
-                            set = Some(json!({ key: x }));
+                        let mut x = v.as_f64().unwrap_or(0.0) as f32 * type_unit;
+                        if crate::widgets::value_field(ui, &mut x, -1296.0 * type_unit..=1296.0 * type_unit, &format!(" {unit_label}"), 70.0).changed() {
+                            set = Some(json!({ key: x / type_unit }));
                         }
                     }
                     _ => {
