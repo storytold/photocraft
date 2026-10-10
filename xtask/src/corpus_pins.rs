@@ -41,6 +41,9 @@ pub const ASSET_STORE_TEMPLATE_COMMIT: &str = "f671981ee89d15526285b3cc87b4393d3
 /// https://github.com/satoshoe-dev/affinity-samples (CC0-1.0): purpose-made Affinity 3 documents
 /// and exported PNG references for the gaps tracked in #1606.
 pub const AFFINITY_SAMPLES_COMMIT: &str = "96aca6bd86bbe7a677f1cf0630bd832d23943be8";
+/// https://github.com/storytold/photocraft-corpus: our JPEG XL oracles encoded by libjxl's `cjxl`
+/// (`jxl/`). Its own pin, like `gimp/`. Bump through a PR after committing there.
+pub const PHOTOCRAFT_CORPUS_JXL_COMMIT: &str = "f2c4d043d984b33f67f35014d3805ba3e76e9938";
 /// PngSuite (public domain), a fixed release archive.
 pub const PNGSUITE_URL: &str = "http://www.schaik.com/pngsuite/PngSuite-2017jul19.tgz";
 /// Fixed archive, corroborated by HTTPS records in opencodecs at 6f070029 and rivet-png at
@@ -334,8 +337,34 @@ pub const ATN: PinnedCorpus = PinnedCorpus {
     },
 };
 
+/// `corpus/jxl`: 12 tiny JPEG XL files encoded by libjxl's `cjxl` 0.7 by the photocraft-corpus
+/// generator from procedural images, plus the source JPEG of two of them (13 files, 7 KB), the
+/// oracles of `photocraft-codecs`' JPEG XL decoder (feature `jxl`).
+pub const JXL: PinnedCorpus = PinnedCorpus {
+    name: "jxl",
+    dest: "jxl",
+    upstreams: &[Upstream {
+        prefix: "",
+        repo: "storytold/photocraft-corpus",
+        commit: PHOTOCRAFT_CORPUS_JXL_COMMIT,
+        subdir: "jxl",
+        extras: &[("README.md", "README.md"), ("LICENSE-MIT", "LICENSE-MIT"), ("LICENSE-APACHE", "LICENSE-APACHE")],
+    }],
+    manifest: "xtask/jxl-corpus.sha256",
+    exts: &["jxl", "jpg"],
+    subset: false,
+    sources_md: |c| {
+        format!(
+            "# JPEG XL oracle corpus\n\n`jxl/` of https://github.com/storytold/photocraft-corpus at commit {PHOTOCRAFT_CORPUS_JXL_COMMIT} \
+             (see `README.md`). MIT OR Apache-2.0, authored by the PhotoCraft contributors with libjxl's `cjxl`. Fetched and sha256-verified by \
+             `cargo xtask corpus --jxl` against `{}`. Gitignored; never commit these files.\n",
+            c.manifest
+        )
+    },
+};
+
 /// Every pinned corpus, in fetch order.
-pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &GIMP, &HEIF, &EXR, &AFFINITY, &ATN];
+pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &GIMP, &JXL, &HEIF, &EXR, &AFFINITY, &ATN];
 
 /// `corpus/pixls`: real camera raws from <https://raw.pixls.us> (released into the public
 /// domain / CC0 by their photographers; see ATTRIBUTION.md). One file per decode path
