@@ -51,6 +51,12 @@ Implemented only from public specifications, papers and observation of files:
   predictor groups with per-parity predictors, the 2/4/8-bit field widths, the page-permuted
   downward bit order and the black level sitting 15 counts above the recorded tags were all
   established by observation of sample files.
+* Padded uncompressed Olympus ORF: the accepted prose and file measurements in
+  [LightCraft #651](https://github.com/storytold/lightcraft/pull/651), contributed by radialmonster with
+  earlier measurements by voshart. Independently implemented here from that description and
+  direct byte measurements of CC0 E-300 / E-500 / E-330 files: one little-endian TIFF strip,
+  ten LSB-first 12-bit samples in 15 bytes followed by one zero byte, with whole blocks per row.
+  No LightCraft decoder source was used. This does not describe Olympus compressed ORF.
 * Demosaicing: Malvar, He & Cutler (ICASSP 2004); Hirakawa & Parks, "Adaptive
   homogeneity-directed demosaicing" (IEEE TIP 2005); for X-Trans and other non-Bayer CFAs,
   gradient-weighted green interpolation (Lu & Tan, "Color filter array demosaicking: new method
@@ -79,6 +85,7 @@ camera colour tables were copied.
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Panasonic / Leica RW2, RawFormat 3 and 4 (vendor-compressed, 12-bit) | Decoded; the black level is read 15 counts above the recorded tag; PanasonicRaw white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
+| Olympus ORF, padded uncompressed 12-bit (E-300, E-500, E-330) | Decoded, including files declaring 16-bit samples; exact single-strip 12.8-bit-per-pixel storage only. Reuses the file's CFA / ImageProcessing metadata and existing uncalibrated colour fallback |
 | Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |
 | Fujifilm compressed RAF, early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported (no public description of the compression); preview fallback |
