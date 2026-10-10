@@ -1159,7 +1159,9 @@ fn thai_in_latin_font_falls_back_to_installed_thai_font() {
     let (family, bytes, index) = e.fonts.fallback_face_for('ก').expect("a face covering Thai");
     assert!(!family.is_empty());
     let face = skrifa::FontRef::from_index(&bytes, index).expect("the returned face parses");
-    assert!(face.charmap().map('ก').is_some_and(|g| g.to_u32() != 0), "{family} does not cover Thai");
+    let cmap = face.charmap();
+    assert!(cmap.map('ก').is_some_and(|g| g.to_u32() != 0), "{family} does not cover Thai");
+    assert!(!cmap.map('漢').is_some_and(|g| g.to_u32() != 0), "{family} also covers Han; it would shadow the locale CJK fonts");
     let l = e.layout(&point(THAI_SAMPLE, 24.0), 72.0);
     assert!(!l.glyphs.is_empty());
     assert!(l.glyphs.iter().all(|g| g.id != 0), "Thai drawn with .notdef although {thai} is installed");

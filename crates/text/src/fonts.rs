@@ -87,6 +87,13 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
     v
 }
 
+/// Does a face cover CJK (a Han, Kana or Hangul representative)? A broad fallback such as Arial
+/// Unicode does; a script font (Thai, Arabic) does not. Used to keep a broad fallback from
+/// shadowing the UI shell's locale-ordered CJK fonts.
+fn covers_cjk(cmap: &skrifa::charmap::Charmap<'_>) -> bool {
+    [0x4E00_u32, 0x3042, 0xAC00].iter().any(|&u| char::from_u32(u).is_some_and(|c| cmap.map(c).is_some_and(|g| g.to_u32() != 0)))
+}
+
 /// Bumped whenever font data is registered: fonts can arrive after start (the web build fetches
 /// served fonts on demand, [`crate::served`]), so lists derived from the database, such as font
 /// menus, compare it to know when to refresh.
@@ -333,30 +340,41 @@ impl FontDb {
     /// fallback font, so a Layer name in a script the bundled UI fonts lack (Thai, Arabic, …)
     /// draws instead of a missing-glyph box. `None` for ASCII or when nothing installed covers it.
     ///
-    /// Bounded by [`MAX_FALLBACK_FACE_BYTES`]; malformed data yields no face, never a panic.
+    /// The Regular (400, upright) face of each family is chosen, like the UI's Inter Regular. For
+    /// a non-CJK character a face that also covers CJK is skipped: a broad font such as Arial
+    /// Unicode must not shadow the shell's locale-ordered CJK fonts (the canvas keeps CJK ahead of
+    /// it in the same way). Bounded by [`MAX_FALLBACK_FACE_BYTES`]; malformed data yields no face,
+    /// never a panic.
     pub fn fallback_face_for(&mut self, c: char) -> Option<(String, Vec<u8>, u32)> {
         if c.is_ascii() {
             return None;
         }
+        let non_cjk = crate::cjk::classify(c).is_none();
         for name in self.fallbacks.clone() {
             let Some(info) = self.fcx.collection.family_by_name(&name) else {
                 continue;
             };
-            for font in info.fonts() {
-                let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else {
-                    continue;
-                };
-                let bytes: &[u8] = blob.as_ref();
-                if bytes.len() as u64 > MAX_FALLBACK_FACE_BYTES {
-                    continue;
-                }
-                let Ok(face) = skrifa::FontRef::from_index(bytes, font.index()) else {
-                    continue;
-                };
-                if face.charmap().map(c).is_some_and(|g| g.to_u32() != 0) {
-                    return Some((name.clone(), bytes.to_vec(), font.index()));
-                }
+            let Some(font) = info.match_font(FontWidth::default(), FontStyle::Normal, FontWeight::new(400.0), true) else {
+                continue;
+            };
+            let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else {
+                continue;
+            };
+            let bytes: &[u8] = blob.as_ref();
+            if bytes.len() as u64 > MAX_FALLBACK_FACE_BYTES {
+                continue;
             }
+            let Ok(face) = skrifa::FontRef::from_index(bytes, font.index()) else {
+                continue;
+            };
+            let cmap = face.charmap();
+            if !cmap.map(c).is_some_and(|g| g.to_u32() != 0) {
+                continue;
+            }
+            if non_cjk && covers_cjk(&cmap) {
+                continue;
+            }
+            return Some((name.clone(), bytes.to_vec(), font.index()));
         }
         None
     }
@@ -675,6 +693,26 @@ mod tests {
         assert!(db.fallback_face_for('a').is_none());
         assert!(db.fallback_face_for('ก').is_none());
         assert!(db.fallback_face_for('\u{0627}').is_none());
+    }
+
+    /// The Regular face is chosen, not whichever face the family lists first: a Medium face must
+    /// not be handed to the UI as the fallback for an ordinary label.
+    #[test]
+    fn fallback_face_selects_the_regular_face() {
+        let mut db = super::FontDb::new();
+        db.fallbacks = vec!["Inter".to_string()];
+        let (family, bytes, index) = db.fallback_face_for('é').expect("Inter covers é");
+        assert_eq!((family.as_str(), index), ("Inter", 0));
+        assert_eq!(bytes, *super::INTER_REGULAR, "the Regular face, not Medium or SemiBold");
+    }
+
+    /// The broad-font guard used by [`super::FontDb::fallback_face_for`]: Inter is not broad, a
+    /// CJK-covering font like Arial Unicode is.
+    #[test]
+    fn a_broad_face_is_recognised_as_covering_cjk() {
+        use skrifa::MetadataProvider as _;
+        let inter = skrifa::FontRef::new(super::INTER_REGULAR.as_slice()).expect("Inter parses");
+        assert!(!super::covers_cjk(&inter.charmap()), "Inter does not cover CJK");
     }
 }
 
