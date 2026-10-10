@@ -180,6 +180,10 @@ fn step_label(id: &str, params: &Value) -> String {
     if id == "actions.play" {
         let target = params.get("action").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();
         format!("{}: {target}", label_of(id))
+    } else if id == "layer.select" {
+        let target =
+            params.get("name").and_then(Value::as_str).map(str::to_owned).or_else(|| params.get("layer").and_then(Value::as_u64).map(|id| format!("ID {id}")));
+        target.map_or_else(|| label_of(id), |target| format!("{} ({target})", label_of(id)))
     } else {
         label_of(id)
     }
@@ -435,6 +439,25 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_layer_name_is_visible_during_recording_and_after_stop() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":4,"height":4})).unwrap();
+        app.run("layer.setProps", json!({"name":"Background"})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.run("actions.record", json!({"name":"Select photo"})).unwrap();
+        app.ui.actions.expanded = vec![true];
+        app.run("layer.select", json!({"layer":layer.0})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(400.0, 260.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(4);
+        h.get_by_label("Select Layer (Background)");
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+        h.run_steps(4);
+        h.get_by_label("Select Layer (Background)");
+        assert_eq!(step_label("layer.select", &json!({"layer":26})), "Select Layer (ID 26)");
+    }
 
     #[test]
     fn play_button_targets_first_action_if_nothing_is_selected() {

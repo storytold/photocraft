@@ -82,7 +82,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 |---|---|
 | `file.new` | `{"width":1920,"height":1080,"mode":"rgb","depth":8,"background":"white"}` |
 | `layer.new.layer` | `{"name":"Ink"}` |
-| `layer.select` | `{"layer":id,"mode":"replace\|toggle\|range\|add"}`: ⌘-click = toggle, ⇧-click = range; `document.inspect` reports `selectedLayers` and a per-layer `selected` flag |
+| `layer.select` | `{"layer":id,"mode":"replace\|toggle\|range\|add"}` or `{"name":"Background","occurrence":0?}` (occurrence is zero-based document walk order; required for duplicate names): ⌘-click = toggle, ⇧-click = range; `document.inspect` reports `selectedLayers` and a per-layer `selected` flag |
 | `channel.target` / `channel.setVisible` | Channels panel target and eyes (`"composite"`, colour name, alpha index or name, `"quickMask"`). `document.inspect` (and `channel.list`) report `channels`: composite/colour/alpha rows with visibility, channel options, `quickMask`, `target`. Pixel commands without a `target` param follow the targeted channel |
 | `layer.setProps` | `{"layer":id?,"name":…,"visible":…,"opacity":0..1,"blend":"Multiply"}` |
 | `layer.fill.solidColor.set` | `{"layer":id?,"document":id?,"color":"#rrggbb"}`: edit a Solid Color Fill in one undo step; RGB without alpha preserves the fill's alpha. Float RGB arrays and a stored `Color` are also accepted. `document` rejects stale dialog targets. |
@@ -481,6 +481,16 @@ visibility reset when the dialog opens. HDR scopes are not implemented. See
 [camera-raw-histogram.md](camera-raw-histogram.md).
 
 ### Editing and composing actions
+
+Newly recorded Select Layer steps store the layer name instead of a document-specific ID,
+and the Actions panel shows `Select Layer (Background)`. Duplicate names include a zero-based
+`occurrence` in document walk order (including layers inside groups); keep that order consistent
+between source and target documents. A missing name or occurrence stops playback; a name without
+an occurrence is rejected when ambiguous. Names are captured at selection time, so a later
+rename in the action does not change the earlier target. Numeric `layer` IDs remain supported
+for direct commands and older recordings, which the panel labels `Select Layer (ID 26)`.
+Re-record old Select Layer steps: their original names cannot be recovered from an ID alone.
+
 
 Creating an action scrolls its row into view; newly recorded steps are revealed immediately.
 Drag a step above or below another step in the same action to reorder it. Drag an action header

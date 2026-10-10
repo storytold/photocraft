@@ -585,7 +585,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id,"mode":"replace|toggle|range|add"="replace"} (toggle = ⌘-click, range = ⇧-click)"##,
+            r##"{"layer":id | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add"="replace"} (name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),

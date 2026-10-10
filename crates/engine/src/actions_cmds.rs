@@ -575,6 +575,96 @@ mod tests {
     }
 
     #[test]
+    fn recorded_layer_selection_replays_by_name_on_another_document() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+            let original = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.setProps", json!({"name": "Photo"})).unwrap();
+            s.execute("layer.new.layer", json!({"name": "LogoBase"})).unwrap();
+            s.execute("actions.record", json!({"name": "Duplicate photo"})).unwrap();
+            s.execute("layer.select", json!({"layer": original.0, "mode": "replace"})).unwrap();
+            // The target name must be captured now, not when recording stops.
+            s.execute("layer.setProps", json!({"name": "Retouched"})).unwrap();
+            s.execute("layer.duplicate", json!({})).unwrap();
+            s.execute("actions.stop", json!({})).unwrap();
+            assert_eq!(s.actions.list[0].steps[0].1, json!({"name":"Photo", "mode":"replace"}));
+            // Persisted actions must work in an entirely different session too.
+            let saved = serde_json::to_string(&s.actions.list).unwrap();
+            let mut replay = Session::new();
+            replay.actions.list = serde_json::from_str(&saved).unwrap();
+            replay.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+            replay.execute("layer.setProps", json!({"name": "Photo"})).unwrap();
+            let target = replay.active().unwrap().active_layer.unwrap();
+            assert_ne!(original, target);
+            replay.execute("layer.new.layer", json!({"name": "LogoBase"})).unwrap();
+            let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+            assert!(result.get("failed").is_none(), "{result}");
+            assert_eq!(result["ran"], 3);
+            assert_eq!(replay.active().unwrap().doc.layer(target).unwrap().name, "Retouched");
+            let active = replay.active().unwrap().active_layer.unwrap();
+            assert_eq!(replay.active().unwrap().doc.layer(active).unwrap().name, "Retouched copy");
+        }
+    }
+
+    #[test]
+    fn named_selection_preserves_modes_and_duplicate_occurrences() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        s.execute("layer.setProps", json!({"name":"Photo"})).unwrap();
+        let first = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.group", json!({"name":"Group"})).unwrap();
+        // A duplicate nested in a group must be found even when that group is collapsed.
+        let second = s
+            .edit("child", |doc, active| {
+                let child = photocraft_doc::Layer::raster("Photo", doc.pixel_format());
+                let id = child.id;
+                if let photocraft_doc::LayerContent::Group(group) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
+                    group.children.push(child);
+                    group.expanded = false;
+                }
+                Ok(id)
+            })
+            .unwrap();
+        s.execute("actions.record", json!({"name":"Select duplicates"})).unwrap();
+        s.execute("layer.select", json!({"layer":first.0})).unwrap();
+        s.execute("layer.select", json!({"layer":second.0,"mode":"add"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(s.actions.list[0].steps[0].1, json!({"name":"Photo","occurrence":0}));
+        assert_eq!(s.actions.list[0].steps[1].1, json!({"name":"Photo","occurrence":1,"mode":"add"}));
+        s.execute("layer.select", json!({"layer":first.0})).unwrap();
+        let r = s.execute("actions.play", json!({"action":0})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        assert_eq!(s.active().unwrap().selected_layers(), vec![first, second]);
+        s.execute("layer.select", json!({"name":"Photo","occurrence":1,"mode":"toggle"})).unwrap();
+        assert_eq!(s.active().unwrap().selected_layers(), vec![first]);
+        s.execute("layer.select", json!({"name":"Photo","occurrence":1,"mode":"range"})).unwrap();
+        assert!(s.active().unwrap().selected_layers().contains(&second));
+        for p in [
+            json!({"name":"absent"}),
+            json!({"name":"Photo"}),
+            json!({"name":1}),
+            json!({"name":"Photo","occurrence":-1}),
+            json!({"name":"Photo","occurrence":1.5}),
+            json!({"name":"Photo","occurrence":99}),
+            json!({"name":"Photo","layer":first.0}),
+            json!({"layer":first.0,"occurrence":0}),
+        ] {
+            let before = s.active().unwrap().selected_layers();
+            assert!(s.execute("layer.select", p.clone()).is_err(), "{p}");
+            assert_eq!(s.active().unwrap().selected_layers(), before);
+        }
+        s.actions
+            .list
+            .push(Action { name: "Missing".into(), steps: vec![("layer.select".into(), json!({"name":"absent"})), ("layer.duplicate".into(), json!({}))] });
+        let before = s.active().unwrap().doc.walk().len();
+        let result = s.execute("actions.play", json!({"action":"Missing"})).unwrap();
+        assert_eq!(result["ran"], 0);
+        assert!(result["failed"]["error"].as_str().unwrap().contains("absent"));
+        assert_eq!(s.active().unwrap().doc.walk().len(), before);
+    }
+
+    #[test]
     fn play_stops_at_the_failing_step_and_reports_it() {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
