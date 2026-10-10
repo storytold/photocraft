@@ -183,6 +183,17 @@ fn pencil_dabs_sit_on_the_pixel_grid() {
         }
     }
     assert_eq!(s.rgba(9, 5)[3], 1.0);
+
+    // A 12 px Pencil dab with the default round tip must fill the complete square shown by its
+    // cursor, rather than only the inscribed circle. Regression for the cursor/renderer mismatch.
+    let b = BrushSettings { size: 12.0, ..b };
+    let s = paint(&b, &[StrokePoint::new(24.0, 16.0, 1.0)], 48, 32);
+    for y in 0..32 {
+        for x in 0..48 {
+            let inside = (18..30).contains(&x) && (10..22).contains(&y);
+            assert_eq!(s.rgba(x, y)[3], if inside { 1.0 } else { 0.0 }, "({x},{y})");
+        }
+    }
 }
 
 // ---------- spacing ----------

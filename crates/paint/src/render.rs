@@ -153,7 +153,14 @@ impl BrushContext {
     /// Bounding rectangle of a dab (rotated sampled tips need the corner reach).
     pub fn dab_rect(&self, d: &Dab, dual: bool) -> Rect {
         let sampled = if dual { self.dual_tip.is_some() } else { self.tip.is_some() };
-        let reach = if sampled { d.radius * std::f32::consts::SQRT_2 } else { d.radius };
+        let aliased = self.brush.aliased && !dual;
+        let reach = if aliased {
+            (2.0 * d.radius).round().max(1.0) * 0.5 * std::f32::consts::SQRT_2
+        } else if sampled {
+            d.radius * std::f32::consts::SQRT_2
+        } else {
+            d.radius
+        };
         rect_around(d, reach)
     }
 
@@ -196,33 +203,43 @@ impl BrushContext {
             for xx in 0..w {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
-                // To y-up, project, rotate by -angle, flip.
-                let (mut ux, mut uy) = (dx, -dy);
-                if let Some((ax, ay, k)) = proj {
-                    let t = (ux * ax + uy * ay) * k;
-                    ux += t * ax;
-                    uy += t * ay;
-                }
-                let u = (ux * cs + uy * sn) * fx;
-                let v = (-ux * sn + uy * cs) * fy;
-                let (mut val, rn) = match mips {
-                    None => {
-                        let d2 = (u * ro).powi(2) + v * v;
-                        if d2 >= reach2 {
-                            continue;
-                        }
-                        let dd = d2.sqrt();
-                        let val = if aliased { if dd <= rm { 1.0 } else { 0.0 } } else { dab_coverage(dd, rm, hardness) };
-                        (val, dd / rm)
+                // Pencil dabs are whole-pixel, axis-aligned squares. The cursor uses this same
+                // snapped centre and rounded diameter; applying the selected brush-tip mask here
+                // made the Pencil cursor square while a default round tip still painted a circle.
+                let (mut val, rn) = if aliased {
+                    let half = (2.0 * r).round().max(1.0) * 0.5;
+                    if dx.abs() >= half || dy.abs() >= half {
+                        continue;
                     }
-                    Some(m) => {
-                        let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
-                        if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
-                            continue;
+                    (1.0, (dx.abs().max(dy.abs()) / half).clamp(0.0, 1.0))
+                } else {
+                    // To y-up, project, rotate by -angle, flip.
+                    let (mut ux, mut uy) = (dx, -dy);
+                    if let Some((ax, ay, k)) = proj {
+                        let t = (ux * ax + uy * ay) * k;
+                        ux += t * ax;
+                        uy += t * ay;
+                    }
+                    let u = (ux * cs + uy * sn) * fx;
+                    let v = (-ux * sn + uy * cs) * fy;
+                    match mips {
+                        None => {
+                            let d2 = (u * ro).powi(2) + v * v;
+                            if d2 >= reach2 {
+                                continue;
+                            }
+                            let dd = d2.sqrt();
+                            let val = dab_coverage(dd, rm, hardness);
+                            (val, dd / rm)
                         }
-                        let s = m.sample_clamped(level, px / tw, py / th);
-                        let val = if aliased { if s >= 0.5 { 1.0 } else { 0.0 } } else { s };
-                        (val, 1.0 - s)
+                        Some(m) => {
+                            let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
+                            if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
+                                continue;
+                            }
+                            let s = m.sample_clamped(level, px / tw, py / th);
+                            (s, 1.0 - s)
+                        }
                     }
                 };
                 if val <= 0.0 {
