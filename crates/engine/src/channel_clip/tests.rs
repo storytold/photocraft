@@ -128,3 +128,22 @@ fn copying_and_pasting_channels_fail_cleanly() {
     assert!(s.execute("edit.paste", json!({})).is_err());
     assert_eq!(px(&s, 5, 5), before);
 }
+
+#[test]
+fn cut_a_colour_channel_clears_only_that_channel() {
+    let mut s = session(8);
+    let (left, right) = (px(&s, 5, 5), px(&s, 30, 5));
+    s.tools.background = [0.8, 0.1, 0.9, 1.0];
+    s.execute("channel.target", json!({"channel": "red"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.cut", json!({})).unwrap();
+    let clip = s.clipboard.as_ref().unwrap();
+    assert_eq!(clip.surface.format().mode, ColorMode::Grayscale, "the red channel copies as grayscale");
+    assert!(near(&clip.surface.pixel(5, 5), &[left[0], 1.0]), "the clip holds the old red, {:?}", clip.surface.pixel(5, 5));
+    // Red takes the background colour's red; green, blue and transparency stay.
+    assert!(near(&px(&s, 5, 5), &[0.8, left[1], left[2], 1.0]), "{:?}", px(&s, 5, 5));
+    assert!(near(&px(&s, 15, 5), &left), "outside the selection");
+    assert!(near(&px(&s, 30, 5), &right));
+    s.undo();
+    assert!(near(&px(&s, 5, 5), &left), "one undoable step");
+}

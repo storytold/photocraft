@@ -6,9 +6,11 @@
 //!   active layer, instead of making a new layer. The other channels and the layer's transparency
 //!   stay as they are. Pasting into an alpha channel, a layer mask or the Quick Mask goes through
 //!   [`crate::edit_cmds::paste_to_target`].
+//! - Cut with a colour channel targeted copies that channel and fills the cut area of that channel
+//!   only with the background colour (#2698).
 
 use photocraft_color::{ColorMode, PixelFormat};
-use photocraft_doc::Layer;
+use photocraft_doc::{Layer, LayerId};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -111,6 +113,45 @@ pub(crate) fn paste(s: &mut Session, p: &Value, k: usize, in_place: bool, limit:
         Ok(())
     })?;
     Ok(json!({"layer": id.0, "channel": k, "offset": [dx, dy]}))
+}
+
+/// Cut with colour channel `k` of layer `id` targeted (#2698): copy the channel as [`copy`] does,
+/// then fill the selected area (or the canvas) of that channel only with the background colour's
+/// value for it, as Photoshop does. The other channels and the layer's transparency stay as they
+/// are. One history step.
+pub(crate) fn cut(s: &mut Session, id: LayerId, k: usize) -> Result<Value> {
+    let r = copy(s)?.ok_or_else(|| EngineError::Other("no colour channel is targeted".into()))?;
+    let bg = s.tools.background;
+    s.edit("Cut Pixels", |doc, _| {
+        let canvas = doc.bounds();
+        let sel = doc.selection.clone();
+        let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+        let fmt = surf.format();
+        let n = fmt.channels();
+        if k >= n {
+            return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
+        }
+        if area.is_empty() {
+            return Ok(());
+        }
+        // The background colour in the layer's colour model, so `k` picks the right component.
+        let mut enc = [0.0f32; 8];
+        photocraft_raster::from_rgba_into(&fmt, [bg[0], bg[1], bg[2], 1.0], &mut enc);
+        let v = enc.get(k).copied().unwrap_or(0.0);
+        let cover = sel.map(|m| (m.read_region(area), m.format().channels().max(1)));
+        let mut px = surf.read_region(area);
+        for (i, p) in px.chunks_exact_mut(n).enumerate() {
+            let w = cover.as_ref().map_or(1.0, |(m, mk)| m.get(i * mk).copied().unwrap_or(0.0));
+            if let Some(c) = p.get_mut(k) {
+                *c += (v - *c) * w.clamp(0.0, 1.0);
+            }
+        }
+        surf.write_region(area, &px);
+        surf.prune();
+        Ok(())
+    })?;
+    Ok(r)
 }
 
 /// Copy reads only: with an alpha channel targeted it needs no pixel layer.

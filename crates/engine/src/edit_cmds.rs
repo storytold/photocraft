@@ -546,10 +546,14 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
-        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{}", has_pixels, |s, _| {
+        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{} (a targeted colour channel cuts that channel only)", has_pixels, |s, p| {
             // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
             let id = active_id(s)?;
             crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+            // A targeted colour channel cuts that channel only (#2698).
+            if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+                return crate::channel_clip::cut(s, id, k);
+            }
             let r = copy(s, false)?;
             let bg = s.tools.background;
             s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
