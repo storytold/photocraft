@@ -111,10 +111,7 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
         app.run("plugin.install", json!({"path": path})).unwrap();
         let items = crate::menus::menu_items(&app);
-        let me = items
-            .iter()
-            .find(|i| i.id == "plugin.filter.org.photocraft.example.invert")
-            .expect("plug-in listed");
+        let me = items.iter().find(|i| i.id == "plugin.filter.org.photocraft.example.invert").expect("plug-in listed");
         assert_eq!(me.path, ["Filter", "Plug-ins"], "plug-in row sits where the menu renderer looks for it");
         let install = items.iter().find(|i| i.id == "plugin.install").expect("Install Plug-in… listed");
         assert_eq!(me.path, install.path, "same submenu as Install Plug-in…");
