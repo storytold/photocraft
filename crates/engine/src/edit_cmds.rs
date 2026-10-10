@@ -55,6 +55,11 @@ fn has_layer_pixels(s: &Session) -> std::result::Result<(), String> {
     active_layer(s)?.surface().map(|_| ()).ok_or_else(|| "the active layer has no pixels".into())
 }
 
+/// Copy also copies a targeted alpha channel, with or without a pixel layer (#2307).
+fn can_copy(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_clip::copies_alpha_channel(s) { Ok(()) } else { has_layer_pixels(s) }
+}
+
 fn has_clip(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     s.clipboard.as_ref().map(|_| ()).ok_or_else(|| "the clipboard is empty".into())
@@ -160,6 +165,10 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return paste_to_target(s, p, in_place, None, "Paste");
     }
+    // A targeted colour channel takes the paste instead of a new layer (#2307).
+    if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+        return crate::channel_clip::paste(s, p, k, in_place, None, "Paste");
+    }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
     let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
@@ -180,7 +189,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
 /// canvas and no `center` is given), else onto `center` (the view centre from the UI) or the
 /// canvas centre.
-fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
+pub(crate) fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
     if in_place || (clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
         return (0, 0);
     }
@@ -190,7 +199,7 @@ fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i
     ((cx - (b.x0 + b.x1) as f64 / 2.0).round() as i32, (cy - (b.y0 + b.y1) as f64 / 2.0).round() as i32)
 }
 
-fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
+pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
     if dx == 0 && dy == 0 { surface.clone() } else { photocraft_algo::resample::translate_surface(surface, dx, dy) }
 }
 
@@ -546,7 +555,12 @@ pub fn specs() -> Vec<CommandSpec> {
             s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
             Ok(r)
         }),
-        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", has_layer_pixels, |s, _| copy(s, false)),
+        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{} (a targeted colour or alpha channel copies that channel, as grayscale)", can_copy, |s, _| {
+            match crate::channel_clip::copy(s)? {
+                Some(r) => Ok(r),
+                None => copy(s, false),
+            }
+        }),
         spec!("edit.copyMerged", "Copy Merged", &["Edit"], Some("Cmd+Shift+C"), "{}", has_doc, |s, _| copy(s, true)),
         spec!(
             "edit.paste",
