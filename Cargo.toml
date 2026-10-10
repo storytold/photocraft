@@ -73,20 +73,19 @@ codegen-units = 1
 
 # The browser build (apps/photocraft-web, `data-cargo-profile` in its index.html). Hosts cap the
 # size of a single file (Cloudflare Pages/Workers: 25 MiB), and the wasm is downloaded on every
-# visit, so this profile optimizes for size: fat LTO, and opt-level "s" for everything except the
+# visit, so this profile optimizes for size: fat LTO, and opt-level "z" for everything except the
 # pixel-processing crates, which keep opt-level 3 so filters and compositing stay fast. panic
 # stays the target default (wasm32-unknown-unknown aborts; AGENTS.md's `panic = "unwind"` is for
-# the native app shell). packaging/web/package.sh fails the build above 24 MiB. Issue #198:
-# this took the wasm from 26.3 MiB (release profile) to 18.8 MiB.
+# the native app shell). packaging/web/package.sh fails the build above 24 MiB (#198, #2213).
 [profile.wasm-release]
 inherits = "release"
-opt-level = "s"
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = "debuginfo"
 
 [profile.wasm-release.package."*"]
-opt-level = "s"
+opt-level = "z"
 
 [profile.wasm-release.package.photocraft-raster]
 opt-level = 3
