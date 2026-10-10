@@ -305,6 +305,7 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
         FileDialogRequest::Save { suggested } => suggested.clone(),
         other => panic!("save dialog expected, got {other:?}"),
     };
+    let joined = |dir: &str, name: &str| std::path::Path::new(dir).join(name).to_string_lossy().into_owned();
     // An export starts beside the document; the user saves it under /renders instead.
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
