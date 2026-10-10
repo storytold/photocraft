@@ -221,6 +221,7 @@ pub fn has_dialog(command: &str) -> bool {
                 | "layer.layerStyle.globalLight"
                 | "image.mode.colorTable"
                 | "edit.definePattern"
+                | "type.warpText"
         ))
         && photocraft_engine::commands::find(command).is_some_and(|c| !parse_spec(c.params).is_empty())
 }
@@ -292,6 +293,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut fields);
     }
+    if command == "type.warpText" {
+        warp_defaults(app, &mut fields);
+    }
     // Photoshop's Pattern Name dialog starts from the name the pattern would get anyway.
     if command == "edit.definePattern" {
         fields.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
@@ -315,6 +319,28 @@ fn straighten_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     }
     fields.insert("angle".into(), json!(rot.abs()));
     fields.insert("direction".into(), json!(if rot < 0.0 { "ccw" } else { "cw" }));
+}
+
+/// Warp Text edits the type layers it opened on (the selected ones, or the one being edited) and
+/// starts from the warp the shown layer has, or None, never from remembered values (#218).
+fn warp_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    if let Some(Value::Object(targets)) = crate::type_tool::formatting_params(app) {
+        fields.extend(targets);
+    }
+    let warp = crate::type_tool::target_text(app).and_then(|t| t.warp.clone());
+    let w = warp.unwrap_or(photocraft_doc::text::TextWarp {
+        style: "warpNone".into(),
+        value: 50.0,
+        horizontal_distortion: 0.0,
+        vertical_distortion: 0.0,
+        horizontal: true,
+    });
+    // A style without a short id (from a PSD) shows as None, with the layer's values.
+    fields.insert("style".into(), json!(photocraft_text::warp::short_style(&w.style).unwrap_or("none")));
+    fields.insert("bend".into(), json!(w.value));
+    fields.insert("horizontalDistortion".into(), json!(w.horizontal_distortion));
+    fields.insert("verticalDistortion".into(), json!(w.vertical_distortion));
+    fields.insert("orientation".into(), json!(if w.horizontal { "horizontal" } else { "vertical" }));
 }
 
 /// A filter dialog with live preview for `command` whose parameters follow `spec` (registry

@@ -892,6 +892,12 @@ fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
     Some((id.0, None))
 }
 
+/// The type layer whose properties the Type controls and dialogs show (see [`target`]).
+pub(crate) fn target_text(app: &PhotocraftApp) -> Option<&TextLayer> {
+    let (id, _) = target(app)?;
+    text_layer(&app.session.active()?.doc, LayerId(id))
+}
+
 /// Snapshot the mutation scope separately from the representative used to display properties.
 /// An inline edit remains on its layer/range; layer selection formats every selected type layer.
 pub(crate) fn formatting_params(app: &PhotocraftApp) -> Option<serde_json::Value> {
