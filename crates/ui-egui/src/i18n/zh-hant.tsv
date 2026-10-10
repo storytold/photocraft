@@ -2408,3 +2408,9 @@ fontWeight	Italic	斜體
 
 	Thumbnail size	縮圖大小
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-按一下加入頁面。Shift-按一下選取範圍。
+
+	Place PDF pages as smart objects	將 PDF 頁面置入為智慧型物件
+	{count} pages • Each selected page becomes a smart object layer	{count} 頁 • 每個選取的頁面成為一個智慧型物件圖層
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	智慧型物件包含依此解析度點陣化的頁面。PDF 文字和向量仍維持點陣化。
+	Place all {count} pages	置入全部 {count} 頁
+	Place selected ({count})	置入選取頁面 ({count})

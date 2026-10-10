@@ -2431,3 +2431,9 @@ fontWeight	Italic	Kurzíva
 
 	Thumbnail size	Velikost miniatur
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik přidá stránky. Shift-klik vybere rozsah.
+
+	Place PDF pages as smart objects	Vložit stránky PDF jako inteligentní objekty
+	{count} pages • Each selected page becomes a smart object layer	{count} stránek • Každá vybraná stránka vytvoří vrstvu inteligentního objektu
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Inteligentní objekty obsahují rastrové stránky v tomto rozlišení. Text a vektory PDF zůstávají rastrové.
+	Place all {count} pages	Vložit všech {count} stránek
+	Place selected ({count})	Vložit vybrané ({count})

@@ -2837,3 +2837,9 @@ fontWeight	Italic	Miring
 
 	Thumbnail size	Ukuran thumbnail
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik menambahkan halaman. Shift-klik memilih rentang.
+
+	Place PDF pages as smart objects	Tempatkan halaman PDF sebagai objek pintar
+	{count} pages • Each selected page becomes a smart object layer	{count} halaman • Setiap halaman terpilih menjadi lapisan objek pintar
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Objek pintar berisi halaman raster pada resolusi ini. Teks dan vektor PDF tetap berupa raster.
+	Place all {count} pages	Tempatkan semua {count} halaman
+	Place selected ({count})	Tempatkan pilihan ({count})

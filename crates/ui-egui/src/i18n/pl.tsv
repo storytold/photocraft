@@ -3451,3 +3451,9 @@ cameraRaw	Roughness	Chropowatość
 
 	Thumbnail size	Rozmiar miniatur
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik dodaje strony. Shift-klik wybiera zakres.
+
+	Place PDF pages as smart objects	Umieść strony PDF jako obiekty inteligentne
+	{count} pages • Each selected page becomes a smart object layer	{count} stron • Każda wybrana strona staje się warstwą obiektu inteligentnego
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Obiekty inteligentne zawierają zrasteryzowane strony w tej rozdzielczości. Tekst i wektory PDF pozostają zrasteryzowane.
+	Place all {count} pages	Umieść wszystkie strony ({count})
+	Place selected ({count})	Umieść wybrane ({count})

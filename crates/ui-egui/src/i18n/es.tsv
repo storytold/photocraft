@@ -2499,3 +2499,9 @@ fontWeight	Italic	Cursiva
 
 	Thumbnail size	Tamaño de miniatura
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-clic añade páginas. Mayús-clic selecciona un intervalo.
+
+	Place PDF pages as smart objects	Colocar páginas PDF como objetos inteligentes
+	{count} pages • Each selected page becomes a smart object layer	{count} páginas • Cada página seleccionada se convierte en una capa de objeto inteligente
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Los objetos inteligentes contienen páginas rasterizadas a esta resolución. El texto y los vectores PDF permanecen rasterizados.
+	Place all {count} pages	Colocar las {count} páginas
+	Place selected ({count})	Colocar selección ({count})

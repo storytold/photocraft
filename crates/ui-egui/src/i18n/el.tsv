@@ -3539,3 +3539,9 @@ fontWeight	Thin	Πολύ λεπτά
 
 	Thumbnail size	Μέγεθος μικρογραφίας
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-κλικ προσθέτει σελίδες. Shift-κλικ επιλέγει εύρος.
+
+	Place PDF pages as smart objects	Εισαγωγή σελίδων PDF ως έξυπνων αντικειμένων
+	{count} pages • Each selected page becomes a smart object layer	{count} σελίδες • Κάθε επιλεγμένη σελίδα γίνεται επίπεδο έξυπνου αντικειμένου
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Τα έξυπνα αντικείμενα περιέχουν ραστεροποιημένες σελίδες σε αυτή την ανάλυση. Το κείμενο και τα διανύσματα PDF παραμένουν ραστεροποιημένα.
+	Place all {count} pages	Εισαγωγή και των {count} σελίδων
+	Place selected ({count})	Εισαγωγή επιλεγμένων ({count})

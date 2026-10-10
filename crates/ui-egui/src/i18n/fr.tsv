@@ -2850,3 +2850,9 @@ fontWeight	Italic	Italique
 
 	Thumbnail size	Taille des miniatures
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-clic ajoute des pages. Maj-clic sélectionne une plage.
+
+	Place PDF pages as smart objects	Importer les pages PDF comme objets dynamiques
+	{count} pages • Each selected page becomes a smart object layer	{count} pages • Chaque page sélectionnée devient un calque d’objet dynamique
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Les objets dynamiques contiennent des pages pixellisées à cette résolution. Le texte et les vecteurs PDF restent pixellisés.
+	Place all {count} pages	Importer les {count} pages
+	Place selected ({count})	Importer la sélection ({count})

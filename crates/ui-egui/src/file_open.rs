@@ -143,8 +143,7 @@ impl PhotocraftApp {
         };
         for f in files {
             let name = dropped_name(&f);
-            // A PDF is a page set: dropping it on an existing canvas must not flatten all
-            // its pages into one placed layer. Explicit Place Embedded remains available.
+            // PDFs first show page selection; confirmation places separate smart objects.
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) && !name.to_ascii_lowercase().ends_with(".pdf") {
                 self.drop_places.push_back(f);
                 continue;
@@ -185,6 +184,7 @@ impl PhotocraftApp {
         let Some(slot) = slot else { return Ok(false) };
         if let Some(picker) = self.pdf_pickers.get_mut(pickers) {
             picker.slot = Some(slot);
+            picker.target = None;
             return Ok(true);
         }
         if let Some(tab) = self.jobs.opens.get_mut(opens) {
@@ -205,6 +205,7 @@ impl PhotocraftApp {
                 crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&dropped_name(&f), bytes, None))
             };
             match placed {
+                Ok(result) if result.get("pdfPicker").and_then(serde_json::Value::as_bool) == Some(true) => return,
                 Ok(_) => {
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
@@ -218,6 +219,11 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read.
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
+        if linked.is_none() && crate::pdf_import_ui::is_pdf(name, &bytes) {
+            self.active_doc_id()?;
+            crate::pdf_import_ui::queue(self, name, None, &bytes)?;
+            return Ok(serde_json::json!({"pdfPicker": true}));
+        }
         let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string());
         self.sync_views();
         r

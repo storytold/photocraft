@@ -3538,3 +3538,9 @@ cameraRaw	Masking	Маскування
 
 	Thumbnail size	Розмір мініатюр
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-клацання додає сторінки. Shift-клацання вибирає діапазон.
+
+	Place PDF pages as smart objects	Розмістити сторінки PDF як смарт-об’єкти
+	{count} pages • Each selected page becomes a smart object layer	{count} сторінок • Кожна вибрана сторінка стає шаром смарт-об’єкта
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-об’єкти містять растрові сторінки з цією роздільністю. Текст і вектори PDF залишаються растровими.
+	Place all {count} pages	Розмістити всі сторінки ({count})
+	Place selected ({count})	Розмістити вибрані ({count})

@@ -3610,3 +3610,9 @@ cameraRaw	Whites	Witten
 
 	Thumbnail size	Miniatuurgrootte
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik voegt pagina's toe. Shift-klik selecteert een bereik.
+
+	Place PDF pages as smart objects	PDF-pagina’s als slimme objecten plaatsen
+	{count} pages • Each selected page becomes a smart object layer	{count} pagina’s • Elke geselecteerde pagina wordt een slimme-objectlaag
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Slimme objecten bevatten gerasterde pagina’s op deze resolutie. PDF-tekst en vectoren blijven gerasterd.
+	Place all {count} pages	Alle {count} pagina’s plaatsen
+	Place selected ({count})	Selectie plaatsen ({count})

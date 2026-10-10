@@ -11,7 +11,7 @@ been atomically saved; cancellation or failure leaves the tabs intact. Tabs open
 or changed after export began remain open. Export does not change source files or
 the saved state of tabs that remain open.
 
-Opening or dropping a PDF shows a page picker before any editing tabs are created.
+Opening or dropping a PDF shows a page picker before changing documents.
 Pages appear as a thumbnail grid with page numbers below each miniature. The first
 page is selected initially. Click a miniature to select one page, Ctrl/Cmd-click to
 add or remove pages, or Shift-click to select an inclusive range. Choose Small,
@@ -20,17 +20,28 @@ the preview cache holds at most 32 pages and is independent of import resolution
 
 ![PDF thumbnail grid with two synthetic pages](images/pdf-page-thumbnails.png)
 
-Open selected imports only those pages. Open all pages explicitly imports the binder.
-Choose Resolution (1–2400 ppi, default 144) before opening. Each selected page
-opens as an RGB 8-bit image in its own named tab, in binder order. Resolution
+With an open document, Place selected inserts one embedded smart object per selected
+page into that document; Place all pages inserts the whole binder. Pages are centered
+and fitted to the canvas when larger. The Layers panel retains binder order, and the
+entire insertion is one Undo step. The destination is captured when the picker opens:
+switching tabs does not redirect placement, and closing the destination fails without
+changing another document. File > Place Embedded also uses this picker for PDFs.
+Each source is a raster page stored as an embedded .pcraft document, so Smart Object
+Edit Contents and transformations retain its original pixels. Original PDF vectors
+are not embedded or rerendered at higher zoom. The target canvas, color mode, bit depth
+and save path remain unchanged. Save .pcraft to retain the smart objects.
+
+Without an open document, or when dropping onto the tab strip, Open selected and
+Open all pages create separate named RGB 8-bit tabs in binder order. Choose
+Resolution (1–2400 ppi, default 144) before confirmation. Resolution
 changes the pixel dimensions while preserving the physical page size.
 Cancel leaves existing documents untouched. The CLI retains multipage
 artboard import for batch conversion.
 If synchronous import fails, the picker retains its pages and resolution so the
 setting can be corrected and retried without reopening the PDF.
 
-This picker opens raster editing documents. It does not reproduce Photoshop's
-Open as Smart Object dialog: embedded-image/3D selection and configurable PDF
+This picker supports raster smart objects and separate raster documents.
+Embedded-image/3D selection and configurable PDF
 page boxes are not exposed. No unsupported options are shown as working controls.
 Crop and Trim resize a single-page artboard along with its canvas, so PDF exports
 use the cropped page dimensions instead of retaining the original blank sheet.

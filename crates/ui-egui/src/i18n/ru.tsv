@@ -2715,3 +2715,9 @@ fontWeight	Italic	Курсив
 
 	Thumbnail size	Размер миниатюр
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-щелчок добавляет страницы. Shift-щелчок выбирает диапазон.
+
+	Place PDF pages as smart objects	Поместить страницы PDF как смарт-объекты
+	{count} pages • Each selected page becomes a smart object layer	{count} страниц • Каждая выбранная страница становится слоем смарт-объекта
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-объекты содержат растрированные страницы в этом разрешении. Текст и векторы PDF остаются растрированными.
+	Place all {count} pages	Поместить все страницы ({count})
+	Place selected ({count})	Поместить выбранные ({count})

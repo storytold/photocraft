@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::default());
                 PhotocraftApp::new(photocraft_engine::Session::new(), Services::default())
             });
+            harness.state_mut().session.execute("file.new", serde_json::json!({"width": 600, "height": 400}))?;
             harness.state_mut().open_file("Synthetic pages.pdf", &bytes).map_err(std::io::Error::other)?;
             for theme in ThemeKind::ALL {
                 let ctx = harness.ctx.clone();

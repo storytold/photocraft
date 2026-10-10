@@ -53,6 +53,54 @@ fn binder() -> Vec<u8> {
 }
 
 #[test]
+fn picker_places_in_original_document_and_retains_state_on_failure() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.session.execute("file.new", serde_json::json!({"width": 100, "height": 80})).unwrap();
+    let target = app.session.active().unwrap().doc.id;
+    let before = app.session.active().unwrap().doc.clone();
+    app.open_file("binder.pdf", &binder()).unwrap();
+    app.session.execute("file.new", serde_json::json!({"width": 20, "height": 20})).unwrap();
+    let other = app.session.active().unwrap().doc.clone();
+    assert!(app.confirm_pdf_pages(&[3]).is_err());
+    assert_eq!(app.pending_pdf_pages(), Some(3));
+    app.confirm_pdf_pages(&[2, 0]).unwrap();
+    assert_eq!(app.session.documents().len(), 2);
+    assert_eq!(app.session.active().unwrap().doc.id, target);
+    assert_eq!(app.session.documents()[1].doc, other);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len() + 2);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc, before);
+    app.open_file("binder.pdf", &binder()).unwrap();
+    app.session.execute("file.close", serde_json::json!({})).unwrap();
+    assert!(app.confirm_pdf_pages(&[0]).is_err());
+    assert_eq!(app.pending_pdf_pages(), Some(3));
+    assert_eq!(app.session.active().unwrap().doc, other);
+    app.cancel_pdf_import();
+}
+
+#[test]
+fn place_embedded_pdf_dialog_waits_for_page_selection() {
+    use photocraft_ui_egui::FileDialogAnswer;
+    let bytes = binder();
+    let services = Services {
+        file_dialog: Some(Box::new(move |_, _, reply| reply.send(Some(FileDialogAnswer::Contents("binder.pdf".into(), bytes.clone()))))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.session.execute("file.new", serde_json::json!({"width": 100, "height": 80})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    photocraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "file.placeEmbedded", serde_json::json!({})).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert_eq!(app.pending_pdf_pages(), Some(3));
+    assert_eq!(app.session.active().unwrap().doc, before);
+    app.confirm_pdf_pages(&[1]).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len() + 1);
+    assert!(app.session.active().unwrap().doc.layers.iter().any(|l| l.name == "binder - Page 2"));
+}
+
+#[test]
 fn picker_cancel_selected_and_all_pages_create_only_independent_tabs() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     let bytes = binder();

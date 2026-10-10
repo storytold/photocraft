@@ -158,6 +158,80 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+#[test]
+fn place_pdf_pages_as_separate_smart_objects_is_atomic_and_undoable() {
+    use photocraft_doc::{Artboard, Group};
+    let mut binder = Document::new("binder", photocraft_geom::Size::new(12, 40), ColorMode::Rgb, photocraft_color::SampleType::U8);
+    binder.resolution_dpi = 72.0;
+    for i in (0..2).rev() {
+        let rect = Rect::new(0, i * 24, 12, i * 24 + 16);
+        let mut pixels = Surface::new(binder.pixel_format());
+        pixels.write_region(rect, &[i as f32, 0.2, 1.0 - i as f32, 1.0].repeat(12 * 16));
+        binder.layers.push(Layer::new(
+            format!("Page {}", i + 1),
+            LayerContent::Group(Group {
+                children: vec![Layer::new("pixels", LayerContent::Raster(pixels))],
+                expanded: true,
+                artboard: Some(Artboard::new(rect)),
+            }),
+        ));
+    }
+    let bytes = photocraft_io::export(&binder, "pdf", &Default::default()).unwrap().bytes;
+    let dir = tmp("pdf-smart");
+    let path = join(&dir, "binder.pdf");
+    std::fs::write(&path, &bytes).unwrap();
+    for (depth, mode) in [(8, "rgb"), (16, "rgb"), (32, "rgb"), (16, "gray"), (8, "cmyk"), (32, "lab")] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20, "depth": depth, "mode": mode})).unwrap();
+        let before = doc(&s).clone();
+        let history = s.active().unwrap().history.past_len();
+        let result = s.execute("file.placeEmbedded", json!({"path": path, "pages": [1, 0], "resolution": 144})).unwrap();
+        assert_eq!(s.documents().len(), 1);
+        assert_eq!(doc(&s).id, before.id);
+        assert_eq!(doc(&s).size, before.size);
+        assert_eq!(doc(&s).pixel_format(), before.pixel_format());
+        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+        assert_eq!(result["layers"].as_array().unwrap().len(), 2);
+        let names: Vec<_> = doc(&s).layers.iter().rev().take(2).map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["binder - Page 1", "binder - Page 2"]);
+        for layer in doc(&s).layers.iter().rev().take(2) {
+            let LayerContent::Smart(so) = &layer.content else { panic!("smart object required") };
+            let SmartSource::Embedded { file_name, bytes } = &so.source else { panic!("embedded source required") };
+            assert!(file_name.ends_with(".pcraft"));
+            let source = crate::smart_cmds::decode_source(file_name, bytes).unwrap();
+            assert_eq!(source.size, photocraft_geom::Size::new(24, 32));
+            assert_eq!(source.resolution_dpi, 144.0);
+            assert!(crate::smart_cmds::render(doc(&s), so).unwrap().is_some());
+            assert!((so.transform.m[0] - 0.625).abs() < 1e-9);
+        }
+        let placed = doc(&s).clone();
+        let saved = photocraft_format::save_to_bytes(&placed, &Default::default()).unwrap();
+        assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap(), placed);
+        assert!(s.undo());
+        assert_eq!(doc(&s), &before);
+        assert!(s.redo());
+        assert_eq!(doc(&s), &placed);
+        for params in [
+            json!({"pages": []}),
+            json!({"pages": [-1]}),
+            json!({"pages": [2]}),
+            json!({"pages": "all"}),
+            json!({"resolution": 0}),
+            json!({"resolution": "144"}),
+            json!({"scale": 1e200}),
+            json!({"scale": -1}),
+            json!({"center": [0, 1e100]}),
+        ] {
+            assert!(place_bytes(&mut s, "binder.pdf", bytes.clone(), None, &params).is_err());
+            assert_eq!(doc(&s), &placed);
+        }
+        assert!(place_bytes(&mut s, "broken.pdf", b"%PDF-invalid".to_vec(), None, &json!({})).is_err());
+        assert_eq!(doc(&s), &placed);
+    }
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert!(place_bytes(&mut Session::new(), "binder.pdf", bytes, None, &json!({})).is_err());
+}
+
 /// A 40×20 JPEG (left half red, right half blue) tagged EXIF Orientation = 6: shown upright it
 /// is 20×40, red on top.
 fn rotated_jpeg(dir: &str) -> String {

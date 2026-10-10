@@ -42,6 +42,7 @@ pub(crate) struct Picker {
     thumbnail_size: ThumbnailSize,
     resolution: f32,
     pub slot: Option<usize>,
+    pub target: Option<photocraft_doc::DocId>,
 }
 
 pub(crate) fn is_pdf(name: &str, bytes: &[u8]) -> bool {
@@ -63,13 +64,38 @@ pub(crate) fn queue(app: &mut PhotocraftApp, name: &str, path: Option<String>, b
         thumbnail_size: ThumbnailSize::default(),
         resolution: 144.0,
         slot: None,
+        target: app.session.active().map(|d| d.doc.id),
     });
-    app.ui.status = "Choose PDF pages to open".into();
+    app.ui.status = "Choose PDF pages".into();
     app.ui.status_error = false;
     Ok(())
 }
 
 impl PhotocraftApp {
+    /// Confirm pages using the destination captured when the picker opened.
+    pub fn confirm_pdf_pages(&mut self, pages: &[usize]) -> Result<(), String> {
+        let p = self.pdf_pickers.front().ok_or("no PDF is waiting for a page selection")?;
+        let Some(target) = p.target else { return self.open_pdf_pages(pages) };
+        if pages.is_empty() || pages.iter().any(|&i| i >= p.sizes.len()) {
+            return Err("Choose at least one valid page".into());
+        }
+        let (name, bytes, resolution) = (p.name.clone(), p.bytes.clone(), p.resolution);
+        self.refocus(target)?;
+        photocraft_engine::file_cmds::place_bytes(
+            &mut self.session,
+            &name,
+            bytes.as_ref().clone(),
+            None,
+            &serde_json::json!({"pages": pages, "resolution": resolution}),
+        )
+        .map_err(|e| e.to_string())?;
+        self.pdf_pickers.pop_front();
+        self.sync_views();
+        self.ui.status = format!("Placed {} PDF page(s) as smart objects", pages.len());
+        self.ui.status_error = false;
+        Ok(())
+    }
+
     /// Set the raster resolution for the pending open/drop picker.
     pub fn set_pdf_import_resolution(&mut self, resolution: f32) -> Result<(), String> {
         photocraft_io::pdf::ImportOptions { resolution }.validate().map_err(|e| e.to_string())?;
@@ -269,9 +295,17 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (mut open, mut all, mut cancel) = (false, false, false);
     let modal = egui::Modal::new(egui::Id::new("pdf-page-picker")).show(ctx, |ui| {
         ui.set_width(650.0);
-        ui.heading(tl!("Open PDF pages"));
+        let placing = p.target.is_some();
+        ui.heading(if placing { tl!("Place PDF pages as smart objects") } else { tl!("Open PDF pages") });
         ui.label(&p.name);
-        ui.label(crate::i18n::fmt(tl!("{count} pages • Each selected page opens in its own tab"), &[("count", &p.sizes.len().to_string())]));
+        ui.label(crate::i18n::fmt(
+            if placing {
+                tl!("{count} pages • Each selected page becomes a smart object layer")
+            } else {
+                tl!("{count} pages • Each selected page opens in its own tab")
+            },
+            &[("count", &p.sizes.len().to_string())],
+        ));
         ui.label(tl!("Ctrl/Cmd-click adds pages. Shift-click selects a range."));
         ui.separator();
         let t = crate::theme::Tokens::get(ui.ctx());
@@ -320,13 +354,21 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             tl!("Preview page: {width} × {height} pixels"),
             &[("width", &format!("{:.0}", (w * p.resolution / 72.0).ceil())), ("height", &format!("{:.0}", (h * p.resolution / 72.0).ceil()))],
         ));
-        ui.label(tl!("Pages open as RGB 8-bit images. PDF text and vector objects are rasterized."));
+        ui.label(if placing {
+            tl!("Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.")
+        } else {
+            tl!("Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.")
+        });
         ui.horizontal(|ui| {
             cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 90.0).clicked();
-            let all_label = crate::i18n::fmt(tl!("Open all {count} pages"), &[("count", &p.sizes.len().to_string())]);
+            let all_label = crate::i18n::fmt(
+                if placing { tl!("Place all {count} pages") } else { tl!("Open all {count} pages") },
+                &[("count", &p.sizes.len().to_string())],
+            );
             all = crate::widgets::secondary_button(ui, &all_label, 130.0).clicked();
             let count = p.selected.iter().filter(|&&v| v).count();
-            let selected_label = crate::i18n::fmt(tl!("Open selected ({count})"), &[("count", &count.to_string())]);
+            let selected_label =
+                crate::i18n::fmt(if placing { tl!("Place selected ({count})") } else { tl!("Open selected ({count})") }, &[("count", &count.to_string())]);
             open = ui.add_enabled_ui(count > 0, |ui| crate::widgets::primary_button(ui, &selected_label, 140.0)).inner.clicked();
         });
     });
@@ -337,7 +379,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if open || all {
         let pages: Vec<usize> = p.selected.iter().enumerate().filter_map(|(i, &v)| (all || v).then_some(i)).collect();
         let name = p.name.clone();
-        if let Err(e) = app.open_pdf_pages(&pages) {
+        if let Err(e) = app.confirm_pdf_pages(&pages) {
             app.open_failed(&name, &e);
         }
     } else if cancel {
@@ -366,6 +408,7 @@ mod tests {
             thumbnail_size: super::ThumbnailSize::Small,
             resolution: 144.0,
             slot: None,
+            target: None,
         });
         // The harness draws immediately; bind themed fonts before drawing buttons.
         let ready = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -423,38 +466,46 @@ mod tests {
     fn picker_actions_fit_small_windows_at_both_scales() {
         use egui_kittest::{Harness, kittest::Queryable};
         for scale in [1.0, 2.0] {
-            for thumbnail_size in [super::ThumbnailSize::Small, super::ThumbnailSize::Medium, super::ThumbnailSize::Large] {
-                let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-                app.pdf_pickers.push_back(super::Picker {
-                    name: "Binder.pdf".into(),
-                    path: None,
-                    bytes: std::sync::Arc::new(vec![]),
-                    sizes: vec![(72.0, 36.0); 2],
-                    selected: vec![true, false],
-                    anchor: Some(0),
-                    preview: 0,
-                    loading: None,
-                    thumbnails: (0..2).map(|i| (i, Err("Test preview".into()))).collect(),
-                    thumbnail_size,
-                    resolution: 144.0,
-                    slot: None,
-                });
-                let ready = std::rc::Rc::new(std::cell::Cell::new(false));
-                let draw_ready = ready.clone();
-                let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_pixels_per_point(scale).build_ui_state(
-                    move |ui, app: &mut crate::PhotocraftApp| {
-                        if draw_ready.get() {
-                            super::show(app, ui.ctx());
-                        }
-                    },
-                    app,
-                );
-                crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
-                ready.set(true);
-                h.run_steps(4);
-                let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-                for label in ["Open PDF pages", "Resolution (ppi)", "Cancel", "Open selected (1)"] {
-                    assert!(viewport.contains_rect(h.get_by_label(label).rect()), "{label} must fit at {scale}x");
+            for placing in [false, true] {
+                for thumbnail_size in [super::ThumbnailSize::Small, super::ThumbnailSize::Medium, super::ThumbnailSize::Large] {
+                    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                    app.pdf_pickers.push_back(super::Picker {
+                        name: "Binder.pdf".into(),
+                        path: None,
+                        bytes: std::sync::Arc::new(vec![]),
+                        sizes: vec![(72.0, 36.0); 2],
+                        selected: vec![true, false],
+                        anchor: Some(0),
+                        preview: 0,
+                        loading: None,
+                        thumbnails: (0..2).map(|i| (i, Err("Test preview".into()))).collect(),
+                        thumbnail_size,
+                        resolution: 144.0,
+                        slot: None,
+                        target: placing.then(photocraft_doc::DocId::fresh),
+                    });
+                    let ready = std::rc::Rc::new(std::cell::Cell::new(false));
+                    let draw_ready = ready.clone();
+                    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_pixels_per_point(scale).build_ui_state(
+                        move |ui, app: &mut crate::PhotocraftApp| {
+                            if draw_ready.get() {
+                                super::show(app, ui.ctx());
+                            }
+                        },
+                        app,
+                    );
+                    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+                    ready.set(true);
+                    h.run_steps(4);
+                    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+                    for label in [
+                        if placing { "Place PDF pages as smart objects" } else { "Open PDF pages" },
+                        "Resolution (ppi)",
+                        "Cancel",
+                        if placing { "Place selected (1)" } else { "Open selected (1)" },
+                    ] {
+                        assert!(viewport.contains_rect(h.get_by_label(label).rect()), "{label} must fit at {scale}x");
+                    }
                 }
             }
         }

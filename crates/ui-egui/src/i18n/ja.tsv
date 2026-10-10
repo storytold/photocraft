@@ -3451,3 +3451,9 @@ fontWeight	Italic	斜体
 
 	Thumbnail size	サムネイルサイズ
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd キーを押しながらクリックでページを追加し、Shift キーを押しながらクリックで範囲を選択します。
+
+	Place PDF pages as smart objects	PDFページをスマートオブジェクトとして配置
+	{count} pages • Each selected page becomes a smart object layer	{count}ページ • 選択した各ページがスマートオブジェクトレイヤーになります
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	スマートオブジェクトにはこの解像度でラスタライズしたページが含まれます。PDFのテキストとベクトルはラスタライズされたままです。
+	Place all {count} pages	全{count}ページを配置
+	Place selected ({count})	選択を配置 ({count})

@@ -2439,3 +2439,9 @@ fontWeight	Italic	斜体
 
 	Thumbnail size	缩略图大小
 	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-单击添加页面。Shift-单击选择范围。
+
+	Place PDF pages as smart objects	将 PDF 页面置入为智能对象
+	{count} pages • Each selected page becomes a smart object layer	{count} 页 • 每个选中的页面成为一个智能对象图层
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	智能对象包含按此分辨率栅格化的页面。PDF 文本和矢量仍保持栅格化。
+	Place all {count} pages	置入全部 {count} 页
+	Place selected ({count})	置入选中页面 ({count})
