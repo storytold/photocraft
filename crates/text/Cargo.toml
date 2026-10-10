@@ -26,19 +26,19 @@ icu_segmenter = { version = "2.3", default-features = false, features = ["compil
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 flate2 = { workspace = true }
 
+# Kashida candidates (arabic-naskh rules, MIT, Khaled Hosny): plain text in, joins with priorities
+# out, no font data. Only its built-in pattern sets are used, never its pattern compiler. Pinned: the
+# pattern sets and priorities decide where a justified line stretches. It depends on icu_segmenter
+# with default features (`auto`, `lstm`), but only calls the grapheme segmenter, so the neural
+# line-break models are not linked into the web build (a standalone wasm with it grew by 56 KB).
+raqim-kashida = "=0.3.0"
+
 # ICU dictionary data for Japanese word boundaries and complex-script (Thai, Lao, Khmer, Burmese)
 # line breaking. Native only: the CJK dictionary alone is 3.8 MB of wasm, and the web build must
 # stay under Cloudflare's 25 MiB per-file cap (packaging/web/package.sh). The web build falls back
 # to the generic Unicode rules for those scripts.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
-
-# Kashida candidates (arabic-naskh rules, MIT, Khaled Hosny): plain text in, joins with priorities
-# out, no font data. Only its built-in pattern sets are used, never its pattern compiler.
-# Native only: it depends on icu_segmenter with default features, which turn on `auto` and `lstm`
-# (neural line-break models) and would grow the web build, which must stay under Cloudflare's
-# 25 MiB per-file cap (packaging/web/package.sh). The web build keeps word-gap justification.
-raqim-kashida = "0.3"
 
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.

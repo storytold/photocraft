@@ -635,7 +635,7 @@ impl Layouter {
             let (line_origin, line_len) = if vertical { (box_rect.1, box_rect.3) } else { (box_rect.0, box_rect.2) };
             let avail = if is_box { Some((line_len - indent_start - indent_end).max(1.0)) } else { None };
             layout.break_all_lines(avail);
-            let kashida_para = is_box && ps.kashida && kashida_justify::ENABLED && !vertical && ps.align.is_justified();
+            let kashida_para = is_box && ps.kashida && !vertical && ps.align.is_justified();
             let kashida_cands = if kashida_para { kashida_justify::candidates(&ptext, &words, &pgraphemes) } else { Vec::new() };
             let alignment = if is_box {
                 match ps.align {

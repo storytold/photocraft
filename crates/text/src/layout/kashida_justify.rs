@@ -24,9 +24,7 @@
 //! Limits: a probe validates one tatweel, so copies are assumed to tile flat; a join at a style
 //! run boundary is never a candidate (parley has no shaping context across it). Not built: reshaping
 //! the justified line itself with U+0640 in the shaping text, which would let fonts pick
-//! kashida-aware forms. The web build has no kashida (it keeps word-gap justification): the
-//! `raqim-kashida` dependency is native-only because it enables `icu_segmenter`'s `auto` and
-//! `lstm` features.
+//! kashida-aware forms.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -37,9 +35,6 @@ use skrifa::MetadataProvider;
 
 use super::{ClusterInfo, JustifyLine, Layouter, PlacedGlyph, RunBrush, SmallCapsMode, justify_all_line, shift_decorations, style_props, word_gap_indices};
 use crate::fonts::FontDb;
-
-/// Kashida needs `raqim-kashida`, which the web build leaves out.
-pub(super) const ENABLED: bool = cfg!(not(target_arch = "wasm32"));
 
 const TATWEEL: char = '\u{640}';
 /// A kashida grows by at most this many em.
@@ -60,7 +55,6 @@ pub(crate) struct Candidate {
 /// One candidate per cursive word of `text`: the join with the highest priority, ties to the join
 /// nearest the word's end. `words` are the cursive words and `graphemes` the grapheme boundaries
 /// of `text` (see `segment`).
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn candidates(text: &str, words: &[Range<usize>], graphemes: &[usize]) -> Vec<Candidate> {
     // Never `compile_pattern_text`: its pattern slicing is unchecked. The built-in sets only.
     let Some(set) = ::kashida::builtin_pattern_set("arabic-naskh") else {
@@ -83,12 +77,6 @@ pub(crate) fn candidates(text: &str, words: &[Range<usize>], graphemes: &[usize]
         }
     }
     words.iter().zip(best).filter_map(|(word, b)| b.map(|(_, join)| Candidate { word: word.clone(), join })).collect()
-}
-
-/// The web build has no kashida candidates (see the module docs).
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn candidates(_text: &str, _words: &[Range<usize>], _graphemes: &[usize]) -> Vec<Candidate> {
-    Vec::new()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -159,9 +147,13 @@ pub(super) struct Tatweel {
     pub y: f32,
 }
 
-/// Probe results by (style, font instance, word, join).
+/// What the probes remember: results by (style, font instance, word, join), and the plain
+/// shaping of each word by (style, word, font generation).
 #[derive(Default)]
-pub(super) struct ProbeCache(HashMap<String, Option<Tatweel>>);
+pub(super) struct ProbeCache {
+    probes: HashMap<String, Option<Tatweel>>,
+    plain: HashMap<String, Option<Shaped>>,
+}
 
 /// An accepted join of a line.
 #[derive(Clone, Copy, Debug)]
@@ -236,21 +228,35 @@ impl Layouter {
         collect(layout.lines().flat_map(|l| l.runs()), &(0..text.len()))
     }
 
+    /// The word shaped alone, remembered per style and word (until the font set changes).
+    fn plain_shaping(&mut self, fonts: &mut FontDb, props: &[StyleProperty<'static, RunBrush>], word: &str) -> Option<Shaped> {
+        let key = format!("{props:?}|{word}|{}", crate::fonts::generation());
+        if let Some(plain) = self.kashida_probes.plain.get(&key) {
+            return plain.clone();
+        }
+        let plain = self.shape_scratch(fonts, word, props);
+        if self.kashida_probes.plain.len() >= PROBE_CACHE_CAP {
+            self.kashida_probes.plain.clear();
+        }
+        self.kashida_probes.plain.insert(key, plain.clone());
+        plain
+    }
+
     /// The tatweel to place at byte `join` of `word`, or `None` when the join is unsafe.
     fn probe_join(&mut self, fonts: &mut FontDb, props: &[StyleProperty<'static, RunBrush>], word: &str, join: usize, in_line: &Shaped) -> Option<Tatweel> {
-        let plain = self.shape_scratch(fonts, word, props)?;
+        let plain = self.plain_shaping(fonts, props, word)?;
         if !plain.same_font(in_line) || !same_glyphs(&plain.glyphs, &in_line.glyphs) {
             return None;
         }
         let key = format!("{props:?}|{word}|{join}|{}|{}|{:?}|{}", plain.font.data.id(), plain.font.index, plain.coords, plain.size.to_bits());
-        if let Some(t) = self.kashida_probes.0.get(&key) {
+        if let Some(t) = self.kashida_probes.probes.get(&key) {
             return *t;
         }
         let t = self.probe_tatweel(fonts, props, word, join, &plain);
-        if self.kashida_probes.0.len() >= PROBE_CACHE_CAP {
-            self.kashida_probes.0.clear();
+        if self.kashida_probes.probes.len() >= PROBE_CACHE_CAP {
+            self.kashida_probes.probes.clear();
         }
-        self.kashida_probes.0.insert(key, t);
+        self.kashida_probes.probes.insert(key, t);
         t
     }
 
@@ -418,7 +424,7 @@ fn widen(line: &mut JustifyLine<'_>, placed: &[Placed], baseline: f32) -> f32 {
     before
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::segment::{cursive_words, grapheme_boundaries};
@@ -483,8 +489,10 @@ mod tests {
         assert!(t.advance > 0.0 && t.id != 0, "{t:?}");
         assert!(probe(&mut e, amiri, "مدرسة", 4).is_some(), "مدرسة before the teh marbuta");
         // Cached: the same answer again.
+        let shaped = e.layouter.kashida_probes.plain.len();
         assert_eq!(probe(&mut e, amiri, "كتاب", 2), None);
         assert_eq!(probe(&mut e, amiri, "سلام", 1), Some(t));
+        assert_eq!(e.layouter.kashida_probes.plain.len(), shaped, "the plain shaping of a word is kept, not redone");
     }
 
     use super::super::{DecorationRect, GlyphOrient};
