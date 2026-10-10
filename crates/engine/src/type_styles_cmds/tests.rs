@@ -189,3 +189,57 @@ fn exhausted_style_ids_return_errors_without_history_changes() {
     assert_eq!(s.active().unwrap().doc.text_styles.next_char_id(), None);
     assert_eq!(s.active().unwrap().doc.text_styles.next_para_id(), None);
 }
+
+#[test]
+fn isolated_options_preview_matches_commit_with_multiple_layers_and_local_overrides() {
+    for paragraph in [false, true] {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":400,"height":200,"depth":depth,"background":"transparent"})).unwrap();
+            let a = s.execute("type.create", json!({"x":10,"y":50,"text":"Hello world","size":24})).unwrap()["layer"].as_u64().unwrap();
+            let b = s.execute("type.create", json!({"x":10,"y":100,"text":"Second layer","size":24})).unwrap()["layer"].as_u64().unwrap();
+            let prefix = if paragraph { "type.paragraphStyle" } else { "type.characterStyle" };
+            let id = s.execute(&format!("{prefix}.new"), json!({"fromSelection":false,"attrs":{"color":"#ff0000"}})).unwrap()["id"].as_u64().unwrap();
+            for layer in [a, b] {
+                s.execute(&format!("{prefix}.apply"), json!({"id":id,"layer":layer})).unwrap();
+            }
+            s.execute("type.setStyle", json!({"layer":a,"range":[6,11],"color":"#0000ff"})).unwrap();
+            let doc = s.active().unwrap().doc.clone();
+            let revision = s.active().unwrap().revision;
+            let p = json!({"id":id,"attrs":{"color":"#00ff00"}});
+            let shown = preview_options(&doc, &p, paragraph).unwrap();
+            assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc));
+            assert_eq!(s.active().unwrap().revision, revision);
+            assert_eq!(text_of(&shown, LayerId(a)).unwrap().char_runs().last().unwrap().style.color.to_rgb(), [0.0, 0.0, 1.0]);
+            assert_eq!(text_of(&shown, LayerId(b)).unwrap().color.to_rgb(), [0.0, 1.0, 0.0]);
+            s.execute(&format!("{prefix}.set"), p).unwrap();
+            let committed = &s.active().unwrap().doc;
+            assert_eq!(shown.text_styles, committed.text_styles);
+            for layer in [a, b] {
+                let expected = text_of(&shown, LayerId(layer)).unwrap();
+                let actual = text_of(committed, LayerId(layer)).unwrap();
+                assert_eq!(expected.runs, actual.runs);
+                assert_eq!(expected.paragraphs, actual.paragraphs);
+                assert_eq!(expected.psd_raw, actual.psd_raw);
+            }
+            assert_eq!(photocraft_compose::flatten(&shown).get(20, 40), photocraft_compose::flatten(committed).get(20, 40));
+        }
+    }
+}
+
+#[test]
+fn preview_options_validates_without_mutating_source() {
+    let (s, _) = session("Text");
+    let doc = s.active().unwrap().doc.clone();
+    for paragraph in [false, true] {
+        for p in [json!({}), json!({"id":"bad"}), json!({"id":u64::MAX}), json!({"id":999}), json!({"id":0,"attrs":3})] {
+            assert!(preview_options(&doc, &p, paragraph).is_err());
+        }
+    }
+    let before = doc.text_styles.clone();
+    let p = json!({"id":0,"attrs":{"color":"#112233"}});
+    assert!(preview_options(&doc, &p, false).is_err());
+    let shown = preview_options(&doc, &p, true).unwrap();
+    assert_ne!(shown.text_styles, before);
+    assert_eq!(doc.text_styles, before);
+}

@@ -148,6 +148,8 @@ pub enum DecodeWarning {
     MoreFrames { total: Option<u32> },
     /// Only the first page of a multi-page file was decoded; `total` counts every page when known.
     MorePages { total: Option<u32> },
+    /// Only one part of a multi-part file was decoded; `total` counts every part when known.
+    MoreParts { total: Option<u32> },
     /// The image data ends early (truncated or damaged file); the decoder filled in the rest
     /// (a baseline JPEG's missing rows come out grey).
     Truncated { format: Format },
@@ -163,6 +165,8 @@ impl fmt::Display for DecodeWarning {
             DecodeWarning::MoreFrames { total: None } => write!(f, "only the first frame of the animation was imported"),
             DecodeWarning::MorePages { total: Some(n) } => write!(f, "only the first of {n} pages was imported"),
             DecodeWarning::MorePages { total: None } => write!(f, "only the first page of the file was imported"),
+            DecodeWarning::MoreParts { total: Some(n) } => write!(f, "only one of {n} EXR parts was imported"),
+            DecodeWarning::MoreParts { total: None } => write!(f, "only one EXR part of the file was imported"),
             DecodeWarning::Truncated { format } => {
                 write!(f, "{} data ends early (the file is truncated or damaged); part of the image is missing", format.name())
             }
@@ -218,6 +222,107 @@ impl DeepImage {
     /// The total number of samples over all pixels.
     pub fn total_samples(&self) -> u64 {
         self.counts.last().copied().unwrap_or(0)
+    }
+}
+
+/// One channel of an [`ExrPartInfo`]: the name as in the file (a Maya/Arnold AOV layer
+/// keeps its prefix, e.g. `diffuse.R`) and the sample type that part stores it with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExrChannelInfo {
+    pub name: String,
+    pub sample: SampleType,
+}
+
+/// One part of a multi-part OpenEXR file (what a Maya/Arnold render writes per AOV):
+/// header facts only, no pixel data. [`crate::exr_info`] lists them, and the index is
+/// what [`crate::decode_exr_part`] decodes; [`crate::decode_as_with`] opens the part
+/// the ranking in [`ExrPartInfo::color_rank`] prefers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExrPartInfo {
+    /// Index into the part list, in file order.
+    pub index: usize,
+    /// The part `name` attribute, when the file records one (Arnold names parts after AOVs).
+    pub name: Option<String>,
+    /// The part `view` attribute for stereo files (`left`/`right`).
+    pub view: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    /// True for `deepscanline`/`deeptile` parts; those are composited by the deep
+    /// decoder ([`crate::decode_deep_exr`]), not decoded part by part.
+    pub deep: bool,
+    /// True when the part is stored as tiles instead of scanlines.
+    pub tiled: bool,
+    /// The part's channels in file order.
+    pub channels: Vec<ExrChannelInfo>,
+}
+
+impl ExrPartInfo {
+    /// How much this part looks like a colour image the plain [`Image`] decode can show:
+    /// 4 RGBA, 3 RGB, 2 YA, 1 any-single-channel, 0 anything else (e.g. `Z` beside `A`).
+    /// The auto-pick takes the highest rank; ties go to the earlier part.
+    pub fn color_rank(&self) -> u8 {
+        let has = |n: &str| self.channels.iter().any(|c| base_channel_name(&c.name) == n);
+        if has("R") && has("G") && has("B") {
+            return if has("A") { 4 } else { 3 };
+        }
+        if has("Y") {
+            return if has("A") { 2 } else { 1 };
+        }
+        u8::from(self.channels.len() == 1)
+    }
+}
+
+/// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
+pub(crate) fn base_channel_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+/// One Cryptomatte layer of an EXR file (Cryptomatte specification 1.2): per-pixel object or
+/// material IDs with coverage, as written by Arnold, V-Ray, Redshift, Mantra/Karma or Cycles.
+/// Header facts plus the parsed manifest; the samples come from
+/// [`crate::decode_cryptomatte`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CryptomatteLayer {
+    /// The part (see [`crate::exr_info`]) the channels and attributes live in.
+    pub part: usize,
+    /// The `cryptomatte/<key>/name` attribute, e.g. `CryptoAsset` or `crypto_asset`.
+    pub name: String,
+    /// The 7-hex-digit metadata key of the layer.
+    pub key: String,
+    /// The `conversion` attribute, when recorded (canonically `uint32_to_float32`).
+    pub conversion: Option<String>,
+    /// The manifest: object names with their ID values. A sidecar manifest file is only
+    /// recorded in [`Self::sidecar_manifest`] and not read here (the codec is I/O free).
+    pub manifest: Vec<(f32, String)>,
+    /// The `manif_file` sidecar attribute, when the manifest is not embedded.
+    pub sidecar_manifest: Option<String>,
+    /// The stream channel bases in file order, e.g. `["crypto_asset00", "crypto_asset01"]`;
+    /// each holds an ID (`.red`) and a coverage (`.green`) channel.
+    pub channels: Vec<String>,
+}
+
+impl CryptomatteLayer {
+    /// The manifest name for an ID value, when the manifest lists it.
+    pub fn name_of(&self, id: f32) -> Option<&str> {
+        self.manifest.iter().find(|(i, _)| *i == id).map(|(_, n)| n.as_str())
+    }
+}
+
+/// Decoded Cryptomatte samples: per pixel the (ID, coverage) pairs with coverage above zero,
+/// sorted by descending coverage. The IDs are the float values as stored (compared by value,
+/// never by bit pattern, like the reference readers).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CryptomatteBuffer {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<Vec<(f32, f32)>>,
+}
+
+impl CryptomatteBuffer {
+    /// The pairs of one pixel; empty for a pixel covered by nothing.
+    pub fn at(&self, x: u32, y: u32) -> &[(f32, f32)] {
+        let i = y as usize * self.width as usize + x as usize;
+        self.pixels.get(i).map_or(&[], |v| v)
     }
 }
 

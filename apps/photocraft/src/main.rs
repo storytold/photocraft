@@ -22,8 +22,10 @@
 
 mod app_dirs;
 mod app_icon;
+mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod caps_lock;
 mod control_server;
 mod crash_guard;
 mod cursor;
@@ -37,12 +39,14 @@ mod mac_window;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod photoshop_settings;
 mod screen_color;
 mod services;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod tablet;
 mod ui_state;
+mod window_frame;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -238,7 +242,7 @@ fn main() -> eframe::Result {
             Ok(token) => token,
             Err(e) => {
                 eprintln!("photocraft: cannot configure control authentication: {e}");
-                return Ok(());
+                std::process::exit(2);
             }
         };
         if let Some(path) = token_file {
@@ -252,7 +256,7 @@ fn main() -> eframe::Result {
             Ok(workspace) => workspace,
             Err(error) => {
                 eprintln!("photocraft: cannot configure automation workspace: {error}");
-                return Ok(());
+                std::process::exit(2);
             }
         };
         Some((port, token, workspace))
@@ -444,6 +448,12 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // The custom title bar's undecorated window must stay borderless, or its caption and
+            // border offset the content and the pointer on some Windows systems (#2246).
+            app.services.window_frame = window_frame::service(cc, custom_titlebar);
+            // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
+            // precise crosshair for painting tools while it is toggled on (#1758).
+            app.services.caps_lock = caps_lock::service(cc);
             app.services.screen_pick = screen_color::service(cc, app.services.is_wayland);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:

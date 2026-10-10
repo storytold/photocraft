@@ -24,6 +24,8 @@
 	Layer	Warstwa
 	Type	Tekst
 	Select	Zaznaczenie
+	Selected	Zaznaczone
+	Scope	Zakres
 	Filter	Filtr
 	View	Widok
 	Window	Okno
@@ -33,6 +35,11 @@
 	New from Clipboard	Nowy ze schowka
 	Open…	Otwórz…
 	Open As…	Otwórz jako…
+	Open EXR Parts…	Otwórz części EXR…
+	Add beauty precomp from the AOVs	Dodaj wstępną kompozycję piękna z AOV-ów
+	Both	Obie
+	Left	Lewa
+	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
 	Close	Zamknij
@@ -82,6 +89,8 @@
 	Import	Importuj
 	Browse…	Przeglądaj…
 	Reveal in Finder	Pokaż w Finderze
+	Show in Explorer	Pokaż w Eksploratorze
+	Show in Folder	Pokaż w folderze
 	File Info…	Informacje o pliku…
 	Print…	Drukuj…
 	Print One Copy	Drukuj jedną kopię
@@ -670,7 +679,11 @@
 	Pro Medium Gray Theme	Motyw Pro (średni szary)
 	Studio Theme	Motyw Studio
 	Studio Light Theme	Motyw Studio (jasny)
+	Adwaita Light Theme	Motyw Adwaita (jasny)
+	Adwaita Dark Theme	Motyw Adwaita (ciemny)
 	Classic Theme	Motyw klasyczny
+	Solarized dark	Solarized ciemny
+	Solarized Dark Theme	Ciemny motyw Solarized
 	Next Theme	Następny motyw
 	Actions	Akcje
 	Brush Settings	Ustawienia pędzla
@@ -756,7 +769,7 @@
 	All Caps	Wszystkie wersaliki
 	All Slices	Wszystkie plasterki
 	All User Slices	Wszystkie plasterki użytkownika
-	All shortcuts reset to Photoshop defaults.	Wszystkie skróty przywrócono do ustawień domyślnych Photoshopa.
+	All shortcuts reset to PhotoCraft defaults.	Wszystkie skróty przywrócono do ustawień domyślnych PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Zawsze używaj nacisku do krycia
 	Always use pressure for size	Zawsze używaj nacisku do rozmiaru
@@ -804,7 +817,6 @@
 	Blending Options	Opcje mieszania
 	Blue	Niebieski
 	Blue, Red, Yellow	Niebieski, czerwony, żółty
-	Both	Oba
 	Both Axes	Obie osie
 	Bottom	Dół
 	Brightness	Jasność
@@ -946,6 +958,17 @@
 	Delete current channel	Usuń bieżący kanał
 	Delete current state	Usuń bieżący stan
 	Delete effect layer	Usuń warstwę efektu
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Usunąć warstwę „{name}”?
+	Delete {count} layers? {names}	Usunąć warstwy ({count})? {names}
+	Delete layer?	Usunąć warstwę?
+	The document is closed	Dokument jest zamknięty
+	The document or selected layers changed. Please request deletion again.	Dokument lub zaznaczone warstwy uległy zmianie. Ponownie zażądaj usunięcia.
+	Missing delete command	Brak polecenia usuwania
+	Invalid delete command	Nieprawidłowe polecenie usuwania
+	Layer deleted, but confirmation preference could not be saved: {error}	Warstwa została usunięta, ale nie udało się zapisać ustawienia potwierdzenia: {error}
+
 	Delete layer	Usuń warstwę
 	Delete layer comp	Usuń kompozycję warstw
 	Delete note	Usuń notatkę
@@ -1075,7 +1098,7 @@
 	Ignore All	Ignoruj wszystko
 	Image Size	Rozmiar obrazu
 	Import Brushes…	Importuj pędzle…
-	Import Photoshop brushes (.abr)	Importuj pędzle Photoshopa (.abr)
+	Import brushes (.abr)	Importuj pędzle (.abr)
 	Import Presets	Importuj ustawienia wstępne
 	Imported	Zaimportowano
 	Indent First	Wcięcie pierwszego wiersza
@@ -1110,7 +1133,6 @@
 	Leading	Interlinia
 	Leading (set to the font size × auto-leading when Auto)	Interlinia (przy ustawieniu Automatycznie: rozmiar czcionki × automatyczna interlinia)
 	Leave as is (don't color manage)	Pozostaw bez zmian (bez zarządzania kolorami)
-	Left	Lewo
 	Left align text	Wyrównaj tekst do lewej
 	Length:	Długość:
 	Level	Poziom
@@ -1125,7 +1147,6 @@
 	Liquify is not open	Skraplanie nie jest otwarte
 	Load	Wczytaj
 	Load 3D LUT…	Wczytaj 3D LUT…
-	Load Photoshop brushes (.abr)	Wczytaj pędzle Photoshopa (.abr)
 	Load channel as selection	Wczytaj kanał jako zaznaczenie
 	Load…	Wczytaj…
 	Localized Color Clusters	Zlokalizowane skupiska kolorów
@@ -1283,6 +1304,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Nagraj ● sekwencję edycji, a następnie odtwórz ▶ ją na dowolnym dokumencie.
 	Red	Czerwony
 	Redefine style by current selection	Zdefiniuj styl ponownie na podstawie bieżącego zaznaczenia
+	Refine	Dopracuj
 	Reflected Gradient	Gradient odbity
 	Registration Marks	Znaczniki pasowania
 	Regular	Zwykła
@@ -1301,6 +1323,17 @@
 	Rename…	Zmień nazwę…
 	Resample	Przepróbkuj
 	Reset All to Defaults	Przywróć wszystko do wartości domyślnych
+	Import Shortcuts…	Importuj skróty…
+	Load a keyboard shortcut set saved as .kys	Wczytaj zestaw skrótów klawiaturowych zapisany jako .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Zaimportowano skrótów: {n} z pliku {file}. Kliknij OK, aby je zachować.
+	{n} commands are not in PhotoCraft.	Poleceń, których nie ma w PhotoCraft: {n}.
+	Keyboard shortcuts imported	Zaimportowano skróty klawiaturowe
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Twój zestaw skrótów klawiaturowych {set} jest tu używany: skrótów innych niż domyślne: {n}. Edycja › Skróty klawiaturowe je pokazuje; Przywróć wszystkie domyślne cofa import.
+	Import keyboard shortcuts?	Zaimportować skróty klawiaturowe?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft znalazł na tym komputerze Twój zestaw skrótów klawiaturowych {set} z innego edytora obrazów: skrótów innych niż w PhotoCraft: {n}. Zaimportować go?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Edycja › Skróty klawiaturowe › Przywróć wszystkie domyślne cofa import.
+	Don't Import	Nie importuj
+	The keyboard shortcut set was not imported: {error}	Nie zaimportowano zestawu skrótów klawiaturowych: {error}
 	Reset Section	Resetuj sekcję
 	Reset Transform	Resetuj przekształcenie
 	Reset to defaults	Przywróć wartości domyślne
@@ -1309,7 +1342,6 @@
 	Restore All	Przywróć wszystko
 	Restore Defaults	Przywróć domyślne
 	Restrictive (Web)	Ograniczona (Internet)
-	Right	Prawo
 	Right align text	Wyrównaj tekst do prawej
 	Rigid	Sztywne
 	Rotate:	Obrót:
@@ -1350,6 +1382,7 @@
 	Set background color	Ustaw kolor tła
 	Set foreground color	Ustaw kolor pierwszego planu
 	Set painting symmetry options	Ustaw opcje symetrii malowania
+	Symmetry Off	Symetria wyłączona
 	Set shape fill type	Ustaw typ wypełnienia kształtu
 	Set shape stroke type	Ustaw typ obrysu kształtu
 	Set the text color	Ustaw kolor tekstu
@@ -1391,6 +1424,7 @@
 	Stroke	Obrys
 	Stroke Catch-up	Dogonienie pociągnięcia
 	Stroke:	Obrys:
+	Location:	Położenie:
 	Style	Styl
 	Style Options	Opcje stylu
 	Style Options…	Opcje stylu…
@@ -1517,7 +1551,7 @@
 	Current Tool	Bieżące narzędzie
 	Custom Shape Tool	Narzędzie Kształt niestandardowy
 	Cyans	Cyjany
-	Default Photoshop Size	Domyślny rozmiar Photoshopa
+	Default PhotoCraft Size	Domyślny rozmiar PhotoCraft
 	Delete Workspace	Usuń obszar roboczy
 	Diamond	Romb
 	Dimensions:	Wymiary:
@@ -1594,6 +1628,8 @@
 	Millimeters	Milimetry
 	Mobile	Urządzenia mobilne
 	Move Tool	Narzędzie Przesunięcie
+	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
+	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -1638,6 +1674,7 @@
 	Quick Selection Tool	Narzędzie Szybkie zaznaczanie
 	Radial	Promienisty
 	Rasterize Layer	Rasteryzuj warstwę
+	Rasterize Layers	Rasteryzuj warstwy
 	Ratio	Proporcje
 	Recent	Ostatnie
 	Rectangle Tool	Narzędzie Prostokąt
@@ -1864,6 +1901,8 @@
 	Standard	Standardowy
 	Studio	Studio
 	Studio light	Studio jasny
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita ciemny
 	Subdivisions	Podziały
 	System	Systemowy
 	Text engine	Silnik tekstu
@@ -1915,6 +1954,7 @@
 	Collapse group  ({key}-click: all groups)	Zwiń grupę  (kliknięcie z {key}: wszystkie grupy)
 	Create new brush from the current settings	Utwórz nowy pędzel z bieżących ustawień
 	Create new brush from these settings	Utwórz nowy pędzel z tych ustawień
+	Update the current brush with these settings	Zaktualizuj bieżący pędzel tymi ustawieniami
 	Delete brush	Usuń pędzel
 	Drag the arrow to set the angle, the dots to set the roundness	Przeciągnij strzałkę, aby ustawić kąt, a punkty, aby ustawić zaokrąglenie
 	Expand	Rozwiń
@@ -1968,8 +2008,8 @@
 	Delete Brush	Usuń pędzel
 	Group name	Nazwa grupy
 	Brush name	Nazwa pędzla
-	Grid view	Widok siatki
-	List view	Widok listy
+	Brush Name	Nazwa pędzla
+	Brush Stroke	Pociągnięcie pędzla
 	Off: the speed of the pointer sets the spacing	Wyłączone: prędkość wskaźnika określa odstępy
 	Tilt Scale	Skala nachylenia
 	Brush Projection	Rzutowanie pędzla
@@ -1989,6 +2029,13 @@
 	Align with layer	Wyrównaj do warstwy
 	Reset Alignment	Resetuj wyrównanie
 	Centre the gradient (offset 0, 0)	Wyśrodkuj gradient (przesunięcie 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Edytor gradientu
+	Gradient picker	Wybór gradientu
+	Gradient stops	Punkty gradientu
+	Save As Preset	Zapisz jako preset
+	The gradient the Gradient tool paints with	Gradient, którym maluje narzędzie Gradient
+	Adds the current gradient to the Gradients panel	Dodaje bieżący gradient do panelu Gradienty
 	The current gradient (pick one in Window › Gradients)	Bieżący gradient (wybierz w Okno › Gradienty)
 	Select a type layer to edit its character and paragraph settings.	Zaznacz warstwę tekstową, aby edytować jej ustawienia znaków i akapitów.
 	Text color	Kolor tekstu
@@ -2020,6 +2067,9 @@
 	Cancelled {label}	Anulowano: {label}
 	Esc to cancel	Esc, aby anulować
 	Opening {name}	Otwieranie {name}
+	Saving {name}	Zapisywanie {name}
+	A save to {name} is still running; try again when it finishes	Zapisywanie do {name} wciąż trwa; spróbuj ponownie, gdy się zakończy
+	{label} is writing the file and can no longer be cancelled	{label} zapisuje plik i nie można już tego anulować
 	Opening {name}…	Otwieranie {name}…
 	Opening…	Otwieranie…
 	Reading…	Odczyt…
@@ -2386,7 +2436,7 @@
 	Pixel	Piksel
 	Adjustment	Korekta
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Przeciągaj (lasso) lub klikaj punkty (wielokątne) · {add} dodaj · {sub} odejmij
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Przeciągnij ramkę przycinania · przeciągnij wewnątrz, aby przesunąć · krawędzie zmieniają rozmiar ({ratio} proporcje, {centre} od środka) · Spacja przesuwa podczas rysowania · {commit} zatwierdza · Esc anuluje
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Przeciągnij ramkę przycinania · przeciągnij wewnątrz, aby przesunąć · krawędzie zmieniają rozmiar ({ratio} proporcje, {centre} od środka) · Spacja przesuwa podczas rysowania · strzałki przesuwają · X zamienia orientację · {commit} zatwierdza · Esc anuluje
 	{mode} Color · {bits} bit	Kolor {mode} · {bits} bitów
 	Drag to move the layer	Przeciągnij, aby przesunąć warstwę
 	Scrubby Zoom	Powiększanie przeciąganiem
@@ -2553,6 +2603,7 @@ cameraRaw	Roughness	Chropowatość
 	Patch Tool	Narzędzie Łatka
 	Patch:	Łatka:
 	Lasso around an area, then drag the selection	Zakreśl obszar lassem, a następnie przeciągnij zaznaczenie
+	Now drag the selection onto another area	Teraz przeciągnij zaznaczenie na inny obszar
 	Edit Type	Edytuj tekst
 	Make Default	Ustaw jako domyślne
 	Reset to Default	Przywróć domyślne
@@ -2650,6 +2701,7 @@ cameraRaw	Roughness	Chropowatość
 	Reduce Color Noise	Redukuj szum kolorów
 	Sharpen Details	Wyostrz szczegóły
 	Remove Jpeg Artifact	Usuń artefakty JPEG
+	Remove Tool	Narzędzie Usuń
 	Blade Curvature	Krzywizna listków
 	Depth Map	Mapa głębi
 	Focal Distance	Odległość ogniskowania
@@ -3195,6 +3247,11 @@ cameraRaw	Roughness	Chropowatość
 
 # Text Color Picker and screen sampling
 	Color Picker (Text Color)	Próbnik kolorów (Kolor tekstu)
+	Color Picker ({name})	Próbnik kolorów ({name})
+	Color Picker (Fill Color)	Próbnik kolorów (Kolor wypełnienia)
+	Fill color	Kolor wypełnienia
+	Color Picker (Stroke Color)	Próbnik kolorów (Kolor obrysu)
+	Stroke color	Kolor obrysu
 	Pick screen color	Wybierz kolor z ekranu
 	Sample a pixel anywhere on the screen	Pobierz kolor piksela w dowolnym miejscu ekranu
 	Click to pick · Esc to cancel	Kliknij, aby wybrać · Esc, aby anulować
@@ -3273,6 +3330,24 @@ cameraRaw	Roughness	Chropowatość
 	Reset View	Resetuj widok
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
 
+# Painting symmetry presets.
+	Dual Axis	Podwójna oś
+	Diagonal	Ukośna
+	Transform Symmetry	Przekształć symetrię
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Próbka punktowa
+	3 by 3 Average	Uśrednianie 3 × 3
+	5 by 5 Average	Uśrednianie 5 × 5
+	11 by 11 Average	Uśrednianie 11 × 11
+	31 by 31 Average	Uśrednianie 31 × 31
+	51 by 51 Average	Uśrednianie 51 × 51
+	101 by 101 Average	Uśrednianie 101 × 101
+	Sample Size:	Wielkość próbki:
+	All Layers No Adjustments	Wszystkie warstwy bez korekt
+	Current & Below No Adjustments	Bieżąca i poniżej bez korekt
+	Show Sampling Ring	Pokaż pierścień próbkowania
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Poza gamą druku: kliknij, aby wybrać najbliższy kolor do druku
 	Not a web colour: click for the nearest web colour	To nie jest kolor internetowy: kliknij, aby wybrać najbliższy kolor internetowy
@@ -3280,3 +3355,88 @@ cameraRaw	Roughness	Chropowatość
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
 	PhotoCraft — Screen Color Picker	PhotoCraft — Próbnik kolorów ekranu
+
+	Rasterize svg groups deeper than	Rasteryzuj grupy SVG głębsze niż ten poziom
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 wyłącza ten próg; grupy SVG zagnieżdżone głębiej niż 100 poziomów są zawsze rasteryzowane.
+	Rule of Thirds	Zasada trójpodziału
+	Golden Ratio	Złoty podział
+	Golden Spiral	Złota spirala
+	Auto Show Overlay	Pokazuj nakładkę automatycznie
+	Always Show Overlay	Zawsze pokazuj nakładkę
+	Never Show Overlay	Nigdy nie pokazuj nakładki
+	Cycle Overlay	Przełącz nakładkę
+	Cycle Orientation	Przełącz orientację
+	Set the overlay options for the Crop tool	Ustaw opcje nakładki narzędzia Kadrowanie
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+kliknięcie przejęło środowisko pulpitu, które przesuwa okna przez Alt+przeciąganie. Ustaw w nim klawisz przesuwania okien na Super lub zablokuj Alt w Okno › Klawisze modyfikujące.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Próbnik kolorów (kolor stylu warstwy)
+	Auto Hide Notifications	Automatycznie ukrywaj powiadomienia
+	Notification Duration (seconds)	Czas trwania powiadomienia (sekundy)
+	Appearance Mode	Tryb wyglądu
+	Dark Theme	Ciemny motyw
+	Light Theme	Jasny motyw
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Następny tryb wyglądu
+	Sync with system	Synchronizuj z systemem
+	Active	Aktywny
+	Color Picker (Solid Color)	Próbnik kolorów (kolor jednolity)
+	Straighten the image by drawing a line on it	Wyprostuj obraz, rysując na nim linię
+	Set additional Crop options	Ustaw dodatkowe opcje kadrowania
+	Show Cropped Area	Pokaż wykadrowany obszar
+	Enable Crop Shield	Włącz osłonę kadrowania
+	Match Canvas	Dopasuj do obszaru roboczego
+	Auto Adjust Opacity	Automatycznie dopasuj krycie
+	Crop Shield color	Kolor osłony kadrowania
+	Color Picker (Crop Shield Color)	Próbnik kolorów (Kolor osłony kadrowania)
+	From Center	Od środka
+	Link radii	Połącz promienie
+	Star Ratio:	Proporcja gwiazdy:
+	Create Rectangle	Utwórz prostokąt
+	Create Ellipse	Utwórz elipsę
+	Create Triangle	Utwórz trójkąt
+	Create Polygon	Utwórz wielokąt
+	Pressure curve	Krzywa nacisku
+	Click to add a point, right-click to remove	Kliknij, aby dodać punkt; kliknij prawym przyciskiem, aby go usunąć
+	Some brush presets could not be loaded	Nie udało się wczytać niektórych ustawień predefiniowanych pędzli
+	Retry saving presets	Ponów zapisywanie ustawień predefiniowanych
+	Brush preset changes are not saved: {error}	Zmiany w ustawieniach predefiniowanych pędzli nie zostały zapisane: {error}
+	Keep this tab open to retain your brushes.	Nie zamykaj tej karty, aby zachować pędzle.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Pamięć przeglądarki jest niedostępna; pędzle działają tylko w tej sesji. Nie zamykaj tej karty, aby je zachować.
+	Saving brush presets… Keep this tab open until saving finishes.	Zapisywanie ustawień predefiniowanych pędzli… Nie zamykaj tej karty, dopóki zapis się nie zakończy.
+	Reflect	Odbicie
+	Glow	Poświata
+	Negation	Negacja
+	XOR	XOR
+	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
+	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+	Stroke Options	Opcje obrysu
+	Solid	Ciągły
+	Dashed	Kreskowany
+	Dotted	Kropkowany
+	Caps	Zakończenia
+	Butt / Flat	Płaskie
+	Miter	Ostre
+	Round	Okrągłe
+	Bevel	Ścięte
+	Miter limit	Limit ostrego narożnika
+	Dashed line	Linia kreskowana
+	Dash	Kreska
+	Gap	Odstęp
+	Dash / gap lengths × stroke width	Długości kreski / odstępu × szerokość obrysu
+	Add pair	Dodaj parę
+	Remove pair	Usuń parę
+	Dash offset	Przesunięcie kresek
+	Open paths use centered strokes	Otwarte ścieżki używają wyśrodkowanych obrysów
+	Use finite lengths and a positive pattern total	Użyj skończonych długości i dodatniej sumy wzoru
+	No subject found — try Object Selection or the Lasso	Nie znaleziono obiektu — spróbuj Zaznaczania obiektu lub Lassa
+	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
+	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
+	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Use Classic Mode	Użyj trybu klasycznego
+	Auto Center Preview	Automatycznie wyśrodkuj podgląd
+	Next Document	Następny dokument
+	Previous Document	Poprzedni dokument
+	W x H x Resolution	Szer. x Wys. x Rozdzielczość
+	Front Image	Obraz na wierzchu

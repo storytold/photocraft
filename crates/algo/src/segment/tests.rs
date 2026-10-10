@@ -311,7 +311,7 @@ fn quick_select_with_points_far_off_canvas_selects_nothing() {
     let s = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = Rect::new(0, 0, 140, 100);
     for p in [(3e9, 0.0), (0.0, 3e9), (f32::MAX, f32::MAX)] {
-        assert!(quick::quick_select(&s, canvas, &[p], 8.0, quick::WORK_PX).is_none(), "{p:?}");
+        assert!(quick::quick_select(&s, canvas, &[p], 8.0).is_none(), "{p:?}");
     }
 }
 
@@ -320,7 +320,7 @@ fn quick_select_grows_without_leaking() {
     let img = two_regions(140, 100);
     let s = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = Rect::new(0, 0, 140, 100);
-    let reg = quick::quick_select(&s, canvas, &[(20.0, 50.0), (35.0, 50.0)], 8.0, quick::WORK_PX).unwrap();
+    let reg = quick::quick_select(&s, canvas, &[(20.0, 50.0), (35.0, 50.0)], 8.0).unwrap();
     let mut inside = 0;
     for y in 0..100 {
         for x in 0..140 {
@@ -346,7 +346,7 @@ fn quick_select_stops_at_thin_line() {
         if x == 60 || x == 61 { [0.05, 0.05, 0.05] } else { [0.6 + n, 0.6 + n, 0.55 + n] }
     });
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = quick::quick_select(&s, Rect::new(0, 0, 120, 80), &[(30.0, 40.0)], 6.0, quick::WORK_PX).unwrap();
+    let reg = quick::quick_select(&s, Rect::new(0, 0, 120, 80), &[(30.0, 40.0)], 6.0).unwrap();
     assert!(reg.at(10, 10) >= 0.5 && reg.at(50, 70) >= 0.5);
     for y in 0..80 {
         for x in 63..120 {
@@ -356,13 +356,134 @@ fn quick_select_stops_at_thin_line() {
 }
 
 #[test]
-fn quick_select_downsampled_window() {
-    // A larger image with a small working budget: step > 1 plus band refinement.
+fn quick_select_a_drag_selects_around_itself_not_a_big_object() {
+    // Photoshop 25.4 on this very scene: an 80 px drag inside a 180 px radius disc selects about
+    // the stroke (5285 px), not the disc (~100,000 px): the disc is far too big for the stroke.
     let (img, truth) = disc_scene(600, 500, 300.0, 250.0, 180.0, 4);
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = quick::quick_select(&s, Rect::new(0, 0, 600, 500), &[(260.0, 250.0), (340.0, 250.0)], 30.0, 15_000).unwrap();
-    let v = iou(&reg, &truth, 600, 500);
-    assert!(v > 0.93, "IoU {v}");
+    let reg = quick::quick_select(&s, Rect::new(0, 0, 600, 500), &[(260.0, 250.0), (340.0, 250.0)], 30.0).unwrap();
+    let n = count(&reg);
+    assert!((3000..9000).contains(&n), "{n} px");
+    assert!(reg.at(300, 250) >= 0.5 && reg.at(262, 250) >= 0.5);
+    assert!(iou(&reg, &truth, 600, 500) < 0.2);
+}
+
+// ---------- Quick selection: Photoshop's measured behaviour ----------
+//
+// Each case below was run in Photoshop 25.4 (the same image and stroke, the mouse held 1 s so
+// its solver settles); the numbers in the comments are Photoshop's.
+
+const QS_RED: [f32; 3] = [200.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0];
+const QS_BLUE: [f32; 3] = [60.0 / 255.0, 60.0 / 255.0, 200.0 / 255.0];
+
+/// A `w` x `h` image of `bg` with `fg` over `[x0, x1) x [y0, y1)`.
+fn qs_scene(w: usize, h: usize, bg: [f32; 3], fg: [f32; 3], rect: (usize, usize, usize, usize)) -> RgbImage {
+    let (x0, y0, x1, y1) = rect;
+    RgbImage::from_fn(w, h, |x, y| if x >= x0 && x < x1 && y >= y0 && y < y1 { fg } else { bg })
+}
+
+/// A centred `side` square of `fg` on `bg` in a `w` x `w` image.
+fn qs_square(w: usize, side: usize, fg: [f32; 3], bg: [f32; 3]) -> RgbImage {
+    let x0 = (w - side) / 2;
+    qs_scene(w, w, bg, fg, (x0, x0, x0 + side, x0 + side))
+}
+
+fn qs(img: &RgbImage, pts: &[(f32, f32)], size: f32) -> Region {
+    let s = ImageSampler { img, origin: (0, 0) };
+    quick::quick_select(&s, Rect::new(0, 0, img.w as i32, img.h as i32), pts, size).expect("a selection")
+}
+
+fn count(r: &Region) -> usize {
+    r.mask.iter().filter(|v| **v >= 128).count()
+}
+
+/// Selected pixels inside and outside `[x0, x1) x [y0, y1)`.
+fn inside_outside(r: &Region, rect: (i32, i32, i32, i32)) -> (usize, usize) {
+    let (mut i, mut o) = (0, 0);
+    for y in r.bbox.y0..r.bbox.y1 {
+        for x in r.bbox.x0..r.bbox.x1 {
+            if r.at(x, y) >= 0.5 {
+                if x >= rect.0 && x < rect.2 && y >= rect.1 && y < rect.3 { i += 1 } else { o += 1 }
+            }
+        }
+    }
+    (i, o)
+}
+
+#[test]
+fn quick_select_works_at_full_or_exactly_half_resolution() {
+    // Up to 512 x 512 pixels Photoshop works on the whole document, above at half resolution,
+    // whatever the document's shape or the brush.
+    assert_eq!(quick::working_step(512, 512), 1);
+    assert_eq!(quick::working_step(513, 512), 2);
+    assert_eq!(quick::working_step(520, 300), 1);
+    assert_eq!(quick::working_step(900, 300), 2);
+    assert_eq!(quick::working_step(5000, 3500), 2);
+    // Half resolution: the mask is scaled up bilinearly, so a selected square's edge steps
+    // 64, 191, 255 (Photoshop's own values on a 640 px document).
+    let img = qs_square(640, 200, QS_RED, QS_BLUE);
+    let r = qs(&img, &[(320.0, 320.0)], 30.0);
+    let row: Vec<u8> = (216..223).map(|x| (r.at(x, 320) * 255.0).round() as u8).collect();
+    assert_eq!(row, [0, 0, 0, 64, 191, 255, 255]);
+}
+
+#[test]
+fn quick_select_click_in_a_flat_area_selects_about_the_brush() {
+    // Photoshop: 1025-1120 px for a 30 px brush (the disc grows a little while the button is held).
+    let img = qs_scene(400, 400, QS_RED, QS_RED, (0, 0, 0, 0));
+    let n = count(&qs(&img, &[(200.0, 200.0)], 30.0));
+    assert!((700..1600).contains(&n), "{n} px");
+}
+
+#[test]
+fn quick_select_click_takes_an_object_only_while_it_is_small_enough() {
+    // 30 px brush, red on blue: Photoshop selects a 220 px square whole, not a 240 px one.
+    let img = qs_square(500, 220, QS_RED, QS_BLUE);
+    let (i, o) = inside_outside(&qs(&img, &[(250.0, 250.0)], 30.0), (140, 140, 360, 360));
+    assert!(i >= 220 * 220 - 10 && o == 0, "220: {i} in, {o} out");
+    let img = qs_square(500, 240, QS_RED, QS_BLUE);
+    let n = count(&qs(&img, &[(250.0, 250.0)], 30.0));
+    assert!(n < 2000, "240: {n} px");
+    // A weak edge (15 levels) holds only a small square: 94 px yes, 120 px no.
+    let (lo, hi) = ([125.0 / 255.0, 110.0 / 255.0, 110.0 / 255.0], [110.0 / 255.0, 110.0 / 255.0, 125.0 / 255.0]);
+    let img = qs_square(500, 94, lo, hi);
+    let (i, o) = inside_outside(&qs(&img, &[(250.0, 250.0)], 30.0), (203, 203, 297, 297));
+    assert!(i >= 94 * 94 - 10 && o == 0, "94: {i} in, {o} out");
+    let img = qs_square(500, 120, lo, hi);
+    let n = count(&qs(&img, &[(250.0, 250.0)], 30.0));
+    assert!(n < 2000, "120: {n} px");
+}
+
+#[test]
+fn quick_select_takes_a_narrow_bar_end_to_end_but_only_the_end_near_it() {
+    // An 80 x 400 bar: a click in the middle selects all of it; a click 30 px from its end only
+    // the end (Photoshop: 3762 px, cut just above the brush).
+    let img = qs_scene(500, 500, QS_BLUE, QS_RED, (100, 50, 180, 450));
+    let (i, o) = inside_outside(&qs(&img, &[(140.0, 250.0)], 30.0), (100, 50, 180, 450));
+    assert!(i >= 80 * 400 - 10 && o == 0, "middle: {i} in, {o} out");
+    let r = qs(&img, &[(140.0, 420.0)], 30.0);
+    let (i, o) = inside_outside(&r, (100, 380, 180, 450));
+    assert!(i > 2500 && o == 0, "near the end: {i} in the end, {o} elsewhere");
+}
+
+#[test]
+fn quick_select_a_short_drag_takes_what_a_click_does_not() {
+    // A 300 px square: a click selects about the brush; a 60 px drag the whole square.
+    let img = qs_square(500, 300, QS_RED, QS_BLUE);
+    assert!(count(&qs(&img, &[(250.0, 250.0)], 30.0)) < 2000);
+    let (i, o) = inside_outside(&qs(&img, &[(220.0, 250.0), (280.0, 250.0)], 30.0), (100, 100, 400, 400));
+    assert!(i >= 300 * 300 - 10 && o == 0, "{i} in, {o} out");
+}
+
+#[test]
+fn quick_select_on_a_large_document_grows_its_window_to_the_object() {
+    // A 1000 x 600 document (half resolution) with an 80 x 960 bar: Photoshop selects all of it
+    // from a click in the middle (76800 px). The working window starts around the stroke and grows
+    // until the selection no longer runs into it.
+    let img = qs_scene(1000, 600, QS_BLUE, QS_RED, (20, 260, 980, 340));
+    // The mouse on pixel (500, 300), as in Photoshop: its centre.
+    let (i, o) = inside_outside(&qs(&img, &[(500.5, 300.5)], 30.0), (20, 260, 980, 340));
+    assert!(i >= 960 * 80 * 98 / 100 && o < 2000, "{i} in, {o} out");
 }
 
 // ---------- Select subject ----------
@@ -452,25 +573,21 @@ fn clean_mask_drops_islands_and_fills_holes() {
     assert!(!c[36 * w + 36]);
 }
 
+/// Writes the quick-selection test scenes as raw RGB8 (for measuring them in Photoshop).
 #[test]
-fn geodesic_distance_jumps_across_edges() {
-    let img = two_regions(140, 100);
-    let seeds = quick::stroke_mask(&[(20.0, 50.0)], 4.0, 140, 100);
-    let d = quick::geodesic(&img, &seeds);
-    assert!(d[50 * 140 + 40] < 0.02, "same region {}", d[50 * 140 + 40]);
-    assert!(d[50 * 140 + 100] > 0.1, "across the edge {}", d[50 * 140 + 100]);
-}
-
-#[test]
-fn geodesic_barrier_blocks_oblique_crossings() {
-    // A large disc whose slightly tilted edge crosses the image: paths running along the soft
-    // edge must not sneak across it.
-    let (img, truth) = disc_scene(352, 372, -470.0, 186.0, 668.0, 4);
-    let seeds = quick::stroke_mask(&[(175.0, 176.0), (175.0, 196.0)], 5.0, 352, 372);
-    assert!(seeds.iter().zip(&truth).all(|(s, t)| !*s || *t));
-    let d = quick::geodesic(&img, &seeds);
-    assert!(d[186 * 352 + 100] < 0.02);
-    for y in (0..372).step_by(31) {
-        assert!(d[y * 352 + 291] > 0.1, "row {y}: {}", d[y * 352 + 291]);
-    }
+#[ignore]
+fn dump_quick_scenes() {
+    let Ok(dir) = std::env::var("QS_DUMP") else { return };
+    let save = |name: &str, img: &RgbImage| {
+        let bytes: Vec<u8> = img.px.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+        std::fs::write(format!("{dir}/{name}_{}x{}.rgb", img.w, img.h), bytes).unwrap();
+    };
+    save("two_regions", &two_regions(140, 100));
+    let mut rng = Rng::new(9);
+    let line = RgbImage::from_fn(120, 80, |x, _| {
+        let n = 0.03 * rng.normal();
+        if x == 60 || x == 61 { [0.05, 0.05, 0.05] } else { [0.6 + n, 0.6 + n, 0.55 + n] }
+    });
+    save("thin_line", &line);
+    save("disc_scene", &disc_scene(600, 500, 300.0, 250.0, 180.0, 4).0);
 }

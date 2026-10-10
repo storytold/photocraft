@@ -3,7 +3,11 @@
 ## Prerequisites
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
-- macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
+- macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
+  - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
+  - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
+  - Arch: `sudo pacman -S libxkbcommon wayland libx11 libxrandr libxi mesa gtk3`
+  - openSUSE: `sudo zypper install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel Mesa-libGL-devel gtk3-devel`
 
 ### Windows source builds
 
@@ -37,10 +41,25 @@ cargo run --release -p photocraft -- --control 7878 --control-token-file .privat
 cargo test --workspace                                     # everything
 cargo xtask ci                                             # fmt + clippy + tests + layers + wasm
 cargo xtask stats                                          # tests and lines per crate
-cargo xtask parity                                         # Photoshop menu coverage -> docs/parity.md
+cargo xtask parity                                         # Photoshop menu coverage -> docs/parity-checklist.md
 ```
 
 Image code is slow at `opt-level 0`, so the workspace profile builds dependencies at `opt-level 2`. Use `--release` for anything interactive.
+
+The dev profile builds with `debug = "line-tables-only"`: panic backtraces keep file and line, and test binaries link about twice as fast. To inspect local variables in a debugger, build with `CARGO_PROFILE_DEV_DEBUG=true`.
+
+### Faster test loops
+
+Most of a `cargo test` run is linking test binaries and running them one after another. While iterating:
+
+```sh
+cargo test -p <crate> --lib --tests        # skip examples and doctests (ui-egui has 11 examples)
+cargo test -p <crate> --test <file>        # one integration-test file
+cargo nextest run --workspace              # parallel across binaries (cargo install cargo-nextest --locked)
+cargo test --doc --workspace               # nextest does not run doctests
+```
+
+[cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and ui-egui's integration and canvas/GPU tests) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. CI still runs `cargo test`, and a full `cargo test` stays the final check before a PR.
 
 ## Fonts (craft-fonts)
 
@@ -58,7 +77,7 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 - `crates/text/build.rs` reads `$CRAFT_FONTS_DIR/fonts/manifest.txt` and embeds the fonts as `photocraft_text::CRAFT_FONTS` (`crates/text/src/craft_fonts.rs`). Unset, `CRAFT_FONTS` is empty and the build is unchanged. A bad path is a build warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds set both).
 - **UI:** the Japanese fonts (BIZ UDPGothic Regular first) are the first Japanese fallback in the lazy CJK loader (`crates/ui-egui/src/cjk_fonts.rs`), ahead of the system Japanese fonts and in the same locale script order, appended last to every egui family with the usual baseline alignment.
 - **Type tool:** the text engine registers them in `FontDb::new` (so also with no system fonts) and puts them first in the Japanese slot of the locale-ordered fallback list: BIZ UDPGothic for sans runs, Shippori Mincho / BIZ UDMincho for serif runs.
-- **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. The web build therefore has no Japanese font yet (loading craft-fonts next to the wasm at run time would be the way to add one).
+- **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. Instead it loads fonts served next to it, on demand: `fonts/manifest.txt` beside `index.html`, in craft-fonts' manifest format (`crates/text/src/served.rs`; hosting: `packaging/web/README.md` › Fonts). `PHOTOCRAFT_WEB_FONTS_DIR="$PWD/../craft-fonts" packaging/web/package.sh` puts craft-fonts there. Served families are in the font menus and are fetched when picked or when a document's text needs them; they aren't in the script fallback list yet, so Japanese text set in a Latin font still needs a Japanese font picked (#1615).
 - Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's Linux job runs the tests a second time with `CRAFT_FONTS_DIR` set. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
 
 ## Graphics startup and device loss
@@ -152,6 +171,8 @@ cargo run -p photocraft-cli -- commands --filter blur                    # the c
 
 Keep one `PcraftWriter` per open document: re-saving then only compresses and writes tiles that changed. Directory bundles verify objects on first encounter in a folder; later saves reuse them while their file size and modification time are unchanged, and re-verify changed objects, repair missing or damaged objects, and garbage-collect unreferenced ones. `format::Autosaver` writes snapshots into a recovery directory on a background thread. `list_recovery` / `recover` / `discard_recovery` implement crash recovery, and `format::RecoveryStore` is the lifecycle the desktop app uses: new documents autosave under per-launch keys (document ids restart every launch, so they never overwrite an older entry), and a recovered document adopts the entry it came from. That entry is replaced in place by the next autosave and removed only when the document is saved or closed, never just because it was recovered, so a second crash loses nothing. The web build has no crash recovery (no autosave services).
 
+At startup the desktop lists recovery metadata, then decodes one document at a time through the existing background-job system. The window stays usable, with recovery progress and Cancel in the status bar. Cancel skips the rest of that launch's recovery queue and prevents the current result from opening; the decoder may finish in the background. Failed or cancelled loads leave their recovery files intact for a later launch. Turning off Preferences › File Handling › Recover on launch skips discovery altogether.
+
 `photocraft-io` routes `.pcraft` through this crate in `import`/`export`, detecting it by magic or by extension.
 
 ## MCP (agents)
@@ -197,7 +218,9 @@ claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
 ```
 
 `doc_inspect` (and the engine command `document.inspect`) reports the layer tree with kinds,
-bounds, masks, selection, effects (`effects.items[].kind`), smart filters (`smartFilters[]`), type
+bounds, masks, selection, effects (`effects.items[].kind`), smart filters (`smartFilters[]`), smart
+object sources (`smartSource`: `embedded` with its file name, or `linked` with a file path or, for a
+PSD placed layer, the `Idnt` uuid its duplicates share), type
 text, adjustment settings, channels and history, so agents can verify what they did without a
 screenshot. `crates/automation/tests/agent_tasks.rs` is the reference: ten realistic edit tasks
 (title card, colour grade, undo/redo, editable smart blur, masks, saved selections, align,
@@ -230,7 +253,7 @@ intents, black point compensation). It ships CC0 built-in profiles, including a 
 ## Menu parity
 
 `cargo xtask parity` compares Photoshop's menu tree (`crates/ui-egui/src/menu_catalog.rs`) with
-the live command registry (`menus::is_live`) and rewrites [`docs/parity.md`](parity.md). The test
+the live command registry (`menus::is_live`) and rewrites [`docs/parity-checklist.md`](parity-checklist.md). The test
 `parity::tests::parity_does_not_regress` fails if the live count drops below `parity::FLOOR`.
 
 `cargo xtask i18n-coverage` prints the UI translation coverage for each language in the
@@ -254,8 +277,8 @@ translations do not affect the denominator. Unregistered locale TSV files are ig
 ## Performance notes
 
 - The canvas is presented by a custom WGSL shader (`ui-egui/src/gpu_canvas.rs`): mip-mapped/nearest sampling, procedural checkerboard, pixel grid, tiling. Brush strokes upload only their damage rect.
-- **The canvas composites on the GPU** (`photocraft-gpu`, driven from `gpu_canvas.rs`), layer effects included. What the planner can't express returns `Unsupported` and the canvas falls back to the CPU compositor (`photocraft-compose`, also the reference for export and tests): Multichannel documents, and documents or effect regions over the texture limit. Pieces the GPU can't derive itself are rasterised once on the CPU and cached (`compose::masks` for vector masks, `compose::shape_split` for stroked shapes with clipped layers, effect distance fields). Timings of the interactive paths: `cargo run --release -p photocraft-ui-egui --example interactive_bench`; effects: `--example fx_bench` (`--compare files…` for GPU vs CPU); large documents (open, refresh, thumbnails, a filter, a stroke, saves; one operation per run so `/usr/bin/time -l` gives its peak memory): `--example large_image_bench -- --size 14000x14000 --op psd`. The app requests the adapter's own texture limit (egui's default is 8192 px; see `gpu_canvas::use_adapter_limits`); beyond it the CPU fallback composites and uploads in bands (`compose::render_bands`), and exports, thumbnails and flattening stream bands too, so no full-size float composite is ever held. Rendering fidelity: `cargo run --release -p photocraft-io --example oracle_diff -- corpus/psd` (the whole PSD oracle table in seconds). `ui.inspect` → `perf.timings.gpuFallback` names the reason (`null` on the GPU path).
-- **Layer effects on the GPU** (`gpu/src/fx.rs`, kernels in `gpu/src/compose.wgsl`). Every enabled effect becomes a *map program* over the layer's effect region (shift, dilate, Gaussian blur, glow ramp, bevel height and shading, contour, stroke band), mirroring `compose::effects` step by step; the chunked composite then paints through the maps, clipped to that region, and copies the result back into the backdrop in place, so a small text layer costs only its own pixels. The layer's shape (`compose::layer_shape`) and its distance fields (`compose::effects::distance_field`: a sequential transform whose tie-breaking a parallel GPU pass can't reproduce bit for bit) come from compose on the CPU, computed in parallel bands. Everything is cached per layer state: an unrelated edit, or an effect's colour or opacity, rebuilds nothing; a brush dab recomputes the touched 256² tiles grown by the effect reach; changing one effect's geometry rebuilds that effect only. Cache budget `gpu::FX_BUDGET` (1.5 GB, least recently drawn layers evicted first). `PHOTOCRAFT_FX_TRACE=1` prints the CPU time of each rebuild.
+- **The canvas composites on the GPU** (`photocraft-gpu`, driven from `gpu_canvas.rs`), layer effects included. What the planner can't express returns `Unsupported` and the canvas falls back to the CPU compositor (`photocraft-compose`, also the reference for export and tests): Multichannel documents, and documents or effect regions over the texture limit. Pieces the GPU can't derive itself are rasterised once on the CPU and cached (`compose::masks` for vector masks, `compose::shape_split` for stroked shapes with clipped layers, effect distance fields). Timings of the interactive paths: `cargo run --release -p photocraft-ui-egui --example interactive_bench`; effects: `--example fx_bench` (`--compare files…` for GPU vs CPU); the cost of changing a chisel bevel's size (a dragged slider, GPU and CPU, ellipse and text): `--example bevel_bench`; large documents (open, refresh, thumbnails, a filter, a stroke, saves; one operation per run so `/usr/bin/time -l` gives its peak memory): `--example large_image_bench -- --size 14000x14000 --op psd`. The app requests the adapter's own texture limit (egui's default is 8192 px; see `gpu_canvas::use_adapter_limits`); beyond it the CPU fallback composites and uploads in bands (`compose::render_bands`), and exports, thumbnails and flattening stream bands too, so no full-size float composite is ever held. Rendering fidelity: `cargo run --release -p photocraft-io --example oracle_diff -- corpus/psd` (the whole PSD oracle table in seconds). `ui.inspect` → `perf.timings.gpuFallback` names the reason (`null` on the GPU path).
+- **Layer effects on the GPU** (`gpu/src/fx.rs`, kernels in `gpu/src/compose.wgsl`). Every enabled effect becomes a *map program* over the layer's effect region (shift, dilate, Gaussian blur, glow ramp, bevel height and shading, contour, stroke band), mirroring `compose::effects` step by step; the chunked composite then paints through the maps, clipped to that region, and copies the result back into the backdrop in place, so a small text layer costs only its own pixels. The layer's shape (`compose::layer_shape`) and its distance fields (`compose::effects::distance_field`: a transform whose tie-breaking a parallel GPU pass can't reproduce bit for bit) come from compose on the CPU: bands computed in parallel, except the Euclidean fields of precise glows and chiselled bevels (a halo as tall as the bevel size would make most of a band's work redundant), which are one window whose passes run on all threads, the CPU compositor's own way. Everything is cached per layer state: an unrelated edit, or an effect's colour or opacity, rebuilds nothing; a brush dab recomputes the touched 256² tiles grown by the effect reach; changing one effect's geometry rebuilds that effect only. Cache budget `gpu::FX_BUDGET` (1.5 GB, least recently drawn layers evicted first). `PHOTOCRAFT_FX_TRACE=1` prints the CPU time of each rebuild.
 - The canvas grows a stroke's damage rect by the effect reach of the layers around it (`canvas::effect_reach`), so effects beyond the dab refresh too (on both paths).
 - **Numbers** (7360 × 4912, 8 text layers + one painted layer with drop shadow + stroke + bevel, Hue/Saturation on top; M4 Pro; `cargo run --release -p photocraft-ui-egui --example fx_bench`), CPU fallback → GPU: full refresh with warm effect maps 5.7 s → 47 ms; Hue/Saturation tweak above the effects 4.7 s → 31 ms; brush dab on a plain layer 32 → 1.7 ms; brush dab on the effect layer (its maps rebuilt around the dab) 659 → 3.7 ms; first refresh (all maps built) 6.4 s → 0.39 s. With the CPU ~14× oversubscribed by parallel builds (min of 7 runs): 8.1 s → 0.33 s, 9.9 s → 0.28 s, 28 → 2.2 ms, 1.7 s → 89 ms; moving a text layer 7 px 336 → 13 ms. `fx_bench --compare corpus/psd/…/*.psd` reports the GPU vs CPU difference on real files (30 of the 31 corpus files with effects render on the GPU, worst 0.12/255).
 - On the CPU path `compose::effect_maps` caches shadow, glow, bevel and satin maps per layer state (LRU, 768 MB budget).
@@ -292,10 +315,10 @@ cargo xtask perf --update-baseline   # also write perf/baseline.json from this r
   class, commit, date and load average.
 - `crates/io/tests/corpus.rs`: the corpus floors (every `Source { .. }` constant).
 - The prefs audit: `Preferences` fields that no code reads (target 0, #204), plus counts taken
-  from the tree (never-crash attribute coverage, `docs/parity.md`).
+  from the tree (never-crash attribute coverage, `docs/parity-checklist.md`).
 
 **Perf runs.** `xtask perf` builds the benches in release (`perf_scenarios`, `interactive_bench`,
-`fx_bench`, `type_bench`, `large_image_bench`, and `layout_bench` once it exists), runs each with
+`fx_bench`, `bevel_bench`, `type_bench`, `large_image_bench`, and `layout_bench` once it exists), runs each with
 `--json`, and merges the reports into `target/perf/results.json` keyed by scenario id, with p50,
 p95 and max (nearest rank over the samples), peak RSS measured in-process (`photocraft-testkit`'s
 `perf::RssSampler`), GPU bytes held by the canvas, and the load average before and after each
@@ -328,7 +351,7 @@ trunk build --release              # writes ../../dist/web (index.html, .js glue
 trunk serve --release              # dev server on http://127.0.0.1:8765
 ```
 
-Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "s" except the pixel crates). The `.wasm` is about 18.8 MiB raw, 7.8 MiB gzipped and 5.6 MiB with Brotli; serve it with compression. Keep it under 24 MiB (`packaging/web/package.sh` enforces this; Cloudflare's per-file cap is 25 MiB). The web build never embeds craft-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/photocraft-web.wasm` (before wasm-opt strips the names).
+Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "s" except the pixel crates). The `.wasm` is about 18.8 MiB raw, 7.8 MiB gzipped and 5.6 MiB with Brotli; serve it with compression. Keep it under 24 MiB (`packaging/web/package.sh` enforces this; Cloudflare's per-file cap is 25 MiB). Pull-request CI also builds the actual browser app with the same pinned Trunk version as the release job and runs `packaging/web/package.sh`, including the relative-URL and 24 MiB checks. The `web build and wasm size gate` check runs on main and on PRs that change something the web build compiles or packages (`apps/photocraft-web`, `packaging/web`, crate sources and manifests, `Cargo.toml`/`Cargo.lock`, the CI workflow), and reports the resulting wasm size in the Actions job summary. The web build never embeds craft-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/photocraft-web.wasm` (before wasm-opt strips the names).
 
 URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path.
 
@@ -391,6 +414,27 @@ Input calls (`ui.key`, `ui.type`, `ui.click`) now reply only after the app has p
 so a following `ui.inspect` observes their effect.
 
 
+## Remove Tool quality
+
+`cargo run --release -p photocraft-engine --example remove_quality -- <dir> [out dir]` fills
+holes (discs and thin lines over background) in five photos with `photocraft_algo::remove` and
+prints, per hole, the PSNR against the original, `texture` (the fill's mean gradient over the
+original's: below 1 it is smoother than what it replaces) and `seam` (the same on the band along the
+hole's edge: above 1 the edge shows). With an out dir it writes original | hole | fill crops. The
+photos are public domain, not committed; download them at 1920 px wide into `<dir>` as:
+
+| File | Photo |
+|---|---|
+| `01.jpg` | [The Tetons and the Snake River](https://commons.wikimedia.org/wiki/File:Adams_The_Tetons_and_the_Snake_River.jpg), Ansel Adams, 1942 (U.S. National Archives) |
+| `02.jpg` | [Ansel Adams, National Archives 79-AAB-01](https://commons.wikimedia.org/wiki/File:Ansel_Adams_-_National_Archives_79-AAB-01.jpg) (U.S. National Archives) |
+| `03.jpg` | [Hiking at Crane Meadows National Wildlife Refuge](https://commons.wikimedia.org/wiki/File:Hiking_at_Crane_Meadows_National_Wildlife_Refuge_(49018614166).jpg) (USFWS) |
+| `04.jpg` | [Meadow Anemone, Lake Andes National Wildlife Refuge](https://commons.wikimedia.org/wiki/File:Meadow_Anemone_Lake_Andes_National_Wildlife_Refuge_South_Dakota_(53923253226).jpg) (USFWS) |
+| `06.jpg` | [Line5070, NOAA Photo Library](https://commons.wikimedia.org/wiki/File:Line5070_-_Flickr_-_NOAA_Photo_Library.jpg) (NOAA) |
+
+`https://commons.wikimedia.org/wiki/Special:FilePath/<file name>?width=1600` serves each at the
+size the cases were placed for (Commons rounds it to 1920). Timing on a 24 MP document through the
+command: `cargo run --release -p photocraft-engine --example remove_bench`.
+
 ## Test corpora
 
 Real files are our best oracles, but they are large binaries, so they never go into this
@@ -405,7 +449,7 @@ against committed **sha256 manifests**. All pins are in one place:
 | `corpus/psd-tools/` | the complete psd-tools test set (309 files) | psd-tools upstream (MIT) | `xtask/psd-tools-corpus.sha256` |
 | `corpus/heif/` | 9 small HEIC/HEIF files (checkerboards, RGB strips, a grid-tiled photo with EXIF/XMP, each with Apple's decode as `.ref.png`; a 10-bit RGBA file with its source PNG), for the `heif` feature | heic-rs (MIT OR Apache-2.0) and pillow-heif (BSD-3-Clause) upstreams | `xtask/heif-corpus.sha256` |
 | `corpus/exr/` | the 5 deep OpenEXR test images (scanline deep data with half colour and u32 ID channels; 2.3 MB), checked against the ID manifests of their upstream sidecars | OpenEXR upstream at v3.5.2 (BSD-3-Clause) | `xtask/exr-corpus.sha256` |
-| `corpus/affinity/` | 21 public Affinity documents (four Affinity 3 `.af` files, `.afdesign` vector art, layer/shape/raster test files, a template with artboards), each holding Affinity's own render as its thumbnail | vector-art (CC0), AFDesignLoad, Jac21/Branding and AssetStoreTemplate (MIT) upstreams | `xtask/affinity-corpus.sha256` |
+| `corpus/affinity/` | 21 public Affinity documents and the 18 Affinity 3 samples for #1606, with exported PNG references | vector-art and affinity-samples (CC0), AFDesignLoad, Jac21/Branding and AssetStoreTemplate (MIT) upstreams | `xtask/affinity-corpus.sha256` |
 | `corpus/pngsuite/` | PngSuite | schaik.com release archive (public domain) | (fixed archive) |
 
 ```sh

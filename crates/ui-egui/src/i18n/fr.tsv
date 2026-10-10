@@ -24,6 +24,8 @@
 	Layer	Calque
 	Type	Texte
 	Select	Sélection
+	Selected	Sélectionnés
+	Scope	Portée
 	Top Left	En haut à gauche
 	Top Right	En haut à droite
 	Bottom Left	En bas à gauche
@@ -36,6 +38,11 @@
 	New…	Nouveau…
 	Open…	Ouvrir…
 	Open As…	Ouvrir en tant que…
+	Open EXR Parts…	Ouvrir les parties EXR…
+	Add beauty precomp from the AOVs	Ajouter la précomposition de la beauté depuis les AOV
+	Both	Les deux
+	Left	Gauche
+	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
 	Close	Fermer
@@ -85,6 +92,8 @@
 	Import	Importer
 	Browse…	Parcourir…
 	Reveal in Finder	Afficher dans le Finder
+	Show in Explorer	Afficher dans l'Explorateur
+	Show in Folder	Afficher dans le dossier
 	File Info…	Informations sur le fichier…
 	Print…	Imprimer…
 	Print One Copy	Imprimer un exemplaire
@@ -660,7 +669,11 @@
 	Pro Medium Gray Theme	Thème Pro gris moyen
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
+	Adwaita Light Theme	Thème Adwaita clair
+	Adwaita Dark Theme	Thème Adwaita sombre
 	Classic Theme	Thème Classique
+	Solarized dark	Solarized sombre
+	Solarized Dark Theme	Thème Solarized sombre
 	Next Theme	Thème suivant
 	Actions	Actions
 	Brush Settings	Paramètres du pinceau
@@ -744,7 +757,7 @@
 	All Caps	Tout en capitales
 	All Slices	Toutes les tranches
 	All User Slices	Toutes les tranches utilisateur
-	All shortcuts reset to Photoshop defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Toujours utiliser la pression pour l'opacité
 	Always use pressure for size	Toujours utiliser la pression pour la taille
@@ -792,7 +805,6 @@
 	Blending Options	Options de fusion
 	Blue	Bleu
 	Blue, Red, Yellow	Bleu, rouge, jaune
-	Both	Les deux
 	Both Axes	Deux axes
 	Bottom	Bas
 	Brightness	Luminosité
@@ -932,6 +944,17 @@
 	Delete current channel	Supprimer le canal actif
 	Delete current state	Supprimer l'état actuel
 	Delete effect layer	Supprimer le calque d'effet
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Supprimer le calque « {name} » ?
+	Delete {count} layers? {names}	Supprimer {count} calques ? {names}
+	Delete layer?	Supprimer le calque ?
+	The document is closed	Le document est fermé
+	The document or selected layers changed. Please request deletion again.	Le document ou les calques sélectionnés ont changé. Demandez à nouveau la suppression.
+	Missing delete command	Commande de suppression manquante
+	Invalid delete command	Commande de suppression non valide
+	Layer deleted, but confirmation preference could not be saved: {error}	Le calque a été supprimé, mais la préférence de confirmation n’a pas pu être enregistrée : {error}
+
 	Delete layer	Supprimer le calque
 	Delete layer comp	Supprimer la composition de calques
 	Delete note	Supprimer la note
@@ -1059,7 +1082,7 @@
 	Ignore All	Tout ignorer
 	Image Size	Taille de l'image
 	Import Brushes…	Importer des pinceaux…
-	Import Photoshop brushes (.abr)	Importer des pinceaux Photoshop (.abr)
+	Import brushes (.abr)	Importer des pinceaux (.abr)
 	Import Presets	Importer des préréglages
 	Imported	Importé
 	Indent First	Retrait de première ligne
@@ -1094,7 +1117,6 @@
 	Leading	Interlignage
 	Leading (set to the font size × auto-leading when Auto)	Interlignage (en Auto : taille de police × interlignage automatique)
 	Leave as is (don't color manage)	Laisser tel quel (sans gestion des couleurs)
-	Left	Gauche
 	Left align text	Aligner le texte à gauche
 	Length:	Longueur :
 	Level	Niveau
@@ -1109,7 +1131,6 @@
 	Liquify is not open	Liquéfier n'est pas ouvert
 	Load	Charger
 	Load 3D LUT…	Charger une LUT 3D…
-	Load Photoshop brushes (.abr)	Charger des pinceaux Photoshop (.abr)
 	Load channel as selection	Charger le canal comme sélection
 	Load…	Charger…
 	Localized Color Clusters	Groupes de couleurs localisés
@@ -1267,6 +1288,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Enregistrez ● une suite de modifications, puis rejouez-la ▶ sur n'importe quel document.
 	Red	Rouge
 	Redefine style by current selection	Redéfinir le style d'après la sélection actuelle
+	Refine	Affiner
 	Reflected Gradient	Dégradé réfléchi
 	Registration Marks	Repères de montage
 	Regular	Normal
@@ -1276,6 +1298,7 @@
 	Remove All Pins	Retirer toutes les épingles
 	Remove Background	Supprimer l'arrière-plan
 	Remove Planes	Supprimer les plans
+	Remove Tool	Outil Retirer
 	Remove stop	Retirer le point
 	Remove variable	Retirer la variable
 	Rename	Renommer
@@ -1285,6 +1308,17 @@
 	Rename…	Renommer…
 	Resample	Rééchantillonner
 	Reset All to Defaults	Tout réinitialiser aux valeurs par défaut
+	Import Shortcuts…	Importer des raccourcis…
+	Load a keyboard shortcut set saved as .kys	Charger un jeu de raccourcis clavier enregistré en .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} raccourcis importés depuis {file}. Cliquez sur OK pour les conserver.
+	{n} commands are not in PhotoCraft.	{n} commandes n'existent pas dans PhotoCraft.
+	Keyboard shortcuts imported	Raccourcis clavier importés
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Votre jeu de raccourcis clavier {set} est utilisé ici : {n} raccourcis diffèrent des valeurs par défaut. Édition › Raccourcis clavier les affiche ; Tout rétablir par défaut annule l'import.
+	Import keyboard shortcuts?	Importer les raccourcis clavier ?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft a trouvé sur cet ordinateur votre jeu de raccourcis clavier {set} provenant d'un autre éditeur d'images : {n} de ses raccourcis diffèrent de ceux de PhotoCraft. L'importer ?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Édition › Raccourcis clavier › Tout rétablir par défaut annule un import.
+	Don't Import	Ne pas importer
+	The keyboard shortcut set was not imported: {error}	Le jeu de raccourcis clavier n'a pas été importé : {error}
 	Reset Section	Réinitialiser la section
 	Reset Transform	Réinitialiser la transformation
 	Reset to defaults	Réinitialiser aux valeurs par défaut
@@ -1293,7 +1327,6 @@
 	Restore All	Tout restaurer
 	Restore Defaults	Rétablir les valeurs par défaut
 	Restrictive (Web)	Restrictive (Web)
-	Right	Droite
 	Right align text	Aligner le texte à droite
 	Rigid	Rigide
 	Rotate:	Rotation :
@@ -1376,6 +1409,7 @@
 	Stroke	Contour
 	Stroke Catch-up	Rattrapage du trait
 	Stroke:	Contour :
+	Location:	Emplacement :
 	Style	Style
 	Style Options	Options de style
 	Style Options…	Options de style…
@@ -1499,7 +1533,7 @@
 	Current Tool	Outil actif
 	Custom Shape Tool	Outil Forme personnalisée
 	Cyans	Cyans
-	Default Photoshop Size	Taille Photoshop par défaut
+	Default PhotoCraft Size	Taille PhotoCraft par défaut
 	Delete Workspace	Supprimer l'espace de travail
 	Diamond	Losange
 	Dimensions:	Dimensions :
@@ -1576,6 +1610,8 @@
 	Millimeters	Millimètres
 	Mobile	Mobile
 	Move Tool	Outil Déplacement
+	Could not use the move tool because the layer is locked.	Impossible d'utiliser l'outil Déplacement, car le calque est verrouillé.
+	Could not complete the Free Transform command because the layer is locked.	Impossible d'exécuter la commande Transformation libre, car le calque est verrouillé.
 	Multiply	Produit
 	My Brushes	Mes pinceaux
 	Neutrals	Neutres
@@ -1620,6 +1656,7 @@
 	Quick Selection Tool	Outil Sélection rapide
 	Radial	Radial
 	Rasterize Layer	Rastériser le calque
+	Rasterize Layers	Rastériser les calques
 	Ratio	Proportions
 	Recent	Récent
 	Rectangle Tool	Outil Rectangle
@@ -1840,6 +1877,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio clair
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita sombre
 	Subdivisions	Subdivisions
 	System	Système
 	Text engine	Moteur de texte
@@ -1889,6 +1928,7 @@
 	Collapse group  ({key}-click: all groups)	Réduire le groupe  ({key}-clic : tous les groupes)
 	Create new brush from the current settings	Créer un nouveau pinceau à partir des paramètres actuels
 	Create new brush from these settings	Créer un nouveau pinceau à partir de ces paramètres
+	Update the current brush with these settings	Mettre à jour le pinceau actuel avec ces paramètres
 	Delete brush	Supprimer le pinceau
 	Drag the arrow to set the angle, the dots to set the roundness	Faites glisser la flèche pour régler l'angle, les points pour régler l'arrondi
 	Expand	Développer
@@ -1943,8 +1983,8 @@
 	Brush Preset Options	Options des préréglages de pinceau
 	Group name	Nom du groupe
 	Brush name	Nom du pinceau
-	Grid view	Vue en grille
-	List view	Vue en liste
+	Brush Name	Nom du pinceau
+	Brush Stroke	Trace de pinceau
 	Off: the speed of the pointer sets the spacing	Désactivé : la vitesse du pointeur détermine l'espacement
 	Tilt Scale	Échelle d'inclinaison
 	Brush Projection	Projection du pinceau
@@ -1963,7 +2003,13 @@
 	Align with layer	Aligner sur le calque
 	Reset Alignment	Réinitialiser l'alignement
 	Centre the gradient (offset 0, 0)	Centrer le dégradé (décalage 0, 0)
-	The current gradient (pick one in Window › Gradients)	Le dégradé actuel (choisissez-en un dans Fenêtre › Dégradés)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Éditeur de dégradé
+	Gradient picker	Sélecteur de dégradé
+	Save As Preset	Enregistrer comme préreglage
+	The gradient the Gradient tool paints with	Le dégradé que l'outil Dégradé applique
+	Adds the current gradient to the Gradients panel	Ajoute le dégradé actuel au panneau Dégradés
+	Gradient stops	Arrêts de dégradé
 	Select a type layer to edit its character and paragraph settings.	Sélectionnez un calque de texte pour modifier ses paramètres de caractère et de paragraphe.
 	Text color	Couleur du texte
 	Type Options	Options de texte
@@ -1995,6 +2041,9 @@
 	Cancelled {label}	{label} : annulé
 	Esc to cancel	Échap pour annuler
 	Opening {name}	Ouverture de {name}
+	Saving {name}	Enregistrement de {name}
+	A save to {name} is still running; try again when it finishes	Un enregistrement de {name} est encore en cours ; réessayez lorsqu’il sera terminé
+	{label} is writing the file and can no longer be cancelled	{label} écrit le fichier et ne peut plus être annulé
 	Opening {name}…	Ouverture de {name}…
 	Opening…	Ouverture…
 	Reading…	Lecture…
@@ -2357,7 +2406,7 @@
 	Pixel	Pixel
 	Adjustment	Ajustement
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Faites glisser (lasso) ou cliquez des points (polygonal) · {add} ajouter · {sub} soustraire
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Tracez un cadre de recadrage · faites glisser à l'intérieur pour le déplacer · les bords le redimensionnent ({ratio} proportions, {centre} centre) · Espace le déplace pendant le tracé · {commit} valide · Échap annule
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Tracez un cadre de recadrage · faites glisser à l'intérieur pour le déplacer · les bords le redimensionnent ({ratio} proportions, {centre} centre) · Espace le déplace pendant le tracé · flèches le décalent · X permute l'orientation · {commit} valide · Échap annule
 	{mode} Color · {bits} bit	Couleurs {mode} · {bits} bits
 	Drag to move the layer	Faites glisser pour déplacer le calque
 	Scrubby Zoom	Zoom par glissement
@@ -2518,6 +2567,7 @@ cameraRaw	Blending	Fusion
 	Patch Tool	Outil Pièce
 	Patch:	Pièce :
 	Lasso around an area, then drag the selection	Entourez une zone au lasso, puis faites glisser la sélection
+	Now drag the selection onto another area	Faites maintenant glisser la sélection vers une autre zone
 
 # Warp grid presets (#388)
 	3 x 3	3 × 3
@@ -2605,6 +2655,11 @@ cameraRaw	Blending	Fusion
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
+	Color Picker ({name})	Sélecteur de couleurs ({name})
+	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)
+	Fill color	Couleur de remplissage
+	Color Picker (Stroke Color)	Sélecteur de couleurs (Couleur du contour)
+	Stroke color	Couleur du contour
 	Pick screen color	Choisir une couleur à l’écran
 	Sample a pixel anywhere on the screen	Prélever un pixel n’importe où sur l’écran
 	Click to pick · Esc to cancel	Cliquer pour choisir · Échap pour annuler
@@ -2672,6 +2727,24 @@ fontWeight	Italic	Italique
 	Reset View	Réinitialiser la vue
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Faites glisser autour du centre pour tourner la vue  ·  Maj contraint à 15°
 
+# Painting symmetry presets.
+	Dual Axis	Deux axes
+	Diagonal	Diagonale
+	Transform Symmetry	Transformer la symétrie
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Échantillon ponctuel
+	3 by 3 Average	Moyenne 3 × 3
+	5 by 5 Average	Moyenne 5 × 5
+	11 by 11 Average	Moyenne 11 × 11
+	31 by 31 Average	Moyenne 31 × 31
+	51 by 51 Average	Moyenne 51 × 51
+	101 by 101 Average	Moyenne 101 × 101
+	Sample Size:	Taille de l'échantillon :
+	All Layers No Adjustments	Tous les calques sans ajustements
+	Current & Below No Adjustments	Actif et inférieurs sans ajustements
+	Show Sampling Ring	Afficher l'anneau d'échantillonnage
+
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Hors de la gamme d’impression : cliquez pour la couleur imprimable la plus proche
 	Not a web colour: click for the nearest web colour	Pas une couleur web : cliquez pour la couleur web la plus proche
@@ -2679,3 +2752,90 @@ fontWeight	Italic	Italique
 	Transparency Threshold	Seuil de transparence
 	Opacity Threshold	Seuil d'opacité
 	PhotoCraft — Screen Color Picker	PhotoCraft — Sélecteur de couleur d'écran
+
+	Rasterize svg groups deeper than	Pixelliser les groupes SVG au-delà de cette profondeur
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 désactive ce seuil ; les groupes SVG imbriqués sur plus de 100 niveaux sont toujours pixellisés.
+	Rule of Thirds	Règle des tiers
+	Triangle	Triangle
+	Golden Ratio	Nombre d’or
+	Golden Spiral	Spirale d’or
+	Auto Show Overlay	Afficher automatiquement la superposition
+	Always Show Overlay	Toujours afficher la superposition
+	Never Show Overlay	Ne jamais afficher la superposition
+	Cycle Overlay	Changer de superposition
+	Cycle Orientation	Changer d’orientation
+	Set the overlay options for the Crop tool	Définir les options de superposition de l’outil Recadrage
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-clic a été intercepté par le bureau, qui déplace les fenêtres avec Alt-glisser. Réglez sa touche de déplacement des fenêtres sur Super, ou verrouillez Alt dans Fenêtre › Touches de modification.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Sélecteur de couleurs (couleur du style de calque)
+	Auto Hide Notifications	Masquer automatiquement les notifications
+	Notification Duration (seconds)	Durée de la notification (secondes)
+	Appearance Mode	Mode d’apparence
+	Dark Theme	Thème sombre
+	Light Theme	Thème clair
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Mode d’apparence suivant
+	Sync with system	Synchroniser avec le système
+	Active	Actif
+	Color Picker (Solid Color)	Sélecteur de couleurs (couleur unie)
+	Straighten the image by drawing a line on it	Redresser l’image en traçant une ligne dessus
+	Set additional Crop options	Définir d’autres options de recadrage
+	Show Cropped Area	Afficher la zone recadrée
+	Enable Crop Shield	Activer le masque de recadrage
+	Match Canvas	Identique à la zone de travail
+	Auto Adjust Opacity	Réglage automatique de l’opacité
+	Crop Shield color	Couleur du masque de recadrage
+	Color Picker (Crop Shield Color)	Sélecteur de couleurs (Couleur du masque de recadrage)
+	From Center	À partir du centre
+	Link radii	Lier les rayons
+	Star Ratio:	Proportion de l'étoile :
+	Create Rectangle	Créer un rectangle
+	Create Ellipse	Créer une ellipse
+	Create Triangle	Créer un triangle
+	Create Polygon	Créer un polygone
+	Pressure curve	Courbe de pression
+	Click to add a point, right-click to remove	Cliquez pour ajouter un point, clic droit pour le supprimer
+	Some brush presets could not be loaded	Certains paramètres prédéfinis de forme n'ont pas pu être chargés
+	Retry saving presets	Réessayer d'enregistrer les paramètres prédéfinis
+	Brush preset changes are not saved: {error}	Les modifications des paramètres prédéfinis de forme ne sont pas enregistrées : {error}
+	Keep this tab open to retain your brushes.	Gardez cet onglet ouvert pour conserver vos formes.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Le stockage du navigateur n'est pas disponible ; les formes ne durent que le temps de la session. Gardez cet onglet ouvert pour les conserver.
+	Saving brush presets… Keep this tab open until saving finishes.	Enregistrement des paramètres prédéfinis de forme… Gardez cet onglet ouvert jusqu'à la fin de l'enregistrement.
+	Reflect	Réflexion
+	Glow	Lueur
+	Negation	Négation
+	XOR	XOR
+	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
+	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+	Stroke Options	Options du contour
+	Solid	Continu
+	Dashed	Tirets
+	Dotted	Pointillé
+	Caps	Extrémités
+	Butt / Flat	Plat
+	Corners	Angles
+	Miter	Pointe
+	Round	Arrondi
+	Bevel	Biseau
+	Miter limit	Limite de pointe
+	Dashed line	Ligne en tirets
+	Dash	Tiret
+	Gap	Espace
+	Dash / gap lengths × stroke width	Longueurs des tirets / espaces × largeur du contour
+	Add pair	Ajouter une paire
+	Remove pair	Retirer une paire
+	Dash offset	Décalage des tirets
+	Open paths use centered strokes	Les tracés ouverts utilisent des contours centrés
+	Use finite lengths and a positive pattern total	Utiliser des longueurs finies et un total de motif positif
+	No subject found — try Object Selection or the Lasso	Aucun sujet trouvé — essayez la Sélection d'objet ou le Lasso
+	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
+	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
+	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+	Use Classic Mode	Utiliser le mode classique
+	Auto Center Preview	Centrer automatiquement l'aperçu
+	Next Document	Document suivant
+	Previous Document	Document précédent
+	W x H x Resolution	L x H x Résolution
+	Front Image	Image de premier plan

@@ -206,6 +206,12 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         }
     }
 
+    // DNG 1.6 ProfileGainTableMap: the local tone mapping that phones (Samsung Expert RAW) rely on
+    // for their default look. Without it the rendering is darker in the shadows.
+    if ifd0.has(tag::PROFILE_GAIN_TABLE_MAP) || raw.has(tag::PROFILE_GAIN_TABLE_MAP) {
+        warnings.push("DNG ProfileGainTableMap (local tone mapping) is not applied".to_string());
+    }
+
     let max = ((1u32 << plane.bits) - 1) as f32;
     let linearization = raw.get(tag::LINEARIZATION_TABLE).map(|e| t.uints(e)).filter(|v| !v.is_empty() && v.len() <= 65536);
     let linearization: Option<Vec<u16>> = linearization.map(|v| v.into_iter().map(|x| x.min(65535) as u16).collect());
@@ -258,7 +264,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         crop,
         color,
         camera_wb: None,
-        orientation: t.tag_uint(&ifd0, tag::ORIENTATION).map(|o| o as u16).filter(|o| (1..=8).contains(o)).unwrap_or(1),
+        orientation: crate::tiff::orientation(t.tag_uint(&ifd0, tag::ORIENTATION)),
         baseline_exposure: if baseline_exposure.is_finite() { baseline_exposure.clamp(-10.0, 10.0) } else { 0.0 },
         gain_maps,
         tone_curve: Vec::new(),

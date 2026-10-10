@@ -347,3 +347,203 @@ fn release(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers
     let p = screen(h, x, y);
     button(h, p, false, m);
 }
+
+/// A red square on a new layer for the ⌘ (Move) tests; Auto-Select, snapping and smart guides
+/// off so the drag offsets are exact.
+fn with_layer(h: &mut Harness<'static, PhotocraftApp>) -> photocraft_doc::LayerId {
+    let app = h.state_mut();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(100, 100, 160, 160), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool_options.move_auto_select = false;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    h.run_steps(2);
+    id
+}
+
+fn bounds(h: &Harness<'static, PhotocraftApp>, id: photocraft_doc::LayerId) -> Rect {
+    h.state().session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds()
+}
+
+/// A drag with `m` held throughout (the modifiers go down before the press, as on a keyboard).
+fn drag_with(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, x: f32, y: f32, x2: f32, y2: f32) {
+    drag_raw(h, platform(m), x, y, x2, y2);
+}
+
+/// [`drag_with`] with the modifiers exactly as given, for one platform's layout on any host.
+fn drag_raw(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, x: f32, y: f32, x2: f32, y2: f32) {
+    h.event(Event::ModifiersChanged(m));
+    h.run_steps(1);
+    let p = screen(h, x, y);
+    h.event(Event::PointerMoved(p));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: m });
+    h.run_steps(1);
+    move_to(h, x + 8.0, y + 6.0);
+    move_to(h, x2, y2);
+    let q = screen(h, x2, y2);
+    h.event(Event::PointerButton { pos: q, button: PointerButton::Primary, pressed: false, modifiers: m });
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+/// ⌘⌥ as a Mac sends it, and Ctrl+Alt as Windows and Linux send it (`command` is Ctrl there).
+const MAC_CMD_ALT: Modifiers = Modifiers { alt: true, ctrl: false, shift: false, mac_cmd: true, command: true };
+const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+
+/// ⌘ with the Brush is the Move tool: a ⌘-drag moves the layer and paints nothing; the Brush is
+/// back when ⌘ comes up.
+#[test]
+fn cmd_drag_with_the_brush_is_the_move_tool() {
+    let mut h = harness(Tool::Brush);
+    let id = with_layer(&mut h);
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move));
+    let steps = h.state().session.active().unwrap().history.past_len();
+    drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
+    assert_eq!(held_tool(h.state(), &h.ctx), None);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180), "the layer moved by (40, 20)");
+    assert_eq!(st.history.undo_label(), Some("Move"));
+    assert_eq!(st.history.past_len(), steps + 1, "one step: no brush stroke");
+    assert_eq!(h.state().ui.tool, Tool::Brush, "the Brush is back");
+}
+
+/// ⌘ released mid-drag: the Move tool lasts until the button comes up (Photoshop), and the
+/// Eraser's `Up` never fires.
+#[test]
+fn cmd_released_mid_drag_keeps_moving_until_the_button_comes_up() {
+    let mut h = harness(Tool::Eraser);
+    let id = with_layer(&mut h);
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.run_steps(1);
+    let p = screen(&h, 130.0, 130.0);
+    h.event(Event::PointerMoved(p));
+    h.run_steps(1);
+    button(&mut h, p, true, Modifiers::COMMAND);
+    move_to(&mut h, 150.0, 140.0);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    move_to(&mut h, 170.0, 150.0);
+    release(&mut h, 170.0, 150.0, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180));
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "nothing erased");
+}
+
+/// ⌘⌥-drag duplicates the layer first and moves the copy, as the Move tool's ⌥-drag does. Off
+/// the Mac the same keys are Ctrl+Alt, which the Brush keeps for its on-canvas resize
+/// (`brush_resize`, Alt+right-drag there too), so Ctrl+Alt duplicates with the tools that have no
+/// brush to resize, such as the Gradient.
+#[test]
+fn cmd_alt_drag_duplicates_the_layer_then_moves_the_copy() {
+    for (tool, mods) in [(Tool::Brush, MAC_CMD_ALT), (Tool::Gradient, MAC_CMD_ALT), (Tool::Gradient, CTRL_ALT)] {
+        let mut h = harness(tool);
+        let orig = with_layer(&mut h);
+        let n0 = h.state().session.active().unwrap().doc.layers.len();
+        let h0 = h.state().session.active().unwrap().history.past_len();
+        drag_raw(&mut h, mods, 130.0, 130.0, 170.0, 150.0);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n0 + 1, "one copy ({tool:?}, {mods:?})");
+        let copy = st.active_layer.unwrap();
+        assert_ne!(copy, orig);
+        assert_eq!(bounds(&h, orig), Rect::new(100, 100, 160, 160), "the original stays");
+        assert_eq!(bounds(&h, copy), Rect::new(140, 120, 200, 180), "the copy moved");
+        assert_eq!(st.history.past_len(), h0 + 1, "one undo step");
+        assert_eq!(st.history.undo_label(), Some(crate::move_mods::DUPLICATE_MOVE_LABEL));
+        assert_eq!(h.state().ui.tool, tool);
+    }
+}
+
+/// Off the Mac, Ctrl+Alt-drag with the Brush resizes the brush, as before ⌘ became the Move
+/// tool: no copy, no move, the layer untouched.
+#[test]
+fn ctrl_alt_drag_with_the_brush_resizes_it_off_the_mac() {
+    let mut h = harness(Tool::Brush);
+    let orig = with_layer(&mut h);
+    let n0 = h.state().session.active().unwrap().doc.layers.len();
+    let size0 = h.state().session.tools.brush.size;
+    drag_raw(&mut h, CTRL_ALT, 130.0, 130.0, 170.0, 150.0);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.doc.layers.len(), n0, "no copy");
+    assert_eq!(st.active_layer, Some(orig));
+    assert_eq!(bounds(&h, orig), Rect::new(100, 100, 160, 160), "the layer stays");
+    assert_ne!(st.history.undo_label(), Some("Move"));
+    assert_ne!(h.state().session.tools.brush.size, size0, "the brush was resized");
+}
+
+/// With a selection, ⌘-drag with the Brush moves the selected pixels (a floating piece), as the
+/// Move tool does, not the whole layer.
+#[test]
+fn cmd_drag_with_the_brush_inside_the_selection_floats_the_selected_pixels() {
+    let mut h = harness(Tool::Brush);
+    let id = with_layer(&mut h);
+    h.state_mut().run("select.rect", json!({"x": 110, "y": 110, "width": 40, "height": 40})).unwrap();
+    h.run_steps(1);
+    let n0 = h.state().session.active().unwrap().doc.layers.len();
+    drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
+    let st = h.state().session.active().unwrap();
+    let f = photocraft_engine::float_cmds::floating(st).expect("a floating piece");
+    assert_eq!((f.layer, f.offset), (id, (40, 20)));
+    assert_eq!(st.doc.layers.len(), n0, "no layer was added");
+    assert_eq!(bounds(&h, id), Rect::new(100, 100, 160, 160), "the layer itself stayed");
+}
+
+/// ⌘-click with the Brush picks the layer under the pointer, as a ⌘-click with the Move tool does
+/// (Auto-Select off).
+#[test]
+fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
+    let mut h = harness(Tool::Brush);
+    let red = with_layer(&mut h);
+    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.run_steps(1);
+    click(&mut h, 130.0, 130.0, Modifiers::COMMAND);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.active_layer, Some(red));
+    assert_eq!(rgba(&h, 130, 130), [1.0, 0.0, 0.0, 1.0], "nothing painted");
+}
+
+/// Tools that keep ⌘ for themselves, and the selection tools (their ⌘ is handled per press in
+/// `canvas`, #896), never become the Move tool this way.
+#[test]
+fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
+    for tool in [
+        Tool::Hand,
+        Tool::RotateView,
+        Tool::Zoom,
+        Tool::Pen,
+        Tool::Rectangle,
+        Tool::Type,
+        Tool::VerticalType,
+        Tool::Crop,
+        Tool::PathSelection,
+        Tool::DirectSelection,
+        Tool::Move,
+        Tool::RectMarquee,
+        Tool::EllipseMarquee,
+        Tool::Lasso,
+        Tool::PolygonLasso,
+        Tool::MagicWand,
+    ] {
+        assert!(!cmd_moves(tool), "{tool:?}");
+        let mut h = harness(tool);
+        h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+        h.run_steps(1);
+        assert_eq!(held_tool(h.state(), &h.ctx), None, "{tool:?}");
+    }
+    for tool in [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::MagneticLasso, Tool::QuickSelection] {
+        assert!(cmd_moves(tool), "{tool:?}");
+    }
+}

@@ -106,6 +106,15 @@ the same.
   size (5–8 swap width and height), and the rotated buffer is allocated fallibly.
   `Image::oriented` turns any layout and depth in parallel bands (about 10 ms for 24 MP RGB8 in
   release).
+* **Resolution** (#1691, module `resolution`): a file without a resolution of its own format
+  (no PNG `pHYs`, a WebP, HEIF, …) takes it from its XMP `tiff:XResolution` / `YResolution` /
+  `ResolutionUnit`, else from EXIF IFD0 (RATIONAL X/YResolution, unit 2 inch — the default when
+  absent — or 3 cm; unit 1 or anything malformed counts as no resolution). A JPEG uses, like
+  Photoshop, the first usable of: APP13 Photoshop ResolutionInfo (0x03ED), XMP, EXIF, and only
+  then the JFIF density (cameras write EXIF only, many tools write a default JFIF 72). On export
+  the EXIF and XMP resolution are rewritten to the image's (`export_exif`, `export_xmp`): the
+  RATIONAL values in place, ResolutionUnit set to 2, an entry that can't be rewritten removed
+  from IFD0 without moving any other data. IFD1 (the thumbnail's) is left as it is.
 * **JPEG**
   * 8-bit only. Neither decoder backend supports 12-bit.
   * A file cut off inside its image data decodes leniently (a baseline JPEG's missing rows come
@@ -142,9 +151,21 @@ the same.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
   the file could pass 4 GiB.
 * **EXR**
-  * Reads the first valid layer at full resolution, from its data window.
+  * Multi-part files (a Maya/Arnold render writes one part per AOV) open the part that
+    looks most like a colour image — RGBA beats RGB beats YA beats a single channel, so a
+    depth-only part no longer fails the file — with `DecodeWarning::MoreParts` naming how
+    many parts exist. `exr_info` lists every part (name, view, size, channels, deep/tiled)
+    without decoding pixels, and `decode_exr_part` decodes a chosen one. Deep parts stay
+    with the deep decoder: a file that has any is refused here with a pointer to it.
+  * Reads at full resolution, from the data window.
   * Channel names are matched by suffix, so `layer.R` counts as `R`.
   * Subsampled channels are unsupported.
+  * Cryptomatte layers (specification 1.2, as written by Arnold, V-Ray, Redshift, Mantra/Karma
+    and Cycles) are listed and decoded structurally: `cryptomatte_layers` reads the header
+    attributes, channels and embedded manifest without pixels, `decode_cryptomatte` returns the
+    per-pixel (ID, coverage) pairs, and `cryptomatte_id`/`cryptomatte_key`/`cryptomatte_preview_color`
+    hash names to IDs the way the reference implementation does (official test vectors in the
+    test suite).
   * Deep data (scanlines or single-level tiles, compressed NONE, RLE or ZIPS) opens as a flat
     image: each pixel's samples are composited into one, with
     `DecodeWarning::DeepFlattened` because per-pixel depth is not kept. Deep ZIP (16-line

@@ -187,6 +187,9 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         for pat in &pats {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
+        // A preset's colours are RGB; the layer's are in the document's mode.
+        let mode = doc.mode;
+        let effects: Vec<_> = effects.iter().cloned().map(|e| e.in_mode(mode)).collect();
         for id in &ids {
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             // Styles can't sit on the Background: Photoshop turns it into a normal layer first.

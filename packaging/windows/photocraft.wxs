@@ -95,12 +95,14 @@
           </Extension>
         </ProgId>
         <!-- PSD/PSB and images: offered under "Open with", never forced as the default. -->
-        <ProgId Id="Photocraft.PhotoshopDocument" Description="Photoshop Document" Icon="PhotocraftExe" IconIndex="0" />
+        <ProgId Id="Photocraft.PhotoshopDocument" Description="PSD Document" Icon="PhotocraftExe" IconIndex="0" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Photocraft.PhotoshopDocument\shell\open\command" Value="&quot;[#PhotocraftExe]&quot; &quot;%1&quot;" Type="string" />
         <ProgId Id="Photocraft.Image" Description="Image" Icon="PhotocraftExe" IconIndex="0" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Photocraft.Image\shell\open\command" Value="&quot;[#PhotocraftExe]&quot; &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.psd\OpenWithProgids" Name="Photocraft.PhotoshopDocument" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.psb\OpenWithProgids" Name="Photocraft.PhotoshopDocument" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.pdn\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ora\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.png\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.jpg\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.jpeg\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
@@ -122,6 +124,8 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".pcraft" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".psd" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".psb" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".pdn" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".ora" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".png" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".jpg" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".jpeg" Value="" Type="string" />

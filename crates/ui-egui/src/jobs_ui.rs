@@ -10,18 +10,22 @@
 //!   shown after a short delay so quick jobs don't flash it. Esc cancels.
 //! - Files opening in the background get a document tab at once ([`OpenTab`]); its canvas area
 //!   shows the progress, and closing the tab cancels the open.
+//! - Saves encode and write on a worker ([`start_save`], #2017) under the modal progress dialog;
+//!   the document is locked meanwhile, and the save is recorded when the job ends.
 //!
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 
 use egui::{Color32, Rect, RichText, Sense, Stroke, vec2};
-use photocraft_engine::jobs::{JobEvent, JobId, JobInfo, JobOutcome, OPEN_JOB, OpenSource, Started};
+use photocraft_doc::DocId;
+use photocraft_engine::jobs::{JobCtx, JobEvent, JobId, JobInfo, JobOutcome, OPEN_JOB, OpenSource, Started};
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
-use crate::{ControlResponse, PhotocraftApp, notices};
+use crate::{ControlResponse, ExportSettings, PhotocraftApp, SaveFileFn, notices};
 
 /// Delay before the modal progress dialog appears (quick jobs finish without it).
 pub const DIALOG_DELAY_MS: f64 = 250.0;
@@ -38,6 +42,87 @@ pub struct OpenTab {
     pub slot: Option<usize>,
 }
 
+/// The job command of a background save.
+pub const SAVE_JOB: &str = "file.save";
+
+const ENCODING: u8 = 0;
+const WRITING: u8 = 1;
+const CANCELLED: u8 = 2;
+
+/// A save worker's stage, shared between the worker and the UI.
+#[derive(Debug, Default)]
+pub struct SaveState {
+    stage: AtomicU8,
+    finished: AtomicBool,
+}
+
+impl SaveState {
+    /// Cancel unless writing has started; false once it has.
+    fn try_cancel(&self) -> bool {
+        matches!(self.stage.compare_exchange(ENCODING, CANCELLED, Ordering::AcqRel, Ordering::Acquire), Ok(_) | Err(CANCELLED))
+    }
+
+    /// The worker has returned (or unwound): nothing of this save can still touch the file.
+    pub fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+}
+
+/// Marks the worker finished when the work closure is dropped, which also covers a panic.
+struct WorkerDone(Arc<SaveState>);
+
+impl Drop for WorkerDone {
+    fn drop(&mut self) {
+        self.0.finished.store(true, Ordering::Release);
+    }
+}
+
+/// What a save worker gets (see [`crate::Services::save_file`]): the job's progress and
+/// cancellation, and [`commit`](Self::commit), the point after which the save can no longer
+/// be cancelled.
+pub struct SaveCtl {
+    pub job: JobCtx,
+    state: Arc<SaveState>,
+}
+
+impl SaveCtl {
+    pub fn progress(&self, fraction: f32, message: &str) {
+        self.job.progress(fraction, message);
+    }
+
+    /// `Err` once the save was cancelled: stop, write nothing.
+    pub fn check(&self) -> Result<(), String> {
+        if self.job.cancelled() || self.state.stage.load(Ordering::Acquire) == CANCELLED { Err(SAVE_CANCELLED.into()) } else { Ok(()) }
+    }
+
+    /// Call once, right before replacing the file. `Ok`: the save can no longer be cancelled
+    /// (Cancel and Esc are refused) and must run to the end; `Err`: it was cancelled first and
+    /// nothing may be written.
+    pub fn commit(&self) -> Result<(), String> {
+        self.check()?;
+        self.state.stage.compare_exchange(ENCODING, WRITING, Ordering::AcqRel, Ordering::Acquire).map(|_| ()).map_err(|_| SAVE_CANCELLED.into())
+    }
+}
+
+/// The error a cancelled save worker returns.
+const SAVE_CANCELLED: &str = "cancelled";
+
+/// A save running in the background: what to record once the file is written.
+#[derive(Clone, Debug)]
+pub struct SaveJob {
+    pub job: JobId,
+    pub doc: DocId,
+    /// The document's revision when the save started (the job locks it against edits).
+    pub revision: u64,
+    pub path: String,
+    /// A copy leaves the document's path and unsaved state alone.
+    pub copy: bool,
+    pub state: Arc<SaveState>,
+    /// The job has ended (cancelled, say) but its worker may still be running: kept until it
+    /// returns, so quitting and another save to the same file wait for it.
+    pub ended: bool,
+}
+
 /// The shell's job bookkeeping.
 #[derive(Default)]
 pub struct JobsUi {
@@ -45,6 +130,10 @@ pub struct JobsUi {
     pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
     pub opens: Vec<OpenTab>,
+    /// Background saves.
+    pub saves: Vec<SaveJob>,
+    /// The window was asked to close while a save was writing: close it once none is left.
+    pub close_after_saves: bool,
     /// The open tab shown in the canvas area instead of the active document.
     pub focus: Option<JobId>,
     /// The job the latest [`run`] started (the control channel waits on it).
@@ -88,15 +177,114 @@ pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, sou
     }
 }
 
+/// Save the active document to `path` in the background: `save` encodes and writes it on a
+/// worker while the window keeps drawing and shows the progress dialog. The document is locked
+/// until the job ends, which [`tick`] records like a synchronous save. `Ok(None)`: started;
+/// `Ok(Some(..))`: it ran inline (wasm) and is already recorded.
+pub fn start_save(
+    app: &mut PhotocraftApp,
+    path: String,
+    settings: ExportSettings,
+    copy: bool,
+    save: SaveFileFn,
+) -> Result<Option<(String, Vec<String>)>, String> {
+    let st = app.session.active().ok_or("no document")?;
+    if let Some(j) = app.session.job_on(st.doc.id) {
+        // The engine's wording for a command refused while a job runs.
+        return Err(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", j.label));
+    }
+    let name = crate::file_open::display_name(&path);
+    // One writer per file: an older snapshot must not land after a newer one.
+    if app.jobs.saves.iter().any(|s| s.path == path) {
+        return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
+    }
+    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
+    let target = path.clone();
+    let state = Arc::new(SaveState::default());
+    let worker = Arc::clone(&state);
+    let started = app.session.start_job(
+        SAVE_JOB,
+        json!({"path": path}),
+        &label,
+        true,
+        move |ctx| {
+            let _done = WorkerDone(Arc::clone(&worker));
+            let ctl = SaveCtl { job: ctx.clone(), state: worker };
+            save(&snapshot, &target, &settings, &ctl)
+                .map_err(|e| if ctl.check().is_err() { photocraft_engine::EngineError::Cancelled } else { photocraft_engine::EngineError::Other(e) })
+        },
+        |_, warnings: Vec<String>| Ok(json!({"warnings": warnings})),
+    );
+    match started.map_err(|e| e.to_string())? {
+        Started::Done(v) => {
+            let warnings = warnings_of(&v);
+            app.saved(doc, revision, &path, &warnings, copy);
+            Ok(Some((path, warnings)))
+        }
+        Started::Job(job) => {
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, state, ended: false });
+            // Control and MCP requests wait on it, as for other jobs.
+            app.jobs.last_started = Some(job);
+            // The status bar's progress readout names the save; clear any old message.
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            Ok(None)
+        }
+    }
+}
+
+fn warnings_of(v: &Value) -> Vec<String> {
+    v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+}
+
+/// A background save ended: record it, or report why not. The close prompt waiting on it moves
+/// on, or asks again.
+fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
+    match outcome {
+        JobOutcome::Done(v) => {
+            app.saved(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+            if !save.copy {
+                crate::discard_ui::saved_document(app, ctx, save.doc);
+            }
+        }
+        JobOutcome::Failed(err) => {
+            // Don't close the window over the error.
+            app.jobs.close_after_saves = false;
+            notices::error(app, crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &err)]));
+        }
+        JobOutcome::Cancelled => {
+            app.jobs.close_after_saves = false;
+            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", label)]);
+            app.ui.status_error = false;
+        }
+    }
+    close_after_saves(app, ctx);
+}
+
+/// Forget saves whose job ended and whose worker has returned; repeat a held window close once
+/// no save worker is left.
+fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    app.jobs.saves.retain(|s| !(s.ended && s.state.finished()));
+    if !app.saving() && std::mem::take(&mut app.jobs.close_after_saves) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+}
+
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for e in app.session.poll_jobs() {
-        on_event(app, e);
+        on_event(app, ctx, e);
     }
     // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
     if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {
         app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
+    }
+    if app.saving() {
+        close_after_saves(app, ctx);
+        // Keep checking on a cancelled save's worker until it returns.
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
     if !app.session.has_jobs() {
         return;
@@ -123,6 +311,15 @@ pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
 /// Cancel job `id` (the status bar's ×, the dialog's Cancel, Esc, closing an opening tab).
 pub fn cancel(app: &mut PhotocraftApp, id: JobId) {
     let label = app.session.job(id).map(|j| j.label);
+    // A save that has started replacing the file runs to the end: cancelling it now would leave
+    // the file written but the document marked unsaved.
+    if let Some(save) = app.jobs.saves.iter().find(|s| s.job == id)
+        && !save.state.try_cancel()
+    {
+        app.ui.status = crate::i18n::fmt(tl!("{label} is writing the file and can no longer be cancelled"), &[("label", label.as_deref().unwrap_or_default())]);
+        app.ui.status_error = false;
+        return;
+    }
     if app.session.cancel_job(id) {
         // The event (and its status text) arrives with the next poll; say so now as well.
         if let Some(l) = label {
@@ -132,7 +329,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) {
     }
 }
 
-fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
+fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     // Control requests waiting on this job.
     let reply = match &e.outcome {
         JobOutcome::Done(v) => json!({"ok": true, "result": v}),
@@ -147,8 +344,24 @@ fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
             true
         }
     });
+    if crate::prefs_ui::on_recovery_event(app, &e) {
+        return;
+    }
     // Camera Raw's open-time re-develop and its final step.
     if crate::camera_raw_ui::on_redevelop_event(app, &e) {
+        return;
+    }
+    if e.command == SAVE_JOB
+        && let Some(i) = app.jobs.saves.iter().position(|s| s.job == e.id)
+    {
+        // A cancelled save's worker may still be running: keep it counted until it returns.
+        let save = if app.jobs.saves[i].state.finished() {
+            app.jobs.saves.remove(i)
+        } else {
+            app.jobs.saves[i].ended = true;
+            app.jobs.saves[i].clone()
+        };
+        finish_save(app, ctx, save, &e.label, e.outcome);
         return;
     }
     if e.command == OPEN_JOB {
@@ -332,33 +545,75 @@ fn elapsed(ms: f64) -> String {
     if s < 60.0 { format!("{s:.1} s") } else { format!("{}:{:02}", (s / 60.0).floor() as u64, (s % 60.0).floor() as u64) }
 }
 
+/// Where the opening card drew its parts last frame (tests check that everything fits, #2423).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpenCardRects {
+    pub card: Rect,
+    pub title: Rect,
+    pub cancel: Rect,
+}
+
+fn open_card_rects_id() -> egui::Id {
+    egui::Id::new("open-card-rects")
+}
+
+/// The opening card's parts as drawn last frame, if it was shown.
+pub fn open_card_rects(ctx: &egui::Context) -> Option<OpenCardRects> {
+    ctx.data(|d| d.get_temp::<OpenCardRects>(open_card_rects_id()))
+}
+
+/// The card's width and padding, and the height it has when the title and message fit one line.
+const OPEN_CARD_WIDTH: f32 = 340.0;
+const OPEN_CARD_PAD: f32 = 18.0;
+const OPEN_CARD_MIN_HEIGHT: f32 = 132.0;
+
 /// The canvas area of an opening tab: the file name, a bar and Cancel, centred on the
-/// workspace backdrop.
+/// workspace backdrop. The name and the message stay on one line (truncated with "…", the full
+/// text on hover) and the card grows to fit its rows, so nothing lands outside it (#2423).
 pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let Some(tab) = app.jobs.opens.iter().find(|o| o.job == job).cloned() else { return };
     let Some(j) = app.session.job(job) else { return };
     let t = Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
     ui.painter().rect_filled(area, 0.0, t.canvas);
-    let card = Rect::from_center_size(area.center(), vec2(340.0, 132.0));
-    ui.painter().rect_filled(card, t.radius_lg, t.card);
-    ui.painter().rect_stroke(card, t.radius_lg, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(18.0)));
-    child.label(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0)));
+    // Centre the card at the height its content needed last frame; the background is painted
+    // once the rows are laid out, so a taller content (a long translation) still gets a card.
+    let height_id = egui::Id::new(("open-card-height", job));
+    let height = ui.ctx().data(|d| d.get_temp::<f32>(height_id)).unwrap_or(OPEN_CARD_MIN_HEIGHT);
+    let card = Rect::from_center_size(area.center(), vec2(OPEN_CARD_WIDTH, height));
+    let fill = ui.painter().add(egui::Shape::Noop);
+    let border = ui.painter().add(egui::Shape::Noop);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(OPEN_CARD_PAD)));
+    let title = child
+        .add(egui::Label::new(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0))).truncate())
+        .rect;
     child.add_space(4.0);
     let msg = if j.message.is_empty() { tl!("Reading…").to_string() } else { format!("{}…", j.message) };
-    child.label(RichText::new(msg).color(t.text_dim).size(12.0));
+    child.add(egui::Label::new(RichText::new(msg).color(t.text_dim).size(12.0)).truncate());
     child.add_space(10.0);
     let (br, _) = child.allocate_exact_size(vec2(child.available_width(), 8.0), Sense::hover());
     bar(&child, br, shown_fraction(&j), &t);
     child.add_space(10.0);
     let mut cancel_it = false;
+    let mut cancel_rect = Rect::NOTHING;
     child.horizontal(|ui| {
         ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel_it = crate::widgets::secondary_button(ui, tl!("Cancel"), 76.0).clicked();
+            let r = crate::widgets::secondary_button(ui, tl!("Cancel"), 76.0);
+            cancel_it = r.clicked();
+            cancel_rect = r.rect;
         });
     });
+    let content = child.min_rect();
+    let needed = (content.height() + 2.0 * OPEN_CARD_PAD).max(OPEN_CARD_MIN_HEIGHT);
+    let card = Rect::from_min_size(card.min, vec2(OPEN_CARD_WIDTH, height.max(needed)));
+    ui.painter().set(fill, egui::Shape::rect_filled(card, t.radius_lg, t.card));
+    ui.painter().set(border, egui::Shape::rect_stroke(card, t.radius_lg, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside));
+    if (needed - height).abs() > 0.5 {
+        ui.ctx().data_mut(|d| d.insert_temp(height_id, needed));
+        ui.ctx().request_repaint();
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(open_card_rects_id(), OpenCardRects { card, title, cancel: cancel_rect }));
     if cancel_it {
         cancel(app, job);
     }
@@ -382,6 +637,7 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
     json!({
         "running": app.session.jobs(),
         "opening": app.jobs.opens.iter().map(|o| json!({"job": o.job.0, "name": o.name, "path": o.path})).collect::<Vec<_>>(),
+        "saving": app.jobs.saves.iter().map(|s| json!({"job": s.job.0, "path": s.path})).collect::<Vec<_>>(),
         "focus": app.jobs.focus.map(|j| j.0),
         "background": app.background_jobs,
     })

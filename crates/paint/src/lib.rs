@@ -28,6 +28,7 @@ pub mod render;
 pub mod replace;
 pub mod retouch;
 pub mod rng;
+pub mod symmetry;
 pub mod tile;
 
 pub use brush::{
@@ -36,7 +37,7 @@ pub use brush::{
 };
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, grid_center, grid_square, render_stroke};
-pub use tile::GrayTile;
+pub use tile::{GrayTile, StoredTile};
 
 /// One input sample. Missing stylus data defaults to "mouse": full pressure, no tilt/rotation.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,6 +137,24 @@ pub fn dabs(stroke: &Stroke) -> Vec<Dab> {
     out
 }
 
+/// Opacity of a round tip at distance `d` from its centre, without edge anti-aliasing: 1 in the
+/// hard core (`hardness` of the radius), then a Gaussian-like fall to 0 at the radius:
+/// `(1 - t²)⁴`, which tracks `exp(-4.6 t²)` closely but is exact (no `exp`, the same on every
+/// platform), reaches exactly 0 at the edge and leaves it flat. A soft tip keeps most of its area
+/// faint, so a stroke of overlapping dabs (Flow builds up) stays about as soft as one dab, as in
+/// Photoshop; the old smoothstep kept so much near the centre that strokes came out hard.
+#[inline]
+pub fn tip_falloff(d: f32, radius: f32, hardness: f32) -> f32 {
+    let inner = radius * hardness.clamp(0.0, 1.0);
+    if d <= inner || radius - inner < 1e-3 {
+        return 1.0;
+    }
+    let t = ((d - inner) / (radius - inner)).clamp(0.0, 1.0);
+    let s = 1.0 - t * t;
+    let s2 = s * s;
+    s2 * s2
+}
+
 /// Coverage of a round dab at distance `d` from its centre (anti-aliased edge, hardness falloff).
 #[inline]
 pub fn dab_coverage(d: f32, radius: f32, hardness: f32) -> f32 {
@@ -143,16 +162,7 @@ pub fn dab_coverage(d: f32, radius: f32, hardness: f32) -> f32 {
         return 0.0;
     }
     let edge = ((radius + 0.5 - d).clamp(0.0, 1.0)).min(1.0);
-    let h = hardness.clamp(0.0, 1.0);
-    let inner = radius * h;
-    let falloff = if d <= inner || radius - inner < 1e-3 {
-        1.0
-    } else {
-        let t = ((d - inner) / (radius - inner)).clamp(0.0, 1.0);
-        // smoothstep falloff
-        1.0 - t * t * (3.0 - 2.0 * t)
-    };
-    edge * falloff
+    edge * tip_falloff(d, radius, hardness)
 }
 
 /// Rasterize a stroke onto `target`, optionally limited by a selection (grayscale coverage surface).

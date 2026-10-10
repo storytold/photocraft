@@ -94,12 +94,13 @@ fn registered_languages(source: &str) -> Result<Vec<Language>, String> {
         let catalog = if code == "en" {
             None
         } else {
-            let marker = "include_str!(\"";
-            let start = block.find(marker).ok_or_else(|| format!("language `{code}` has no include_str! catalog"))? + marker.len();
+            // `catalog!("xx")` embeds `xx.tsv` (deflated by ui-egui's build.rs).
+            let marker = "catalog!(\"";
+            let start = block.find(marker).ok_or_else(|| format!("language `{code}` has no catalog! entry"))? + marker.len();
             let rest = block.get(start..).ok_or_else(|| format!("language `{code}` has a malformed catalog path"))?;
             let end = rest.find("\")").ok_or_else(|| format!("language `{code}` has a malformed catalog path"))?;
-            let file = rest.get(..end).ok_or_else(|| format!("language `{code}` has an invalid catalog path"))?;
-            let path = Path::new(file);
+            let file = format!("{}.tsv", rest.get(..end).ok_or_else(|| format!("language `{code}` has an invalid catalog path"))?);
+            let path = Path::new(&file);
             if path.components().count() != 1 || path.extension().and_then(|ext| ext.to_str()) != Some("tsv") {
                 return Err(format!("language `{code}` has unsafe catalog path `{file}`"));
             }
@@ -482,9 +483,9 @@ mod tests {
     fn registered_languages_and_report_are_stable() {
         let registry = r#"
             pub static LANGUAGES: [LangInfo; 3] = [
-                LangInfo { code: "zh", source: include_str!("zh.tsv") },
-                LangInfo { code: "en", source: "" },
-                LangInfo { code: "fr", source: include_str!("fr.tsv") },
+                LangInfo { code: "zh", source: catalog!("zh") },
+                LangInfo { code: "en", source: b"" },
+                LangInfo { code: "fr", source: catalog!("fr") },
             ];
             impl LangInfo {}
         "#;
@@ -569,6 +570,8 @@ mod tests {
             ("pt-br", "pt-br.tsv"),
             ("it", "it.tsv"),
             ("el", "el.tsv"),
+            ("uk", "uk.tsv"),
+            ("nl", "nl.tsv"),
         ] {
             let catalog_path = root.join("crates/ui-egui/src/i18n").join(path);
             let text = fs::read_to_string(&catalog_path).unwrap_or_default();

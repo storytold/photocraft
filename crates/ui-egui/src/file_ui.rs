@@ -39,6 +39,9 @@ fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: Value, choi
     json!({"dialog": app.ui.open_dialog(DialogKind::Command, f)})
 }
 
+/// File › Scripts › Browse… lists these script files (plus the JSON/text the engine parses).
+const SCRIPT_EXTENSIONS: &[&str] = &["psjs", "ccjs", "jsx", "js", "jsxbin", "json", "txt"];
+
 /// Menu items fronted here (dialogs before the engine command). `None` when not ours.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if !no_params(params) {
@@ -86,7 +89,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             form(app, id, "Image Statistics", json!({"mode": "median", "input": dir, "align": false}), json!({"mode": modes}))
         }
         "file.scripts.browse" => {
-            return Some(app.pick_file_bytes(|app, name, bytes| {
+            return Some(app.pick_file_bytes_filtered(SCRIPT_EXTENSIONS, |app, name, bytes| {
                 let r = app.run("file.scripts.browse", json!({"script": String::from_utf8_lossy(&bytes)}));
                 if r.is_ok() {
                     app.ui.status = format!("Ran script {name}");
@@ -177,17 +180,19 @@ fn b(f: &Map<String, Value>, k: &str, d: bool) -> bool {
 // ---------- Save for Web ----------
 
 const WEB_FORMATS: [(&str, &str); 5] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("wbmp", "WBMP")];
+const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
 
 pub fn open_web(app: &mut PhotocraftApp) -> u64 {
     let mut f = Map::new();
     f.insert("__web".into(), json!(true));
+    f.insert("__command".into(), json!(WEB_COMMAND));
     f.insert("__label".into(), json!("Save for Web (Legacy)"));
     f.insert("__view".into(), json!("2up"));
-    // Start from the last settings, like Photoshop.
+    // Remember encoding choices, but each document starts at its own full size.
     let last = app.session.file_menu.last_web.clone().unwrap_or_else(|| json!({"format": "jpeg", "quality": 60}));
     if let Value::Object(m) = last {
         for (k, v) in m {
-            if !matches!(k.as_str(), "path" | "dir") {
+            if !matches!(k.as_str(), "path" | "dir" | "width" | "height" | "percent") {
                 f.insert(k, v);
             }
         }
@@ -494,6 +499,16 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let mut p = params(f);
+    // Check while the control/input policy is still installed, before an asynchronous picker
+    // can outlive the request. A browser download uses the interactive platform writer.
+    if let Some(authorize) = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None }) {
+        authorize(WEB_COMMAND, &p).map_err(|e| e.to_string())?;
+    }
+    if app.automation_input
+        && let Some(authorize) = app.services.automation_command.as_ref()
+    {
+        authorize(WEB_COMMAND, &p)?;
+    }
     if p.get("path").is_some() || p.get("dir").is_some() {
         return save_for_web(app, p);
     }
@@ -518,9 +533,28 @@ fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 /// Runs Save for Web with `p`, which says where to write.
 fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
-    let r = app.run("file.export.saveForWebLegacy", p)?;
+    #[cfg(target_arch = "wasm32")]
+    let result = download_for_web(app, p);
+    #[cfg(not(target_arch = "wasm32"))]
+    let result = app.run(WEB_COMMAND, p);
+    let r = result.inspect_err(|error| {
+        app.ui.status = error.clone();
+        app.ui.status_error = true;
+    })?;
+    app.sync_views();
     app.ui.status = format!("Saved for Web: {} file(s)", r["files"].as_array().map_or(0, Vec::len));
+    app.ui.status_error = false;
     Ok(r)
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn download_for_web(app: &mut PhotocraftApp, mut p: Value) -> Result<Value, String> {
+    // Browser downloads have no directory hierarchy. Keep the HTML's image and spacer URLs
+    // beside the downloaded page, matching the names handed to the platform service.
+    p["imagesFolder"] = json!("");
+    let write = app.services.write.as_mut().ok_or("no download service")?;
+    web_cmds::save_for_web_with_writer(&mut app.session, &p, &mut |path, bytes| write(path, bytes).map_err(photocraft_engine::EngineError::Other))
+        .map_err(|e| e.to_string())
 }
 
 // ---------- Print ----------
@@ -757,6 +791,83 @@ mod tests {
         let d = app.ui.dialog_mut(r["dialog"].as_u64().unwrap()).unwrap();
         assert_eq!(d.fields["format"], "gif");
         assert!(!d.fields.contains_key("path"));
+    }
+
+    #[test]
+    fn save_for_web_starts_at_the_current_document_size() {
+        let (mut app, _) = app();
+        let path = std::env::temp_dir().join(format!("pc-webui-size-{}.png", std::process::id())).to_string_lossy().into_owned();
+        app.run("file.export.saveForWebLegacy", json!({"path": path, "format": "png24", "width": 60, "height": 40, "percent": 50})).unwrap();
+        app.run("file.new", json!({"width": 240, "height": 160, "name": "next"})).unwrap();
+        let id = open_web(&mut app);
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!(f["format"], "png24");
+        assert_eq!(f["percent"], 100.0);
+        assert!(!f.contains_key("width"));
+        assert!(!f.contains_key("height"));
+    }
+
+    #[test]
+    fn save_for_web_downloads_images_and_html_through_the_platform_writer() {
+        let (mut app, _) = app();
+        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = downloads.clone();
+        app.services.write = Some(Box::new(move |path, bytes| {
+            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        download_for_web(&mut app, json!({"path": "web.png", "format": "png24"})).unwrap();
+        assert_eq!(downloads.borrow()[0].0, "web.png");
+        assert!(downloads.borrow()[0].1.starts_with(b"\x89PNG\r\n\x1a\n"));
+        downloads.borrow_mut().clear();
+
+        app.run("slice.new", json!({"rect": [0, 0, 60, 80], "name": "left"})).unwrap();
+        download_for_web(&mut app, json!({"dir": ".", "format": "png24", "html": true, "imagesFolder": "images"})).unwrap();
+        let files = downloads.borrow();
+        let html = std::str::from_utf8(&files.iter().find(|(path, _)| path.ends_with(".html")).unwrap().1).unwrap();
+        assert!(!html.contains("images/"), "downloaded files are siblings, not an images directory");
+        for (path, bytes) in files.iter().filter(|(path, _)| !path.ends_with(".html")) {
+            let name = std::path::Path::new(path).file_name().unwrap().to_str().unwrap();
+            assert!(html.contains(&format!("src=\"{name}\"")), "missing downloaded image {name}");
+            assert!(!bytes.is_empty());
+        }
+        assert!(files.iter().any(|(path, _)| path.ends_with("spacer.gif")));
+        drop(files);
+
+        app.services.write = Some(Box::new(|_, _| Err("download failed".into())));
+        assert_eq!(download_for_web(&mut app, json!({"path": "fail.png", "format": "png24"})).unwrap_err(), "download failed");
+        app.services.write = None;
+        assert_eq!(download_for_web(&mut app, json!({"path": "missing.png"})).unwrap_err(), "no download service");
+    }
+
+    #[test]
+    fn save_for_web_authorizes_before_opening_a_picker() {
+        fn deny(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+            Err(photocraft_engine::EngineError::Other("export denied".into()))
+        }
+        for explicit_path in [false, true] {
+            for synthetic_input in [false, true] {
+                let (mut app, ctx) = app();
+                let id = open_web(&mut app);
+                if explicit_path {
+                    app.ui.dialog_mut(id).unwrap().fields.insert("path".into(), json!("denied.png"));
+                }
+                app.services.automation_authorize = Some(deny);
+                app.services.file_dialog = Some(Box::new(|_, _, _| panic!("denied export must not show a picker")));
+                app.services.write = Some(Box::new(|_, _| panic!("denied export must not write")));
+                let error = if synthetic_input {
+                    app.automation_input = true;
+                    crate::dialogs::confirm(&mut app, id).unwrap_err()
+                } else {
+                    let (request, _) = crate::control::ControlRequest::new("ui.dialog.confirm", json!({"dialog": id}));
+                    let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected immediate denial") };
+                    assert_eq!(reply["ok"], false);
+                    reply["error"].as_str().unwrap().to_string()
+                };
+                assert_eq!(error, "export denied");
+                assert!(!app.file_dialog_open());
+            }
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! over pixels with content only, never over empty checker.
 //!
 //! These tests render the real app offscreen and read pixels back. They skip when no GPU adapter
-//! is available.
+//! is available. The CPU canvas (no wgpu handed to the app) has its own pixel grid tests at the end.
 
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, handle};
@@ -15,11 +15,16 @@ const LIGHT: u8 = 255;
 const DARK: u8 = 204;
 
 fn harness() -> Option<Harness> {
+    harness_with(true)
+}
+
+/// The app with the GPU canvas (`gpu`), or without it: the CPU fallback path.
+fn harness_with(gpu: bool) -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 800.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+            if let Some(rs) = cc.wgpu_render_state.as_ref().filter(|_| gpu) {
                 app.set_wgpu(rs.clone());
             }
             app
@@ -82,6 +87,11 @@ impl Shot {
 /// it with the pixel grid on or off, and returns the screenshot with the document's left and top
 /// screen edge and its width in screen pixels.
 fn render(h: &mut Harness, zoom: f32, doc: u32, black: bool, grid: bool) -> (Shot, u32, u32, u32) {
+    render_on(h, true, zoom, doc, black, grid)
+}
+
+/// [`render`] on the GPU canvas (`gpu`) or the CPU canvas.
+fn render_on(h: &mut Harness, gpu: bool, zoom: f32, doc: u32, black: bool, grid: bool) -> (Shot, u32, u32, u32) {
     {
         let app = h.state_mut();
         while app.session.active().is_some() {
@@ -97,14 +107,15 @@ fn render(h: &mut Harness, zoom: f32, doc: u32, black: bool, grid: bool) -> (Sho
     }
     control(h, "ui.set", json!({"zoom": zoom, "center": [doc as f32 / 2.0, doc as f32 / 2.0]}));
     h.run_steps(3);
-    assert!(h.state().perf.gpu, "zoom {zoom}: expected the GPU canvas");
+    assert_eq!(h.state().perf.gpu, gpu, "zoom {zoom}: expected the {} canvas", if gpu { "GPU" } else { "CPU" });
     let rendered = h.render().expect("render");
     let (width, height) = (rendered.width(), rendered.height());
     let img = Shot { w: width, px: rendered.into_raw() };
     let r = h.state().last_canvas_rect;
     let (cx, cy) = (r.center().x as u32, r.center().y as u32);
     // Black fill is 0 (64 on a grid line), the pasteboard is 39.
-    let on_doc = |p: [u8; 4]| if black { p[0] < 12 || (58..=70).contains(&p[0]) } else { is_checker_grey(p) };
+    // (Two CPU grid lines crossing blend twice: about 112.)
+    let on_doc = |p: [u8; 4]| if black { p[0] < 12 || (58..=70).contains(&p[0]) || (105..=120).contains(&p[0]) } else { is_checker_grey(p) };
     let (x0, w) = longest_run((0..width).map(|x| on_doc(img.at(x, cy))));
     let (y0, hgt) = longest_run((0..height).map(|y| on_doc(img.at(cx, y))));
     let doc_px = (doc as f32 * zoom).round() as i64;
@@ -187,6 +198,40 @@ fn pixel_grid_is_not_drawn_over_empty_checker() {
             for x in x0..x0 + 64 {
                 let v = img.at(x, y)[0];
                 assert!(v == LIGHT || v == DARK, "zoom {zoom}: grid or blend {v} over empty checker at ({x}, {y})");
+            }
+        }
+    }
+}
+
+#[test]
+fn cpu_pixel_grid_shows_above_500_percent_over_content() {
+    let Some(mut h) = harness_with(false) else { return };
+    h.run_steps(4);
+    let (flat, x0, y0, _) = render_on(&mut h, false, 5.0, 48, true, true);
+    assert!(lit_columns(&flat, x0, y0 + 20, 100).is_empty(), "no grid at 500%");
+    for zoom in [6.0f32, 8.0, 12.0] {
+        let (img, x0, y0, _) = render_on(&mut h, false, zoom, 48, true, true);
+        let y = y0 + (zoom * 3.5) as u32;
+        let lit = lit_columns(&img, x0, y, (zoom * 10.0) as u32);
+        assert_eq!(lit.len(), 10, "zoom {zoom}: grid columns {lit:?}");
+        assert!(lit.windows(2).all(|p| p[1] - p[0] == zoom as u32), "zoom {zoom}: spacing of {lit:?}");
+        let v = img.at(x0 + lit[2], y)[0];
+        assert!((60..=68).contains(&v), "zoom {zoom}: a grid line over black is {v}, want about 64");
+    }
+}
+
+#[test]
+fn cpu_pixel_grid_is_not_drawn_over_empty_checker() {
+    let Some(mut h) = harness_with(false) else { return };
+    h.run_steps(4);
+    // The CPU checker has soft cell edges of its own, so compare with and without the grid.
+    for zoom in [8.0f32, 16.0] {
+        let (without, x0, y0, _) = render_on(&mut h, false, zoom, 24, false, false);
+        let (with, x1, y1, _) = render_on(&mut h, false, zoom, 24, false, true);
+        assert_eq!((x0, y0), (x1, y1), "zoom {zoom}: the document moved");
+        for y in y0..y0 + 64 {
+            for x in x0..x0 + 64 {
+                assert_eq!(with.at(x, y), without.at(x, y), "zoom {zoom}: the grid changed empty checker at ({x}, {y})");
             }
         }
     }

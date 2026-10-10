@@ -174,7 +174,13 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         return Err(format!("\"{name}\" is a built-in workspace"));
     }
     let prefs = app.session.prefs().clone();
-    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock});
+    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open});
+    // The icon rail and menu bar flags belong to an embedding app's session, not to a saved
+    // layout: a workspace never brings back a window without its menus.
+    if let Some(panels) = ws.get_mut("panels").and_then(Value::as_object_mut) {
+        panels.remove("rail");
+        panels.remove("menu_bar");
+    }
     if p.get("keyboardShortcuts").and_then(Value::as_bool) == Some(true) {
         ws["shortcuts"] = json!(prefs.shortcuts);
     }
@@ -307,6 +313,29 @@ pub fn dialog_command(kind: &str, f: &Map<String, Value>) -> Option<(&'static st
     })
 }
 
+/// The title of a dialog kind.
+pub fn title(kind: &str) -> &'static str {
+    match kind {
+        "newWorkspace" => "New Workspace",
+        "deleteWorkspace" => "Delete Workspace",
+        "customPar" => "Save Pixel Aspect Ratio",
+        "preview32" => "32-bit Preview Options",
+        _ => "Show Extras Options",
+    }
+}
+
+/// OK on the open dialog (its button, or `ui.dialog.confirm {"dialog": "shell"}`): runs its
+/// command, then closes it; on an error the dialog stays open.
+pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    let (kind, f) = app.ui.shell.dialog.clone().ok_or("no dialog is open")?;
+    let (id, p) = dialog_command(&kind, &f).ok_or_else(|| format!("unknown dialog `{kind}`"))?;
+    let r = crate::menus::invoke(app, ctx, id, p);
+    if r.is_ok() {
+        app.ui.shell.dialog = None;
+    }
+    r
+}
+
 /// Draws the Modifier Keys panel and the open dialog.
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.shell.modifier_keys {
@@ -336,13 +365,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some((kind, mut f)) = app.ui.shell.dialog.clone() else { return };
     let t = Tokens::get(ctx);
-    let title = match kind.as_str() {
-        "newWorkspace" => "New Workspace",
-        "deleteWorkspace" => "Delete Workspace",
-        "customPar" => "Save Pixel Aspect Ratio",
-        "preview32" => "32-bit Preview Options",
-        _ => "Show Extras Options",
-    };
+    let title = title(&kind);
     let names: Vec<String> = app.session.prefs().workspaces.keys().cloned().collect();
     let mut result: Option<bool> = None;
     egui::Window::new(title).id(egui::Id::new("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
@@ -400,6 +423,9 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     number(ui, &mut f, "ratio", tl!("Factor:"), 0.1..=10.0);
                 }
                 "preview32" => {
+                    // A slider fills its available width. Keep its field above it, so the
+                    // field cannot grow an auto-sized window beyond that width each frame.
+                    ui.set_width((ctx.content_rect().width() - 32.0).clamp(0.0, 320.0));
                     let mut m = f.get("method").and_then(Value::as_str).unwrap_or("exposureGamma").to_string();
                     if crate::widgets::dropdown(
                         ui,
@@ -411,8 +437,12 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         f.insert("method".into(), json!(m));
                     }
                     ui.add_enabled_ui(m == "exposureGamma", |ui| {
-                        number(ui, &mut f, "exposure", tl!("Exposure:"), -20.0..=20.0);
-                        number(ui, &mut f, "gamma", tl!("Gamma:"), 0.1..=9.99);
+                        for (key, label, range) in [("exposure", tl!("Exposure:"), -20.0..=20.0), ("gamma", tl!("Gamma:"), 0.1..=9.99)] {
+                            let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                            if crate::widgets::slider_row(ui, label, &mut v, range, "", None).changed() {
+                                f.insert(key.into(), json!(v));
+                            }
+                        }
                     });
                 }
                 _ => {
@@ -440,15 +470,10 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     );
     match result {
         Some(true) => {
-            if let Some((id, p)) = dialog_command(&kind, &f) {
-                match crate::menus::invoke(app, ctx, id, p) {
-                    Ok(_) => app.ui.shell.dialog = None,
-                    Err(e) => {
-                        app.ui.status = e;
-                        app.ui.status_error = true;
-                        app.ui.shell.dialog = Some((kind, f));
-                    }
-                }
+            app.ui.shell.dialog = Some((kind, f));
+            if let Err(e) = confirm(app, ctx) {
+                app.ui.status = e;
+                app.ui.status_error = true;
             }
         }
         Some(false) => app.ui.shell.dialog = None,
@@ -478,6 +503,8 @@ mod tests {
         });
         inv(&mut app, "window.workspace.newWorkspace", json!({"name": "Retouch", "keyboardShortcuts": true})).unwrap();
         assert_eq!(app.ui.workspace, "Retouch");
+        let saved = &app.session.prefs().workspaces["Retouch"]["panels"];
+        assert!(saved.get("menu_bar").is_none() && saved.get("rail").is_none(), "embedding-only flags are not saved");
         assert!(inv(&mut app, "window.workspace.newWorkspace", json!({"name": "Painting"})).is_err());
         assert!(inv(&mut app, "window.workspace.newWorkspace", json!({"name": " "})).is_err());
         // The current workspace can't be deleted.
@@ -581,6 +608,33 @@ mod tests {
         let after = serde_json::to_value(app.ui.view.show).unwrap();
         for (k, _) in extras_options() {
             assert_eq!(after[k].as_bool(), before[k].as_bool().map(|b| !b), "{k}");
+        }
+    }
+
+    #[test]
+    fn thirty_two_bit_preview_window_fits_and_stops_growing() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (size, scale) in [(vec2(760.0, 480.0), 1.0), (vec2(420.0, 360.0), 2.0)] {
+            for theme in crate::theme::ThemeKind::ALL {
+                let (mut app, _) = app();
+                app.run("file.new", json!({"width": 20, "height": 20, "depth": 32})).unwrap();
+                let mut h = Harness::builder().with_size(size).with_pixels_per_point(scale).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+                PhotocraftApp::setup_context(&h.ctx, theme);
+                let ctx = h.ctx.clone();
+                crate::menus::invoke(h.state_mut(), &ctx, "view.thirtyTwoBitPreviewOptions", json!({})).unwrap();
+                h.run_steps(4);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                let first = h.ctx.memory(|m| m.area_rect(egui::Id::new("shell-dialog"))).unwrap();
+                h.run_steps(20);
+                let last = h.ctx.memory(|m| m.area_rect(egui::Id::new("shell-dialog"))).unwrap();
+                assert!(screen.contains_rect(last), "{theme:?} at {size:?}: dialog {last:?} must fit");
+                assert!((last.width() - first.width()).abs() < 1.0, "{theme:?}: width grew from {first:?} to {last:?}");
+                for label in ["Exposure:", "Gamma:", "OK", "Cancel"] {
+                    let rect = h.get_by_label(label).rect();
+                    assert!(last.contains_rect(rect) && screen.contains_rect(rect), "{label} must remain visible: {rect:?}");
+                }
+            }
         }
     }
 

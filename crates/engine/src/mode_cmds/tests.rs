@@ -211,6 +211,13 @@ fn bitmap_methods_need_grayscale() {
         s.execute("edit.undo", json!({})).unwrap();
     }
     assert!(s.execute("image.mode.bitmap", json!({"method": "nope"})).is_err());
+    // An unlisted halftone shape is a bad-params error, not a silent Round (#507).
+    assert!(s.execute("image.mode.bitmap", json!({"method": "halftone", "shape": "hexagon"})).is_err());
+    assert_eq!(doc(&s).mode, ColorMode::Grayscale);
+    for shape in ["round", "ellipse", "line", "square", "diamond", "cross"] {
+        s.execute("image.mode.bitmap", json!({"method": "halftone", "shape": shape})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+    }
 }
 
 #[test]
@@ -251,4 +258,83 @@ fn modes_round_trip_through_pcraft() {
     let back = photocraft_format::load_from_bytes(&bytes).unwrap();
     assert_eq!(back.color_table, doc(&s).color_table);
     assert_eq!(back.mode, ColorMode::Indexed);
+}
+
+/// Leaving Duotone for a colour mode keeps the printed look (#2383): the converted pixels are
+/// the displayed ink colours, through the destination profile. Grayscale drops the inks.
+#[test]
+fn duotone_to_colour_modes_keeps_the_ink_colours() {
+    use photocraft_cms::{Builtin, Transform};
+    let configs = [
+        json!({"type": "duotone"}),
+        json!({"type": "monotone", "inks": [{"name": "Orange", "color": "#ff8000", "curve": [[0, 0], [100, 100]]}]}),
+        json!({"type": "quadtone"}),
+    ];
+    for depth in [8, 16, 32] {
+        for cfg in &configs {
+            for mode in ["rgb", "cmyk", "lab", "grayscale"] {
+                let ctx = format!("{depth}-bit {cfg} → {mode}");
+                let mut s = session(16, 2, depth, "gray");
+                paint(&mut s, |x, _| {
+                    let v = x as f32 / 15.0;
+                    [v, v, v, 1.0]
+                });
+                s.execute("image.mode.duotone", cfg.clone()).unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let gray: Vec<f32> = (0..16).map(|x| before.layers[0].surface().unwrap().pixel(x, 1)[0]).collect();
+                let shown = photocraft_compose::render(&display_document(&before).unwrap(), Rect::from_xywh(0, 1, 16, 1)).px;
+                s.execute(&format!("image.mode.{mode}"), json!({})).unwrap();
+                let d = doc(&s);
+                assert!(d.duotone.is_none(), "{ctx}");
+                let surf = d.layers[0].surface().unwrap();
+                let target = match mode {
+                    "rgb" => ColorMode::Rgb,
+                    "cmyk" => ColorMode::Cmyk,
+                    "lab" => ColorMode::Lab,
+                    _ => ColorMode::Grayscale,
+                };
+                assert_eq!(d.mode, target, "{ctx}");
+                let srgb = Builtin::Srgb.profile();
+                let dst = crate::color_cmds::working_profile(target);
+                let t = Transform::new(srgb, &dst, s.color.settings.intent(), s.color.settings.bpc).unwrap();
+                for x in 0..16 {
+                    let got = surf.pixel(x, 1);
+                    let want: Vec<f32> = if target == ColorMode::Grayscale {
+                        vec![gray[x as usize]]
+                    } else {
+                        let mut o = [0.0f32; 16];
+                        t.eval(&shown[x as usize][..3], &mut o);
+                        o[..target.color_channels()].to_vec()
+                    };
+                    // The display's gradient map samples the inks at 33 stops; dark CMYK
+                    // separations magnify that a little.
+                    let tol = if target == ColorMode::Cmyk { 0.03 } else { 0.02 };
+                    for (g, w) in got.iter().zip(&want) {
+                        assert!((g - w).abs() < tol, "{ctx} x={x}: got {got:?}, want {want:?}");
+                    }
+                }
+                // Undo brings back the inks and the gray pixels.
+                s.execute("edit.undo", json!({})).unwrap();
+                let back = doc(&s);
+                assert_eq!((back.mode, &back.duotone), (ColorMode::Duotone, &before.duotone), "{ctx}");
+                assert_eq!(back.layers[0].surface().unwrap().pixel(7, 1), before.layers[0].surface().unwrap().pixel(7, 1), "{ctx}");
+            }
+        }
+    }
+}
+
+/// Colours stored in a Duotone document (fill layers) take the ink colours too.
+#[test]
+fn duotone_to_rgb_inks_fill_layer_colours() {
+    let mut s = session(4, 4, 8, "gray");
+    s.execute("image.mode.duotone", json!({"type": "monotone", "inks": [{"name": "Orange", "color": "#ff8000"}]})).unwrap();
+    s.execute("layer.newFillLayer.solidColor", json!({"color": "#808080"})).unwrap();
+    s.execute("image.mode.rgb", json!({})).unwrap();
+    let d = doc(&s);
+    let Some(LayerContent::Fill(photocraft_doc::Fill::Solid(c))) = d.layers.last().map(|l| &l.content) else { panic!("no fill layer") };
+    assert_eq!(c.mode, ColorMode::Rgb);
+    // Gray 0.5 is half-density orange: (1, 0.75, 0.5).
+    for (g, w) in c.c[..3].iter().zip([1.0, 0.75, 0.5]) {
+        assert!((g - w).abs() < 0.02, "{c:?}");
+    }
 }

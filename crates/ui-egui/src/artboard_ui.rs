@@ -60,11 +60,15 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let id = st.active_layer.and_then(|l| st.doc.artboard_of(l)).or_else(|| st.doc.artboards().last().map(|b| b.0)).ok_or("the document has no artboards")?;
     let b = st.doc.layer(id).and_then(Layer::artboard).map(|a| a.rect).ok_or("no artboard")?;
+    let size = [st.doc.size.width, st.doc.size.height];
     let area = app.last_canvas_rect.size();
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
+    let ppp = app.canvas_ppp();
     let v = &mut app.ui.views[i];
-    // Leave room for the name above the board.
-    v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32).clamp(0.01, 64.0);
+    // Leave room for the name above the board. The area is in egui points; the stored zoom is
+    // device pixels per document pixel.
+    v.zoom = ((area.x - 60.0) / b.width().max(1) as f32).min((area.y - 80.0) / b.height().max(1) as f32) * ppp;
+    v.zoom = crate::zoom_levels::clamp(v.zoom, size);
     // Widen before adding: a board near ±2^30, or one whose far edge saturated at i32::MAX,
     // overflows an i32 sum (#981).
     v.center = [((f64::from(b.x0) + f64::from(b.x1)) / 2.0) as f32, ((f64::from(b.y0) + f64::from(b.y1)) / 2.0) as f32];
@@ -78,6 +82,8 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     let key = |k: &str| format!("artboard-{}-{k}", layer.id.0);
     let mut edit: Option<Value> = None;
+    // The custom background swatch was clicked: its colour, for the Color Picker.
+    let mut pick: Option<[f32; 3]> = None;
     ui.label(egui::RichText::new(tl!("Artboard")).font(crate::theme::semibold(12.0)).color(t.text));
     ui.add_space(4.0);
     let mut preset = a.preset.clone();
@@ -116,7 +122,12 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     });
     ui.horizontal(|ui| {
         let mut bg = a.background.name().to_string();
-        let opts = [("white".to_string(), tl!("White")), ("black".to_string(), tl!("Black")), ("transparent".to_string(), tl!("Transparent")), ("custom".to_string(), tl!("Other…"))];
+        let opts = [
+            ("white".to_string(), tl!("White")),
+            ("black".to_string(), tl!("Black")),
+            ("transparent".to_string(), tl!("Transparent")),
+            ("custom".to_string(), tl!("Other…")),
+        ];
         if crate::widgets::dropdown(ui, &key("bg"), &mut bg, &opts, 120.0) {
             let mut params = json!({"layer": layer.id.0, "background": bg});
             if bg == "custom" {
@@ -133,9 +144,9 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         }
         if let ArtboardBackground::Custom(c) = a.background {
             let [r8, g8, b8, _] = c.to_rgba8();
-            let mut rgb = [r8, g8, b8];
-            if crate::widgets::color_edit_button_srgb(ui, &mut rgb).changed() {
-                edit = Some(json!({"layer": layer.id.0, "background": "custom", "color": format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]), "coalesce": key("color")}));
+            // PhotoCraft's Color Picker, as everywhere else (#2144): OK sets the background.
+            if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(r8, g8, b8), tl!("Color")).clicked() {
+                pick = Some(c.to_rgb());
             }
         }
     });
@@ -144,6 +155,10 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     {
         app.ui.status = e;
         app.ui.status_error = true;
+    }
+    if let Some(rgb) = pick {
+        let title = crate::color_picker_ui::title_for(tl!("Color"));
+        crate::color_picker_ui::open_for_command(app, &title, rgb, "layer.artboard.set", json!({"layer": layer.id.0, "background": "custom"}));
     }
 }
 

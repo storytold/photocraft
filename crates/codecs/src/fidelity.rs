@@ -227,10 +227,10 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
             w.push(W::XmpDropped);
         }
         if format == Format::Jpeg {
-            if let Some(exif) = m.exif.as_deref().filter(|e| crate::codecs::jpeg::exif_segment(e).is_none()) {
+            if let Some(exif) = m.exif.as_deref().filter(|e| crate::codecs::jpeg::exif_segment(e, None).is_none()) {
                 w.push(W::MetadataTooLarge { what: "EXIF", bytes: exif.len() });
             }
-            if let Some(xmp) = m.xmp.as_deref().filter(|x| crate::codecs::jpeg::xmp_segment(x).is_none()) {
+            if let Some(xmp) = m.xmp.as_deref().filter(|x| crate::codecs::jpeg::xmp_segment(x, None).is_none()) {
                 w.push(W::MetadataTooLarge { what: "XMP", bytes: xmp.len() });
             }
         }

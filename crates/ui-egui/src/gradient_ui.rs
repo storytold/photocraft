@@ -17,6 +17,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_compose::gradient_fill as gf;
 use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, LayerId};
 use photocraft_engine::gradient_fill_cmds as cmds;
+use photocraft_engine::presets::gradients as gradient_presets;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -64,6 +65,9 @@ pub struct LiveGradient {
     last_click: Option<(Grab, f64)>,
     /// Pending edit from the Properties panel's stops editor (previewed like a canvas drag).
     panel: Option<(LayerId, &'static str, Value)>,
+    /// Pending edit from the Gradient Editor window's current-gradient strip
+    /// (`gradient.presets.stop`, previewed the same way).
+    preset_stop: Option<Value>,
     /// Cached preview document by key.
     preview: Option<(u64, Arc<Document>)>,
 }
@@ -72,7 +76,7 @@ pub struct LiveGradient {
 /// Painting into a layer mask, an alpha channel or the Quick Mask stays classic (pixels), except
 /// that a selected gradient fill layer is always edited live (selecting it targets its mask).
 pub fn live_mode(app: &PhotocraftApp) -> bool {
-    if app.ui.tool != Tool::Gradient || app.ui.tool_options.gradient_classic {
+    if app.active_tool() != Tool::Gradient || app.ui.tool_options.gradient_classic {
         return false;
     }
     match crate::canvas::paint_target(app).as_str() {
@@ -106,11 +110,16 @@ fn fill_of(l: &Layer) -> Option<&Fill> {
 fn edited_fill(app: &PhotocraftApp, layer: &Layer, canvas: Rect32, cmd: &str, p: &Value) -> Option<Fill> {
     let f = fill_of(layer)?;
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    match cmd {
+    let edited = match cmd {
         cmds::SET => cmds::apply_set(layer, f, canvas, p, fg, bg).ok(),
         cmds::STOP => cmds::apply_stop(f, p, fg, bg).ok(),
         _ => None,
-    }
+    }?;
+    // As the command commits it: colours in the document's mode.
+    Some(match app.session.active() {
+        Some(st) => edited.in_mode(st.doc.mode),
+        None => edited,
+    })
 }
 
 /// Options-bar params of a new live gradient.
@@ -205,7 +214,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         app.gradient.drag = None;
         return false;
     }
-    let zoom = app.current_zoom().max(0.01);
+    let zoom = app.point_zoom().max(0.01);
     match ev {
         ToolEvent::Down { x, y, .. } => {
             let p = [x as f32, y as f32];
@@ -226,7 +235,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 }
 
 fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
-    let zoom = app.current_zoom().max(0.01);
+    let zoom = app.point_zoom().max(0.01);
     let active = active_gradient(app);
     let Some(drag) = app.gradient.drag.as_mut() else { return };
     // ⇧: 45° gradient angles, the same snap as the classic drag (stroke_constraint.rs).
@@ -279,7 +288,7 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
 
 fn finish(app: &mut PhotocraftApp) {
     let Some(drag) = app.gradient.drag.take() else { return };
-    let zoom = app.current_zoom().max(0.01);
+    let zoom = app.point_zoom().max(0.01);
     match drag {
         Drag::Draw { from, to, redraw } => {
             if dist(from, to) * zoom < 2.0 {
@@ -563,21 +572,74 @@ pub fn paint_thumbnail(ui: &egui::Ui, layer: LayerId, f: &Fill, rect: Rect) -> b
 }
 
 /// Options-bar swatch of the current gradient. Both live and classic modes use the same
-/// engine-owned preset, so its popup reuses the Gradients browser instead of keeping an
-/// independent copy of the chosen gradient in the UI (#1651).
-pub fn preset_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// engine-owned preset (#1651). Clicking it opens the Gradient Editor window, as Photoshop's
+/// swatch does. Returns whether it was clicked.
+pub fn preset_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     let t = Tokens::get(ui.ctx());
     let stops = app.session.presets.gradient.resolve(app.session.tools.foreground, app.session.tools.background);
     let (r, resp) = ui.allocate_exact_size(vec2(96.0, 20.0), Sense::click());
     paint_ramp(ui.painter(), r, |u| photocraft_algo::paint::sample_stops(&stops, u));
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    let resp = resp.on_hover_text(tl!("The current gradient (pick one in Window › Gradients)"));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Gradients")));
-    egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(260.0);
-        ui.set_max_width(330.0);
-        crate::preset_panels::gradients_panel(app, ui);
-    });
+    // Name the control for accessibility (and so tests and agents can find it).
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Gradient picker")));
+    resp.on_hover_text(tl!("Click to edit the gradient")).clicked()
+}
+
+/// The selected layer when it is a gradient fill layer. Unlike [`active_gradient`] it does not
+/// require the layer to be visible: the editor edits it either way.
+fn selected_gradient(app: &PhotocraftApp) -> Option<Layer> {
+    let st = app.session.active()?;
+    let l = st.doc.layer(st.active_layer?)?;
+    fill_of(l)?;
+    Some(l.clone())
+}
+
+/// The Gradient Editor window the options-bar swatch opens, standing in for Photoshop's Gradient
+/// Editor. A selected gradient fill layer gets the full editor — the same "Gradient" (stops) and
+/// "Gradient Options" sections the Properties panel shows. With no gradient fill layer selected
+/// there is nothing to edit yet (a live gradient is created by dragging on the canvas, and a
+/// classic one is a preset), so the window says so and offers the Gradients panel.
+pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !app.ui.panels.gradient_editor {
+        return;
+    }
+    let mut open = true;
+    let mut show_panel = false;
+    // Resolved before the closure so `app` is borrowed only once inside it.
+    let layer = selected_gradient(app);
+    egui::Window::new(tl!("Gradient Editor"))
+        .id(egui::Id::new("gradient-editor"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(330.0)
+        .show(ctx, |ui| match &layer {
+            Some(l) => properties(app, ui, l),
+            None => {
+                // Photoshop's editor edits the gradient the tool paints with, so with no gradient
+                // fill layer around the strip edits the current gradient in place.
+                let t = Tokens::get(ui.ctx());
+                ui.label(egui::RichText::new(tl!("The gradient the Gradient tool paints with")).color(t.text_dim));
+                ui.add_space(6.0);
+                preset_stops_editor(app, ui);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if widgets::secondary_button(ui, tl!("Save As Preset"), 0.0)
+                        .on_hover_text(tl!("Adds the current gradient to the Gradients panel"))
+                        .clicked()
+                    {
+                        let _ = app.run("gradient.presets.new", json!({}));
+                    }
+                    show_panel = widgets::secondary_button(ui, tl!("Gradients"), 0.0).clicked();
+                });
+            }
+        });
+    if show_panel {
+        let _ = crate::preset_panels::menu(app, "window.panel.gradients", &Value::Null);
+    }
+    if !open {
+        app.ui.panels.gradient_editor = false;
+    }
 }
 
 /// Live mode: style, reverse, dither and blend mode changes in the options bar also edit the selected
@@ -709,22 +771,109 @@ enum Marker {
     Mid(usize),
 }
 
+/// What a stops editor instance edits: a Gradient Fill layer (`gradient.fill.stop`) or the
+/// Gradient tool's current gradient (`gradient.presets.stop`, the Gradient Editor window's
+/// no-layer mode). Presets keep midpoints centred, so midpoint markers are layer-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Sink {
+    Layer(LayerId),
+    Preset,
+}
+
+impl Sink {
+    /// Uniqueness for the drag state.
+    fn key(self) -> egui::Id {
+        match self {
+            Sink::Layer(id) => egui::Id::new(("gradient-stops-drag", id.0)),
+            Sink::Preset => egui::Id::new(("gradient-stops-drag", "preset")),
+        }
+    }
+    fn cmd(self) -> &'static str {
+        match self {
+            Sink::Layer(_) => cmds::STOP,
+            Sink::Preset => gradient_presets::STOP,
+        }
+    }
+    /// Preset gradients keep midpoints at the centre (they are not stored), so only a layer's
+    /// editor shows draggable midpoint diamonds.
+    fn midpoints(self) -> bool {
+        matches!(self, Sink::Layer(_))
+    }
+    /// The edit params with the layer added (the preset grammar has no `layer`).
+    fn params(self, mut p: Value) -> Value {
+        if let Sink::Layer(id) = self {
+            p["layer"] = json!(id.0);
+        }
+        p
+    }
+}
+
 /// Photoshop's Gradient Editor strip: opacity stops above the ramp, colour stops and midpoints
 /// below. Drag a stop to move it (off the strip to delete it), click above / below to add one,
 /// double-click a colour stop for the Color Picker.
 fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
-    let Some(f) = fill_of(layer).cloned() else { return };
+    if let Some(f) = fill_of(layer).cloned() {
+        stops_editor_for(app, ui, Sink::Layer(layer.id), f);
+    }
+}
+
+/// The Gradient Editor window's no-layer mode: the strip edits the Gradient tool's current
+/// gradient in place (`gradient.presets.stop`), as Photoshop's editor edits the tool gradient.
+fn preset_stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if let Some(f) = preset_fill(app) {
+        stops_editor_for(app, ui, Sink::Preset, f);
+    }
+}
+
+/// The current gradient as a fill for the strip (foreground/background resolved now, the preset's
+/// own opacity stops, empty = opaque, midpoints centred).
+fn preset_fill(app: &PhotocraftApp) -> Option<Fill> {
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let (cs, os) = app.session.presets.gradient.fill_stops(fg, bg);
+    Some(Fill::Gradient {
+        stops: cs,
+        angle: 0.0,
+        scale: 1.0,
+        style: GradientStyle::Linear,
+        reverse: false,
+        opacity_stops: os,
+        midpoints: Vec::new(),
+        offset: (0.0, 0.0),
+        dither: false,
+        align: true,
+    })
+}
+
+/// Opens the Color Picker on the current gradient's colour stop `i`; OK runs
+/// `gradient.presets.stop` (one journal step).
+fn preset_stop_color(app: &mut PhotocraftApp, i: usize) {
+    let Some(f) = preset_fill(app) else { return };
+    let Fill::Gradient { stops, .. } = &f else { return };
+    let mut sorted = stops.clone();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((_, c)) = sorted.get(i) else { return };
+    let r = c.to_rgb();
+    app.gradient.preset_stop = None;
+    crate::color_picker_ui::open_for_command(app, "Color Picker (Stop Color)", r, gradient_presets::STOP, json!({"action": "color", "index": i}));
+}
+
+fn stops_editor_for(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink, f: Fill) {
     let Fill::Gradient { stops, .. } = &f else { return };
     let t = Tokens::get(ui.ctx());
-    let id = layer.id;
     let w = ui.available_width().max(120.0);
     let (outer, resp) = ui.allocate_exact_size(vec2(w, 58.0), Sense::click_and_drag());
+    // Name the strip for accessibility (and so tests and agents can find it).
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Gradient stops")));
     let bar = Rect::from_min_max(pos2(outer.left() + 8.0, outer.top() + 16.0), pos2(outer.right() - 8.0, outer.top() + 40.0));
     let x_of = |loc: f32| bar.left() + loc.clamp(0.0, 1.0) * bar.width();
     let loc_of = |x: f32| ((x - bar.left()) / bar.width().max(1.0)).clamp(0.0, 1.0);
     // The ramp being shown (with a pending drag's edit applied).
-    let pending = app.gradient.panel.clone().filter(|(l, ..)| *l == id);
-    let shown = pending.as_ref().and_then(|(_, cmd, p)| edited_fill(app, layer, Rect32::new(0, 0, 1, 1), cmd, p)).unwrap_or_else(|| f.clone());
+    let pending: Option<Value> = match sink {
+        Sink::Layer(id) => app.gradient.panel.clone().filter(|(l, ..)| *l == id).map(|(_, _, p)| p),
+        Sink::Preset => app.gradient.preset_stop.clone(),
+    };
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let shown = pending.as_ref().and_then(|p| cmds::apply_stop(&f, p, fg, bg).ok()).unwrap_or_else(|| f.clone());
     if let Some(ramp) = gf::Ramp::new(&shown) {
         paint_ramp(ui.painter(), bar, |u| ramp.sample(u));
     }
@@ -736,7 +885,7 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut sorted = ss.clone();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
     let ops: Vec<(f32, f32)> = if os.is_empty() { vec![(0.0, 1.0), (1.0, 1.0)] } else { os.clone() };
-    let key = egui::Id::new(("gradient-stops-drag", id.0));
+    let key = sink.key();
     let dragging: Option<Marker> = ui.data(|d| d.get_temp(key));
     // Markers.
     let p = ui.painter();
@@ -760,12 +909,14 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         );
         p.rect_stroke(body, 1.0, Stroke::new(1.0, if sel { t.accent } else { t.text_dim }), StrokeKind::Outside);
     }
-    for i in 0..sorted.len().saturating_sub(1) {
-        let (a, b) = (sorted[i].0, sorted[i + 1].0);
-        if b - a > 1e-3 {
-            let m = mids.get(i).copied().unwrap_or(0.5);
-            let sel = dragging == Some(Marker::Mid(i));
-            diamond(p, pos2(x_of(a + (b - a) * m), bar.bottom() + 6.0), 3.0, if sel { t.accent } else { t.text_faint }, t.text_faint);
+    if sink.midpoints() {
+        for i in 0..sorted.len().saturating_sub(1) {
+            let (a, b) = (sorted[i].0, sorted[i + 1].0);
+            if b - a > 1e-3 {
+                let m = mids.get(i).copied().unwrap_or(0.5);
+                let sel = dragging == Some(Marker::Mid(i));
+                diamond(p, pos2(x_of(a + (b - a) * m), bar.bottom() + 6.0), 3.0, if sel { t.accent } else { t.text_faint }, t.text_faint);
+            }
         }
     }
     for (i, (loc, a)) in ops.iter().enumerate() {
@@ -785,6 +936,9 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         if pos.y > bar.bottom() {
             if let Some(i) = sorted.iter().position(|(l, _)| (x_of(*l) - pos.x).abs() <= 6.0 && pos.y >= bar.bottom() + 3.0) {
                 return Some(Marker::Color(i));
+            }
+            if !sink.midpoints() {
+                return None;
             }
             return (0..sorted.len().saturating_sub(1))
                 .find(|i| {
@@ -818,16 +972,26 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 json!({"action": "midpoint", "index": i, "location": ((loc - a) / (b - a).max(1e-4)).clamp(0.05, 0.95)})
             }
         };
-        let mut edit = edit;
-        edit["layer"] = json!(id.0);
         if resp.dragged() {
-            app.gradient.panel = Some((id, cmds::STOP, edit));
+            match sink {
+                Sink::Layer(id) => app.gradient.panel = Some((id, cmds::STOP, sink.params(edit))),
+                Sink::Preset => app.gradient.preset_stop = Some(edit),
+            }
         }
     }
     if resp.drag_stopped() {
         ui.data_mut(|d| d.remove::<Marker>(key));
-        if let Some((_, cmd, p)) = app.gradient.panel.take() {
-            let _ = app.run(cmd, p);
+        match sink {
+            Sink::Layer(_) => {
+                if let Some((_, cmd, p)) = app.gradient.panel.take() {
+                    let _ = app.run(cmd, p);
+                }
+            }
+            Sink::Preset => {
+                if let Some(p) = app.gradient.preset_stop.take() {
+                    let _ = app.run(sink.cmd(), p);
+                }
+            }
         }
         return;
     }
@@ -835,7 +999,10 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         && let Some(pos) = resp.interact_pointer_pos()
         && let Some(Marker::Color(i)) = hit(pos)
     {
-        edit_stop_color(app, id, i);
+        match sink {
+            Sink::Layer(id) => edit_stop_color(app, id, i),
+            Sink::Preset => preset_stop_color(app, i),
+        }
         return;
     }
     if resp.clicked()
@@ -844,11 +1011,11 @@ fn stops_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     {
         let loc = loc_of(pos.x);
         let p = if pos.y < bar.center().y {
-            json!({"layer": id.0, "action": "add", "kind": "opacity", "location": loc})
+            sink.params(json!({"action": "add", "kind": "opacity", "location": loc}))
         } else {
-            json!({"layer": id.0, "action": "add", "location": loc})
+            sink.params(json!({"action": "add", "location": loc}))
         };
-        let _ = app.run(cmds::STOP, p);
+        let _ = app.run(sink.cmd(), p);
     }
 }
 
@@ -906,21 +1073,31 @@ mod tests {
     }
 
     #[test]
-    fn options_bar_swatch_opens_the_real_preset_browser_and_selects_presets() {
+    fn options_bar_swatch_opens_the_editor_and_reaches_the_gradients_panel() {
         use egui_kittest::{Harness, kittest::Queryable};
         let app = app_with_gradient("linear");
-        let mut h = Harness::builder().with_size(vec2(440.0, 560.0)).build_ui_state(|ui, app: &mut PhotocraftApp| preset_swatch(app, ui), app);
+        let mut h = Harness::builder().with_size(vec2(440.0, 560.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if preset_swatch(app, ui) {
+                    app.ui.panels.gradient_editor = true;
+                }
+                let ctx = ui.ctx().clone();
+                editor_window(app, &ctx);
+            },
+            app,
+        );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
         h.run_steps(2);
-        let original = h.state().session.presets.gradient.name.clone();
+        // The swatch opens the Gradient Editor window (Photoshop's behaviour), not a popup.
+        h.get_by_label("Gradient picker").click();
+        h.run_steps(2);
+        assert!(h.state().ui.panels.gradient_editor, "the swatch opened the editor window");
+        // Quick preset picking lives in the editor: its Gradients button shows the Gradients panel.
         h.get_by_label("Gradients").click();
         h.run_steps(2);
-        // The popup uses the existing presets UI, not a detached swatch or an editor-only copy.
-        h.get_by_label("Foreground to Transparent").click();
-        h.run_steps(2);
-        assert_eq!(h.state().session.presets.gradient.name, "Foreground to Transparent");
-        assert_ne!(h.state().session.presets.gradient.name, original);
-        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1, "choosing a tool preset does not edit document layers");
+        assert!(h.state().ui.panels.color, "the Gradients panel opened");
+        assert_eq!(h.state().ui.dock_tabs.color, 2, "on the Gradients tab");
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1, "no document layers edited");
     }
 
     #[test]
@@ -1088,5 +1265,130 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "nothing committed yet");
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 140.0, y: 60.0 }, mods());
         assert!(display_doc(&mut app, 0).is_none());
+    }
+
+    /// Regression: the options bar's gradient swatch could not open anything. In live mode it
+    /// sensed hover only, so `clicked()` was never true; in classic mode it sensed clicks and
+    /// promised "Click to edit the gradient" but never read the response. Both now open the
+    /// Gradient Editor window.
+    #[test]
+    fn the_options_bar_swatch_opens_the_gradient_editor_in_both_modes() {
+        use egui_kittest::kittest::Queryable;
+
+        for classic in [false, true] {
+            let mut app = app_with_gradient("linear");
+            app.ui.tool_options.gradient_classic = classic;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    crate::panels::options_bar(app, ui);
+                    let ctx = ui.ctx().clone();
+                    editor_window(app, &ctx);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            assert!(!h.state().ui.panels.gradient_editor, "classic={classic}: starts closed");
+            h.get_by_label("Gradient picker").click();
+            h.run_steps(3);
+            assert!(h.state().ui.panels.gradient_editor, "classic={classic}: the swatch opened the editor");
+        }
+    }
+
+    /// The editor itself renders in both states: with a gradient fill layer selected it shows the
+    /// full stops editor, and with none selected it must still draw (and say what to do) instead of
+    /// opening an empty window or panicking.
+    #[test]
+    fn the_editor_window_renders_with_and_without_a_gradient_layer() {
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        // `run_ui` hands back a `FullOutput` whose texture deltas the caller has to consume.
+        let run = |app: &mut PhotocraftApp| {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| editor_window(app, ui.ctx()));
+            out.textures_delta.clear();
+        };
+
+        // Nothing selected.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.panels.gradient_editor = true;
+        run(&mut app);
+        assert!(app.ui.panels.gradient_editor, "the window stays open");
+
+        // A committed live gradient fill layer: `selected_gradient` finds it, so the full editor
+        // (the same sections the Properties panel shows) is what gets built.
+        let mut app = app_with_gradient("linear");
+        drag(&mut app, [10.0, 10.0], [150.0, 90.0]);
+        assert!(selected_gradient(&app).is_some(), "the drag left a gradient fill layer selected");
+        app.ui.panels.gradient_editor = true;
+        run(&mut app);
+        assert!(app.ui.panels.gradient_editor);
+
+        // Closed: the window draws nothing and leaves the flag alone.
+        app.ui.panels.gradient_editor = false;
+        run(&mut app);
+        assert!(!app.ui.panels.gradient_editor);
+    }
+
+    /// With no gradient fill layer selected the editor edits the Gradient tool's current gradient
+    /// in place (Photoshop's editor edits the tool gradient): a click on the strip adds a stop to
+    /// it instead of only pointing at the Gradients panel's presets.
+    #[test]
+    fn the_editor_edits_the_current_gradient_without_a_layer() {
+        use egui_kittest::kittest::Queryable;
+
+        let app = app_with_gradient("linear");
+        let before = app.session.presets.gradient.stops.len();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                editor_window(app, &ctx);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        // Open the window once the fonts are bound (the build's first frame runs without them).
+        h.run_steps(2);
+        h.state_mut().ui.panels.gradient_editor = true;
+        h.run_steps(4);
+        h.get_by_label("Gradient stops").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.presets.gradient.stops.len(), before + 1, "the click added a stop to the current gradient");
+    }
+
+    /// The editor's Save As Preset button files the current gradient into the Gradients panel
+    /// under a fresh "Custom" name.
+    #[test]
+    fn the_editor_saves_the_current_gradient_as_a_preset() {
+        use egui_kittest::kittest::Queryable;
+
+        let app = app_with_gradient("linear");
+        let has_custom = |s: &PhotocraftApp| s.session.presets.gradients.iter().any(|g| g.items.iter().any(|p| p.name == "Custom"));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                editor_window(app, &ctx);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(2);
+        h.state_mut().ui.panels.gradient_editor = true;
+        h.run_steps(4);
+        assert!(!has_custom(h.state()), "no Custom preset yet");
+        h.get_by_label("Save As Preset").click();
+        h.run_steps(3);
+        assert!(has_custom(h.state()), "the button saved the current gradient as a preset");
+    }
+
+    /// A hidden gradient fill layer is still editable from the editor (the Properties panel edits
+    /// it whether or not it is drawn), so the window must not require visibility.
+    #[test]
+    fn the_editor_finds_a_hidden_gradient_layer() {
+        let mut app = app_with_gradient("linear");
+        drag(&mut app, [10.0, 10.0], [150.0, 90.0]);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.setProps", json!({"layer": id.0, "visible": false})).unwrap();
+        assert!(active_gradient(&app).is_none(), "the canvas widget skips a hidden layer");
+        assert!(selected_gradient(&app).is_some(), "the editor still edits it");
     }
 }

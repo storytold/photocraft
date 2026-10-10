@@ -87,6 +87,110 @@ fn deleting_the_vector_mask_prunes_its_thumbnail() {
 }
 
 #[test]
+fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
+    for linked in [true, false] {
+        for kind in [MaskKind::Pixel, MaskKind::Vector] {
+            let (mut s, masked, shape) = session();
+            s.execute("layer.layerMask.linked", json!({"linked": linked})).unwrap();
+            s.execute("layer.vectorMask.linked", json!({"linked": linked})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let mut h = harness(s, 0, 1.0, 290.0);
+            let r = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == kind).unwrap().1;
+            click_with(&mut h, r.center(), Modifiers::NONE);
+            let label = if kind == MaskKind::Pixel { "Delete Layer Mask" } else { "Delete Vector Mask" };
+            let at = h.get_by_label(label).rect().center();
+            click_with(&mut h, at, Modifiers::NONE);
+            let l = layer(&h, masked);
+            assert!(h.state().ui.dialogs.is_empty(), "mask deletion remains immediate");
+            let original = before.layer(photocraft_doc::LayerId(masked)).unwrap();
+            assert_eq!(l.content, original.content);
+            assert_eq!(layer(&h, shape), *before.layer(photocraft_doc::LayerId(shape)).unwrap());
+            if kind == MaskKind::Pixel {
+                assert!(l.mask.is_none());
+                assert_eq!(l.vector_mask, original.vector_mask);
+                assert!(!h.state().ui.mask_target);
+            } else {
+                assert!(l.vector_mask.is_none());
+                assert_eq!(l.mask, original.mask);
+                assert!(!h.state().ui.vector_mask_target);
+            }
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(*h.state().session.active().unwrap().doc, *before);
+            h.state_mut().run("edit.redo", json!({})).unwrap();
+            assert_eq!(layer(&h, masked), l);
+        }
+    }
+}
+
+#[test]
+fn footer_trash_still_deletes_the_layer_when_its_content_is_targeted() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_some());
+    assert!(h.state().ui.dialogs.iter().any(|d| crate::delete_layer_prompt::owns(&d.fields)));
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+/// Like Photoshop, ⌥/Alt-clicking the trash deletes the layer without asking.
+#[test]
+fn alt_click_on_the_footer_trash_deletes_without_confirmation() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::ALT);
+    assert!(h.state().ui.dialogs.is_empty(), "no confirmation");
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+#[test]
+fn a_new_mask_is_targeted_so_the_next_footer_trash_keeps_its_layer() {
+    let (s, _, shape) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    h.state_mut().run("layer.new.layer", json!({"name": "Fresh mask"})).unwrap();
+    let id = h.state().session.active().unwrap().active_layer.unwrap();
+    h.run_steps(3);
+    let label = format!("Add a mask  (from the selection; {} inverts)", crate::shortcuts::pretty("Alt"));
+    let at = h.get_by_label(&label).rect().center();
+    click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().ui.mask_target && !h.state().ui.vector_mask_target);
+    assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_some());
+    let at = h.get_by_label("Delete Layer Mask").rect().center();
+    click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_none());
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(shape)).is_some());
+}
+
+#[test]
+fn dragging_a_layer_row_to_trash_still_deletes_the_layer_with_a_mask_targeted() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let mask = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == MaskKind::Pixel).unwrap().1;
+    click_with(&mut h, mask.center(), Modifiers::NONE);
+    let from = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row.center();
+    let to = h.get_by_label("Delete Layer Mask").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+#[test]
 fn the_chain_toggles_linking_and_it_survives_psd() {
     let (s, masked, _) = session();
     let mut h = harness(s, 0, 1.0, 290.0);
@@ -390,6 +494,34 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
     assert_eq!(crate::canvas::paint_target(h.state()), json!("pixels"));
 }
 
+/// #1765: `\` shows the active layer's mask as a rubylith and hides it again, as in Photoshop;
+/// the mask stays the paint target meanwhile. On a layer without a mask it does nothing, and a
+/// focused text field keeps the key.
+#[test]
+fn backslash_toggles_the_rubylith() {
+    let (s, masked, shape) = dotted();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let doc = h.state().session.active().unwrap().doc.clone();
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), json!({"layer": masked, "mode": "overlay"}), "\\ shows the overlay");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"), "painting paints the mask");
+    let px = canvas_px(&h).unwrap();
+    assert_eq!(px[50 * 200 + 50], egui::Color32::from_rgba_premultiplied(128, 0, 0, 128), "50% red over hidden areas");
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "a view toggle, not an edit");
+    // A layer without a layer mask: nothing happens.
+    h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Backslash);
+    h.run_steps(2);
+    assert_eq!(mask_view(&h), serde_json::Value::Null);
+    let sc = crate::shortcuts::parse("\\").unwrap();
+    assert!(!crate::shortcut_dispatch::Focus::Text.allows(&sc), "typing \\ in a text field stays text");
+}
+
 /// #780: clicking the mask thumbnail targets the mask, and ⌘I (Image › Adjustments › Invert)
 /// then inverts the mask instead of the layer; on an adjustment layer the menu item is live.
 #[test]
@@ -418,4 +550,61 @@ fn command_i_inverts_the_targeted_mask() {
     let st = app.session.active().unwrap();
     let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
     assert_eq!(mask.sample_channel(10, 10, 0), 0.0, "reveal all → hide all");
+}
+
+/// #2420: Selecting a layer mask in the Layers panel toggles the color swatches
+/// to the mask's colors (white/black by default), and deselecting toggles back.
+#[test]
+fn selecting_mask_thumbnail_toggles_swatches_to_mask_colors_and_back() {
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    let (mut s, masked, _) = dotted();
+    s.execute("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+
+    // Initial state: layer pixels targeted, red foreground, blue background.
+    assert!(!h.state().ui.mask_target);
+    assert_eq!(h.state().session.tools.foreground, RED);
+    assert_eq!(h.state().session.tools.background, BLUE);
+
+    // 1. Click mask thumbnail in Layers panel -> targets mask, swatches toggle to mask colors.
+    let r_mask = mask_rect(&h, masked, MaskKind::Pixel);
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target, "mask thumbnail clicked: mask is targeted");
+    assert_eq!(h.state().session.tools.foreground, WHITE);
+    assert_eq!(h.state().session.tools.background, BLACK);
+
+    // 2. Click layer thumbnail -> deselects mask, swatches toggle back to pixel colors.
+    let r_layer = layer_thumb_center(&h, masked);
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert!(!h.state().ui.mask_target, "layer thumbnail clicked: pixels are targeted");
+    assert_eq!(h.state().session.tools.foreground, RED);
+    assert_eq!(h.state().session.tools.background, BLUE);
+
+    // 3. Click mask thumbnail again -> swatches toggle back to mask colors.
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target);
+    assert_eq!(h.state().session.tools.foreground, WHITE);
+    assert_eq!(h.state().session.tools.background, BLACK);
+
+    // 4. Changing mask colors preserves them when switching away and back.
+    h.state_mut().run("tools.setColors", json!({"foreground": "#808080"})).unwrap();
+    let grey = h.state().session.tools.foreground;
+    assert_eq!(grey, [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, RED, "pixel colors restored");
+
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, grey, "mask colors restored");
+
+    // 5. Creating a new adjustment layer targets its mask and toggles to mask colors.
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, RED);
+    h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    assert!(h.state().ui.mask_target, "new adjustment layer targets its mask");
+    assert_eq!(h.state().session.tools.foreground, grey);
 }

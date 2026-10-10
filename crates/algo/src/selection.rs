@@ -151,11 +151,12 @@ pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMo
 }
 
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
-    (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
+    (a[3] == 0.0 && b[3] == 0.0) || (0..4).all(|c| (a[c] - b[c]).abs() * 255.0 <= tol + 1e-3)
 }
 
 /// Pixels similar to the seed pixel (per-channel difference ≤ `tolerance`
-/// levels, alpha included). `contiguous` limits to the 4-connected region
+/// levels, alpha included; fully transparent pixels match regardless of hidden RGB).
+/// `contiguous` limits to the 4-connected region
 /// around the seed. `px` covers `area`.
 pub fn magic_wand(px: &[[f32; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Vec<f32> {
     let (w, h) = (area.width() as usize, area.height() as usize);
@@ -252,7 +253,9 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
     let (w, h) = (area.width() as usize, area.height() as usize);
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
     let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    let similar = |p: [u8; 4]| (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
+    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
+    // split a transparent region into pieces, as if the copied source were still visible.
+    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {
@@ -706,67 +709,9 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
         .collect()
 }
 
-/// 1D squared distance transform (Felzenszwalb & Huttenlocher).
-fn dt1(f: &[f32], out: &mut [f32], v: &mut [usize], z: &mut [f32]) {
-    let n = f.len();
-    let mut k = 0usize;
-    v[0] = 0;
-    z[0] = f32::NEG_INFINITY;
-    z[1] = f32::INFINITY;
-    for q in 1..n {
-        loop {
-            let p = v[k];
-            let s = ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32));
-            if s <= z[k] && k > 0 {
-                k -= 1;
-                continue;
-            }
-            if s <= z[k] {
-                v[0] = q;
-                z[0] = f32::NEG_INFINITY;
-                z[1] = f32::INFINITY;
-                break;
-            }
-            k += 1;
-            v[k] = q;
-            z[k] = s;
-            z[k + 1] = f32::INFINITY;
-            break;
-        }
-    }
-    k = 0;
-    for (q, o) in out.iter_mut().enumerate() {
-        while z[k + 1] < q as f32 {
-            k += 1;
-        }
-        let d = q as f32 - v[k] as f32;
-        *o = d * d + f[v[k]];
-    }
-}
+mod distance;
 
-/// Euclidean distance to the nearest `true` pixel.
-pub fn edt(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
-    let mut g: Vec<f32> = inside.iter().map(|&b| if b { 0.0 } else { 1e20 }).collect();
-    let n = w.max(h).max(1);
-    let (mut f, mut o, mut v, mut z) = (vec![0.0; n], vec![0.0; n], vec![0usize; n], vec![0.0f32; n + 1]);
-    for x in 0..w {
-        for y in 0..h {
-            f[y] = g[y * w + x];
-        }
-        dt1(&f[..h], &mut o[..h], &mut v, &mut z);
-        for y in 0..h {
-            g[y * w + x] = o[y];
-        }
-    }
-    for y in 0..h {
-        f[..w].copy_from_slice(&g[y * w..(y + 1) * w]);
-        dt1(&f[..w], &mut o[..w], &mut v, &mut z);
-        for x in 0..w {
-            g[y * w + x] = o[x].sqrt();
-        }
-    }
-    g
-}
+pub use distance::edt;
 
 /// Grows the selection by `r` pixels.
 pub fn expand(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
@@ -783,11 +728,20 @@ pub fn contract(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     expand(&inv, w, h, r).into_iter().map(|v| 1.0 - v).collect()
 }
 
-/// A band of width `r` straddling the selection edge.
+/// Select › Modify › Border: a soft band `2r` wide centred on the selection edge, as in
+/// Photoshop. A pixel `D` away (centre to centre) from the nearest pixel on the other side of the
+/// edge is selected `1 − (D − 1) / r`: fully at the edge, fading to nothing `r` pixels out on
+/// either side (measured on Photoshop 27.11, Border 4: 63, 127, 191, 255 | 255, 191, 127, 63
+/// across a straight edge, the same along the inside of a corner). It used to be a hard band
+/// `r` wide.
 pub fn border(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let outer = expand(m, w, h, r / 2.0);
-    let inner = contract(m, w, h, r / 2.0);
-    outer.iter().zip(inner).map(|(o, i)| (o - i).max(0.0)).collect()
+    let inside: Vec<bool> = m.iter().map(|v| *v >= 0.5).collect();
+    let outside: Vec<bool> = inside.iter().map(|v| !v).collect();
+    let (to_inside, to_outside) = (edt(&inside, w, h), edt(&outside, w, h));
+    if r <= 0.0 || to_inside.len() != m.len() || to_outside.len() != m.len() {
+        return vec![0.0; m.len()];
+    }
+    inside.iter().zip(to_inside.iter().zip(&to_outside)).map(|(&sel, (&di, &dout))| (1.0 - ((if sel { dout } else { di }) - 1.0) / r).clamp(0.0, 1.0)).collect()
 }
 
 /// Smooth: removes specks and rounds corners (box average of radius `round(r)`, edges
@@ -796,7 +750,7 @@ pub fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     crate::selection_blur::smooth(m, w, h, r)
 }
 
-/// Feather: Gaussian blur of the mask with sigma = radius / 2 (kernel truncated at 3σ, zero
+/// Feather: Gaussian blur of the mask with sigma = radius, as in Photoshop (kernel truncated at 3σ, zero
 /// beyond the canvas). Parallel, confined to the selection's bounds, and independent of the
 /// radius (#211).
 pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
@@ -875,6 +829,32 @@ mod tests {
         let px = img(10, 1, |x, _| [x as f32 * 10.0 / 255.0, 0.0, 0.0, 1.0]);
         let m = magic_wand(&px, Rect::new(0, 0, 10, 1), (0, 0), 25.0, true, false);
         assert_eq!(m.iter().filter(|v| **v > 0.0).count(), 3);
+    }
+
+    #[test]
+    fn wand_ignores_hidden_rgb_only_when_both_pixels_are_fully_transparent() {
+        let area = Rect::new(0, 0, 6, 1);
+        let pixels = [[255, 0, 0, 0], [0, 255, 0, 0], [255, 0, 0, 128], [253, 0, 0, 128], [0, 0, 255, 0], [255, 0, 0, 255]];
+        let floats: Vec<_> = pixels.iter().map(|p| p.map(|v| f32::from(v) / 255.0)).collect();
+        for (seed, tolerance, contiguous, expected) in [
+            ((0, 0), 0.0, true, [1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+            ((0, 0), 0.0, false, [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ((4, 0), 32.0, false, [1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ((2, 0), 0.0, false, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            ((2, 0), 2.0, true, [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]),
+            ((5, 0), 32.0, false, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        ] {
+            assert_eq!(magic_wand(&floats, area, seed, tolerance, contiguous, false), expected);
+            let region = wand_region(&pixels, area, seed, tolerance, contiguous, false).unwrap();
+            for (x, value) in expected.into_iter().enumerate() {
+                assert_eq!(region.at(x as i32, 0), value, "seed={seed:?}, tolerance={tolerance}, x={x}");
+            }
+        }
+        // Hidden RGB cannot introduce extra edges into the anti-aliased selection either.
+        let plain: Vec<_> = pixels.iter().map(|p| if p[3] == 0 { [0; 4] } else { *p }).collect();
+        for contiguous in [false, true] {
+            assert_eq!(wand_region(&pixels, area, (0, 0), 0.0, contiguous, true), wand_region(&plain, area, (0, 0), 0.0, contiguous, true));
+        }
     }
 
     #[test]
@@ -1127,6 +1107,22 @@ mod tests {
         assert!(b[10 * 20 + 5] > 0.5 && b[10 * 20 + 4] > 0.5);
     }
 
+    /// Photoshop 27.11, measured: a 32×32 rectangle at (16,16) in 64×64, Select › Modify ›
+    /// Border 4 px, filled white. Row y = 32 for x = 8..=24, and the diagonal (16,16)..(24,24).
+    #[test]
+    fn border_matches_photoshop() {
+        let (w, h) = (64, 64);
+        let m: Vec<f32> = (0..w * h).map(|i| if (16..48).contains(&(i % w)) && (16..48).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+        let b = border(&m, w, h, 4.0);
+        let v = |x: usize, y: usize| (b[y * w + x] * 255.0).round() as i32;
+        let row: Vec<i32> = (8..=24).map(|x| v(x, 32)).collect();
+        let diag: Vec<i32> = (16..=24).map(|d| v(d, d)).collect();
+        let near = |got: &[i32], want: &[i32]| got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1);
+        let want_row = [0, 0, 0, 0, 63, 127, 191, 255, 255, 191, 127, 63, 0, 0, 0, 0, 0];
+        assert!(near(&row, &want_row), "{row:?}");
+        assert!(near(&diag, &[255, 191, 127, 63, 0, 0, 0, 0, 0]), "{diag:?}");
+    }
+
     #[test]
     fn smooth_removes_specks_and_feather_softens() {
         let mut m = square(20, 20);
@@ -1134,7 +1130,8 @@ mod tests {
         let s = smooth(&m, 20, 20, 1.0);
         assert_eq!(s[2 * 20 + 2], 0.0);
         assert_eq!(s[10 * 20 + 10], 1.0);
-        let f = feather(&square(20, 20), 20, 20, 4.0);
+        // Radius 2 (σ 2) keeps the blur inside the 20×20 canvas, so no coverage is lost.
+        let f = feather(&square(20, 20), 20, 20, 2.0);
         let edge = f[10 * 20 + 5];
         assert!(edge > 0.3 && edge < 0.8, "{edge}");
         let sum: f32 = f.iter().sum();

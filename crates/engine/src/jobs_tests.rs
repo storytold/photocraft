@@ -127,6 +127,23 @@ fn a_panic_in_the_worker_becomes_an_error_and_the_document_is_unchanged() {
 }
 
 #[test]
+fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
+    // REL-3: the last-resort guard in `jobs::dispatch` catches a panic that escapes `run`,
+    // reports it as an error and leaves the document (and its history) untouched.
+    let mut s = session(64, 64);
+    let doc_before = s.active().unwrap().doc.clone();
+    let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    let msg = s.execute("test.panic", json!({})).unwrap_err().to_string();
+    assert!(msg.contains("internal error"), "{msg}");
+    assert!(msg.contains("test.panic"), "{msg}");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!((st.revision, st.history.past_len()), (rev, steps));
+    // The session still works.
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
 fn progress_is_monotonic_and_reaches_one() {
     let ctx = JobCtx::new();
     ctx.progress(0.5, "half");
@@ -218,6 +235,23 @@ fn a_running_job_locks_its_document_but_not_others() {
     assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
     assert_eq!(s.active_index(), Some(1));
     assert_eq!(s.documents()[0].history.past_len(), 3);
+}
+
+#[test]
+fn jobs_list_puts_running_jobs_before_ended_ones() {
+    let mut s = session(64, 64);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let done = gated_job(&mut s, &gate);
+    assert!(matches!(wait_event(&mut s, done).outcome, JobOutcome::Done(_)));
+    // A second document, so the next job doesn't wait on the first one's.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let running = gated_job(&mut s, &gate);
+    let r = s.execute("jobs.list", json!({})).unwrap();
+    let listed: Vec<_> = r["jobs"].as_array().unwrap().iter().map(|j| (j["id"].clone(), j["state"].clone())).collect();
+    assert_eq!(listed, [(json!(running.0), json!("running")), (json!(done.0), json!("done"))], "{r}");
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    wait_event(&mut s, running);
 }
 
 #[test]
@@ -348,6 +382,27 @@ fn content_aware_move_runs_as_a_job() {
 }
 
 #[test]
+fn remove_runs_as_a_job() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    let p = json!({"points": [[60, 50], [100, 70]], "size": 24});
+    inline.execute("paint.remove", p.clone()).unwrap();
+    let before = pixels(&s);
+    let id = job(s.start("paint.remove", p.clone()).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert!(v["damage"].is_array(), "{v}");
+    assert_eq!(pixels(&s), pixels(&inline), "same result as the synchronous command");
+    // Cancelled at once: the document stays as it was.
+    s.undo();
+    let id = job(s.start("paint.remove", p).unwrap());
+    assert!(s.cancel_job(id));
+    s.join_cancelled_jobs();
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert_eq!(pixels(&s), before);
+}
+
+#[test]
 fn open_runs_as_a_job_and_cancel_adds_nothing() {
     let mut src = session(40, 30);
     let doc = (*src.active().unwrap().doc).clone();
@@ -436,4 +491,27 @@ fn cancel_takes_effect_within_200_ms_on_24_mp() {
         eprintln!("{cmd}: worst cancel latency {worst:.1} ms");
         assert!(worst < 200.0, "{cmd}: cancel took {worst:.1} ms");
     }
+}
+
+#[test]
+fn an_inline_job_ctx_lets_another_thread_cancel_inline_work() {
+    // A live filter preview runs the filter inline in a private session; when the dialog's
+    // parameters change, the stale computation is cancelled through this context.
+    let mut s = session(96, 64);
+    let before = pixels(&s);
+    let revision = s.active().unwrap().revision;
+    let ctx = JobCtx::new();
+    ctx.cancel();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    for (id, p) in [("filter.blur.gaussianBlur", json!({"radius": 40})), ("filter.blur.motionBlur", json!({"distance": 40}))] {
+        assert!(matches!(s.execute(id, p), Err(EngineError::Cancelled)), "{id}");
+        assert_eq!(pixels(&s), before, "{id}: the document is unchanged");
+        assert_eq!(s.active().unwrap().revision, revision, "{id}: no edit recorded");
+    }
+    // Not cancelled: the same session runs as before.
+    s.set_inline_job_ctx(Some(JobCtx::new()));
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+    assert_ne!(pixels(&s), before);
+    s.set_inline_job_ctx(None);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
 }

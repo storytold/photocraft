@@ -22,6 +22,8 @@ const MAX_SIDE: u32 = 4096;
 pub struct Cache {
     revision: u64,
     key: u64,
+    /// The canvas document shown by a live stroke (0 is the committed document).
+    pub(crate) preview_key: u64,
     factor: u32,
     /// False while the plain composite shows: the texture is kept (so toggling a view back on
     /// reuses its allocation) but its pixels are stale.
@@ -111,8 +113,10 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: b
                 }
                 for (k, x) in native[..colors].iter_mut().enumerate() {
                     if !v.color_visible(k) {
-                        // Hidden channels contribute nothing (Lab: neutral a/b).
-                        *x = if mode == ColorMode::Lab && k > 0 { 0.5 } else { 0.0 };
+                        // Hidden channels contribute nothing (Lab: neutral a/b, and a neutral
+                        // Lightness under Show Channels in Color, so an isolated a/b channel
+                        // tints over mid gray instead of black, as Photoshop does).
+                        *x = if mode == ColorMode::Lab && (k > 0 || in_color) { 0.5 } else { 0.0 };
                     }
                 }
                 let c = to_rgba(&fmt, &native);
@@ -190,46 +194,58 @@ fn view_key(v: &ChannelView, in_color: bool) -> u64 {
 /// Make the channel-view texture of document `idx` current; `None` = nothing to draw.
 pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
     let st = app.session.documents().get(idx)?;
-    let doc = st.doc.clone();
     let view = st.channel_view.clone();
-    let (revision, damage) = (st.revision, st.last_damage);
-    let id = doc.id.0;
-    if view.is_plain(&doc) {
+    let (revision, last_damage) = (st.revision, st.last_damage);
+    let id = st.doc.id.0;
+    if view.is_plain(&st.doc) {
         if let Some(c) = app.channel_views.get_mut(&id) {
             c.valid = false;
         }
         return None;
     }
-    let in_color = false;
+    // Mask and channel views are drawn over the canvas: show the same live document,
+    // otherwise an opaque grayscale mask hides the stroke until it is committed (#2078).
+    // The plain-composite path above needs no preview work.
+    let (doc, preview_key) = crate::canvas::display_doc(app, idx);
+    // Interface ▸ Show Channels in Color tints single colour channel views on the canvas too,
+    // not just the panel thumbnails (#2385). The view key carries the flag, so toggling it
+    // rebuilds the texture.
+    let in_color = app.session.prefs().interface.show_channels_in_color;
     let key = view_key(&view, in_color);
     // Never exceed what the GPU accepts (egui panics on oversized textures).
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, MAX_SIDE);
     let factor = doc.size.width.max(doc.size.height).div_ceil(max_side).max(1);
+    if let Some(c) = app.channel_views.get(&id)
+        && c.key == key
+        && c.factor == factor
+        && c.valid
+        && c.revision == revision
+        && c.preview_key == preview_key
+    {
+        return Some(c.tex.id());
+    }
+    let damage =
+        app.channel_views.get(&id).and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
     if let Some(c) = app.channel_views.get_mut(&id)
         && c.key == key
         && c.factor == factor
         && c.valid
+        && let Some(d) = damage
     {
-        if c.revision == revision {
-            return Some(c.tex.id());
-        }
-        if c.revision + 1 == revision
-            && let Some(d) = damage
+        // Re-render just the damage, snapped to the sampling grid so a downsampled texture
+        // (big documents) updates in place too.
+        let f = factor as i32;
+        let d = d.intersect(&doc.bounds());
+        let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
+        if !r.is_empty()
+            && let Some(px) = render(&doc, &view, r, factor, in_color)
         {
-            // Re-render just the damage, snapped to the sampling grid so a downsampled texture
-            // (big documents) updates in place too.
-            let f = factor as i32;
-            let d = d.intersect(&doc.bounds());
-            let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
-            if !r.is_empty()
-                && let Some(px) = render(&doc, &view, r, factor, in_color)
-            {
-                let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
-                c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
-            }
-            c.revision = revision;
-            return Some(c.tex.id());
+            let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
+            c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
         }
+        c.revision = revision;
+        c.preview_key = preview_key;
+        return Some(c.tex.id());
     }
     let b = doc.bounds();
     let px = render(&doc, &view, b, factor, in_color)?;
@@ -239,13 +255,14 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         Some(c) if c.tex.size() == size => {
             c.tex.set(img, TextureOptions::LINEAR);
             c.revision = revision;
+            c.preview_key = preview_key;
             c.key = key;
             c.factor = factor;
             c.valid = true;
         }
         _ => {
             let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
-            app.channel_views.insert(id, Cache { revision, key, factor, valid: true, tex });
+            app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex });
         }
     }
     app.channel_views.get(&id).map(|c| c.tex.id())
@@ -337,6 +354,64 @@ mod tests {
             }
             println!("24 MP mask view {mode}: {best:.1} ms (render at 1/{factor})");
         }
+    }
+
+    /// Interface ▸ Show Channels in Color (#2385): a solo RGB / CMYK channel tints the canvas
+    /// instead of staying gray, like the panel thumbnails wired in #1986.
+    #[test]
+    fn show_channels_in_color_tints_the_canvas() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        s.execute("channel.target", json!({"channel": "green"})).unwrap();
+        let st = s.active().unwrap();
+        let b = st.doc.bounds();
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, false).unwrap()[0], Color32::from_gray(128));
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, true).unwrap()[0], Color32::from_rgb(0, 128, 0));
+
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        s.execute("channel.target", json!({"channel": "cyan"})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, true).unwrap()[0];
+        assert!(px.r() < 100 && px.g() > 150 && px.b() > 150, "cyan ink, not gray: {px:?}");
+        let gray = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap()[0];
+        assert_eq!(gray.r(), gray.g(), "off stays grayscale");
+    }
+
+    /// Lab: a and b tint over a neutral Lightness; Lightness itself stays gray (Adobe's exception).
+    #[test]
+    fn show_channels_in_color_lab_lightness_stays_gray() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "lab"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        let b = s.active().unwrap().doc.bounds();
+        s.execute("channel.target", json!({"channel": {"color": 0}})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, b, 1, true).unwrap()[0];
+        let spread = px.r().max(px.g().max(px.b())) as i32 - px.r().min(px.g().min(px.b())) as i32;
+        assert!(spread <= 3, "Lightness stays gray: {px:?}");
+        s.execute("channel.target", json!({"channel": {"color": 1}})).unwrap();
+        let st = s.active().unwrap();
+        let px = render(&st.doc, &st.channel_view, b, 1, true).unwrap()[0];
+        assert!(px.r() != px.g() || px.g() != px.b(), "a channel is tinted, not gray: {px:?}");
+    }
+
+    /// The canvas texture cache is keyed by the preference, so toggling it rebuilds the view.
+    #[test]
+    fn ensure_honours_show_channels_in_color() {
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.sync_views();
+        app.run("channel.target", json!({"channel": "green"})).unwrap();
+        let ctx = egui::Context::default();
+        assert!(ensure(&mut app, &ctx, 0).is_some());
+        let key_off = app.channel_views.values().next().unwrap().key;
+        app.session.execute("prefs.set", json!({"values": {"interface.showChannelsInColor": true}})).unwrap();
+        assert!(ensure(&mut app, &ctx, 0).is_some());
+        let key_on = app.channel_views.values().next().unwrap().key;
+        assert_ne!(key_off, key_on, "the preference changes the cached view key");
     }
 
     #[test]

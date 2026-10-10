@@ -359,6 +359,77 @@ fn alt_dragging_a_row_drops_a_copy_and_a_plain_drag_moves() {
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Reorder Layers"));
 }
 
+/// #1721: a press-move-release from `from` to `to`, with `release` held only when the row is
+/// dropped.
+fn drag_from_to(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2, release: Modifiers) {
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::ModifiersChanged(release));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: release });
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+}
+
+/// #1721: with a single layer there is no other row to drop on, so with ⌥ held the dragged row
+/// accepts the drop onto itself and the copy lands above it. Without ⌥ the drop on itself does
+/// nothing.
+#[test]
+fn alt_dragging_the_only_layer_drops_a_copy_on_itself() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    assert_eq!(names(&h), ["Background"]);
+    let row = recorded(&h.ctx)[0].row;
+    let from = pos2(row.center().x, row.bottom() - 4.0);
+    let before = steps(&h);
+    drag_from_to(&mut h, from, pos2(row.center().x, row.top() + row.height() * 0.25), Modifiers::ALT);
+    assert_eq!(names(&h), ["Background", "Background copy"]);
+    assert_eq!(steps(&h), before + 1, "one undo step");
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Duplicate Layer"));
+    // A plain drop back on the same layer leaves everything as it is.
+    let row = recorded(&h.ctx)[0].row;
+    let before = steps(&h);
+    drag_from_to(&mut h, from, pos2(row.center().x, row.top() + row.height() * 0.75), Modifiers::NONE);
+    assert_eq!(names(&h), ["Background", "Background copy"], "a plain drop on itself does nothing");
+    assert_eq!(steps(&h), before);
+}
+
+/// #1721: the empty space below the bottom-most row is a drop target too (Photoshop): ⌥ copies
+/// the layer to the very bottom of the stack, a plain drag moves it there.
+#[test]
+fn dropping_below_the_bottom_row_lands_at_the_bottom_of_the_stack() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    for i in 0..2 {
+        s.execute("layer.new.layer", json!({"name": format!("L{i}")})).unwrap();
+    }
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    // Rows top to bottom: L1, L0, Background. The empty space starts under Background.
+    let top = recorded(&h.ctx)[0].row.center();
+    let bottom = recorded(&h.ctx)[2].row;
+    drag_from_to(&mut h, top, pos2(bottom.center().x, bottom.bottom() + 10.0), Modifiers::ALT);
+    assert_eq!(names(&h), ["L1 copy", "Background", "L0", "L1"]);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Duplicate Layer"));
+    // Rows: L1, L0, Background, L1 copy. A plain drag of L0 to the empty space moves it to the
+    // very bottom.
+    let grabbed = recorded(&h.ctx)[1].row.center();
+    let bottom = recorded(&h.ctx)[3].row;
+    drag_from_to(&mut h, grabbed, pos2(bottom.center().x, bottom.bottom() + 10.0), Modifiers::NONE);
+    assert_eq!(names(&h), ["L0", "L1 copy", "Background", "L1"]);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Reorder Layers"));
+}
+
 /// Photoshop's Layers footer is a bar along the panel's bottom edge: its buttons sit in the middle
 /// of the bar's height, from the right. They used to hang under the line with twice the gap below.
 #[test]
@@ -377,4 +448,89 @@ fn the_footer_is_a_bar_along_the_panel_bottom_with_its_buttons_centred() {
         assert_eq!(new_layer.center().y, delete.center().y, "{theme}: one row");
         assert!(new_layer.right() <= delete.left(), "{theme}: New Layer left of Delete");
     }
+}
+
+/// #2071: like Photoshop, the "Create new fill or adjustment layer" button opens its menu on the
+/// press, so one gesture can press it, drag onto an item and release to add that layer. A plain
+/// click leaves the menu open, and a release on nothing adds nothing.
+#[test]
+fn press_drag_release_on_the_adjustment_button_adds_that_layer() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let count = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.len();
+    let press = |h: &mut Harness<'static, PhotocraftApp>, pos: Pos2, pressed: bool| {
+        h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    };
+    let drag = |h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2| {
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+    };
+    let button = h.get_by_label("Create new fill or adjustment layer").rect().center();
+    let before = count(&h);
+
+    // Press, drag onto Curves, release: one Curves adjustment layer.
+    h.event(egui::Event::PointerMoved(button));
+    h.run_steps(1);
+    press(&mut h, button, true);
+    let curves = h.get_by_label("Curves").rect().center();
+    drag(&mut h, button, curves);
+    press(&mut h, curves, false);
+    h.run_steps(2);
+    assert_eq!(count(&h), before + 1, "releasing on Curves added a layer");
+    let doc = &h.state().session.active().unwrap().doc;
+    let top = doc.layers.last().unwrap();
+    assert!(matches!(top.content, LayerContent::Adjustment(_)), "an adjustment layer: {:?}", top.name);
+    assert!(h.query_by_label("Curves").is_none(), "and the menu closed");
+
+    // A plain click opens the menu and leaves it open; releasing off the items adds nothing.
+    drag(&mut h, curves, button);
+    press(&mut h, button, true);
+    press(&mut h, button, false);
+    h.run_steps(2);
+    assert!(h.query_by_label("Curves").is_some(), "a click leaves the menu open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label("Curves").is_none(), "Esc closed it");
+
+    // Press, drag off the button to an empty spot, release: nothing is added, the menu stays open.
+    press(&mut h, button, true);
+    let away = pos2(button.x - 120.0, button.y - 4.0);
+    drag(&mut h, button, away);
+    press(&mut h, away, false);
+    h.run_steps(2);
+    assert_eq!(count(&h), before + 1, "a release on nothing adds no layer");
+    assert!(h.query_by_label("Curves").is_some(), "and keeps the menu open");
+}
+
+/// #2071: the fx (Add a layer style) footer button is the same kind of menu, and runs after the
+/// adjustment button's in the frame: press it, drag to Drop Shadow… and release to open Layer
+/// Style on Drop Shadow.
+#[test]
+fn press_drag_release_on_the_fx_button_opens_that_style() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let styles =
+        |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::LayerStyle).cloned().collect::<Vec<_>>();
+    let button = h.get_by_label("Add a layer style").rect().center();
+    h.event(egui::Event::PointerMoved(button));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: button, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let item = h.get_by_label("Drop Shadow…").rect().center();
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(button + (item - button) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: item, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let open = styles(&h);
+    assert_eq!(open.len(), 1, "releasing on Drop Shadow… opened Layer Style");
+    let effects = open[0].fields["effects"].as_array().unwrap();
+    assert!(effects.iter().any(|e| e["kind"] == json!("dropShadow")), "on Drop Shadow: {effects:?}");
 }

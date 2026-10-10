@@ -184,6 +184,62 @@ fn presets_save_load_delete_round_trip() {
 }
 
 #[test]
+fn presets_save_appends_at_the_end_and_update_overwrites_in_place() {
+    let mut s = session(10, 10);
+    s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
+    assert_eq!(s.tools.current_preset.as_deref(), Some("Chalk"));
+    let n = s.tools.presets.len();
+    let chalk_at = s.tools.presets.iter().position(|p| p.name == "Chalk").unwrap();
+    // A new preset appends at the end, picked preset or not.
+    s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
+    assert_eq!(s.tools.presets.last().unwrap().name, "Mine");
+    s.execute("brush.presets.save", json!({"name": "Tail"})).unwrap();
+    assert_eq!(s.tools.presets.last().unwrap().name, "Tail");
+    // A reset clears the picked preset.
+    s.execute("tools.setBrush", json!({"reset": true})).unwrap();
+    assert_eq!(s.tools.current_preset, None);
+    // Editing the brush keeps the picked preset current; update overwrites it in place.
+    s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
+    s.execute("tools.setBrush", json!({"size": 55})).unwrap();
+    assert_eq!(s.tools.current_preset.as_deref(), Some("Chalk"));
+    let r = s.execute("brush.presets.update", json!({})).unwrap();
+    assert_eq!(r["name"], "Chalk");
+    assert_eq!(s.tools.presets.len(), n + 2, "no new preset (the two saves added two)");
+    assert_eq!(s.tools.presets.iter().position(|p| p.name == "Chalk"), Some(chalk_at));
+    let chalk = s.tools.presets.iter().find(|p| p.name == "Chalk").unwrap();
+    assert_eq!(chalk.brush.size, 55.0);
+    assert!(!chalk.builtin, "an updated built-in becomes the user's preset");
+    // A named update of another preset.
+    s.execute("brush.presets.update", json!({"name": "Mine", "brush": {"size": 9}})).unwrap();
+    assert_eq!(s.tools.presets.iter().find(|p| p.name == "Mine").unwrap().brush.size, 9.0);
+    // Errors: no such preset, and no preset to update after a reset.
+    assert!(s.execute("brush.presets.update", json!({"name": "Nope"})).is_err());
+    s.execute("tools.setBrush", json!({"reset": true})).unwrap();
+    assert!(s.execute("brush.presets.update", json!({})).is_err());
+    // Deleting the current preset clears it, so a later update fails rather than guessing.
+    s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
+    s.execute("brush.presets.delete", json!({"name": "Chalk"})).unwrap();
+    assert_eq!(s.tools.current_preset, None);
+    assert!(s.execute("brush.presets.update", json!({})).is_err());
+}
+
+#[test]
+fn a_failed_set_brush_leaves_no_current_preset_behind() {
+    let mut s = session(10, 10);
+    let before = s.tools.brush.clone();
+    // A rejected brush (a wrong-typed size) must not record the preset it came with.
+    assert!(s.execute("tools.setBrush", json!({"preset": "Chalk", "brush": {"size": "big"}})).is_err());
+    assert_eq!(s.tools.current_preset, None);
+    assert_eq!(s.tools.brush, before);
+    // Once the brush is accepted, the preset is recorded.
+    s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
+    assert_eq!(s.tools.current_preset.as_deref(), Some("Chalk"));
+    // A `reset` wins over a `preset` in the same call.
+    s.execute("tools.setBrush", json!({"preset": "Chalk", "reset": true})).unwrap();
+    assert_eq!(s.tools.current_preset, None);
+}
+
+#[test]
 fn set_brush_merges_fields() {
     let mut s = session(10, 10);
     s.execute("tools.setBrush", json!({"size": 55, "shapeDynamics": {"enabled": true, "size": {"jitter": 0.5}}})).unwrap();
@@ -638,4 +694,49 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     let mut s = new();
     s.execute("tools.setBrush", json!({ "brush": scatter(2.0) })).unwrap();
     assert_eq!(s.execute("paint.stroke", stroke).unwrap(), json!({"damage": [17, 14, 23, 23]}));
+}
+
+#[test]
+fn strokes_convert_through_the_documents_cmyk_profile() {
+    // A synthetic uncoated-like profile: heavier dot gain than the built-in coated CMYK (whose
+    // params are the defaults here), so painted ink differs from the default conversion. The
+    // compositors and composite exports enter the document's space; the stroke must too (#583).
+    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+        description: "Stroke Test Uncoated".into(),
+        tvi: [0.26, 0.26, 0.26, 0.3],
+        grid_a2b: 5,
+        grid_b2a: 9,
+        ..Default::default()
+    })
+    .to_bytes();
+    let cmyk_session = |tagged: bool| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32, "mode": "cmyk", "background": "white"})).unwrap();
+        if tagged {
+            s.edit("icc", |doc, _| {
+                doc.icc_profile = Some(profile.clone());
+                Ok(())
+            })
+            .unwrap();
+        }
+        s
+    };
+    let params = json!({"points": [[4, 16], [28, 16]], "size": 8, "hardness": 1, "opacity": 1, "flow": 1, "color": "#cc3366", "smoothing": 0});
+    let mut s = cmyk_session(true);
+    // The live preview enters the same space, so it commits the pixels it shows.
+    let mut live =
+        LiveStroke::begin(&s, &json!({"points": [[4, 16]], "size": 8, "hardness": 1, "opacity": 1, "flow": 1, "color": "#cc3366", "smoothing": 0})).unwrap();
+    live.push(&[StrokePoint::new(28.0, 16.0, 1.0)]).unwrap();
+    let mut commit = params.clone();
+    commit["seed"] = json!(live.seed);
+    s.execute("paint.stroke", commit).unwrap();
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+    assert!(same_pixels(&shown, &surface(&s), Rect::new(0, 0, 32, 32)), "the preview commits the pixels it shows");
+    // The stroke's ink differs from the same stroke without the embedded profile.
+    let ink = |surf: &Surface| surf.read_region(Rect::new(15, 16, 17, 18));
+    let tagged = ink(&surface(&s));
+    let mut plain = cmyk_session(false);
+    plain.execute("paint.stroke", params).unwrap();
+    let untagged = ink(&surface(&plain));
+    assert!(tagged != untagged, "the document's CMYK profile must convert the painted ink: {tagged:?} vs {untagged:?}");
 }

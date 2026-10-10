@@ -496,11 +496,12 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
     });
 }
 
-/// #209: arrow-key nudge in the 150-layer document.
+/// #209: arrow-key nudge in the 150-layer document; #1771: a new layer there.
 fn many_layer_scenarios(b: &mut Bench, sz: &Sizes) {
     // Row names stay stable across modes: the layer count is in the mode, not the key.
     let name = "nudge 1 px in the many-layer document + refresh".to_string();
-    if !b.wanted(&name) {
+    let new_layer = "new layer in the many-layer document + refresh";
+    if !b.wanted(&name) && !b.wanted(new_layer) {
         return;
     }
     // The document's first refresh is part of this row (a crash there is reported against it).
@@ -519,6 +520,15 @@ fn many_layer_scenarios(b: &mut Bench, sz: &Sizes) {
         let t = Instant::now();
         exec(s, "layer.translate", json!({"layer": mid, "dx": if i % 2 == 0 { 1 } else { -1 }, "dy": 0}))?;
         Ok(ms(t) + b.refresh(s, false)?)
+    });
+    // Layer › New › Layer: as fast at any layer count. Undone (untimed) so the count stays put.
+    b.time(new_layer, &mut s, reps, true, |b, s, _| {
+        let t = Instant::now();
+        exec(s, "layer.new.layer", json!({}))?;
+        let took = ms(t) + b.refresh(s, false)?;
+        exec(s, "edit.undo", json!({}))?;
+        b.refresh(s, false)?;
+        Ok(took)
     });
 }
 

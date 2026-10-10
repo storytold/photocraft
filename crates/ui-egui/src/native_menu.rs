@@ -396,7 +396,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
             if free {
                 hide.shortcut = Some("Ctrl+Cmd+H".into());
             }
-            let resolution = if free { "Hide moves to ⌃⌘H, as in Photoshop" } else { "Hide has no shortcut" };
+            let resolution = if free { "Hide moves to ⌃⌘H" } else { "Hide has no shortcut" };
             clashes.push(Clash { shortcut: "Cmd+H", system: "Hide", command, resolution });
         }
         None => hide.shortcut = Some("Cmd+H".into()),
@@ -440,7 +440,7 @@ pub fn mac_layout(bar: &MenuBar, lang: Lang) -> Layout {
             if free {
                 it.shortcut = Some("Ctrl+Cmd+M".into());
             }
-            let resolution = if free { "Minimize moves to ⌃⌘M, as in Photoshop" } else { "Minimize has no shortcut" };
+            let resolution = if free { "Minimize moves to ⌃⌘M" } else { "Minimize has no shortcut" };
             clashes.push(Clash { shortcut: "Cmd+M", system: "Minimize", command, resolution });
             Node::Item(it)
         }
@@ -633,12 +633,23 @@ impl NativeMenu {
 
     /// Before egui sees this frame's input: key equivalents become the key presses they were,
     /// and clicks wait for [`NativeMenu::run`].
+    ///
+    /// AppKit takes only the key-down: winit still delivers the key-up (it forwards key-ups while
+    /// ⌘ is held). So a key equivalent adds just its press, ahead of its key-up when that is
+    /// already queued. A second, made-up release made ⌘V paste three times (#1638): a ⌘V release
+    /// without a press is how an image paste reaches us (see [`crate::shortcuts::clipboard_keys`]).
     pub fn raw_input(&mut self, raw: &mut egui::RawInput) {
         for e in self.backend.drain() {
             match e {
                 Event::Key(chord) => {
-                    raw.events.extend(chord.key_event(true));
-                    raw.events.extend(chord.key_event(false));
+                    if let Some(press @ egui::Event::Key { key: pressed_key, .. }) = chord.key_event(true) {
+                        let at = raw
+                            .events
+                            .iter()
+                            .position(|e| matches!(e, egui::Event::Key { key, pressed: false, .. } if *key == pressed_key))
+                            .unwrap_or(raw.events.len());
+                        raw.events.insert(at, press);
+                    }
                 }
                 Event::Click(id) => self.clicks.push(id),
             }
@@ -672,8 +683,7 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// every command's enabled state, so it doesn't run on frames that only animate or scroll.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_ref() else { return };
-    let input = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })));
-    let state = state_hash(app, input.then_some(app.frame));
+    let state = state_hash(app, had_input(ctx).then_some(app.frame));
     if menu.state == Some(state) && !menu.dirty {
         return;
     }
@@ -695,16 +705,23 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     menu.dirty = false;
 }
 
+/// A click or key press this frame: it may have changed state [`state_hash`] doesn't list.
+pub(crate) fn had_input(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })))
+}
+
 /// What the menus' rows depend on, cheaply: commands run, the documents and their revisions,
 /// selection, recent files, panels and view state, the language. `input` forces a change on
 /// frames with a click or key press, which covers state the hash doesn't list.
-fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
+pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
     input.hash(&mut h);
     let s = &app.session;
     s.journal.len().hash(&mut h);
     s.active_index().hash(&mut h);
     s.clipboard.is_some().hash(&mut h);
+    // A running job greys the commands that would change its document.
+    s.has_jobs().hash(&mut h);
     if let Some(d) = s.active() {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }
@@ -803,7 +820,7 @@ mod tests {
         assert!(!file.children.contains(&Node::Standard(Standard::CloseWindow)), "⌘W stays File › Close");
     }
 
-    /// Themes and Next Theme move from Window to the app menu's Appearance, checked by the theme.
+    /// Themes and the appearance-mode cycle move from Window to the app menu's Appearance.
     #[test]
     fn themes_move_to_the_app_menus_appearance() {
         let mut a = app(false);
@@ -818,9 +835,20 @@ mod tests {
         assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.classic".to_string()));
         assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
         assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
-        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Theme");
+        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Appearance Mode");
+        assert_eq!(l.bar.find("window.theme.system").unwrap().label, "Sync with system");
+        assert_eq!(l.bar.find("window.theme.system").unwrap().checked, Some(false));
         let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
         assert!(!window.iter().any(|id| id.starts_with("window.theme.") || id == "[Theme]"), "{window:?}");
+        a.session.prefs.edit(|p| p.interface.appearance_mode = photocraft_engine::prefs::AppearanceMode::Auto);
+        for palette in [crate::theme::ThemeKind::Classic, crate::theme::ThemeKind::ProMedium] {
+            a.ui.theme = palette;
+            let automatic = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+            assert_eq!(automatic.bar.find("window.theme.system").unwrap().checked, Some(true));
+            for kind in crate::theme::ThemeKind::ALL {
+                assert_eq!(automatic.bar.find(&format!("window.theme.{}", kind.id())).unwrap().checked, Some(false));
+            }
+        }
     }
 
     /// Language follows Settings in the app menu: Auto and every UI language in its own name,
@@ -934,7 +962,7 @@ mod tests {
         if let Some(m) = app.services.native_menu.as_mut() {
             m.raw_input(&mut raw);
         }
-        assert_eq!(raw.events.len(), 2, "a press and a release");
+        assert_eq!(raw.events.len(), 1, "the press: winit delivers the release");
         frame(&ctx, raw, |ui| {
             run(&mut app, ui.ctx());
             crate::shortcuts::handle(&mut app, ui.ctx());
@@ -945,6 +973,42 @@ mod tests {
         // Nothing changed: no rebuild of the rows on the next frame.
         frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
         assert_eq!(synced.borrow().len(), 1);
+    }
+
+    /// #1638: ⌘V through the Mac menu pasted three layers. AppKit takes the key-down for Edit ›
+    /// Paste's key equivalent, but winit still delivers the key-up (it forwards key-ups while ⌘ is
+    /// held). The menu's press plus that real release must paste once, whether the release
+    /// arrives in a later frame or already sits in the same input as the menu event.
+    #[test]
+    fn a_paste_key_equivalent_pastes_once() {
+        let release = || egui::Event::Key { key: Key::V, physical_key: Some(Key::V), pressed: false, repeat: false, modifiers: Modifiers::COMMAND };
+        for same_frame in [false, true] {
+            let mut app = app(true);
+            let ctx = egui::Context::default();
+            app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+            app.run("edit.copy", json!({})).unwrap();
+            let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layer_count();
+            let before = layers(&app);
+            let paste = Chord::parse("Cmd+V").unwrap();
+            app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: Default::default(), events: vec![Event::Key(paste)] })));
+            let step = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+                let mut raw = egui::RawInput { events, ..Default::default() };
+                eframe::App::raw_input_hook(app, &ctx, &mut raw);
+                frame(&ctx, raw, |ui| {
+                    run(app, ui.ctx());
+                    crate::shortcuts::handle(app, ui.ctx());
+                });
+            };
+            if same_frame {
+                // A quick tap: the real key-up is already queued when the menu event is drained.
+                step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), release()]);
+            } else {
+                step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::COMMAND)]);
+                step(&mut app, vec![release()]);
+            }
+            step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+            assert_eq!(layers(&app), before + 1, "one ⌘V pastes one layer (key-up in the same frame: {same_frame})");
+        }
     }
 
     #[test]
@@ -997,6 +1061,72 @@ mod tests {
         app.ui.dialogs.clear();
         frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
         assert!(synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
+    }
+
+    /// Edit > Cut uses the type editor's selection, like the clipboard Cut event (#1355).
+    #[test]
+    fn cut_selected_type_from_native_menu_matches_keyboard_cut() {
+        for native_click in [true, false] {
+            let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut app = app(true);
+            let ctx = egui::Context::default();
+            let id = photocraft_doc::LayerId(app.run("type.create", json!({"text": "Hello", "size": 12, "x": 4, "y": 24})).unwrap()["layer"].as_u64().unwrap());
+            crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
+            let edit = app.ui.text_edit.as_ref().unwrap();
+            assert_eq!((edit.anchor, edit.caret), (0, 5));
+            let events = if native_click { vec![Event::Click("edit.cut".into())] } else { Vec::new() };
+            app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events })));
+            frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+            assert!(synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, "Cut must be enabled for selected characters");
+
+            let mut raw = egui::RawInput::default();
+            app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+            if !native_click {
+                raw.events.push(egui::Event::Cut);
+            }
+            let mut out = ctx.run_ui(raw, |ui| {
+                run(&mut app, ui.ctx());
+                crate::shortcuts::handle(&mut app, ui.ctx());
+                sync(&mut app, ui.ctx());
+            });
+            out.textures_delta.clear();
+            assert_eq!(out.platform_output.commands, [egui::OutputCommand::CopyText("Hello".into())]);
+            let photocraft_doc::LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(id).unwrap().content else {
+                panic!("type layer changed kind")
+            };
+            assert!(text.text.is_empty());
+            let edit = app.ui.text_edit.as_ref().unwrap();
+            assert_eq!((edit.anchor, edit.caret), (0, 0));
+            assert!(!synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, "Cut must be disabled at an empty caret");
+            assert!(app.session.clipboard.is_none(), "text Cut must not copy rendered pixels");
+        }
+    }
+
+    #[test]
+    fn native_cut_without_type_edit_keeps_pixel_clipboard_behavior() {
+        let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = app(false);
+        app.run("file.new", json!({"width": 4, "height": 4, "background": "transparent"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert_eq!(app.run("document.pixel", json!({"x": 1, "y": 1})).unwrap(), json!([1.0, 0.0, 0.0, 1.0]));
+        let ctx = egui::Context::default();
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("edit.cut".into())] })));
+        frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+        assert_eq!(synced.borrow().last().unwrap().find("edit.cut").unwrap().enabled, app.session.is_enabled("edit.cut"));
+        assert!(app.session.is_enabled("edit.cut"));
+        let mut raw = egui::RawInput::default();
+        app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+        frame(&ctx, raw, |ui| {
+            run(&mut app, ui.ctx());
+            sync(&mut app, ui.ctx());
+        });
+        assert_eq!(app.run("document.pixel", json!({"x": 1, "y": 1})).unwrap(), json!([0.0, 0.0, 0.0, 0.0]));
+        let clip = app.session.clipboard.as_ref().unwrap();
+        assert_eq!((clip.bounds.width(), clip.bounds.height()), (4, 4));
+        let mut px = vec![[0u8; 4]; 16];
+        clip.surface.read_rgba8_into(clip.bounds, &mut px);
+        assert_eq!(px, vec![[255u8, 0, 0, 255]; 16]);
+        assert!(app.ui.text_edit.is_none());
     }
 
     /// With the Mac menu bar the title bar draws no menu titles: each title shows once fewer.

@@ -715,6 +715,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 && let Some(hp) = resp.hover_pos()
             {
                 let before = to_doc(d, area, hp);
+                // Liquify's own preview zoom, not the canvas (`zoom_levels` doesn't apply): the
+                // preview is a proxy of at most PROXY_SIDE px, so past 3200 % it would only magnify
+                // proxy pixels further.
                 d.zoom = (d.zoom * (scroll / 200.0).exp()).clamp(0.01, 32.0);
                 let after = to_doc(d, area, hp);
                 d.center = [d.center[0] + before[0] - after[0], d.center[1] + before[1] - after[1]];

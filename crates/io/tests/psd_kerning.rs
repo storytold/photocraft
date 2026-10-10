@@ -79,6 +79,108 @@ fn manual_and_off_kerning_round_trip_through_psd() {
     assert!(f.iter().enumerate().filter(|(j, _)| ![1, 4, 8, 9, 10].contains(j)).all(|(_, x)| *x == (true, 0)), "{f:?}");
 }
 
+/// #1348: the automatic mode (Metrics/Optical) lives in the document `Txt2` block, one model
+/// object per `TextIndex`. A PhotoCraft-authored PSD must carry it or a reopened layer falls
+/// back to Metrics — Optical used to be silently lost.
+#[test]
+fn optical_kerning_round_trips_through_psd() {
+    use Kerning::{Metrics as M, Optical as P};
+    let t1 = layer("AVATAR", &[(4, P, 0.0), (2, M, 0.0)]);
+    let t2 = layer("Wave", &[(2, M, 0.0), (2, P, 0.0)]);
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    for (name, want) in [("one", &t1), ("two", &t2)] {
+        let mut t = want.clone();
+        photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+        doc.layers.push(Layer::new(name, LayerContent::Text(t)));
+    }
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
+    for (want, l) in [(&t1, &back.layers[0]), (&t2, &back.layers[1])] {
+        let LayerContent::Text(b) = &l.content else { panic!("not text") };
+        assert_eq!(chars(b), chars(want), "{}", l.name);
+    }
+}
+
+/// Two imported layers can name the same Txt2 object; export must update the second
+/// preserved TySh pointer so each layer restores its own automatic kerning mode.
+#[test]
+fn duplicate_preserved_text_indices_get_distinct_txt2_objects() {
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let cases = [("optical", "AV", Kerning::Optical), ("metrics", "BC", Kerning::Metrics)];
+    for (name, text, mode) in cases {
+        let mut t = layer(text, &[(text.len(), mode, 0.0)]);
+        photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+        let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
+        doc.layers.push(Layer::new(name, LayerContent::Text(t)));
+    }
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
+    assert_eq!(txt2.path(&["1", "1"]).and_then(E::as_array).unwrap().len(), 2);
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
+    for (i, expected) in [Kerning::Optical, Kerning::Metrics].into_iter().enumerate() {
+        let LayerContent::Text(t) = &back.layers[i].content else { panic!("expected text layer") };
+        assert!(chars(t).iter().all(|(mode, _)| *mode == expected), "layer {i} used another layer's Txt2 object");
+    }
+}
+
+/// A file-controlled `TextIndex` must not size the save: `i32::MAX` is ignored (the regenerated
+/// `Txt2` is sized by real text objects, never by a file's numbers) and the document still saves
+/// and reopens with its text.
+#[test]
+fn hostile_text_index_never_sizes_the_save() {
+    let t = layer("AV", &[(1, Kerning::Metrics, 0.0), (1, Kerning::Optical, 0.0)]);
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut r = t.clone();
+    photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
+    // An invalid index is remapped into the saved Txt2 rather than preserved.
+    r.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&photocraft_text::psd::build_tysh(&r, 72.0, None), i32::MAX).unwrap()));
+    doc.layers.push(Layer::new("hostile", LayerContent::Text(r)));
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
+    let slots = txt2.path(&["1", "1"]).and_then(E::as_array).unwrap();
+    assert!(slots.len() <= 8, "a file-controlled TextIndex sized the save: {} slots", slots.len());
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
+    let LayerContent::Text(b) = &back.layers[0].content else { panic!("not text") };
+    assert_eq!(b.text, "AV");
+    assert_eq!(chars(b), chars(&t), "a remapped TextIndex must still restore Optical kerning");
+}
+
+/// A save must not drop what the file held beyond the style runs: the previous `Txt2`'s glyph
+/// pen positions (`/21 /1`) survive a resave of unchanged text, and go away with the text they
+/// described rather than lying about the new one.
+#[test]
+fn txt2_extras_survive_a_resave_of_unchanged_text() {
+    let obj = E::Dict(vec![
+        ("0".into(), E::Dict(vec![("0".into(), E::String("AV\r".into())), ("6".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))])),
+        ("21".into(), E::Dict(vec![("1".into(), E::Array(vec![E::Real(10.0), E::Real(20.0)]))])),
+    ]);
+    let prev = photocraft_text::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("0".into(), E::dict()),
+        ("1".into(), E::Dict(vec![("1".into(), E::Array(vec![obj]))])),
+    ]);
+    let save = |text: &str| {
+        let t = layer(text, &[(text.len(), Kerning::Metrics, 0.0)]);
+        let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut r = t.clone();
+        photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
+        doc.layers.push(Layer::new("kept", LayerContent::Text(r)));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", std::sync::Arc::new(prev.clone())));
+        let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+        let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+        photocraft_text::psd::parse_txt2(&file.global_blocks.iter().find(|b| &b.key == b"Txt2").unwrap().data).unwrap()
+    };
+    let kept = save("AV");
+    let object = kept.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
+    assert_eq!(object.path(&["21", "1"]).and_then(E::as_array).map(|items| items.len()), Some(2), "pen positions survive a resave of unchanged text");
+    let stale = save("AX");
+    let object = stale.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
+    assert!(object.get("21").is_none(), "positions of another text are stale and dropped");
+}
+
 /// Kerning that can't be represented (non-finite) and bad PSD fields never panic and stay sane.
 #[test]
 fn hostile_kerning_values() {

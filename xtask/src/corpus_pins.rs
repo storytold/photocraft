@@ -35,6 +35,9 @@ pub const AFDESIGNLOAD_COMMIT: &str = "a18dd50a7079fb861a28835eeefa0d015f03f4a1"
 pub const JAC21_BRANDING_COMMIT: &str = "57ae3f45bf4637f6927c0b07de25b922c55f944f";
 /// https://github.com/eviltwo/AssetStoreTemplate (MIT): an Affinity template with artboards.
 pub const ASSET_STORE_TEMPLATE_COMMIT: &str = "f671981ee89d15526285b3cc87b4393d3defe644";
+/// https://github.com/satoshoe-dev/affinity-samples (CC0-1.0): purpose-made Affinity 3 documents
+/// and exported PNG references for the gaps tracked in #1606.
+pub const AFFINITY_SAMPLES_COMMIT: &str = "96aca6bd86bbe7a677f1cf0630bd832d23943be8";
 /// PngSuite (public domain), a fixed release archive.
 pub const PNGSUITE_URL: &str = "http://www.schaik.com/pngsuite/PngSuite-2017jul19.tgz";
 
@@ -208,9 +211,16 @@ pub const AFFINITY: PinnedCorpus = PinnedCorpus {
             subdir: "AssetStoreTemplate",
             extras: &[("LICENSE", "asset-store-template/LICENSE")],
         },
+        Upstream {
+            prefix: "affinity-samples/",
+            repo: "satoshoe-dev/affinity-samples",
+            commit: AFFINITY_SAMPLES_COMMIT,
+            subdir: "",
+            extras: &[("LICENSE", "affinity-samples/LICENSE"), ("README.md", "affinity-samples/README.md")],
+        },
     ],
     manifest: "xtask/affinity-corpus.sha256",
-    exts: &["af", "afdesign", "aftemplate"],
+    exts: &["af", "afdesign", "aftemplate", "png"],
     subset: true,
     sources_md: |c| {
         format!(
@@ -218,12 +228,29 @@ pub const AFFINITY: PinnedCorpus = PinnedCorpus {
              https://github.com/samuel-etver/vector-art/tree/{VECTOR_ART_COMMIT}/simple (`vector-art/`, CC0-1.0), \
              https://github.com/NickBeeuwsaert/AFDesignLoad/tree/{AFDESIGNLOAD_COMMIT}/testDesigns (`afdesignload/`, MIT, Copyright (c) 2015 Nick Beeuwsaert), \
              https://github.com/Jac21/Branding/tree/{JAC21_BRANDING_COMMIT}/Logos/JC/DesignerFiles/Affinity (`jac21/`, MIT, Copyright (c) 2018 Jeremy Cantu) and \
-             https://github.com/eviltwo/AssetStoreTemplate/tree/{ASSET_STORE_TEMPLATE_COMMIT}/AssetStoreTemplate (`asset-store-template/`, MIT). \
+             https://github.com/eviltwo/AssetStoreTemplate/tree/{ASSET_STORE_TEMPLATE_COMMIT}/AssetStoreTemplate (`asset-store-template/`, MIT) and \
+             https://github.com/satoshoe-dev/affinity-samples/tree/{AFFINITY_SAMPLES_COMMIT} (`affinity-samples/`, CC0-1.0; includes PNG references for issue #1606). \
              Selected by and sha256-verified against `{}` by `cargo xtask corpus --affinity`. Gitignored; never commit these files.\n",
             c.manifest
         )
     },
 };
-
 /// Every pinned corpus, in fetch order.
 pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &HEIF, &EXR, &AFFINITY];
+
+/// `corpus/pixls`: real camera raws from <https://raw.pixls.us> (released into the public
+/// domain / CC0 by their photographers; see ATTRIBUTION.md). One file per decode path
+/// `photocraft-raw` supports, plus the packed-ORF known-unsupported oracle. Fetched as single
+/// files (the server 301-redirects `/data/` to `/download/`), verified against
+/// `xtask/pixls.sha256`.
+pub const PIXLS_BASE: &str = "https://raw.pixls.us/data/";
+/// (url path, file name in `corpus/pixls`)
+pub const PIXLS_FILES: &[(&str, &str)] = &[
+    ("Canon/PowerShot%20SX50%20HS/IMG_4059.CR2", "IMG_4059.CR2"),
+    ("Canon/PowerShot%20SX50%20HS/CRW_4061.DNG", "CRW_4061.DNG"),
+    ("Nikon/D3/JD1_8203.NEF", "JD1_8203.NEF"),
+    ("Sony/DSC-RX0/DSC00009.ARW", "DSC00009.ARW"),
+    ("Panasonic/DC-G9/P1000475.RW2", "P1000475.RW2"),
+    ("Olympus/E-1/E_1__C106743_gredos.ORF", "E_1__C106743_gredos.ORF"),
+    ("Olympus/E-5/_7061961_copy.ORF", "_7061961_copy.ORF"),
+];

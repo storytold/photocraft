@@ -226,19 +226,9 @@ pub fn thumb_scale(size: f32) -> f32 {
     (size / 40.0).clamp(0.3, 1.0)
 }
 
-/// Does `b`'s tip look like `p`'s (same bitmap or round hardness, and size)?
-fn same_tip(tip: &TipShape, size: f32, hardness: f32, p: &BrushPreset) -> bool {
-    let (pt, ps, ph, ..) = preset_tip(p);
-    (size - ps).abs() < 0.5
-        && match (tip, pt) {
-            (TipShape::Round, TipShape::Round) => (hardness - ph).abs() < 0.01,
-            (TipShape::Sampled(a), TipShape::Sampled(b)) => a.width == b.width && a.height == b.height && a.data == b.data,
-            _ => false,
-        }
-}
-
-/// Photoshop's scrolling grid of preset tips with their sizes. Returns the clicked preset index.
-fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl Fn(&BrushPreset) -> bool) -> Option<usize> {
+/// Photoshop's scrolling grid of preset tips with their sizes; `highlight` is the selected
+/// preset (by identity: look-alike duplicates must stay distinct). Returns the clicked index.
+fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], highlight: Option<usize>) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let mut clicked = None;
     let frame = egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm as u8).inner_margin(egui::Margin::same(3));
@@ -251,7 +241,7 @@ fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl
                     if !ui.is_rect_visible(cell) {
                         continue;
                     }
-                    if selected(p) {
+                    if highlight == Some(i) {
                         ui.painter().rect_filled(cell, 3.0, t.accent_soft);
                         ui.painter().rect_stroke(cell, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
                     } else if resp.hovered() {
@@ -279,10 +269,14 @@ fn tip_grid(ui: &mut egui::Ui, id: &str, presets: &[BrushPreset], selected: impl
     clicked
 }
 
-fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) {
-    let (tip, size, hardness) = (b.tip.clone(), b.size, b.hardness);
-    if let Some(p) = tip_grid(ui, "brush-tip-grid", presets, |p| same_tip(&tip, size, hardness, p)).and_then(|i| presets.get(i)) {
-        // Picking a tip changes the tip only: the dynamics sections stay (Photoshop).
+/// The Brush Tip Shape section: the tip grid and the tip's own controls. Picking a tip copies the
+/// tip fields only — the dynamics sections stay as they are (Photoshop). The clicked preset's name
+/// is returned so the caller can mark it current with `brush.presets.setCurrent` (by identity:
+/// look-alike duplicates stay distinct; the engine can't infer it from the brush). The tip fields
+/// are also copied into the working brush so this frame's controls start from them.
+fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
+    let highlight = current.and_then(|n| presets.iter().position(|p| p.name.eq_ignore_ascii_case(n)));
+    if let Some(p) = tip_grid(ui, "brush-tip-grid", presets, highlight).and_then(|i| presets.get(i)) {
         let (pt, ps, ph, pa, pr, psp) = preset_tip(p);
         b.tip = pt.clone();
         b.size = ps;
@@ -290,11 +284,9 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) 
         b.angle = pa;
         b.roundness = pr;
         b.spacing = psp;
+        return Some(p.name.clone());
     }
-    let orig = match &b.tip {
-        TipShape::Sampled(g) => Some(g.width.max(g.height) as f32),
-        TipShape::Round => None,
-    };
+    let orig = b.tip.bitmap_size().map(|(w, h)| w.max(h) as f32);
     size_row(ui, tl!("Size"), &mut b.size, MAX_BRUSH_SIZE, orig);
     ui.horizontal(|ui| {
         widgets::checkbox(ui, &mut b.flip_x, tl!("Flip X"));
@@ -333,6 +325,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset]) 
     ui.add_space(2.0);
     let on = b.spacing_enabled;
     ui.add_enabled_ui(on, |ui| signed_pct(ui, tl!("Spacing"), &mut b.spacing, 0.01, 10.0));
+    None
 }
 
 fn shape_dynamics(ui: &mut egui::Ui, b: &mut BrushSettings) {
@@ -379,10 +372,11 @@ fn pattern_swatch(ui: &mut egui::Ui, tx: &paint::Texture) {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         serde_json::to_vec(&(
             match &tx.pattern {
-                Pattern::Tile(g) => {
-                    (g.width, g.height, g.data.len() as u32, g.data.iter().step_by((g.data.len() / 512).max(1)).map(|v| *v as u32).sum::<u32>())
-                }
                 Pattern::Procedural { style, size, seed } => (*style as u32, *size, *seed, 0),
+                // A bitmap tile (a stored one's preview until it is loaded, #1843).
+                p => p.bitmap().map_or((0, 0, 0, 0), |g| {
+                    (g.width, g.height, g.data.len() as u32, g.data.iter().step_by((g.data.len() / 512).max(1)).map(|v| *v as u32).sum::<u32>())
+                }),
             },
             tx.invert,
             tx.brightness,
@@ -396,8 +390,10 @@ fn pattern_swatch(ui: &mut egui::Ui, tx: &paint::Texture) {
         c.get("texture-swatch", sig, || {
             let img = match &tx.pattern {
                 Pattern::Procedural { style, size, seed } => paint::procedural::pattern(*style, (*size).clamp(4, 1024), *seed),
-                Pattern::Tile(g) if g.is_valid() => paint::tile::PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
-                Pattern::Tile(_) => paint::tile::PatternImage { width: 1, height: 1, data: vec![0.5] },
+                p => match p.bitmap() {
+                    Some(g) if g.is_valid() => paint::tile::PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
+                    _ => paint::tile::PatternImage { width: 1, height: 1, data: vec![0.5] },
+                },
             };
             let (br, ct) = (tx.brightness.clamp(-1.0, 1.0), tx.contrast.clamp(-1.0, 1.0));
             let px: Vec<u8> = (0..n * n)
@@ -427,7 +423,7 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
         ui.vertical(|ui| {
             let mut style = match &tx.pattern {
                 Pattern::Procedural { style, .. } => Some(*style),
-                Pattern::Tile(_) => None,
+                Pattern::Tile(_) | Pattern::Stored(_) => None,
             };
             let mut opts: Vec<(Option<PatternStyle>, &str)> = PATTERNS.iter().map(|(s, l)| (Some(*s), *l)).collect();
             if style.is_none() {
@@ -438,7 +434,7 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
             {
                 let size = match &tx.pattern {
                     Pattern::Procedural { size, .. } => *size,
-                    Pattern::Tile(_) => 128,
+                    Pattern::Tile(_) | Pattern::Stored(_) => 128,
                 };
                 tx.pattern = Pattern::Procedural { style: s, size, seed: 1 };
             }
@@ -488,8 +484,9 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
         widgets::checkbox(ui, &mut d.flip, tl!("Flip"));
     });
     ui.add_space(4.0);
-    let (tip, size, hardness) = (d.tip.clone(), d.size, d.hardness);
-    if let Some(p) = tip_grid(ui, "brush-dual-grid", presets, |p| same_tip(&tip, size, hardness, p)).and_then(|i| presets.get(i)) {
+    // The dual tip is a sub-setting, not a selection: no persistent highlight (a look-alike match
+    // would highlight an arbitrary duplicate).
+    if let Some(p) = tip_grid(ui, "brush-dual-grid", presets, None).and_then(|i| presets.get(i)) {
         let (pt, ps, ph, pa, pr, psp) = preset_tip(p);
         d.tip = pt.clone();
         d.size = ps;
@@ -498,10 +495,7 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
         d.roundness = pr;
         d.spacing = psp;
     }
-    let orig = match &d.tip {
-        TipShape::Sampled(g) => Some(g.width.max(g.height) as f32),
-        TipShape::Round => None,
-    };
+    let orig = d.tip.bitmap_size().map(|(w, h)| w.max(h) as f32);
     size_row(ui, tl!("Size"), &mut d.size, 2500.0, orig);
     signed_pct(ui, tl!("Spacing"), &mut d.spacing, 0.01, 10.0);
     pct(ui, tl!("Scatter"), &mut d.scatter, 10.0);
@@ -583,13 +577,17 @@ fn smoothing(ui: &mut egui::Ui, b: &mut BrushSettings) {
 }
 
 /// Controls for section `i` (see [`crate::brush_panel::SECTIONS`]). `presets` feed the tip grids.
-pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset]) {
+/// Returns the name of a preset whose tip was picked in the Brush Tip Shape grid, for
+/// `brush.presets.setCurrent`.
+pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let note = |ui: &mut egui::Ui, s: &str| {
         ui.label(RichText::new(s).color(t.text_faint).font(theme::medium(11.5)));
     };
+    if i == 0 {
+        return tip_shape(ui, b, presets, current);
+    }
     match i {
-        0 => tip_shape(ui, b, presets),
         1 => shape_dynamics(ui, b),
         2 => scattering(ui, b),
         3 => texture(ui, b),
@@ -610,6 +608,7 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
         11 => smoothing(ui, b),
         _ => note(ui, "Keeps the current pattern and scale when you switch to another textured brush preset."),
     }
+    None
 }
 
 #[cfg(test)]
