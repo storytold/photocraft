@@ -674,6 +674,8 @@
 	Pro Medium Gray Theme	专业中灰主题
 	Studio Theme	工作室主题
 	Studio Light Theme	工作室浅色主题
+	Adwaita Light Theme	Adwaita 浅色主题
+	Adwaita Dark Theme	Adwaita 深色主题
 	Classic Theme	经典主题
 	Solarized dark	Solarized 深色
 	Solarized Dark Theme	Solarized 深色主题
@@ -1313,6 +1315,12 @@
 	Rename…	重命名…
 	Resample	重新采样
 	Reset All to Defaults	全部重置为默认值
+	Import Shortcuts…	导入快捷键…
+	Load a keyboard shortcut set saved as .kys	载入保存为 .kys 的键盘快捷键集
+	Imported {n} shortcuts from {file}. Click OK to keep them.	已从 {file} 导入 {n} 个快捷键。点击“确定”保留。
+	{n} commands are not in PhotoCraft.	{n} 个命令在 PhotoCraft 中不存在。
+	Keyboard shortcuts imported	已导入键盘快捷键
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此处正在使用你的键盘快捷键集 {set}：{n} 个快捷键与默认值不同。可在“编辑 › 键盘快捷键”中查看；“全部重置为默认值”可撤销。
 	Reset Section	重置此部分
 	Reset Transform	重置变换
 	Reset to defaults	重置为默认值
@@ -1882,6 +1890,8 @@
 	Standard	标准
 	Studio	工作室
 	Studio light	工作室（浅色）
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita（深色）
 	Subdivisions	细分
 	System	系统
 	Text engine	文字引擎
@@ -2313,6 +2323,19 @@ fontWeight	Italic	斜体
 	Cycle Orientation	循环切换取向
 	Set the overlay options for the Crop tool	设置裁剪工具的叠加选项
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 单击被桌面环境截获了，它用 Alt 拖动来移动窗口。请把桌面的窗口移动键改为 Super，或在 窗口 › 修饰键 中锁定 Alt。
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	拾色器（图层样式颜色）
+	Auto Hide Notifications	自动隐藏通知
+	Notification Duration (seconds)	通知持续时间（秒）
+	Appearance Mode	外观模式
+	Dark Theme	深色主题
+	Light Theme	浅色主题
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	下一个外观模式
+	Sync with system	与系统同步
+	Active	当前使用
 	Color Picker (Solid Color)	拾色器（纯色）
 	Straighten the image by drawing a line on it	通过在图像上画一条线来拉直图像
 	Set additional Crop options	设置其他裁剪选项
@@ -2335,3 +2358,9 @@ fontWeight	Italic	斜体
 	Keep this tab open to retain your brushes.	请保持此标签页打开以保留您的画笔。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	浏览器存储不可用；画笔仅在本次会话中有效。请保持此标签页打开以保留它们。
 	Saving brush presets… Keep this tab open until saving finishes.	正在保存画笔预设… 请保持此标签页打开，直到保存完成。
+	Reflect	反射
+	Glow	发光
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
+	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)

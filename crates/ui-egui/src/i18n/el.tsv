@@ -2799,6 +2799,12 @@
 	Resample	Επαναδειγματοληψία
 	Reselect	Επαναφορά προηγούμενης επιλογής
 	Reset All to Defaults	Επαναφορά όλων στις προεπιλογές
+	Import Shortcuts…	Εισαγωγή συντομεύσεων…
+	Load a keyboard shortcut set saved as .kys	Φόρτωση ενός σετ συντομεύσεων πληκτρολογίου αποθηκευμένου ως .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Εισήχθησαν {n} συντομεύσεις από το {file}. Πατήστε OK για να τις κρατήσετε.
+	{n} commands are not in PhotoCraft.	{n} εντολές δεν υπάρχουν στο PhotoCraft.
+	Keyboard shortcuts imported	Οι συντομεύσεις πληκτρολογίου εισήχθησαν
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Το σετ συντομεύσεων πληκτρολογίου {set} χρησιμοποιείται εδώ: {n} συντομεύσεις διαφέρουν από τις προεπιλογές. Το Επεξεργασία › Συντομεύσεις πληκτρολογίου τις δείχνει· η Επαναφορά όλων στις προεπιλογές το αναιρεί.
 	Reset GPU Backend	Επαναφορά συστήματος απόδοσης GPU
 	Reset Section	Επαναφορά ενότητας
 	Reset Transform	Επαναφορά μετασχηματισμού
@@ -2981,8 +2987,12 @@
 	Studio (Dark)	Studio (σκοτεινό)
 	Studio (Light)	Studio (φωτεινό)
 	Studio Light Theme	Φωτεινό θέμα Studio
+	Adwaita Light Theme	Φωτεινό θέμα Adwaita
+	Adwaita Dark Theme	Σκούρο θέμα Adwaita
 	Studio Theme	Θέμα Studio
 	Studio light	Φωτεινό στούντιο
+	Adwaita	Adwaita
+	Adwaita dark	Σκούρο Adwaita
 	Style	Στυλ
 	Style Options	Επιλογές στυλ
 	Style Options…	Επιλογές στυλ…
@@ -3415,6 +3425,20 @@ fontWeight	Thin	Πολύ λεπτά
 	Cycle Orientation	Εναλλαγή προσανατολισμού
 	Set the overlay options for the Crop tool	Ορισμός επιλογών επικάλυψης για το εργαλείο Περικοπή
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Το Alt-κλικ πήγε στο περιβάλλον εργασίας, που μετακινεί παράθυρα με Alt-σύρσιμο. Ορίστε το πλήκτρο μετακίνησης παραθύρων του σε Super ή κλειδώστε το Alt στο Παράθυρο › Πλήκτρα τροποποίησης.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Επιλογέας χρώματος (χρώμα στυλ επιπέδου)
+
+# Shared text style Color Picker (#2015)
+	Color Picker (Text Color)	Επιλογέας χρώματος (χρώμα κειμένου)
+	Auto Hide Notifications	Αυτόματη απόκρυψη ειδοποιήσεων
+	Notification Duration (seconds)	Διάρκεια ειδοποίησης (δευτερόλεπτα)
+	Appearance Mode	Λειτουργία εμφάνισης
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Επόμενη λειτουργία εμφάνισης
+	Sync with system	Συγχρονισμός με το σύστημα
+	Active	Ενεργό
 	Color Picker (Solid Color)	Επιλογέας χρώματος (συμπαγές χρώμα)
 	Straighten the image by drawing a line on it	Ευθυγράμμιση της εικόνας σχεδιάζοντας μια γραμμή πάνω της
 	Set additional Crop options	Ορισμός πρόσθετων επιλογών περικοπής
@@ -3437,3 +3461,9 @@ fontWeight	Thin	Πολύ λεπτά
 	Keep this tab open to retain your brushes.	Κρατήστε αυτή την καρτέλα ανοιχτή για να διατηρήσετε τα πινέλα σας.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Ο χώρος αποθήκευσης του προγράμματος περιήγησης δεν είναι διαθέσιμος· τα πινέλα ισχύουν μόνο για αυτή την περίοδο λειτουργίας. Κρατήστε αυτή την καρτέλα ανοιχτή για να τα διατηρήσετε.
 	Saving brush presets… Keep this tab open until saving finishes.	Αποθήκευση προεπιλογών πινέλων… Κρατήστε αυτή την καρτέλα ανοιχτή μέχρι να ολοκληρωθεί η αποθήκευση.
+	Reflect	Αντανάκλαση
+	Glow	Λάμψη
+	Negation	Άρνηση
+	XOR	XOR
+	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
+	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)

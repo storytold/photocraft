@@ -674,6 +674,8 @@
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
+	Adwaita Light Theme	Adwaita(ライト)テーマ
+	Adwaita Dark Theme	Adwaita(ダーク)テーマ
 	Classic Theme	クラシックテーマ
 	Solarized dark	Solarized ダーク
 	Solarized Dark Theme	Solarized ダークテーマ
@@ -1309,6 +1311,12 @@
 	Rename…	名前を変更…
 	Resample	再サンプル
 	Reset All to Defaults	すべて既定に戻す
+	Import Shortcuts…	ショートカットを読み込む…
+	Load a keyboard shortcut set saved as .kys	.kys として保存されたキーボードショートカットセットを読み込みます
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file} から {n} 個のショートカットを読み込みました。OK をクリックすると保持されます。
+	{n} commands are not in PhotoCraft.	{n} 個のコマンドは PhotoCraft にありません。
+	Keyboard shortcuts imported	キーボードショートカットを読み込みました
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	キーボードショートカットセット {set} をここで使用しています。{n} 個のショートカットが既定と異なります。編集 › キーボードショートカットで確認でき、「すべて既定に戻す」で元に戻せます。
 	Reset Section	セクションをリセット
 	Reset Transform	変形をリセット
 	Reset to defaults	既定に戻す
@@ -1878,6 +1886,8 @@
 	Standard	標準
 	Studio	スタジオ
 	Studio light	スタジオ(ライト)
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita(ダーク)
 	Subdivisions	分割数
 	System	システム
 	Text engine	テキストエンジン
@@ -3329,6 +3339,19 @@ fontWeight	Italic	斜体
 	Cycle Orientation	方向を切り替え
 	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	カラーピッカー（レイヤースタイルの色）
+	Auto Hide Notifications	通知を自動的に隠す
+	Notification Duration (seconds)	通知の表示時間（秒）
+	Appearance Mode	外観モード
+	Dark Theme	ダークテーマ
+	Light Theme	ライトテーマ
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	次の外観モード
+	Sync with system	システムと同期
+	Active	適用中
 	Color Picker (Solid Color)	カラーピッカー（べた塗り）
 	Straighten the image by drawing a line on it	画像上に線を描いて角度を補正
 	Set additional Crop options	切り抜きの追加オプションを設定
@@ -3351,3 +3374,9 @@ fontWeight	Italic	斜体
 	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
 	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。
+	Reflect	反射
+	Glow	グロー
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
+	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)

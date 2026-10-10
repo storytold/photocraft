@@ -678,6 +678,8 @@
 	Pro Medium Gray Theme	專業中灰主題
 	Studio Theme	工作室主題
 	Studio Light Theme	工作室淺色主題
+	Adwaita Light Theme	Adwaita 淺色主題
+	Adwaita Dark Theme	Adwaita 深色主題
 	Classic Theme	經典主題
 	Solarized dark	Solarized 深色
 	Solarized Dark Theme	Solarized 深色主題
@@ -1310,6 +1312,12 @@
 	Rename…	重新命名…
 	Resample	重新取樣
 	Reset All to Defaults	全部重設為預設值
+	Import Shortcuts…	匯入快速鍵…
+	Load a keyboard shortcut set saved as .kys	載入儲存為 .kys 的鍵盤快速鍵集
+	Imported {n} shortcuts from {file}. Click OK to keep them.	已從 {file} 匯入 {n} 個快速鍵。按一下「確定」即可保留。
+	{n} commands are not in PhotoCraft.	{n} 個命令在 PhotoCraft 中不存在。
+	Keyboard shortcuts imported	已匯入鍵盤快速鍵
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此處正在使用你的鍵盤快速鍵集 {set}：{n} 個快速鍵與預設值不同。可在「編輯 › 鍵盤快速鍵」中查看；「全部重設為預設值」可復原。
 	Reset Section	重設區段
 	Reset Transform	重設變形
 	Reset to defaults	重設為預設值
@@ -1875,6 +1883,8 @@
 	Standard	標準
 	Studio	Studio
 	Studio light	Studio 淺色
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita 深色
 	Subdivisions	細分
 	System	系統
 	Text engine	文字引擎
@@ -2282,6 +2292,19 @@ fontWeight	Italic	斜體
 	Cycle Orientation	循環切換方向
 	Set the overlay options for the Crop tool	設定裁切工具的覆蓋選項
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 按一下被桌面環境攔截了，它用 Alt 拖曳來移動視窗。請把桌面的視窗移動鍵改為 Super，或在 視窗 › 輔助鍵 中鎖定 Alt。
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	檢色器（圖層樣式顏色）
+	Auto Hide Notifications	自動隱藏通知
+	Notification Duration (seconds)	通知持續時間（秒）
+	Appearance Mode	外觀模式
+	Dark Theme	深色主題
+	Light Theme	淺色主題
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	下一個外觀模式
+	Sync with system	與系統同步
+	Active	目前使用
 	Color Picker (Solid Color)	檢色器（純色）
 	Straighten the image by drawing a line on it	在影像上繪製一條線以拉直影像
 	Set additional Crop options	設定其他裁切選項
@@ -2304,3 +2327,9 @@ fontWeight	Italic	斜體
 	Keep this tab open to retain your brushes.	請保持此分頁開啟以保留您的筆刷。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	瀏覽器儲存空間無法使用；筆刷僅在本次工作階段有效。請保持此分頁開啟以保留它們。
 	Saving brush presets… Keep this tab open until saving finishes.	正在儲存筆刷預設集… 請保持此分頁開啟，直到儲存完成。
+	Reflect	反射
+	Glow	光暈
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	加深顏色 (Paint.NET)
+	Color Dodge (Paint.NET)	加亮顏色 (Paint.NET)

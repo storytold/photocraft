@@ -1666,6 +1666,12 @@ pub fn mode_index(m: BlendMode) -> i32 {
         BlendMode::Saturation => 25,
         BlendMode::Color => 26,
         BlendMode::Luminosity => 27,
+        BlendMode::Reflect => 28,
+        BlendMode::Glow => 29,
+        BlendMode::Negation => 30,
+        BlendMode::Xor => 31,
+        BlendMode::PaintNetColorBurn => 32,
+        BlendMode::PaintNetColorDodge => 33,
     }
 }
 
