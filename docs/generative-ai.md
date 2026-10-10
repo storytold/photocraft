@@ -46,7 +46,12 @@ variation (so three requests by default, each billed to the user's key):
 
 Gemini takes no mask parameter, so the mask is a second image and the instruction says what it
 means. PhotoCraft keeps only the masked pixels of the result, so anything the model changes
-outside the selection is discarded. Gemini returns JPEG (its only output format) and its results carry Google's SynthID watermark.
+outside the selection is discarded. The model redraws the whole image and its colours drift a
+little, differently each time, which would leave a seam at the selection's edge; the area outside
+the selection should come back unchanged, so comparing it with the original measures the drift.
+A per-channel gain and offset fitted there, then the remaining difference near the edge spread
+smoothly inward, bring the fill back in line (`match_surroundings`). A result that doesn't
+resemble the original around the selection (over 25% mean difference) is left as it came. Gemini returns JPEG (its only output format) and its results carry Google's SynthID watermark.
 
 ## Keys and privacy
 

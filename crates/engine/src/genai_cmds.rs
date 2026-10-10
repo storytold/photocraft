@@ -138,6 +138,8 @@ fn scaled(s: &Surface, area: Rect, w: u32, h: u32) -> Surface {
     photocraft_algo::resample::resize_surface(&local, sx, sy, photocraft_algo::resample::Resample::Bicubic)
 }
 
+/// Largest mean difference (0..1) around the selection still treated as colour drift.
+const MAX_DRIFT: f64 = 0.25;
 /// Grey the selected part of the image is cleared to before it is sent.
 const HOLE: f32 = 128.0;
 
@@ -150,25 +152,127 @@ fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
 /// cleared to flat grey, and an opaque black-and-white PNG of the selection (white = fill). The
 /// provider never sees what is being replaced, as Photoshop's fill doesn't, so it can't paint it
 /// back: an empty prompt removes the selected object and continues what lies around it.
-fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) -> Result<(Vec<u8>, Vec<u8>)> {
+fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) -> Result<(Vec<u8>, Vec<u8>, Reference)> {
     let r = Rect::from_xywh(0, 0, w, h);
     let rgba = image.convert(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true)).to_interleaved(r);
     let coverage = scaled(sel, area, w, h).read_region(r);
     let mut cleared = Vec::with_capacity(rgba.len());
     let mut mask = Vec::with_capacity(rgba.len());
-    for (px, v) in rgba.as_chunks::<4>().0.iter().zip(coverage) {
+    let mut original = Vec::with_capacity(coverage.len() * 3);
+    for (px, &v) in rgba.as_chunks::<4>().0.iter().zip(&coverage) {
         let m = v.clamp(0.0, 1.0);
         let a = f32::from(px[3]) / 255.0;
         // Composite over the hole grey too, so transparent areas read as cleared, not black.
         for &c in &px[..3] {
             let c = f32::from(c) * a + HOLE * (1.0 - a);
+            original.push(c / 255.0);
             cleared.push((c * (1.0 - m) + HOLE * m).round() as u8);
         }
         cleared.push(255);
         let g = (m * 255.0).round() as u8;
         mask.extend_from_slice(&[g, g, g, 255]);
     }
-    Ok((encode_rgba(cleared, w, h)?, encode_rgba(mask, w, h)?))
+    let reference = Reference { original, coverage, w, h };
+    Ok((encode_rgba(cleared, w, h)?, encode_rgba(mask, w, h)?, reference))
+}
+
+/// What a result is matched against: the area as it was before the hole was cleared (RGB, 0..1)
+/// and the selection's coverage, both at the request size.
+pub(crate) struct Reference {
+    original: Vec<f32>,
+    coverage: Vec<f32>,
+    w: u32,
+    h: u32,
+}
+
+/// Box blur of a `w`×`h` plane with radius `r`, edges clamped.
+fn box_blur(v: &mut [f32], w: usize, h: usize, r: usize) {
+    let pass = |line: &mut [f32], tmp: &mut Vec<f32>| {
+        let n = line.len();
+        tmp.clear();
+        tmp.extend_from_slice(line);
+        let mut sum: f32 = (0..=r.min(n - 1)).map(|i| tmp[i]).sum();
+        let mut count = r.min(n - 1) + 1;
+        for i in 0..n {
+            line[i] = sum / count as f32;
+            if i + r + 1 < n {
+                sum += tmp[i + r + 1];
+                count += 1;
+            }
+            if i >= r {
+                sum -= tmp[i - r];
+                count -= 1;
+            }
+        }
+    };
+    let mut tmp = Vec::new();
+    let mut col = vec![0.0; h];
+    for row in v.chunks_mut(w) {
+        pass(row, &mut tmp);
+    }
+    for x in 0..w {
+        for y in 0..h {
+            col[y] = v[y * w + x];
+        }
+        pass(&mut col, &mut tmp);
+        for y in 0..h {
+            v[y * w + x] = col[y];
+        }
+    }
+}
+
+/// Take out the colour drift a model adds when it redraws the whole image, so the fill meets the
+/// photo around it without a seam. Everything outside the selection should have come back
+/// unchanged; comparing it with the original measures the drift. First a per-channel gain and
+/// offset fitted over all of it, then what is left near the edge, spread smoothly inward
+/// (normalized convolution), as Photoshop's fills blend into their surroundings.
+/// `px` is RGBA (0..1) at the reference size.
+fn match_surroundings(px: &mut [f32], r: &Reference) {
+    let (w, h) = (r.w as usize, r.h as usize);
+    let outside: Vec<f32> = r.coverage.iter().map(|c| 1.0 - c.clamp(0.0, 1.0)).collect();
+    let weight: f64 = outside.iter().map(|&o| f64::from(o)).sum();
+    if weight < 16.0 || px.len() != w * h * 4 {
+        return;
+    }
+    // Drift is a few percent. A result that doesn't resemble the original around the selection
+    // (reframed, restyled) is left alone rather than forced onto it.
+    let diff: f64 = (0..w * h).map(|i| f64::from(outside[i]) * (0..3).map(|c| f64::from((px[i * 4 + c] - r.original[i * 3 + c]).abs())).sum::<f64>()).sum();
+    if diff / (weight * 3.0) > MAX_DRIFT {
+        return;
+    }
+    let radius = (w.max(h) / 16).max(2);
+    for c in 0..3 {
+        let (mut sx, mut sy, mut sxx, mut sxy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for i in 0..w * h {
+            let (o, x, y) = (f64::from(outside[i]), f64::from(px[i * 4 + c]), f64::from(r.original[i * 3 + c]));
+            sx += o * x;
+            sy += o * y;
+            sxx += o * x * x;
+            sxy += o * x * y;
+        }
+        let (mx, my) = (sx / weight, sy / weight);
+        let var = sxx / weight - mx * mx;
+        let gain = if var > 1e-5 { ((sxy / weight - mx * my) / var).clamp(0.5, 2.0) } else { 1.0 };
+        let (gain, offset) = (gain as f32, (my - gain * mx) as f32);
+        let mut num = vec![0.0f32; w * h];
+        for i in 0..w * h {
+            let v = &mut px[i * 4 + c];
+            *v = *v * gain + offset;
+            num[i] = outside[i] * (r.original[i * 3 + c] - *v);
+        }
+        let mut den = outside.clone();
+        for _ in 0..3 {
+            box_blur(&mut num, w, h, radius);
+            box_blur(&mut den, w, h, radius);
+        }
+        for i in 0..w * h {
+            let v = &mut px[i * 4 + c];
+            if r.coverage[i] > 0.0 && den[i] > 1e-4 {
+                *v += num[i] / den[i];
+            }
+            *v = v.clamp(0.0, 1.0);
+        }
+    }
 }
 
 /// Decode a provider's PNG or JPEG into 8-bit sRGB, with its size.
@@ -211,6 +315,7 @@ pub(crate) struct Source {
     prompt: String,
     area: Rect,
     request: EditRequest,
+    reference: Reference,
 }
 
 fn variations_param(p: &Value, key: &str) -> Result<usize> {
@@ -258,10 +363,16 @@ fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request:
     }
 }
 
-/// A provider's image scaled into `area`, in document coordinates.
-fn place(bytes: &[u8], area: Rect) -> Result<Surface> {
+/// A provider's image, colour-matched to the original around the selection, scaled into `area`
+/// in document coordinates.
+fn place(bytes: &[u8], area: Rect, reference: &Reference) -> Result<Surface> {
     let (got, full) = decode(bytes)?;
-    let fitted = scaled(&got, full, area.width(), area.height());
+    let r = Rect::from_xywh(0, 0, reference.w, reference.h);
+    let mut at_request = scaled(&got, full, reference.w, reference.h);
+    let mut px = at_request.read_region(r);
+    match_surroundings(&mut px, reference);
+    at_request.write_region(r, &px);
+    let fitted = scaled(&at_request, r, area.width(), area.height());
     let mut placed = Surface::new(fitted.format());
     placed.write_region(area, &fitted.read_region(Rect::from_xywh(0, 0, area.width(), area.height())));
     Ok(placed)
@@ -299,13 +410,13 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.progress(0.05, "Preparing image");
-            let (image, mask) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h)?;
+            let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h)?;
             ctx.check()?;
             let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)) };
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
-            let placed = results.iter().map(|b| place(b, area)).collect::<Result<Vec<_>>>()?;
-            let source = Source { prompt: request.prompt.clone(), area, request };
+            let placed = results.iter().map(|b| place(b, area, &reference)).collect::<Result<Vec<_>>>()?;
+            let source = Source { prompt: request.prompt.clone(), area, request, reference };
             Ok((placed, sel, source))
         },
         move |s, (placed, sel, source)| {
@@ -401,7 +512,7 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
         move |ctx| {
             let results = request_all(ctx, provider.as_ref(), &source.request, count)?;
             ctx.progress(0.9, "Placing the results");
-            results.iter().map(|b| place(b, source.area)).collect::<Result<Vec<_>>>()
+            results.iter().map(|b| place(b, source.area, &source.reference)).collect::<Result<Vec<_>>>()
         },
         move |s, placed| {
             let ids = s.edit("Generate More", |doc, _| {

@@ -13,6 +13,8 @@ struct Fake {
     flaky: bool,
     /// How long each call takes.
     delay: std::time::Duration,
+    /// Answer with the image sent, every channel moved by this much (a model's colour drift).
+    echo: Option<i16>,
     calls: AtomicUsize,
     size: Option<(u32, u32)>,
     fail: Option<GenError>,
@@ -28,6 +30,7 @@ impl Fake {
             vary: false,
             flaky: false,
             delay: std::time::Duration::ZERO,
+            echo: None,
             calls: AtomicUsize::new(0),
             size: None,
             fail: None,
@@ -57,6 +60,12 @@ impl ImageProvider for Fake {
         }
         if self.flaky && n % 2 == 1 {
             return Err(GenError::Quota);
+        }
+        if let Some(d) = self.echo {
+            let img = codecs::decode(&r.image).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
+            let px: Vec<u8> = img.data().iter().enumerate().map(|(i, &v)| if i % 4 == 3 { v } else { (i16::from(v) + d).clamp(0, 255) as u8 }).collect();
+            let out = Image::from_u8(img.width(), img.height(), ChannelLayout::Rgba, px).unwrap();
+            return Ok(GeneratedImage { bytes: codecs::encode(&out, Format::Png, &Default::default()).unwrap(), mime: "image/png".into() });
         }
         let color = if self.vary { [self.color[0].wrapping_add(n as u8 * 60), self.color[1], self.color[2]] } else { self.color };
         let (w, h) = self.size.or_else(|| photocraft_genai::png_size(&r.image)).unwrap();
@@ -388,4 +397,40 @@ fn variations_are_requested_at_the_same_time() {
     assert_eq!(r["variations"].as_array().unwrap().len(), 4);
     // One after another would take 1.6 s.
     assert!(start.elapsed() < delay * 2, "{:?}", start.elapsed());
+}
+
+#[test]
+fn a_models_colour_drift_is_taken_out() {
+    // The fake redraws the image 40 levels darker everywhere. Outside the selection that shows
+    // it drifted, so the fill (the grey hole, 128) comes back at 128, not 88.
+    let mut s = session(160, 160);
+    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
+    let fake = Arc::new(Fake { echo: Some(-40), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
+    s.set_image_provider(Some(fake));
+    s.execute(FILL, json!({"variations": 1})).unwrap();
+    for (x, y) in [(80, 80), (52, 52), (108, 108)] {
+        let [r, g, b] = rgb_at(&s, x, y);
+        assert!([r, g, b].iter().all(|&c| c.abs_diff(128) <= 2), "({x},{y}): {r} {g} {b}");
+    }
+}
+
+#[test]
+fn drift_that_varies_across_the_image_leaves_no_seam() {
+    // A flat mid-grey photo; the model's result drifts from -0.1 on the left to +0.1 on the right.
+    let (w, h) = (100u32, 80u32);
+    let n = (w * h) as usize;
+    let inside = |i: usize| {
+        let (x, y) = (i % w as usize, i / w as usize);
+        (30..70).contains(&x) && (20..60).contains(&y)
+    };
+    let reference = Reference { original: vec![0.5; n * 3], coverage: (0..n).map(|i| if inside(i) { 1.0 } else { 0.0 }).collect(), w, h };
+    let mut px: Vec<f32> = (0..n)
+        .flat_map(|i| {
+            let d = 0.2 * (i % w as usize) as f32 / w as f32 - 0.1;
+            [0.5 + d, 0.5 + d, 0.5 + d, 1.0]
+        })
+        .collect();
+    match_surroundings(&mut px, &reference);
+    let worst = (0..n).filter(|&i| inside(i)).map(|i| (px[i * 4] - 0.5).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 0.02, "worst {worst}");
 }
