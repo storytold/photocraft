@@ -55,7 +55,7 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
-choice!(Theme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark" } default ProMedium);
+choice!(Theme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark" } default ProMedium);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
@@ -830,25 +830,21 @@ pub const SECTIONS: [(&str, &str); 18] = [
 pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
     "general.beepWhenDone",
-    "general.exportClipboard",
     "general.resizeImageDuringPlace",
     "general.alwaysCreateSmartObjectsWhenPlacing",
     "general.animatedZoom",
     "general.zoomResizesWindows",
-    "interface.showChannelsInColor",
     "interface.dynamicColorSliders",
     "workspace.autoCollapseIconPanels",
     "workspace.autoShowHiddenPanels",
     "workspace.openDocumentsAsTabs",
     "workspace.enableFloatingDocumentWindowDocking",
-    "workspace.largeTabs",
     "workspace.enableNarrowOptionsBar",
     "tools.enableFlickPanning",
     "tools.varyRoundBrushHardnessOnHud",
     "tools.showTransformationValues",
     "tools.doubleClickLayerMaskLaunchesSelectAndMask",
     "fileHandling.imagePreviews",
-    "fileHandling.lowercaseExtension",
     "fileHandling.saveInBackground",
     "fileHandling.ignoreExifProfileTag",
     "fileHandling.maximizePsdCompatibility",
@@ -861,17 +857,14 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "unitsAndRulers.columnWidth",
     "unitsAndRulers.gutter",
     "unitsAndRulers.printResolution",
-    "unitsAndRulers.screenResolution",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "plugIns.generatorEnabled",
     "type.smartQuotes",
     "type.missingGlyphProtection",
     "type.showFontNamesInEnglish",
-    "type.useEscToCommit",
     "type.textEngine",
     "type.fontPreview",
-    "type.fillNewTypeLayersWithPlaceholder",
     "type.recentFonts",
     "enhancedControls.scrubbySliderAcceleration",
     "enhancedControls.touchGestures",
@@ -1410,6 +1403,8 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, e));
         }
     }
+    // `colorSettings.blendTextGamma` lives in the compositor too, as `edit.colorSettings` sets it.
+    photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
     s.apply_prefs();
     let view = s.prefs_view();
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
@@ -1439,6 +1434,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.prefs.edit(|_| ());
+    photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
     s.apply_prefs();
     if path.is_some_and(|path| keyed(path).is_some()) {
         // The removed override is absent, so reading its old path would report an error.
@@ -1585,7 +1581,10 @@ macro_rules! spec {
 
 macro_rules! section {
     ($id:literal, $label:literal) => {
-        CommandSpec { id: $id, label: $label, menu: &["Edit", "Preferences"], shortcut: None, params: r##"{}"##, enabled: always, run: |s, _| preferences_section(s, &json!({"__section": section_of($id)})), journal: false }
+        section!($id, $label, None)
+    };
+    ($id:literal, $label:literal, $shortcut:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &["Edit", "Preferences"], shortcut: $shortcut, params: r##"{}"##, enabled: always, run: |s, _| preferences_section(s, &json!({"__section": section_of($id)})), journal: false }
     };
 }
 
@@ -1615,7 +1614,8 @@ pub fn specs() -> Vec<CommandSpec> {
             false
         ),
         spec!("prefs.reset", "Reset Preferences", [], None, r##"{"path":"section|section.key"?=everything}"##, prefs_reset, false),
-        section!("edit.preferences.general", "General…"),
+        // Photoshop: ⌘K opens Preferences › General (⌘, is Layer › Hide Layers).
+        section!("edit.preferences.general", "General…", Some("Cmd+K")),
         section!("edit.preferences.interface", "Interface…"),
         section!("edit.preferences.workspace", "Workspace…"),
         section!("edit.preferences.tools", "Tools…"),

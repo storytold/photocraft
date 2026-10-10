@@ -48,6 +48,7 @@ const F_STROKE_OUT: u32 = 1024u; // effect paint: outside stroke band
 const F_FIRST: u32 = 2048u;      // outside strokes: nothing accumulated yet
 const F_CHANNELS: u32 = 4096u;   // lerp: per-channel weights in p0 (channel restrictions)
 const F_LAB: u32 = 65536u;      // Lab document: Normal mixes in CIELAB
+const F_HDR: u32 = 262144u;     // 32-bit float document: Add / Divide don't clip at 1
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
@@ -152,7 +153,13 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
     return min(cb / (2.0 * (1.0 - cs)), 1.0);
 }
 
+// f32::MAX exactly. The decimal 3.40282347e38 is just above it: naga rounds it down, but browsers'
+// WebGPU compiler rejects it, which left the web app without a GPU compositor.
+const F32_MAX: f32 = 0x1.fffffep+127f;
+
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
+    // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
+    let hi = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
     switch mode {
         case 3: { return min(cb, cs); }                         // Darken
         case 4: { return cb * cs; }                             // Multiply
@@ -161,7 +168,7 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
         case 8: { return max(cb, cs); }                         // Lighten
         case 9: { return cb + cs - cb * cs; }                   // Screen
         case 10: { return color_dodge(cb, cs); }                // ColorDodge
-        case 11: { return min(cb + cs, 1.0); }                  // LinearDodge
+        case 11: { return min(cb + cs, hi); }                   // LinearDodge
         case 13: { return hard_light(cs, cb); }                 // Overlay
         case 14: { return soft_light_ps(cb, cs); }              // SoftLight
         case 15: { return hard_light(cb, cs); }                 // HardLight
@@ -179,7 +186,7 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
         case 22: { return max(cb - cs, 0.0); }                  // Subtract
         case 23: {                                              // Divide
             if (cs <= 0.0) { return select(1.0, 0.0, cb <= 0.0); }
-            return min(cb / cs, 1.0);
+            return min(cb / cs, hi);
         }
         default: { return cs; }                                 // Normal, Dissolve, PassThrough
     }

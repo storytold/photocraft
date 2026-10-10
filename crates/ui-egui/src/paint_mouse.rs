@@ -34,6 +34,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
         None => BrushSettings { smoothing: first_smoothing(), ..current },
     };
+    // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
+    // that preset with this tool's brush.
+    app.session.tools.current_preset = None;
     app.ui.brush_tool = tool;
 }
 
@@ -155,7 +158,9 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
-        let picks = egui::Frame::popup(ui.style()).show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, list)).inner;
+        let picks = egui::Frame::popup(ui.style())
+            .show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list))
+            .inner;
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
         let closes = picks.iter().any(crate::brush_picker::Pick::closes);
         crate::brush_picker::apply(app, ui.ctx(), picks);
@@ -273,9 +278,12 @@ mod tests {
         let strokes = strokes(&h);
         assert_eq!(strokes.len(), 2, "a Shift-click commits one connected stroke");
         let points = strokes[1]["points"].as_array().unwrap();
-        assert_eq!(points.len(), 2, "a click has the previous endpoint and clicked endpoint");
+        // The previous endpoint, then the clicked one. While the button is held, smoothing that is
+        // still catching up repeats the clicked point with later times.
         assert_eq!(points[0][0], previous[0]);
         assert_eq!(points[0][1], previous[1]);
+        let clicked = &points[1];
+        assert!(points[1..].iter().all(|p| p[0] == clicked[0] && p[1] == clicked[1]), "{points:?}");
         assert!(alpha_at(&h, end + vec2(60.0, 40.0)) > 0.9, "the segment between the strokes is painted");
     }
 
@@ -423,7 +431,8 @@ mod tests {
         assert_eq!(h.state().ui.brush_picker_list.view, crate::brush_panel::BrushesView::List);
         assert!(h.state().ui.brush_picker.is_some());
         // A rename left open goes with the picker.
-        h.state_mut().ui.brush_picker_list.renaming = Some(crate::brush_panel::Renaming { group: false, name: "Inky".into(), text: String::new() });
+        h.state_mut().ui.brush_picker_list.renaming =
+            Some(crate::brush_panel::Renaming { group: false, name: "Inky".into(), folder: Vec::new(), text: String::new() });
         h.run_steps(2);
         let far = c - vec2(300.0, 200.0);
         h.event(egui::Event::PointerMoved(far));

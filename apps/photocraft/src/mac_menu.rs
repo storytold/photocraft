@@ -1,5 +1,5 @@
-//! The macOS menu bar, through muda (Tauri's menu crate: AppKit menus behind a safe API, no GTK on
-//! macOS). The menus themselves, their Mac layout and how their keys reach PhotoCraft are in
+//! The macOS menu bar, through muda (a standalone native menu crate, not Tauri: no webview, just
+//! AppKit menus behind a safe API, no GTK on macOS). The menus themselves, their Mac layout and how their keys reach PhotoCraft are in
 //! `photocraft_ui_egui::native_menu`; this file only builds and updates the `NSMenu`s.
 //!
 //! - Item ids are command ids; a command in two menus (Keyboard Shortcuts is in Edit and Window)

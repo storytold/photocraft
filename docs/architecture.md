@@ -97,8 +97,9 @@ photocraft/
 │  │  ── I/O ──
 │  ├─ psd/                     photocraft-psd       PSD/PSB read + write; its OWN format-level model; depends on nothing in this workspace
 │  ├─ adobe-assets/            photocraft-adobe-assets  .abr .asl .aco/.ase .grd .pat .csh .atn .cube/.3dl, ACR .xmp presets (standalone, like psd)
-│  ├─ codecs/                  photocraft-codecs    png/jpeg/tiff/webp/gif/bmp/avif decode/encode, heif/heic decode (feature `heif`)
+│  ├─ codecs/                  photocraft-codecs    flat raster decode/encode at format-supported depths; AVIF encode only (feature `avif`), HEIF/HEIC decode only (feature `heif`); no JPEG XL
 │  ├─ heif/                    photocraft-heif      optional HEIF/HEIC decoder (heic-rs, pure Rust); used only by codecs behind its `heif` feature (standalone)
+│  ├─ affinity/                photocraft-affinity  bounded native Affinity reader: archive, object stream, layers, vectors, text, pixels (standalone; read only)
 │  ├─ raw/                     photocraft-raw       clean-room camera RAW decode (DNG, CR2, TIFF/EP) + develop pipeline (standalone, like psd)
 │  ├─ format/                  photocraft-format    native document format (.pcraft bundle): manifest + content-addressed tiles
 │  ├─ io/                      photocraft-io        import/export orchestration; doc ⇄ PSD mapping; PDF/SVG import (features)
@@ -188,7 +189,7 @@ Each command registers the following:
 - `kind`: Instant / Dialog / Interactive (hands control to a tool, e.g. Free Transform).
 
 **Consumers:**
-- The GUI builds the menu bar, the ⌘K palette and the shortcut editor from it.
+- The GUI builds the menu bar, the ⌘F palette and the shortcut editor from it.
 - `automation` exposes the registry as MCP tools.
 - `photocraft-cli` exposes `photocraft-cli run in.psd --cmd filter.blur.gaussianBlur --params '{"radius":4}' --out out.png`.
 - Action recording is simply `Vec<CommandInvocation>`.
@@ -393,7 +394,7 @@ psd/src/
 | Area | Contents (first pass) | GPU kernel? |
 |---|---|---|
 | Adjustments | levels, curves, brightness/contrast, exposure, vibrance, hue/sat, color balance, B&W, photo filter, channel mixer, gradient map, selective color, invert/posterize/threshold, 3D LUT | yes (LUT + small kernels) |
-| Filters | gaussian/box/motion/radial/surface/lens blur, unsharp/smart sharpen, high pass, noise add/reduce/median/dust, distort family (twirl, wave, polar, spherize, displace), stylize, render (clouds, lens flare), pixelate | many |
+| Filters | gaussian/box/motion/radial/surface/lens blur, unsharp/smart sharpen, high pass, noise add/reduce/median/dust, distort family (twirl, wave, polar, spherize, displace), stylize, render (clouds, lens flare), pixelate, color to alpha | many |
 | Selection | marquee/lasso geometry → mask, magic wand (flood fill tolerance), color range, quick select (graph cut / superpixels), feather, grow/shrink, refine edge | some |
 | Inpaint/heal | spot heal, healing brush (Poisson), content-aware fill (PatchMatch + multiscale EM) | later |
 | Warp | free transform (affine/perspective/warp mesh), liquify, puppet (ARAP), lens correction, resampling (Lanczos/bicubic) | yes |

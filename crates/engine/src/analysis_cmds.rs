@@ -172,7 +172,7 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 }
 
 /// Run several commands as one history step labelled `label`.
-fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
+pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
     let r = f(s);

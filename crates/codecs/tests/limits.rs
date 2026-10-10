@@ -258,6 +258,43 @@ fn png_duplicate_xmp_chunks_each_consume_budget() {
 }
 
 #[test]
+fn png_xmp_in_all_text_chunk_types_is_preserved() {
+    const XMP: &str = "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>";
+    for ty in [b"tEXt", b"zTXt", b"iTXt"] {
+        for after_idat in [false, true] {
+            let chunks = [png_text(ty, b"XML:com.adobe.xmp", XMP.as_bytes())];
+            let bytes = if after_idat { png_with_text(&[], &chunks) } else { png_with_text(&chunks, &[]) };
+            let image = png_text_decode(&bytes, PNG_TEXT_BUDGET).unwrap();
+            assert_eq!(image.meta.xmp.as_deref(), Some(XMP), "{ty:?}, after IDAT: {after_idat}");
+            assert!(image.meta.text.is_empty(), "XMP must not also be retained as ordinary text");
+            let saved = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+            assert_eq!(decode(&saved).unwrap().meta.xmp, image.meta.xmp);
+        }
+    }
+}
+
+#[test]
+fn png_mixed_xmp_chunk_types_use_last_packet_and_share_budget() {
+    for first_ty in [b"tEXt", b"zTXt", b"iTXt"] {
+        for last_ty in [b"tEXt", b"zTXt", b"iTXt"] {
+            let first = png_text(first_ty, b"XML:com.adobe.xmp", b"first");
+            let last = png_text(last_ty, b"XML:com.adobe.xmp", b"last");
+            let bytes = png_with_text(&[first], &[last]);
+            let budget = 2 * b"XML:com.adobe.xmp".len() + b"first".len() + b"last".len();
+            // Pixel decoding needs a larger limit, so check the shared budget with larger packets.
+            let image = png_text_decode(&bytes, PNG_TEXT_BUDGET).unwrap();
+            assert_eq!(image.meta.xmp.as_deref(), Some("last"));
+            assert!(image.meta.text.is_empty());
+            let first = png_text(first_ty, b"XML:com.adobe.xmp", &vec![b'A'; PNG_TEXT_BUDGET - budget]);
+            let last = png_text(last_ty, b"XML:com.adobe.xmp", b"last");
+            let bytes = png_with_text(&[first], &[last]);
+            assert!(png_text_decode(&bytes, PNG_TEXT_BUDGET - b"first".len()).is_ok());
+            assert!(is_limit(png_text_decode(&bytes, PNG_TEXT_BUDGET - b"first".len() - 1)));
+        }
+    }
+}
+
+#[test]
 fn png_corrupt_text_is_still_skipped() {
     let valid = zlib(b"discard");
     let mut bad_header = valid.clone();

@@ -125,8 +125,8 @@ impl Plugin {
         let ctx = BandCtx { surface, extent, canvas, selection, fmt, ov, params: Value::Object(resolved) };
         let run = |b: &Rect| {
             let r = self.run_band(&ctx, *b, &deadline).map(|data| encode_band(surface, *b, &data));
-            if r.is_err() {
-                deadline.abort();
+            if let Err(error) = &r {
+                deadline.abort(error.clone());
             }
             r
         };

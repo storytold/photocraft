@@ -459,14 +459,16 @@ pub fn render_table(outcomes: &[Outcome], with_baseline: bool) -> String {
 }
 
 /// Counts for the scorecard summary: (within budget, over budget or failing, tracked only, not measurable).
+/// Not-run scenarios are in none of them; the scorecard counts those separately.
 pub fn counts(outcomes: &[Outcome]) -> (usize, usize, usize, usize) {
     let mut c = (0, 0, 0, 0);
     for o in outcomes {
         match o.status {
             Status::Pass => c.0 += 1,
             Status::Over | Status::Broken | Status::Regressed | Status::Missing(_) => c.1 += 1,
+            Status::Tracked => c.2 += 1,
             Status::NotMeasurable(_) => c.3 += 1,
-            _ => c.2 += 1,
+            Status::NotRun => {}
         }
     }
     c
@@ -1039,6 +1041,7 @@ not_measurable = "needs a frame harness"
         let out = evaluate(&b, &BTreeMap::new(), None, 15.0, true);
         assert_eq!(out[0].status, Status::NotRun);
         assert!(!out[0].status.fails());
+        assert_eq!(counts(&out), (0, 0, 0, 1), "not-run scenarios are not tracked; the scorecard counts them separately");
     }
 
     #[test]

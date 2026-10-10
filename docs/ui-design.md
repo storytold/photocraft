@@ -10,6 +10,7 @@
 | Classic | Windows-2000 bevels, square corners, navy selection |
 | Adwaita | GNOME's libadwaita light palette on the Studio layout: white header bar and cards on a grey sidebar, GNOME blue accent (#3584e4), 6 / 9 / 12 px radii, grey (not red) close button |
 | Adwaita Dark | The libadwaita dark palette on the same layout |
+| Solarized Dark | Ethan Schoonover's Solarized palette: base03 canvas, base02 panels, base0 text, Solarized blue accent |
 
 Switch themes with the sun icon, Window → Theme, or `ui.set {"theme":"classic"}` over the control channel.
 
@@ -41,7 +42,7 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Feature | Module | Behaviour |
 |---|---|---|
 | Type tool | `type_tool.rs` | Click: point text with the placeholder "Lorem Ipsum" selected. Drag: paragraph box. Inline caret and selection drawn from the text engine layout. ⌥/⌘ word and line navigation, ↩ newline, ⌘↩ or Esc commits, a click outside commits. One history step per session (`coalesce`). A new layer is named after its text; an empty one is deleted. |
-| Free Transform | `transform_tool.rs` | ⌘T. Corners scale proportionally (⇧ frees them); edges scale one axis; ⌥ scales about the reference point; ⌘-corner distorts; dragging outside rotates (⇧ snaps to 15°); dragging inside moves. Preview = document without the moving pixels + a textured 24×24 mesh. ↩ or a double-click commits via `edit.transform {rect, quad}`. |
+| Free Transform | `transform_tool.rs` | ⌘T. Corners and edges scale proportionally (⇧ frees them: an edge then stretches one axis); ⌥ scales about the reference point; ⌘-corner distorts; dragging outside rotates (⇧ snaps to 15°); dragging inside moves. Preview = document without the moving pixels + a textured 24×24 mesh. ↩ or a double-click commits via `edit.transform {rect, quad}`. |
 | Quick layer pick | `quick_pick.rs` | macOS: ⌘⌥⌃-click with any tool selects the topmost visible layer with pixels under the pointer (`layer.pickAt`) without switching tools; the drag and release are swallowed. Windows/Linux have no third modifier distinct from the ⌃⌥ brush resize, so the gesture is a no-op there (use the Move tool's Auto-Select). A failed pick is a status-bar error. |
 | Layers rows | `panels.rs` | Double-click: on the name renames in place; on the Background makes it a normal layer; on an adjustment or fill thumbnail opens its Properties; on a Smart Object thumbnail opens its contents (Edit Contents); anywhere else on the row opens Layer Style. |
 | Layer masks | `panels.rs` | Clicking the mask thumbnail targets the mask (corner-bracket frame; the tab reads "Layer, Layer Mask/8"). Brush, eraser (paints background colour), gradient and bucket then send `"target": "mask"`. Adjustment and fill layers target their mask automatically. |
@@ -90,6 +91,9 @@ Preferences has **Apply**, **OK** and **Cancel**. Apply saves the edited section
 dialog open; it is disabled when the values match the saved preferences. OK saves and closes.
 Cancel discards only changes made since the last successful Apply. A failed Apply leaves the
 draft open for correction. Settings marked for the next launch still require a restart.
+On Windows and Linux, System Title Bar displays “Applies at next launch.” beneath its checkbox,
+including before editing and after Apply. Saving this preference does not restart the app or
+change the current window's decorations; the next launch reads the saved choice.
 
 ## High DPI and 4K displays
 

@@ -32,6 +32,12 @@ const MAX_RASTER_PIXELS: u64 = 24_000_000;
 const MAX_NODES: usize = 2_000;
 /// Nesting past which a subtree is rasterised instead of walked (bounded recursion).
 const MAX_RECURSION: usize = 200;
+/// Deepest element nesting accepted. The XML parser recurses once per level, so a file nested
+/// a few thousand deep (70 KB of `<g>`) overflows a 2 MB thread stack, an abort no guard can
+/// catch; real drawings stay under a hundred levels.
+pub const MAX_XML_DEPTH: usize = 512;
+/// Largest `.svgz` accepted once inflated (a 1.5 MB gzip can hold 1.5 GB of whitespace).
+pub const MAX_INFLATED_BYTES: u64 = 128 << 20;
 
 /// Does this look like an SVG document (plain XML; `.svgz` is recognised by its extension)?
 pub fn is_svg(bytes: &[u8]) -> bool {
@@ -65,9 +71,8 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
 /// `~/.ssh/...`) into the document. Embedded SVG images get no `<image>` resolution at all
 /// (`usvg` already blanks it for sub-SVGs). The font database (and its one-off scan of the system
 /// fonts) is only loaded when the drawing may contain text.
-fn options(bytes: &[u8]) -> usvg::Options<'static> {
-    // `.svgz` is gzip: it can't be scanned before usvg inflates it, so assume it has text.
-    let has_text = bytes.starts_with(&[0x1f, 0x8b]) || bytes.windows(4).any(|w| w == b"text");
+fn options(xml: &[u8]) -> usvg::Options<'static> {
+    let has_text = xml.windows(4).any(|w| w == b"text");
     usvg::Options {
         resources_dir: None,
         image_href_resolver: usvg::ImageHrefResolver { resolve_data: usvg::ImageHrefResolver::default_data_resolver(), resolve_string: Box::new(|_, _| None) },
@@ -76,9 +81,87 @@ fn options(bytes: &[u8]) -> usvg::Options<'static> {
     }
 }
 
+/// Parses a drawing, `.svgz` included. The XML is inflated and checked here, before the parser
+/// sees it: deeper nesting than [`MAX_XML_DEPTH`] is an error, not a stack overflow.
 fn parse(bytes: &[u8]) -> Result<usvg::Tree, IoError> {
-    let opt = options(bytes);
-    usvg::Tree::from_data(bytes, &opt).map_err(|e| IoError::Svg(e.to_string()))
+    let xml = inflate(bytes)?;
+    if nesting_depth(&xml, MAX_XML_DEPTH) > MAX_XML_DEPTH {
+        return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
+    }
+    let opt = options(&xml);
+    usvg::Tree::from_data(&xml, &opt).map_err(|e| IoError::Svg(e.to_string()))
+}
+
+/// The plain XML of `bytes`: itself, or the inflated content of a gzip `.svgz`, refused past
+/// [`MAX_INFLATED_BYTES`] (a decompression bomb) or when the stream is corrupt.
+fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
+    use std::io::Read;
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Ok(std::borrow::Cow::Borrowed(bytes));
+    }
+    let mut out = Vec::new();
+    let mut reader = flate2::read::MultiGzDecoder::new(bytes).take(MAX_INFLATED_BYTES.saturating_add(1));
+    reader.read_to_end(&mut out).map_err(|e| IoError::Svg(format!("the compressed SVG couldn't be inflated: {e}")))?;
+    if u64::try_from(out.len()).unwrap_or(u64::MAX) > MAX_INFLATED_BYTES {
+        return Err(IoError::Svg(format!("the compressed SVG inflates past {} MB", MAX_INFLATED_BYTES >> 20)));
+    }
+    Ok(std::borrow::Cow::Owned(out))
+}
+
+/// The deepest element nesting in `xml`, stopping as soon as it passes `limit` (the result is
+/// then `limit + 1`). Comments, CDATA sections, processing instructions and the DOCTYPE add
+/// nothing; quoted attribute values may hold `>` or `/>`. Malformed markup is only counted
+/// loosely: the parser rejects it afterwards.
+fn nesting_depth(xml: &[u8], limit: usize) -> usize {
+    let after = |from: usize, pat: &[u8]| -> usize {
+        xml.get(from..).and_then(|s| s.windows(pat.len()).position(|w| w == pat)).map_or(xml.len(), |p| from.saturating_add(p).saturating_add(pat.len()))
+    };
+    // The byte after a tag's closing `>` (outside quotes) and whether the tag ended in `/>`.
+    let tag_end = |from: usize| -> (usize, bool) {
+        let (mut quote, mut last) = (None, b' ');
+        for (k, &b) in xml.iter().enumerate().skip(from) {
+            match quote {
+                Some(q) if b == q => quote = None,
+                Some(_) => {}
+                None if b == b'"' || b == b'\'' => quote = Some(b),
+                None if b == b'>' => return (k.saturating_add(1), last == b'/'),
+                None => {
+                    if !b.is_ascii_whitespace() {
+                        last = b;
+                    }
+                }
+            }
+        }
+        (xml.len(), false)
+    };
+    let (mut depth, mut deepest, mut i) = (0usize, 0usize, 0usize);
+    while let Some(p) = xml.get(i..).and_then(|s| s.iter().position(|&b| b == b'<')) {
+        let at = i.saturating_add(p);
+        let rest = xml.get(at..).unwrap_or_default();
+        i = if rest.starts_with(b"<!--") {
+            after(at.saturating_add(4), b"-->")
+        } else if rest.starts_with(b"<![CDATA[") {
+            after(at.saturating_add(9), b"]]>")
+        } else if rest.starts_with(b"<?") {
+            after(at.saturating_add(2), b"?>")
+        } else if rest.starts_with(b"<!") {
+            tag_end(at.saturating_add(2)).0
+        } else if rest.starts_with(b"</") {
+            depth = depth.saturating_sub(1);
+            tag_end(at.saturating_add(2)).0
+        } else {
+            let (end, self_closing) = tag_end(at.saturating_add(1));
+            if !self_closing {
+                depth = depth.saturating_add(1);
+                deepest = deepest.max(depth);
+                if deepest > limit {
+                    return deepest;
+                }
+            }
+            end
+        };
+    }
+    deepest
 }
 
 /// The document canvas for a drawing: its size in px, scaled down to [`MAX_SIDE`] when needed.
@@ -121,7 +204,7 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     if doc.layers.is_empty() {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { document: doc, warnings: conv.warnings })
+    Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
 }
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at

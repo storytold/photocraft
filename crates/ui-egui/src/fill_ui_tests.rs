@@ -160,3 +160,107 @@ fn menu_opens_the_dialog_and_params_skip_it() {
     assert!(crate::menus::invoke(&mut empty, &ctx, COMMAND, json!({})).is_err());
     assert!(empty.ui.dialogs.is_empty());
 }
+
+/// The open Fill dialog's id and the top Color Picker, if one is open.
+fn fill_and_picker(h: &Harness<'_, PhotocraftApp>) -> (u64, Option<u64>) {
+    let app = h.state();
+    let fill = app.ui.dialogs.iter().find(|d| owns(&d.fields)).map(|d| d.id).expect("the Fill dialog is open");
+    (fill, crate::color_picker_ui::top(app))
+}
+
+fn field(h: &Harness<'_, PhotocraftApp>, id: u64, key: &str) -> Value {
+    h.state().ui.dialogs.iter().find(|d| d.id == id).and_then(|d| d.fields.get(key).cloned()).unwrap_or(Value::Null)
+}
+
+/// Contents › Color… opens PhotoCraft's Color Picker on the dialog's colour (as Photoshop's Fill
+/// does), and its OK sets the Fill colour, not the foreground; Fill then fills with it.
+#[test]
+fn choosing_color_opens_the_color_picker() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    h.state_mut().run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(fill_and_picker(&h).1, None, "no picker before Color… is chosen");
+    // The Contents dropdown shows its choice as the combo box's value.
+    h.get_by_value("Foreground Color").click();
+    h.run_steps(3);
+    h.get_by_label("Color…").click();
+    h.run_steps(4);
+    let (fill, picker) = fill_and_picker(&h);
+    assert_eq!(field(&h, fill, "contents"), json!("color"));
+    let picker = picker.expect("Color… opens the Color Picker");
+    assert_eq!(field(&h, picker, "color"), json!("#ff0000"), "on the dialog's colour (the foreground at first)");
+    assert_eq!(field(&h, picker, "__label"), json!("Color Picker (Fill Color)"));
+    // OK sets the Fill colour; the Fill dialog stays open and the tool colours are untouched.
+    h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#336699"));
+    crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+    h.run_steps(3);
+    assert_eq!(fill_and_picker(&h), (fill, None));
+    assert_eq!(field(&h, fill, "color"), json!("#336699"));
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
+    crate::dialogs::confirm(h.state_mut(), fill).unwrap();
+    let st = h.state().session.active().unwrap();
+    let c = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(5, 5);
+    assert!(close(c, [0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0, 1.0]), "{c:?}");
+}
+
+/// The Fill dialog keeps its colour swatch (Photoshop shows none), and clicking it opens the real
+/// Color Picker, not a small popup. Cancel keeps Contents on Color… and the colour unchanged.
+#[test]
+fn the_color_swatch_opens_the_color_picker() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    {
+        let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        f.insert("contents".into(), json!("color"));
+        f.insert("color".into(), json!("#20a040"));
+    }
+    h.run_steps(3);
+    assert_eq!(fill_and_picker(&h).1, None, "setting the field (automation) opens nothing");
+    h.get_by_label("Fill color").click();
+    h.run_steps(4);
+    let picker = fill_and_picker(&h).1.expect("the swatch opens the Color Picker");
+    assert_eq!(field(&h, picker, "color"), json!("#20a040"));
+    assert!(!egui::Popup::is_any_open(&h.ctx), "no egui colour popup");
+    // Cancel: the Fill dialog is unchanged.
+    h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#000000"));
+    h.state_mut().ui.close_dialog(picker);
+    h.run_steps(3);
+    assert_eq!(fill_and_picker(&h), (id, None));
+    assert_eq!(field(&h, id, "contents"), json!("color"));
+    assert_eq!(field(&h, id, "color"), json!("#20a040"));
+}
+
+#[test]
+fn the_pattern_is_picked_from_its_swatches() {
+    // The Custom Pattern was a dropdown of names; Photoshop shows the pattern itself and opens a grid
+    // of swatches.
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    {
+        let app = h.state_mut();
+        app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+        app.run("edit.definePattern", json!({"name": "Brick", "rect": [0, 0, 8, 8]})).unwrap();
+        app.run("edit.fill", json!({"color": "#2266cc"})).unwrap();
+        app.run("edit.definePattern", json!({"name": "Sky", "rect": [0, 0, 8, 8]})).unwrap();
+    }
+    let ctx = h.ctx.clone();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("pattern"));
+    h.run_steps(3);
+    let pattern = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["pattern"].clone();
+    let ids: Vec<String> = h.state().session.patterns.items.iter().map(|p| p.id.clone()).collect();
+    let sky = ids[h.state().session.patterns.items.iter().position(|p| p.name == "Sky").unwrap()].clone();
+    assert_ne!(pattern(&h), json!(sky), "starts on another pattern");
+    assert!(h.query_by_label("Sky").is_none(), "the grid opens on a click");
+    h.get_by_label("Patterns").click();
+    h.run_steps(3);
+    h.get_by_label("Sky").click();
+    h.run_steps(3);
+    assert_eq!(pattern(&h), json!(sky));
+    assert!(h.query_by_label("Brick").is_none(), "the grid closes after a pick");
+}

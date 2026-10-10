@@ -26,6 +26,7 @@ photocraft-algo = { workspace = true }
 photocraft-psd = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-raw = { workspace = true }
+photocraft-affinity = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
@@ -33,6 +34,8 @@ photocraft-format = { path = "../format" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+# svg.rs inflates `.svgz` itself (with a size cap) so the XML can be checked before it is parsed.
+flate2 = { workspace = true }
 # SVG import (svg.rs): usvg parses, resvg rasterises what the shape model can't hold. Both are
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -42,6 +45,9 @@ resvg = { version = "0.45", default-features = false, features = ["text", "syste
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
 
 [dev-dependencies]
+crc32fast = "1.5"
+photocraft-affinity = { workspace = true, features = ["synth"] }
+flate2 = { workspace = true }
 photocraft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 proptest = { workspace = true }

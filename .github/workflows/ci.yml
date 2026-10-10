@@ -30,14 +30,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Which OSes the test job runs on. main, manual runs and PRs labelled `full-ci` get all three.
-  # Other PRs get Linux, plus macOS and Windows when they touch code whose behaviour differs by
+  # Which OSes the test job runs on. main, manual runs and PRs labelled `full-ci` get Linux and
+  # Windows. Other PRs get Linux, plus Windows when they touch code whose behaviour differs by
   # platform: the app shell, UI, text and fonts, GPU, pen input, build scripts or the lockfile.
+  # macOS is tested only by release.yml.
   platforms:
     name: select platforms
     runs-on: ubuntu-latest
     outputs:
       os: ${{ steps.pick.outputs.os }}
+      web: ${{ steps.pick.outputs.web }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,10 +50,21 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
-          all='["ubuntu-latest","macos-latest","windows-latest"]'
+          # No macOS on PRs or main: the org's 5 macOS slots are kept for release builds, and
+          # release.yml builds and tests macOS (a failing release is fixed and rebuilt).
+          all='["ubuntu-latest","windows-latest"]'
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
             echo "os=$all" >> "$GITHUB_OUTPUT"
+            echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # The browser build (a fat-LTO wasm build) runs only when something it compiles or
+          # packages changed: the web app and its packaging, crate sources and manifests (the web
+          # build compiles nearly every crate), the workspace manifests and this workflow.
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/photocraft-web/|packaging/web/|packaging/env\.sh$|crates/[^/]+/(src/|Cargo\.toml$|build\.rs$)|Cargo\.(toml|lock)$|rust-toolchain(\.toml)?$|\.github/workflows/ci\.yml$)'; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web=false" >> "$GITHUB_OUTPUT"
           fi
           if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
             echo "os=$all" >> "$GITHUB_OUTPUT"
@@ -188,6 +201,50 @@ jobs:
       - name: Check wasm-safe crates
         run: cargo xtask wasm
 
+  web:
+    name: web build and wasm size gate
+    # PRs run it only when web-relevant files change (see `platforms`); main always does.
+    needs: platforms
+    if: needs.platforms.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # Match release.yml so PR results reflect what would actually ship.
+      TRUNK_VERSION: 0.21.14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-web
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin" trunk
+          trunk --version
+      # package.sh runs Trunk's release build, validates relative URLs, checks the 24 MiB
+      # wasm limit and exercises the same packaging step used by release.yml.
+      - name: Build and verify browser release
+        run: packaging/web/package.sh
+      - name: Report wasm size
+        if: success()
+        run: |
+          {
+            echo "### Browser WebAssembly size"
+            echo
+            echo "| File | Bytes | MiB | Limit |"
+            echo "| --- | ---: | ---: | ---: |"
+            for wasm in dist/web/*.wasm; do
+              [ -f "$wasm" ] || continue
+              bytes=$(wc -c < "$wasm" | tr -d ' ')
+              mib=$(awk -v n="$bytes" 'BEGIN { printf "%.2f", n / 1048576 }')
+              echo "| $(basename "$wasm") | $bytes | $mib | 24 MiB |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
   fuzz:
     name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})
     # Placeholder: manual trigger only until a nightly schedule is enabled.
@@ -206,6 +263,8 @@ jobs:
           - { crate: codecs, name: decode_tiff }
           - { crate: codecs, name: decode_exr }
           - { crate: codecs, name: decode_heif }
+          - { crate: affinity, name: preview }
+          - { crate: affinity, name: import_preview, args: "--features io" }
           - { crate: format, name: load }
     steps:
       - uses: actions/checkout@v4
@@ -217,7 +276,7 @@ jobs:
         run: cargo install cargo-fuzz --locked
       - name: Fuzz
         working-directory: crates/${{ matrix.target.crate }}
-        run: cargo fuzz run ${{ matrix.target.name }} -- -max_total_time=${{ inputs.fuzz_seconds }}
+        run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time=${{ inputs.fuzz_seconds }}
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4

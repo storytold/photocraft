@@ -8,14 +8,34 @@ use photocraft_raster::{Surface, from_rgba, to_rgba};
 /// Apply an adjustment destructively to a surface, weighted by an optional selection.
 /// Applies `adj` to a surface (any colour model and depth, via straight RGBA) through the
 /// selection; `mode` is the document's, for the tone transfer (e.g. Exposure in Grayscale).
+/// Works tile by tile in parallel, so a large layer needs one tile's buffers per thread rather
+/// than four full-layer copies, and the result is the same as one pass over the whole region.
 pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) {
+    use rayon::prelude::*;
     let r = s.content_bounds();
     if r.is_empty() {
         return;
     }
-    let out = adjusted(s, r, adj, selection, mode);
-    s.write_region(r, &out);
+    let fmt = s.format();
+    let done: Vec<_> = s
+        .take_tiles(r)
+        .into_par_iter()
+        .flat_map_iter(|(tc, tile)| {
+            // A one-tile surface, so `adjusted` reads and writes this tile only.
+            let mut one = Surface::new(fmt);
+            one.put_tiles([(tc, tile)]);
+            let tr = tc.rect().intersect(&r);
+            let out = adjusted(&one, tr, adj, selection, mode);
+            one.write_region(tr, &out);
+            one.take_tiles(tc.rect())
+        })
+        .collect();
+    s.put_tiles(done);
 }
+
+#[cfg(test)]
+#[path = "pixels_tests.rs"]
+mod tests;
 
 /// Applies `adj` to a layer mask through the selection. Untouched mask pixels count (they read as
 /// the mask's default value), and without a selection the default changes too, since a mask

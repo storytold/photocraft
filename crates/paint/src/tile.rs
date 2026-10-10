@@ -6,7 +6,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A grayscale bitmap, row-major, 1 = full.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrayTile {
     pub width: u32,
     pub height: u32,
@@ -38,6 +38,75 @@ impl GrayTile {
     }
     pub fn is_valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.data.len() == self.width as usize * self.height as usize
+    }
+
+    /// A box-filtered copy whose larger side is at most `max_side` (the whole tile when it is
+    /// already that small), quantised to 8-bit levels so it stores compactly. Thumbnails and the
+    /// Brushes panel draw this instead of a full tip that may be thousands of pixels across.
+    /// Deterministic: the same tile always gives the same preview. An invalid tile gives 1×1.
+    pub fn preview(&self, max_side: u32) -> GrayTile {
+        let q8 = |v: u32| ((v + 128) / 257 * 257) as u16;
+        if !self.is_valid() {
+            return GrayTile { width: 1, height: 1, data: vec![0] };
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        let max = max_side.max(1) as usize;
+        let f = w.max(h).div_ceil(max).max(1);
+        let (nw, nh) = (w.div_ceil(f), h.div_ceil(f));
+        let mut sum = vec![0u64; nw * nh];
+        let mut cnt = vec![0u32; nw * nh];
+        for (y, row) in self.data.chunks_exact(w).enumerate() {
+            let base = (y / f) * nw;
+            for (x, v) in row.iter().enumerate() {
+                if let (Some(s), Some(c)) = (sum.get_mut(base + x / f), cnt.get_mut(base + x / f)) {
+                    *s += u64::from(*v);
+                    *c += 1;
+                }
+            }
+        }
+        let data = sum.iter().zip(&cnt).map(|(s, c)| q8(if *c > 0 { (*s / u64::from(*c)) as u32 } else { 0 })).collect();
+        GrayTile { width: nw as u32, height: nh as u32, data }
+    }
+}
+
+/// Larger side of the previews kept for tips that are loaded on demand ([`StoredTile`]).
+pub const PREVIEW_SIDE: u32 = 96;
+
+/// A tip or texture bitmap kept outside the brush settings by its owner and loaded only when the
+/// brush is used (#1843): the desktop preset store keeps imported tips on disk, so a library of a
+/// thousand big sampled brushes costs a few small previews in memory, not gigabytes of bitmaps.
+///
+/// `preview` is a small copy ([`GrayTile::preview`]) for thumbnails and stroke previews; `full`
+/// is the bitmap once the owner has loaded it (shared with the owner's cache, never serialised).
+/// Brush rendering uses [`StoredTile::bitmap`]: the full bitmap, or the preview when the owner
+/// could not load it, so a missing file degrades the stroke instead of failing it.
+///
+/// Two stored tiles are equal when their key and size are (the key names the content).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredTile {
+    /// The owner's key for the bitmap (the preset store uses the content hash).
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+    pub preview: std::sync::Arc<GrayTile>,
+    #[serde(skip)]
+    pub full: Option<std::sync::Arc<GrayTile>>,
+}
+
+impl StoredTile {
+    /// The full bitmap when loaded, else the preview.
+    pub fn bitmap(&self) -> &GrayTile {
+        self.full.as_deref().unwrap_or(&self.preview)
+    }
+    pub fn is_loaded(&self) -> bool {
+        self.full.is_some()
+    }
+}
+
+impl PartialEq for StoredTile {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.width == other.width && self.height == other.height
     }
 }
 
@@ -248,6 +317,42 @@ mod tests {
         let f: GrayTile = serde_json::from_str(r#"{"width":2,"height":1,"data":[0.0,1.0]}"#).unwrap();
         assert_eq!(f.data, vec![0, 65535]);
         assert!(serde_json::from_str::<GrayTile>(r#"{"width":2,"height":2,"data":[0.0,1.0]}"#).is_err());
+    }
+
+    #[test]
+    fn preview_downscales_deterministically_and_tolerates_bad_tiles() {
+        let t = GrayTile::from_fn(1000, 400, |x, _| if x < 500 { 1.0 } else { 0.0 });
+        let p = t.preview(96);
+        assert!(p.is_valid() && p.width <= 96 && p.height <= 96, "{}×{}", p.width, p.height);
+        assert_eq!(p, t.preview(96));
+        assert!(p.get(0, 0) > 0.99 && p.get(p.width - 1, 0) < 0.01);
+        assert!(p.data.iter().all(|v| v % 257 == 0), "8-bit levels");
+        // Small tiles keep their size; invalid ones never panic.
+        assert_eq!(GrayTile::from_fn(5, 3, |_, _| 0.5).preview(96).width, 5);
+        assert!(GrayTile { width: 4, height: 4, data: vec![1] }.preview(96).is_valid());
+        assert!(GrayTile { width: 0, height: 0, data: vec![] }.preview(0).is_valid());
+    }
+
+    #[test]
+    fn stored_tiles_compare_by_key_and_serialise_loaded_as_sampled() {
+        use crate::brush::{Pattern, TipShape};
+        use std::sync::Arc;
+        let full = GrayTile::from_fn(300, 200, |x, y| ((x + y) % 7) as f32 / 7.0);
+        let r = StoredTile { key: "abc".into(), width: 300, height: 200, preview: Arc::new(full.preview(PREVIEW_SIDE)), full: None };
+        let loaded = StoredTile { full: Some(Arc::new(full.clone())), ..r.clone() };
+        assert_eq!(TipShape::Stored(r.clone()), TipShape::Stored(loaded.clone()));
+        assert_ne!(TipShape::Stored(r.clone()), TipShape::Sampled(full.clone()));
+        assert_eq!(r.bitmap().width, r.preview.width);
+        assert_eq!(loaded.bitmap(), &full);
+        // Unloaded: a small reference that reads back as one.
+        let j = serde_json::to_value(TipShape::Stored(r.clone())).unwrap();
+        assert_eq!(j["stored"]["key"], "abc");
+        assert!(j["stored"].get("full").is_none());
+        assert_eq!(serde_json::from_value::<TipShape>(j).unwrap(), TipShape::Stored(r.clone()));
+        // Loaded: the same JSON as an embedded bitmap.
+        assert_eq!(serde_json::to_value(TipShape::Stored(loaded.clone())).unwrap(), serde_json::to_value(TipShape::Sampled(full.clone())).unwrap());
+        assert_eq!(serde_json::to_value(Pattern::Stored(loaded)).unwrap(), serde_json::to_value(Pattern::Tile(full)).unwrap());
+        assert_eq!(serde_json::to_value(Pattern::Stored(r)).unwrap()["stored"]["width"], 300);
     }
 
     #[test]

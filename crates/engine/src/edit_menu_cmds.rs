@@ -264,6 +264,11 @@ fn purge(s: &mut Session, what: &str) -> Result<Value> {
             freed += fx;
             items.push("effect cache");
         }
+        let masks = photocraft_compose::masks::purge_cache();
+        if masks > 0 {
+            freed = freed.saturating_add(masks);
+            items.push("mask cache");
+        }
     }
     s.edit_state.fade = None;
     let msg = if items.is_empty() { "nothing to purge".to_string() } else { format!("purged {}", items.join(", ")) };
@@ -280,9 +285,9 @@ fn can_purge_histories(s: &Session) -> std::result::Result<(), String> {
     if s.documents().iter().any(|d| d.history.can_undo() || d.history.can_redo()) { Ok(()) } else { Err("no history to purge".into()) }
 }
 fn can_purge_all(s: &Session) -> std::result::Result<(), String> {
-    can_purge_histories(s)
-        .or_else(|_| can_purge_clipboard(s))
-        .or_else(|_| if photocraft_compose::effect_cache_bytes() > 0 { Ok(()) } else { Err("nothing to purge".into()) })
+    can_purge_histories(s).or_else(|_| can_purge_clipboard(s)).or_else(|_| {
+        if photocraft_compose::effect_cache_bytes() > 0 || photocraft_compose::masks::cache_bytes() > 0 { Ok(()) } else { Err("nothing to purge".into()) }
+    })
 }
 
 // ------------------------------------------------------------------ Content-Aware Fill
@@ -888,7 +893,13 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 format: PRESET_FORMAT.into(),
                 version: 1,
                 brushes: if want("brushes") {
-                    s.tools.presets.iter().filter(|b| !b.builtin || bool_or(p, "includeBuiltins", false)).cloned().collect()
+                    let mut out: Vec<photocraft_paint::BrushPreset> =
+                        s.tools.presets.iter().filter(|b| !b.builtin || bool_or(p, "includeBuiltins", false)).cloned().collect();
+                    // The file embeds every bitmap: load the tips the preset store keeps (#1843).
+                    for b in &mut out {
+                        s.load_brush_tips(&mut b.brush).map_err(|e| bad(cmd, format!("brush preset `{}`: {e}", b.name)))?;
+                    }
+                    out
                 } else {
                     Vec::new()
                 },
@@ -908,7 +919,11 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let (mut nb, mut ns) = (0, 0);
             if want("brushes") {
-                for b in file.brushes {
+                for mut b in file.brushes {
+                    // Nested folders as the commands bound them (a hand-edited file can't build an
+                    // absurd tree).
+                    b.folder.retain(|f| !f.trim().is_empty());
+                    b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
                     match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
                         None => s.tools.presets.push(b),

@@ -203,7 +203,7 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             };
             Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)? }
         }
-        "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. }))),
+        "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
@@ -909,6 +909,12 @@ mod tests {
             ("channelMixer", json!({"red": [1, 2, 3]})),
             ("gradientMap", json!({"stops": [[0, "#000"]]})),
             ("gradientMap", json!({"stops": 7})),
+            ("selectiveColor", json!({"method": 5})),
+            ("selectiveColor", json!({"reds": "not-an-array"})),
+            ("selectiveColor", json!({"colors": "reds", "cyan": "50"})),
+            ("colorLookup", json!({"lut": 42})),
+            ("colorLookup", json!({"interpolation": 5})),
+            ("colorLookup", json!({"dither": "yes"})),
             ("nope", json!({})),
             ("levels", json!([1, 2])),
         ] {

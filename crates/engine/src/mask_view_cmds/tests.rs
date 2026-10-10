@@ -135,3 +135,34 @@ fn load_selection_from_a_vector_mask() {
     s.execute("layer.vectorMask.delete", json!({})).unwrap();
     assert!(s.execute("select.loadSelection", json!({"channel": "vectorMask"})).is_err());
 }
+
+/// #1765: `\` (`layer.toggleMaskOverlay`) shows the active layer's mask as a rubylith and hides it
+/// again; without a mask (or a document) it is disabled and errors instead of panicking.
+#[test]
+fn backslash_command_toggles_the_overlay() {
+    let (mut s, masked, bg) = session();
+    let steps = s.active().unwrap().history.entries().len();
+    assert!(s.is_enabled(OVERLAY_ID));
+    assert_eq!(s.execute(OVERLAY_ID, json!({})).unwrap()["mode"], "overlay");
+    assert_eq!(view(&s), json!({"layer": masked, "mode": "overlay"}));
+    assert_eq!(s.execute(OVERLAY_ID, Value::Null).unwrap()["mode"], "off", "again: back to the composite");
+    assert_eq!(view(&s), Value::Null);
+    // From the grayscale view it switches to the overlay.
+    s.execute(ID, json!({"mode": "gray"})).unwrap();
+    assert_eq!(s.execute(OVERLAY_ID, json!({"mode": "gray"})).unwrap()["mode"], "overlay", "`mode` is ignored");
+    s.execute(OVERLAY_ID, json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.history.entries().len(), steps, "not a history step");
+    assert!(!st.is_dirty());
+    // No mask on the active layer, bad params, no document: errors, nothing changes.
+    s.execute("layer.select", json!({"layer": bg})).unwrap();
+    assert!(!s.is_enabled(OVERLAY_ID));
+    assert!(s.execute(OVERLAY_ID, json!({})).is_err());
+    assert!(s.execute(OVERLAY_ID, json!({"layer": bg})).is_err());
+    assert!(s.execute(OVERLAY_ID, json!({"layer": "x"})).is_err());
+    assert!(s.execute(OVERLAY_ID, json!([1])).is_err());
+    assert_eq!(view(&s), Value::Null);
+    let mut empty = Session::new();
+    assert!(!empty.is_enabled(OVERLAY_ID));
+    assert!(empty.execute(OVERLAY_ID, json!({})).is_err());
+}

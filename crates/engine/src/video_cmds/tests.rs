@@ -174,3 +174,32 @@ fn edits_to_a_frame_survive_scrubbing_and_render() {
     let q = flat.pixel(2, 2);
     assert!(q[2] > 0.99 && q[0] < 0.01, "rendered frame 1 is blue: {q:?}");
 }
+
+#[test]
+fn render_writer_progress_and_cancellation_leave_session_unchanged() {
+    let mut s = session();
+    s.execute("timeline.create", json!({"duration": 4, "fps": 4})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    for format in ["png", "gif"] {
+        let mut names = Vec::new();
+        let mut progress = Vec::new();
+        let r = render_video_with(
+            &s,
+            &json!({"format":format}),
+            |name, bytes| {
+                assert!(!bytes.is_empty());
+                names.push(name.to_owned());
+                Ok(())
+            },
+            |done, total| {
+                progress.push((done, total));
+                done < 2
+            },
+        );
+        assert!(r.unwrap_err().to_string().contains("cancelled"));
+        assert!(names.len() < 4);
+        assert_eq!(progress.first(), Some(&(0, 4)));
+        assert_eq!(progress.last(), Some(&(2, 4)));
+        assert_eq!(s.active().unwrap().doc.timeline, before.timeline);
+    }
+}

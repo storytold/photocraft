@@ -45,6 +45,46 @@ pub(crate) fn background_color(p: &Value, fallback: [f32; 4], cmd: &str) -> Resu
     Ok([c[0], c[1], c[2], 1.0])
 }
 
+/// Validate creation before dispatch can commit a floating selection or add a document.
+/// Missing fields (including a null params object) keep the command's documented defaults.
+pub(crate) fn validate_new_params(s: &Session, p: &Value) -> Result<()> {
+    let cmd = "file.new";
+    if p.is_null() {
+        return Ok(());
+    }
+    let fields = p.as_object().ok_or_else(|| bad(cmd, "params must be a JSON object"))?;
+    for (key, value) in fields {
+        let (valid, expected) = match key.as_str() {
+            "width" | "height" | "resolution" => {
+                let max = if key == "resolution" { MAX_RESOLUTION } else { f64::from(MAX_DIMENSION) };
+                (value.as_f64().is_some_and(|n| n.is_finite() && (1.0..=max).contains(&n)), format!("a number within 1..={max}"))
+            }
+            "mode" => (value.as_str().and_then(color_mode).is_some(), "rgb, gray, grayscale, cmyk or lab".into()),
+            "depth" => (value.as_u64().and_then(sample_type).is_some(), "8, 16 or 32".into()),
+            "background" => (
+                value.as_str().is_some_and(|v| {
+                    matches!(v, "white" | "black" | "transparent" | "backgroundColor")
+                        || (v.strip_prefix('#').unwrap_or(v).bytes().all(|b| b.is_ascii_hexdigit()) && crate::commands::parse_hex(v).is_some())
+                }),
+                "white, black, transparent, backgroundColor or a valid hex colour".into(),
+            ),
+            "backgroundColor" => {
+                background_color(p, s.tools.background, cmd)?;
+                continue;
+            }
+            "name" => (value.is_string(), "a string".into()),
+            _ => return Err(bad(cmd, format!("unknown parameter `{key}`"))),
+        };
+        if !valid {
+            return Err(bad(cmd, format!("`{key}` must be {expected}")));
+        }
+    }
+    if p.get("background").and_then(Value::as_str) == Some("backgroundColor") {
+        background_color(p, s.tools.background, cmd)?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSettings {
@@ -96,8 +136,8 @@ impl DocumentSettings {
                 fields.entry(k.clone()).or_insert_with(|| v.clone());
             }
         }
-        // Like file.new, accept pixel counts sent as floats by a UI. Unlike file.new's fallback
-        // for legacy callers, refuse invalid input rather than saving a different configuration.
+        // Like file.new, accept pixel counts sent as floats by a UI, but refuse invalid input
+        // rather than saving a different configuration.
         for key in ["width", "height"] {
             let n = fields
                 .get(key)

@@ -23,6 +23,7 @@ mod artistic_fx;
 mod blur;
 mod blur2;
 pub mod camera_raw;
+pub mod color_to_alpha;
 pub mod content_aware;
 mod denoise;
 mod distort;
@@ -519,6 +520,14 @@ pub enum FilterParams {
         input: HsbModel,
         output: HsbModel,
     },
+    /// Removes `color` (straight sRGB RGBA, alpha ignored) by unmixing it from every pixel into
+    /// transparency (see [`color_to_alpha`]). Thresholds 0–1: opacities at or below
+    /// `transparency_threshold` become 0, at or above `opacity_threshold` 1, linear in between.
+    ColorToAlpha {
+        color: [f32; 4],
+        transparency_threshold: f32,
+        opacity_threshold: f32,
+    },
 
     // ---- Video ----
     /// Removes the even (or odd) lines and rebuilds them by interpolation (or duplication).
@@ -570,6 +579,13 @@ impl FilterParams {
             FilterParams::Relight { intensity, softness, .. } if *intensity != 0.0 => Halo::Radius(relight::halo_radius(*softness, bounds)),
             _ => self.halo(),
         }
+    }
+
+    /// Whether the filter's job is to make pixels transparent (Color to Alpha): it needs a layer
+    /// that can hold transparency, so callers turn the Background into a normal layer first and
+    /// refuse a layer whose transparency is locked instead of putting the old alpha back.
+    pub fn makes_transparency(&self) -> bool {
+        matches!(self, FilterParams::ColorToAlpha { .. })
     }
 
     /// Whether the filter moves pixels around the reference bounds (its
@@ -637,6 +653,7 @@ impl FilterParams {
             FilterParams::PathBlur { .. } => "Path Blur",
             FilterParams::Custom { .. } => "Custom",
             FilterParams::HsbHsl { .. } => "HSB/HSL",
+            FilterParams::ColorToAlpha { .. } => "Color to Alpha",
             FilterParams::DeInterlace { .. } => "De-Interlace",
             FilterParams::NtscColors => "NTSC Colors",
             FilterParams::FilterGallery { effects } => match effects.as_slice() {
@@ -656,7 +673,7 @@ fn halo_ext(p: &FilterParams) -> Halo {
         FilterParams::Pointillize { cell_size, .. } => r(cell_size.max(1.0) * 2.0),
         FilterParams::Facet => r(3.0),
         FilterParams::Fragment => r(4.0),
-        FilterParams::Mezzotint { .. } | FilterParams::HsbHsl { .. } | FilterParams::NtscColors => Halo::Radius(0),
+        FilterParams::Mezzotint { .. } | FilterParams::HsbHsl { .. } | FilterParams::ColorToAlpha { .. } | FilterParams::NtscColors => Halo::Radius(0),
         FilterParams::Diffuse { .. } => r(1.0),
         FilterParams::Extrude { size, depth, .. } => r(stylize2::extrude_reach(*depth) + size.clamp(2.0, 255.0) * 3.0 + 1.0),
         FilterParams::OilPaint { stylization, scale, .. } => r(oil::reach(*stylization, *scale)),
@@ -869,6 +886,9 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::PathBlur { paths } => gallery::path(src, out, ctx, paths),
         FilterParams::Custom { kernel, scale, offset } => other2::custom(src, out, ctx, kernel, *scale, *offset),
         FilterParams::HsbHsl { input, output } => other2::hsb_hsl(src, out, ctx, *input, *output),
+        FilterParams::ColorToAlpha { color, transparency_threshold, opacity_threshold } => {
+            color_to_alpha::color_to_alpha(src, out, ctx, *color, *transparency_threshold, *opacity_threshold)
+        }
         FilterParams::DeInterlace { eliminate_even, interpolate } => video::deinterlace(src, out, ctx, *eliminate_even, *interpolate),
         FilterParams::NtscColors => video::ntsc(src, out, ctx),
         FilterParams::FilterGallery { effects } => artistic_fx::run(effects, src, out, ctx),
@@ -963,6 +983,24 @@ pub fn apply_tiled_with(
     extent: Option<Rect>,
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
+    apply_tiled_with_impl(surface, params, area, bounds, selection, tile, extent, ctl, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_tiled_with_impl(
+    surface: &Surface,
+    params: &FilterParams,
+    area: Rect,
+    bounds: Rect,
+    selection: Option<&Surface>,
+    tile: i32,
+    extent: Option<Rect>,
+    ctl: &photocraft_raster::Interrupt,
+    prepare_radial: bool,
+) -> Option<Surface> {
+    if ctl.cancelled() {
+        return None;
+    }
     let mut out = surface.clone();
     if area.is_empty() {
         return Some(out);
@@ -978,6 +1016,18 @@ pub fn apply_tiled_with(
     let tile = if matches!(params, FilterParams::ShapeBlur { .. }) { tile.clamp(1, 2048) } else { tile };
     let fmt = surface.format();
     let ctx = Ctx { bounds, mode: fmt.mode, alpha: fmt.alpha };
+    // Prepare the immutable sample transforms once for all output tiles. If the
+    // optional table allocation fails, use the existing sampler; only a real
+    // cancellation returns None. Source reads keep their upstream semantics.
+    let radial = match params {
+        FilterParams::RadialBlur { amount, method, quality, center_x, center_y } if prepare_radial => {
+            blur::radial::Plan::for_area(bounds, *amount, *method, *quality, (*center_x, *center_y), area, ctl)
+        }
+        _ => None,
+    };
+    if ctl.cancelled() {
+        return None;
+    }
     let halo = params.halo_for(bounds);
     let shared = (halo == Halo::Bounds).then(|| Image::read(surface, bounds.union(&area)));
     // Shape rasterization depends only on params, not on a tile's pixels.
@@ -1029,9 +1079,14 @@ pub fn apply_tiled_with(
                 &owned
             }
         };
-        let Some(mut data) = (match &shape {
-            Some(shape) => shape.checked_run(src, *t, &ctx),
-            None => Some(kernel(params, src, *t, &ctx)),
+        let Some(mut data) = (match (&shape, &radial) {
+            (Some(shape), _) => shape.checked_run(src, *t, &ctx),
+            (None, Some(plan)) => match plan.filter(src, *t, &ctx, ctl) {
+                Some(data) => Some(data),
+                None if ctl.cancelled() => None,
+                None => Some(kernel(params, src, *t, &ctx)),
+            },
+            (None, None) => Some(kernel(params, src, *t, &ctx)),
         }) else {
             return (*t, Vec::new());
         };
@@ -1169,3 +1224,18 @@ mod tests_ext;
 
 #[cfg(test)]
 mod tests_mosaic;
+
+/// The current upstream sampler through the identical source/selection/tile pipeline.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn apply_radial_reference(
+    surface: &Surface,
+    params: &FilterParams,
+    area: Rect,
+    bounds: Rect,
+    selection: Option<&Surface>,
+    extent: Rect,
+    ctl: &photocraft_raster::Interrupt,
+) -> Option<Surface> {
+    apply_tiled_with_impl(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent), ctl, false)
+}

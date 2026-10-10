@@ -50,7 +50,7 @@ fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
     ViewXform {
         rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
+        zoom: v.zoom / app.canvas_ppp(),
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
@@ -208,6 +208,26 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     click(&mut h, p);
     assert_eq!(selection(&h), (3, 3));
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+}
+
+/// Preferences ▸ Type ▸ Use Escape to Commit (default on): with it off, Escape cancels the
+/// session like the Cancel button instead of committing.
+#[test]
+fn use_escape_to_commit_off_makes_escape_cancel_the_session() {
+    for (use_esc_to_commit, expected) in [(true, "HOxHOHO"), (false, "HOHOHO")] {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text": "HOHOHO", "size": 120, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+        app.run("prefs.set", json!({"path": "type.useEscToCommit", "value": use_esc_to_commit})).unwrap();
+        let mut h = harness(1.0, app);
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        super::insert(h.state_mut(), "x");
+        assert_eq!(text(h.state(), id).text, "HOxHOHO", "typing goes into the session");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.text_edit.is_none(), "the session ends either way (useEscToCommit={use_esc_to_commit})");
+        assert_eq!(text(h.state(), id).text, expected, "useEscToCommit={use_esc_to_commit}");
+    }
 }
 
 fn size_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> f32 {
@@ -596,7 +616,8 @@ fn frame_point(app: &PhotocraftApp, p: [f64; 2]) -> Pos2 {
 
 fn assert_affine(a: Affine, b: Affine) {
     for (x, y) in a.m.into_iter().zip(b.m) {
-        assert!((x - y).abs() < 2e-4, "{a:?} != {b:?}");
+        // Translations around 500 doc px at a scaled ppp cancel to ~2.7e-4 in f32 rounding.
+        assert!((x - y).abs() < 1e-3, "{a:?} != {b:?}");
     }
 }
 
@@ -1123,4 +1144,53 @@ fn temporary_type_transform_large_document_preview() {
         command_times[29], command_times[56], command_times[59]
     );
     crate::type_transform::cancel_drag(&mut app);
+}
+
+#[test]
+fn font_styles_keep_metadata_names_and_numeric_labels() {
+    let styles = super::styles("Inter");
+    assert!(styles.contains(&"Regular".into()));
+    assert!(styles.contains(&"SemiBold".into()));
+    assert_eq!(super::style_label("20"), "20");
+    assert_eq!(super::style_label("30"), "30");
+    assert_eq!(super::styles("Missing test family"), ["Regular"]);
+}
+
+#[test]
+fn postscript_only_style_shows_actual_subfamily() {
+    let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-SemiBold".into()), ..Default::default() };
+    assert_eq!(super::selected_style(&style), "SemiBold");
+}
+
+/// A variable face lists every standard weight of its `wght` axis, not only its default instance
+/// (Montserrat from Google Fonts: its default instance is Thin).
+#[test]
+fn variable_faces_list_the_weights_of_their_axis() {
+    let face = |weight: f32, italic: bool, axes: Vec<(String, f32, f32, f32)>| {
+        let base = match weight as i32 {
+            100 => "Thin",
+            300 => "Light",
+            _ => "Bold",
+        };
+        let style = if italic { format!("{base} Italic") } else { base.to_string() };
+        photocraft_text::FaceInfo { family: "Montserrat".into(), style, postscript_name: None, weight, italic, axes }
+    };
+    let full = || vec![("wght".to_string(), 100.0, 100.0, 900.0)];
+    let names = super::style_names(&[face(100.0, false, full()), face(100.0, true, full())]);
+    assert_eq!(names.len(), 18, "{names:?}");
+    assert_eq!(names.first().map(String::as_str), Some("Thin"));
+    for s in ["Regular", "Italic", "Bold", "Bold Italic", "Black Italic"] {
+        assert!(names.iter().any(|n| n == s), "{s}: {names:?}");
+    }
+    // A narrower axis lists only its range; a static face only itself.
+    let names = super::style_names(&[face(300.0, false, vec![("wght".into(), 300.0, 400.0, 700.0)])]);
+    assert_eq!(names, ["Light", "Regular", "Medium", "SemiBold", "Bold"]);
+    assert_eq!(super::style_names(&[face(700.0, false, Vec::new())]), ["Bold"]);
+}
+
+/// Families the host serves are in the font menu before they are fetched.
+#[test]
+fn the_font_menu_lists_served_families() {
+    photocraft_text::served::add_families(["Served Menu Test Serif".to_string()]);
+    assert!(super::families().iter().any(|f| f == "Served Menu Test Serif"));
 }

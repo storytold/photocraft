@@ -53,7 +53,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
         Ok(v) => v,
         Err(e) => {
             let mut r = image_to_document(name, img)?;
-            r.warnings.push(format!("the Photoshop layer data could not be read ({e}); opened flattened"));
+            r.warnings.push(format!("the PSD layer data could not be read ({e}); opened flattened"));
             return Ok(r);
         }
     };
@@ -61,7 +61,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     let (mut resources, w) = match img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty()).map(resources_from_bytes) {
         Some(Ok(v)) => v,
         Some(Err(e)) => {
-            warnings.push(format!("the Photoshop image resources could not be read: {e}"));
+            warnings.push(format!("the PSD image resources could not be read: {e}"));
             (Vec::new(), Vec::new())
         }
         None => (Vec::new(), Vec::new()),
@@ -111,10 +111,8 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     if doc.icc_profile.is_none() {
         doc.icc_profile = img.icc.clone().map(Arc::new);
     }
-    if !img.meta.text.is_empty() {
-        warnings.push(format!("{} text metadata entries are not kept in the document", img.meta.text.len()));
-    }
-    Ok(ImportResult { document: doc, warnings })
+    doc.metadata.text = img.meta.text.clone();
+    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
 /// Interleaved native-endian samples → planar big-endian planes (PSD merged-image order),
@@ -225,6 +223,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions) -> Result<Exp
         // codec a second copy in `meta.exif` bought nothing and made the export claim it would
         // drop metadata it had in fact kept (#1545).
         xmp: doc.metadata.xmp.clone().filter(|_| opts.xmp == crate::XmpEmbed::All),
+        text: if opts.xmp == crate::XmpEmbed::All { doc.metadata.text.clone() } else { Vec::new() },
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         photoshop_resources: Some(resources),
         photoshop_layers: Some(layers),

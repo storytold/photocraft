@@ -76,10 +76,17 @@ pub(crate) struct MapProgram {
 }
 
 /// How far a field value depends on the shape, for a field exact up to `reach`.
-pub(crate) fn field_radius(_kind: FieldKind, reach: i32) -> i32 {
+pub(crate) fn field_radius(kind: FieldKind, reach: i32) -> i32 {
     // The nearest seed lies within the reach (seeds may start up to 1 px in, at their sub-pixel
     // edge); stroke fields classify seeds by their 3×3 local coverage, one more pixel.
-    reach + 3
+    match kind {
+        // A bevel field also looks at the edge pixels around the foot of the perpendicular (3 px
+        // further); each of those takes its direction from the edge pixels within 3 px of it, and
+        // those read their own 3×3 coverage neighbourhood (2 px). Measured, the smallest exact halo
+        // is reach + 1 (`banded_bevel_fields_match_whole_region_on_anti_aliased_edges`).
+        FieldKind::BevelInside | FieldKind::BevelOutside => reach + 9,
+        _ => reach + 3,
+    }
 }
 
 impl MapProgram {
@@ -305,11 +312,10 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
         Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
             // glow_map
             let inner = matches!(e, Effect::InnerGlow(_));
-            let edge = inner && g.source == GlowSource::Edge;
             let center = inner && g.source == GlowSource::Center;
             match g.technique {
                 GlowTechnique::Precise => {
-                    let d = b.field(if edge { FieldKind::Inside } else { FieldKind::Outside }, g.size);
+                    let d = b.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
                     let solid = g.size * g.spread;
                     let soft = (g.size - solid).max(1e-3);
                     let m = b.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, f32::from(u8::from(center)), 0.0], 0));
@@ -353,8 +359,8 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             let mut h = if bv.technique == BevelTechnique::Smooth {
                 b.conv(In::Shape, photocraft_compose::effects::tent_kernel(g.width))
             } else {
-                let din = b.field(FieldKind::Inside, size);
-                let dout = b.field(FieldKind::Outside, size);
+                let din = b.field(FieldKind::BevelInside, size);
+                let dout = b.field(FieldKind::BevelOutside, size);
                 let h = b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), size, 0.0, 0.0], 0));
                 if g.chisel_soft > 0.0 { b.conv(h, photocraft_compose::effects::tent_kernel(g.chisel_soft)) } else { h }
             };
@@ -473,13 +479,13 @@ fn bands(r: Rect, rows: i32) -> Vec<Rect> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync + Send) -> Vec<R> {
+pub(crate) fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync + Send) -> Vec<R> {
     use rayon::prelude::*;
     items.into_par_iter().map(f).collect()
 }
 
 #[cfg(target_arch = "wasm32")]
-fn par_map<T, R>(items: Vec<T>, f: impl Fn(T) -> R) -> Vec<R> {
+pub(crate) fn par_map<T, R>(items: Vec<T>, f: impl Fn(T) -> R) -> Vec<R> {
     items.into_iter().map(f).collect()
 }
 
@@ -490,10 +496,14 @@ const BAND: i32 = 128;
 /// region-sized `shape`. Values within the reach depend only on the shape within
 /// [`field_radius`], so each band is computed from a window grown by it.
 pub(crate) fn field(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, out: Rect) -> Vec<f32> {
-    let halo = field_radius(kind, reach) + 1;
+    field_banded(kind, reach, shape, region, out, field_radius(kind, reach) + 1)
+}
+
+/// [`field`] with the band halo given (the tests shrink it to see that they notice).
+fn field_banded(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, out: Rect, halo: i32) -> Vec<f32> {
     let parts = par_map(bands(out, BAND.max(halo)), |band| {
         let win = band.inflate(halo).intersect(&region);
-        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize);
+        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize, reach as f32);
         crop(&f, win, band)
     });
     parts.concat()
@@ -690,11 +700,18 @@ mod tests {
                 shape[y * w + x] = (90.0 - r).clamp(0.0, 1.0) * if (x / 13 + y / 17) % 5 == 0 { 0.6 } else { 1.0 };
             }
         }
-        for kind in
-            [FieldKind::Outside, FieldKind::Inside, FieldKind::ChokeInside, FieldKind::StrokeOutside, FieldKind::StrokeInside, FieldKind::StrokeOutsideVector]
-        {
+        for kind in [
+            FieldKind::Outside,
+            FieldKind::Inside,
+            FieldKind::BevelOutside,
+            FieldKind::BevelInside,
+            FieldKind::ChokeInside,
+            FieldKind::StrokeOutside,
+            FieldKind::StrokeInside,
+            FieldKind::StrokeOutsideVector,
+        ] {
             let reach = 9;
-            let whole = photocraft_compose::effects::distance_field(kind, shape.clone(), w, h);
+            let whole = photocraft_compose::effects::distance_field(kind, shape.clone(), w, h, reach as f32);
             let banded = field(kind, reach, &shape, region, region);
             let part = Rect::new(40, 30, 170, 120);
             let partial = field(kind, reach, &shape, region, part);
@@ -711,5 +728,60 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn banded_bevel_fields_match_whole_region_on_anti_aliased_edges() {
+        // The bevel fields read the edge pixels around the foot of the perpendicular and take the
+        // direction of each from its neighbours, so the band halo has to cover all of that. A wide
+        // bar with clean anti-aliased edges (almost along the 128 row bands, across them and at an
+        // angle) puts sharp edge pixels where the bands meet and inside the partial window.
+        let region = Rect::new(-20, -10, 300, 290);
+        let (w, h) = (region.width() as usize, region.height() as usize);
+        let part = Rect::new(40, 30, 170, 120);
+        let mut too_small_noticed = false;
+        for deg in [1.5f32, 5.0, 30.0, 88.5] {
+            let (sn, cs) = deg.to_radians().sin_cos();
+            let inside = |x: f32, y: f32| {
+                let (u, v) = ((x - 150.0) * cs + (y - 128.3) * sn, -(x - 150.0) * sn + (y - 128.3) * cs);
+                u.abs() <= 140.0 && v.abs() <= 60.0
+            };
+            let mut shape = vec![0.0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let hits = (0..64).filter(|k| inside(x as f32 + ((k % 8) as f32 + 0.5) / 8.0, y as f32 + ((k / 8) as f32 + 0.5) / 8.0)).count();
+                    shape[y * w + x] = hits as f32 / 64.0;
+                }
+            }
+            for reach in [9, 24] {
+                for kind in [FieldKind::BevelInside, FieldKind::BevelOutside] {
+                    let whole = photocraft_compose::effects::distance_field(kind, shape.clone(), w, h, reach as f32);
+                    let differs = |banded: &[f32], out: Rect| {
+                        let ow = out.width() as usize;
+                        banded
+                            .iter()
+                            .enumerate()
+                            .filter(|&(i, b)| {
+                                let (x, y) = (out.x0 + (i % ow) as i32, out.y0 + (i / ow) as i32);
+                                let a = whole[(y - region.y0) as usize * w + (x - region.x0) as usize];
+                                a.min(*b) < reach as f32 && (a - b).abs() > 1e-5
+                            })
+                            .count()
+                    };
+                    assert_eq!(
+                        differs(&field(kind, reach, &shape, region, region), region),
+                        0,
+                        "{kind:?}, {deg} deg, reach {reach}: banded differs from whole"
+                    );
+                    assert_eq!(
+                        differs(&field(kind, reach, &shape, region, part), part),
+                        0,
+                        "{kind:?}, {deg} deg, reach {reach}: partial window differs from whole"
+                    );
+                    // The test can see a halo that is too small: two rows past the band is not enough.
+                    too_small_noticed |= differs(&field_banded(kind, reach, &shape, region, region, 2), region) > 0;
+                }
+            }
+        }
+        assert!(too_small_noticed, "a 2 row halo went unnoticed, so this test guards nothing");
     }
 }

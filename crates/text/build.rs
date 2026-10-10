@@ -11,8 +11,8 @@
 //! stay under the 24 MiB gate in `packaging/web/package.sh` (#237; Cloudflare's per-file cap is
 //! 25 MiB). Measured 2026-10-06 (`trunk build --release`): 24,190,076 bytes
 //! without craft-fonts, 28,867,488 with only the UI face (BIZ UDPGothic Regular) embedded, over
-//! the 25,165,824-byte gate. The web build keeps no Japanese font until craft-fonts can be
-//! served next to the wasm instead of inside it.
+//! the 25,165,824-byte gate. The web build loads fonts served next to the wasm instead, on
+//! demand (`fonts/manifest.txt`, see `served.rs` and packaging/web/README.md › Fonts).
 use std::fmt::Write as _;
 use std::path::PathBuf;
 

@@ -276,6 +276,8 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     }
     match ui.get("zoom") {
         Some(Value::String(s)) if s == "fit" => d.zoom = 0.0,
+        // The gallery's own preview zoom, not the canvas (`zoom_levels` doesn't apply): its − / +
+        // buttons and menu stop at 400 %, an agent may set up to 3200 %.
         Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(0.01, 32.0),
         _ => {}
     }

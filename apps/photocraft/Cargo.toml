@@ -43,7 +43,8 @@ ron = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
-core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link"] }
+# `event` (CGEventSource) is used for the Caps Lock poll (#1758).
+core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link", "event"] }
 # Finder double-click / Open With / Dock drops arrive as Apple events; this small audited crate
 # registers the handler (Objective-C interop needs unsafe, which our workspace forbids) behind a
 # safe API. Pinned exactly: review the diff before bumping.
@@ -54,8 +55,8 @@ fmv-macos-events = "=0.1.0"
 objc2 = "=0.6.4"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
-# The macOS menu bar (mac_menu.rs): Tauri's menu crate, AppKit menus behind a safe API (no GTK
-# with default features off). Pinned exactly: review the diff before bumping.
+# The macOS menu bar (mac_menu.rs): a standalone native menu crate (from the tauri-apps org, but
+# not Tauri: no webview, no JS), AppKit menus behind a safe API (no GTK with default features off). Pinned exactly: review the diff before bumping.
 muda = { version = "=0.21.1", default-features = false }
 # Quit with `terminate:` from the main queue, outside winit's event handler (mac_window.rs).
 # Already in Cargo.lock (winit, objc2-app-kit); pinned exactly to the same version.
@@ -63,7 +64,7 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr"] }
+x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
 # Wayland desktop color selection through the existing XDG portal transport.
 zbus = "=5.19.0"
 # Already used by the portal stack; bounded waits let cancelling close the OS request.

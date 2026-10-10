@@ -7,10 +7,11 @@
 //! change them with `prefs.get` / `prefs.set`); this module only edits a working copy in a dialog
 //! and commits it with those commands on Apply or OK.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use egui::{Color32, RichText, Sense, vec2};
 use photocraft_doc::DocId;
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 use photocraft_engine::prefs::{self, SECTIONS, Theme};
 use photocraft_engine::snap::{SnapLine, SnapTargets};
 use serde_json::{Map, Value, json};
@@ -34,6 +35,9 @@ pub struct Runtime {
     autosaved: HashMap<DocId, u64>,
     /// Queued writes must not masquerade as durable snapshots.
     autosave_pending: HashMap<DocId, u64>,
+    recovery_started: bool,
+    recovery_queue: VecDeque<crate::Recoverable>,
+    recovery_pending: Option<(JobId, String)>,
     log_len: usize,
     /// Snapping state of the drag in progress (see `snap_ui`).
     pub(crate) snap: Option<crate::snap_ui::ActiveSnap>,
@@ -83,6 +87,7 @@ fn theme_kind(t: Theme) -> ThemeKind {
         Theme::Classic => ThemeKind::Classic,
         Theme::Adwaita => ThemeKind::Adwaita,
         Theme::AdwaitaDark => ThemeKind::AdwaitaDark,
+        Theme::SolarizedDark => ThemeKind::SolarizedDark,
     }
 }
 
@@ -95,13 +100,13 @@ fn theme_pref(k: ThemeKind) -> Theme {
         ThemeKind::Classic => Theme::Classic,
         ThemeKind::Adwaita => Theme::Adwaita,
         ThemeKind::AdwaitaDark => Theme::AdwaitaDark,
+        ThemeKind::SolarizedDark => Theme::SolarizedDark,
     }
 }
 
 // ------------------------------------------------------------------ lifecycle
 
-/// Load saved preferences (once) and recover autosaved documents. Called when the app is
-/// created.
+/// Load saved preferences once, when the app is created. Recovery starts during frame upkeep.
 pub fn load(app: &mut PhotocraftApp) {
     if app.prefs_rt.loaded {
         return;
@@ -116,29 +121,102 @@ pub fn load(app: &mut PhotocraftApp) {
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
-    if app.session.prefs().file_handling.recover_on_launch
-        && let Some(recover) = app.services.recover.as_mut()
-    {
-        let docs = recover();
-        let n = docs.len();
-        for r in docs {
-            app.session.add_document(r.doc, r.path);
-            // Recovered documents are unsaved.
-            let Some(st) = app.session.active_mut() else { continue };
-            st.saved_revision = 0;
-            // Their entry already holds this revision: it stays until a newer autosave replaces
-            // it or the document is saved or closed (see `autosave`).
-            let (id, revision) = (st.doc.id, st.revision);
-            app.prefs_rt.autosaved.insert(id, revision);
-            if let Some(adopt) = app.services.adopt_autosave.as_mut() {
-                adopt(id.0, &r.key);
-            }
-        }
-        if n > 0 {
-            app.sync_views();
-            app.ui.status = format!("Recovered {n} document{}", if n == 1 { "" } else { "s" });
+}
+
+/// Discover recovery entries after construction, then decode one at a time without blocking
+/// the window. Only the completed job's apply step touches the session.
+fn recovery(app: &mut PhotocraftApp) {
+    if !app.prefs_rt.recovery_started {
+        app.prefs_rt.recovery_started = true;
+        if app.session.prefs().file_handling.recover_on_launch
+            && let Some(recover) = app.services.recover.as_mut()
+        {
+            app.prefs_rt.recovery_queue.extend(recover());
         }
     }
+    start_next_recovery(app);
+}
+
+fn start_next_recovery(app: &mut PhotocraftApp) {
+    while app.prefs_rt.recovery_pending.is_none() {
+        let Some(r) = app.prefs_rt.recovery_queue.pop_front() else { return };
+        let label = format!("Recovering {}", r.name);
+        let started = app.session.start_job(
+            "file.recover",
+            json!({}),
+            &label,
+            false,
+            move |ctx| {
+                ctx.check()?;
+                ctx.progress(0.0, "Loading recovery data");
+                let doc = (r.load)().map_err(photocraft_engine::EngineError::Other)?;
+                ctx.check()?;
+                Ok(doc)
+            },
+            move |s, doc| {
+                let active = s.active().map(|st| st.doc.id);
+                let first = s.documents().is_empty();
+                s.add_document(doc, r.path);
+                let st = s.active_mut().ok_or(photocraft_engine::EngineError::NoDocument)?;
+                st.saved_revision = 0;
+                let (id, revision) = (st.doc.id, st.revision);
+                if let Some(index) = active.and_then(|id| s.documents().iter().position(|st| st.doc.id == id)) {
+                    s.set_active(index);
+                }
+                Ok(json!({"documentId": id.0, "revision": revision, "firstDocument": first}))
+            },
+        );
+        match started {
+            Ok(Started::Job(job)) => app.prefs_rt.recovery_pending = Some((job, r.key)),
+            Ok(Started::Done(v)) => finish_recovery(app, &r.key, &v),
+            Err(e) => crate::notices::error(app, format!("{label}: {e}")),
+        }
+    }
+}
+
+fn finish_recovery(app: &mut PhotocraftApp, key: &str, v: &Value) {
+    let recovered = v
+        .get("documentId")
+        .and_then(Value::as_u64)
+        .zip(v.get("revision").and_then(Value::as_u64))
+        .and_then(|(id, revision)| app.session.documents().iter().find(|st| st.doc.id.0 == id).map(|st| (st.doc.id, revision, st.doc.name.clone())));
+    let Some((id, revision, name)) = recovered else {
+        crate::notices::error(app, "The recovered document is no longer open".into());
+        return;
+    };
+    // Track the admitted snapshot's revision, even if another job has already edited it.
+    app.prefs_rt.autosaved.insert(id, revision);
+    if let Some(adopt) = app.services.adopt_autosave.as_mut() {
+        adopt(id.0, key);
+    }
+    if v.get("firstDocument").and_then(Value::as_bool) == Some(true) {
+        app.ui.chrome.home = None;
+    }
+    app.sync_views();
+    app.ui.status = format!("Recovered {name}");
+    app.ui.status_error = false;
+}
+
+/// Recovery uses the existing job polling/progress/cancel path. Its successful result adopts
+/// the original entry on the UI thread, using identity rather than a mutable tab position.
+pub(crate) fn on_recovery_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
+    if !app.prefs_rt.recovery_pending.as_ref().is_some_and(|(job, _)| *job == e.id) {
+        return false;
+    }
+    let Some((_, key)) = app.prefs_rt.recovery_pending.take() else { return false };
+    match &e.outcome {
+        JobOutcome::Done(v) => finish_recovery(app, &key, v),
+        JobOutcome::Failed(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
+        JobOutcome::Cancelled => {
+            // Native bundle decoding cannot stop midway. Cancel admission and the rest of the
+            // batch so another large decoder isn't started while this worker finishes.
+            app.prefs_rt.recovery_queue.clear();
+            app.ui.status = format!("Cancelled {}", e.label);
+            app.ui.status_error = false;
+        }
+    }
+    start_next_recovery(app);
+    true
 }
 
 /// Attach the brush preset store once its background load finishes, and surface write
@@ -207,6 +285,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
         load(app);
     }
+    recovery(app);
     sync_display_scale(app, ctx);
     // Interface theme: a preference change applies to the UI; a theme picked from the Window
     // menu is stored as the preference.
@@ -1026,7 +1105,14 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    crate::widgets::checkbox(ui, &mut b, &label);
+                    if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
+                        ui.vertical(|ui| {
+                            crate::widgets::checkbox(ui, &mut b, &label);
+                            ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                        });
+                    } else {
+                        crate::widgets::checkbox(ui, &mut b, &label);
+                    }
                     obj.insert(k, json!(b));
                 }
                 Value::String(s) if path == "interface.language" => {
@@ -1134,7 +1220,11 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
         ui.add(egui::TextEdit::singleline(&mut filter).desired_width(260.0).hint_text(tl!("command or shortcut")));
     });
     f.insert("filter".into(), json!(filter));
-    let mut overrides: BTreeMap<String, String> = f.get("overrides").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    // A malformed map (set over automation) is left as it is, so OK rejects it instead of
+    // saving the empty map drawn in its place.
+    let parsed = f.get("overrides").map(|v| serde_json::from_value::<BTreeMap<String, String>>(v.clone()));
+    let overrides_ok = parsed.as_ref().is_none_or(Result::is_ok);
+    let mut overrides = parsed.and_then(Result::ok).unwrap_or_default();
     let mut hidden: Vec<String> = f.get("hidden").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let mut colors: BTreeMap<String, String> = f.get("colors").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let mut selected = f.get("selected").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1269,7 +1359,7 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
             }
             if ui.button(tl!("Reset All to Defaults")).clicked() {
                 overrides.clear();
-                message = tl!("All shortcuts reset to Photoshop defaults.").into();
+                message = tl!("All shortcuts reset to PhotoCraft defaults.").into();
             }
         });
     } else if ui.button(tl!("Show All Menu Items")).clicked() {
@@ -1279,7 +1369,9 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     if !message.is_empty() {
         ui.label(RichText::new(&message).color(if message.contains("already in use") { t.warning } else { t.text_dim }));
     }
-    f.insert("overrides".into(), json!(overrides));
+    if overrides_ok {
+        f.insert("overrides".into(), json!(overrides));
+    }
     f.insert("hidden".into(), json!(hidden));
     f.insert("colors".into(), json!(colors));
     f.insert("selected".into(), json!(selected));
@@ -1349,7 +1441,7 @@ fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, 
             let _ = app.run("edit.presets.presetManager", json!({"action": "delete", "kind": kind, "index": selected}));
         }
         // Load Photoshop brushes (.abr) into the library.
-        if kind == "brushes" && ui.button(tl!("Load…")).on_hover_text(tl!("Import Photoshop brushes (.abr)")).clicked() {
+        if kind == "brushes" && ui.button(tl!("Load…")).on_hover_text(tl!("Import brushes (.abr)")).clicked() {
             let _ = app.open_dialog_file();
         }
     });
@@ -1413,7 +1505,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             let overrides = f.get("overrides").cloned().unwrap_or(json!({}));
             // Shortcuts moved to another command are taken from their old owner (shell
             // commands included, which the engine doesn't know).
-            let mut ov: BTreeMap<String, String> = serde_json::from_value(overrides).unwrap_or_default();
+            // The map replaces every stored override, so a malformed one is an error, not "none".
+            let mut ov: BTreeMap<String, String> =
+                serde_json::from_value(overrides).map_err(|e| format!("overrides must map command IDs to shortcut strings: {e}"))?;
             let items = shortcut_items(app);
             // Newly assigned shortcuts are checked first and take theirs from any holder, custom
             // overrides included; unchanged overrides only take theirs from defaults.
@@ -1473,6 +1567,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         _ => Err("unknown dialog".into()),
     }
 }
+
+// Test modules stay after the production code: the prefs_usage test reads each file up to
+// its first `#[cfg(test)] mod`.
+#[cfg(test)]
+mod recovery_tests;
 
 #[cfg(test)]
 #[path = "shortcut_capture_tests.rs"]
@@ -1837,9 +1936,14 @@ mod tests {
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
         // Every setting of these sections is still unimplemented.
-        for section in ["type", "integrations", "scratchDisks"] {
+        for section in ["integrations", "scratchDisks"] {
             assert!(!has_visible_fields(&values, section), "{section}");
         }
+        // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
+        assert!(has_visible_fields(&values, "type"));
+        assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
+        assert!(!prefs::is_hidden("type.useEscToCommit"));
+        assert!(prefs::is_hidden("type.smartQuotes"));
         // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
@@ -1989,6 +2093,62 @@ mod tests {
         assert_eq!(restarted.session.prefs().interface.ui_font_size, prefs::UiFontSize::Large);
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    #[test]
+    fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        app.custom_titlebar = true;
+        let id = open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("System title bar").scroll_to_me();
+        h.run_steps(4);
+        h.get_by_label("Applies at next launch.");
+        for desired in [true, false] {
+            h.get_by_label("System title bar").click();
+            h.run_steps(4);
+            assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["interface"]["systemTitleBar"], desired);
+            assert_eq!(h.state().session.prefs().interface.system_title_bar, !desired, "the draft is not applied yet");
+            h.get_by_label("Applies at next launch.");
+            h.get_by_label("Apply").click();
+            h.run_steps(4);
+            assert_eq!(h.state().session.prefs().interface.system_title_bar, desired);
+            assert_eq!(stored(&store)["interface"]["systemTitleBar"], desired);
+            assert!(h.state().custom_titlebar, "do not change the current window or restart it");
+            let (reloaded, _) = app_with_saved(store.lock().unwrap().clone());
+            assert_eq!(reloaded.session.prefs().interface.system_title_bar, desired);
+            h.get_by_label("Applies at next launch.");
+        }
+        h.get_by_label("System title bar").click();
+        h.run_steps(4);
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.iter().all(|d| d.id != id));
+        assert!(!h.state().session.prefs().interface.system_title_bar);
+        assert_eq!(stored(&store)["interface"]["systemTitleBar"], false);
+        assert!(h.state().custom_titlebar);
+    }
+
+    #[test]
+    fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
+        let mut h =
+            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en")), obj);
+        h.run_steps(4);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
+        h.get_by_label("Show tooltips").click();
+        h.run_steps(4);
+        assert_eq!(h.state()["showTooltips"], false);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
+    }
+
     #[test]
     fn preferences_confirm_after_apply_commits_later_edits() {
         let (mut app, _) = app_with_store();
@@ -2082,6 +2242,35 @@ mod tests {
     }
 
     #[test]
+    fn shortcut_dialog_rejects_malformed_overrides() {
+        // #956: a non-map `overrides` was read as "no overrides" and wiped every custom shortcut.
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        app.run("edit.keyboardShortcuts", json!({"set": {"file.new": "Ctrl+Shift+N"}})).unwrap();
+        let before = app.session.prefs().shortcuts.clone();
+        assert!(!before.is_empty());
+        for bad in [json!("bogus"), json!(["file.new"]), json!({"file.new": 5})] {
+            let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
+            app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), bad.clone());
+            assert!(crate::dialogs::confirm(&mut app, id).is_err(), "{bad} accepted");
+            assert_eq!(app.session.prefs().shortcuts, before, "{bad} changed the shortcuts");
+        }
+
+        // Drawing the open dialog keeps the malformed value for OK to reject, instead of
+        // replacing it with the empty map it shows.
+        let id = crate::menus::invoke(&mut app, &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!("bogus"));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["overrides"], json!("bogus"));
+        assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+        assert_eq!(h.state().session.prefs().shortcuts, before);
+    }
+
+    #[test]
     fn hidden_menu_items_disappear() {
         let (mut app, _) = app_with_store();
         app.run("edit.menus", json!({"hide": ["edit.fade"]})).unwrap();
@@ -2149,12 +2338,21 @@ mod tests {
                 Ok(())
             })),
             discard_autosave: Some(Box::new(move |id: u64| l2.lock().unwrap().push(format!("discard {id}")))),
-            recover: Some(Box::new(move || ["a", "b"].map(|key| crate::Recovered { key: key.into(), path: None, doc: doc() }).into())),
+            recover: Some(Box::new(move || {
+                ["a", "b"].map(|key| crate::Recoverable { key: key.into(), name: "R".into(), path: None, load: Box::new(move || Ok(doc())) }).into()
+            })),
             adopt_autosave: Some(Box::new(move |id: u64, key: &str| l3.lock().unwrap().push(format!("adopt {id} {key}")))),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.session.has_jobs() && std::time::Instant::now() < deadline {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!app.session.has_jobs(), "recovery finished");
         let ids: Vec<u64> = app.session.documents().iter().map(|d| d.doc.id.0).collect();
         assert!(app.session.documents().iter().all(|d| d.is_dirty()), "recovered documents are unsaved");
         let take = || std::mem::take(&mut *log.lock().unwrap());

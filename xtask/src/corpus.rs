@@ -5,24 +5,36 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::corpus_pins::{self, AG_PSD_COMMIT, HEIC_RS_COMMIT, OPENEXR_COMMIT, PHOTOCRAFT_CORPUS_COMMIT, PILLOW_HEIF_COMMIT, PNGSUITE_URL, PSD_TOOLS_COMMIT};
-use crate::pinned::USER_AGENT;
+use crate::pinned::{PinnedCorpus, USER_AGENT};
 use crate::{cargo, root, run};
 
 /// Crates with corpus tests (behind their `corpus` feature).
 pub const CORPUS_CRATES: &[&str] = &["photocraft-psd", "photocraft-codecs", "photocraft-io", "photocraft-engine"];
+/// Opt-in corpus crates: fetched and tested only with `test-corpus --pixls`.
+pub const PIXLS_CRATES: &[&str] = &["photocraft-raw"];
 
 /// Corpus crates with a `heif` feature: test-corpus enables it so the HEIF corpus tests run.
 const HEIF_CRATES: &[&str] = &["photocraft-codecs", "photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates).
-const CRITICAL: &[&str] = &["crates/psd/", "crates/io/", "crates/codecs/", "crates/heif/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/"];
-
-/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --photoshop [--local]] [--update-manifest]`
+const CRITICAL: &[&str] = &[
+    "crates/psd/",
+    "crates/io/",
+    "crates/codecs/",
+    "crates/heif/",
+    "crates/compose/",
+    "crates/gpu/",
+    "crates/text/",
+    "crates/format/",
+    "crates/affinity/",
+    "crates/raw/",
+];
+/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --photoshop [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
     let mut did = false;
     if args.contains(&"--all") {
-        return fetch_all(args.contains(&"--local"));
+        return fetch_all(args.contains(&"--local"), update);
     }
     if args.contains(&"--pngsuite") || args.contains(&"--download") {
         fetch_pngsuite()?;
@@ -40,8 +52,16 @@ pub fn cmd(args: &[&str]) -> Result<(), String> {
         corpus_pins::HEIF.fetch(update)?;
         did = true;
     }
+    if args.contains(&"--pixls") {
+        crate::pinned::fetch_pixls(update)?;
+        did = true;
+    }
     if args.contains(&"--exr") {
         corpus_pins::EXR.fetch(update)?;
+        did = true;
+    }
+    if args.contains(&"--affinity") {
+        corpus_pins::AFFINITY.fetch(update)?;
         did = true;
     }
     if args.contains(&"--photoshop") {
@@ -70,18 +90,26 @@ fn local_clone() -> Result<PathBuf, String> {
 }
 
 /// Fetches every corpus that is missing or stale (verified ones are left alone). With `local`,
-/// `corpus/photoshop` is copied from the authoring clone of photocraft-corpus instead.
-pub fn fetch_all(local: bool) -> Result<(), String> {
+/// `corpus/photoshop` is copied from the authoring clone of photocraft-corpus instead. With
+/// `update`, every pinned corpus is refetched and its manifest rewritten (`--update-manifest`).
+pub fn fetch_all(local: bool, update: bool) -> Result<(), String> {
     fetch_pngsuite()?;
-    for c in corpus_pins::ALL {
-        if local && std::ptr::eq(*c, &corpus_pins::PHOTOSHOP) {
-            c.fetch_local(&local_clone()?, false)?;
-        } else {
-            c.fetch(false)?;
-        }
-    }
+    fetch_pinned(local, update, fetch_one)?;
     println!("all corpora present and verified under {}", root().join("corpus").display());
     Ok(())
+}
+
+/// Calls `fetch(corpus, from_clone, update)` for every pinned corpus; `from_clone` is set for
+/// `corpus/photoshop` when `local`.
+fn fetch_pinned(local: bool, update: bool, mut fetch: impl FnMut(&PinnedCorpus, bool, bool) -> Result<(), String>) -> Result<(), String> {
+    for c in corpus_pins::ALL {
+        fetch(c, local && std::ptr::eq(*c, &corpus_pins::PHOTOSHOP), update)?;
+    }
+    Ok(())
+}
+
+fn fetch_one(c: &PinnedCorpus, from_clone: bool, update: bool) -> Result<(), String> {
+    if from_clone { c.fetch_local(&local_clone()?, update) } else { c.fetch(update) }
 }
 
 fn status(present: bool) -> &'static str {
@@ -111,8 +139,11 @@ fn list() {
                      pillow-heif@{} (BSD-3-Clause), manifest xtask/heif-corpus.sha256. Fetch: --heif
   corpus/exr/        [{}] the deep OpenEXR test images (BSD-3-Clause), openexr@{}
                      manifest xtask/exr-corpus.sha256. Fetch: --exr
+  corpus/affinity/   [{}] public Affinity documents and #1606 samples (CC0, MIT), with PNG references;
+                     manifest xtask/affinity-corpus.sha256. Fetch: --affinity
   corpus/pngsuite/   [{}] PngSuite (public domain), {PNGSUITE_URL}. Fetch: --pngsuite
-  corpus/tiff/, corpus/raw/   optional, copied in by hand
+  corpus/pixls/      [opt-in] real camera raws from raw.pixls.us (public domain), one per decode
+                     path plus the known-unsupported packed ORF. Fetch: --pixls (opt-in)
 
 Pins: xtask/src/corpus_pins.rs. Moving one: change it, then --<name> --update-manifest.",
         corpus.display(),
@@ -126,6 +157,7 @@ Pins: xtask/src/corpus_pins.rs. Moving one: change it, then --<name> --update-ma
         &PILLOW_HEIF_COMMIT[..12],
         status(corpus_pins::EXR.is_current()),
         &OPENEXR_COMMIT[..12],
+        status(corpus_pins::AFFINITY.is_current()),
         status(png_ok),
     );
 }
@@ -172,6 +204,7 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
         Some(i) => (&args[..i], &args[i + 1..]),
         None => (args, &[][..]),
     };
+    let mut raw_changed = false;
     if ours.contains(&"--changed") {
         let changed = changed_files()?;
         let hits: Vec<&String> = changed.iter().filter(|f| CRITICAL.iter().any(|c| f.starts_with(c))).collect();
@@ -180,6 +213,7 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
             return Ok(());
         }
         println!("test-corpus --changed: {} critical files changed (e.g. {}); running the corpus tests", hits.len(), hits[0]);
+        raw_changed = hits.iter().any(|f| f.starts_with("crates/raw/"));
     }
     let mut crates: Vec<String> = Vec::new();
     let mut it = ours.iter();
@@ -188,19 +222,28 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
             "-p" | "--package" => {
                 let name = it.next().ok_or("-p needs a crate name")?;
                 let full = if name.starts_with("photocraft-") { (*name).to_string() } else { format!("photocraft-{name}") };
-                if !CORPUS_CRATES.contains(&full.as_str()) {
-                    return Err(format!("{full} has no corpus tests (crates: {})", CORPUS_CRATES.join(", ")));
+                if !CORPUS_CRATES.contains(&full.as_str()) && !PIXLS_CRATES.contains(&full.as_str()) {
+                    return Err(format!("{full} has no corpus tests (crates: {} or the opt-in {})", CORPUS_CRATES.join(", "), PIXLS_CRATES.join(", ")));
                 }
                 crates.push(full);
             }
-            "--changed" | "--local" => {}
+            "--changed" | "--local" | "--pixls" => {}
             other => return Err(format!("test-corpus: unknown argument `{other}`")),
         }
     }
     if crates.is_empty() {
         crates = CORPUS_CRATES.iter().map(|s| (*s).to_string()).collect();
     }
-    fetch_all(ours.contains(&"--local"))?;
+    // `--pixls` opts in (and fetches), and a raw change under --changed does too: the raw
+    // corpus tests are not part of the default set until a maintainer decides otherwise.
+    let wants_pixls = ours.contains(&"--pixls") || crates.iter().any(|c| PIXLS_CRATES.contains(&c.as_str())) || raw_changed;
+    if wants_pixls && !crates.iter().any(|c| c == "photocraft-raw") {
+        crates.push("photocraft-raw".to_string());
+    }
+    if wants_pixls {
+        crate::pinned::fetch_pixls(false)?;
+    }
+    fetch_all(ours.contains(&"--local"), false)?;
     let mut c = cargo();
     c.args(["test", "--release", "--lib", "--tests"]);
     for k in &crates {
@@ -213,4 +256,34 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
         c.arg("--").args(passthrough);
     }
     run(c, &format!("cargo test --release --features corpus,heif ({})", crates.join(", ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flags each pinned corpus is fetched with by `fetch_all(local, update)`.
+    fn calls(local: bool, update: bool) -> Vec<(&'static str, bool)> {
+        let mut seen = Vec::new();
+        let r = fetch_pinned(local, update, |c, _, u| {
+            seen.push((c.name, u));
+            Ok(())
+        });
+        assert_eq!(r, Ok(()));
+        seen
+    }
+
+    #[test]
+    fn all_with_update_manifest_updates_every_pinned_corpus() {
+        for local in [false, true] {
+            let seen = calls(local, true);
+            assert_eq!(seen.len(), corpus_pins::ALL.len());
+            assert!(seen.iter().all(|(_, u)| *u), "--all --update-manifest dropped the flag: {seen:?}");
+        }
+    }
+
+    #[test]
+    fn all_without_update_manifest_only_verifies() {
+        assert!(calls(false, false).iter().all(|(_, u)| !*u));
+    }
 }

@@ -1,6 +1,7 @@
-//! Lucide icons (ISC licence), embedded and tinted at runtime.
+//! Icons embedded and tinted at runtime; sources and licences are listed in `ATTRIBUTION.md`.
 
 pub static ICONS: &[(&str, &[u8])] = &[
+    ("adjustment-layer", include_bytes!("../../../assets/icons/adjustment-layer.svg")),
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
     ("align-justify", include_bytes!("../../../assets/icons/align-justify.svg")),
     ("align-left", include_bytes!("../../../assets/icons/align-left.svg")),
@@ -55,8 +56,10 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("lasso", include_bytes!("../../../assets/icons/lasso.svg")),
     ("lasso-magnetic", include_bytes!("../../../assets/icons/lasso-magnetic.svg")),
     ("lasso-select", include_bytes!("../../../assets/icons/lasso-select.svg")),
+    ("layer-mask", include_bytes!("../../../assets/icons/layer-mask.svg")),
     ("layers", include_bytes!("../../../assets/icons/layers.svg")),
     ("link", include_bytes!("../../../assets/icons/link.svg")),
+    ("link-2", include_bytes!("../../../assets/icons/link-2.svg")),
     ("lock", include_bytes!("../../../assets/icons/lock.svg")),
     ("lock-open", include_bytes!("../../../assets/icons/lock-open.svg")),
     ("lollipop", include_bytes!("../../../assets/icons/lollipop.svg")),
@@ -68,6 +71,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("move", include_bytes!("../../../assets/icons/move.svg")),
     ("navigation", include_bytes!("../../../assets/icons/navigation.svg")),
     ("paint-bucket", include_bytes!("../../../assets/icons/paint-bucket.svg")),
+    ("painting-symmetry", include_bytes!("../../../assets/icons/painting-symmetry.svg")),
     ("palette", include_bytes!("../../../assets/icons/palette.svg")),
     ("panel-right", include_bytes!("../../../assets/icons/panel-right.svg")),
     ("panels-top-left", include_bytes!("../../../assets/icons/panels-top-left.svg")),
@@ -98,11 +102,14 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("square", include_bytes!("../../../assets/icons/square.svg")),
     ("square-dashed", include_bytes!("../../../assets/icons/square-dashed.svg")),
     ("square-dashed-mouse-pointer", include_bytes!("../../../assets/icons/square-dashed-mouse-pointer.svg")),
-    ("square-dot", include_bytes!("../../../assets/icons/square-dot.svg")),
     ("square-plus", include_bytes!("../../../assets/icons/square-plus.svg")),
     ("squares-subtract", include_bytes!("../../../assets/icons/squares-subtract.svg")),
     ("stamp", include_bytes!("../../../assets/icons/stamp.svg")),
     ("sun", include_bytes!("../../../assets/icons/sun.svg")),
+    ("symmetry-diagonal", include_bytes!("../../../assets/icons/symmetry-diagonal.svg")),
+    ("symmetry-dual", include_bytes!("../../../assets/icons/symmetry-dual.svg")),
+    ("symmetry-horizontal", include_bytes!("../../../assets/icons/symmetry-horizontal.svg")),
+    ("symmetry-vertical", include_bytes!("../../../assets/icons/symmetry-vertical.svg")),
     ("swatch-book", include_bytes!("../../../assets/icons/swatch-book.svg")),
     ("text-cursor", include_bytes!("../../../assets/icons/text-cursor.svg")),
     ("toggle-left", include_bytes!("../../../assets/icons/toggle-left.svg")),

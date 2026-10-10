@@ -24,6 +24,8 @@
 	Layer	Слой
 	Type	Текст
 	Select	Выделение
+	Selected	Выбранные
+	Scope	Область
 	Top Left	Верхний левый
 	Top Right	Верхний правый
 	Bottom Left	Нижний левый
@@ -590,7 +592,7 @@
 	Additional plugins folder	Дополнительная папка плагинов
 	Install Plug-in…	Установить плагин…
 	Export Presets	Экспортировать наборы
-	Import Photoshop brushes (.abr)	Импортировать кисти Photoshop (.abr)
+	Import brushes (.abr)	Импортировать кисти (.abr)
 	Migrate Presets	Перенести наборы
 	Thumbnail size (smallest: list)	Размер миниатюр (минимальный: список)
 	Reset GPU Backend	Сбросить GPU-бэкенд
@@ -956,6 +958,7 @@
 	Brush Preset Options	Параметры наборов кистей
 	New Brush	Новая кисть
 	Create new brush from these settings	Создать новую кисть из этих параметров
+	Update the current brush with these settings	Обновить текущую кисть этими параметрами
 	Reset the brush to the defaults	Сбросить кисть к значениям по умолчанию
 	No brush presets	Нет наборов кистей
 	Override Pressure	Переопределить нажим
@@ -1355,6 +1358,8 @@
 	Switch theme	Сменить тему
 	Next Theme	Следующая тема
 	Classic Theme	Классическая тема
+	Solarized dark	Solarized тёмная
+	Solarized Dark Theme	Тёмная тема Solarized
 	Studio Theme	Тема Studio
 	Studio Light Theme	Светлая тема Studio
 	Adwaita Light Theme	Светлая тема Adwaita
@@ -1404,7 +1409,7 @@
 	Art & Illustration	Искусство и иллюстрация
 	Mobile	Мобильные
 	Film & Video	Кино и видео
-	Default Photoshop Size	Размер Photoshop по умолчанию
+	Default PhotoCraft Size	Размер PhotoCraft по умолчанию
 	Clipboard	Буфер обмена
 	Photo (2 × 3 in)	Фото (2 × 3 дюйма)
 	Photo (4 × 6 in)	Фото (4 × 6 дюйма)
@@ -1531,7 +1536,7 @@
 	Click to fill similar colours	Щёлкните, чтобы залить похожие цвета
 	Click to add text	Щёлкните, чтобы добавить текст
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Перетащите (лассо) или щёлкайте точки (многоугольное) · {add} добавить · {sub} вычесть
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Выделите рамку кадрирования · перетащите внутри для перемещения · края меняют размер ({ratio} пропорции, {centre} центр) · Space двигает при рисовании · {commit} применить · Esc отмена
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Выделите рамку кадрирования · перетащите внутри для перемещения · края меняют размер ({ratio} пропорции, {centre} центр) · Space двигает при рисовании · стрелки сдвигают · X меняет ориентацию · {commit} применить · Esc отмена
 	{mode} Color · {bits} bit	{mode}, {bits} бит
 	Drag to move the layer	Перетащите, чтобы переместить слой
 	Fit Screen	По размеру экрана
@@ -1571,7 +1576,7 @@
 	Yes	Да
 	These settings aren't available in PhotoCraft yet.	Эти параметры пока недоступны в PhotoCraft.
 	Shortcut removed.	Комбинация клавиш удалена.
-	All shortcuts reset to Photoshop defaults.	Все комбинации клавиш сброшены к стандартным Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Все комбинации клавиш сброшены к стандартным PhotoCraft.
 	Delete Shortcut	Удалить комбинацию
 	Press keys…	Нажмите клавиши…
 	shortcut	комбинация
@@ -2095,9 +2100,19 @@
 	Stroke	Мазок
 	Stroke Catch-up	Догонять мазком
 	Stroke:	Обводка:
+	Location:	Расположение:
+	Inside	Внутри
+	Outside	Снаружи
 	Tetrahedral	Тетраэдрическая
 	Texture Each Tip	Текстура на каждый отпечаток
-	The current gradient (pick one in Window › Gradients)	Текущий градиент (выберите в Окно › Градиенты)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Редактор градиентов
+	Gradient picker	Выбор градиента
+	Save As Preset	Сохранить как набор
+	The gradient the Gradient tool paints with	Градиент, которым рисует инструмент «Градиент»
+	Adds the current gradient to the Gradients panel	Добавляет текущий градиент на панель «Градиенты»
+	Gradient stops	Точки градиента
+	Click to edit the gradient	Щёлкните, чтобы изменить градиент
 	Tilt X	Наклон X
 	Tilt Y	Наклон Y
 	Toggle count group visibility	Вкл/выкл видимость группы счёта
@@ -2314,6 +2329,9 @@
 	Cancelled {label}	{label}: отменено
 	Esc to cancel	Esc — отмена
 	Opening {name}	Открытие {name}
+	Saving {name}	Сохранение {name}
+	A save to {name} is still running; try again when it finishes	Сохранение в {name} ещё выполняется; повторите попытку после его завершения
+	{label} is writing the file and can no longer be cancelled	{label}: идёт запись файла, отменить уже нельзя
 	Opening {name}…	Открытие {name}…
 	Opening…	Открытие…
 	Reading…	Чтение…
@@ -2374,6 +2392,7 @@ cameraRaw	Roughness	Неровность
 	Patch Tool	Заплатка
 	Patch:	Заплатка:
 	Lasso around an area, then drag the selection	Обведите область лассо, затем перетащите выделение
+	Now drag the selection onto another area	Теперь перетащите выделение на другую область
 	Edit Type	Редактировать текст
 
 
@@ -2455,6 +2474,10 @@ cameraRaw	Roughness	Неровность
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Палитра цветов (Цвет текста)
+	Color Picker (Fill Color)	Палитра цветов (Цвет заливки)
+	Fill color	Цвет заливки
+	Color Picker (Stroke Color)	Палитра цветов (Цвет обводки)
+	Stroke color	Цвет обводки
 	Pick screen color	Выбрать цвет на экране
 	Sample a pixel anywhere on the screen	Выберите пиксель в любом месте экрана
 	Click to pick · Esc to cancel	Щелчок — выбрать · Esc — отменить
@@ -2523,3 +2546,63 @@ fontWeight	Italic	Курсив
 	Rotate View Tool	Инструмент поворота вида
 	Reset View	Сбросить вид
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Перетащите вокруг центра, чтобы повернуть вид  ·  Shift фиксирует шаг 15°
+
+# Painting symmetry presets.
+	Dual Axis	Две оси
+	Diagonal	Диагональная
+	Transform Symmetry	Трансформировать симметрию
+	Set painting symmetry options	Настроить параметры симметричного рисования
+
+# Eyedropper Sample Size and Sample (#1649).
+	Point Sample	Точечная выборка
+	3 by 3 Average	Среднее 3 × 3
+	5 by 5 Average	Среднее 5 × 5
+	11 by 11 Average	Среднее 11 × 11
+	31 by 31 Average	Среднее 31 × 31
+	51 by 51 Average	Среднее 51 × 51
+	101 by 101 Average	Среднее 101 × 101
+	Sample Size:	Размер выборки:
+	All Layers No Adjustments	Все слои без коррекции
+	Current & Below No Adjustments	Текущий и ниже без коррекции
+	Show Sampling Ring	Показать кольцо выборки
+	Click to sample the foreground colour  ·  {key}-click for background	Клик — взять основной цвет  ·  {key}-клик — фоновый цвет
+
+# Color Picker warnings
+	Out of gamut for printing: click for the nearest printable colour	Вне цветового охвата печати: щёлкните, чтобы выбрать ближайший печатаемый цвет
+	Not a web colour: click for the nearest web colour	Не веб-цвет: щёлкните, чтобы выбрать ближайший веб-цвет
+	Color to Alpha…	Цвет в альфа-канал…
+	Transparency Threshold	Порог прозрачности
+	Opacity Threshold	Порог непрозрачности
+	Rule of Thirds	Правило третей
+	Triangle	Треугольник
+	Golden Ratio	Золотое сечение
+	Golden Spiral	Золотая спираль
+	Auto Show Overlay	Показывать перекрытие автоматически
+	Always Show Overlay	Всегда показывать перекрытие
+	Never Show Overlay	Никогда не показывать перекрытие
+	Cycle Overlay	Сменить перекрытие
+	Cycle Orientation	Сменить ориентацию
+	Set the overlay options for the Crop tool	Задать параметры перекрытия для инструмента «Рамка»
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+щелчок перехватило окружение рабочего стола: оно перемещает окна через Alt+перетаскивание. Назначьте для перемещения окон клавишу Super или зафиксируйте Alt в меню Окно › Клавиши-модификаторы.
+	Color Picker (Solid Color)	Выбор цвета (сплошной цвет)
+	Straighten the image by drawing a line on it	Выровнять изображение, нарисовав на нем линию
+	Set additional Crop options	Задать дополнительные параметры кадрирования
+	Show Cropped Area	Показать отсекаемую область
+	Enable Crop Shield	Включить экран кадрирования
+	Match Canvas	Как у холста
+	Auto Adjust Opacity	Автоматически настраивать непрозрачность
+	Crop Shield color	Цвет экрана кадрирования
+	Color Picker (Crop Shield Color)	Палитра цветов (Цвет экрана кадрирования)
+	From Center	От центра
+	Link radii	Связать радиусы
+	Star Ratio:	Коэффициент звезды:
+	Create Rectangle	Создать прямоугольник
+	Create Ellipse	Создать эллипс
+	Create Triangle	Создать треугольник
+	Create Polygon	Создать многоугольник
+	Some brush presets could not be loaded	Не удалось загрузить некоторые наборы кистей
+	Retry saving presets	Повторить сохранение наборов
+	Brush preset changes are not saved: {error}	Изменения наборов кистей не сохранены: {error}
+	Keep this tab open to retain your brushes.	Не закрывайте эту вкладку, чтобы сохранить кисти.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Хранилище браузера недоступно; кисти действуют только в этом сеансе. Не закрывайте эту вкладку, чтобы сохранить их.
+	Saving brush presets… Keep this tab open until saving finishes.	Сохранение наборов кистей… Не закрывайте эту вкладку, пока сохранение не завершится.

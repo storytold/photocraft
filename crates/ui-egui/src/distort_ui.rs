@@ -217,6 +217,6 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Screen distance (document px) that counts as "on" a handle at the current zoom.
 pub(crate) fn tolerance(app: &PhotocraftApp) -> f64 {
-    let z = app.session.active_index().and_then(|i| app.ui.views.get(i)).map_or(1.0, |v| v.zoom.max(0.01));
+    let z = app.point_zoom().max(0.01);
     8.0 / f64::from(z)
 }

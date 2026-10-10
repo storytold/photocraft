@@ -707,7 +707,20 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
 
 /// File › Export › Save for Web (Legacy).
 fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
+    save_for_web_with_writer(s, p, &mut write_file)
+}
+
+/// Save for Web through a platform writer (native files or browser downloads).
+/// The writer receives every image, spacer and HTML file. A write error stops the export;
+/// only a complete export remembers its settings and fires the export event.
+pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
+    if let Some(authorize) = s.authorize {
+        authorize(cmd, p)?;
+    }
+    // Direct platform calls must export the moved selection as it appears on the canvas,
+    // just as Session::execute does before dispatching the native command.
+    crate::float_cmds::before_command(s, cmd)?;
     let st = WebSettings::from_params(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
@@ -730,7 +743,6 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
-    s.file_menu.last_web = Some(p.clone());
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
@@ -738,7 +750,8 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
-        write_file(path, &o.bytes)?;
+        write(path, &o.bytes)?;
+        s.file_menu.last_web = Some(p.clone());
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
@@ -799,7 +812,7 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
             let name = unique(&stem, o.ext);
             let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
             let out = join(&dir, &rel);
-            write_file(&out, &o.bytes)?;
+            write(&out, &o.bytes)?;
             total += o.bytes.len();
             files.push(out);
             let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
@@ -820,13 +833,14 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
         if let Some(sp) = &spacer {
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write_file(&join(&dir, sp), &gif)?;
+            write(&join(&dir, sp), &gif)?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
         let hp = join(&dir, &format!("{base}.html"));
-        write_file(&hp, page.as_bytes())?;
+        write(&hp, page.as_bytes())?;
         html_path = Some(hp);
     }
+    s.file_menu.last_web = Some(p.clone());
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height}))
 }

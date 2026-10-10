@@ -190,7 +190,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
         "path.style.pasteFill" => !pending && shape && app.session.path_fill_clipboard.is_some(),
         "path.style.pasteStroke" => !pending && shape && app.session.path_stroke_clipboard.is_some(),
         "select.isolateLayers" => layer.is_some(),
-        "paint.symmetryDisable" => st.symmetry_path.is_some(),
+        "paint.symmetryDisable" => st.symmetry.is_some(),
         _ => false,
     }
 }

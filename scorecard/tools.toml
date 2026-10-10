@@ -171,7 +171,7 @@ id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
 status = "partial"
 issue = 214
-note = "Ratio dropdown and fields only (panels.rs:551-579)"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); no W x H x Resolution with units or saved presets"
 
 [[item]]
 id = "TOOL-214-10"
@@ -235,3 +235,45 @@ target = "Rotate View tool: drag to turn the view, Reset View, Match Rotation co
 status = "done"
 issue = 214
 note = "Tool::RotateView in the Hand flyout; view.rotateView / view.resetView; Match Rotation copies views[].rotation; enhanced_controls.rotate_view_with_trackpad is read"
+
+[[item]]
+id = "TOOL-1649-1"
+target = "Eyedropper Sample Size (Point, 3×3 … 101×101 Average), Sample layers, Show Sampling Ring"
+status = "done"
+issue = 1649
+note = "document.sampleColor (sample_cmds.rs): average of the square clipped to the canvas, in the document's model and depth; eyedropper_ui.rs options bar; shared with Alt-click, dialog eyedroppers and the Info panel; ui.set eyedropperSampleSize/eyedropperSample/eyedropperRing. Color Sampler tool still missing"
+
+[[item]]
+id = "TOOL-214-20"
+target = "Crop overlay options: Rule of Thirds, Grid, Diagonal, Triangle, Golden Ratio, Golden Spiral; Auto / Always / Never Show Overlay; O cycles the overlay, Shift+O its orientation"
+status = "done"
+issue = 1919
+note = "crop_overlay.rs: unit-square guides shared by upright and turned frames (canvas.rs), options-bar menu, O / Shift+O ahead of the tool keys in shortcuts.rs; ToolOptions crop_overlay / crop_overlay_show / crop_overlay_orientation, ui.set cropOverlay / cropOverlayShow / cropOverlayOrientation"
+
+[[item]]
+id = "TOOL-214-18"
+target = "Crop: drag outside the frame to rotate it (Shift 15 deg steps, angle readout); Enter rotates and crops in one step"
+status = "done"
+issue = 1792
+note = "image.crop angle param (image_cmds.rs: Image Rotation > Arbitrary + crop, one undo step); crop_ui.rs turns, moves and resizes the frame along its axes (Classic Mode visuals); UiState.crop_angle"
+
+[[item]]
+id = "TOOL-214-19"
+target = "Crop: arrow keys nudge the crop box (Shift 10 px), X swaps portrait/landscape, W x H readout while drawing or resizing"
+status = "done"
+issue = 1919
+note = "crop_ui.rs keys/nudge/swap_orientation (ahead of the selection nudge and tools.swapColors in shortcuts.rs; X also swaps the options-bar ratio) and sizing (canvas.rs draws it with the marquee readout); turned frames included"
+
+[[item]]
+id = "TOOL-214-21"
+target = "Crop: Straighten button in the options bar and Cmd/Ctrl-drag draw a line; the frame turns so the line ends up level (or plumb when nearer vertical), with an angle readout"
+status = "done"
+issue = 1919
+note = "crop_straighten.rs: one-shot options-bar button, Cmd/Ctrl held is a temporary Straighten (ui.pointer command flag); the Ruler's straighten_angle convention; the frame is fitted to the largest of its proportions inside the image (Classic Mode); a pending edit committed by Enter"
+
+[[item]]
+id = "TOOL-214-22"
+target = "Crop gear menu: Show Cropped Area (H), Enable Crop Shield with Match Canvas / custom colour, opacity and Auto Adjust Opacity"
+status = "done"
+issue = 1919
+note = "crop_shield.rs: fill() resolves the shield (canvas.rs paints it around upright and turned frames), gear popup in the options bar, H ahead of the Hand key in shortcuts.rs, Custom… opens the Color Picker; ToolOptions crop_shield, ui.set cropShield. No Classic Mode / Auto Center Preview (PhotoCraft is always Classic Mode)"
