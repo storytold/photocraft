@@ -3426,3 +3426,17 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Check for Updates	Sprawdź aktualizacje
+	Check for Updates…	Sprawdź aktualizacje…
+	Checking for updates…	Sprawdzanie aktualizacji…
+	Download Update	Pobierz aktualizację
+	View Downloads	Zobacz pliki do pobrania
+	Software Updates	Aktualizacje oprogramowania
+	Automatically Check for Updates at Startup	Automatycznie sprawdzaj aktualizacje przy uruchomieniu
+	You're up to date	Masz najnowszą wersję
+	What's new in this release:	Nowości w tym wydaniu:
+	Open Release Page on GitHub	Otwórz stronę wydania w GitHub
+	Web builds are always running the latest version.	Wersja internetowa zawsze korzysta z najnowszej wersji.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatyczne sprawdzanie odbywa się najwyżej raz dziennie. Dostępne aktualizacje pojawią się po zamknięciu pozostałych okien dialogowych.
+	Download the update and save your work before installing the new version.	Pobierz aktualizację i zapisz pracę przed instalacją nowej wersji.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	W przypadku instalacji zarządzanych przez pakiety zaktualizuj PhotoCraft za pomocą menedżera pakietów. Inne pliki są na stronie wydania.

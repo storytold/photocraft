@@ -2812,3 +2812,17 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+	Check for Updates	Periksa Pembaruan
+	Check for Updates…	Periksa Pembaruan…
+	Checking for updates…	Memeriksa pembaruan…
+	Download Update	Unduh Pembaruan
+	View Downloads	Lihat Unduhan
+	Software Updates	Pembaruan Perangkat Lunak
+	Automatically Check for Updates at Startup	Periksa Pembaruan Secara Otomatis Saat Memulai
+	You're up to date	Versi Anda sudah terbaru
+	What's new in this release:	Yang baru dalam rilis ini:
+	Open Release Page on GitHub	Buka Halaman Rilis di GitHub
+	Web builds are always running the latest version.	Versi web selalu menjalankan versi terbaru.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Pemeriksaan otomatis dilakukan paling banyak sekali sehari. Pembaruan yang tersedia muncul setelah Anda menutup dialog lain.
+	Download the update and save your work before installing the new version.	Unduh pembaruan dan simpan pekerjaan Anda sebelum menginstal versi baru.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Untuk instalasi yang dikelola paket, perbarui PhotoCraft melalui pengelola paket. Unduhan lain tersedia di halaman rilis.

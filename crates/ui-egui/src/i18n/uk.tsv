@@ -3513,3 +3513,17 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+	Check for Updates	Перевірити оновлення
+	Check for Updates…	Перевірити оновлення…
+	Checking for updates…	Перевірка оновлень…
+	Download Update	Завантажити оновлення
+	View Downloads	Переглянути завантаження
+	Software Updates	Оновлення програми
+	Automatically Check for Updates at Startup	Автоматично перевіряти оновлення під час запуску
+	You're up to date	Установлено найновішу версію
+	What's new in this release:	Нове в цьому випуску:
+	Open Release Page on GitHub	Відкрити сторінку випуску на GitHub
+	Web builds are always running the latest version.	Вебверсія завжди використовує найновішу версію.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Автоматична перевірка виконується не частіше одного разу на день. Доступні оновлення з’являться після закриття інших діалогів.
+	Download the update and save your work before installing the new version.	Завантажте оновлення та збережіть роботу перед встановленням нової версії.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Якщо програму встановлено через менеджер пакунків, оновіть PhotoCraft за його допомогою. Інші завантаження доступні на сторінці випуску.

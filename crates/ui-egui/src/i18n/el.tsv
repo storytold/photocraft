@@ -3514,3 +3514,16 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	Check for Updates…	Έλεγχος για ενημερώσεις…
+	Checking for updates…	Έλεγχος για ενημερώσεις σε εξέλιξη…
+	Download Update	Λήψη ενημέρωσης
+	View Downloads	Προβολή λήψεων
+	Software Updates	Ενημερώσεις λογισμικού
+	Automatically Check for Updates at Startup	Αυτόματος έλεγχος ενημερώσεων κατά την εκκίνηση
+	You're up to date	Έχετε την πιο πρόσφατη έκδοση
+	What's new in this release:	Τι νέο υπάρχει σε αυτή την έκδοση:
+	Open Release Page on GitHub	Άνοιγμα σελίδας έκδοσης στο GitHub
+	Web builds are always running the latest version.	Η διαδικτυακή έκδοση χρησιμοποιεί πάντα την πιο πρόσφατη έκδοση.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Οι αυτόματοι έλεγχοι γίνονται το πολύ μία φορά την ημέρα. Οι διαθέσιμες ενημερώσεις εμφανίζονται αφού κλείσετε τα άλλα παράθυρα διαλόγου.
+	Download the update and save your work before installing the new version.	Κατεβάστε την ενημέρωση και αποθηκεύστε την εργασία σας πριν εγκαταστήσετε τη νέα έκδοση.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Για εγκαταστάσεις μέσω διαχειριστή πακέτων, ενημερώστε το PhotoCraft μέσω αυτού. Άλλες λήψεις βρίσκονται στη σελίδα της έκδοσης.

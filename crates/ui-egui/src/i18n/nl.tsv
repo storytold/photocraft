@@ -3585,3 +3585,16 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+	Check for Updates…	Controleren op updates…
+	Checking for updates…	Controleren op updates…
+	Download Update	Update downloaden
+	View Downloads	Downloads bekijken
+	Software Updates	Software-updates
+	Automatically Check for Updates at Startup	Bij het opstarten automatisch op updates controleren
+	You're up to date	U gebruikt de nieuwste versie
+	What's new in this release:	Nieuw in deze versie:
+	Open Release Page on GitHub	Releasepagina op GitHub openen
+	Web builds are always running the latest version.	De webversie gebruikt altijd de nieuwste versie.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatische controles vinden maximaal eenmaal per dag plaats. Beschikbare updates verschijnen nadat u andere dialoogvensters sluit.
+	Download the update and save your work before installing the new version.	Download de update en sla uw werk op voordat u de nieuwe versie installeert.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Werk PhotoCraft bij via uw pakketbeheerder als u het daarmee hebt geïnstalleerd. Andere downloads staan op de releasepagina.

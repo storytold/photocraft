@@ -254,7 +254,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         } else if crate::delete_layer_prompt::owns(&d.fields) {
                             tl!("Delete")
                         } else if d.kind == DialogKind::Update {
-                            tl!("Download Update")
+                            if fields.get("downloadUrl").and_then(Value::as_str).is_some() { tl!("Download Update") } else { tl!("View Downloads") }
                         } else if d.fields.contains_key("__export") {
                             tl!("Export")
                         } else {
@@ -392,7 +392,7 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About if d.fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => "System Info".into(),
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
-        DialogKind::Update => "Update Available".into(),
+        DialogKind::Update => "Software Updates".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
         DialogKind::Error => "Error".into(),
     }
@@ -453,15 +453,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         }
         DialogKind::LayerStyle => crate::layer_style::confirm(app, &d.fields),
         DialogKind::About | DialogKind::Error => Ok(Value::Null),
-        DialogKind::Update => {
-            if let Some(url) = d.fields.get("htmlUrl").and_then(Value::as_str) {
-                let url = url.to_string();
-                if let Some(f) = &app.services.open_url {
-                    let _ = f(&url);
-                }
-            }
-            Ok(Value::Null)
-        }
+        DialogKind::Update => crate::update_check::open_download(app, &d.fields),
     }
 }
 

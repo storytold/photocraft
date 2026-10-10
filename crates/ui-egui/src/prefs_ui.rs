@@ -884,7 +884,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         "prefs" => {
             f.insert("__gpuInfo".into(), json!(app.perf.gpu_info.lines()));
             let system = system_theme(app, ui.ctx());
-            prefs_body(ui, f, system);
+            prefs_body(app, ui, f, system);
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -896,6 +896,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 fn humanize(key: &str) -> String {
     match key {
+        "checkForUpdates" => return "Automatically Check for Updates at Startup".into(),
         "appearanceMode" => return "Appearance Mode".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
@@ -971,7 +972,7 @@ fn color_of(s: &str) -> Color32 {
 }
 
 /// Preferences: section list on the left, the section's settings on the right.
-fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
+fn prefs_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -1025,6 +1026,14 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system);
+                    if section == "general" {
+                        ui.add_space(8.0);
+                        ui.label(tl!("Software Updates"));
+                        if crate::widgets::secondary_button(ui, tl!("Check for Updates…"), 160.0).clicked() {
+                            let _ = crate::menus::invoke(app, ui.ctx(), "help.checkForUpdates", json!({}));
+                        }
+                        ui.label(tl!("Automatic checks run at most once a day. Available updates appear after you close other dialogs."));
+                    }
                     if section == "fileHandling" {
                         ui.label(
                             RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))

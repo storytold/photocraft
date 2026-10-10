@@ -45,7 +45,7 @@ id = "DIST-220-1"
 target = "Help > Check for Updates plus an opt-out periodic release-feed check on all desktops"
 status = "done"
 issue = 220
-note = "Help > Check for Updates with GitHub Releases feed, semver comparison, periodic background check, and General settings toggle (#220)"
+note = "Help and General preferences update checks; opt-out daily startup check, release notes and matching MSI/DMG/AppImage download; package-manager guidance (#220, #2316)"
 
 [[item]]
 id = "DIST-220-2"

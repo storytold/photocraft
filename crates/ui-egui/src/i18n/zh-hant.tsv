@@ -2383,3 +2383,17 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Check for Updates	檢查更新
+	Check for Updates…	檢查更新…
+	Checking for updates…	正在檢查更新…
+	Download Update	下載更新
+	View Downloads	檢視下載
+	Software Updates	軟體更新
+	Automatically Check for Updates at Startup	啟動時自動檢查更新
+	You're up to date	已是最新版本
+	What's new in this release:	此版本的新功能：
+	Open Release Page on GitHub	在GitHub上開啟發佈頁面
+	Web builds are always running the latest version.	網頁版一律執行最新版本。
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	自動檢查每天最多執行一次。關閉其他對話框後，將顯示可用更新。
+	Download the update and save your work before installing the new version.	下載更新，並在安裝新版本之前儲存工作。
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	透過套件管理員安裝的版本，請使用套件管理員更新PhotoCraft。其他下載位於發佈頁面。

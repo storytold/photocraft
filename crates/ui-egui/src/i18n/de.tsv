@@ -2445,3 +2445,17 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+	Check for Updates	Nach Updates suchen
+	Check for Updates…	Nach Updates suchen…
+	Checking for updates…	Updates werden gesucht…
+	Download Update	Update herunterladen
+	View Downloads	Downloads anzeigen
+	Software Updates	Software-Updates
+	Automatically Check for Updates at Startup	Beim Start automatisch nach Updates suchen
+	You're up to date	Sie sind auf dem neuesten Stand
+	What's new in this release:	Neuerungen in dieser Version:
+	Open Release Page on GitHub	Versionsseite auf GitHub öffnen
+	Web builds are always running the latest version.	Die Webversion verwendet immer die neueste Version.
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatische Prüfungen erfolgen höchstens einmal täglich. Verfügbare Updates erscheinen, nachdem Sie andere Dialoge geschlossen haben.
+	Download the update and save your work before installing the new version.	Laden Sie das Update herunter und speichern Sie Ihre Arbeit, bevor Sie die neue Version installieren.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Bei paketverwalteten Installationen aktualisieren Sie PhotoCraft über Ihren Paketmanager. Weitere Downloads finden Sie auf der Versionsseite.

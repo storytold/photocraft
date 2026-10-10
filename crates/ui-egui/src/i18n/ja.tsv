@@ -3426,3 +3426,17 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Check for Updates	更新を確認
+	Check for Updates…	更新を確認…
+	Checking for updates…	更新を確認しています…
+	Download Update	更新をダウンロード
+	View Downloads	ダウンロードを表示
+	Software Updates	ソフトウェアの更新
+	Automatically Check for Updates at Startup	起動時に更新を自動確認
+	You're up to date	最新の状態です
+	What's new in this release:	このリリースの新機能：
+	Open Release Page on GitHub	GitHubでリリースページを開く
+	Web builds are always running the latest version.	Web版は常に最新バージョンで動作しています。
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	自動確認は1日1回までです。利用可能な更新は他のダイアログを閉じると表示されます。
+	Download the update and save your work before installing the new version.	更新をダウンロードし、新しいバージョンをインストールする前に作業を保存してください。
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	パッケージ管理された環境では、パッケージマネージャーでPhotoCraftを更新してください。その他のダウンロードはリリースページにあります。
