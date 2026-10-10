@@ -1260,19 +1260,23 @@ impl Compositor {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: kind.format(),
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
             let default_nonzero = default_pixel.iter().any(|v| *v != 0.0);
             let mut r =
                 Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, default_bits, doc, last_used: 0, stamp: 0, cmyk };
+            // Only the region moved (painting past a layer's tiles grows it): keep the texels the
+            // old texture already holds instead of converting and uploading every tile again.
+            let kept = self.residents.remove(&key).map_or(Rect::EMPTY, |old| keep_overlap(device, queue, &old, &mut r));
             // A new texture starts zeroed: write the tiles that are present, and the default pixel
             // where they are missing if it isn't zero. Coordinates sharing a tile (a solid fill,
-            // the default) take one upload and GPU copies (#1774).
+            // the default) take one upload and GPU copies (#1774). Kept tiles are brought up to
+            // date below, like those of a resident that didn't move.
             let mut present = Vec::new();
             let mut missing = Vec::new();
-            for c in region.tiles() {
+            for c in region.tiles().filter(|c| !kept.contains_rect(&c.rect())) {
                 match surface.tile(c) {
                     Some(t) => present.push((c, t.clone())),
                     None if default_nonzero => missing.push(c),
@@ -1756,6 +1760,40 @@ fn put_tiles(device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::Com
     bytes.len() as u64
 }
 
+/// Copy the texels `old` holds inside the region of its replacement `new` (same texel kind,
+/// format and default pixel; only the region moved) and carry over the tiles they show, so only
+/// tiles outside the overlap or changed since need uploading. Returns the kept (tile-aligned)
+/// rect; empty when nothing can be kept.
+fn keep_overlap(device: &wgpu::Device, queue: &wgpu::Queue, old: &Resident, new: &mut Resident) -> Rect {
+    let same = old.kind == new.kind && old.format == new.format && old.cmyk == new.cmyk && old.default_bits == new.default_bits;
+    let k = old.region.intersect(&new.region);
+    if !same || k.is_empty() {
+        return Rect::EMPTY;
+    }
+    // Its own submission: tile writes go through the queue and land at the start of the next
+    // submit, before anything in the frame's encoder, so a copy recorded there would overwrite
+    // the tiles written after it with the old texels.
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose_keep") });
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &old.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: (k.x0 - old.region.x0) as u32, y: (k.y0 - old.region.y0) as u32, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: &new.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: (k.x0 - new.region.x0) as u32, y: (k.y0 - new.region.y0) as u32, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d { width: k.width(), height: k.height(), depth_or_array_layers: 1 },
+    );
+    queue.submit([encoder.finish()]);
+    new.tiles = old.tiles.iter().filter(|(c, _)| k.contains_rect(&c.rect())).map(|(c, t)| (*c, t.clone())).collect();
+    k
+}
+
 /// Convert `tiles` of `surface` to `kind` texels and hand each distinct tile, the coordinates
 /// sharing it and its bytes to `put`. Each distinct tile is converted once (a solid fill shares
 /// one `Arc` across every coordinate it covers), in parallel batches. Converting every tile one
@@ -1793,7 +1831,7 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
     let fmt = surface.format();
     let ch = fmt.channels();
     if let (Some(t), TexKind::Rgba16F) = (tile, kind)
-        && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes())
+        && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes()))
     {
         return out;
     }
@@ -1845,6 +1883,43 @@ fn rgb_gray16_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
             half.get(v as usize).copied().unwrap_or(0).to_le_bytes()
         };
         let (r, g, b) = if gray { (h(0), h(0), h(0)) } else { (h(0), h(1), h(2)) };
+        let a = if fmt.alpha { h(ch - 1) } else { one };
+        out.extend_from_slice(&r);
+        out.extend_from_slice(&g);
+        out.extend_from_slice(&b);
+        out.extend_from_slice(&a);
+    }
+    Some(out)
+}
+
+/// RGBA16F texels of a 32-bit float RGB or grayscale tile, straight from its samples: the same
+/// bytes as the general path without decoding the tile into a float buffer and converting it
+/// pixel by pixel (a brush dab on a 32-bit layer re-uploads the tiles it touched). `None` for
+/// other formats.
+fn rgb_gray32_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
+    use photocraft_color::ColorMode;
+    if fmt.sample != SampleType::F32 {
+        return None;
+    }
+    let gray = match fmt.mode {
+        ColorMode::Rgb => false,
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => true,
+        _ => return None,
+    };
+    let one = f32_to_f16(1.0).to_le_bytes();
+    let ch = fmt.channels();
+    let mut out = Vec::with_capacity((TILE_SIZE * TILE_SIZE) as usize * 8);
+    for px in bytes.chunks_exact(ch * 4) {
+        let h = |i: usize| -> [u8; 2] {
+            let v = px.get(i * 4..i * 4 + 4).map_or(0.0, |b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]));
+            f32_to_f16(v).to_le_bytes()
+        };
+        let (r, g, b) = if gray {
+            let v = h(0);
+            (v, v, v)
+        } else {
+            (h(0), h(1), h(2))
+        };
         let a = if fmt.alpha { h(ch - 1) } else { one };
         out.extend_from_slice(&r);
         out.extend_from_slice(&g);
@@ -2150,22 +2225,28 @@ mod tests {
         assert_eq!((converted, n), (CONVERT_BATCH + 5, CONVERT_BATCH + 5));
     }
 
-    /// The 16-bit RGB/gray fast path gives exactly the general path's half floats.
+    /// The 16-bit and 32-bit float RGB/gray fast paths give exactly the general path's half
+    /// floats (32-bit samples above 1 and below 0 included).
     #[test]
-    fn sixteen_bit_fast_path_matches_the_general_one() {
+    fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
         for fmt in [
             PixelFormat::RGBA16,
             PixelFormat { alpha: false, ..PixelFormat::RGBA16 },
             PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 },
             PixelFormat { sample: SampleType::U16, alpha: true, ..PixelFormat::GRAY8 },
+            PixelFormat::RGBA32F,
+            PixelFormat { alpha: false, ..PixelFormat::RGBA32F },
+            PixelFormat { sample: SampleType::F32, ..PixelFormat::GRAY8 },
+            PixelFormat { sample: SampleType::F32, alpha: true, ..PixelFormat::GRAY8 },
         ] {
             let mut s = Surface::new(fmt);
             let r = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
             let n = (TILE_SIZE * TILE_SIZE) as usize * fmt.channels();
-            let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32).collect();
+            let hdr = if fmt.sample == SampleType::F32 { 4.0 } else { 1.0 };
+            let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32 * hdr - (hdr - 1.0) / 4.0).collect();
             s.write_region(r, &data);
             let t = s.tile(TileCoord::new(0, 0)).expect("written").clone();
-            let fast = rgb_gray16_to_f16(&fmt, t.bytes()).expect("fast path");
+            let fast = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes())).expect("fast path");
             let raw = s.read_region(r);
             let general: Vec<u8> =
                 raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|x| f32_to_f16(x).to_le_bytes())).flatten().collect();
@@ -2174,6 +2255,8 @@ mod tests {
         }
         assert!(rgb_gray16_to_f16(&PixelFormat::RGBA8, &[]).is_none());
         assert!(rgb_gray16_to_f16(&PixelFormat { sample: SampleType::U16, ..PixelFormat::CMYKA8 }, &[]).is_none());
+        assert!(rgb_gray32_to_f16(&PixelFormat::RGBA16, &[]).is_none());
+        assert!(rgb_gray32_to_f16(&PixelFormat { sample: SampleType::F32, ..PixelFormat::CMYKA8 }, &[]).is_none());
     }
 
     #[test]
