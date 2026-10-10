@@ -2363,6 +2363,7 @@ fontWeight	Italic	Kursiv
 	All Layers No Adjustments	Alle Ebenen ohne Einstellungen
 	Current & Below No Adjustments	Aktuelle und darunter ohne Einstellungen
 	Show Sampling Ring	Aufnahmering anzeigen
+	Outer ring: previous color. Inner ring: sampled color.	Äußerer Ring: vorherige Farbe. Innerer Ring: aufgenommene Farbe.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Außerhalb des Druckfarbumfangs: Klicken für die nächstliegende druckbare Farbe

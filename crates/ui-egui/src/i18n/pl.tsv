@@ -3347,6 +3347,7 @@ cameraRaw	Roughness	Chropowatość
 	All Layers No Adjustments	Wszystkie warstwy bez korekt
 	Current & Below No Adjustments	Bieżąca i poniżej bez korekt
 	Show Sampling Ring	Pokaż pierścień próbkowania
+	Outer ring: previous color. Inner ring: sampled color.	Pierścień zewnętrzny: poprzedni kolor. Pierścień wewnętrzny: pobrany kolor.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Poza gamą druku: kliknij, aby wybrać najbliższy kolor do druku

@@ -2324,6 +2324,7 @@ fontWeight	Italic	Kurzíva
 	All Layers No Adjustments	Všechny vrstvy bez korekcí
 	Current & Below No Adjustments	Aktuální a pod ní bez korekcí
 	Show Sampling Ring	Zobrazit vzorkovací kroužek
+	Outer ring: previous color. Inner ring: sampled color.	Vnější kruh: předchozí barva. Vnitřní kruh: vzorkovaná barva.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Mimo gamut tisku: klepnutím zvolíte nejbližší tisknutelnou barvu

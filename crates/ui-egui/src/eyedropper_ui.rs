@@ -45,7 +45,7 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::dropdown(ui, "eyedropper-size", &mut o.eyedropper_size, &size_options(), 130.0);
     opt(ui, tl!("Sample:"));
     widgets::dropdown(ui, "eyedropper-sample", &mut o.eyedropper_sample, &layer_options(), 190.0);
-    widgets::checkbox(ui, &mut o.eyedropper_ring, tl!("Show Sampling Ring"));
+    widgets::checkbox(ui, &mut o.eyedropper_ring, tl!("Show Sampling Ring")).on_hover_text(tl!("Outer ring: previous color. Inner ring: sampled color."));
     widgets::vline(ui, 22.0);
     let t = Tokens::get(ui.ctx());
     ui.label(

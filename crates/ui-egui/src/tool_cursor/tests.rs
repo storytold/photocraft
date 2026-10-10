@@ -119,6 +119,30 @@ fn hostile_scales_get_no_hand_bitmap() {
 }
 
 #[test]
+fn zoom_and_pipette_bitmaps_are_readable_at_each_dpi_and_bound_allocations() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let plus = rasterize(Shape::Zoom { out: false }, scale).unwrap();
+        let minus = rasterize(Shape::Zoom { out: true }, scale).unwrap();
+        assert_eq!((plus.size, plus.hotspot), (minus.size, minus.hotspot));
+        assert_ne!(plus.rgba, minus.rgba);
+        let [x, y] = plus.hotspot;
+        let sign_y = y - (2.5 * scale).round() as u16;
+        assert!(alpha(&plus, x, sign_y) > alpha(&minus, x, sign_y), "+ has a vertical arm at {scale}x");
+        for image in [&plus, &minus, &rasterize(Shape::Pipette, scale).unwrap()] {
+            assert!(image.rgba.as_chunks::<4>().0.iter().any(|p| p[0] > 230 && p[3] > 230));
+            assert!(image.rgba.as_chunks::<4>().0.iter().any(|p| p[0] < 25 && p[3] > 100));
+            assert_eq!(alpha(image, 0, 0), 0);
+            assert!(alpha(image, image.hotspot[0], image.hotspot[1]) > 230);
+        }
+    }
+    for shape in [Shape::Zoom { out: false }, Shape::Zoom { out: true }, Shape::Pipette] {
+        for scale in [f32::NAN, f32::INFINITY, -1.0, 0.0, f32::MAX, 500.0] {
+            assert!(rasterize(shape, scale).is_none());
+        }
+    }
+}
+
+#[test]
 fn the_hand_is_a_bitmap_only_where_the_os_has_none() {
     let ctx = egui::Context::default();
     ctx.add_plugin(CursorLifecycle);
@@ -214,8 +238,16 @@ fn write_cursor_preview() {
         (Shape::Hand { closed: true }, 1.0),
         (Shape::Hand { closed: false }, 1.5),
         (Shape::Hand { closed: true }, 2.0),
+        (Shape::Zoom { out: false }, 1.0),
+        (Shape::Zoom { out: true }, 1.0),
+        (Shape::Pipette, 1.0),
+        (Shape::Zoom { out: false }, 2.0),
+        (Shape::Zoom { out: true }, 2.0),
+        (Shape::Pipette, 2.0),
     ];
-    let (width, height) = (600_usize, cases.len() * 100);
+    // The 2x pipette bitmap is 101 px high, including transparent padding.
+    let row_height = 128;
+    let (width, height) = (600_usize, cases.len() * row_height);
     let mut rgba = vec![255; width * height * 4];
     for (col, background) in [0_u8, 128, 255].into_iter().enumerate() {
         for y in 0..height {
@@ -227,7 +259,7 @@ fn write_cursor_preview() {
             let image = rasterize(shape, scale).unwrap();
             let side = usize::from(image.size[0]);
             let x0 = col * 200 + 100 - usize::from(image.hotspot[0]);
-            let y0 = row * 100 + 50 - usize::from(image.hotspot[1]);
+            let y0 = row * row_height + row_height / 2 - usize::from(image.hotspot[1]);
             for (i, pixel) in image.rgba.as_chunks::<4>().0.iter().enumerate() {
                 let at = ((y0 + i / side) * width + x0 + i % side) * 4;
                 let a = f32::from(pixel[3]) / 255.0;
@@ -301,6 +333,139 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
     h.run_steps(2);
     assert!(h.output().platform_output.cursor_image.is_none());
     assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Default);
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn zoom_and_eyedropper_have_native_cursors_over_the_canvas() {
+    let mut h = harness();
+    for tool in [crate::Tool::Zoom, crate::Tool::Eyedropper] {
+        h.state_mut().ui.tool = tool;
+        h.run_steps(3);
+        assert!(h.output().platform_output.cursor_image.is_some(), "{tool:?} must have an OS cursor image on Windows");
+        let p = h.state().last_canvas_rect.center();
+        h.event(Event::PointerMoved(pos2(20.0, 12.0)));
+        h.run_steps(2);
+        assert!(h.output().platform_output.cursor_image.is_none(), "{tool:?} must release the pointer outside the canvas");
+        h.event(Event::PointerMoved(p));
+        h.run_steps(2);
+    }
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn zoom_alt_changes_the_symbol_without_motion_and_matches_click_direction() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::Tool::Zoom;
+    h.run_steps(2);
+    let p = h.state().last_canvas_rect.center();
+    let plus = h.output().platform_output.cursor_image.clone().unwrap();
+    for (mods, out) in [(Modifiers::ALT, true), (Modifiers::NONE, false)] {
+        h.event(Event::ModifiersChanged(mods));
+        h.run_steps(2);
+        let image = h.output().platform_output.cursor_image.as_ref().unwrap();
+        assert_eq!(image.rgba, rasterize(Shape::Zoom { out }, h.ctx.pixels_per_point()).unwrap().rgba);
+        let z = h.state().current_zoom();
+        let expected = crate::zoom_levels::step(z, if out { -1 } else { 1 }, h.state().ui.views[0].doc_size);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: mods });
+            h.step();
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().current_zoom(), expected);
+    }
+    assert_eq!(h.output().platform_output.cursor_image.as_ref().unwrap().rgba, plus.rgba);
+    h.state_mut().ui.shell.sticky_alt = true;
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_image.as_ref().unwrap().rgba, rasterize(Shape::Zoom { out: true }, 1.0).unwrap().rgba);
+    let z = h.state().current_zoom();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    assert!(h.state().current_zoom() < z);
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn eyedropper_keeps_the_pipette_while_sampling_and_respects_precise_cursors() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::Tool::Eyedropper;
+    h.run_steps(2);
+    let p = h.state().last_canvas_rect.center();
+    let before = h.output().platform_output.cursor_image.clone().unwrap();
+    h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(Event::PointerMoved(p + vec2(16.0, 0.0)));
+    h.run_steps(2);
+    let held = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&before.rgba, &held.rgba), "rings accompany the native pipette instead of hiding it");
+    h.event(Event::PointerButton { pos: p + vec2(16.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().sampling_comparison.is_none());
+    h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": "precise"})).unwrap();
+    h.run_steps(2);
+    let image = h.output().platform_output.cursor_image.as_ref().unwrap();
+    assert_eq!(image.rgba, rasterize(Shape::Crosshair { length: 8.0, gap: 2.0 }, 1.0).unwrap().rgba);
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+#[ignore = "writes synthetic comparison-ring screenshots for visual inspection"]
+fn write_sampling_ring_preview() {
+    use crate::control::{ControlRequest, Outcome, handle};
+    use crate::theme::ThemeKind;
+    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plan/evidence/cursors");
+    std::fs::create_dir_all(&output).unwrap();
+    for (width, height) in [(1000.0, 750.0), (800.0, 600.0)] {
+        for scale in [1.0, 2.0] {
+            let mut h = Harness::builder().with_size(vec2(width, height)).with_pixels_per_point(scale).wgpu().build_eframe(|cc| {
+                crate::PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::default());
+                let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
+                app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 100, 200], "fill": "#ef5b45"})).unwrap();
+                app.run("shape.create", json!({"kind": "rect", "rect": [100, 0, 100, 200], "fill": "#f0cc51"})).unwrap();
+                app.ui.tool = crate::Tool::Eyedropper;
+                app
+            });
+            h.run_steps(4);
+            for theme in ThemeKind::ALL {
+                let ctx = h.ctx.clone();
+                let (request, _) = ControlRequest::new("ui.set", json!({"theme": theme.id()}));
+                assert!(matches!(handle(h.state_mut(), &ctx, &request), Outcome::Done(v) if v["ok"] == true));
+                h.state_mut().run("tools.setColors", json!({"foreground": [0.1, 0.35, 0.9, 1.0]})).unwrap();
+                h.run_steps(3);
+                let p = h.state().last_canvas_rect.center() - vec2(32.0, 0.0);
+                h.event(Event::PointerMoved(p));
+                h.step();
+                h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.step();
+                h.event(Event::PointerMoved(p + vec2(8.0, 0.0)));
+                h.run_steps(3);
+                assert!(h.output().platform_output.cursor_image.is_some());
+                let (_, old) = crate::canvas::eyedropper_ring_colors(h.state_mut(), 50.0, 50.0).unwrap();
+                assert_eq!(old, egui::Color32::from_rgb(26, 89, 230));
+                // Harness::render draws a synthetic arrow even when the OS cursor is a bitmap.
+                // A viewport screenshot captures only the real UI; native cursor bitmaps have
+                // their separate visual atlas above.
+                h.ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                h.step();
+                h.step();
+                let image = h
+                    .ctx
+                    .input(|i| i.events.iter().find_map(|e| if let Event::Screenshot { image, .. } = e { Some(image.clone()) } else { None }))
+                    .expect("viewport screenshot delivered by the harness");
+                let rgba = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                let image =
+                    photocraft_codecs::Image::from_u8(image.size[0] as u32, image.size[1] as u32, photocraft_codecs::ChannelLayout::Rgba, rgba).unwrap();
+                let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+                std::fs::write(output.join(format!("ring-{}-{width:.0}x{height:.0}-{scale:.0}x.png", theme.id())), png).unwrap();
+                h.event(Event::PointerButton { pos: p + vec2(8.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                h.run_steps(2);
+                assert!(h.state().sampling_comparison.is_none());
+            }
+        }
+    }
 }
 
 #[test]

@@ -2302,6 +2302,7 @@ fontWeight	Italic	斜体
 	All Layers No Adjustments	すべてのレイヤー（色調補正なし）
 	Current & Below No Adjustments	現在のレイヤーとその下（色調補正なし）
 	Show Sampling Ring	サンプリングリングを表示
+	Outer ring: previous color. Inner ring: sampled color.	外側のリング：前の色。内側のリング：採取した色。
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	印刷の色域外：クリックすると最も近い印刷可能な色になります

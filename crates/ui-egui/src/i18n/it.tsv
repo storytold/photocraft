@@ -2394,6 +2394,7 @@ fontWeight	Italic	Corsivo
 	All Layers No Adjustments	Tutti i livelli senza regolazioni
 	Current & Below No Adjustments	Corrente e inferiori senza regolazioni
 	Show Sampling Ring	Mostra anello di campionamento
+	Outer ring: previous color. Inner ring: sampled color.	Anello esterno: colore precedente. Anello interno: colore campionato.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Fuori gamma di stampa: fai clic per il colore stampabile più vicino

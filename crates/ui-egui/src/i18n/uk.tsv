@@ -3434,6 +3434,7 @@ cameraRaw	Masking	Маскування
 	Point Sample	Точкова вибірка
 	Sample Size:	Розмір вибірки:
 	Show Sampling Ring	Показувати кільце вибірки
+	Outer ring: previous color. Inner ring: sampled color.	Зовнішнє кільце: попередній колір. Внутрішнє кільце: відібраний колір.
 	Transparency Threshold	Поріг прозорості
 	Opacity Threshold	Поріг непрозорості
 

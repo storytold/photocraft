@@ -2332,6 +2332,7 @@ fontWeight	Italic	斜体
 	All Layers No Adjustments	所有图层（不含调整）
 	Current & Below No Adjustments	当前及下方图层（不含调整）
 	Show Sampling Ring	显示采样环
+	Outer ring: previous color. Inner ring: sampled color.	外环：之前的颜色。内环：采样的颜色。
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	超出打印色域：单击使用最接近的可打印颜色

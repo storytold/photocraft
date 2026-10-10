@@ -2392,6 +2392,7 @@ fontWeight	Italic	Cursiva
 	All Layers No Adjustments	Todas las capas sin ajustes
 	Current & Below No Adjustments	Actual e inferiores sin ajustes
 	Show Sampling Ring	Mostrar anillo de muestreo
+	Outer ring: previous color. Inner ring: sampled color.	Anillo exterior: color anterior. Anillo interior: color muestreado.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Fuera de la gama de impresión: haga clic para el color imprimible más cercano

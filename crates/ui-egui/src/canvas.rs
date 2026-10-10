@@ -407,46 +407,68 @@ fn display_color(c: [f32; 3]) -> Color32 {
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// The Eyedropper ring's two colours at document point (x, y): the colour under the pointer
-/// (what a click would pick) and the current foreground, or `None` where there is no colour
-/// to sample (#213).
-pub(crate) fn eyedropper_ring_colors(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<(Color32, Color32)> {
-    let new = eyedropper_color(app, x, y)?;
-    let fg = app.session.tools.foreground;
-    Some((display_color(new), display_color([fg[0], fg[1], fg[2]])))
+/// Colors captured before the press; Alt on the Eyedropper compares the background instead.
+pub(crate) struct SamplingComparison {
+    doc: photocraft_doc::DocId,
+    foreground: [f32; 4],
+    background: [f32; 4],
+    background_selected: bool,
 }
 
-/// Draw the Eyedropper's comparison ring at `p`: the sampled colour on the upper arc, the
-/// current one below, both over a thin dark outline so they read on any image (#213). Like
-/// Photoshop it shows only while the mouse button is held (`held`): hovering shows the plain
-/// crosshair and samples nothing. `None` when not held, there is nothing to sample, or the
-/// Precise-cursor preference wants the plain crosshair.
-fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, p: Pos2, held: bool) -> Option<egui::CursorIcon> {
+fn begin_sampling_comparison(app: &mut PhotocraftApp, background_selected: bool) {
+    let Some(doc) = app.session.active().map(|st| st.doc.id) else {
+        app.sampling_comparison = None;
+        return;
+    };
+    if app.sampling_comparison.as_ref().is_none_or(|c| c.doc != doc) {
+        app.sampling_comparison =
+            Some(SamplingComparison { doc, foreground: app.session.tools.foreground, background: app.session.tools.background, background_selected });
+    }
+    if let Some(c) = &mut app.sampling_comparison {
+        c.background_selected = background_selected;
+    }
+}
+
+/// The sampled color and the color from before this gesture, or `None` off the image or
+/// over transparency. Updating tool colors during a drag never changes the reference color.
+pub(crate) fn eyedropper_ring_colors(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<(Color32, Color32)> {
+    let new = eyedropper_color(app, x, y)?;
+    let previous = app
+        .sampling_comparison
+        .as_ref()
+        .filter(|c| app.session.active().is_some_and(|st| st.doc.id == c.doc))
+        .map_or(app.session.tools.foreground, |c| if c.background_selected { c.background } else { c.foreground });
+    Some((display_color(new), display_color([previous[0], previous[1], previous[2]])))
+}
+
+/// An offset comparison swatch leaves the sampled pixel visible: previous color around the
+/// live sample. The pipette stays visible at the actual sampling point.
+fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, p: Pos2, held: bool) {
     // The options bar's Show Sampling Ring turns it off (#1649).
     if !held || !app.ui.tool_options.eyedropper_ring || app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-        return None;
+        return;
     }
     let [x, y] = xf.to_doc(p);
-    let (new, current) = eyedropper_ring_colors(app, x, y)?;
-    // Two arcs with a small gap at 3 and 9 o'clock. Screen y grows down, so PI..TAU is the
-    // upper half (the new colour) and 0..PI the lower (the current one).
-    use std::f32::consts::{PI, TAU};
-    let (r, w, gap) = (11.0_f32, 4.0_f32, 0.16_f32);
-    let arc = |a0: f32, a1: f32| -> Vec<Pos2> {
-        (0..=24)
-            .map(|i| {
-                let a = a0 + (a1 - a0) * i as f32 / 24.0;
-                p + vec2(a.cos(), a.sin()) * r
-            })
-            .collect()
-    };
-    let outline = crate::theme::Tokens::get(painter.ctx()).shadow;
-    for (a0, a1, colour) in [(PI + gap, TAU - gap, new), (gap, PI - gap, current)] {
-        let points = arc(a0, a1);
-        painter.add(egui::Shape::line(points.clone(), Stroke::new(w + 1.5, outline)));
-        painter.add(egui::Shape::line(points, Stroke::new(w, colour)));
+    let Some((new, previous)) = eyedropper_ring_colors(app, x, y) else { return };
+    let mut center = p + vec2(48.0, -48.0);
+    let safe = painter.clip_rect().shrink(38.0);
+    if safe.is_positive() {
+        center = safe.clamp(center);
     }
-    Some(egui::CursorIcon::None)
+    let [dark, light] = crate::theme::Tokens::cursor_outline();
+    let to_pointer = p - center;
+    if to_pointer.length() > 38.0 {
+        let end = center + to_pointer.normalized() * 37.0;
+        painter.line_segment([p, end], Stroke::new(2.5, dark));
+        painter.line_segment([p, end], Stroke::new(1.0, light));
+    }
+    // Filled concentric discs leave no transparent gap: circle strokes extend outward in egui.
+    painter.circle_filled(center, 36.0, dark);
+    painter.circle_filled(center, 35.0, light);
+    painter.circle_filled(center, 34.0, previous);
+    painter.circle_filled(center, 24.0, dark);
+    painter.circle_filled(center, 23.0, light);
+    painter.circle_filled(center, 22.0, new);
 }
 
 fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
@@ -2518,6 +2540,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    if primary {
+        let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+        let sampling = tool == Tool::Eyedropper || alt_samples(tool, mods) || app.alt_sampling;
+        if !sampling || ui.input(|i| !i.pointer.primary_down() || !i.focused) {
+            app.sampling_comparison = None;
+        }
+        if sampling && response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
+            app.sampling_comparison = None;
+            begin_sampling_comparison(app, tool == Tool::Eyedropper && mods.alt);
+        }
+    }
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool).
     let zoom_out = |alt: bool| match temporary {
         Some(crate::hold_keys::Temporary::ZoomOut) => true,
@@ -2805,7 +2838,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let d = xf.to_doc(p);
             match tool {
                 Tool::Zoom => {
-                    let nz = crate::zoom_levels::step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 }, view.doc_size);
+                    let nz = crate::zoom_levels::step(view.zoom, if zoom_out(click_mods.alt || app.ui.shell.sticky_alt) { -1 } else { 1 }, view.doc_size);
                     let center = app.session.prefs().tools.zoom_clicked_point_to_center;
                     zoom_about(&mut view, &xf, p, nz, center, ppp);
                 }
@@ -2940,10 +2973,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
                 // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
                 t if app.alt_sampling || (app.drag.is_none() && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) => {
-                    // While it samples (button held), the comparison ring replaces the cursor (#213).
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                    eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on());
+                    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
                         egui::CursorIcon::Crosshair
                     } else {
                         pipette_cursor(ui.ctx(), p)
@@ -2986,12 +3017,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                         }
                     }
                 }
-                // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
-                // otherwise its pipette, or the crosshair for Precise Other Cursors.
+                // The comparison rings accompany the pipette; Precise keeps its crosshair.
                 Tool::Eyedropper => {
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                    eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on());
+                    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
                         egui::CursorIcon::Crosshair
                     } else {
                         pipette_cursor(ui.ctx(), p)
@@ -3005,13 +3034,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 // Dragging is handled with the pan itself, above.
                 Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
                 Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                Tool::Zoom => {
-                    if zoom_out(alt) {
-                        egui::CursorIcon::ZoomOut
-                    } else {
-                        egui::CursorIcon::ZoomIn
-                    }
-                }
+                Tool::Zoom => crate::tool_cursor::zoom(&painter, p, zoom_out(alt || app.ui.shell.sticky_alt)),
                 Tool::Type | Tool::VerticalType => egui::CursorIcon::Text,
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, xf.zoom),
                 Tool::RedEye => {
@@ -3644,9 +3667,7 @@ pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
 /// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
 /// OS cursor to set (hidden).
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
-    crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-    egui::CursorIcon::None
+    crate::tool_cursor::pipette(ctx, p)
 }
 
 /// Decided when the press starts, so ⌥ pressed or released mid-stroke never switches between
@@ -3667,6 +3688,7 @@ fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
 }
 
 fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    begin_sampling_comparison(app, mods.alt);
     if let Some([r, g, b]) = eyedropper_color(app, x, y) {
         let key = if mods.alt { "background" } else { "foreground" };
         let _ = app.run("tools.setColors", json!({ key: [r, g, b, 1.0] }));
@@ -3735,6 +3757,9 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    if matches!(ev, ToolEvent::Up { .. }) {
+        app.sampling_comparison = None;
+    }
     if crate::symmetry_ui::pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
         return;
     }
@@ -5105,6 +5130,10 @@ mod tests {
         };
         assert!(near(new, 255, 0, 0), "{new:?}");
         assert!(near(current, 0, 51, 255), "{current:?}");
+        app.ui.tool = Tool::Eyedropper;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let (_, previous) = super::eyedropper_ring_colors(&mut app, 10.0, 10.0).unwrap();
+        assert!(near(previous, 0, 51, 255), "the ring must retain the color from before the press: {previous:?}");
         // Transparency and points outside the canvas have nothing to compare.
         assert!(super::eyedropper_ring_colors(&mut app, 30.0, 10.0).is_none());
         assert!(super::eyedropper_ring_colors(&mut app, -1.0, 10.0).is_none());
@@ -5123,6 +5152,41 @@ mod tests {
 
         tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
         assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
+    }
+
+    #[test]
+    fn sampling_comparison_keeps_the_previous_target_color_until_release() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+        app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 20, 20], "fill": "#ff0000"})).unwrap();
+        app.run("shape.create", json!({"kind": "rect", "rect": [20, 0, 20, 20], "fill": "#00ff00"})).unwrap();
+        app.ui.tool = Tool::Eyedropper;
+        let blue = egui::Color32::from_rgb(0, 0, 255);
+        for (tool, mods, background, previous) in [
+            (Tool::Eyedropper, egui::Modifiers::NONE, false, blue),
+            (Tool::Eyedropper, egui::Modifiers::ALT, true, egui::Color32::WHITE),
+            (Tool::Brush, egui::Modifiers::ALT, false, blue),
+        ] {
+            app.ui.tool = tool;
+            app.run("tools.setColors", json!({"foreground": [0, 0, 1, 1], "background": [1, 1, 1, 1]})).unwrap();
+            let rev = app.session.active().unwrap().revision;
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, mods);
+            let (sample, reference) = super::eyedropper_ring_colors(&mut app, 10.0, 10.0).unwrap();
+            assert_eq!((sample, reference), (egui::Color32::RED, previous));
+            tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, mods);
+            let (sample, reference) = super::eyedropper_ring_colors(&mut app, 30.0, 10.0).unwrap();
+            assert_eq!((sample, reference), (egui::Color32::GREEN, previous));
+            assert_eq!(if background { app.session.tools.background } else { app.session.tools.foreground }, [0.0, 1.0, 0.0, 1.0]);
+            assert_eq!(app.session.active().unwrap().revision, rev);
+            tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 10.0 }, mods);
+            assert!(app.sampling_comparison.is_none());
+            tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, mods);
+            assert_eq!(super::eyedropper_ring_colors(&mut app, 10.0, 10.0).unwrap().1, egui::Color32::GREEN);
+            tool_event(&mut app, ToolEvent::Up { x: 10.0, y: 10.0 }, mods);
+        }
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        app.run("file.new", json!({"width": 20, "height": 20, "background": "white"})).unwrap();
+        assert_eq!(super::eyedropper_ring_colors(&mut app, 10.0, 10.0).unwrap().1, egui::Color32::RED, "a different document cannot reuse the old comparison");
     }
 
     #[test]
