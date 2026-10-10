@@ -4,7 +4,7 @@
 use std::ops::Range;
 
 use icu_properties::CodePointMapData;
-use icu_properties::props::{GeneralCategory, GeneralCategoryGroup, Script};
+use icu_properties::props::{BidiClass, GeneralCategory, GeneralCategoryGroup, Script};
 use icu_properties::script::ScriptWithExtensions;
 use icu_segmenter::GraphemeClusterSegmenter;
 
@@ -68,6 +68,27 @@ pub(crate) fn word_at(words: &[Range<usize>], offset: usize) -> Option<usize> {
     words.get(i).filter(|w| w.start <= offset).map(|_| i)
 }
 
+/// The direction of the first strong character (UAX #9 P2–P3): `Some(true)` for R or AL,
+/// `Some(false)` for L, `None` when there is none. Text inside an isolate (LRI/RLI/FSI … PDI,
+/// or to the end when unclosed) is skipped, as the rule requires. Digits are weak.
+pub fn first_strong_rtl(text: &str) -> Option<bool> {
+    let classes = CodePointMapData::<BidiClass>::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        let bc = classes.get(c);
+        if bc == BidiClass::LeftToRightIsolate || bc == BidiClass::RightToLeftIsolate || bc == BidiClass::FirstStrongIsolate {
+            depth = depth.saturating_add(1);
+        } else if bc == BidiClass::PopDirectionalIsolate {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && bc == BidiClass::LeftToRight {
+            return Some(false);
+        } else if depth == 0 && (bc == BidiClass::RightToLeft || bc == BidiClass::ArabicLetter) {
+            return Some(true);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +149,18 @@ mod tests {
         }
         // A mark never opens a word: the word starts at ب, not inside the ü grapheme.
         assert_eq!(cursive_words("u\u{0308}ب"), vec![3..5]);
+    }
+
+    #[test]
+    fn first_strong_direction_skips_weak_characters_and_isolates() {
+        assert_eq!(first_strong_rtl("مرحبا"), Some(true));
+        assert_eq!(first_strong_rtl("١٢٣ مرحبا"), Some(true), "Arabic-Indic digits are weak");
+        assert_eq!(first_strong_rtl("123 abc"), Some(false));
+        assert_eq!(first_strong_rtl("Galaxy S24 شاشة"), Some(false));
+        assert_eq!(first_strong_rtl("שלום"), Some(true));
+        assert_eq!(first_strong_rtl("\u{2066}abc\u{2069} مرحبا"), Some(true), "isolated text is skipped (UAX #9 P2)");
+        assert_eq!(first_strong_rtl("\u{2067}abc"), None, "an unclosed isolate runs to the end");
+        assert_eq!(first_strong_rtl("١٢٣"), None);
+        assert_eq!(first_strong_rtl(""), None);
     }
 }

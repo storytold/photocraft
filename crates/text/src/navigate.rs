@@ -13,6 +13,8 @@
 
 use parley::{Affinity, Cursor, Layout};
 
+pub use crate::segment::first_strong_rtl;
+
 use crate::layout::{ClusterInfo, FORCED_LINE_BREAK, LineInfo, RunBrush, TextLayout};
 
 /// A paragraph's parley layout, kept for caret movement (hidden lines of an overflowing box
