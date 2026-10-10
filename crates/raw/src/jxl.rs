@@ -5,14 +5,26 @@
 //! Expert RAW writes LinearRaw this way. Decoding is done by `jxl-oxide`, a pure-Rust decoder;
 //! like heic-rs in `photocraft-heif`, every call into it runs under `catch_unwind` so a decoder
 //! panic on a malformed file becomes [`RawError::Malformed`].
+//!
+//! The browser build (wasm32) leaves the decoder out: jxl-oxide added 0.88 MB to a wasm that
+//! must stay under the per-file cap of static hosts (packaging/web/package.sh), for a format only
+//! a few phones write. There, these segments are [`RawError::Unsupported`] with a clear message.
 
+#[cfg(not(target_arch = "wasm32"))]
 use jxl_oxide::{AllocTracker, JxlImage};
 
 use crate::Limits;
 use crate::error::{RawError, Result};
 
+/// The browser build has no JPEG XL decoder (see the module docs).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn decode(_src: &[u8], _w: usize, _h: usize, _samples: usize, _bits: u32, _limits: &Limits) -> Result<Vec<u16>> {
+    Err(RawError::unsupported("JPEG XL-compressed DNG (DNG 1.7) can't be opened in the browser version of PhotoCraft; open it in the desktop app"))
+}
+
 /// Decodes one segment into `w * h * samples` interleaved samples at `bits` per sample (the
 /// TIFF BitsPerSample, which DNG requires the codestream's bit depth to match).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode(src: &[u8], w: usize, h: usize, samples: usize, bits: u32, limits: &Limits) -> Result<Vec<u16>> {
     limits.check(w as u64, h as u64, samples as u64 * 2)?;
     // jxl-oxide decodes into f32/i32 planes: allow a few times the output size, and never more
@@ -54,6 +66,7 @@ pub(crate) fn decode(src: &[u8], w: usize, h: usize, samples: usize, bits: u32, 
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(RawError::malformed("the JPEG XL decoder failed on this file")))
 }

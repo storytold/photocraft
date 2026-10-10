@@ -650,6 +650,8 @@
 	Pro Medium Gray Theme	프로 중간 회색 테마
 	Studio Theme	스튜디오 테마
 	Studio Light Theme	스튜디오 밝은 테마
+	Adwaita Light Theme	Adwaita 밝은 테마
+	Adwaita Dark Theme	Adwaita 어두운 테마
 	Classic Theme	클래식 테마
 	Solarized dark	Solarized 어두움
 	Solarized Dark Theme	Solarized 어두운 테마
@@ -928,6 +930,17 @@
 	Delete current channel	현재 채널 삭제
 	Delete current state	현재 상태 삭제
 	Delete effect layer	효과 레이어 삭제
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	레이어 ‘{name}’을(를) 삭제하시겠습니까?
+	Delete {count} layers? {names}	레이어 {count}개를 삭제하시겠습니까? {names}
+	Delete layer?	레이어를 삭제하시겠습니까?
+	The document is closed	문서가 닫혔습니다
+	The document or selected layers changed. Please request deletion again.	문서 또는 선택한 레이어가 변경되었습니다. 삭제를 다시 요청하세요.
+	Missing delete command	삭제 명령이 없습니다
+	Invalid delete command	잘못된 삭제 명령입니다
+	Layer deleted, but confirmation preference could not be saved: {error}	레이어가 삭제되었지만 확인 설정을 저장할 수 없습니다: {error}
+
 	Delete layer	레이어 삭제
 	Delete layer comp	레이어 구성 요소 삭제
 	Delete note	메모 삭제
@@ -1280,6 +1293,12 @@
 	Rename…	이름 바꾸기…
 	Resample	리샘플링
 	Reset All to Defaults	모두 기본값으로 초기화
+	Import Shortcuts…	단축키 가져오기…
+	Load a keyboard shortcut set saved as .kys	.kys로 저장된 키보드 단축키 세트 불러오기
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file}에서 단축키 {n}개를 가져왔습니다. 유지하려면 확인을 클릭하세요.
+	{n} commands are not in PhotoCraft.	명령 {n}개는 PhotoCraft에 없습니다.
+	Keyboard shortcuts imported	키보드 단축키를 가져왔습니다
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	키보드 단축키 세트 {set}을(를) 여기서 사용합니다. 단축키 {n}개가 기본값과 다릅니다. 편집 › 키보드 단축키에서 확인할 수 있고, 모두 기본값으로 재설정으로 되돌릴 수 있습니다.
 	Reset Section	섹션 초기화
 	Reset Transform	변형 초기화
 	Reset to defaults	기본값으로 초기화
@@ -1576,6 +1595,7 @@
 	Millimeters	밀리미터
 	Mobile	모바일
 	Move Tool	이동 도구
+	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -1620,6 +1640,7 @@
 	Quick Selection Tool	빠른 선택 도구
 	Radial	방사형
 	Rasterize Layer	레이어 래스터화
+	Rasterize Layers	레이어 래스터화
 	Ratio	비율
 	Recent	최근 항목
 	Rectangle Tool	사각형 도구
@@ -1840,6 +1861,8 @@
 	Standard	표준
 	Studio	스튜디오
 	Studio light	스튜디오 밝게
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita 어둡게
 	Subdivisions	하위 분할
 	System	시스템
 	Text engine	텍스트 엔진
@@ -2874,6 +2897,9 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
+
+	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
 	Rule of Thirds	삼등분 법칙
 	Golden Ratio	황금 비율
 	Golden Spiral	황금 나선
@@ -2884,6 +2910,19 @@ fontWeight	Italic	기울임
 	Cycle Orientation	방향 순환
 	Set the overlay options for the Crop tool	자르기 도구의 오버레이 옵션 설정
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 클릭이 데스크톱으로 전달되었습니다. 데스크톱이 Alt 드래그로 창을 이동합니다. 창 이동 키를 Super로 바꾸거나 창 › 보조 키에서 Alt를 고정하세요.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	색상 피커 (레이어 스타일 색상)
+	Auto Hide Notifications	알림 자동 숨기기
+	Notification Duration (seconds)	알림 지속 시간(초)
+	Appearance Mode	화면 모드
+	Dark Theme	어두운 테마
+	Light Theme	밝은 테마
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	다음 화면 모드
+	Sync with system	시스템과 동기화
+	Active	활성
 	Color Picker (Solid Color)	색상 피커 (단색)
 	Straighten the image by drawing a line on it	이미지에 선을 그려 수평 맞추기
 	Set additional Crop options	추가 자르기 옵션 설정
@@ -2900,9 +2939,21 @@ fontWeight	Italic	기울임
 	Create Ellipse	타원 만들기
 	Create Triangle	삼각형 만들기
 	Create Polygon	다각형 만들기
+	Pressure curve	필압 곡선
+	Click to add a point, right-click to remove	클릭하여 점 추가, 마우스 오른쪽 클릭으로 제거
 	Some brush presets could not be loaded	일부 브러시 사전 설정을 불러오지 못했습니다
 	Retry saving presets	사전 설정 저장 다시 시도
 	Brush preset changes are not saved: {error}	브러시 사전 설정 변경 내용이 저장되지 않았습니다: {error}
 	Keep this tab open to retain your brushes.	브러시를 유지하려면 이 탭을 열어 두세요.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	브라우저 저장소를 사용할 수 없어 브러시는 이 세션에서만 유지됩니다. 유지하려면 이 탭을 열어 두세요.
 	Saving brush presets… Keep this tab open until saving finishes.	브러시 사전 설정 저장 중… 저장이 끝날 때까지 이 탭을 열어 두세요.
+	Reflect	반사
+	Glow	광선
+	Negation	부정
+	XOR	XOR
+	Color Burn (Paint.NET)	색상 번 (Paint.NET)
+	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 개체 선택 또는 올가미를 사용해 보세요
+	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
+	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
+	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요

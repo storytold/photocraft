@@ -239,6 +239,44 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftA
 }
 
 #[test]
+fn clone_stamp_opacity_and_flow_are_journaled_per_gesture() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = options_bar_harness(crate::state::Tool::CloneStamp);
+    for (label, field) in [("Opacity", "opacity"), ("Flow", "flow")] {
+        let n = h.state().session.journal.len();
+        let rect = h.get_by_label(label).rect();
+        let start = egui::pos2(rect.right() + 40.0, rect.center().y);
+        h.hover_at(start);
+        h.run();
+        h.drag_at(start);
+        h.run();
+        for k in 1..=8 {
+            h.hover_at(start - vec2(5.0 * k as f32, 0.0));
+            h.run();
+        }
+        h.drop_at(start - vec2(40.0, 0.0));
+        h.run_steps(2);
+        let brush = &h.state().session.tools.brush;
+        let value = if field == "opacity" { brush.opacity } else { brush.flow };
+        assert!(value < 0.95, "the drag lowered {field}: {value}");
+        let journal = &h.state().session.journal;
+        assert_eq!(journal.len(), n + 1, "one command per gesture");
+        let (id, params) = journal.last().unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"][field].as_f64().map(|v| v as f32), Some(value));
+    }
+    h.state_mut().ui.clone_source = Some([0.0, 0.0]);
+    let params = crate::retouch_ui::clone_params(h.state()).unwrap();
+    assert_eq!(params["opacity"], json!(h.state().session.tools.brush.opacity * 100.0));
+    assert_eq!(params["flow"], json!(h.state().session.tools.brush.flow * 100.0));
+    let mut replay = photocraft_engine::Session::new();
+    for (id, params) in &h.state().session.journal {
+        replay.execute(id, params.clone()).unwrap();
+    }
+    assert_eq!(replay.tools.brush, h.state().session.tools.brush);
+}
+
+#[test]
 fn options_bar_edits_are_one_set_brush_per_gesture() {
     use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::Brush);

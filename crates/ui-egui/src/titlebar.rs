@@ -53,7 +53,7 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
     let right = bar.right().min(ui.ctx().content_rect().right());
     let mut clicked = None;
     for (i, c) in CAPTIONS.into_iter().enumerate() {
-        let r = Rect::from_min_size(pos2(right - WIDTH + i as f32 * BUTTON_WIDTH, bar.top()), vec2(BUTTON_WIDTH, bar.height()));
+        let r = Rect::from_min_size(pos2(right - WIDTH + i as f32 * BUTTON_WIDTH, bar.top()), vec2(BUTTON_WIDTH, bar.height() - 1.0));
         let resp = ui.interact(r, caption_id(c), Sense::click());
         let close = c == Caption::Close;
         let fill = match (resp.is_pointer_button_down_on(), resp.hovered()) {
@@ -301,7 +301,8 @@ mod tests {
             let out = w.frame(vec![]);
             let [min, max, close] = CAPTIONS.map(|c| w.caption(c));
             assert_eq!((close.right(), close.top()), (width, 0.0), "Close sits in the window's corner at {width}");
-            assert!(close.height() >= 32.0 && [min, max, close].iter().all(|r| r.width() == BUTTON_WIDTH));
+            // The bar's bottom point is the panel's separator line, which the buttons leave visible.
+            assert!(close.height() >= 31.0 && [min, max, close].iter().all(|r| r.width() == BUTTON_WIDTH));
             assert_eq!((min.right(), max.right()), (max.left(), close.left()));
             let widgets = w.bar_widgets();
             assert!(widgets.len() >= 10, "menus, search, theme, workspace: {widgets:?}");

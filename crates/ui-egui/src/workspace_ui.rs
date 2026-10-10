@@ -175,6 +175,12 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
     }
     let prefs = app.session.prefs().clone();
     let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open});
+    // The icon rail and menu bar flags belong to an embedding app's session, not to a saved
+    // layout: a workspace never brings back a window without its menus.
+    if let Some(panels) = ws.get_mut("panels").and_then(Value::as_object_mut) {
+        panels.remove("rail");
+        panels.remove("menu_bar");
+    }
     if p.get("keyboardShortcuts").and_then(Value::as_bool) == Some(true) {
         ws["shortcuts"] = json!(prefs.shortcuts);
     }
@@ -497,6 +503,8 @@ mod tests {
         });
         inv(&mut app, "window.workspace.newWorkspace", json!({"name": "Retouch", "keyboardShortcuts": true})).unwrap();
         assert_eq!(app.ui.workspace, "Retouch");
+        let saved = &app.session.prefs().workspaces["Retouch"]["panels"];
+        assert!(saved.get("menu_bar").is_none() && saved.get("rail").is_none(), "embedding-only flags are not saved");
         assert!(inv(&mut app, "window.workspace.newWorkspace", json!({"name": "Painting"})).is_err());
         assert!(inv(&mut app, "window.workspace.newWorkspace", json!({"name": " "})).is_err());
         // The current workspace can't be deleted.
