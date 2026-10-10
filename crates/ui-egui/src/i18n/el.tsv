@@ -459,6 +459,7 @@
 	Rename Layer	Μετονομασία επιπέδου
 	Convert to Smart Object	Μετατροπή σε έξυπνο αντικείμενο
 	Rasterize Layer	Μετατροπή επιπέδου σε εικονοστοιχεία
+	Rasterize Layers	Μετατροπή επιπέδων σε εικονοστοιχεία
 	Lock Transparent Pixels	Κλείδωμα διαφανών εικονοστοιχείων
 	Lock Image Pixels	Κλείδωμα εικονοστοιχείων εικόνας
 	Lock Position	Κλείδωμα θέσης

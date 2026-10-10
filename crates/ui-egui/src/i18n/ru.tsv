@@ -164,6 +164,8 @@
 	Rasterize	Растрировать
 	Rasterize Type	Растрировать текст
 	Rasterize Shape	Растрировать фигуру
+	Rasterize Layer	Растрировать слой
+	Rasterize Layers	Растрировать слои
 	New Adjustment Layer	Новый корректирующий слой
 	New Fill Layer	Новый слой-заливка
 	Layer Mask	Маска слоя
