@@ -333,6 +333,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.prefs_rt.gpu_style = Some(style);
     }
     autosave(app);
+    #[cfg(not(target_arch = "wasm32"))]
+    link_updates(app, ctx);
     history_log(app);
 }
 
@@ -463,6 +465,39 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
         app.ui.notices.retain(|n| n.id != id);
     }
     Ok(())
+}
+
+/// Linked smart objects follow their files while the document is open, as in Photoshop: every two
+/// seconds, and as soon as the window comes back to the front (after saving in another app), stamp
+/// the active document's linked files on a worker thread and re-render the layers of the ones that
+/// changed ([`photocraft_engine::link_watch`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    match app.session.poll_link_scan() {
+        Some(Ok(r)) => {
+            if let Some(n) = r["updated"].as_array().map(Vec::len).filter(|n| *n > 0) {
+                app.ui.status = format!("Updated {n} linked smart object(s) changed on disk");
+            }
+        }
+        Some(Err(e)) => app.ui.status = e.to_string(),
+        None => {}
+    }
+    let (last_key, focus_key) = (egui::Id::new("linkWatch.lastScan"), egui::Id::new("linkWatch.focused"));
+    let now = ctx.input(|i| i.time);
+    let focused = ctx.input(|i| i.focused);
+    let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
+    ctx.data_mut(|d| d.insert_temp(focus_key, focused));
+    let has_links = app.session.active().is_some_and(|d| !photocraft_engine::link_watch::linked_files(&d.doc).is_empty());
+    if !has_links {
+        return;
+    }
+    let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
+    if now - last >= 2.0 || (focused && !was_focused) {
+        ctx.data_mut(|d| d.insert_temp(last_key, now));
+        app.session.start_link_scan();
+    }
+    let wait = if app.session.link_scan.is_some() { 100 } else { 2000 };
+    ctx.request_repaint_after(std::time::Duration::from_millis(wait));
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).

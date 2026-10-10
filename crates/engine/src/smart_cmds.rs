@@ -1049,6 +1049,14 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"layer": id.0}))
         }),
         spec!(
+            "layer.smartObjects.updateChanged",
+            "Update Changed Linked Content",
+            &[],
+            "{} — re-render the active document's linked smart objects whose files changed on disk since they were last seen (size or modification time); the desktop app does this by itself every two seconds, as Photoshop does while a document is open. Files seen for the first time are only remembered. One Update Modified Content undo step per file → {updated: [layer ids]}",
+            |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
+            crate::link_watch::update_changed
+        ),
+        spec!(
             "layer.smartObjects.updateAllModifiedContent",
             "Update All Modified Content",
             SO,
