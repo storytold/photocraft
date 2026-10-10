@@ -121,6 +121,13 @@ impl Ctx<'_> {
         }
     }
 
+    /// [`Self::channel_plane`] without the warnings sink, so a layer's channels decode
+    /// concurrently (their RLE rows are the bulk of the open time on full-canvas layers).
+    fn channel_plane_decoded(&self, rec: &LayerRecord, id: i16) -> Option<Vec<u8>> {
+        rec.channel(id)?;
+        rec.decode_channel(id, self.file.header.depth, self.file.header.version).ok()
+    }
+
     fn record_surface(&mut self, rec: &LayerRecord, name: &str) -> Surface {
         let r = rec.rect;
         if r.is_empty() || r.size().is_err() {
@@ -128,15 +135,34 @@ impl Ctx<'_> {
         }
         let (w, h) = r.size().unwrap_or((0, 0));
         let s = self.fmt.sample;
-        let mut planes = Vec::with_capacity(self.cc + 1);
-        for c in 0..self.cc {
-            planes.push(self.channel_plane(rec, c as i16, name));
-        }
-        planes.push(self.channel_plane(rec, CHANNEL_TRANSPARENCY, name));
+        let ids: Vec<i16> = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]).collect();
+        let planes: Vec<Option<Vec<u8>>> = if cfg!(target_arch = "wasm32") {
+            ids.iter().map(|&id| self.channel_plane(rec, id, name)).collect()
+        } else {
+            // The channels decode independently; their RLE rows are the bulk of the open
+            // time for full-canvas layers, so they run side by side and the warnings land
+            // in the same order afterwards.
+            let decoded: Vec<Option<Vec<u8>>> = std::thread::scope(|scope| {
+                let ctx = &*self;
+                let hs: Vec<_> = ids.iter().map(|&id| scope.spawn(move || ctx.channel_plane_decoded(rec, id))).collect();
+                let mut all = Vec::with_capacity(hs.len());
+                for h in hs {
+                    all.push(h.join().unwrap_or_default());
+                }
+                all
+            });
+            let mut planes: Vec<Option<Vec<u8>>> = Vec::with_capacity(decoded.len());
+            for (&id, p) in ids.iter().zip(&decoded) {
+                if p.is_none() && rec.channel(id).is_some() {
+                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded; treated as empty"));
+                }
+                planes.push(p.clone());
+            }
+            planes
+        };
         // A channel that is in the file but could not be decoded leaves the layer empty, as the
         // warning says. Filling in for it would paint an opaque black layer over the document.
-        let ids = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]);
-        if ids.zip(&planes).any(|(id, p)| p.is_none() && rec.channel(id).is_some()) {
+        if ids.iter().zip(planes.iter()).any(|(&id, p)| p.is_none() && rec.channel(id).is_some()) {
             return Surface::new(self.fmt);
         }
         // Only decoded channel data justifies a buffer: the decoders bound their output by the
