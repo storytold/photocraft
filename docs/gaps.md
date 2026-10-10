@@ -9,6 +9,9 @@ the matching parity doc. Numbers come from [`target-app-parity.md`](target-app-p
 checklist ids (`TOOL-…`, `FILE-…`, `UI-…`) are rows in [`scorecard.md`](scorecard.md); `#n` are
 GitHub issues.
 
+No gap blocks alpha: the [alpha gate](roadmap.md#alpha-gate) passes. "Blocks beta" marks what
+stands between alpha and beta.
+
 Hours are Opus 5.5 agent-hours, one agent working sequentially, including tests. **Human** marks
 what an agent can't finish alone.
 
@@ -41,8 +44,8 @@ what an agent can't finish alone.
   don't always render as Photoshop renders them.
 - **Evidence:** corpus floors (`crates/io/tests/corpus.rs`, scorecard): Photoshop-authored
   oracles 133/256 (52%), io corpus 146/170 (86%), psd-tools 236/309 (76%); round trips ~100%
-  within the corpus. Smart-filter re-render matches 5/30. User reports: Save As PSD on an
-  unmodified file corrupts it (#2374), Photoshop 26.6 cannot reopen our files (#1281), "PSD not
+  within the corpus. Smart-filter re-render matches 5/30. User reports: a PSD with text layers
+  re-saved unmodified would not reopen (#2374, closed 2026-10-10), Photoshop 26.6 cannot reopen our files (#1281), "PSD not
   opening in Photoshop" (#2469), a CS2-era smart object unavailable (#2465), PSB smart object
   blank (#1764), perspective placed layers flattened (#579), PSB > 4 GB fails on Windows (#375).
   No test opens our exports in a third-party editor (FILE-216-4).
@@ -208,4 +211,5 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Checked against the alpha gate (no alpha blockers); #2374 marked closed |
 | 2026-10-10 | major | First version, from the full re-measure against Photoshop 2026 27.11.0 and the open issues |

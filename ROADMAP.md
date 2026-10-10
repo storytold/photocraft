@@ -26,8 +26,10 @@ About 80% of the work parallelizes.
 
 **Why alpha.** Core workflows (open, layer, select, paint, adjust, filter, type, save) work end to
 end, and breadth is high, but users of 0.5/0.6 have 579 open issues, 22 of 25 performance budgets
-are missed, and PSDs we write are not yet reliably accepted by Photoshop (#2374, #1281). Beta
-needs ~75% ready and no blocking PSD gap.
+are missed, and PSDs we write are not yet reliably accepted by Photoshop (#1281, #2469). Beta
+needs ~75% ready and no blocking PSD gap. The [alpha gate](docs/roadmap.md#alpha-gate) passes: all six core workflows
+(retouch, composite, cut-out, design, paint, PSD exchange) complete end to end and save and reopen;
+four are partial in depth, none blocked.
 
 ## By dimension
 
@@ -118,4 +120,5 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Alpha gate result (passes; stays alpha) in the stage explanation |
 | 2026-10-10 | major | First version, per craftrules `standards/progress-docs.md` |

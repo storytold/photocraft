@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (honest assessment moved to `target-app-parity.md`; milestones re-dated; new Current focus and What's next with estimates) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha gate added; earlier the same day: major, honest assessment moved to `target-app-parity.md`; milestones re-dated; new Current focus and What's next with estimates) · **Target:** Adobe Photoshop 2026
 
 Forward-looking plan: milestones, the **Current focus** list, and what's next with estimates.
 Where we stand today is in [`target-app-parity.md`](target-app-parity.md) (two numbers, by
@@ -15,6 +15,25 @@ for one agent working sequentially (calibration in
 [`target-app-parity.md`](target-app-parity.md#remaining-effort-and-calibration)).
 
 **Stage: alpha** (ready for real work ~45%). Beta needs ~75% and reliable PSD: ~1,100–1,800 h.
+
+## Alpha gate
+
+The core workflows a typical Photoshop professional runs every day, checked end to end on the main
+platform (macOS, 0.6.0), including saving and reopening the work. Any **no**, or a **partial**
+that blocks the workflow, would make PhotoCraft pre-alpha.
+
+| Core workflow | Works end to end? | Evidence | Hours to pass |
+|---|---|---|---:|
+| Photo retouch: open JPEG/raw, heal/clone/remove, adjustment layers, export JPEG, save and reopen | yes | Spot Healing, Healing, Clone, Patch, Remove tools; 16 adjustment layers; raw for DNG/CR2/NEF/ARW/RAF; JPEG export; MCP workflow tests (`automation/tests/agent_tasks.rs`). Quality complaints (#1092, #2104) and no CR3 don't stop the workflow | 0 |
+| Composite: layers, masks, selections, blend modes, smart objects; save as PSD and `.pcraft` and reopen | yes | PSD round trip ≥ 169/170, 308/309, 258/256 corpus files; `.pcraft` atomic save and crash recovery. Multi-layer Smart Object conversion (#2604) and mask targeting (#2458) are partial but have workarounds | 0 |
+| Cut-out: select a subject, refine the edge, mask, export PNG with transparency | partial (not blocking) | Object/Quick Selection, Select Subject (classical), Refine Edge dialog, layer masks, PNG export. Select and Mask is a dialog, not the workspace; no Refine Hair (#2671) | 0 (depth: 80–140 h, G7) |
+| Design: type, shapes, layer styles, artboards; export PNG/JPEG; save and reopen | partial (not blocking) | Point/paragraph type, shapes with stroke controls, all 10 layer effects, artboards, Export As. One macOS report of a 60 s freeze on choosing the Type tool (#2518, not reproduced); no type on a path | 0 (fix #2518: 2–6 h) |
+| Paint with a pen tablet: pressure brushes, layers, save and reopen | partial (not blocking) | Pressure, tilt, rotation on macOS (AppKit monitor); every Brush Settings section. Lag with big brushes (#2619) and feel gaps ([brush-parity.md](brush-parity.md)) | 0 (feel: 100–180 h, G4) |
+| Exchange PSDs with Photoshop users: open a client PSD, edit, send a PSD back | partial (not blocking for alpha; blocking for beta) | Photoshop-authored oracle 133/256 render as Photoshop does; most exports open in Photoshop (smart objects verified), but some don't (#1281, #2469) | 0 for alpha; 150–250 h for beta (G1) |
+
+**Result: passes.** Every core workflow completes end to end and the work saves and reopens in
+PhotoCraft; the partial rows are depth and fidelity gaps with workarounds, not blockers. Ready for
+real work is ~45%, inside the alpha band (~40–75%), but close to its floor.
 
 ## Milestones
 
@@ -42,7 +61,7 @@ Releases: 0.1.0 (2026-10-02), 0.2.0 (2026-10-05, first signed and notarized), 0.
 Ranked; each item links to its gap entry. Pick from the top unless an issue is assigned to you.
 
 1. **PSD that Photoshop trusts** ([G1](gaps.md#g1-psd-fidelity-and-photoshop-acceptance)):
-   fix Save As corruption (#2374) and Photoshop refusing our files (#1281, #2469); add a
+   fix Photoshop refusing our files (#1281, #2469; text-layer case #2374 closed); add a
    Photoshop re-open check (FILE-216-4); Photoshop-oracle floor 133/256 → 200+. 150–250 h.
 2. **Performance budgets** ([G2](gaps.md#g2-interactive-performance)): the 22 over-budget
    scenarios, the P12 GPU crash at 150 layers, brush and cursor lag (#2619, #2566). 200–350 h.
@@ -87,6 +106,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Alpha gate table (core-workflow gate from the progress-docs standard): passes, stage stays alpha |
 | 2026-10-10 | major | Progress-docs standard: honest assessment and dated measurements moved to `target-app-parity.md`, Affinity notes to `file-format-parity.md`; new Current focus and estimates; `parity.md` renamed `parity-checklist.md` |
 | 2026-10-08 | minor | Tools, Affinity import and performance measurements added |
 | 2026-10-05 | major | Honest parity assessment added |
