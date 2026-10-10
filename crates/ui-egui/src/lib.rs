@@ -551,6 +551,9 @@ pub struct PhotocraftApp {
     pub(crate) file_dialog: Option<file_dialog::Pending>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
+    /// Where each document was last saved or exported to through a dialog (#1826): its next Save
+    /// As or export dialog starts there rather than beside the document. Session-only.
+    pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
@@ -660,6 +663,7 @@ impl PhotocraftApp {
             discard: None,
             file_dialog: None,
             tiff_options: None,
+            save_dirs: HashMap::new(),
             allow_close: false,
             stylus: Default::default(),
             background_jobs: false,
