@@ -3527,3 +3527,6 @@ cameraRaw	Masking	Маскування
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Автоматична перевірка виконується не частіше одного разу на день. Доступні оновлення з’являться після закриття інших діалогів.
 	Download the update and save your work before installing the new version.	Завантажте оновлення та збережіть роботу перед встановленням нової версії.
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Якщо програму встановлено через менеджер пакунків, оновіть PhotoCraft за його допомогою. Інші завантаження доступні на сторінці випуску.
+	Install Update	Установити оновлення
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft завантажує оновлення у фоновому режимі й встановлює його під час виходу, не перериваючи роботу. Спочатку збережіть роботу.
+	PhotoCraft will install the update when you quit.	PhotoCraft встановить оновлення під час виходу.

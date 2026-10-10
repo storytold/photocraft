@@ -2839,3 +2839,6 @@ fontWeight	Italic	Italique
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Les vérifications automatiques ont lieu au maximum une fois par jour. Les mises à jour disponibles apparaissent après la fermeture des autres boîtes de dialogue.
 	Download the update and save your work before installing the new version.	Téléchargez la mise à jour et enregistrez votre travail avant d’installer la nouvelle version.
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Pour les installations gérées par paquets, mettez à jour PhotoCraft avec votre gestionnaire de paquets. Les autres téléchargements figurent sur la page de la version.
+	Install Update	Installer la mise à jour
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft télécharge la mise à jour en arrière-plan et l’installe à la fermeture, sans interrompre votre session. Enregistrez d’abord votre travail.
+	PhotoCraft will install the update when you quit.	PhotoCraft installera la mise à jour à la fermeture.

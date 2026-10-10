@@ -254,7 +254,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         } else if crate::delete_layer_prompt::owns(&d.fields) {
                             tl!("Delete")
                         } else if d.kind == DialogKind::Update {
-                            if fields.get("downloadUrl").and_then(Value::as_str).is_some() { tl!("Download Update") } else { tl!("View Downloads") }
+                            if fields.get("nativeUpdater").and_then(Value::as_bool) == Some(true) {
+                                tl!("Install Update")
+                            } else if fields.get("downloadUrl").and_then(Value::as_str).is_some() {
+                                tl!("Download Update")
+                            } else {
+                                tl!("View Downloads")
+                            }
                         } else if d.fields.contains_key("__export") {
                             tl!("Export")
                         } else {
@@ -453,7 +459,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         }
         DialogKind::LayerStyle => crate::layer_style::confirm(app, &d.fields),
         DialogKind::About | DialogKind::Error => Ok(Value::Null),
-        DialogKind::Update => crate::update_check::open_download(app, &d.fields),
+        DialogKind::Update => crate::update_check::install(app, &d.fields),
     }
 }
 

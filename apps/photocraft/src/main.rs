@@ -338,13 +338,13 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "macos")]
             {
                 // Sparkle is AppKit-bound and must stay on the main thread for the app's lifetime.
+                // Discovery and its timing stay with `update_check` (the startup preference and
+                // Help ▸ Check for Updates…), so Sparkle does not also check at launch: it is the
+                // installer the update prompt hands off to.
                 if let Some(updater) = initialize_macos_updater() {
                     let updater = std::rc::Rc::new(updater);
-                    if let Err(error) = updater.check_for_updates_in_background() {
-                        log::warn!("couldn't check for PhotoCraft updates at launch: {error}");
-                    }
-                    let updater_for_menu = std::rc::Rc::clone(&updater);
-                    services.check_for_updates = Some(Box::new(move || updater_for_menu.check_for_updates().map_err(|error| error.to_string())));
+                    let updater_for_prompt = std::rc::Rc::clone(&updater);
+                    services.install_update = Some(Box::new(move || updater_for_prompt.check_for_updates().map_err(|error| error.to_string())));
                 }
             }
             services.preset_store = presets;

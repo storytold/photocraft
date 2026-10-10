@@ -114,6 +114,9 @@ pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         fields.insert("downloadUrl".into(), json!(url));
                     }
                     fields.insert("tagName".into(), json!(release.tag_name));
+                    // A build with a native updater (macOS with a signed Sparkle feed) installs
+                    // in-app; the rest follow the release's download links.
+                    fields.insert("nativeUpdater".into(), json!(app.services.install_update.is_some()));
                     app.ui.open_dialog(DialogKind::Update, fields);
                     app.ui.status = format!("Update available: PhotoCraft {}", release.version);
                     ctx.request_repaint();
@@ -179,7 +182,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         );
 
         ui.add_space(8.0);
-        if fields.get("downloadUrl").and_then(Value::as_str).is_some() {
+        if fields.get("nativeUpdater").and_then(Value::as_bool).unwrap_or(false) {
+            // macOS with a signed Sparkle feed: the update installs itself, so no download to fetch.
+            ui.label(tl!(
+                "PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first."
+            ));
+        } else if fields.get("downloadUrl").and_then(Value::as_str).is_some() {
             ui.label(tl!("Download the update and save your work before installing the new version."));
         } else {
             ui.label(tl!("For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page."));
@@ -192,6 +200,19 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             });
         }
     });
+}
+
+/// The dialog's default action. A build with a native updater (macOS with a signed Sparkle feed)
+/// hands the installation to it, which fetches the signed update and replaces the app on quit;
+/// every other build opens the release's download in the browser.
+pub fn install(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    if fields.get("nativeUpdater").and_then(Value::as_bool).unwrap_or(false) {
+        let updater = app.services.install_update.as_mut().ok_or("The in-app updater is no longer available")?;
+        updater()?;
+        app.ui.status = tl!("PhotoCraft will install the update when you quit.").to_string();
+        return Ok(json!({"updater": "native"}));
+    }
+    open_download(app, fields)
 }
 
 pub fn open_download(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
@@ -216,6 +237,9 @@ pub fn open_download(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DOWNLOAD: &str = "https://github.com/storytold/photocraft/releases/download/v99.0.0/photocraft-99.0.0-macos-universal.dmg";
+    static CHECKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     fn available() -> photocraft_engine::update::ReleaseInfo {
         photocraft_engine::update::parse_release(&json!({
@@ -276,6 +300,48 @@ mod tests {
         check_manual(&mut app);
         tx.send((true, UpdateCheckOutcome::UpToDate)).unwrap();
         assert!(app.update_rx.as_ref().unwrap().try_recv().is_ok());
+    }
+
+    /// macOS with a signed Sparkle feed installs in-app instead of opening a download in the browser.
+    #[test]
+    fn the_native_updater_is_preferred_and_the_prompt_says_so() {
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                install_update: Some(Box::new(|| {
+                    CHECKED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                })),
+                open_url: Some(Box::new(|_| panic!("the browser must not open when Sparkle installs"))),
+                ..Default::default()
+            },
+        );
+        let fields = Map::from_iter([("nativeUpdater".into(), json!(true)), ("downloadUrl".into(), json!(DOWNLOAD))]);
+        let id = app.ui.open_dialog(DialogKind::Update, fields.clone());
+        assert_eq!(crate::dialogs::confirm(&mut app, id).unwrap(), json!({"updater": "native"}));
+        assert!(CHECKED.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(app.ui.status, "PhotoCraft will install the update when you quit.");
+    }
+
+    /// Without an updater the same dialog still opens the verified download, and a stale
+    /// `nativeUpdater` flag (the updater went away) is an error, not a silent browser hand-off.
+    #[test]
+    fn without_a_native_updater_the_download_still_opens() {
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                open_url: Some(Box::new(|url| {
+                    assert_eq!(url, DOWNLOAD);
+                    Ok(())
+                })),
+                ..Default::default()
+            },
+        );
+        let fields = Map::from_iter([("tagName".into(), json!("v99.0.0")), ("downloadUrl".into(), json!(DOWNLOAD))]);
+        assert_eq!(install(&mut app, &fields).unwrap(), json!({"url": DOWNLOAD}));
+        let mut stale = fields.clone();
+        stale.insert("nativeUpdater".into(), json!(true));
+        assert_eq!(install(&mut app, &stale).unwrap_err(), "The in-app updater is no longer available");
     }
 
     #[test]

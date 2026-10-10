@@ -3527,3 +3527,6 @@ fontWeight	Thin	Πολύ λεπτά
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Οι αυτόματοι έλεγχοι γίνονται το πολύ μία φορά την ημέρα. Οι διαθέσιμες ενημερώσεις εμφανίζονται αφού κλείσετε τα άλλα παράθυρα διαλόγου.
 	Download the update and save your work before installing the new version.	Κατεβάστε την ενημέρωση και αποθηκεύστε την εργασία σας πριν εγκαταστήσετε τη νέα έκδοση.
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Για εγκαταστάσεις μέσω διαχειριστή πακέτων, ενημερώστε το PhotoCraft μέσω αυτού. Άλλες λήψεις βρίσκονται στη σελίδα της έκδοσης.
+	Install Update	Εγκατάσταση ενημέρωσης
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	Το PhotoCraft κατεβάζει την ενημέρωση στο παρασκήνιο και την εγκαθιστά κατά την έξοδο, ώστε η εργασία σας να μη διακοπεί. Αποθηκεύστε πρώτα την εργασία σας.
+	PhotoCraft will install the update when you quit.	Το PhotoCraft θα εγκαταστήσει την ενημέρωση κατά την έξοδο.

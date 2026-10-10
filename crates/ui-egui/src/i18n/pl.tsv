@@ -3440,3 +3440,6 @@ cameraRaw	Roughness	Chropowatość
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatyczne sprawdzanie odbywa się najwyżej raz dziennie. Dostępne aktualizacje pojawią się po zamknięciu pozostałych okien dialogowych.
 	Download the update and save your work before installing the new version.	Pobierz aktualizację i zapisz pracę przed instalacją nowej wersji.
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	W przypadku instalacji zarządzanych przez pakiety zaktualizuj PhotoCraft za pomocą menedżera pakietów. Inne pliki są na stronie wydania.
+	Install Update	Zainstaluj aktualizację
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft pobiera aktualizację w tle i instaluje ją przy zamknięciu, nie przerywając pracy. Najpierw zapisz swoją pracę.
+	PhotoCraft will install the update when you quit.	PhotoCraft zainstaluje aktualizację przy zamknięciu.

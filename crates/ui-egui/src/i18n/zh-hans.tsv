@@ -2428,3 +2428,6 @@ fontWeight	Italic	斜体
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	自动检查每天最多执行一次。关闭其他对话框后，将显示可用更新。
 	Download the update and save your work before installing the new version.	下载更新，并在安装新版本之前保存工作。
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	对于通过软件包管理器安装的版本，请使用软件包管理器更新PhotoCraft。其他下载位于发布页面。
+	Install Update	安装更新
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft 会在后台下载更新，并在退出时安装，不会打断您的工作。请先保存工作。
+	PhotoCraft will install the update when you quit.	PhotoCraft 将在退出时安装更新。

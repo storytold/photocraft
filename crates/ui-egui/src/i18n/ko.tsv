@@ -2998,3 +2998,6 @@ fontWeight	Italic	기울임
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	자동 확인은 하루에 최대 한 번 실행됩니다. 다른 대화 상자를 닫으면 사용 가능한 업데이트가 표시됩니다.
 	Download the update and save your work before installing the new version.	업데이트를 다운로드하고 새 버전을 설치하기 전에 작업을 저장하세요.
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	패키지 관리자로 설치한 경우 패키지 관리자를 통해 PhotoCraft를 업데이트하세요. 다른 다운로드는 릴리스 페이지에 있습니다.
+	Install Update	업데이트 설치
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft가 업데이트를 백그라운드에서 다운로드하여 종료 시 설치하므로 작업이 중단되지 않습니다. 먼저 작업을 저장하세요.
+	PhotoCraft will install the update when you quit.	PhotoCraft가 종료 시 업데이트를 설치합니다.

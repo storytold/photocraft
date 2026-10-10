@@ -2826,3 +2826,6 @@ fontWeight	Italic	Miring
 	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Pemeriksaan otomatis dilakukan paling banyak sekali sehari. Pembaruan yang tersedia muncul setelah Anda menutup dialog lain.
 	Download the update and save your work before installing the new version.	Unduh pembaruan dan simpan pekerjaan Anda sebelum menginstal versi baru.
 	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Untuk instalasi yang dikelola paket, perbarui PhotoCraft melalui pengelola paket. Unduhan lain tersedia di halaman rilis.
+	Install Update	Instal Pembaruan
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft mengunduh pembaruan di latar belakang dan memasangnya saat keluar sehingga sesi Anda tidak terganggu. Simpan pekerjaan Anda terlebih dahulu.
+	PhotoCraft will install the update when you quit.	PhotoCraft akan memasang pembaruan saat keluar.
