@@ -533,12 +533,15 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
     Ok(Some(surf))
 }
 
-/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table
-/// and the filters. A mask target enables them on any layer with a mask, so ⌘I inverts an
-/// adjustment layer's mask as in Photoshop (#780).
+/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table,
+/// the filters and the fills (Edit › Fill and its keys). A mask target enables them on any layer
+/// with a mask, so ⌘I inverts an adjustment layer's mask (#780) and Fill fills it (#2456) as in
+/// Photoshop.
 fn edits_mask(id: &str) -> bool {
     id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
         || crate::filters::params_for(id, &Value::Null).is_some()
+        || id == "edit.fill"
+        || crate::fill_key_cmds::IDS.contains(&id)
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
