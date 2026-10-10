@@ -34,6 +34,10 @@ photocraft-plugins = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 photocraft-codecs = { workspace = true }
 flate2 = { workspace = true }
+semver = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { workspace = true }
 
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }

@@ -428,6 +428,7 @@ fn main() -> eframe::Result {
                 {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
+                photocraft_ui_egui::update_check::check_periodic(app);
             });
             if let Some((port, token, _)) = control {
                 let rx = control_server::start(port, token, cc.egui_ctx.clone());
