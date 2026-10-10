@@ -2500,6 +2500,9 @@ cameraRaw	Roughness	Неровность
 	Knockout	Просвечивание
 	Apply At Canvas Bounds	Применить эффект на границах холста
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF использует 8-битный sRGB. Метаданные ICC, EXIF и XMP не сохраняются.
+	File size is shown after export.	Размер файла отображается после экспорта.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Палитра цветов (Цвет текста)
 	Color Picker (Fill Color)	Палитра цветов (Цвет заливки)

@@ -191,7 +191,7 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8], usize) -> Result<(Document, Vec<Stri
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
-    /// JPEG quality 1–100 (None = codec default).
+    /// JPEG/AVIF quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
     pub webp_lossless: bool,

@@ -2203,6 +2203,9 @@ cameraRaw	Blending	混合
 	Knockout	去底色
 	Apply At Canvas Bounds	套用效果至版面邊界
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF 使用 8 位元 sRGB。不會保留 ICC、EXIF 和 XMP 中繼資料。
+	File size is shown after export.	檔案大小將在匯出後顯示。
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	檢色器（文字顏色）
 	Color Picker (Fill Color)	檢色器（填滿顏色）

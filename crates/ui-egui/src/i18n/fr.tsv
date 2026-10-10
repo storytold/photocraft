@@ -2651,6 +2651,9 @@ cameraRaw	Blending	Fusion
 	Knockout	Masquage
 	Apply At Canvas Bounds	Appliquer l’effet aux limites de la zone de travail
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF utilise le sRGB sur 8 bits. Les métadonnées ICC, EXIF et XMP ne sont pas conservées.
+	File size is shown after export.	La taille du fichier est affichée après l’exportation.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
 	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)

@@ -2295,6 +2295,9 @@ cameraRaw	Amount	Cantidad
 	Knockout	Cobertura
 	Apply At Canvas Bounds	Aplicar efecto en los límites del lienzo
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF utiliza sRGB de 8 bits. No se conservan los metadatos ICC, EXIF ni XMP.
+	File size is shown after export.	El tamaño del archivo se muestra después de exportar.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selector de color (Color del texto)
 	Color Picker (Fill Color)	Selector de color (Color de relleno)

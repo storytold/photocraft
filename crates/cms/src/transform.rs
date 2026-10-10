@@ -510,7 +510,9 @@ fn apply_matrix(m: &Option<(usize, usize, Vec<f32>, Vec<f32>)>, v: &[f32; 16], o
 
 // ------------------------------------------------------------ parallel helpers
 
+#[cfg(not(target_arch = "wasm32"))]
 const PAR_MIN_PIXELS: usize = 16 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const PAR_CHUNK_PIXELS: usize = 8 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]

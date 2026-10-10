@@ -2638,6 +2638,9 @@ cameraRaw	Blending	Pembauran
 	Knockout	Knockout
 	Apply At Canvas Bounds	Terapkan efek di batas kanvas
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF menggunakan sRGB 8-bit. Metadata ICC, EXIF, dan XMP tidak dipertahankan.
+	File size is shown after export.	Ukuran berkas ditampilkan setelah ekspor.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Pemilih Warna (Warna Teks)
 	Color Picker (Fill Color)	Pemilih Warna (Warna Isian)

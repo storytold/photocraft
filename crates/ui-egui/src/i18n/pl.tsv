@@ -3243,6 +3243,9 @@ cameraRaw	Roughness	Chropowatość
 	Lines +/−	Wiersze +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, commity: {commits}, wiersze +{added} / −{deleted} (Δ {delta}), pliki binarne +{binAdded} / −{binDeleted}, {first} – {last}
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF używa 8-bitowej przestrzeni sRGB. Metadane ICC, EXIF i XMP nie są zachowywane.
+	File size is shown after export.	Rozmiar pliku jest wyświetlany po eksporcie.
+
 # Text Color Picker and screen sampling
 	Color Picker (Text Color)	Próbnik kolorów (Kolor tekstu)
 	Color Picker (Fill Color)	Próbnik kolorów (Kolor wypełnienia)

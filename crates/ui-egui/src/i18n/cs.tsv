@@ -2226,6 +2226,9 @@ cameraRaw	Color	Barvy
 	Knockout	Vyřazení
 	Apply At Canvas Bounds	Použít efekt na hranicích plátna
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF používá 8bitový sRGB. Metadata ICC, EXIF a XMP se nezachovávají.
+	File size is shown after export.	Velikost souboru se zobrazí po exportu.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Výběr barvy (Barva textu)
 	Color Picker (Fill Color)	Výběr barvy (Barva výplně)

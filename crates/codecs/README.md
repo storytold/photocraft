@@ -44,11 +44,12 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | QOI | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
-| AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
+| AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes (lossy) | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
-"Native" means the data is stored and read back without conversion. Anything else is converted by
-the encode plan, and `fidelity_warnings` reports the conversion when it loses information:
+"Native" means the layout and depth can be stored without conversion (and read back where a
+decoder exists). Anything else is converted by the encode plan, and `fidelity_warnings` reports
+the conversion when it loses information:
 
 * A float image written to an integer format goes to U16 where the format supports it. Values
   outside 0..1 raise `RangeClipped`.
@@ -76,10 +77,17 @@ the same.
   decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
   4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
-* **AVIF.** Encoding uses `ravif`, which is pure Rust. Decoding
-  needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated
-  behind the non-default `avif` feature. In a default build it is neither readable nor writable,
-  so the symmetric guarantee holds. It is listed in `ASYMMETRIC_EXCEPTIONS`.
+* **AVIF (export-only, feature `avif`).** Encoding uses `ravif` in pure Rust. Libraries keep the
+  feature opt-in; the desktop, CLI and web apps enable it by default (distributors can use
+  `--no-default-features`). It writes a single 8-bit RGB/RGBA image, with lossy colour and alpha
+  compression and no ICC, EXIF, XMP, DPI or text metadata. Higher depths are reduced to 8 bits,
+  and float values outside 0..1 are clipped, with fidelity warnings. The backend limits the
+  canvas to 65535 × 65535 pixels. Quality uses
+  `EncodeOptions::jpeg_quality` (1–100); quality 100 is not a lossless guarantee. Direct codec
+  encoding does not colour-manage profiles: use `photocraft-io` for document export and its
+  RGB/CMYK/gray-to-sRGB conversion. AVIF decoding remains `CodecError::Unsupported` even with the
+  feature enabled: the available `image` decoder depends on the C `dav1d` library. Animated
+  AVIF is not written. The format is listed in `ASYMMETRIC_EXCEPTIONS`.
 * **Lossy WebP.** Lossless (VP8L, via `image-webp`) is the default. `webp_lossless: false`
   writes a lossy file with our own clean-room VP8 key-frame encoder (`codecs::vp8`, from
   RFC 6386; `webp_quality` 0–100 on libwebp's scale sets the quantizer). Alpha travels losslessly
@@ -199,6 +207,20 @@ including chunks after IDAT. This budget is separate from pixels, not a total pr
 * malformed input: truncation, bit flips and proptest random bytes;
 * Adam7 PNG against progressive PNG and against the `image` crate as an oracle;
 * limit enforcement.
+
+AVIF tests are also run with `cargo test -p photocraft-codecs --features avif --test avif`.
+Because there is no AVIF decoder in this crate, generate independent-decoder oracle inputs with:
+
+```sh
+cargo run --release -p photocraft-codecs --features avif --example avif_fixtures -- log/avif-oracle
+```
+
+The example writes synthetic RGB/RGBA, 16-bit and float inputs, plus tiny and narrow images,
+at qualities 20, 85 and 100, with their quantized 8-bit PNG references. Decode the `.avif` files
+with an independent implementation such as libavif, and compare dimensions, alpha and visible
+colours or composites against the `*-reference.png` files. RGB hidden under zero alpha is not a
+fidelity guarantee; alpha itself is lossy. These generated files are test artifacts, not corpus
+assets to commit.
 
 If `corpus/pngsuite/*.png` exists at the repo root, every file in it is compared against the
 `image` crate's decoder. Without it, that test is skipped.

@@ -2265,6 +2265,9 @@
 	Knockout	Aussparung
 	Apply At Canvas Bounds	Effekt an Arbeitsflächenbegrenzungen anwenden
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF verwendet 8-Bit-sRGB. ICC-, EXIF- und XMP-Metadaten werden nicht übernommen.
+	File size is shown after export.	Die Dateigröße wird nach dem Export angezeigt.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Farbwähler (Textfarbe)
 	Color Picker (Fill Color)	Farbwähler (Füllfarbe)
