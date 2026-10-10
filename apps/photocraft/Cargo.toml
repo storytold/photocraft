@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 photocraft-doc = { workspace = true }
+photocraft-ops = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-geom = { workspace = true }

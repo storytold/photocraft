@@ -3485,6 +3485,14 @@ cameraRaw	Masking	Маскування
 	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+
+# Undo cache budgets
+	Budget mb	Ліміт (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Пікселі документів, вбудовані дані та історія скасування використовують спільний ліміт пам’яті. Пам’ять виділяється за потреби; інша пам’ять програми враховується окремо.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Місце на диску для скасування використовується лише за потреби, до цього ліміту. Нуль вимикає дисковий кеш. Шляхи робочих дисків застосовуються в наступному сеансі кешування.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Ця браузерна версія зберігає історію скасування в пам’яті. Налаштування робочих дисків стосуються настільної програми.
+	Memory budget (MiB)	Ліміт пам’яті (MiB)
+	Undo disk budget (MiB)	Ліміт диска для скасування (MiB)
 	No subject found — try Object Selection or the Lasso	Об'єкт не знайдено — спробуйте «Виділення об'єктів» або «Ласо»
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник

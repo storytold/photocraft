@@ -40,7 +40,7 @@ fn main() {
     let script: Vec<(String, Value)> =
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
-    let services = Services {
+    let mut services = Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], depth: usize| {
             photocraft_io::import_with_svg_group_depth(name, bytes, depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
         })),
@@ -58,6 +58,30 @@ fn main() {
         write: Some(Box::new(|path: &str, bytes: &[u8]| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string()))),
         ..Default::default()
     };
+    // Exercise the actual autosave error/status path without a server or window.
+    let recovery_error = arg(&args, "--recovery-error");
+    if let Some(error) = recovery_error.clone() {
+        services.autosave = Some(Box::new(move |_, _, _, _, _, _| Err(error.clone())));
+    }
+    if let Some(dir) = arg(&args, "--recover-dir") {
+        services.recover = Some(Box::new(move || {
+            let (entries, errors) = photocraft_format::list_recovery_checked(std::path::Path::new(&dir));
+            let mut batch = photocraft_ui_egui::RecoveryBatch { documents: Vec::new(), errors };
+            for entry in entries {
+                match photocraft_format::recover_checkpoint_with_context(&entry) {
+                    Ok((document, history, context)) => batch.documents.push(photocraft_ui_egui::RecoveredDocument {
+                        key: entry.info.key,
+                        path: entry.info.original_path,
+                        document,
+                        history: Some(history),
+                        context,
+                    }),
+                    Err(error) => batch.errors.push(error.to_string()),
+                }
+            }
+            batch
+        }));
+    }
     let open = arg(&args, "--open");
     let safe_gpu = args.iter().any(|a| a == "--safe-gpu");
     // `--background-jobs`: long commands run as background jobs, as in the desktop app (#210).
@@ -148,6 +172,9 @@ fn main() {
         harness.step();
         harness.event(egui::Event::PointerButton { pos, button, pressed: false, modifiers: egui::Modifiers::NONE });
         harness.run_steps(4);
+    }
+    if recovery_error.is_some() {
+        photocraft_ui_egui::prefs_ui::autosave_now(harness.state_mut());
     }
     let t_settle = std::time::Instant::now();
     while t_settle.elapsed() < std::time::Duration::from_millis(settle_ms) {

@@ -2804,6 +2804,14 @@ fontWeight	Italic	Itálico
 	XOR	XOR
 	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
 	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	Limite (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Os pixels dos documentos, os dados incorporados e o histórico de desfazer compartilham o limite de memória. A memória é alocada conforme necessário; outros usos do aplicativo são adicionais.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	O espaço em disco para desfazer é usado somente quando necessário, até este limite. Zero desativa o cache em disco. Os caminhos dos discos de trabalho valem para a próxima sessão de cache.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Esta versão para navegador mantém o histórico de desfazer na memória. As configurações dos discos de trabalho se aplicam ao aplicativo para desktop.
+	Memory budget (MiB)	Limite de memória (MiB)
+	Undo disk budget (MiB)	Limite de disco para desfazer (MiB)
 	No subject found — try Object Selection or the Lasso	Nenhum assunto encontrado — tente Seleção de objeto ou o Laço
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo

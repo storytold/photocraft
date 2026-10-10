@@ -82,8 +82,8 @@ Measured on the 0.2.x build (`packaging/web/package.sh`; gzip `-9`, Brotli quali
 | `photocraft-web-<hash>.js` | about 160 KB | about 23 KB | about 20 KB |
 
 Per-file upload limits: Cloudflare Pages and Workers static assets reject any file over
-**25 MiB** (26,214,400 bytes). The wasm fits, and `packaging/web/package.sh` fails the build if
-it ever grows past 24 MiB, so a release can't ship a file a common host refuses. (Releases up to
+**25 MiB** (26,214,400 bytes; [Cloudflare Pages limits](https://developers.cloudflare.com/pages/platform/limits/#file-size)). The wasm fits, and `packaging/web/package.sh` fails the build if
+it ever grows past 25 MiB, so a release can't ship a file a common host refuses. (Releases up to
 0.2.0 shipped a 25.8 MiB wasm, which Cloudflare rejected; issue #198.) The size comes from the
 `wasm-release` Cargo profile (fat LTO, size-optimized code with the pixel crates kept at full
 speed) plus `wasm-opt -Oz`.

@@ -225,7 +225,7 @@ jobs:
           curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C "$HOME/.cargo/bin" trunk
           trunk --version
-      # package.sh runs Trunk's release build, validates relative URLs, checks the 24 MiB
+      # package.sh runs Trunk's release build, validates relative URLs, checks the 25 MiB
       # wasm limit and exercises the same packaging step used by release.yml.
       - name: Build and verify browser release
         run: packaging/web/package.sh
@@ -241,7 +241,7 @@ jobs:
               [ -f "$wasm" ] || continue
               bytes=$(wc -c < "$wasm" | tr -d ' ')
               mib=$(awk -v n="$bytes" 'BEGIN { printf "%.2f", n / 1048576 }')
-              echo "| $(basename "$wasm") | $bytes | $mib | 24 MiB |"
+              echo "| $(basename "$wasm") | $bytes | $mib | 25 MiB |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
 

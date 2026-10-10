@@ -3486,6 +3486,14 @@ fontWeight	Thin	Πολύ λεπτά
 	XOR	XOR
 	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
 	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	Όριο (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Τα εικονοστοιχεία εγγράφων, τα ενσωματωμένα δεδομένα και το ιστορικό αναίρεσης μοιράζονται το όριο μνήμης. Η μνήμη δεσμεύεται όταν χρειάζεται· η υπόλοιπη μνήμη της εφαρμογής είναι πρόσθετη.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Ο χώρος δίσκου για αναίρεση χρησιμοποιείται μόνο όταν χρειάζεται, μέχρι αυτό το όριο. Το μηδέν απενεργοποιεί την προσωρινή αποθήκευση στον δίσκο. Οι διαδρομές δίσκων εργασίας ισχύουν στην επόμενη συνεδρία προσωρινής αποθήκευσης.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Αυτή η έκδοση προγράμματος περιήγησης κρατά το ιστορικό αναίρεσης στη μνήμη. Οι ρυθμίσεις δίσκων εργασίας ισχύουν για την εφαρμογή υπολογιστή.
+	Memory budget (MiB)	Όριο μνήμης (MiB)
+	Undo disk budget (MiB)	Όριο δίσκου για αναίρεση (MiB)
 	No subject found — try Object Selection or the Lasso	Δεν βρέθηκε θέμα — δοκιμάστε την Επιλογή αντικειμένου ή το Λάσο
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο

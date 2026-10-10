@@ -40,7 +40,7 @@ fn delete_state(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Step back to the state before `i`; the steps from `i` on are then redo states.
     for _ in i..=current {
-        if !s.undo() {
+        if !s.try_undo()? {
             return Err(EngineError::Other("the history can't step back right now".into()));
         }
     }
@@ -56,7 +56,7 @@ fn new_document(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "history.newDocument";
     let (i, current) = state_index(s, CMD, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let src = if i == current { Some(st.doc.clone()) } else { st.history.state(i) };
+    let src = if i == current { Some(st.doc.clone()) } else { st.history.try_state(i).map_err(EngineError::Other)? };
     let src = src.ok_or_else(|| bad(CMD, format!("state {i} is not held")))?;
     let label = st.history.entries().get(i).cloned().unwrap_or_default();
     let mut doc = (*src).clone();

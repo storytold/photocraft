@@ -107,6 +107,7 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.jobs.close_after_saves = true;
         return;
     }
+    crate::prefs_ui::retire_all(app);
     // Leaving: through the platform's own quit where there is one (see `Services::quit`), with
     // the window left open for it to close.
     if let Some(quit) = app.services.quit.as_mut() {
@@ -126,6 +127,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
     if id == EXIT {
+        crate::prefs_ui::retire_all(app);
         app.allow_close = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         return;

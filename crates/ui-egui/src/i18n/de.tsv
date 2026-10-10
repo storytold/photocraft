@@ -2414,6 +2414,14 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	Budget (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Dokumentpixel, eingebettete Daten und der Rückgängig-Verlauf teilen sich das Speicherbudget. Speicher wird bei Bedarf belegt; weiterer App-Speicher kommt hinzu.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Festplattenspeicher für Rückgängig wird nur bei Bedarf bis zu diesem Limit belegt. Null deaktiviert den Festplattencache. Arbeitsvolume-Pfade gelten ab der nächsten Cache-Sitzung.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Diese Browserversion hält den Rückgängig-Verlauf im Arbeitsspeicher. Arbeitsvolume-Einstellungen gelten für die Desktop-App.
+	Memory budget (MiB)	Speicherbudget (MiB)
+	Undo disk budget (MiB)	Festplattenbudget für Rückgängig (MiB)
 	No subject found — try Object Selection or the Lasso	Kein Motiv gefunden — versuchen Sie das Objektauswahlwerkzeug oder das Lasso
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck

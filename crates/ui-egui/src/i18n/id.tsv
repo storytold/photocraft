@@ -2783,6 +2783,14 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+
+# Undo cache budgets
+	Budget mb	Batas (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Piksel dokumen, data tersemat, dan riwayat urungkan berbagi batas memori. Memori dialokasikan sesuai kebutuhan; penggunaan memori aplikasi lainnya dihitung terpisah.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Ruang disk untuk urungkan hanya digunakan saat diperlukan, hingga batas ini. Nol menonaktifkan cache disk. Jalur disk sementara berlaku pada sesi cache berikutnya.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Versi browser ini menyimpan riwayat urungkan di memori. Pengaturan disk sementara berlaku untuk aplikasi desktop.
+	Memory budget (MiB)	Batas memori (MiB)
+	Undo disk budget (MiB)	Batas disk untuk urungkan (MiB)
 	No subject found — try Object Selection or the Lasso	Subjek tidak ditemukan — coba Seleksi Objek atau Laso
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat

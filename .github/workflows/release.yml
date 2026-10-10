@@ -363,7 +363,7 @@ jobs:
         if: inputs.version != ''
         run: cargo xtask version set "$PHOTOCRAFT_VERSION"
       # No craft-fonts here: the wasm32 build never embeds it (crates/text/build.rs), since even
-      # one Japanese font takes the wasm over packaging/web/package.sh's 24 MiB gate.
+      # one Japanese font takes the wasm over packaging/web/package.sh's 25 MiB gate.
       - name: Build and zip
         run: packaging/web/package.sh
       - uses: actions/upload-artifact@v4

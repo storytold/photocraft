@@ -13,6 +13,7 @@ photocraft-color = { workspace = true }
 photocraft-cms = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
+photocraft-ops = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-gpu = { workspace = true }
 photocraft-engine = { workspace = true }

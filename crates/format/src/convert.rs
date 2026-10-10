@@ -42,6 +42,10 @@ pub(crate) trait Fetch {
     /// Canonical (little-endian) tile bytes of the given expected length.
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>>;
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>>;
+    fn shared_tile(&mut self, _hash: &str, _len: usize) -> Result<Option<Arc<Tile>>> {
+        Ok(None)
+    }
+    fn cache_tile(&mut self, _hash: &str, _tile: &Arc<Tile>) {}
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -332,9 +336,16 @@ impl Loader<'_> {
             if s.tile(c).is_some() {
                 return Err(FormatError::corrupt(format!("duplicate tile ({}, {})", t.tx, t.ty)));
             }
+            if let Some(tile) = self.fetch.shared_tile(&t.hash, len)? {
+                s.put_tiles(std::iter::once((c, tile)));
+                continue;
+            }
             let mut bytes = self.fetch.tile(&t.hash, len)?;
             swap_to_le(&mut bytes, f.sample);
             s.tile_mut(c).bytes_mut().copy_from_slice(&bytes);
+            if let Some(tile) = s.tile(c) {
+                self.fetch.cache_tile(&t.hash, tile);
+            }
         }
         Ok(s)
     }

@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use common::*;
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{DocId, Document};
 use photocraft_format::*;
 
 #[test]
@@ -13,7 +12,7 @@ fn autosave_then_recover() {
     let dir = temp_dir("recovery");
     let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U16));
     let saver = Autosaver::new(&dir, "doc-1");
-    saver.request(doc.clone(), 7, Some("/work/a.pcraft".into()), SaveOptions::default());
+    saver.request(doc.clone(), 7, Some("/work/a.pcraft".into()), SaveOptions::default()).unwrap();
     let r = saver.flush().expect("a save ran");
     let stats = r.unwrap();
     assert!(stats.tiles_written > 0);
@@ -36,13 +35,13 @@ fn background_save_outcomes_report_failure_then_recovery() {
     std::fs::write(&blocked, b"not a directory").unwrap();
     let saver = Autosaver::new(&blocked, "doc");
     let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
-    saver.request_checked(doc.clone(), 7, None, SaveOptions::default()).unwrap();
+    saver.request(doc.clone(), 7, None, SaveOptions::default()).unwrap();
 
     let receive = |saver: &Autosaver| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
-            if let Some(outcome) = saver.take_completed().into_iter().next() {
-                return outcome;
+            if let Some(outcome) = saver.take_completion() {
+                return (outcome.revision, outcome.result);
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -54,7 +53,7 @@ fn background_save_outcomes_report_failure_then_recovery() {
 
     std::fs::remove_file(&blocked).unwrap();
     std::fs::create_dir(&blocked).unwrap();
-    saver.request_checked(doc.clone(), 7, None, SaveOptions::default()).unwrap();
+    saver.request(doc.clone(), 7, None, SaveOptions::default()).unwrap();
     let (revision, result) = receive(&saver);
     assert_eq!(revision, 7);
     result.unwrap();
@@ -72,7 +71,7 @@ fn repeated_autosaves_are_incremental_and_coalesced() {
     for i in 0..5 {
         let id = doc.layers[1].id;
         doc.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(i, 0, &[1.0, 0.0, 0.0, 1.0]);
-        saver.request(Arc::new(doc.clone()), i as u64, None, SaveOptions::default());
+        saver.request(Arc::new(doc.clone()), i as u64, None, SaveOptions::default()).unwrap();
     }
     saver.flush().unwrap().unwrap();
     let e = list_recovery(&dir);
@@ -85,7 +84,7 @@ fn repeated_autosaves_are_incremental_and_coalesced() {
 fn discard_removes_everything() {
     let dir = temp_dir("discard");
     let saver = Autosaver::new(&dir, "x y/z");
-    saver.request(Arc::new(rich_doc(ColorMode::Grayscale, SampleType::U8)), 1, None, SaveOptions::default());
+    saver.request(Arc::new(rich_doc(ColorMode::Grayscale, SampleType::U8)), 1, None, SaveOptions::default()).unwrap();
     let path = saver.bundle_path();
     assert!(path.file_name().unwrap().to_string_lossy().starts_with("x_y_z"));
     saver.discard().unwrap();
@@ -104,135 +103,276 @@ fn list_ignores_junk() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// `doc` as document `id` with pixel (x, 0) of its paint layer set, so versions are told apart.
-fn edit(mut doc: Document, id: u64, x: i32) -> Document {
-    doc.id = DocId(id);
-    let layer = doc.layers[1].id;
-    doc.layer_mut(layer).unwrap().surface_mut().unwrap().write_pixel(x, 0, &[1.0, 0.0, 0.0, 1.0]);
-    doc
-}
-
-fn version(id: u64, x: i32, mode: ColorMode) -> Document {
-    edit(rich_doc(mode, SampleType::U8), id, x)
-}
-
-/// Save one snapshot under `key` and wait for it.
-fn save_once(dir: &std::path::Path, key: &str, doc: Document) {
-    let saver = Autosaver::new(dir, key);
-    saver.request(Arc::new(doc), 1, None, SaveOptions::default());
-    saver.flush().unwrap().unwrap();
-}
-
-/// The recovered documents by entry key, ids cleared (they're reassigned on open).
-fn recovered(store: &RecoveryStore) -> std::collections::BTreeMap<String, Document> {
-    store
-        .recover()
-        .into_iter()
-        .map(|(e, mut doc)| {
-            doc.id = DocId(0);
-            (e.info.key, doc)
-        })
-        .collect()
-}
-
-fn same(mut doc: Document) -> Document {
-    doc.id = DocId(0);
-    doc
-}
-
 #[test]
-fn recovered_entries_survive_a_second_crash_until_saved_or_closed() {
-    let dir = temp_dir("second-crash");
-    let (a, b) = (version(1, 3, ColorMode::Rgb), version(2, 5, ColorMode::Grayscale));
-    // Launch 1 autosaves two unsaved documents, then crashes (dropping waits for the writes).
-    {
-        let mut launch = RecoveryStore::new(&dir);
-        launch.autosave(&Arc::new(a.clone()), 4, None);
-        launch.autosave(&Arc::new(b.clone()), 6, Some("/work/b.pcraft".into()));
-    }
-    assert_eq!(list_recovery(&dir).len(), 2);
-    // Launch 2 recovers both and crashes before its first autosave: nothing may be lost.
-    let keys: Vec<String> = {
-        let mut launch = RecoveryStore::new(&dir);
-        let docs = recovered(&launch);
-        assert_eq!(docs.len(), 2);
-        assert_eq!(list_recovery(&dir).len(), 2, "recovering must not delete the entries");
-        for (i, key) in docs.keys().enumerate() {
-            launch.adopt(10 + i as u64, key);
+fn worker_failure_is_acknowledged_and_same_revision_can_retry() {
+    let dir = temp_dir("retry");
+    let blocked = dir.join("blocked");
+    std::fs::write(&blocked, b"not a directory").unwrap();
+    let saver = Autosaver::new(&blocked, "doc");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
+    saver.request(doc.clone(), 9, None, SaveOptions::default()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(completion) = saver.take_completion() {
+            assert_eq!(completion.revision, 9);
+            assert!(completion.result.is_err());
+            break;
         }
-        docs.into_keys().collect()
-    };
-    // Launch 3 still has both, pixels intact; one is edited and autosaved, the other closed.
-    let edited = edit(a.clone(), 20, 9);
-    {
-        let mut launch = RecoveryStore::new(&dir);
-        let docs = recovered(&launch);
-        assert_eq!(docs.values().cloned().collect::<Vec<_>>(), vec![same(a.clone()), same(b.clone())]);
-        launch.adopt(20, &keys[0]);
-        launch.adopt(21, &keys[1]);
-        launch.autosave(&Arc::new(edited.clone()), 9, None);
-        launch.discard(21).unwrap();
-        assert_eq!(list_recovery(&dir).len(), 1, "closing removes the adopted entry");
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
     }
-    // The autosave replaced the adopted entry in place: no duplicate, newest content.
+    std::fs::remove_file(&blocked).unwrap();
+    saver.request(doc.clone(), 9, None, SaveOptions::default()).unwrap();
+    saver.flush().unwrap().unwrap();
+    assert_eq!(recover(&list_recovery(&blocked)[0]).unwrap(), *doc);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checkpoint_preserves_current_undo_redo_and_lazy_lease_at_every_depth() {
+    use photocraft_ops::{History, HistoryState};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let dir = temp_dir("checkpoint");
+        let current = Arc::new(rich_doc(ColorMode::Rgb, depth));
+        let mut before = (*current).clone();
+        before.name = "Before".into();
+        let mut after = (*current).clone();
+        after.name = "After".into();
+        let mut checkpoint = History::default().checkpoint();
+        checkpoint.current_label = "Current edit".into();
+        checkpoint.undo.push(HistoryState::from_document("Before edit", Arc::new(before.clone())));
+        checkpoint.redo.push(HistoryState::from_document("After edit", Arc::new(after.clone())));
+        let saver = Autosaver::new(&dir, "history");
+        saver.request_checkpoint(current.clone(), checkpoint, 12, None, SaveOptions::default()).unwrap();
+        saver.flush().unwrap().unwrap();
+        let entry = list_recovery(&dir).remove(0);
+        let (restored, history) = recover_checkpoint(&entry).unwrap();
+        assert_eq!(restored, *current);
+        assert_eq!(history.current_label, "Current edit");
+        let restored_before = history.undo[0].load_document().unwrap();
+        assert_eq!(*restored_before, before);
+        let mut allocations = std::collections::HashSet::new();
+        assert!(photocraft_ops::document_bytes(&restored, &mut allocations) > 0);
+        assert_eq!(photocraft_ops::document_bytes(&restored_before, &mut allocations), 0, "unchanged recovered pixels and blobs share live allocations");
+        assert_eq!(*history.redo[0].load_document().unwrap(), after);
+        let saver = Autosaver::new(&dir, "history");
+        saver.request(current.clone(), 13, None, SaveOptions::default()).unwrap();
+        saver.flush().unwrap().unwrap();
+        // A replacement checkpoint and normal save retirement cannot remove
+        // immutable objects still needed by recovered cold undo/redo states.
+        discard_recovery(&dir, &entry).unwrap();
+        assert!(list_recovery(&dir).is_empty());
+        assert_eq!(*history.undo[0].load_document().unwrap(), before);
+        drop(history);
+    }
+}
+
+#[test]
+fn failed_history_load_preserves_previous_complete_checkpoint() {
+    #[derive(Debug)]
+    struct Broken;
+    impl photocraft_ops::ArchivedDocument for Broken {
+        fn load(&self) -> std::result::Result<Arc<photocraft_doc::Document>, String> {
+            Err("cold history unavailable".into())
+        }
+    }
+    let dir = temp_dir("preserve");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U16));
+    let saver = Autosaver::new(&dir, "safe");
+    saver.request(doc.clone(), 1, None, SaveOptions::default()).unwrap();
+    saver.flush().unwrap().unwrap();
+    let saver = Autosaver::new(&dir, "safe");
+    let mut checkpoint = photocraft_ops::History::default().checkpoint();
+    checkpoint.undo.push(photocraft_ops::HistoryState::from_archive("Broken", false, Arc::new(Broken)));
+    saver.request_checkpoint(doc.clone(), checkpoint, 2, None, SaveOptions::default()).unwrap();
+    assert!(saver.flush().unwrap().is_err());
     let entries = list_recovery(&dir);
-    assert_eq!(entries.len(), 1);
-    assert_eq!((entries[0].info.key.as_str(), entries[0].info.revision), (keys[0].as_str(), 9));
-    // Launch 4 recovers it once more and saves it: the entry goes.
-    let mut launch = RecoveryStore::new(&dir);
-    assert_eq!(recovered(&launch).into_values().collect::<Vec<_>>(), vec![same(edited)]);
-    launch.adopt(30, &keys[0]);
-    launch.discard(30).unwrap();
-    assert!(list_recovery(&dir).is_empty());
-    drop(launch);
+    assert_eq!(entries[0].info.revision, 1);
+    assert_eq!(recover(&entries[0]).unwrap(), *doc);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn new_documents_never_overwrite_surviving_entries() {
-    let dir = temp_dir("collision");
-    // An earlier launch (including builds that keyed entries by bare document id) left `doc-1`.
-    let old = version(1, 3, ColorMode::Rgb);
-    save_once(&dir, "doc-1", old.clone());
-    // A store from another launch left an entry for its own document 1 too.
-    let other = version(1, 6, ColorMode::Grayscale);
-    RecoveryStore::new(&dir).autosave(&Arc::new(other.clone()), 2, None);
-    assert_eq!(list_recovery(&dir).len(), 2);
-    // This launch adopts `doc-1` for its document 5, and its own new document 1 autosaves.
-    let fresh = version(1, 8, ColorMode::Rgb);
-    {
-        let mut launch = RecoveryStore::new(&dir);
-        launch.adopt(5, "doc-1");
-        launch.autosave(&Arc::new(fresh.clone()), 3, None);
+fn malicious_key_is_reported_and_cannot_delete_outside_storage() {
+    let dir = temp_dir("unsafe-key");
+    let metadata = serde_json::json!({"key":"../victim", "document_name":"Bad", "original_path":null, "saved_at":0, "revision":1});
+    std::fs::write(dir.join("bad.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let (entries, errors) = list_recovery_checked(&dir);
+    assert!(entries.is_empty());
+    assert_eq!(errors.len(), 1);
+    assert!(dir.join("bad.json").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn legacy_sidecar_recovery_remains_supported() {
+    let dir = temp_dir("legacy");
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    PcraftWriter::new().save_dir(&doc, &dir.join("old.pcraft"), &SaveOptions::default()).unwrap();
+    let metadata = serde_json::json!({"key":"old", "document_name":"Rich", "original_path":null, "saved_at":0, "revision":1});
+    std::fs::write(dir.join("old.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let (current, history) = recover_checkpoint(&list_recovery(&dir)[0]).unwrap();
+    assert_eq!(current, doc);
+    assert!(history.undo.is_empty());
+    assert!(history.redo.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn blocked_worker_retains_only_newest_pending_snapshot() {
+    #[derive(Debug)]
+    struct Blocked {
+        doc: Arc<photocraft_doc::Document>,
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
     }
-    let docs = recovered(&RecoveryStore::new(&dir));
-    assert_eq!(docs.len(), 3, "the new document got an entry of its own");
-    assert_eq!(docs.get("doc-1"), Some(&same(old)), "the adopted entry is untouched");
-    assert!(docs.values().any(|d| *d == same(other.clone())));
-    assert!(docs.values().any(|d| *d == same(fresh.clone())));
-    // Closing the new document removes only its own entry.
-    let mut launch = RecoveryStore::new(&dir);
-    launch.adopt(5, "doc-1");
-    launch.autosave(&Arc::new(fresh), 3, None);
-    launch.discard(1).unwrap();
-    assert_eq!(list_recovery(&dir).len(), 3);
-    launch.discard(5).unwrap();
-    assert_eq!(list_recovery(&dir).len(), 2);
-    drop(launch);
+    impl photocraft_ops::ArchivedDocument for Blocked {
+        fn load(&self) -> std::result::Result<Arc<photocraft_doc::Document>, String> {
+            self.entered.send(()).map_err(|e| e.to_string())?;
+            self.release.lock().map_err(|e| e.to_string())?.recv().map_err(|e| e.to_string())?;
+            Ok(self.doc.clone())
+        }
+    }
+    let dir = temp_dir("bounded");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let base = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
+    let mut history = photocraft_ops::History::default().checkpoint();
+    history.undo.push(photocraft_ops::HistoryState::from_archive(
+        "Wait",
+        false,
+        Arc::new(Blocked { doc: base.clone(), entered: entered_tx, release: std::sync::Mutex::new(release_rx) }),
+    ));
+    let saver = Autosaver::new(&dir, "bound");
+    saver.request_checkpoint(base.clone(), history, 0, None, SaveOptions::default()).unwrap();
+    entered_rx.recv_timeout(std::time::Duration::from_secs(15)).unwrap();
+    let mut weak = Vec::new();
+    for revision in 1..=30 {
+        let mut document = (*base).clone();
+        document.name = format!("Revision {revision}");
+        let doc = Arc::new(document);
+        weak.push(Arc::downgrade(&doc));
+        saver.request(doc, revision, None, SaveOptions::default()).unwrap();
+    }
+    assert!(weak.iter().take(29).all(|doc| doc.strong_count() == 0));
+    assert_eq!(weak[29].strong_count(), 1);
+    release_tx.send(()).unwrap();
+    saver.flush().unwrap().unwrap();
+    let entries = list_recovery(&dir);
+    assert_eq!(entries[0].info.revision, 30);
+    assert_eq!(recover(&entries[0]).unwrap().name, "Revision 30");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn sidecars_cannot_point_at_other_bundles() {
-    let dir = temp_dir("sidecar-key");
-    let inner = dir.join("Recovery");
-    save_once(&dir, "outside", rich_doc(ColorMode::Rgb, SampleType::U8));
-    save_once(&inner, "k", rich_doc(ColorMode::Rgb, SampleType::U8));
-    let info = std::fs::read_to_string(inner.join("k.json")).unwrap();
-    // A copied sidecar (its name isn't its key) and one whose key leaves the directory.
-    std::fs::write(inner.join("copy.json"), &info).unwrap();
-    std::fs::write(inner.join("escape.json"), info.replace("\"k\"", "\"../outside\"")).unwrap();
-    let entries = list_recovery(&inner);
-    assert_eq!(entries.iter().map(|e| e.info.key.as_str()).collect::<Vec<_>>(), ["k"]);
+fn view_context_roundtrips_and_large_context_is_rejected() {
+    let dir = temp_dir("context");
+    let saver = Autosaver::new(&dir, "view");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
+    let context = serde_json::json!({"zoom":1.5,"center":[42.0,84.0],"tool":"brush","tabOrder":2});
+    saver
+        .request_checkpoint_with_context(doc.clone(), photocraft_ops::History::default().checkpoint(), 1, None, SaveOptions::default(), context.clone())
+        .unwrap();
+    saver.flush().unwrap().unwrap();
+    let (_, _, recovered_context) = recover_checkpoint_with_context(&list_recovery(&dir)[0]).unwrap();
+    assert_eq!(recovered_context, context);
+    let saver = Autosaver::new(&dir, "view");
+    assert!(
+        saver
+            .request_checkpoint_with_context(
+                doc,
+                photocraft_ops::History::default().checkpoint(),
+                2,
+                None,
+                SaveOptions::default(),
+                serde_json::json!({"oversized":"x".repeat(70_000)})
+            )
+            .is_err()
+    );
+    saver.discard().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_descriptors_roots_and_objects_are_rejected() {
+    use std::os::unix::fs::symlink;
+    let dir = temp_dir("symlinks");
+    let outside = temp_dir("outside");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
+    let saver = Autosaver::new(&dir, "safe");
+    saver.request(doc, 1, None, SaveOptions::default()).unwrap();
+    saver.flush().unwrap().unwrap();
+    let entry = list_recovery(&dir).remove(0);
+    let sidecar = dir.join("safe.json");
+    let saved_sidecar = outside.join("descriptor.json");
+    std::fs::rename(&sidecar, &saved_sidecar).unwrap();
+    symlink(&saved_sidecar, &sidecar).unwrap();
+    assert!(list_recovery_checked(&dir).0.is_empty());
+    assert!(recover(&entry).is_err());
+    assert!(discard_recovery(&dir, &entry).is_err());
+    std::fs::remove_file(&sidecar).unwrap();
+    std::fs::rename(&saved_sidecar, &sidecar).unwrap();
+    let object = std::fs::read_dir(entry.bundle.join("tiles")).unwrap().next().unwrap().unwrap().path();
+    let outside_object = outside.join("object.zst");
+    std::fs::rename(&object, &outside_object).unwrap();
+    symlink(&outside_object, &object).unwrap();
+    assert!(recover(&entry).is_err());
+    std::fs::remove_file(&object).unwrap();
+    std::fs::rename(&outside_object, &object).unwrap();
+    let outside_root = outside.join("bundle");
+    std::fs::rename(&entry.bundle, &outside_root).unwrap();
+    symlink(&outside_root, &entry.bundle).unwrap();
+    assert!(recover(&entry).is_err());
+    assert!(discard_recovery(&dir, &entry).is_err());
+    assert!(outside_root.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn autosave_repairs_corrupt_existing_objects_before_acknowledging() {
+    let dir = temp_dir("repair-object");
+    let saver = Autosaver::new(&dir, "repair");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U16));
+    saver.request(doc.clone(), 1, None, SaveOptions::default()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(completion) = saver.take_completion() {
+            completion.result.unwrap();
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let entry = list_recovery(&dir).remove(0);
+    let object = std::fs::read_dir(entry.bundle.join("tiles")).unwrap().next().unwrap().unwrap().path();
+    std::fs::write(&object, b"truncated").unwrap();
+    assert!(recover(&entry).is_err());
+    // Reuse the same worker: fingerprint changes invalidate its verified cache.
+    saver.request(doc.clone(), 2, None, SaveOptions::default()).unwrap();
+    saver.flush().unwrap().unwrap();
+    assert_eq!(recover(&list_recovery(&dir)[0]).unwrap(), *doc);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn missing_descriptor_does_not_consume_a_failed_recovery_source() {
+    let dir = temp_dir("missing-descriptor");
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U16);
+    let bundle = dir.join("retained.pcraft");
+    PcraftWriter::new().save_dir(&doc, &bundle, &SaveOptions::default()).unwrap();
+    let entry = RecoveryEntry {
+        info: photocraft_format::autosave::RecoveryInfo {
+            key: "retained".into(),
+            document_name: doc.name.clone(),
+            original_path: None,
+            saved_at: 0,
+            revision: 1,
+        },
+        bundle: bundle.clone(),
+    };
+    assert!(recover_checkpoint(&entry).is_err());
+    assert_eq!(load_path(&bundle).unwrap(), doc, "a failed load never implicitly retires its source");
     std::fs::remove_dir_all(dir).unwrap();
 }

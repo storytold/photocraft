@@ -63,7 +63,7 @@ pub(crate) fn after_command(s: &mut Session, id: &str) {
     let Some(layer) = st.active_layer else { return };
     let label = st.history.undo_label().unwrap_or(id).to_string();
     let mask = st.doc.layer(layer).is_some_and(|l| l.mask.is_some())
-        && st.history.state(st.history.past_len().wrapping_sub(1)).is_some_and(|prev| {
+        && st.history.resident_state(st.history.past_len().wrapping_sub(1)).is_some_and(|prev| {
             // The mask changed and the pixels didn't: the command painted the mask.
             let now = st.doc.layer(layer);
             let was = prev.layer(layer);
@@ -201,7 +201,7 @@ fn fade(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = f32_or(p, "opacity", 100.0).clamp(0.0, 100.0) / 100.0;
     let mode = blend_from_str(str_or(p, "mode", "normal")).ok_or_else(|| bad(cmd, "unknown blend mode"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let prev = st.history.state(st.history.past_len() - 1).ok_or_else(|| bad(cmd, "no previous state"))?;
+    let prev = st.history.try_state(st.history.past_len().saturating_sub(1)).map_err(EngineError::Other)?.ok_or_else(|| bad(cmd, "no previous state"))?;
     let before = surface_of(&prev, src.layer, src.mask).cloned().ok_or_else(|| EngineError::Other("the layer did not exist before this step".into()))?;
     let now = surface_of(&st.doc, src.layer, src.mask).ok_or(EngineError::NoLayer(src.layer))?;
     if now.format() != before.format() {

@@ -3558,6 +3558,14 @@ cameraRaw	Whites	Witten
 	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+
+# Undo cache budgets
+	Budget mb	Limiet (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Documentpixels, ingesloten gegevens en de geschiedenis voor ongedaan maken delen de geheugenlimiet. Geheugen wordt naar behoefte gebruikt; ander app-geheugen komt daarbovenop.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Schijfruimte voor ongedaan maken wordt alleen naar behoefte gebruikt, tot deze limiet. Nul schakelt de schijfcache uit. Werkschijfpaden gelden vanaf de volgende cachesessie.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Deze browserversie bewaart de geschiedenis voor ongedaan maken in het geheugen. Werkschijfinstellingen gelden voor de desktop-app.
+	Memory budget (MiB)	Geheugenlimiet (MiB)
+	Undo disk budget (MiB)	Schijflimiet voor ongedaan maken (MiB)
 	No subject found — try Object Selection or the Lasso	Geen onderwerp gevonden — probeer Objectselectie of de Lasso
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek

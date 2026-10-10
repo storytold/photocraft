@@ -234,33 +234,42 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
-/// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
-/// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
-pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
-/// Poll successful or failed background writes: (document id, revision, result).
-pub type AutosaveResultsFn = Box<dyn FnMut() -> Vec<(u64, u64, Result<(), String>)>>;
-/// Drop the recovery data of a document (by `DocId` value) once it is saved or closed.
-pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
-/// List recoverable documents without decoding them. Their data stays until the documents are
-/// saved or closed; the shell runs each entry's loader on a background worker.
-pub type RecoverFn = Box<dyn FnMut() -> Vec<Recoverable>>;
-/// Photoshop's own keyboard shortcut set on this machine, as (source path, `.kys` XML text):
-/// the newest install's live `Keyboard Shortcuts.psp` on the desktop, `None` without one.
 pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
-/// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
-/// its autosaves replace the entry, and saving or closing it drops the entry.
-pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
-
-/// A recovery entry [`RecoverFn`] found; its loader owns only the data it needs to read.
 pub struct Recoverable {
-    /// The recovery entry to adopt once loading succeeds (see [`AdoptAutosaveFn`]).
     pub key: String,
     pub name: String,
-    /// Where the user last saved it, if anywhere.
     pub path: Option<String>,
-    pub load: Box<dyn FnOnce() -> Result<Document, String> + Send + 'static>,
+    pub load: Box<dyn FnOnce() -> Result<RecoveredDocument, String> + Send + 'static>,
 }
+pub type RecoveryDiscovery = Box<dyn FnOnce() -> (Vec<Recoverable>, Vec<String>) + Send>;
+pub type DiscoverRecoveryFn = Box<dyn FnMut() -> RecoveryDiscovery>;
+/// Queue an immutable document/history checkpoint. Success means accepted, not saved.
+pub type AutosaveFn =
+    Box<dyn FnMut(&std::sync::Arc<Document>, photocraft_ops::HistoryCheckpoint, u64, Option<&str>, Option<&str>, serde_json::Value) -> Result<(), String>>;
+/// Retire a closed document's checkpoint off the UI thread; inherited keys remain owned until completion.
+pub type DiscardAutosaveFn = Box<dyn FnMut(u64, Option<&str>) -> Result<(), String>>;
+pub struct AutosaveCompletion {
+    pub document_id: u64,
+    pub revision: u64,
+    pub result: Result<(), String>,
+    pub retired: bool,
+}
+pub type PollAutosaveFn = Box<dyn FnMut() -> Vec<AutosaveCompletion>>;
+pub struct RecoveredDocument {
+    pub key: String,
+    pub path: Option<String>,
+    pub document: Document,
+    pub history: Option<photocraft_ops::HistoryCheckpoint>,
+    pub context: serde_json::Value,
+}
+#[derive(Default)]
+pub struct RecoveryBatch {
+    pub documents: Vec<RecoveredDocument>,
+    pub errors: Vec<String>,
+}
+/// Load recoverable checkpoints without consuming their durable originals.
+pub type RecoverFn = Box<dyn FnMut() -> RecoveryBatch>;
 /// Append text to a file (History Log).
 pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Requests from the operating system since the last call (see [`OsEvent`]).
@@ -322,11 +331,10 @@ pub struct Services {
     pub xwayland_command: Option<String>,
     /// Crash-recovery autosave (Preferences › File Handling) and recovery at launch.
     pub autosave: Option<AutosaveFn>,
-    /// None for services that report synchronous success through `autosave`.
-    pub autosave_results: Option<AutosaveResultsFn>,
     pub discard_autosave: Option<DiscardAutosaveFn>,
+    pub poll_autosave: Option<PollAutosaveFn>,
     pub recover: Option<RecoverFn>,
-    pub adopt_autosave: Option<AdoptAutosaveFn>,
+    pub discover_recovery: Option<DiscoverRecoveryFn>,
     /// History Log text file output.
     pub append_text: Option<AppendTextFn>,
     /// OS requests (macOS open-documents / quit Apple events), polled every frame.

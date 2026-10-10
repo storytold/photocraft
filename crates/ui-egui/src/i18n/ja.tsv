@@ -3399,6 +3399,14 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+
+# Undo cache budgets
+	Memory budget (MiB)	メモリ上限 (MiB)
+	Undo disk budget (MiB)	取り消し用ディスク上限 (MiB)
+	Budget mb	容量上限 (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	メモリ上限はドキュメントの画素、埋め込みデータ、取り消し履歴で共有します。必要に応じて増加し、アプリのその他のメモリは別途使用されます。
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	取り消し用ディスク容量は必要なときだけ、この上限まで増加します。0 にするとディスクキャッシュを無効にします。保存先は次のキャッシュセッションから適用されます。
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	ブラウザー版では取り消し履歴をメモリに保持します。スクラッチディスク設定はデスクトップ版に適用されます。
 	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください

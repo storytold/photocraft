@@ -3,9 +3,8 @@
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image, SampleType as CS};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, Size};
-use photocraft_format::RecoveryStore;
 use photocraft_geom::Rect;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Services};
 use std::cell::RefCell;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -212,44 +211,36 @@ fn save_file(
     Ok(r.warnings)
 }
 
-type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
-
-/// Run `f` on the recovery store (`Err` without a config directory). The service closures never
-/// call each other, so the store is never borrowed twice.
-fn with_store<R>(store: &SharedRecovery, f: impl FnOnce(&mut RecoveryStore) -> R) -> Result<R, String> {
-    let mut slot = store.try_borrow_mut().map_err(|_| "crash recovery is busy".to_string())?;
-    Ok(f(slot.as_mut().ok_or("no config directory")?))
+fn with_recovery<T>(
+    manager: &std::sync::Mutex<crate::recovery::RecoveryManager>,
+    f: impl FnOnce(&mut crate::recovery::RecoveryManager) -> T,
+) -> Result<T, String> {
+    let mut slot = match manager.try_lock() {
+        Ok(slot) => slot,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Err("Recovery discovery is busy; retry shortly".into()),
+    };
+    Ok(f(&mut slot))
 }
 
-/// Crash recovery: background incremental .pcraft autosaves into `dir` (`None`: no config
-/// directory, so autosaves fail and nothing is recovered). Recovered documents keep their entries
-/// until a newer autosave replaces them or they're saved or closed (see [`RecoveryStore`]).
 fn recovery_services(dir: Option<PathBuf>) -> Services {
-    let recover_dir = dir.clone();
-    let store: SharedRecovery = Rc::new(RefCell::new(dir.map(RecoveryStore::new)));
-    let (s1, s2, s4) = (store.clone(), store.clone(), store.clone());
+    let manager = Arc::new(std::sync::Mutex::new(crate::recovery::RecoveryManager::new(dir.clone())));
+    let (queue, discard, poll) = (manager.clone(), manager.clone(), manager.clone());
     Services {
-        autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
-            with_store(&s1, |s| s.autosave_checked(doc, revision, path.map(str::to_string)))?
+        autosave: Some(Box::new(move |doc, history, revision, path, key, context| {
+            with_recovery(&queue, |manager| manager.queue(doc, history, revision, path, key, context))?
         })),
-        autosave_results: Some(Box::new(move || with_store(&s4, |s| s.take_completed()).unwrap_or_default())),
-        discard_autosave: Some(Box::new(move |id: u64| {
-            let _ = with_store(&s2, |s| s.discard(id));
-        })),
-        recover: Some(Box::new(move || {
-            let Some(dir) = recover_dir.as_ref() else { return Vec::new() };
-            photocraft_format::list_recovery(dir)
-                .into_iter()
-                .map(|e| Recoverable {
-                    key: e.info.key.clone(),
-                    name: e.info.document_name.clone(),
-                    path: e.info.original_path.clone(),
-                    load: Box::new(move || photocraft_format::recover(&e).map_err(|e| e.to_string())),
-                })
-                .collect()
-        })),
-        adopt_autosave: Some(Box::new(move |id: u64, key: &str| {
-            let _ = with_store(&store, |s| s.adopt(id, key));
+        discard_autosave: Some(Box::new(move |id, key| with_recovery(&discard, |manager| manager.discard(id, key))?)),
+        poll_autosave: Some(Box::new(move || with_recovery(&poll, |manager| manager.poll()).unwrap_or_default())),
+        discover_recovery: Some(Box::new(move || {
+            let manager = manager.clone();
+            let dir = dir.clone();
+            Box::new(move || {
+                let Some(dir) = dir else { return (Vec::new(), Vec::new()) };
+                // Large descriptors are parsed on the discovery worker outside the manager lock.
+                let (entries, errors) = photocraft_format::list_recovery_checked(&dir);
+                manager.lock().unwrap_or_else(std::sync::PoisonError::into_inner).claim_discovery(entries, errors)
+            })
         })),
         ..Default::default()
     }
@@ -689,12 +680,31 @@ mod tests {
         let st = app.session.active_mut().unwrap();
         st.saved_revision = st.revision;
         prefs_ui::tick(&mut app, &ctx);
+        assert!(
+            list_recovery(&dir).iter().any(|entry| photocraft_format::recover(entry).ok().is_some_and(|doc| photocraft_compose::flatten(&doc)
+                .px
+                .first()
+                .copied()
+                == Some(BLUE))),
+            "normal Save retains undo recovery"
+        );
+        app.run("file.close", json!({"document": index_of(&app, BLUE)})).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while list_recovery(&dir).len() > 1 && std::time::Instant::now() < deadline {
+            prefs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let left = list_recovery(&dir);
         assert_eq!(left.len(), 1);
         assert_eq!(photocraft_compose::flatten(&photocraft_format::recover(&left[0]).unwrap()).px.first().copied(), Some(GREEN));
         let green = index_of(&app, GREEN);
         app.run("file.close", json!({"document": green})).unwrap();
         prefs_ui::tick(&mut app, &ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !list_recovery(&dir).is_empty() && std::time::Instant::now() < deadline {
+            prefs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert!(list_recovery(&dir).is_empty());
         drop(app);
         let _ = std::fs::remove_dir_all(&dir);
@@ -731,7 +741,8 @@ mod tests {
         std::fs::create_dir(&recovery).unwrap();
         autosave(&mut app, &ctx);
         let mut recovered = Vec::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // Recovery retries use a 30-second backoff; allow its deadline plus worker completion.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
         while std::time::Instant::now() < deadline {
             prefs_ui::tick(&mut app, &ctx);
             recovered = list_recovery(&recovery);
@@ -740,6 +751,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        while app.ui.status.starts_with("Autosave failed:") && std::time::Instant::now() < deadline {
+            prefs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!app.ui.status.starts_with("Autosave failed:"), "a durable retry clears its matching error: {}", app.ui.status);
         assert_eq!(recovered.len(), 1, "unchanged revision should retry after failure");
         assert_eq!(recovered[0].info.revision, revision);
         let restored = photocraft_format::recover(&recovered[0]).unwrap();

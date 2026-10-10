@@ -423,7 +423,7 @@ fn auto_adjust(s: &mut Session, kind: &str) -> Result<Value> {
 fn toggle_last_state(s: &mut Session) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let redo = st.history.can_redo();
-    Ok(json!(if redo { s.redo() } else { s.undo() }))
+    Ok(json!(if redo { s.try_redo()? } else { s.try_undo()? }))
 }
 
 /// Edit › Transform › Again: replay the last `edit.transform` on the active layer.

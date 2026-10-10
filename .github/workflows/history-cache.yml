@@ -1,0 +1,42 @@
+name: Undo and recovery workloads
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/engine/src/history_cache/**'
+      - 'crates/engine/src/history_cache.rs'
+      - 'crates/engine/examples/history_cache_bench.rs'
+      - 'crates/format/src/history.rs'
+      - 'crates/format/src/autosave.rs'
+      - 'crates/format/examples/recovery_workload.rs'
+      - 'crates/ops/src/**'
+      - '.github/workflows/history-cache.yml'
+permissions:
+  contents: read
+concurrency:
+  group: history-cache-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  workload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run reproducible 24 MP workload
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --release --locked -p photocraft-engine --example history_cache_bench -- --steps 12 | tee history-cache-results.txt
+      - name: Run reproducible 24 MP recovery workload
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --release --locked -p photocraft-format --example recovery_workload | tee recovery-results.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: history-cache-results
+          path: |
+            history-cache-results.txt
+            recovery-results.txt
