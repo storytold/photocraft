@@ -344,6 +344,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             true
         }
     });
+    if crate::prefs_ui::on_recovery_event(app, &e) {
+        return;
+    }
     // Camera Raw's open-time re-develop and its final step.
     if crate::camera_raw_ui::on_redevelop_event(app, &e) {
         return;

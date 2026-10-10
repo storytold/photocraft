@@ -31,13 +31,13 @@
 //! A [`Session`] has no store by default, so headless CLI/MCP sessions and tests never write.
 //! The desktop app opens the store on a background thread ([`open`]) and attaches it with
 //! [`Session::attach_preset_store`] once loaded, so the first frame never waits for it. The web
-//! app has no store (localStorage is too small for sampled tips): its brush presets are
-//! session-only. Gradient presets, including imported `.grd` groups, are small and persist with
+//! app hydrates a bounded memory backend from IndexedDB before accepting edits and commits
+//! changes asynchronously. Gradient presets, including imported `.grd` groups, are small and persist with
 //! the preferences document (`presets.gradients`).
 //!
 //! The Actions list (`actions.json`, see [`crate::actions_cmds`]) lives in the same directory.
 //! A missing file is an empty list. A corrupt or oversized file is skipped with a warning.
-//! Headless and web sessions have no store, so their actions stay in memory.
+//! Headless sessions have no store, so their actions stay in memory.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;

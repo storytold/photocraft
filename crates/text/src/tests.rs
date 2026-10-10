@@ -211,7 +211,7 @@ fn make_ttc(fonts: &[&[u8]]) -> Vec<u8> {
 
 #[test]
 fn truetype_collections_load() {
-    let ttc = make_ttc(&[fonts::BUNDLED[0].1, fonts::BUNDLED[3].1]);
+    let ttc = make_ttc(&[fonts::BUNDLED[0].1.as_slice(), fonts::BUNDLED[3].1.as_slice()]);
     assert_eq!(fonts::face_count(&ttc), 2);
     let mut db = fonts::FontDb::new();
     // A fresh DB without the bundled mono font would miss it; register the collection anyway
@@ -1175,4 +1175,17 @@ fn thai_fallback_candidates_cover_every_platform() {
             assert!(i < last, "{fam} after the last-resort fonts");
         }
     }
+}
+
+#[test]
+fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
+    let Some(cairo) = crate::CRAFT_FONTS.iter().find(|f| f.family == "Cairo") else {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    };
+    crate::served::add_fonts(&crate::served::parse_manifest("Cairo | Regular | fonts/cairo/Cairo.ttf | Arab,Latn\n").0);
+    let mut db = fonts::FontDb::new();
+    assert!(!db.fallback_stack().any(|f| f == "Cairo"), "not before it arrives");
+    db.register_font_data(cairo.bytes.to_vec());
+    assert!(db.fallback_stack().any(|f| f == "Cairo"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
 }

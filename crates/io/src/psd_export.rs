@@ -372,6 +372,29 @@ impl Ex {
         // Effects: the original lfx2 while the effects are unchanged (or
         // could not be decoded at all); otherwise regenerated.
         let fx = &l.effects;
+        for effect in &fx.items {
+            use photocraft_doc::effects::Effect;
+            let modes = match effect {
+                Effect::DropShadow(s) | Effect::InnerShadow(s) => [Some(s.common.blend), None],
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => [Some(g.common.blend), None],
+                Effect::Stroke(s) => [Some(s.common.blend), None],
+                Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => {
+                    [Some(common.blend), None]
+                }
+                Effect::Satin(s) => [Some(s.common.blend), None],
+                Effect::BevelEmboss(b) => [Some(b.highlight.blend), Some(b.shadow.blend)],
+            };
+            for mode in modes.into_iter().flatten() {
+                if !mode.has_psd_equivalent() {
+                    self.warnings.push(format!(
+                        "layer \"{}\", {}: {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                        l.name,
+                        effect.label(),
+                        mode.label()
+                    ));
+                }
+            }
+        }
         let lfx2 = match effects_unchanged(l) {
             Some(true) | None if fx.psd_raw.is_some() => fx.psd_raw.as_ref().map(|r| r.to_vec()),
             _ => (!fx.items.is_empty()).then(|| crate::effects_map::write_lfx2(fx.enabled, &fx.items)),
@@ -388,6 +411,13 @@ impl Ex {
             if b.data.len() % 2 == 1 && b.padding.is_none() {
                 b.data.push(0);
             }
+        }
+        if !l.blend.has_psd_equivalent() {
+            self.warnings.push(format!(
+                "layer \"{}\": {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                l.name,
+                l.blend.label()
+            ));
         }
         LayerRecord {
             rect,

@@ -22,6 +22,7 @@
 
 mod app_dirs;
 mod app_icon;
+mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod caps_lock;
@@ -38,6 +39,7 @@ mod mac_window;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod photoshop_settings;
 mod screen_color;
 mod services;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.

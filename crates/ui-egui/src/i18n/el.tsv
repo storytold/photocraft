@@ -1463,6 +1463,7 @@
 	Collapse Panel Group	Σύμπτυξη ομάδας πλαισίων
 	Create new brush from the current settings	Δημιουργία νέου πινέλου από τις τρέχουσες ρυθμίσεις
 	Create new brush from these settings	Δημιουργία νέου πινέλου από αυτές τις ρυθμίσεις
+	Update the current brush with these settings	Ενημέρωση του τρέχοντος πινέλου με αυτές τις ρυθμίσεις
 	Delete brush	Διαγραφή πινέλου
 	Drag the arrow to set the angle, the dots to set the roundness	Σύρετε το βέλος για τη γωνία και τις κουκκίδες για τη στρογγυλότητα
 	Expand Panel Group	Ανάπτυξη ομάδας πλαισίων
@@ -1505,6 +1506,13 @@
 	Align with layer	Στοίχιση με το επίπεδο
 	Reset Alignment	Επαναφορά στοίχισης
 	Centre the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Επεξεργασία διαβάθμισης
+	Gradient picker	Επιλογή διαβάθμισης
+	Gradient stops	Σημεία διαβάθμισης
+	Save As Preset	Αποθήκευση ως προεπιλογή
+	The gradient the Gradient tool paints with	Η διαβάθμιση με την οποία ζωγραφίζει το εργαλείο Διαβάθμιση
+	Adds the current gradient to the Gradients panel	Προσθέτει την τρέχουσα διαβάθμιση στον πίνακα Διαβαθμίσεις
 	The current gradient (pick one in Window › Gradients)	Η τρέχουσα διαβάθμιση (επιλέξτε μία από Παράθυρο › Διαβαθμίσεις)
 	Select a type layer to edit its character and paragraph settings.	Επιλέξτε επίπεδο κειμένου για επεξεργασία των ρυθμίσεων χαρακτήρων και παραγράφων.
 	Text color	Χρώμα κειμένου
@@ -2053,6 +2061,8 @@
 	Chrome	Χρώμιο
 	Classic	Κλασικό
 	Classic Theme	Κλασικό θέμα
+	Solarized dark	Solarized σκούρο
+	Solarized Dark Theme	Σκούρο θέμα Solarized
 	Clear Canvas Guides	Απαλοιφή οδηγών καμβά
 	Clear Override	Απαλοιφή παράκαμψης
 	Clear Samples	Απαλοιφή δειγμάτων
@@ -2789,6 +2799,12 @@
 	Resample	Επαναδειγματοληψία
 	Reselect	Επαναφορά προηγούμενης επιλογής
 	Reset All to Defaults	Επαναφορά όλων στις προεπιλογές
+	Import Shortcuts…	Εισαγωγή συντομεύσεων…
+	Load a keyboard shortcut set saved as .kys	Φόρτωση ενός σετ συντομεύσεων πληκτρολογίου αποθηκευμένου ως .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Εισήχθησαν {n} συντομεύσεις από το {file}. Πατήστε OK για να τις κρατήσετε.
+	{n} commands are not in PhotoCraft.	{n} εντολές δεν υπάρχουν στο PhotoCraft.
+	Keyboard shortcuts imported	Οι συντομεύσεις πληκτρολογίου εισήχθησαν
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Το σετ συντομεύσεων πληκτρολογίου {set} χρησιμοποιείται εδώ: {n} συντομεύσεις διαφέρουν από τις προεπιλογές. Το Επεξεργασία › Συντομεύσεις πληκτρολογίου τις δείχνει· η Επαναφορά όλων στις προεπιλογές το αναιρεί.
 	Reset GPU Backend	Επαναφορά συστήματος απόδοσης GPU
 	Reset Section	Επαναφορά ενότητας
 	Reset Transform	Επαναφορά μετασχηματισμού
@@ -2971,8 +2987,12 @@
 	Studio (Dark)	Studio (σκοτεινό)
 	Studio (Light)	Studio (φωτεινό)
 	Studio Light Theme	Φωτεινό θέμα Studio
+	Adwaita Light Theme	Φωτεινό θέμα Adwaita
+	Adwaita Dark Theme	Σκούρο θέμα Adwaita
 	Studio Theme	Θέμα Studio
 	Studio light	Φωτεινό στούντιο
+	Adwaita	Adwaita
+	Adwaita dark	Σκούρο Adwaita
 	Style	Στυλ
 	Style Options	Επιλογές στυλ
 	Style Options…	Επιλογές στυλ…
@@ -3405,6 +3425,21 @@ fontWeight	Thin	Πολύ λεπτά
 	Cycle Orientation	Εναλλαγή προσανατολισμού
 	Set the overlay options for the Crop tool	Ορισμός επιλογών επικάλυψης για το εργαλείο Περικοπή
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Το Alt-κλικ πήγε στο περιβάλλον εργασίας, που μετακινεί παράθυρα με Alt-σύρσιμο. Ορίστε το πλήκτρο μετακίνησης παραθύρων του σε Super ή κλειδώστε το Alt στο Παράθυρο › Πλήκτρα τροποποίησης.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Επιλογέας χρώματος (χρώμα στυλ επιπέδου)
+
+# Shared text style Color Picker (#2015)
+	Color Picker (Text Color)	Επιλογέας χρώματος (χρώμα κειμένου)
+	Auto Hide Notifications	Αυτόματη απόκρυψη ειδοποιήσεων
+	Notification Duration (seconds)	Διάρκεια ειδοποίησης (δευτερόλεπτα)
+	Appearance Mode	Λειτουργία εμφάνισης
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Επόμενη λειτουργία εμφάνισης
+	Sync with system	Συγχρονισμός με το σύστημα
+	Active	Ενεργό
+	Color Picker (Solid Color)	Επιλογέας χρώματος (συμπαγές χρώμα)
 	Straighten the image by drawing a line on it	Ευθυγράμμιση της εικόνας σχεδιάζοντας μια γραμμή πάνω της
 	Set additional Crop options	Ορισμός πρόσθετων επιλογών περικοπής
 	Show Cropped Area	Εμφάνιση περιοχής περικοπής
@@ -3420,3 +3455,19 @@ fontWeight	Thin	Πολύ λεπτά
 	Create Ellipse	Δημιουργία έλλειψης
 	Create Triangle	Δημιουργία τριγώνου
 	Create Polygon	Δημιουργία πολυγώνου
+	Some brush presets could not be loaded	Ορισμένες προεπιλογές πινέλων δεν ήταν δυνατό να φορτωθούν
+	Retry saving presets	Επανάληψη αποθήκευσης προεπιλογών
+	Brush preset changes are not saved: {error}	Οι αλλαγές στις προεπιλογές πινέλων δεν αποθηκεύτηκαν: {error}
+	Keep this tab open to retain your brushes.	Κρατήστε αυτή την καρτέλα ανοιχτή για να διατηρήσετε τα πινέλα σας.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Ο χώρος αποθήκευσης του προγράμματος περιήγησης δεν είναι διαθέσιμος· τα πινέλα ισχύουν μόνο για αυτή την περίοδο λειτουργίας. Κρατήστε αυτή την καρτέλα ανοιχτή για να τα διατηρήσετε.
+	Saving brush presets… Keep this tab open until saving finishes.	Αποθήκευση προεπιλογών πινέλων… Κρατήστε αυτή την καρτέλα ανοιχτή μέχρι να ολοκληρωθεί η αποθήκευση.
+	Reflect	Αντανάκλαση
+	Glow	Λάμψη
+	Negation	Άρνηση
+	XOR	XOR
+	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
+	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Δεν βρέθηκε θέμα — δοκιμάστε την Επιλογή αντικειμένου ή το Λάσο
+	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
+	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
+	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο

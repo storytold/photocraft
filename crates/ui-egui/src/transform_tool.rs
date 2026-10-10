@@ -1383,7 +1383,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             for i in 0..=n {
                 let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
                 let (x, y) = h.apply(u, v);
-                mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u as f32 * uv[0], v as f32 * uv[1]), color: tint });
+                mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: pos2(u as f32 * uv[0], v as f32 * uv[1]), color: tint });
             }
         }
         for j in 0..n {
@@ -1393,7 +1393,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
             }
         }
-        painter.add(mesh);
+        painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
@@ -1429,6 +1429,60 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             draw_rotate_feedback(painter, at, rotating.then(|| rotation_degrees(t.quad)), xf.rect);
         }
     }
+}
+
+/// Width and height of the document being transformed, in document pixels.
+fn canvas_size(pv: &TransformPreview) -> [f32; 2] {
+    [pv.doc.size.width as f32, pv.doc.size.height as f32]
+}
+
+/// Clips `mesh` (positions in document pixels) to the canvas `[0, 0, size]` and maps it to the
+/// screen. Pixels past the canvas edge are never shown, also not while transforming (Photoshop;
+/// #2027): only the box and its handles reach over the pasteboard. Clipping in document space
+/// stays exact under a rotated or flipped view, where a screen clip rectangle would not.
+fn clip_to_canvas(mut mesh: egui::Mesh, size: [f32; 2], to_screen: impl Fn(Pos2) -> Pos2) -> egui::Mesh {
+    let inside = |p: Pos2| p.x >= 0.0 && p.y >= 0.0 && p.x <= size[0] && p.y <= size[1];
+    if mesh.vertices.iter().all(|v| inside(v.pos)) {
+        for v in &mut mesh.vertices {
+            v.pos = to_screen(v.pos);
+        }
+        return mesh;
+    }
+    let mut out = egui::Mesh::with_texture(mesh.texture_id);
+    for tri in mesh.indices.as_chunks::<3>().0 {
+        let mut poly: Vec<egui::epaint::Vertex> = tri.iter().filter_map(|i| mesh.vertices.get(*i as usize).copied()).collect();
+        // Sutherland–Hodgman against the four canvas edges (`dist` >= 0 is the canvas side).
+        for edge in 0..4 {
+            let dist = |v: &egui::epaint::Vertex| match edge {
+                0 => v.pos.x,
+                1 => size[0] - v.pos.x,
+                2 => v.pos.y,
+                _ => size[1] - v.pos.y,
+            };
+            let mut next = Vec::with_capacity(poly.len() + 2);
+            for (k, a) in poly.iter().enumerate() {
+                let Some(b) = poly.get((k + 1) % poly.len()) else { continue };
+                let (da, db) = (dist(a), dist(b));
+                if da >= 0.0 {
+                    next.push(*a);
+                }
+                if (da >= 0.0) != (db >= 0.0) && da != db {
+                    let t = da / (da - db);
+                    next.push(egui::epaint::Vertex { pos: a.pos.lerp(b.pos, t), uv: a.uv.lerp(b.uv, t), color: a.color });
+                }
+            }
+            poly = next;
+        }
+        if poly.len() < 3 {
+            continue;
+        }
+        let base = out.vertices.len() as u32;
+        out.vertices.extend(poly.iter().map(|v| egui::epaint::Vertex { pos: to_screen(v.pos), ..*v }));
+        for k in 1..poly.len() as u32 - 1 {
+            out.add_triangle(base, base + k, base + k + 1);
+        }
+    }
+    out
 }
 
 /// The transform's rotation handle is an arc, not the generic Alias pointer.
@@ -1469,7 +1523,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
         for i in 0..=n {
             let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
             let (x, y) = w.map(r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
-            mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u as f32 * uv[0], v as f32 * uv[1]), color: tint });
+            mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: pos2(u as f32 * uv[0], v as f32 * uv[1]), color: tint });
         }
     }
     for j in 0..n {
@@ -1479,7 +1533,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
             mesh.add_triangle(a, a + n as u32 + 2, a + n as u32 + 1);
         }
     }
-    painter.add(mesh);
+    painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let line = Stroke::new(1.0, accent);
     let thin = Stroke::new(0.75, accent.gamma_multiply(0.7));
@@ -2738,6 +2792,54 @@ mod tests {
         // At 100% the texture has at least as many texels as the box covers screen pixels.
         let t = app.ui.transform.as_ref().unwrap();
         assert!(pv.texture.size()[0] as f64 >= t.rect[2] - t.rect[0]);
+    }
+
+    /// The textured meshes `draw_overlay` paints for the moving pixels (not the box or handles).
+    fn preview_meshes(app: &PhotocraftApp, xf: &ViewXform) -> Vec<egui::Mesh> {
+        let ctx = gpu_ctx();
+        let mut out = ctx.run_ui(egui::RawInput { max_texture_side: Some(16384), ..Default::default() }, |ui| {
+            let painter = ui.ctx().layer_painter(egui::LayerId::background());
+            draw_overlay(app, &painter, xf);
+        });
+        out.textures_delta.clear();
+        out.shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => Some((*m).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn preview_pixels_past_the_canvas_are_hidden() {
+        // #2027: a box scaled past the canvas drew its pixels over the pasteboard.
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 56, 56));
+        begin(&mut app, &gpu_ctx()).unwrap();
+        scale_about_pivot(&mut app, 2.0, 2.0);
+        let q = app.ui.transform.as_ref().unwrap().quad;
+        assert!(q[0][0] < -10.0 && q[2][1] > 74.0, "the box reaches past the canvas: {q:?}");
+        let tol = 1e-3;
+        for (rotation, flip) in [(0.0, false), (30.0, false), (-75.0, true)] {
+            let xf = ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)), zoom: 2.0, center: [32.0, 32.0], flip, rotation };
+            let meshes = preview_meshes(&app, &xf);
+            let verts: Vec<[f64; 2]> = meshes.iter().flat_map(|m| m.vertices.iter().map(|v| xf.to_doc(v.pos))).collect();
+            assert!(!verts.is_empty(), "the preview still draws (rotation {rotation})");
+            for d in &verts {
+                assert!(d[0] >= -tol && d[1] >= -tol && d[0] <= 64.0 + tol && d[1] <= 64.0 + tol, "vertex {d:?} off the canvas (rotation {rotation})");
+            }
+            // The clipped mesh still covers the whole canvas: the corners lie on it.
+            for corner in [[0.0, 0.0], [64.0, 0.0], [64.0, 64.0], [0.0, 64.0]] {
+                assert!(verts.iter().any(|d| (d[0] - corner[0]).abs() < 1e-2 && (d[1] - corner[1]).abs() < 1e-2), "corner {corner:?} (rotation {rotation})");
+            }
+        }
+        // Inside the canvas the mesh is drawn unchanged (24×24 grid).
+        cancel(&mut app);
+        begin(&mut app, &gpu_ctx()).unwrap();
+        let xf =
+            ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0 };
+        let meshes = preview_meshes(&app, &xf);
+        assert_eq!(meshes.iter().map(|m| m.vertices.len()).sum::<usize>(), 25 * 25);
     }
 
     #[test]
