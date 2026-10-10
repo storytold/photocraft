@@ -944,7 +944,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if widgets::dropdown(ui, "gradient-mode", &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0) {
                             app.ui.tool_options.gradient_classic = classic;
                         }
-                        crate::gradient_ui::preset_swatch(app, ui);
+                        // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels):
+                        // both paint with the same engine-owned preset (#1651), and either swatch
+                        // click opens the Gradient Editor window, as in Photoshop.
+                        if crate::gradient_ui::preset_swatch(app, ui) {
+                            app.ui.panels.gradient_editor = true;
+                        }
                         widgets::vline(ui, 22.0);
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let before = app.ui.tool_options.clone();
@@ -1796,11 +1801,23 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
     }
     widgets::panel_footer(ui, |ui| {
-        let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete layer"));
+        let active_layer = active.and_then(|id| doc.layer(id));
+        let (delete, label) = if app.ui.vector_mask_target && active_layer.is_some_and(|l| l.vector_mask.is_some()) {
+            ("layer.vectorMask.delete", "Delete Vector Mask")
+        } else if app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some()) {
+            ("layer.layerMask.delete", "Delete Layer Mask")
+        } else {
+            ("layer.delete", "Delete layer")
+        };
+        let trash = icons::button(ui, "trash", 26.0, false, tl!(label));
         if trash.clicked() {
-            actions.push(("layer.delete".into(), json!({"__trash": true})));
+            let params = if delete == "layer.delete" { json!({"__trash": true}) } else { json!({}) };
+            actions.push((delete.into(), params));
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
+        // A click follows the selected thumbnail; name that action for screen readers even
+        // though dropping a whole layer row onto the same button always deletes the layer.
+        trash.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(label)));
         let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
         if new_layer.clicked() {
             actions.push(("layer.new.layer".into(), json!({})));
@@ -1840,6 +1857,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
         };
         let mask_btn = ui.add_enabled_ui(mask_cmd.is_some(), |ui| icons::button(ui, "layer-mask", 26.0, false, &mask_tip)).inner;
+        mask_btn.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &mask_tip));
         if mask_btn.clicked()
             && let Some(cmd) = mask_cmd
         {
@@ -2177,7 +2195,8 @@ fn layer_row(
     } else if resp.clicked() && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
         let mode = select_mode(ui.input(|i| i.modifiers));
         actions.push(("layer.select".into(), json!({"layer": l.id.0, "mode": mode})));
-        // Clicking a thumbnail picks what painting targets; adjustment/fill layers target their mask.
+        // A thumbnail explicitly selects content or a mask. Selecting an adjustment/fill row
+        // defaults to its mask, but clicking its content thumbnail must leave the mask target.
         let pos = resp.interact_pointer_pos();
         let on_mask = mask_rect.zip(pos).is_some_and(|(r, p)| r.expand(2.0).contains(p));
         let on_thumb = pos.is_some_and(|p| thumb.expand(2.0).contains(p));
@@ -2193,7 +2212,7 @@ fn layer_row(
             // Paths panel selects the layer's path.
             app.ui.selected_path = Some("layer".into());
             actions.push(("ui.vectorMaskTarget".into(), json!(true)));
-        } else if on_mask || (content_less && l.mask.is_some()) {
+        } else if on_mask || (content_less && l.mask.is_some() && !on_thumb) {
             actions.push(("ui.maskTarget".into(), json!(true)));
         } else if on_thumb || !row.primary {
             actions.push(("ui.maskTarget".into(), json!(false)));
@@ -2265,11 +2284,11 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
         }
         // Gradient fills show the gradient itself (Photoshop); solid ones their colour.
         LayerContent::Fill(f) if crate::gradient_ui::paint_thumbnail(ui, l.id, f, rect) => {}
-        LayerContent::Fill(f) => {
-            let c = match f {
-                photocraft_doc::Fill::Solid(c) => c.to_rgba8(),
-                _ => [128, 128, 128, 255],
-            };
+        LayerContent::Fill(photocraft_doc::Fill::Solid(color)) => {
+            crate::solid_fill_ui::paint_thumbnail(ui, crate::solid_fill_ui::thumbnail_color(app, doc.id, l.id, *color), rect);
+        }
+        LayerContent::Fill(_) => {
+            let c = [128, 128, 128, 255];
             p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
         }
         _ => {

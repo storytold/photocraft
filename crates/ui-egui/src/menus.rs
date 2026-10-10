@@ -350,8 +350,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(Value::Null)
         }
-        // Layer Content Options…: the adjustment / fill controls live in Properties.
+        // Solid Color uses the Color Picker; other adjustment / fill controls use Properties.
         "layer.layerContentOptions" => {
+            if let Some(dialog) = crate::solid_fill_ui::open(app) {
+                return Ok(json!({"dialog": dialog}));
+            }
             let r = app.run(id, params)?;
             app.ui.panels.properties = true;
             app.ui.dock_tabs.properties = 0;

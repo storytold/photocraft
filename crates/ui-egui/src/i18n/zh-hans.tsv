@@ -949,6 +949,17 @@
 	Delete current channel	删除当前通道
 	Delete current state	删除当前状态
 	Delete effect layer	删除效果图层
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	删除图层“{name}”？
+	Delete {count} layers? {names}	删除 {count} 个图层？{names}
+	Delete layer?	删除图层？
+	The document is closed	文档已关闭
+	The document or selected layers changed. Please request deletion again.	文档或所选图层已更改。请重新请求删除。
+	Missing delete command	缺少删除命令
+	Invalid delete command	无效的删除命令
+	Layer deleted, but confirmation preference could not be saved: {error}	图层已删除，但无法保存确认设置：{error}
+
 	Delete layer	删除图层
 	Delete layer comp	删除图层复合
 	Delete note	删除注释
@@ -1929,6 +1940,7 @@
 	Collapse group  (⌥-click: all groups)	折叠组  (⌥-单击：所有组)
 	Create new brush from the current settings	根据当前设置创建新画笔
 	Create new brush from these settings	根据这些设置创建新画笔
+	Update the current brush with these settings	用这些设置更新当前画笔
 	Delete brush	删除画笔
 	Drag the arrow to set the angle, the dots to set the roundness	拖动箭头设置角度，拖动圆点设置圆度
 	Expand	展开
@@ -2057,7 +2069,13 @@ cameraRaw	Blending	混合
 	Align with layer	与图层对齐
 	Reset Alignment	重置对齐
 	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
-	The current gradient (pick one in Window › Gradients)	当前渐变（在“窗口 › 渐变”中选择）
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	渐变编辑器
+	Gradient picker	渐变拾色器
+	Save As Preset	存储为预设
+	The gradient the Gradient tool paints with	渐变工具所使用的渐变
+	Adds the current gradient to the Gradients panel	将当前渐变添加到“渐变”面板
+	Gradient stops	渐变色标
 	Select a type layer to edit its character and paragraph settings.	选择文字图层以编辑字符和段落设置。
 	Text color	文字颜色
 	Type Options	文字选项
@@ -2304,6 +2322,7 @@ fontWeight	Italic	斜体
 	Cycle Orientation	循环切换取向
 	Set the overlay options for the Crop tool	设置裁剪工具的叠加选项
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 单击被桌面环境截获了，它用 Alt 拖动来移动窗口。请把桌面的窗口移动键改为 Super，或在 窗口 › 修饰键 中锁定 Alt。
+	Color Picker (Solid Color)	拾色器（纯色）
 	Straighten the image by drawing a line on it	通过在图像上画一条线来拉直图像
 	Set additional Crop options	设置其他裁剪选项
 	Show Cropped Area	显示裁剪区域
@@ -2319,13 +2338,9 @@ fontWeight	Italic	斜体
 	Create Ellipse	创建椭圆
 	Create Triangle	创建三角形
 	Create Polygon	创建多边形
-
-# Layers-panel trash confirmation
-	Delete layer ‘{name}’?	删除图层“{name}”？
-	Delete {count} layers? {names}	删除 {count} 个图层？{names}
-	Delete layer?	删除图层？
-	The document is closed	文档已关闭
-	The document or selected layers changed. Please request deletion again.	文档或所选图层已更改。请重新请求删除。
-	Missing delete command	缺少删除命令
-	Invalid delete command	无效的删除命令
-	Layer deleted, but confirmation preference could not be saved: {error}	图层已删除，但无法保存确认设置：{error}
+	Some brush presets could not be loaded	部分画笔预设无法加载
+	Retry saving presets	重试保存预设
+	Brush preset changes are not saved: {error}	画笔预设的更改未保存：{error}
+	Keep this tab open to retain your brushes.	请保持此标签页打开以保留您的画笔。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	浏览器存储不可用；画笔仅在本次会话中有效。请保持此标签页打开以保留它们。
+	Saving brush presets… Keep this tab open until saving finishes.	正在保存画笔预设… 请保持此标签页打开，直到保存完成。

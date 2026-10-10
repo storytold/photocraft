@@ -950,6 +950,17 @@
 	Delete current channel	刪除目前色版
 	Delete current state	刪除目前狀態
 	Delete effect layer	刪除效果圖層
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	刪除圖層「{name}」？
+	Delete {count} layers? {names}	刪除 {count} 個圖層？{names}
+	Delete layer?	刪除圖層？
+	The document is closed	文件已關閉
+	The document or selected layers changed. Please request deletion again.	文件或所選圖層已變更。請重新要求刪除。
+	Missing delete command	缺少刪除指令
+	Invalid delete command	無效的刪除指令
+	Layer deleted, but confirmation preference could not be saved: {error}	圖層已刪除，但無法儲存確認設定：{error}
+
 	Delete layer	刪除圖層
 	Delete layer comp	刪除圖層構圖
 	Delete note	刪除註解
@@ -1922,6 +1933,7 @@
 	Collapse group  ({key}-click: all groups)	收合群組 ({key}+按一下：全部群組)
 	Create new brush from the current settings	以目前設定建立新筆刷
 	Create new brush from these settings	以這些設定建立新筆刷
+	Update the current brush with these settings	以這些設定更新目前筆刷
 	Delete brush	刪除筆刷
 	Drag the arrow to set the angle, the dots to set the roundness	拖曳箭頭設定角度，拖曳圓點設定圓度
 	Expand	展開
@@ -1997,7 +2009,13 @@
 	Align with layer	與圖層對齊
 	Reset Alignment	重設對齊
 	Centre the gradient (offset 0, 0)	置中漸層 (位移 0, 0)
-	The current gradient (pick one in Window › Gradients)	目前的漸層 (請在 視窗 › 漸層 挑選)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	漸層編輯器
+	Gradient picker	漸層挑選器
+	Save As Preset	儲存為預設
+	The gradient the Gradient tool paints with	漸變工具所使用的漸變
+	Adds the current gradient to the Gradients panel	將目前漸變新增至「漸層」面板
+	Gradient stops	漸層色標
 	Select a type layer to edit its character and paragraph settings.	選取文字圖層以編輯其字元和段落設定。
 	Text color	文字顏色
 	Type Options	文字選項
@@ -2273,6 +2291,7 @@ fontWeight	Italic	斜體
 	Cycle Orientation	循環切換方向
 	Set the overlay options for the Crop tool	設定裁切工具的覆蓋選項
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 按一下被桌面環境攔截了，它用 Alt 拖曳來移動視窗。請把桌面的視窗移動鍵改為 Super，或在 視窗 › 輔助鍵 中鎖定 Alt。
+	Color Picker (Solid Color)	檢色器（純色）
 	Straighten the image by drawing a line on it	在影像上繪製一條線以拉直影像
 	Set additional Crop options	設定其他裁切選項
 	Show Cropped Area	顯示裁切區域
@@ -2288,13 +2307,9 @@ fontWeight	Italic	斜體
 	Create Ellipse	建立橢圓
 	Create Triangle	建立三角形
 	Create Polygon	建立多邊形
-
-# Layers-panel trash confirmation
-	Delete layer ‘{name}’?	刪除圖層「{name}」？
-	Delete {count} layers? {names}	刪除 {count} 個圖層？{names}
-	Delete layer?	刪除圖層？
-	The document is closed	文件已關閉
-	The document or selected layers changed. Please request deletion again.	文件或所選圖層已變更。請重新要求刪除。
-	Missing delete command	缺少刪除指令
-	Invalid delete command	無效的刪除指令
-	Layer deleted, but confirmation preference could not be saved: {error}	圖層已刪除，但無法儲存確認設定：{error}
+	Some brush presets could not be loaded	部分筆刷預設集無法載入
+	Retry saving presets	重試儲存預設集
+	Brush preset changes are not saved: {error}	筆刷預設集的變更尚未儲存：{error}
+	Keep this tab open to retain your brushes.	請保持此分頁開啟以保留您的筆刷。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	瀏覽器儲存空間無法使用；筆刷僅在本次工作階段有效。請保持此分頁開啟以保留它們。
+	Saving brush presets… Keep this tab open until saving finishes.	正在儲存筆刷預設集… 請保持此分頁開啟，直到儲存完成。

@@ -17,7 +17,7 @@ use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
 use serde_json::json;
 
 use crate::brush_panel::{
-    BrushesPanelState, BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, full_uv, grouped_presets, is_current, new_preset_name, run_or_status,
+    BrushesPanelState, BrushesView, Renaming, UNGROUPED, WIDTH, commit_gesture, full_uv, grouped_presets, new_preset_name, run_or_status,
 };
 use crate::brush_preview;
 use crate::theme::{self, Tokens};
@@ -212,9 +212,7 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
             Action::Select(name) => run_or_status(app, "tools.setBrush", json!({ "preset": name })),
             Action::Choose(name) => {
                 // The double-click's first click already picked it.
-                let picked =
-                    photocraft_engine::paint::presets::find(&app.session.tools.presets, &name).is_some_and(|p| is_current(&p.brush, &app.session.tools.brush));
-                if !picked {
+                if app.session.tools.current_preset.as_deref() != Some(name.as_str()) {
                     run_or_status(app, "tools.setBrush", json!({ "preset": name }));
                 }
             }
@@ -469,7 +467,8 @@ struct Draw<'a> {
     label: &'a str,
     key: &'a str,
     presets: &'a [BrushPreset],
-    brush: &'a photocraft_engine::BrushSettings,
+    /// The selected preset's name (by identity, so look-alike duplicates stay distinct).
+    current: Option<&'a str>,
     collapsed: &'a [String],
     filtering: bool,
     grid: bool,
@@ -496,14 +495,14 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                     ui.horizontal(|ui| {
                         ui.add_space(left);
                         for p in row {
-                            grid_cell(ui, p, is_current(&p.brush, d.brush), d.presets, d.layout.cell, acts);
+                            grid_cell(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.layout.cell, acts);
                         }
                     });
                 }
             });
         } else {
             for p in run.iter() {
-                list_row(ui, p, is_current(&p.brush, d.brush), d.presets, indent, acts);
+                list_row(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, indent, acts);
             }
         }
         run.clear();
@@ -562,15 +561,10 @@ fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Acti
 }
 
 /// The presets in their groups, filtered by `st.filter`, as rows or tip cells (`st.view`), with
-/// the rename bar above them while a rename is open. Group toggles and renames update `st`; the
-/// returned actions are commands for [`apply`].
-pub fn preset_list(
-    ui: &mut egui::Ui,
-    presets: &[BrushPreset],
-    brush: &photocraft_engine::BrushSettings,
-    st: &mut BrushesPanelState,
-    layout: ListLayout,
-) -> Vec<Action> {
+/// the rename bar above them while a rename is open. `current` is the selected preset's name:
+/// selection is by identity, so it survives edits and tells look-alike duplicates apart. Group
+/// toggles and renames update `st`; the returned actions are commands for [`apply`].
+pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>, st: &mut BrushesPanelState, layout: ListLayout) -> Vec<Action> {
     let mut acts = Vec::new();
     rename_bar(ui, st, &mut acts);
     let filter = st.filter.trim().to_lowercase();
@@ -590,7 +584,7 @@ pub fn preset_list(
             if !open {
                 continue;
             }
-            let d = Draw { label: &label, key: &key, presets, brush, collapsed, filtering: !filter.is_empty(), grid, layout };
+            let d = Draw { label: &label, key: &key, presets, current, collapsed, filtering: !filter.is_empty(), grid, layout };
             draw_nodes(ui, &d, &folder_tree(&items), 0, &mut acts);
             ui.add_space(2.0);
         }
@@ -662,7 +656,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    let acts = preset_list(ui, &app.session.tools.presets, &app.session.tools.brush, &mut app.ui.brushes_panel, PANEL_LIST);
+    let acts = preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, PANEL_LIST);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);
@@ -670,7 +664,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} presets", app.session.tools.presets.len())).color(t.text_faint));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let current = app.session.tools.presets.iter().find(|p| is_current(&p.brush, &app.session.tools.brush)).map(|p| p.name.clone());
+            // The current preset by identity: editing the brush after picking must not deselect it.
+            let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
             if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, "Delete brush")).inner.clicked()
                 && let Some(name) = current
             {

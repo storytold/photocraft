@@ -133,6 +133,7 @@ mod sizing;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
+pub(crate) mod solid_fill_ui;
 pub mod state;
 pub mod stroke_constraint;
 pub mod stroke_trail;
@@ -233,20 +234,21 @@ pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>
 pub type AutosaveResultsFn = Box<dyn FnMut() -> Vec<(u64, u64, Result<(), String>)>>;
 /// Drop the recovery data of a document (by `DocId` value) once it is saved or closed.
 pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
-/// Load recoverable documents left by a previous session. Their recovery data stays until the
-/// documents are saved or closed.
-pub type RecoverFn = Box<dyn FnMut() -> Vec<Recovered>>;
+/// List recoverable documents without decoding them. Their data stays until the documents are
+/// saved or closed; the shell runs each entry's loader on a background worker.
+pub type RecoverFn = Box<dyn FnMut() -> Vec<Recoverable>>;
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.
 pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
 
-/// A document [`RecoverFn`] found.
-pub struct Recovered {
-    /// The recovery entry it was loaded from (see [`AdoptAutosaveFn`]).
+/// A recovery entry [`RecoverFn`] found; its loader owns only the data it needs to read.
+pub struct Recoverable {
+    /// The recovery entry to adopt once loading succeeds (see [`AdoptAutosaveFn`]).
     pub key: String,
+    pub name: String,
     /// Where the user last saved it, if anywhere.
     pub path: Option<String>,
-    pub doc: Document,
+    pub load: Box<dyn FnOnce() -> Result<Document, String> + Send + 'static>,
 }
 /// Append text to a file (History Log).
 pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
@@ -323,7 +325,7 @@ pub struct Services {
     pub caps_lock: Option<CapsLockFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
-    /// one, brush presets are session-only (web, tests).
+    /// one, brush presets are session-only unless the shell attached a store before startup.
     pub preset_store: Option<std::sync::mpsc::Receiver<photocraft_engine::preset_store::Opened>>,
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
@@ -468,6 +470,7 @@ pub struct PhotocraftApp {
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
+    pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
     /// Liquify dialog, Puppet Warp and Perspective Warp sessions (distort_ui).
     pub(crate) distort: distort_ui::Distort,
     /// Gradient tool live-mode drags and previews (gradient_ui).
@@ -610,6 +613,7 @@ impl PhotocraftApp {
             transform_preview: None,
             move_mods: Default::default(),
             style_preview: None,
+            solid_fill_preview: None,
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
@@ -633,7 +637,7 @@ impl PhotocraftApp {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
-        // Saved preferences (and recovered documents) are in place before the first frame.
+        // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
@@ -747,6 +751,12 @@ impl PhotocraftApp {
         let params = self.with_mask_target(id, params);
         let params = vector_ui::with_active_path(self, id, params);
         let path_mask = vector_ui::takes_path_mask(id) && params.get("path").is_some_and(|v| !v.is_null());
+        let creates_active_mask =
+            matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection")
+                && self
+                    .session
+                    .active()
+                    .is_some_and(|st| st.active_layer.is_some_and(|layer| params.get("layer").and_then(Value::as_u64).is_none_or(|target| target == layer.0)));
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -762,6 +772,11 @@ impl PhotocraftApp {
             // The new layer's vector mask becomes the active path, as in Photoshop: the path it
             // was made from is no longer selected, so the next fill layer isn't masked by it too.
             self.ui.selected_path = Some("layer".into());
+        }
+        if r.is_ok() && creates_active_mask {
+            // Adding a mask selects its thumbnail: the next brush or footer Delete targets it.
+            self.ui.mask_target = true;
+            self.ui.vector_mask_target = false;
         }
         if r.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
             self.clip_external = false;
@@ -1273,6 +1288,7 @@ impl eframe::App for PhotocraftApp {
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
+        gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
@@ -1359,6 +1375,9 @@ impl PhotocraftApp {
         }
         if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
             self.ui.vector_mask_target = false;
+        }
+        if self.ui.mask_target && !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some()) {
+            self.ui.mask_target = false;
         }
     }
 
@@ -1772,6 +1791,9 @@ mod marquee_tests;
 
 #[cfg(test)]
 mod caps_lock_tests;
+
+#[cfg(test)]
+mod view_sync_tests;
 
 #[cfg(test)]
 mod stamp_tests;

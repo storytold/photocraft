@@ -1176,3 +1176,16 @@ fn thai_fallback_candidates_cover_every_platform() {
         }
     }
 }
+
+#[test]
+fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
+    let Some(cairo) = crate::CRAFT_FONTS.iter().find(|f| f.family == "Cairo") else {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    };
+    crate::served::add_fonts(&crate::served::parse_manifest("Cairo | Regular | fonts/cairo/Cairo.ttf | Arab,Latn\n").0);
+    let mut db = fonts::FontDb::new();
+    assert!(!db.fallback_stack().any(|f| f == "Cairo"), "not before it arrives");
+    db.register_font_data(cairo.bytes.to_vec());
+    assert!(db.fallback_stack().any(|f| f == "Cairo"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
+}
