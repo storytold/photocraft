@@ -217,6 +217,33 @@ fn temporary_zoom_drag_is_a_scrubby_zoom() {
     assert!(!h.state().session.active().unwrap().history.can_undo(), "nothing was painted");
 }
 
+/// Changes only the held modifiers, as pressing or releasing ⌥ / ⌘ does with Space already down.
+fn hold_mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
+    h.event(Event::ModifiersChanged(platform(m)));
+    h.run_steps(1);
+}
+
+#[test]
+fn alt_turns_a_held_zoom_in_around_unless_the_key_includes_alt() {
+    let mut h = harness(Tool::Brush);
+    // With Zoom Out unbound, ⌘⌥Space still zooms out: ⌥ turns the held Zoom In around, as it
+    // does the Zoom tool.
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomOut": ""}})).unwrap();
+    key(&mut h, Key::Space, true, Modifiers::COMMAND | Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    key(&mut h, Key::Space, false, Modifiers::COMMAND | Modifiers::ALT);
+    hold_mods(&mut h, Modifiers::NONE);
+    // An ⌥ that is part of the Zoom In key doesn't.
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomIn": "Alt+Z"}})).unwrap();
+    let z0 = h.state().ui.views[0].zoom;
+    key(&mut h, Key::Z, true, Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    click(&mut h, 200.0, 150.0, Modifiers::ALT);
+    key(&mut h, Key::Z, false, Modifiers::ALT);
+    hold_mods(&mut h, Modifiers::NONE);
+    assert!(h.state().ui.views[0].zoom > z0);
+}
+
 #[test]
 fn rebound_temporary_zoom_uses_the_new_key_only() {
     let mut h = harness(Tool::RectMarquee);

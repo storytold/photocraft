@@ -2,7 +2,8 @@
 //!
 //! - Space: the Hand tool while held.
 //! - ⌘Space (Ctrl+Space off the Mac): Zoom In while held; a drag is a scrubby zoom.
-//! - ⌘⌥Space: Zoom Out while held.
+//! - ⌘⌥Space: Zoom Out while held. ⌥ added to a held Zoom In zooms out too, as ⌥ does with the
+//!   Zoom tool.
 //! - Space while a marquee, lasso or shape is being dragged repositions it; releasing Space
 //!   goes back to sizing it (the Crop tool does the same for its frame, `crop_ui`).
 //! - ⌘ (Ctrl off the Mac): the Move tool while held, with the painting, retouching, eraser,
@@ -139,21 +140,26 @@ pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> 
         let m = sc.modifiers;
         m.alt as u8 + m.shift as u8 + (m.command || m.mac_cmd) as u8 + (m.ctrl && !m.command) as u8
     };
-    let mut best: Option<(u8, Temporary)> = None;
+    let mut best: Option<(u8, Temporary, KeyboardShortcut)> = None;
     let mut cmd_move = false;
+    let mut alt = false;
     ctx.input(|i| {
         for t in Temporary::BOUND {
             if let Some(sc) = binding(app, t)
                 && held(i, &sc)
-                && best.is_none_or(|(n, _)| count(&sc) > n)
+                && best.is_none_or(|(n, ..)| count(&sc) > n)
             {
-                best = Some((count(&sc), t));
+                best = Some((count(&sc), t, sc));
             }
         }
         cmd_move = cmd_move_held(app, i);
+        alt = i.modifiers.alt;
     });
+    // ⌥ turns a held Zoom In around, as it does the Zoom tool, unless ⌥ is part of the Zoom In
+    // key itself.
+    let held = best.map(|(_, t, sc)| if t == Temporary::ZoomIn && alt && !sc.modifiers.alt { Temporary::ZoomOut } else { t });
     // A bound key (⌘Space is Zoom In) wins over ⌘ alone.
-    best.map(|(_, t)| t).or(cmd_move.then_some(Temporary::Move))
+    held.or(cmd_move.then_some(Temporary::Move))
 }
 
 /// Is the reposition key (the Hand key, any modifiers) down?
