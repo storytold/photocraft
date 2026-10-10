@@ -3006,3 +3006,6 @@ fontWeight	Italic	기울임
 	Close exported tabs after successful export	내보내기 성공 후 내보낸 탭 닫기
 	Canceled or failed exports leave every tab open.	내보내기를 취소하거나 실패하면 모든 탭이 열린 상태로 유지됩니다.
 	PDF saves the visible pages with flattened layers.	PDF는 보이는 페이지의 레이어를 병합하여 저장합니다.
+
+	Thumbnail size	썸네일 크기
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-클릭으로 페이지를 추가하고 Shift-클릭으로 범위를 선택합니다.

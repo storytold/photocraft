@@ -3448,3 +3448,6 @@ cameraRaw	Roughness	Chropowatość
 	Close exported tabs after successful export	Zamknij wyeksportowane karty po udanym eksporcie
 	Canceled or failed exports leave every tab open.	Anulowany lub nieudany eksport pozostawia wszystkie karty otwarte.
 	PDF saves the visible pages with flattened layers.	PDF zapisuje widoczne strony ze spłaszczonymi warstwami.
+
+	Thumbnail size	Rozmiar miniatur
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik dodaje strony. Shift-klik wybiera zakres.

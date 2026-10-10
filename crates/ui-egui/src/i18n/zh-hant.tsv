@@ -2405,3 +2405,6 @@ fontWeight	Italic	斜體
 	Close exported tabs after successful export	成功匯出後關閉已匯出的分頁
 	Canceled or failed exports leave every tab open.	取消或失敗的匯出會保留所有分頁。
 	PDF saves the visible pages with flattened layers.	PDF 將可見頁面以平面化圖層的方式儲存。
+
+	Thumbnail size	縮圖大小
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-按一下加入頁面。Shift-按一下選取範圍。

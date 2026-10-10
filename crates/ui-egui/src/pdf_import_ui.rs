@@ -1,10 +1,33 @@
 //! A PDF binder is inspected before any editing documents are created.
-use std::sync::{Arc, mpsc};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, mpsc},
+};
 
 use crate::PhotocraftApp;
 use photocraft_engine::jobs::OpenSource;
 
 type Preview = Result<(u32, u32, Vec<u8>), String>;
+type Thumbnail = Result<egui::TextureHandle, String>;
+const THUMBNAIL_CACHE_LIMIT: usize = 32;
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum ThumbnailSize {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl ThumbnailSize {
+    fn image_size(self) -> egui::Vec2 {
+        match self {
+            Self::Small => egui::vec2(78.0, 104.0),
+            Self::Medium => egui::vec2(117.0, 156.0),
+            Self::Large => egui::vec2(156.0, 208.0),
+        }
+    }
+}
 
 pub(crate) struct Picker {
     name: String,
@@ -15,9 +38,8 @@ pub(crate) struct Picker {
     anchor: Option<usize>,
     preview: usize,
     loading: Option<(usize, mpsc::Receiver<Preview>)>,
-    shown: Option<usize>,
-    texture: Option<egui::TextureHandle>,
-    error: Option<String>,
+    thumbnails: VecDeque<(usize, Thumbnail)>,
+    thumbnail_size: ThumbnailSize,
     resolution: f32,
     pub slot: Option<usize>,
 }
@@ -32,14 +54,13 @@ pub(crate) fn queue(app: &mut PhotocraftApp, name: &str, path: Option<String>, b
         name: name.into(),
         path,
         bytes: Arc::new(bytes.to_vec()),
-        selected: vec![false; sizes.len()],
+        selected: (0..sizes.len()).map(|i| i == 0).collect(),
         sizes,
-        anchor: None,
+        anchor: Some(0),
         preview: 0,
         loading: None,
-        shown: None,
-        texture: None,
-        error: None,
+        thumbnails: VecDeque::new(),
+        thumbnail_size: ThumbnailSize::default(),
         resolution: 144.0,
         slot: None,
     });
@@ -120,40 +141,55 @@ fn select(selected: &mut [bool], anchor: &mut Option<usize>, index: usize, shift
     }
 }
 
-fn preview(p: &mut Picker, ctx: &egui::Context) {
+fn click_page(p: &mut Picker, index: usize, modifiers: egui::Modifiers) {
+    let Some(&selected) = p.selected.get(index) else { return };
+    let additive = modifiers.ctrl || modifiers.command;
+    if !modifiers.shift && !additive {
+        p.selected.fill(false);
+    }
+    select(&mut p.selected, &mut p.anchor, index, modifiers.shift, !additive || !selected);
+    p.preview = index;
+}
+
+fn cache_thumbnail(p: &mut Picker, index: usize, thumbnail: Thumbnail) {
+    p.thumbnails.retain(|(page, _)| *page != index);
+    while p.thumbnails.len() >= THUMBNAIL_CACHE_LIMIT {
+        p.thumbnails.pop_front();
+    }
+    p.thumbnails.push_back((index, thumbnail));
+}
+
+fn poll_preview(p: &mut Picker, ctx: &egui::Context) {
     if let Some((index, rx)) = &p.loading {
         match rx.try_recv() {
             Ok(result) => {
-                if *index == p.preview {
-                    p.shown = Some(*index);
-                    match result {
-                        Ok((w, h, pixels)) => {
-                            let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &pixels);
-                            p.texture = Some(ctx.load_texture("pdf-page-preview", image, egui::TextureOptions::LINEAR));
-                            p.error = None;
-                        }
-                        Err(e) => {
-                            p.error = Some(e);
-                            p.texture = None;
-                        }
+                let thumbnail = result.and_then(|(w, h, pixels)| {
+                    if w == 0 || h == 0 || w > 420 || h > 420 || pixels.len() != w as usize * h as usize * 4 {
+                        return Err("Invalid PDF preview dimensions".into());
                     }
-                }
+                    let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &pixels);
+                    Ok(ctx.load_texture(format!("pdf-page-thumbnail-{index}"), image, egui::TextureOptions::LINEAR))
+                });
+                let index = *index;
+                cache_thumbnail(p, index, thumbnail);
                 p.loading = None;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
+                let index = *index;
+                cache_thumbnail(p, index, Err("Preview unavailable".into()));
                 p.loading = None;
-                p.shown = Some(p.preview);
-                p.error = Some("Preview unavailable".into());
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
     }
-    if p.loading.is_none() && p.shown != Some(p.preview) {
+}
+
+fn request_preview(p: &mut Picker, ctx: &egui::Context, visible: &[usize]) {
+    if p.loading.is_none()
+        && let Some(&index) = visible.iter().find(|&&index| !p.thumbnails.iter().any(|(page, _)| *page == index))
+    {
         let (tx, rx) = mpsc::channel();
         let bytes = p.bytes.clone();
-        let index = p.preview;
-        p.texture = None;
-        p.error = None;
         let render = move || {
             let _ = tx.send(photocraft_io::pdf::page_preview(bytes, index).map_err(|e| e.to_string()));
         };
@@ -168,55 +204,107 @@ fn preview(p: &mut Picker, ctx: &egui::Context) {
     }
 }
 
+fn thumbnail(ui: &mut egui::Ui, p: &mut Picker, index: usize) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let max = p.thumbnail_size.image_size();
+    let (rect, response) = ui.allocate_exact_size(max + egui::vec2(8.0, 26.0), egui::Sense::click());
+    let selected = p.selected.get(index).copied().unwrap_or(false);
+    let label = crate::i18n::fmt(tl!("Page {number}"), &[("number", &(index + 1).to_string())]);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, &label));
+    if ui.is_rect_visible(rect) {
+        if selected || response.hovered() {
+            ui.painter().rect_filled(rect, t.radius_sm, if selected { t.accent_soft } else { t.hover });
+        }
+        let (w, h) = p.sizes.get(index).copied().unwrap_or((1.0, 1.0));
+        let size = if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+            let normalized = egui::vec2(w, h) / w.max(h);
+            normalized * (max.x / normalized.x).min(max.y / normalized.y)
+        } else {
+            max
+        };
+        let paper = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 4.0 + max.y / 2.0), size);
+        let cached = p.thumbnails.iter().find(|(page, _)| *page == index).map(|(_, thumbnail)| thumbnail);
+        match cached {
+            Some(Ok(texture)) => {
+                ui.painter().image(texture.id(), paper, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            }
+            _ => {
+                ui.painter().rect_filled(paper, 0.0, t.card);
+                let placeholder = if matches!(cached, Some(Err(_))) { "!" } else { "…" };
+                ui.painter().text(paper.center(), egui::Align2::CENTER_CENTER, placeholder, egui::TextStyle::Body.resolve(ui.style()), t.text_dim);
+            }
+        }
+        ui.painter().rect_stroke(
+            paper.expand(2.0),
+            0.0,
+            egui::Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { t.accent } else { t.field_border }),
+            egui::StrokeKind::Outside,
+        );
+        if response.has_focus() {
+            ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        }
+        ui.painter().text(
+            egui::pos2(rect.center().x, rect.bottom() - 10.0),
+            egui::Align2::CENTER_CENTER,
+            (index + 1).to_string(),
+            egui::TextStyle::Body.resolve(ui.style()),
+            t.text,
+        );
+    }
+    let response = match p.thumbnails.iter().find(|(page, _)| *page == index) {
+        Some((_, Err(error))) => response.on_hover_text(error),
+        _ => response.on_hover_text(&label),
+    };
+    if response.clicked() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter))) {
+        response.request_focus();
+        click_page(p, index, ui.input(|i| i.modifiers));
+    }
+    response
+}
+
 pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = app.pdf_pickers.front_mut() else { return };
-    preview(p, ctx);
+    poll_preview(p, ctx);
+    let mut visible = Vec::new();
     let (mut open, mut all, mut cancel) = (false, false, false);
     let modal = egui::Modal::new(egui::Id::new("pdf-page-picker")).show(ctx, |ui| {
         ui.set_width(650.0);
         ui.heading(tl!("Open PDF pages"));
         ui.label(&p.name);
         ui.label(crate::i18n::fmt(tl!("{count} pages • Each selected page opens in its own tab"), &[("count", &p.sizes.len().to_string())]));
-        ui.label(tl!("Click to select pages. Shift-click selects a range."));
+        ui.label(tl!("Ctrl/Cmd-click adds pages. Shift-click selects a range."));
         ui.separator();
-        ui.horizontal_top(|ui| {
-            ui.set_height(360.0);
-            egui::ScrollArea::vertical().max_width(200.0).max_height(360.0).id_salt("pdf-pages").show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(185.0);
-                    for i in 0..p.selected.len() {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        egui::Frame::new().fill(t.field).stroke(egui::Stroke::new(1.0, t.field_border)).inner_margin(8.0).show(ui, |ui| {
+            let card = p.thumbnail_size.image_size() + egui::vec2(8.0, 26.0);
+            let columns = ((ui.available_width() - ui.spacing().scroll.bar_width) / (card.x + ui.spacing().item_spacing.x)).floor().max(1.0) as usize;
+            egui::ScrollArea::vertical().max_height(280.0).auto_shrink([false, false]).id_salt("pdf-pages").show_rows(
+                ui,
+                card.y,
+                p.sizes.len().div_ceil(columns),
+                |ui, rows| {
+                    for row in rows {
                         ui.horizontal(|ui| {
-                            let mut checked = p.selected[i];
-                            let label = crate::i18n::fmt(tl!("Page {number}"), &[("number", &(i + 1).to_string())]);
-                            if crate::widgets::checkbox(ui, &mut checked, &label).changed() {
-                                select(&mut p.selected, &mut p.anchor, i, ui.input(|i| i.modifiers.shift), checked);
-                                p.preview = i;
-                            }
-                            if ui.small_button(tl!("Preview")).clicked() {
-                                p.preview = i;
+                            for index in row * columns..((row + 1) * columns).min(p.sizes.len()) {
+                                let response = ui.push_id(index, |ui| thumbnail(ui, p, index)).inner;
+                                if ui.is_rect_visible(response.rect) {
+                                    visible.push(index);
+                                }
                             }
                         });
                     }
-                });
-            });
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.set_max_size(egui::vec2(420.0, 360.0));
-                ui.set_min_size(egui::vec2(420.0, 360.0));
-                let (w, h) = p.sizes[p.preview];
-                ui.label(crate::i18n::fmt(
-                    tl!("Page {number} — {width} × {height} in"),
-                    &[("number", &(p.preview + 1).to_string()), ("width", &format!("{:.1}", w / 72.0)), ("height", &format!("{:.1}", h / 72.0))],
-                ));
-                if let Some(texture) = &p.texture {
-                    ui.add(egui::Image::new(texture).max_size(egui::vec2(420.0, 330.0)).maintain_aspect_ratio(true));
-                } else if let Some(error) = &p.error {
-                    ui.label(error);
-                } else {
-                    ui.spinner();
-                    ui.label(tl!("Loading preview…"));
-                }
-            });
+                },
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label(tl!("Thumbnail size"));
+            crate::widgets::dropdown(
+                ui,
+                "pdf-thumbnail-size",
+                &mut p.thumbnail_size,
+                &[(ThumbnailSize::Small, tl!("Small")), (ThumbnailSize::Medium, tl!("Medium")), (ThumbnailSize::Large, tl!("Large"))],
+                110.0,
+            );
         });
         ui.separator();
         ui.horizontal(|ui| {
@@ -224,6 +312,10 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::widgets::value_field(ui, &mut p.resolution, 1.0..=2400.0, "", 80.0).labelled_by(label.id);
         });
         let (w, h) = p.sizes[p.preview];
+        ui.label(crate::i18n::fmt(
+            tl!("Page {number} — {width} × {height} in"),
+            &[("number", &(p.preview + 1).to_string()), ("width", &format!("{:.1}", w / 72.0)), ("height", &format!("{:.1}", h / 72.0))],
+        ));
         ui.label(crate::i18n::fmt(
             tl!("Preview page: {width} × {height} pixels"),
             &[("width", &format!("{:.0}", (w * p.resolution / 72.0).ceil())), ("height", &format!("{:.0}", (h * p.resolution / 72.0).ceil()))],
@@ -239,6 +331,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     });
     cancel |= modal.should_close();
+    if !open && !all && !cancel {
+        request_preview(p, ctx, &visible);
+    }
     if open || all {
         let pages: Vec<usize> = p.selected.iter().enumerate().filter_map(|(i, &v)| (all || v).then_some(i)).collect();
         let name = p.name.clone();
@@ -267,9 +362,8 @@ mod tests {
             anchor: None,
             preview: 0,
             loading: None,
-            shown: Some(0),
-            texture: None,
-            error: None,
+            thumbnails: (0..13).map(|i| (i, Err("Test preview".into()))).collect(),
+            thumbnail_size: super::ThumbnailSize::Small,
             resolution: 144.0,
             slot: None,
         });
@@ -299,6 +393,16 @@ mod tests {
         assert!(h.state().pdf_pickers[0].selected[1..5].iter().all(|&v| v), "{:?}", h.state().pdf_pickers[0].selected);
         assert_eq!(h.state().pdf_pickers[0].selected.iter().filter(|&&v| v).count(), 4);
         assert!(viewport.contains_rect(h.get_by_label("Open selected (4)").rect()));
+        h.get_by_label("Page 7").click_modifiers(egui::Modifiers::CTRL);
+        h.run_steps(4);
+        assert_eq!(h.state().pdf_pickers[0].selected.iter().filter(|&&v| v).count(), 5);
+        h.get_by_label("Page 7").click_modifiers(egui::Modifiers::CTRL);
+        h.run_steps(4);
+        assert_eq!(h.state().pdf_pickers[0].selected.iter().filter(|&&v| v).count(), 4);
+        h.get_by_label("Page 1").click();
+        h.run_steps(4);
+        assert_eq!(h.state().pdf_pickers[0].selected.iter().filter(|&&v| v).count(), 1);
+        assert!(h.state().pdf_pickers[0].selected[0]);
     }
 
     #[test]
@@ -319,38 +423,39 @@ mod tests {
     fn picker_actions_fit_small_windows_at_both_scales() {
         use egui_kittest::{Harness, kittest::Queryable};
         for scale in [1.0, 2.0] {
-            let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-            app.pdf_pickers.push_back(super::Picker {
-                name: "Binder.pdf".into(),
-                path: None,
-                bytes: std::sync::Arc::new(vec![]),
-                sizes: vec![(72.0, 36.0); 2],
-                selected: vec![true, false],
-                anchor: Some(0),
-                preview: 0,
-                loading: None,
-                shown: Some(0),
-                texture: None,
-                error: None,
-                resolution: 144.0,
-                slot: None,
-            });
-            let ready = std::rc::Rc::new(std::cell::Cell::new(false));
-            let draw_ready = ready.clone();
-            let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_pixels_per_point(scale).build_ui_state(
-                move |ui, app: &mut crate::PhotocraftApp| {
-                    if draw_ready.get() {
-                        super::show(app, ui.ctx());
-                    }
-                },
-                app,
-            );
-            crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
-            ready.set(true);
-            h.run_steps(4);
-            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-            for label in ["Open PDF pages", "Resolution (ppi)", "Cancel", "Open selected (1)"] {
-                assert!(viewport.contains_rect(h.get_by_label(label).rect()), "{label} must fit at {scale}x");
+            for thumbnail_size in [super::ThumbnailSize::Small, super::ThumbnailSize::Medium, super::ThumbnailSize::Large] {
+                let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.pdf_pickers.push_back(super::Picker {
+                    name: "Binder.pdf".into(),
+                    path: None,
+                    bytes: std::sync::Arc::new(vec![]),
+                    sizes: vec![(72.0, 36.0); 2],
+                    selected: vec![true, false],
+                    anchor: Some(0),
+                    preview: 0,
+                    loading: None,
+                    thumbnails: (0..2).map(|i| (i, Err("Test preview".into()))).collect(),
+                    thumbnail_size,
+                    resolution: 144.0,
+                    slot: None,
+                });
+                let ready = std::rc::Rc::new(std::cell::Cell::new(false));
+                let draw_ready = ready.clone();
+                let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_pixels_per_point(scale).build_ui_state(
+                    move |ui, app: &mut crate::PhotocraftApp| {
+                        if draw_ready.get() {
+                            super::show(app, ui.ctx());
+                        }
+                    },
+                    app,
+                );
+                crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+                ready.set(true);
+                h.run_steps(4);
+                let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+                for label in ["Open PDF pages", "Resolution (ppi)", "Cancel", "Open selected (1)"] {
+                    assert!(viewport.contains_rect(h.get_by_label(label).rect()), "{label} must fit at {scale}x");
+                }
             }
         }
     }

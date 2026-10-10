@@ -3535,3 +3535,6 @@ cameraRaw	Masking	Маскування
 	Close exported tabs after successful export	Закрити експортовані вкладки після успішного експорту
 	Canceled or failed exports leave every tab open.	У разі скасування або помилки експорту всі вкладки залишаються відкритими.
 	PDF saves the visible pages with flattened layers.	PDF зберігає видимі сторінки зі зведеними шарами.
+
+	Thumbnail size	Розмір мініатюр
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-клацання додає сторінки. Shift-клацання вибирає діапазон.

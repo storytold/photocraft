@@ -2712,3 +2712,6 @@ fontWeight	Italic	Курсив
 	Close exported tabs after successful export	Закрыть экспортированные вкладки после успешного экспорта
 	Canceled or failed exports leave every tab open.	При отмене или ошибке экспорта все вкладки остаются открытыми.
 	PDF saves the visible pages with flattened layers.	PDF сохраняет видимые страницы со сведёнными слоями.
+
+	Thumbnail size	Размер миниатюр
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-щелчок добавляет страницы. Shift-щелчок выбирает диапазон.

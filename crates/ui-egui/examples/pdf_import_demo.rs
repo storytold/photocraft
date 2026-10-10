@@ -8,13 +8,19 @@ use photocraft_ui_egui::{PhotocraftApp, Services, theme::ThemeKind};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = std::env::args().nth(1).unwrap_or_else(|| "plan/evidence".into());
     std::fs::create_dir_all(&output)?;
-    let mut doc = Document::new("Synthetic pages", Size::new(144, 208), ColorMode::Rgb, SampleType::U8);
+    let mut doc = Document::new("Synthetic pages", Size::new(144, 432), ColorMode::Rgb, SampleType::U8);
     doc.resolution_dpi = 144.0;
     for (i, color) in [[0.2, 0.5, 0.9, 1.0], [0.9, 0.4, 0.2, 1.0]].into_iter().enumerate() {
-        let y = i as i32 * 112;
-        let rect = Rect::new(0, y, 144, y + 96);
+        let y = i as i32 * 224;
+        let rect = Rect::new(0, y, 144, y + 208);
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
-        surface.write_region(rect, &color.repeat(144 * 96));
+        surface.write_region(rect, &[1.0, 1.0, 1.0, 1.0].repeat(144 * 208));
+        surface.write_region(Rect::new(18, y + 22, 126, y + 28), &color.repeat(108 * 6));
+        for line in 0..18 {
+            let width = if line % 6 == 5 { 74 } else { 108 };
+            let top = y + 45 + line * 7;
+            surface.write_region(Rect::new(18, top, 18 + width, top + 2), &[0.2, 0.2, 0.2, 1.0].repeat(width as usize * 2));
+        }
         doc.layers.push(Layer::new(
             format!("Page {}", i + 1),
             LayerContent::Group(Group {

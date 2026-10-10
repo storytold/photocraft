@@ -3448,3 +3448,6 @@ fontWeight	Italic	斜体
 	Close exported tabs after successful export	エクスポート成功後にエクスポートしたタブを閉じる
 	Canceled or failed exports leave every tab open.	エクスポートの中止や失敗時は、すべてのタブを開いたままにします。
 	PDF saves the visible pages with flattened layers.	PDF は表示中のページをレイヤーを統合して保存します。
+
+	Thumbnail size	サムネイルサイズ
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd キーを押しながらクリックでページを追加し、Shift キーを押しながらクリックで範囲を選択します。

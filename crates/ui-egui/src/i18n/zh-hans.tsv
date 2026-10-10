@@ -2436,3 +2436,6 @@ fontWeight	Italic	斜体
 	Close exported tabs after successful export	成功导出后关闭已导出的标签页
 	Canceled or failed exports leave every tab open.	取消或失败的导出会保留所有标签页。
 	PDF saves the visible pages with flattened layers.	PDF 将可见页面以拼合图层的方式保存。
+
+	Thumbnail size	缩略图大小
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-单击添加页面。Shift-单击选择范围。

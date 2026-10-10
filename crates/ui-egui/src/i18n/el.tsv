@@ -3536,3 +3536,6 @@ fontWeight	Thin	Πολύ λεπτά
 	Close exported tabs after successful export	Κλείσιμο εξαγόμενων καρτελών μετά από επιτυχή εξαγωγή
 	Canceled or failed exports leave every tab open.	Οι ακυρωμένες ή αποτυχημένες εξαγωγές αφήνουν όλες τις καρτέλες ανοιχτές.
 	PDF saves the visible pages with flattened layers.	Το PDF αποθηκεύει τις ορατές σελίδες με συγχωνευμένα επίπεδα.
+
+	Thumbnail size	Μέγεθος μικρογραφίας
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-κλικ προσθέτει σελίδες. Shift-κλικ επιλέγει εύρος.

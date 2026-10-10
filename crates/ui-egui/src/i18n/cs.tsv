@@ -2428,3 +2428,6 @@ fontWeight	Italic	Kurzíva
 	Close exported tabs after successful export	Zavřít exportované karty po úspěšném exportu
 	Canceled or failed exports leave every tab open.	Zrušený nebo neúspěšný export ponechá všechny karty otevřené.
 	PDF saves the visible pages with flattened layers.	PDF ukládá viditelné stránky se sloučenými vrstvami.
+
+	Thumbnail size	Velikost miniatur
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik přidá stránky. Shift-klik vybere rozsah.

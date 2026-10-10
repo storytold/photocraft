@@ -2496,3 +2496,6 @@ fontWeight	Italic	Cursiva
 	Close exported tabs after successful export	Cerrar las pestañas exportadas tras una exportación correcta
 	Canceled or failed exports leave every tab open.	Las exportaciones canceladas o fallidas dejan todas las pestañas abiertas.
 	PDF saves the visible pages with flattened layers.	El PDF guarda las páginas visibles con las capas acopladas.
+
+	Thumbnail size	Tamaño de miniatura
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-clic añade páginas. Mayús-clic selecciona un intervalo.

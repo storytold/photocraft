@@ -2855,3 +2855,6 @@ fontWeight	Italic	Itálico
 	Close exported tabs after successful export	Fechar abas exportadas após uma exportação bem-sucedida
 	Canceled or failed exports leave every tab open.	Exportações canceladas ou malsucedidas deixam todas as abas abertas.
 	PDF saves the visible pages with flattened layers.	O PDF salva as páginas visíveis com as camadas achatadas.
+
+	Thumbnail size	Tamanho da miniatura
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-clique adiciona páginas. Shift-clique seleciona um intervalo.

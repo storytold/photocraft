@@ -12,7 +12,14 @@ or changed after export began remain open. Export does not change source files o
 the saved state of tabs that remain open.
 
 Opening or dropping a PDF shows a page picker before any editing tabs are created.
-Preview pages, click their checkboxes, or Shift-click to select an inclusive range.
+Pages appear as a thumbnail grid with page numbers below each miniature. The first
+page is selected initially. Click a miniature to select one page, Ctrl/Cmd-click to
+add or remove pages, or Shift-click to select an inclusive range. Choose Small,
+Medium or Large thumbnail size. Visible pages load serially in the background;
+the preview cache holds at most 32 pages and is independent of import resolution.
+
+![PDF thumbnail grid with two synthetic pages](images/pdf-page-thumbnails.png)
+
 Open selected imports only those pages. Open all pages explicitly imports the binder.
 Choose Resolution (1–2400 ppi, default 144) before opening. Each selected page
 opens as an RGB 8-bit image in its own named tab, in binder order. Resolution

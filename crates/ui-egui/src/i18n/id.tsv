@@ -2834,3 +2834,6 @@ fontWeight	Italic	Miring
 	Close exported tabs after successful export	Tutup tab yang diekspor setelah ekspor berhasil
 	Canceled or failed exports leave every tab open.	Ekspor yang dibatalkan atau gagal membiarkan semua tab tetap terbuka.
 	PDF saves the visible pages with flattened layers.	PDF menyimpan halaman yang terlihat dengan lapisan yang diratakan.
+
+	Thumbnail size	Ukuran thumbnail
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik menambahkan halaman. Shift-klik memilih rentang.

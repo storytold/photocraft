@@ -2498,3 +2498,6 @@ fontWeight	Italic	Corsivo
 	Close exported tabs after successful export	Chiudi le schede esportate dopo un'esportazione riuscita
 	Canceled or failed exports leave every tab open.	Le esportazioni annullate o non riuscite lasciano aperte tutte le schede.
 	PDF saves the visible pages with flattened layers.	Il PDF salva le pagine visibili con i livelli uniti.
+
+	Thumbnail size	Dimensione miniature
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-clic aggiunge pagine. Maiusc-clic seleziona un intervallo.

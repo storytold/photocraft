@@ -2467,3 +2467,6 @@ fontWeight	Italic	Kursiv
 	Close exported tabs after successful export	Exportierte Tabs nach erfolgreichem Export schließen
 	Canceled or failed exports leave every tab open.	Bei Abbruch oder fehlgeschlagenem Export bleiben alle Tabs geöffnet.
 	PDF saves the visible pages with flattened layers.	PDF speichert sichtbare Seiten mit zusammengeführten Ebenen.
+
+	Thumbnail size	Miniaturgröße
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Strg/Cmd-Klick ergänzt Seiten. Umschalt-Klick wählt einen Bereich.

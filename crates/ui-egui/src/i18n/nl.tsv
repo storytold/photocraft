@@ -3607,3 +3607,6 @@ cameraRaw	Whites	Witten
 	Close exported tabs after successful export	Geëxporteerde tabbladen sluiten na succesvolle export
 	Canceled or failed exports leave every tab open.	Bij geannuleerde of mislukte exports blijven alle tabbladen open.
 	PDF saves the visible pages with flattened layers.	PDF slaat zichtbare pagina's op met samengevoegde lagen.
+
+	Thumbnail size	Miniatuurgrootte
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik voegt pagina's toe. Shift-klik selecteert een bereik.

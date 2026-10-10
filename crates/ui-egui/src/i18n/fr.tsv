@@ -2847,3 +2847,6 @@ fontWeight	Italic	Italique
 	Close exported tabs after successful export	Fermer les onglets exportés après un export réussi
 	Canceled or failed exports leave every tab open.	Les exports annulés ou échoués laissent tous les onglets ouverts.
 	PDF saves the visible pages with flattened layers.	Le PDF enregistre les pages visibles avec les calques aplatis.
+
+	Thumbnail size	Taille des miniatures
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-clic ajoute des pages. Maj-clic sélectionne une plage.
