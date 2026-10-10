@@ -30,6 +30,8 @@ const SMALL_TIP_RADIUS: f32 = 3.0;
 /// Sub-pixel sample offsets (a 4×4 grid) for the area coverage of small tips.
 const SUBPIXEL: [f32; 4] = [-0.375, -0.125, 0.125, 0.375];
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
+/// Max dabs rasterized in one parallel batch (bounds temporary mask memory).
+const PAR_DAB_BATCH: usize = 64;
 
 #[inline]
 /// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
@@ -599,27 +601,29 @@ impl StrokeRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if dabs.len() >= 4 {
             let ctx = &self.ctx;
-            let rasterized: Vec<(Rect, Vec<f32>)> = dabs
-                .par_iter()
-                .map(|d| {
-                    let rect = ctx.dab_rect(d, false);
-                    let mut buf = Vec::new();
-                    ctx.rasterize(d, false, rect, &mut buf);
-                    (rect, buf)
-                })
-                .collect();
-            let mut native = [0.0f32; 8];
-            for (i, (rect, vals)) in rasterized.iter().enumerate() {
-                let d = &dabs[i];
-                let col = match (self.per_dab_color, self.fmt) {
-                    (true, Some(f)) => {
-                        from_rgba_into(&f, d.color, &mut native);
-                        Some(&native[..f.mode.color_channels()])
-                    }
-                    _ => None,
-                };
-                self.cov.accumulate(*rect, vals, d.opacity, wet, col);
-                self.cov.bounds = self.cov.bounds.union(rect);
+            for chunk in dabs.chunks(PAR_DAB_BATCH) {
+                let rasterized: Vec<(Rect, Vec<f32>)> = chunk
+                    .par_iter()
+                    .map(|d| {
+                        let rect = ctx.dab_rect(d, false);
+                        let mut buf = Vec::new();
+                        ctx.rasterize(d, false, rect, &mut buf);
+                        (rect, buf)
+                    })
+                    .collect();
+                let mut native = [0.0f32; 8];
+                for (i, (rect, vals)) in rasterized.iter().enumerate() {
+                    let d = &chunk[i];
+                    let col = match (self.per_dab_color, self.fmt) {
+                        (true, Some(f)) => {
+                            from_rgba_into(&f, d.color, &mut native);
+                            Some(&native[..f.mode.color_channels()])
+                        }
+                        _ => None,
+                    };
+                    self.cov.accumulate(*rect, vals, d.opacity, wet, col);
+                    self.cov.bounds = self.cov.bounds.union(rect);
+                }
             }
         } else {
             self.raster_dabs_seq(&dabs, wet);
@@ -629,18 +633,20 @@ impl StrokeRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if duals.len() >= 4 {
             let ctx = &self.ctx;
-            let rasterized: Vec<(Rect, Vec<f32>)> = duals
-                .par_iter()
-                .map(|d| {
-                    let rect = ctx.dab_rect(d, true);
-                    let mut buf = Vec::new();
-                    ctx.rasterize(d, true, rect, &mut buf);
-                    (rect, buf)
-                })
-                .collect();
-            if let Some(dm) = self.dual.as_mut() {
-                for (rect, vals) in &rasterized {
-                    dm.accumulate(*rect, vals, 1.0, false, None);
+            for chunk in duals.chunks(PAR_DAB_BATCH) {
+                let rasterized: Vec<(Rect, Vec<f32>)> = chunk
+                    .par_iter()
+                    .map(|d| {
+                        let rect = ctx.dab_rect(d, true);
+                        let mut buf = Vec::new();
+                        ctx.rasterize(d, true, rect, &mut buf);
+                        (rect, buf)
+                    })
+                    .collect();
+                if let Some(dm) = self.dual.as_mut() {
+                    for (rect, vals) in &rasterized {
+                        dm.accumulate(*rect, vals, 1.0, false, None);
+                    }
                 }
             }
         } else {
@@ -893,9 +899,15 @@ impl StrokeRenderer {
         if use_par {
             #[cfg(not(target_arch = "wasm32"))]
             {
+                let cmyk = photocraft_color::convert::active_cmyk_space();
+                let cmyk_ref = cmyk.as_ref();
                 let results: Vec<(Rect, Vec<f32>)> = work
                     .par_iter()
-                    .map(|&(tx, ty, tile, tr)| blend_tile(tx, ty, tile, tr, pre.read_region(tr)))
+                    .map(|&(tx, ty, tile, tr)| {
+                        photocraft_color::convert::with_cmyk_space(cmyk_ref, || {
+                            blend_tile(tx, ty, tile, tr, pre.read_region(tr))
+                        })
+                    })
                     .collect();
                 let mut dmg = Rect::EMPTY;
                 for (tr, region) in results {

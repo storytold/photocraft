@@ -484,6 +484,24 @@ impl LiveStroke {
         }
         Ok(dmg)
     }
+
+    /// Ensure the tail preview is up to date (undo the throttle skip so the surface shows the
+    /// correct smoothing catch-up). Call before reading pixels from `self.doc`.
+    pub fn finalize_tail(&mut self) -> Result<Rect> {
+        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
+        if !old.is_empty() {
+            surf.write_region(old, &self.pre.read_region(old));
+            self.renderer.mark_dirty(old);
+        }
+        let mut dmg = self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+        if let Some(mut tail) = self.renderer.tail_preview() {
+            self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+            dmg = dmg.union(&self.tail);
+        }
+        dmg = dmg.union(&old);
+        Ok(dmg)
+    }
 }
 
 fn pencil(s: &mut Session, p: &Value) -> Result<Value> {

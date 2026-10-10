@@ -560,6 +560,43 @@ fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
 }
 
 #[test]
+fn live_stroke_finalize_tail_matches_commit_at_odd_push_counts() {
+    // The tail throttle skips the smoothing preview on odd pushes. After `finalize_tail` the
+    // preview must still match the committed stroke, including when the last push was a skip.
+    let pts: Vec<[f64; 3]> = (0..40)
+        .map(|i| {
+            let t = f64::from(i) / 39.0;
+            [40.0 + 120.0 * t, 60.0 + 30.0 * (t * 7.0).sin(), 0.3 + 0.7 * t]
+        })
+        .collect();
+    for total in [39, 40] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 120, "depth": 8, "background": "white"})).unwrap();
+        let brush = json!({"size": 40, "hardness": 0.0, "pressureSize": true, "smoothing": {"amount": 0.5}});
+        let p = json!({"points": [pts[0]], "brush": brush, "zoom": 1.0, "target": "pixels"});
+        let mut live = LiveStroke::begin(&s, &p).unwrap();
+        for q in &pts[1..total] {
+            live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+        }
+        live.finalize_tail().unwrap();
+        let mut commit = p.clone();
+        commit["points"] = json!(&pts[..total]);
+        commit["seed"] = json!(live.seed);
+        s.execute("paint.stroke", commit).unwrap();
+        let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let done = surface(&s);
+        let worst = (0..120)
+            .flat_map(|y| (0..200).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let (a, b) = (shown.rgba(x, y), done.rgba(x, y));
+                (0..4).map(|i| (a[i] - b[i]).abs()).fold(0.0f32, f32::max)
+            })
+            .fold(0.0f32, f32::max);
+        assert!(worst <= 1.0 / 255.0, "total {total}: preview differs from commit by {worst}");
+    }
+}
+
+#[test]
 fn new_brush_controls_round_trip_through_set_brush() {
     let mut s = session(40, 40);
     let patch = json!({
