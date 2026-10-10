@@ -608,6 +608,27 @@ fn incremental_updates_follow_the_document() {
     check(&mut g, &d, "opacity");
 }
 
+/// #2422: a mask whose default pixel changes without touching its tiles (Invert on a sparse mask)
+/// must re-upload the absent tiles between its stored ones, not keep the old default on the GPU.
+#[test]
+fn changed_mask_default_updates_absent_tiles() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(600, 300);
+    d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 600, 300), 61, 0.5));
+    // Tiles in opposite corners: the resident texture spans the absent tiles between them.
+    let corners = [Rect::new(0, 0, 70, 70), Rect::new(530, 230, 600, 300)];
+    let data = vec![0.5f32; 70 * 70];
+    for default in [0.0, 1.0] {
+        let mut m = LayerMask::reveal_all();
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
+        for r in corners {
+            m.surface.write_region(r, &data);
+        }
+        d.layers[1].mask = Some(m);
+        check(&mut g, &d, &format!("mask default {default}"));
+    }
+}
+
 /// #1774: tiles shared across coordinates (a solid fill, a cleared area, the default pixel of a
 /// mask) upload once and are copied on the GPU, at 8 and 16 bits, in RGB and grayscale, on a new
 /// layer page and on an incremental update.
