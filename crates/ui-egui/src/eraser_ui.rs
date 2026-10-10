@@ -53,6 +53,19 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) -
     true
 }
 
+/// Whether `tool` is the Eraser in Pencil mode: it erases hard, aliased pixels through
+/// `paint.pencil` (`"erase": true`) and shows the Pencil's pixel-grid cursor (#2662).
+pub fn pencil_mode(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::Eraser && app.ui.tool_options.eraser_mode == "pencil"
+}
+
+/// The Eraser's Mode dropdown (Brush / Pencil). Returns whether it changed.
+pub fn mode_dropdown(ui: &mut egui::Ui, mode: &mut String) -> bool {
+    opt(ui, tl!("Mode:"));
+    let modes = [("brush".to_string(), tl!("Brush")), ("pencil".to_string(), tl!("Pencil"))];
+    widgets::dropdown(ui, "eraser-mode", mode, &modes, 96.0)
+}
+
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
