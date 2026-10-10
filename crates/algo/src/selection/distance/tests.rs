@@ -80,7 +80,9 @@ fn inconsistent_and_empty_dimensions_do_not_panic() {
 
 #[test]
 fn selection_modifiers_keep_fractional_coverage() {
-    use crate::selection::{border, contract, expand};
+    // Border is no longer expand − contract (it is Photoshop's soft band, checked against
+    // measurements in `selection::tests::border_matches_photoshop`), so only these two remain.
+    use crate::selection::{contract, expand};
     let (w, h) = (47, 39);
     let m: Vec<f32> = (0..w * h).map(|i| if (8..31).contains(&(i % w)) && (5..27).contains(&(i / w)) { 0.8 } else { 0.2 }).collect();
     let reference_expand = |m: &[f32], r: f32| {
@@ -92,9 +94,6 @@ fn selection_modifiers_keep_fractional_coverage() {
         let inverse: Vec<_> = m.iter().map(|v| 1.0 - v).collect();
         let contracted: Vec<_> = reference_expand(&inverse, r).iter().map(|v| 1.0 - v).collect();
         assert_eq!(contract(&m, w, h, r), contracted);
-        let outer = reference_expand(&m, r / 2.0);
-        let inner: Vec<_> = reference_expand(&inverse, r / 2.0).iter().map(|v| 1.0 - v).collect();
-        assert_eq!(border(&m, w, h, r), outer.iter().zip(inner).map(|(o, i)| (o - i).max(0.0)).collect::<Vec<_>>());
     }
 }
 

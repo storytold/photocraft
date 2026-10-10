@@ -40,6 +40,11 @@
 	New from Clipboard	Nový ze schránky
 	Open…	Otevřít…
 	Open As…	Otevřít jako…
+	Open EXR Parts…	Otevřít části EXR…
+	Add beauty precomp from the AOVs	Přidat předběžnou kompozici krásy z AOV
+	Both	Obě
+	Left	Vlevo
+	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
 	Close	Zavřít
@@ -89,6 +94,8 @@
 	Import	Import
 	Browse…	Procházet…
 	Reveal in Finder	Zobrazit ve Finderu
+	Show in Explorer	Zobrazit v Průzkumníkovi
+	Show in Folder	Zobrazit ve složce
 	File Info…	Informace o souboru…
 	Print…	Tisk…
 	Print One Copy	Vytisknout jednu kopii
@@ -823,7 +830,6 @@
 	Blending Options	Možnosti prolnutí
 	Blue	Modrá
 	Blue, Red, Yellow	Modrá, červená, žlutá
-	Both	Obojí
 	Both Axes	Obě osy
 	Bottom	Dole
 	Brightness	Jas
@@ -1142,7 +1148,6 @@
 	Leading	Proklad
 	Leading (set to the font size × auto-leading when Auto)	Proklad (při volbě Automaticky velikost písma × automatický proklad)
 	Leave as is (don't color manage)	Ponechat beze změny (bez správy barev)
-	Left	Vlevo
 	Left align text	Zarovnat text vlevo
 	Length:	Délka:
 	Level	Úroveň
@@ -1352,7 +1357,6 @@
 	Restore All	Obnovit vše
 	Restore Defaults	Obnovit výchozí
 	Restrictive (Web)	Omezená (web)
-	Right	Vpravo
 	Right align text	Zarovnat text vpravo
 	Rigid	Tuhý
 	Rotate:	Otočení:
@@ -2224,6 +2228,7 @@ cameraRaw	Color	Barvy
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Výběr barvy (Barva textu)
+	Color Picker ({name})	Výběr barvy ({name})
 	Color Picker (Fill Color)	Výběr barvy (Barva výplně)
 	Fill color	Barva výplně
 	Color Picker (Stroke Color)	Výběr barvy (Barva tahu)
@@ -2439,3 +2444,7 @@ fontWeight	Italic	Kurzíva
 	Place selected ({count})	Vložit vybrané ({count})
 
 	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Inteligentní objekty nelze přímo malovat. Ručně rastrujte vrstvu nebo malujte na nové pixelové vrstvě.
+	Next Document	Další dokument
+	Previous Document	Předchozí dokument
+	W x H x Resolution	Š x V x Rozlišení
+	Front Image	Přední obraz

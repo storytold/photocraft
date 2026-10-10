@@ -42,6 +42,11 @@
 	Open…	Открыть…
 	Open	Открыть
 	Open As…	Открыть как…
+	Open EXR Parts…	Открыть части EXR…
+	Add beauty precomp from the AOVs	Добавить предкомпозит красоты из AOV
+	Both	Оба
+	Left	Левый
+	Right	Правый
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
 	Close	Закрыть
@@ -1078,8 +1083,6 @@
 	Single Word Justification	Выключка одного слова
 	Alignment	Выравнивание
 	Indent First	Отступ первой строки
-	Left	По левому краю
-	Right	По правому краю
 	Center	По центру
 	Justify	По ширине
 
@@ -1613,6 +1616,8 @@
 	Open a document to select a colour range.	Откройте документ, чтобы выбрать цветовой диапазон.
 	Saved	Сохранено
 	Reveal in Finder	Показать в Finder
+	Show in Explorer	Показать в Проводнике
+	Show in Folder	Показать в папке
 	Before (Y)	До (Y)
 	After (X)	После (X)
 	Original	Оригинал
@@ -1928,7 +1933,6 @@
 	Bilinear	Билинейная
 	Black, White	Чёрный, белый
 	Blue, Red, Yellow	Синий, красный, жёлтый
-	Both	Оба
 	Bottom	Снизу
 	Brightness Jitter	Колебание яркости
 	Brush Reconstruct Options	Параметры восстановления кисти
@@ -2498,6 +2502,7 @@ cameraRaw	Roughness	Неровность
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Палитра цветов (Цвет текста)
+	Color Picker ({name})	Палитра цветов ({name})
 	Color Picker (Fill Color)	Палитра цветов (Цвет заливки)
 	Fill color	Цвет заливки
 	Color Picker (Stroke Color)	Палитра цветов (Цвет обводки)
@@ -2723,3 +2728,8 @@ fontWeight	Italic	Курсив
 	Place selected ({count})	Поместить выбранные ({count})
 
 	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Нельзя рисовать непосредственно на смарт-объектах. Растрируйте слой вручную или рисуйте на новом пиксельном слое.
+	Next Document	Следующий документ
+	Previous Document	Предыдущий документ
+	W x H x Resolution	Ш x В x Разрешение
+	Front Image	Изображение переднего плана
+	Swaps height and width	Меняет местами высоту и ширину

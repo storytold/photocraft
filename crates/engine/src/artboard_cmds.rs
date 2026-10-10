@@ -188,7 +188,13 @@ pub(crate) fn fit_canvas(doc: &mut Document) {
         w = w.max(i64::from(a.rect.x1));
         h = h.max(i64::from(a.rect.y1));
     }
-    doc.size = Size::new(w.clamp(1, 300_000) as u32, h.clamp(1, 300_000) as u32);
+    let size = Size::new(w.clamp(1, 300_000) as u32, h.clamp(1, 300_000) as u32);
+    if size != doc.size {
+        doc.size = size;
+        // Shape pixels are cut at the canvas: a board moved past the old edge rendered its
+        // shapes against it, leaving them missing or clipped (#2389).
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+    }
 }
 
 fn next_artboard_name(doc: &Document) -> String {
