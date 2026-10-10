@@ -645,7 +645,7 @@ pub fn turn_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
         Some(_) => false,
         None => hit_turned(r, deg, p, tolerance(app)) == Hit::Outside,
     };
-    if !turning || !(p[0].is_finite() && p[1].is_finite()) {
+    if !(turning && p[0].is_finite() && p[1].is_finite()) {
         return None;
     }
     let c = center(r);
