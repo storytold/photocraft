@@ -168,6 +168,25 @@ fn the_hand_is_a_bitmap_only_where_the_os_has_none() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn pipette_bitmap_uses_the_platform_cursor_units_at_high_dpi() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    ctx.set_pixels_per_point(2.0);
+    frame(&ctx, |_| {});
+    let output = frame(&ctx, |ui| {
+        let icon = pipette(ui.ctx(), egui::pos2(100.0, 100.0));
+        ui.ctx().set_cursor_icon(icon);
+    });
+    assert_eq!(ctx.pixels_per_point(), 2.0);
+    let image = output.platform_output.cursor_image.unwrap();
+    let scale = if cfg!(target_os = "macos") { 1.0 } else { 2.0 };
+    let expected = rasterize(Shape::Pipette, scale).unwrap();
+    assert_eq!((image.size, image.hotspot), (expected.size, expected.hotspot));
+    assert_eq!(image.rgba, expected.rgba);
+}
+
+#[test]
 fn unchanged_geometry_reuses_the_os_upload_and_dpi_invalidates_it() {
     let ctx = egui::Context::default();
     let shape = Shape::Circle { radius: 20.0, centre: false };

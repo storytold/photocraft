@@ -100,10 +100,12 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     // eframe's immediate viewports and web integration do not upload cursor images. Keep their
-    // existing painter path. Other native platforms retain their existing cursor behaviour.
+    // existing painter path. Only the pipette also uses bitmaps on other native platforms.
     let native = cfg!(target_os = "windows") || (!cfg!(target_arch = "wasm32") && matches!(shape, Shape::Pipette));
     if native && ctx.viewport_id() == egui::ViewportId::ROOT {
-        let scale = ctx.pixels_per_point();
+        // winit gives macOS NSCursor bitmap sizes and hotspots in logical points; Windows
+        // and Linux expect physical pixels. Scaling on macOS would double a Retina pipette.
+        let scale = if cfg!(target_os = "macos") { 1.0 } else { ctx.pixels_per_point() };
         if let Some(image) = cached_image(ctx, shape, scale) {
             ctx.set_cursor_image(Some(image));
             return CursorIcon::None;
