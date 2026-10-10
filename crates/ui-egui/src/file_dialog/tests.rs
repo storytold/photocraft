@@ -405,3 +405,93 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.documents().len(), 1);
 }
+
+/// The app with a painted layer converted to a smart object and a duplicate instance of it.
+fn smart_app() -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>, [u64; 2]) {
+    let (mut app, open, written) = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    let a = app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let b = app.run("layer.duplicate", json!({"layer": a})).unwrap()["layer"].as_u64().unwrap();
+    app.session.select_layer(photocraft_doc::LayerId(a)).unwrap();
+    (app, open, written, [a, b])
+}
+
+fn smart_source(app: &PhotocraftApp, id: u64) -> photocraft_doc::SmartSource {
+    match &app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+        photocraft_doc::LayerContent::Smart(sm) => sm.source.clone(),
+        other => panic!("not a smart object: {}", other.kind_name()),
+    }
+}
+
+#[test]
+fn replace_contents_picks_a_file_for_every_instance() {
+    let (mut app, open, _, ids) = smart_app();
+    let ctx = egui::Context::default();
+    let before = ids.map(|id| smart_source(&app, id));
+    // Cancelling changes nothing.
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: false, .. }, _)]));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(ids.map(|id| smart_source(&app, id)), before);
+    // A picked file (by contents, as on the web) replaces the contents of both instances.
+    let png = photocraft_io::export(&app.session.active().unwrap().doc, "png", &Default::default()).unwrap().bytes;
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("art.png".into(), png)));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    for id in ids {
+        assert!(matches!(smart_source(&app, id), photocraft_doc::SmartSource::Embedded { ref file_name, .. } if file_name == "art.png"));
+    }
+    // A file that isn't an image is an error, and the contents stay.
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("notes.png".into(), b"not an image".to_vec())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(app.ui.status_error);
+    assert!(matches!(smart_source(&app, ids[1]), photocraft_doc::SmartSource::Embedded { ref file_name, .. } if file_name == "art.png"));
+}
+
+#[test]
+fn export_contents_suggests_the_contents_file_name() {
+    let (mut app, open, written, _) = smart_app();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.exportContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "Layer 1.pcraft"),
+        "{:?}",
+        open.borrow().first().map(|(r, _)| r.clone())
+    );
+    answer(&open, Some(FileDialogAnswer::SaveTo("/out/contents.pcraft".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/out/contents.pcraft"]);
+}
+
+#[test]
+fn convert_to_linked_asks_where_to_write_the_contents() {
+    let (mut app, open, _, ids) = smart_app();
+    let ctx = egui::Context::default();
+    let dir = std::env::temp_dir().join(format!("pcraft-convert-linked-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("linked.pcraft").to_string_lossy().into_owned();
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.convertToLinked", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { .. }, _)]));
+    answer(&open, Some(FileDialogAnswer::SaveTo(path.clone())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(std::fs::metadata(&path).is_ok_and(|m| m.len() > 0));
+    std::fs::remove_dir_all(&dir).ok();
+    for id in ids {
+        assert_eq!(smart_source(&app, id), photocraft_doc::SmartSource::Linked { path: path.clone() });
+    }
+}
