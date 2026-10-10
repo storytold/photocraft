@@ -101,6 +101,7 @@ pub mod menu_catalog;
 pub mod menu_nav;
 pub mod menus;
 pub mod monitor_status;
+pub mod move_box;
 pub mod move_lock;
 pub mod move_mods;
 pub mod move_ui;
@@ -565,6 +566,8 @@ pub struct PhotocraftApp {
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
     /// Guide being dragged (from a ruler or with the Move tool).
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
+    /// Move tool marquee selecting layers (`move_box`).
+    pub(crate) layer_box: Option<move_box::LayerBox>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     /// Type tool layout cache: ((doc, revision, layer), layout).
@@ -677,6 +680,7 @@ impl PhotocraftApp {
             type_layout: None,
             type_transform_preview: None,
             guide_drag: None,
+            layer_box: None,
             crop: Default::default(),
             hover_doc: None,
             clone_preview: None,

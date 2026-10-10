@@ -2893,6 +2893,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // The pending crop frame shows on its own document only, not on the other tiles (#1918).
         let foreign_crop = if app.session.active_index() == Some(idx) { None } else { app.ui.crop_rect.take() };
         draw_drag_preview(app, &painter, &xf);
+        if app.session.active_index() == Some(idx) {
+            crate::move_box::draw(app, &painter, &xf);
+        }
         if foreign_crop.is_some() {
             app.ui.crop_rect = foreign_crop;
         }
@@ -3786,6 +3789,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
+    // The Move tool's marquee selecting layers takes its moves and release unsnapped (move_box.rs).
+    if crate::move_box::pointer(app, raw) {
+        return;
+    }
     // A press anywhere but on the floating piece (or with ⇧ / ⌥, to draw) drops it first; the
     // Move tool (⌘ with a painting tool too, `event_tool`) drags it from anywhere.
     if let ToolEvent::Down { x, y, .. } = raw
@@ -3900,7 +3907,14 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());
-                let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                let picked = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                // No pixels there at all (an empty spot, or off the canvas): drag a marquee that
+                // selects the layers it touches instead (move_box.rs). A fully locked layer's
+                // pixels still say it is locked once the pointer moves (`move_lock`).
+                if picked.is_ok_and(|v| v["layer"].is_null()) && crate::move_box::empty_at(app, [x, y]) {
+                    crate::move_box::begin(app, [x, y], mods.shift);
+                    return;
+                }
                 // Snapping (and the drag's box) started before the pick: point it at what moves.
                 if app.session.active().map(|st| st.selected_layers()) != before {
                     crate::snap_ui::retarget_move(app, [x, y], mods);
