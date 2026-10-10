@@ -382,6 +382,54 @@ impl Stylus {
     }
 }
 
+/// Recover a missing pointer release when egui-winit receives Android
+/// TouchPhase::Cancel. The backend sends PointerGone without PointerButton
+/// release in this case, which can leave the brush's drag held indefinitely.
+///
+/// Only the tracked first touch is the mouse-emulated pointer. Never synthesize
+/// ordinary DOWN/MOVE/UP events: egui-winit already supplies those.
+#[derive(Debug, Default)]
+pub struct AndroidTouchRecovery {
+    primary: Option<(egui::TouchDeviceId, egui::TouchId)>,
+}
+
+impl AndroidTouchRecovery {
+    pub fn repair(&mut self, raw: &mut egui::RawInput) {
+        let modifiers = raw.modifiers;
+        let mut events = Vec::with_capacity(raw.events.len() + 1);
+        for event in raw.events.drain(..) {
+            match &event {
+                egui::Event::Touch { device_id, id, phase: egui::TouchPhase::Start, .. } => {
+                    if self.primary.is_none() {
+                        self.primary = Some((*device_id, *id));
+                    }
+                }
+                egui::Event::Touch { device_id, id, phase: egui::TouchPhase::End, .. } => {
+                    if self.primary == Some((*device_id, *id)) {
+                        self.primary = None;
+                    }
+                }
+                egui::Event::Touch { device_id, id, phase: egui::TouchPhase::Cancel, pos, .. } => {
+                    if self.primary == Some((*device_id, *id)) {
+                        self.primary = None;
+                        events.push(event);
+                        events.push(egui::Event::PointerButton {
+                            pos: *pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers,
+                        });
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            events.push(event);
+        }
+        raw.events = events;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +547,46 @@ mod tests {
         s.select(0, 2);
         let r = s.sample().map_or(-1.0, |p| p.rotation);
         assert!(r.abs() < 1e-3 || (r - 360.0).abs() < 1e-3, "halfway from 350° to 10° is 0°, got {r}");
+    }
+
+    #[test]
+    fn cancelled_primary_touch_releases_the_pointer_without_duplicate_down() {
+        let mut repair = AndroidTouchRecovery::default();
+        let start = touch(egui::TouchPhase::Start, Some(0.3));
+        let cancel = touch(egui::TouchPhase::Cancel, None);
+        let mut raw = egui::RawInput {
+            events: vec![start.clone(), egui::Event::PointerButton {
+                pos: egui::pos2(1.0, 1.0), button: egui::PointerButton::Primary,
+                pressed: true, modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        repair.repair(&mut raw);
+        assert_eq!(raw.events.len(), 2, "normal presses already arrive from winit");
+        raw.events = vec![cancel.clone(), egui::Event::PointerGone];
+        repair.repair(&mut raw);
+        assert_eq!(raw.events.len(), 3);
+        assert!(matches!(raw.events.get(1), Some(egui::Event::PointerButton {
+            button: egui::PointerButton::Primary, pressed: false, ..
+        })), "release must precede PointerGone");
+        raw.events = vec![cancel, egui::Event::PointerGone];
+        repair.repair(&mut raw);
+        assert_eq!(raw.events.len(), 2, "do not release the same contact twice");
+    }
+
+    #[test]
+    fn cancelling_a_secondary_finger_never_releases_the_primary_pointer() {
+        let mut repair = AndroidTouchRecovery::default();
+        let secondary = egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1), id: egui::TouchId(42),
+            phase: egui::TouchPhase::Cancel, pos: egui::pos2(2.0, 2.0), force: None,
+        };
+        let mut raw = egui::RawInput {
+            events: vec![touch(egui::TouchPhase::Start, Some(0.2)), secondary],
+            ..Default::default()
+        };
+        repair.repair(&mut raw);
+        assert_eq!(raw.events.len(), 2);
     }
 
     #[test]
