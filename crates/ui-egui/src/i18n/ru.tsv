@@ -2704,3 +2704,218 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+
+# Dialogs, panels and UI controls
+	(coming soon)	(скоро появится)
+	Add a layer style	Добавить стиль слоя
+	Add a mask  (from the selection; {key} inverts)	Добавить маску  (из выделения; {key} инвертирует)
+	Add an adjustment	Добавить корректировку
+	Add space after paragraph	Добавить отступ после абзаца
+	Add space before paragraph	Добавить отступ перед абзацем
+	Add to selection  ({key})	Добавить к выделению  ({key})
+	Adjustment visible	Коррекция видима
+	Align and distribute	Выровнять и распределить
+	Align horizontal centers	Выровнять центры по горизонтали
+	Align left edges	Выровнять левые края
+	Align right edges	Выровнять правые края
+	Always use pressure for opacity	Всегда использовать нажим для непрозрачности
+	Always use pressure for size	Всегда использовать нажим для размера
+	Angle Gradient	Угловой градиент
+	Auto-Select:	Автовыбор:
+	Baseline shift	Смещение базовой линии
+	Brush Preset picker	Выбор набора кисти
+	Cancel current crop operation  (Esc)	Отменить текущую операцию кадрирования  (Esc)
+	Click sets foreground · right-click sets background	Щелчок задаёт основной цвет · правый щелчок задаёт фоновый
+	Click the first point or press {key} to close · Esc cancels	Щёлкните по первой точке или нажмите {key} для замыкания · Esc отменяет
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Щелчок для увеличения  ·  {key}-щелчок для уменьшения  ·  перетаскивание вправо/влево для масштабирования
+	Clip to layer below	Обрезать по нижележащему слою
+	Color & Swatches	Цвет и образцы
+	Commit current crop operation  ({key})	Применить текущую операцию кадрирования  ({key})
+	Create a new group	Создать новую группу
+	Create a new layer	Создать новый слой
+	Create new document from current state	Создать новый документ из текущего состояния
+	Create new fill or adjustment layer	Создать новый слой-заливку или корректирующий слой
+	Create new snapshot	Создать новый снимок
+	Delete Cropped Pixels	Удалить обрезанные пиксели
+	Delete current state	Удалить текущее состояние
+	Delete layer	Удалить слой
+	Diamond Gradient	Ромбовидный градиент
+	Enable airbrush-style build-up effects	Включить эффекты накопления в стиле аэрографа
+	Filter for adjustment layers	Фильтр корректирующих слоев
+	Filter for pixel layers	Фильтр пиксельных слоев
+	Filter for shape layers	Фильтр слоев-фигур
+	Filter for smart objects	Фильтр смарт-объектов
+	Filter for type layers	Фильтр текстовых слоев
+	Fixed Ratio	Заданные пропорции
+	Fixed Size	Заданный размер
+	Font size	Размер шрифта
+	Hide Properties	Скрыть свойства
+	Horizontal scale	Горизонтальный масштаб
+	Hue/Saturation	Цветовой тон/Насыщенность
+	Indent first line	Отступ первой строки
+	Indent left margin	Отступ слева
+	Indent right margin	Отступ справа
+	Intersect with selection  ({key})	Пересечь с выделением  ({key})
+	Kind	Вид
+	Layout	Макет
+	Leading (set to the font size × auto-leading when Auto)	Интерлиньяж (при «Авто» равен размеру шрифта × авто-интерлиньяж)
+	Linear Gradient	Линейный градиент
+	Link layers	Связать слои
+	Lock	Закрепить
+	Lock all	Закрепить все
+	Lock image pixels	Закрепить пиксели изображения
+	Lock layer	Закрепить слой
+	Lock position	Закрепить положение
+	Lock transparent pixels	Закрепить прозрачные пиксели
+	Metrics	Метрический
+	New document…	Новый документ…
+	New selection	Новое выделение
+	No properties	Нет свойств
+	Optical	Оптический
+	Overlay: Rule of Thirds	Наложение: правило третей
+	PSD	PSD
+	Paper	Бумага
+	Pressure for Opacity	Нажим для непрозрачности
+	Pressure for Size	Нажим для размера
+	Prevent auto-nesting in and out of Artboards and Frames	Запретить автовложение в монтажные области и кадры
+	Quick Actions	Быстрые действия
+	Radial Gradient	Радиальный градиент
+	Reflected Gradient	Зеркальный градиент
+	Reset to defaults	Сбросить к значениям по умолчанию
+	Search commands	Поиск команд
+	Set additional smoothing options	Задать дополнительные параметры сглаживания
+	Show Guides	Показать направляющие
+	Show Transform Controls	Показать элементы управления трансформацией
+	Subtract from selection  ({key})	Вычесть из выделения  ({key})
+	Tolerance	Допуск
+	Tracking (1/1000 em)	Трекинг (1/1000 em)
+	Vertical scale	Вертикальный масштаб
+
+# Presets, options, styles and document properties
+	Error	Ошибка
+	Command	Команда
+	Adjustment layers have nothing to transform	Корректирующим слоям нечего трансформировать
+	Altitude	Высота
+	Android 1080p	Android 1080p
+	Apple Watch 45mm	Apple Watch 45 мм
+	Blues	Синие
+	Choke	Стягивание
+	Comic Book	Комикс
+	Conform	Согласовать
+	Content-Aware Fill needs a selection on a pixel layer	Заливка с учётом содержимого требует выделения на пиксельном слое
+	Could not transform: the layer is empty	Не удалось трансформировать: слой пуст
+	Could not use Perspective Warp: the layer is empty	Не удалось использовать перспективную деформацию: слой пуст
+	Could not use Puppet Warp: no opaque pixels	Не удалось использовать деформацию марионетки: нет непрозрачных пикселей
+	Could not use Puppet Warp: the layer is empty	Не удалось использовать деформацию марионетки: слой пуст
+	Crosswise	Крест-накрест
+	Cyans	Голубые
+	Delete Workspace	Удалить рабочую область
+	Diamond	Ромб
+	Direction	Направление
+	Distance	Расстояние
+	Document Sizes	Размеры документа
+	Down	Вниз
+	Edge	Край
+	Emboss	Тиснение
+	ExtraBold	Особо жирный
+	ExtraLight	Особо светлый
+	Fade	Ослабить
+	Fill Opacity	Непрозрачность заливки
+	From	От
+	Greens	Зелёные
+	Highlights from:	Света от:
+	Indexed	Индексированный
+	Initial Direction	Начальное направление
+	Inner Bevel	Внутренний скос
+	Lab	Lab
+	Landscape, 10 x 8	Альбомная, 10 x 8
+	Landscape, 6 x 4	Альбомная, 6 x 4
+	Landscape, 7 x 5	Альбомная, 7 x 5
+	Layer Count	Количество слоев
+	Layer Knocks Out Drop Shadow	Слой пробивает тень
+	Legal	Legal
+	Letter	Letter
+	Linear Height	Линейная высота
+	Link with Layer	Связать со слоем
+	Lorem Ipsum	Lorem Ipsum
+	Magentas	Пурпурные
+	Measurement Scale	Шкала измерений
+	Measurement Scale Marker	Маркер шкалы измерений
+	My Brushes	Мои кисти
+	Neutrals	Нейтральные
+	New Workspace	Новая рабочая область
+	Original Ratio	Исходные пропорции
+	Out Of Gamut	Вне цветового охвата
+	Outer Bevel	Внешний скос
+	Paints from the document's opening state	Рисует из исходного состояния документа
+	Pillow Emboss	Контурное тиснение
+	Portrait, 4 x 6	Книжная, 4 x 6
+	Portrait, 5 x 7	Книжная, 5 x 7
+	Postcard	Открытка
+	Poster	Плакат
+	Pro (Dark)	Pro (тёмная)
+	Pro (Medium Gray)	Pro (средне-серая)
+	Radial	Радиальный
+	Ratio	Пропорции
+	Reds	Красные
+	Reflected	Зеркальный
+	Sampled Colors	Выбранные цвета
+	Save Pixel Aspect Ratio	Сохранить пропорции пикселя
+	Select Data Points	Выбрать точки данных
+	SemiBold	Полужирный
+	Shadows up to:	Тени до:
+	Show Extras Options	Параметры отображения дополнительных элементов
+	Soften	Смягчение
+	Source: set	Источник: задан
+	Spread	Размах
+	Square, 12 x 12	Квадрат, 12 x 12
+	Square, 5 x 5	Квадрат, 5 x 5
+	Studio (Dark)	Студия (тёмная)
+	Studio (Light)	Студия (светлая)
+	Tabloid	Таблоид
+	Web Large	Web (большой)
+	Web Minimum	Web (минимальный)
+	Web Most Common	Web (самый частый)
+	WebP (lossless)	WebP (без потерь)
+	Yellows	Жёлтые
+	Doc: {w} × {h} px	Док: {w} × {h} пикс.
+	Frame {current} / {total}	Кадр {current} / {total}
+
+# Rebase updates: Brushes, Vector Paths, Text and Dialog controls
+	Create new brush from the current settings	Создать кисть с текущими настройками
+	Delete brush	Удалить кисть
+	Import Brushes… (.abr)	Импортировать кисти… (.abr)
+	System Info	Информация о системе
+	Create Warped Text	Создать деформированный текст
+	Rasterize Smart Object	Растрировать смарт-объект
+	Rasterize Fill Content	Растрировать содержимое заливки
+	Toggle the Brush Settings panel  (F5)	Переключить панель «Настройки кисти»  (F5)
+	Create new brush preset from the current settings	Создать набор кисти с текущими настройками
+	Brush Settings…  (F5): every option of this brush	Настройки кисти…  (F5): все параметры этой кисти
+	Gradient Options	Параметры градиента
+	Reset Alignment	Сбросить выравнивание
+	Type Options	Параметры текста
+	Horizontal type	Горизонтальный текст
+	Vertical type	Вертикальный текст
+	Fill path with foreground color	Выполнить заливку контура основным цветом
+	Stroke path with brush	Выполнить обводку контура кистью
+	Load path as a selection	Загрузить контур как выделенную область
+	Make work path from selection	Создать рабочий контур из выделенной области
+	Add vector mask	Добавить векторную маску
+	Delete path	Удалить контур
+	Delete vector mask	Удалить векторную маску
+@id	edit.purge.undo	История отмен
+cameraRaw	Tint	Оттенок
+cameraRaw	Temperature	Цветовая температура
+
+# Noise and Sharpen filters
+	Distribution	Распределение
+	Uniform	Равномерное
+	Gaussian	По Гауссу
+	Monochromatic	Монохромный
+	Seed	Случайное число
+	Strength	Интенсивность
+	Reduce Color Noise	Уменьшить цветной шум
+	Remove Jpeg Artifact	Удалить артефакты JPEG
+	Sharpen Details	Повысить резкость деталей
+	Reduce Noise	Уменьшить шум
