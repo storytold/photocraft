@@ -493,6 +493,8 @@ fn selected_pixels_move_off_the_background_but_not_off_a_fully_locked_layer() {
         assert!(photocraft_engine::float_cmds::floating(app.session.active().unwrap()).is_none(), "{tool:?}");
         app.ui.dialogs.clear();
     }
+}
+
 /// Photoshop's cursor over a selection: the move cursor where a marquee press moves the outline,
 /// scissors where ⌘ (or the Move tool) cuts the selected pixels, a double arrow where ⌥ copies
 /// them, a hollow arrowhead while they are dragged, and a plain arrow over the floating piece.
