@@ -233,6 +233,12 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
     }
+    if (has_extension(name, "svg") || has_extension(name, "svgz"))
+        && photocraft_codecs::detect(bytes).is_none()
+        && let Some(imported) = raster_documents::import_wrapper(name, bytes)?
+    {
+        return Ok(imported);
+    }
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }

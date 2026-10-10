@@ -4,7 +4,7 @@ use crate::{ExportOptions, ExportResult, IoError};
 use base64::Engine;
 use photocraft_codecs::{ChannelLayout, Format, SampleType};
 use photocraft_doc::Document;
-use std::io::Write;
+use std::io::{Read, Write};
 fn error(s: impl std::fmt::Display) -> IoError {
     IoError::Unsupported(format!("raster document export: {s}"))
 }
@@ -15,9 +15,12 @@ pub(crate) fn export(doc: &Document, ext: &str, opts: &ExportOptions) -> Result<
     let mut warnings = png.warnings;
     warnings.push(format!("{} output embeds one raster image; editable layers, paths and fonts are not retained", ext.to_ascii_uppercase()));
     let bytes = if ext == "svg" || ext == "svgz" {
+        if png.bytes.len() > 96 << 20 {
+            return Err(error("embedded SVG image exceeds 128 MiB XML budget"));
+        }
         let encoded = base64::engine::general_purpose::STANDARD.encode(&png.bytes);
         let source = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"><image width=\"{w}\" height=\"{h}\" xlink:href=\"data:image/png;base64,{encoded}\"/></svg>"
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" data-photocraft-raster=\"1\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"><image width=\"{w}\" height=\"{h}\" xlink:href=\"data:image/png;base64,{encoded}\"/></svg>"
         );
         if ext == "svgz" {
             let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -106,4 +109,62 @@ fn pdf(image: &photocraft_codecs::Image, points: (f64, f64), embed_icc: bool) ->
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n", objects.len() + 1).as_bytes());
     Ok(out)
+}
+
+/// Reopen PhotoCraft's explicitly marked minimal SVG wrapper through its PNG payload. This
+/// retains sample depth, ICC and DPI instead of re-rasterising a known raster image through SVG.
+/// General SVG documents remain the responsibility of the full SVG importer.
+pub(crate) fn import_wrapper(name: &str, bytes: &[u8]) -> Result<Option<crate::ImportResult>, IoError> {
+    const MAX: u64 = 128 << 20;
+    let inflated;
+    let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
+        inflated = {
+            let mut out = Vec::new();
+            flate2::read::MultiGzDecoder::new(bytes).take(MAX + 1).read_to_end(&mut out).map_err(error)?;
+            out
+        };
+        if inflated.len() as u64 > MAX {
+            return Err(error("SVGZ exceeds decompression budget"));
+        }
+        inflated.as_slice()
+    } else {
+        bytes
+    };
+    let marker = b"data-photocraft-raster";
+    if !bytes.windows(marker.len()).any(|b| b == marker) {
+        return Ok(None);
+    }
+    if bytes.len() as u64 > MAX {
+        return Err(error("SVG exceeds XML budget"));
+    }
+    let source = std::str::from_utf8(bytes).map_err(error)?;
+    let tree = roxmltree::Document::parse_with_options(source, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 32 }).map_err(error)?;
+    let root = tree.root_element();
+    if !root.has_tag_name("svg") || root.attribute("data-photocraft-raster") != Some("1") {
+        return Ok(None);
+    }
+    if root.attributes().any(|a| !matches!(a.name(), "width" | "height" | "viewBox" | "data-photocraft-raster")) {
+        return Err(error("unexpected SVG wrapper attribute"));
+    }
+    let children = root.children().filter(|n| n.is_element()).collect::<Vec<_>>();
+    let image = children.first().filter(|n| n.has_tag_name("image")).ok_or_else(|| error("missing SVG image"))?;
+    if children.len() != 1 || image.attributes().any(|a| !matches!(a.name(), "width" | "height" | "href")) {
+        return Err(error("unexpected SVG wrapper content"));
+    }
+    let source = image.attribute(("http://www.w3.org/1999/xlink", "href")).ok_or_else(|| error("missing embedded image"))?;
+    let payload = source.strip_prefix("data:image/png;base64,").ok_or_else(|| error("wrapper must embed PNG"))?;
+    let png = base64::engine::general_purpose::STANDARD.decode(payload).map_err(error)?;
+    let limits = photocraft_codecs::Limits { max_alloc: 256 << 20, ..Default::default() };
+    let pixels = photocraft_codecs::decode_as_with(Format::Png, &png, &photocraft_codecs::DecodeOptions { limits, ..Default::default() })?;
+    for node in [root, *image] {
+        for (key, size) in [("width", pixels.width()), ("height", pixels.height())] {
+            if node.attribute(key).and_then(|v| v.parse::<u32>().ok()) != Some(size) {
+                return Err(error("SVG wrapper dimensions disagree with PNG"));
+            }
+        }
+    }
+    if root.attribute("viewBox") != Some(format!("0 0 {} {}", pixels.width(), pixels.height()).as_str()) {
+        return Err(error("SVG wrapper viewBox disagrees"));
+    }
+    crate::flat::image_to_document(name, &pixels).map(Some)
 }

@@ -154,7 +154,7 @@ The eleven new standalone codecs are PCX, SGI, Sun Raster, Farbfeld, WBMP, XBM, 
 GBR and GIMP PAT. Each declares supported layouts/depths and participates in the existing depth,
 alpha, ICC and metadata warning pipeline. No native codec library or new unsafe code is required.
 Decode support covers the emitted baseline plus the variants listed above, not every historical
-variant. XPM supports RGB hex colours and a small basic named-colour set; X10 short-packed XBM,
+variant. XPM supports RGB hex colours and a small basic named-colour set, with a one-million-entry palette cap; X10 short-packed XBM,
 compressed Sun Raster, palettized low-bit PCX and non-PNG ICNS representations remain unsupported.
 ICNS rejects unsuitable dimensions instead of silently resizing; CUR stores one image and uses
 an explicit default hotspot. XPM and monochrome formats lose transparency/colour precision as warned.
@@ -182,3 +182,28 @@ Public format specifications used for clean-room implementation:
   [layer stack](https://www.openraster.org/baseline/layer-stack-spec.html).
 - [SVG image element](https://www.w3.org/TR/SVG11/struct.html) and
   [Adobe PDF reference](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.6.pdf).
+
+### Local release export cost
+
+Apple M1 Max, one release run of `cargo run --release -p photocraft-codecs --example export_bench`,
+24 MP opaque RGBA8 with a repeating 256-colour pattern. Times measure the standalone encoder,
+including format conversion, excluding composition, colour management and disk writes. This is
+an initial measurement, not a before/after speedup or a representative photographic XPM benchmark.
+
+| Format | Encode ms | Output bytes |
+|---|---:|---:|
+| PCX | 288.69 | 90,000,128 |
+| SGI | 64.48 | 96,000,512 |
+| Sun Raster | 153.17 | 72,000,032 |
+| Farbfeld | 91.98 | 192,000,016 |
+| WBMP | 91.04 | 3,000,006 |
+| XBM | 143.53 | 15,004,107 |
+| XPM | 1,145.66 | 192,021,700 |
+| GBR | 2.29 | 96,000,039 |
+| GIMP PAT | 2.27 | 96,000,035 |
+| CUR (256 × 256) | 0.12 | 270,398 |
+| ICNS (1024 × 1024) | 5.23 | 6,539 |
+
+PhotoCraft's explicitly marked raster SVG wrappers reopen through the embedded PNG, retaining
+pixel depth, ICC and DPI; other SVG drawings continue through the existing vector importer.
+The fork port supports reopening these raster wrappers; its older tree has no general SVG importer.

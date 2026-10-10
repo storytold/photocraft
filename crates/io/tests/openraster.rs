@@ -96,3 +96,10 @@ fn unsupported_backdrop_features_export_a_warned_visual_composite() {
     assert_eq!(opened.layers.len(), 1);
     assert_eq!(photocraft_compose::flatten(&opened).to_rgba8().pixels, photocraft_compose::flatten(&original).to_rgba8().pixels);
 }
+
+#[test]
+fn invalid_layer_names_fail_before_creating_an_unreadable_file() {
+    let mut original = doc(SampleType::U8);
+    original.layers[0].name = "bad\0name".into();
+    assert!(export(&original, "ora", &Default::default()).is_err());
+}

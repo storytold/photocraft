@@ -12,8 +12,11 @@ const MAX_ENTRIES: usize = 4096;
 fn bad(e: impl std::fmt::Display) -> IoError {
     IoError::Unsupported(format!("OpenRaster: {e}"))
 }
-fn xml(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+fn xml(s: &str) -> Result<String, IoError> {
+    if s.len() > 1 << 20 || s.chars().any(|c| !matches!(c,'\t'|'\n'|'\r'|' '..='\u{d7ff}'|'\u{e000}'..='\u{fffd}'|'\u{10000}'..='\u{10ffff}')) {
+        return Err(bad("layer name contains invalid XML characters or exceeds name budget"));
+    }
+    Ok(s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;"))
 }
 fn blend(b: B) -> Option<&'static str> {
     Some(match b {
@@ -151,7 +154,7 @@ fn export_layers(
         }
         let attrs = format!(
             "name=\"{}\" opacity=\"{}\" visibility=\"{}\" composite-op=\"{}\"",
-            xml(&layer.name),
+            xml(&layer.name)?,
             layer.opacity,
             if layer.visible { "visible" } else { "hidden" },
             blend(layer.blend).ok_or_else(|| bad("unsupported blend mode"))?
