@@ -50,9 +50,9 @@ note = "fill_ui.rs dialog over edit.fill (fill_cmds.rs): all contents, mode, opa
 [[item]]
 id = "TOOL-213-7"
 target = "Live stroke preview for every brush-based retouch tool"
-status = "missing"
+status = "done"
 issue = 213
-note = "Live stroke only for Brush and Eraser (canvas.rs:1684)"
+note = "canvas.rs strokes_live covers Brush, Pencil, Eraser, Blur, Sharpen, Smudge, Dodge, Burn and Sponge, and live_retouch_command adds the Clone Stamp, Healing Brush and History Brush (LiveRetouch; the Healing Brush shows its texture while drawing and blends on release)"
 
 [[item]]
 id = "TOOL-213-8"
@@ -141,9 +141,9 @@ note = "move_mods.rs covers Shift/Alt/arrows only"
 [[item]]
 id = "TOOL-214-5"
 target = "Right-click menu during Free Transform (scale, rotate, skew, warp, flip, rotate 90/180)"
-status = "missing"
+status = "partial"
 issue = 214
-note = "No context menu in canvas.rs or transform_tool.rs"
+note = "canvas_tool_menu.rs TRANSFORM_MENU opens on a right click during a transform with Free Transform, Scale, Rotate, Skew, Distort, Perspective and Warp, and the current mode is checked; right_click_while_transforming_switches_the_mode and the two warp-row tests cover it. Flip and Rotate 90/180 rows are still missing"
 
 [[item]]
 id = "TOOL-214-6"
@@ -162,9 +162,9 @@ note = "edit.contentAwareScale (edit_menu_cmds.rs:899) behind a parameter dialog
 [[item]]
 id = "TOOL-214-8"
 target = "A measured ruler angle prefills Image Rotation > Arbitrary (0.01 deg)"
-status = "missing"
+status = "done"
 issue = 214
-note = "Arbitrary rotation is a generic dialog; ruler only feeds straighten"
+note = "analysis_ui.rs: image.rotation.arbitrary opens seeded with the ruler angle and the direction that straightens it; arbitrary_rotation_starts_at_the_ruler_angle checks 5.7106 deg within 1e-3 and cw/ccw for three measured lines"
 
 [[item]]
 id = "TOOL-214-9"

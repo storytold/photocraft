@@ -50,9 +50,9 @@ note = "No update check in crates"
 [[item]]
 id = "DIST-220-2"
 target = "Windows ARM64 (aarch64-pc-windows-msvc) in the release matrix, signed like x64"
-status = "missing"
+status = "done"
 issue = 220
-note = "release.yml:113-114 only x86_64 and i686 msvc"
+note = "release.yml has { arch: arm64, target: aarch64-pc-windows-msvc } in the Windows matrix, and .github/workflows/windows-arm64.yml packages that MSI, installs it on a Windows 11 ARM64 runner, checks the installed binaries are ARM64 and runs the CLI natively before uninstalling. Signing takes the same path as x64: the secrets are optional and a missing one produces an unsigned artifact and a warning (see DIST-2)"
 
 [[item]]
 id = "DIST-220-3"
