@@ -241,10 +241,10 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
     ran
 }
 
-/// Clear's key (Delete / Backspace) with nothing selected deletes the selected layers, of any
-/// kind, as in Photoshop (#1077): Edit › Clear only clears pixel layers, so on an adjustment, fill,
-/// type or shape layer the key did nothing. A selection, a targeted layer mask, a single channel
-/// or Quick Mask keeps Clear.
+/// Clear's key (Delete / Backspace) deletes the selected layers, of any kind, as in Photoshop
+/// (#1077, #2279): Edit › Clear only clears pixel layers, so on an adjustment, fill, type or
+/// shape layer the key did nothing. A canvas selection doesn't change that. A targeted layer
+/// mask, a single channel or Quick Mask keeps Clear.
 fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     if id != "edit.clear" {
         return id;
@@ -252,7 +252,7 @@ fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     let Some(st) = app.session.active() else { return id };
     let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
     let mask = app.ui.mask_target && st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
-    if st.doc.selection.is_some() || !composite || mask {
+    if !composite || mask {
         return id;
     }
     "layer.delete".into()

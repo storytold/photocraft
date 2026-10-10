@@ -140,6 +140,11 @@ fn same(shown: &str, bound: &str) -> bool {
     shown == bound || crate::menus::panel_alias(shown) == Some(bound) || crate::menus::panel_alias(bound) == Some(shown)
 }
 
+/// Delete is Edit › Clear's key, but in the composite view it deletes the layer (#2279).
+fn dispatches(shown: &str, bound: &str) -> bool {
+    same(shown, bound) || (shown == "edit.clear" && bound == "layer.delete")
+}
+
 /// Every shortcut shown in the menus (and the shell's unlisted ones), with whether it is live.
 fn displayed(app: &PhotocraftApp) -> Vec<(String, String, bool)> {
     let mut v: Vec<(String, String, bool)> = crate::menus::menu_items(app)
@@ -207,8 +212,8 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
             }
             let enabled = items.iter().find(|i| i.id == id).map_or_else(|| crate::menus::is_enabled(h.state(), &id), |i| i.enabled);
             match log.as_slice() {
-                [(bound, Outcome::Ran)] if same(&id, bound) && enabled => {}
-                [(bound, Outcome::Disabled(why))] if same(&id, bound) && !enabled && !why.is_empty() => {}
+                [(bound, Outcome::Ran)] if dispatches(&id, bound) && enabled => {}
+                [(bound, Outcome::Disabled(why))] if dispatches(&id, bound) && !enabled && !why.is_empty() => {}
                 other => failures.push(format!("{place:?}: {sc} ({id}, menu enabled: {enabled}) -> {other:?}")),
             }
         }
@@ -458,6 +463,46 @@ fn delete_without_a_selection_deletes_the_selected_layer() {
     }
 }
 
+/// #2279: a canvas selection doesn't change what Delete / Backspace do: the active layer goes,
+/// whatever its kind. Pixel layers are deleted, not cleared.
+#[test]
+fn delete_with_a_selection_deletes_the_active_layer_of_any_kind() {
+    for key in ["Delete", "Backspace"] {
+        for kind in ["pixel", "text", "smart object"] {
+            let mut h = harness();
+            put_focus(&mut h, Place::Canvas);
+            let s = &mut h.state_mut().session;
+
+            let mut layer = s.active().unwrap().active_layer.unwrap();
+            if kind != "pixel" {
+                layer = s
+                    .active()
+                    .unwrap()
+                    .doc
+                    .walk()
+                    .into_iter()
+                    .find(|(_, _, l)| matches!(l.content, LayerContent::Text(_)))
+                    .map(|(_, _, l)| l.id)
+                    .expect("test document should contain a text layer");
+            }
+            if kind == "smart object" {
+                let r = s.execute("layer.smartObjects.convertToSmartObject", json!({"layer": layer.0})).unwrap();
+                layer = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+            }
+            s.execute("layer.select", json!({"layer": layer.0})).unwrap();
+            assert!(s.active().unwrap().doc.selection.is_some(), "{kind} {key}: the test must keep the canvas selection");
+
+            h.run_steps(2);
+            let before = names(&h);
+            press(&mut h, key);
+
+            assert_eq!(logged(&h), ["layer.delete"], "{kind} {key}");
+            assert!(h.state().session.active().unwrap().doc.layer(layer).is_none(), "{kind} {key}: the layer is gone");
+            assert_eq!(names(&h).len(), before.len() - 1, "{kind} {key}: only it");
+        }
+    }
+}
+
 /// Every selected layer goes, pixel layers too (Photoshop deletes, it doesn't clear the layer).
 #[test]
 fn delete_without_a_selection_deletes_every_selected_layer() {
@@ -475,18 +520,6 @@ fn delete_without_a_selection_deletes_every_selected_layer() {
     let doc = &h.state().session.active().unwrap().doc;
     assert!(doc.layer(paint).is_none() && doc.layer(adj).is_none(), "both selected layers are gone");
     assert_eq!(names(&h).len(), n - 2);
-}
-
-/// A selection keeps Edit › Clear: the selected pixels go, the layer stays.
-#[test]
-fn delete_with_a_selection_clears_it() {
-    let mut h = harness();
-    put_focus(&mut h, Place::Canvas);
-    let before = names(&h);
-    assert!(h.state().session.active().unwrap().doc.selection.is_some());
-    press(&mut h, "Delete");
-    assert_eq!(logged(&h), ["edit.clear"]);
-    assert_eq!(names(&h), before, "no layer was deleted");
 }
 
 #[test]
