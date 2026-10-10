@@ -751,6 +751,16 @@ pub fn ranged_lut(contour: &Contour, range: f32) -> Option<Vec<f32>> {
     )
 }
 
+/// The bevel Contour element's height transfer: the contour alone. Unlike a glow's, its Range is
+/// not a `v / range` stretch: that flattened a Linear contour at the default 50 % to a bevel half
+/// as wide as Photoshop's (a real 18 px smooth inner bevel at 136 % depth: top-edge highlight gone
+/// 15 px in, Photoshop's still 0.19 at 16 px), and dropping it lowers the bad pixels of every
+/// contour oracle (bevel-inner-contour-ramp-peak 25.9 → 21.8 %, -double-ring-aa-r70 25.2 → 21.0 %,
+/// bevel-pillow-chisel-hard-gloss-and-contour 11.4 → 7.2 %). What Range does instead is still open.
+pub fn bevel_contour_lut(c: &photocraft_doc::BevelContour) -> Vec<f32> {
+    contour_lut(&c.contour).unwrap_or_else(|| (0..4096).map(|k| k as f32 / 4095.0).collect())
+}
+
 fn apply_lut(m: Map, l: Option<Vec<f32>>) -> Map {
     match l {
         None => m,
@@ -1316,9 +1326,9 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
         }
         h
     };
-    // Contour element: the height profile through the contour over its range.
+    // Contour element: the height profile through the contour.
     if let Some(c) = &b.contour {
-        h = apply_lut(h, Some(ranged_lut(&c.contour, c.range).unwrap_or_else(|| (0..4096).map(|k| k as f32 / 4095.0).collect())));
+        h = apply_lut(h, Some(bevel_contour_lut(c)));
     }
     // Texture element: the pattern's luminance as extra height, scaled so a full-contrast step
     // at 100 % depth slopes like the bevel at its depth.
@@ -2497,6 +2507,16 @@ mod tests {
         let at = |x: usize, y: usize| m[0].v[y * 48 + x];
         // A constant slope: equal highlight along the top facet.
         assert!(at(24, 12) > 0.1 && (at(24, 12) - at(24, 13)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn linear_bevel_contour_leaves_the_height_alone_at_any_range() {
+        for range in [0.5, 0.7, 1.0] {
+            let lut = bevel_contour_lut(&photocraft_doc::BevelContour { contour: Contour::Linear, range, anti_alias: false });
+            for v in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+                assert!((lut_at(&lut, v) - v).abs() < 1e-3, "range {range}: {v} -> {}", lut_at(&lut, v));
+            }
+        }
     }
 
     #[test]
