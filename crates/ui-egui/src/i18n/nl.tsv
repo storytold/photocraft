@@ -35,6 +35,8 @@
 	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Remove from Recent	Verwijderen uit recente bestanden
+	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
 	Minimize	Minimaliseren
 	Maximize	Maximaliseren
@@ -3606,3 +3608,4 @@ cameraRaw	Whites	Witten
 	Color stops	Kleurstops
 
 	Opacity stops	Dekkingsstops
+	PhotoCraft — Screen Color Picker	PhotoCraft — Schermkleurkiezer

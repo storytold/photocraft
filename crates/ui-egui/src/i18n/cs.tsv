@@ -47,6 +47,8 @@
 	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
+	Remove from Recent	Odebrat z nedávných
+	Remove {name} from Recent	Odebrat {name} z nedávných
 	Close	Zavřít
 	Minimize	Minimalizovat
 	Maximize	Maximalizovat
@@ -1547,6 +1549,7 @@
 	Blur Tool	Nástroj rozostření
 	Bold	Tučné
 	Brush	Štětec
+	Pencil	Tužka
 	Brush Pose	Poloha štětce
 	Brush Tip Shape	Tvar hrotu štětce
 	Brush Tool	Nástroj štětec
@@ -2335,6 +2338,7 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+	PhotoCraft — Screen Color Picker	PhotoCraft — Výběr barvy obrazovky
 
 	Rasterize svg groups deeper than	Rasterizovat skupiny SVG hlubší než tato úroveň
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 vypne tento práh; skupiny SVG vnořené hlouběji než 100 úrovní se rastrují vždy.

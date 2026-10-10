@@ -770,19 +770,36 @@ impl OutputClaims {
     }
 }
 
-fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
+fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let steps =
+    let mut steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    // Each result goes to the destination folder, which overrides the action's recorded Save /
+    // Save As steps (Photoshop's "Override Action 'Save As' Commands"). Recorded view steps
+    // (zoom, fit) don't change the output, so they are skipped (#2752).
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id));
     if let Some((id, _)) = steps.iter().find(|(id, _)| crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
     let inputs = batch_inputs(p, cmd)?;
     let output = str_param(p, "output", cmd)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
+    // Steps that call another action play it from the caller's actions; the playback stack comes
+    // along so an action that batches itself is caught as a recursive call.
+    let actions = crate::actions_cmds::ActionState {
+        list: s.actions.list.clone(),
+        playing: s.actions.playing,
+        playback_stack: s.actions.playback_stack.clone(),
+        ..Default::default()
+    };
     let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
+        scratch.actions = actions.clone();
         for (id, params) in &steps {
-            scratch.execute(id, params.clone())?;
+            let r = scratch.execute(id, params.clone())?;
+            // A failed step inside a called action makes this file an error, not a saved result.
+            if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
+                return Err(EngineError::Other(error));
+            }
         }
         Ok(())
     });

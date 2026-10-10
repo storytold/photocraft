@@ -40,6 +40,8 @@
 	Right	Правий
 	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
+	Remove from Recent	Вилучити з нещодавніх
+	Remove {name} from Recent	Вилучити {name} з нещодавніх
 	Close	Закрити
 	Minimize	Згорнути
 	Maximize	Розгорнути
@@ -3534,3 +3536,4 @@ cameraRaw	Masking	Маскування
 	Color stops	Колірні точки
 
 	Opacity stops	Точки непрозорості
+	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана

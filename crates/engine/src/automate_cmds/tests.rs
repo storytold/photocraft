@@ -114,6 +114,21 @@ fn droplets_are_written_and_run() {
 }
 
 #[test]
+fn batch_and_droplets_skip_recorded_view_steps() {
+    let dir = tmp("view-steps");
+    images(&dir, 1, 40, 20);
+    let steps = json!([["view.zoomIn", {}], ["image.imageRotation.90cw", {}], ["view.fitOnScreen", {}]]);
+    let mut s = Session::new();
+    let r = s.execute("file.automate.batch", json!({"steps": steps, "input": dir.clone(), "output": format!("{dir}/batch"), "format": "png"})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let out = photocraft_codecs::decode(&std::fs::read(format!("{dir}/batch/img0.png")).unwrap()).unwrap();
+    assert_eq!(out.dimensions(), (20, 40));
+    let r = s.execute("file.automate.createDroplet", json!({"path": format!("{dir}/Rotate"), "steps": steps})).unwrap();
+    let v: Value = serde_json::from_slice(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(v["action"]["steps"], json!([["image.imageRotation.90cw", {}]]));
+}
+
+#[test]
 fn statistics_makes_a_stack_mode_smart_object() {
     let dir = tmp("stats");
     let files = images(&dir, 3, 16, 12);
@@ -198,4 +213,33 @@ fn contact_sheet_places_thumbnails_with_captions() {
         let d = &s.documents()[r["documents"][0].as_u64().unwrap() as usize].doc;
         assert_eq!(d.layers.len(), 1);
     }
+}
+
+#[test]
+fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("nested-failure");
+    images(&dir, 1, 8, 4);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.actions.list.push(Action { name: "Rotate".into(), steps: vec![("image.imageRotation.90cw".into(), json!({}))] });
+    s.actions.list.push(Action { name: "Bad".into(), steps: vec![("layer.delete".into(), json!({"layer": 999_999}))] });
+    // A script stops at the failed call and reports it.
+    let r = s.execute("file.scripts.browse", json!({"steps": [["actions.play", {"action": "Bad"}], ["image.imageRotation.90cw", {}]]})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(r["results"].as_array().unwrap().len(), 1);
+    // Batch plays called actions, and a failure inside one is a file error, not a saved result.
+    let batch = |s: &mut Session, action: &str| {
+        let p = json!({"steps": [["actions.play", {"action": action}]], "input": dir.clone(), "output": format!("{dir}/{action}"), "format": "png"});
+        s.execute("file.automate.batch", p).unwrap()
+    };
+    let r = batch(&mut s, "Rotate");
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let r = batch(&mut s, "Bad");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("no such layer"), "{r}");
+    // An action that batches itself stops as a recursive call instead of overflowing the stack.
+    let inner = json!({"steps": [["actions.play", {"action": "Loop"}]], "input": dir.clone(), "output": format!("{dir}/inner"), "format": "png"});
+    s.actions.list.push(Action { name: "Loop".into(), steps: vec![("file.automate.batch".into(), inner)] });
+    batch(&mut s, "Loop");
 }

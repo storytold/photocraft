@@ -107,7 +107,14 @@ fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
         match s.execute(id, params.clone()) {
-            Ok(r) => results.push(json!({"command": id, "result": r})),
+            // A called action reports a failed step inside an `Ok`; it stops the script too.
+            Ok(r) => match crate::actions_cmds::nested_failure(id, &r) {
+                Some(error) => {
+                    results.push(json!({"command": id, "result": r, "error": error}));
+                    break;
+                }
+                None => results.push(json!({"command": id, "result": r})),
+            },
             Err(e) => {
                 results.push(json!({"command": id, "error": e.to_string()}));
                 break;
@@ -284,7 +291,9 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;
     let steps_v = p.get("steps").or_else(|| p.get("action")).ok_or_else(|| bad(cmd, "missing \"steps\" (the action to run)"))?;
-    let steps = parse_steps(steps_v, cmd)?;
+    let mut steps = parse_steps(steps_v, cmd)?;
+    // The droplet's output folder replaces recorded saves, and view steps don't apply, as in batch.
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id));
     check_known(&steps, cmd)?;
     let path = if path.ends_with(".pcdroplet") || path.ends_with(".json") { path.to_string() } else { format!("{path}.pcdroplet") };
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));

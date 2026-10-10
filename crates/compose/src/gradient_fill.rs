@@ -103,15 +103,32 @@ pub fn dither(c: &mut [f32; 4], x: i32, y: i32) {
 }
 
 fn dither_channels(c: &mut [f32], x: i32, y: i32) {
+    dither_channels_to(c, x, y, None);
+}
+
+/// [`dither_channels`], then rounded to `quantum` steps when given. The noise is a fraction of a
+/// level that only means something once the value lands on a level, as it does in a painted
+/// gradient: left in float, a dark channel lifted 0.002 above black is still 0.002 to the next
+/// blend, and Color Dodge under a bright layer turns that into visible speckle (#2755).
+fn dither_channels_to(c: &mut [f32], x: i32, y: i32, quantum: Option<f32>) {
     let n = (photocraft_color::dither_noise(x, y) - 0.5) / 255.0;
     for ch in c {
         *ch = (*ch + n).clamp(0.0, 1.0);
+        if let Some(q) = quantum {
+            *ch = (*ch * q + 0.5).floor() / q;
+        }
     }
 }
 
 /// Renders a gradient fill over `rect`, laid out in `frame` (row-major RGBA).
 pub fn render(f: &Fill, rect: Rect, frame: Rect) -> Vec<[f32; 4]> {
-    render_ramp(f, rect, frame, Ramp::new(f))
+    render_quantized(f, rect, frame, None)
+}
+
+/// [`render`] with dithered pixels rounded to `quantum` steps (the document depth's levels, see
+/// [`crate::adjustment_quantum`]), as a gradient painted into a layer of that depth stores them.
+pub fn render_quantized(f: &Fill, rect: Rect, frame: Rect, quantum: Option<f32>) -> Vec<[f32; 4]> {
+    render_ramp(f, rect, frame, Ramp::new(f), quantum)
 }
 
 /// Native CMYK solid/gradient pixels at document depth; patterns return `None`.
@@ -125,7 +142,7 @@ pub fn render_cmyk_fill(f: &Fill, rect: Rect, frame: Rect, depth: photocraft_col
     match f {
         Fill::Solid(c) => surface.fill_rect(rect, &native(*c)),
         Fill::Gradient { .. } => {
-            let px = render_ramp(f, rect, frame, Ramp::with_colors(f, native));
+            let px = render_ramp(f, rect, frame, Ramp::with_colors(f, native), None);
             surface.write_region(rect, px.as_flattened());
         }
         Fill::Pattern { .. } => return None,
@@ -134,7 +151,7 @@ pub fn render_cmyk_fill(f: &Fill, rect: Rect, frame: Rect, depth: photocraft_col
     Some(surface)
 }
 
-fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>) -> Vec<[f32; N]> {
+fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<Ramp<N>>, quantum: Option<f32>) -> Vec<[f32; N]> {
     let mut px = vec![[0.0f32; N]; rect.width() as usize * rect.height() as usize];
     let (Some(ramp), Fill::Gradient { angle, scale, style, reverse, offset, dither: dith, .. }) = (ramp, f) else { return px };
     let w = rect.width() as usize;
@@ -149,7 +166,7 @@ fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<R
             let t = crate::effects::gradient_t(*style, *angle, *scale, *reverse, *offset, frame, x as f32 + 0.5, y as f32 + 0.5);
             *p = ramp.sample(t);
             if *dith {
-                dither_channels(p.get_mut(..N.saturating_sub(1)).unwrap_or_default(), x, y);
+                dither_channels_to(p.get_mut(..N.saturating_sub(1)).unwrap_or_default(), x, y, quantum);
             }
         }
     };
