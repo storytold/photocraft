@@ -3499,3 +3499,9 @@ curves	Smooth	Glätten
 	the macOS Keychain	der macOS-Schlüsselbundverwaltung
 	Windows Credential Manager	der Windows-Anmeldeinformationsverwaltung
 	memory until PhotoCraft quits	dem Arbeitsspeicher, bis PhotoCraft beendet wird
+# Generative Fill variations (#41)
+	Variations	Varianten
+	No prompt: continues the image	Keine Beschreibung: setzt das Bild fort
+	Sends the same area and prompt to {name} again for three more.	Sendet denselben Bereich und dieselbe Beschreibung erneut an {name}, für drei weitere.
+	Generate More	Weitere generieren
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Jedes Generative Füllen erzeugt drei Varianten und sendet daher drei Anfragen, die jeweils über Ihren Schlüssel abgerechnet werden.

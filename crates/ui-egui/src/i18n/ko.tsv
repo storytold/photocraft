@@ -3694,3 +3694,9 @@ curves	Smooth	매끄럽게
 	the macOS Keychain	macOS 키체인
 	Windows Credential Manager	Windows 자격 증명 관리자
 	memory until PhotoCraft quits	PhotoCraft를 종료할 때까지 메모리
+# Generative Fill variations (#41)
+	Variations	변형
+	No prompt: continues the image	설명 없음: 이미지를 이어 채움
+	Sends the same area and prompt to {name} again for three more.	같은 영역과 설명을 {name}에 다시 보내 세 개를 더 만듭니다.
+	Generate More	더 생성
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	생성형 채우기는 매번 변형 세 개를 만들므로 요청을 세 번 보내며, 각 요청은 사용자의 키로 청구됩니다.

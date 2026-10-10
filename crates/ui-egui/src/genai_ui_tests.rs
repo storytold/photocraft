@@ -195,3 +195,53 @@ fn the_dialogs_render() {
         img.save(std::path::Path::new(dir).join("genai-options-bar.png")).unwrap();
     }
 }
+
+/// Properties shows a generative layer's variations: clicking one shows it, and Generate More
+/// adds three (`GENAI_SNAPSHOT_DIR=… cargo test` saves a look).
+#[test]
+fn properties_show_the_variations() {
+    let store = Store::default();
+    store.borrow_mut().insert("gemini".into(), SECRET.into());
+    let store2 = store.clone();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 760.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app_with(&store2);
+        app.session.prefs.edit(|p| p.dialogs.insert(PREF.into(), json!({"provider": "gemini", "model": "m"})));
+        restore(&mut app).unwrap();
+        app.run("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 24})).unwrap();
+        app
+    });
+    h.state_mut().run(FILL, json!({"prompt": "a red kite"})).unwrap();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().session.generative_layer().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let group = h.state().session.generative_layer().expect("the fill finished");
+    h.run_steps(4);
+    let shown = |h: &egui_kittest::Harness<'_, PhotocraftApp>| -> Vec<bool> {
+        h.state().session.active().unwrap().doc.layer(group).unwrap().children().unwrap().iter().map(|l| l.visible).collect()
+    };
+    assert_eq!(shown(&h), [true, false, false]);
+    h.get_by_label("Variations");
+    h.get_by_label("Generate More");
+    if let (Some(dir), Ok(img)) = (std::env::var_os("GENAI_SNAPSHOT_DIR"), h.render()) {
+        img.save(std::path::Path::new(&dir).join("genai-variations.png")).unwrap();
+    }
+    // The Layers panel lists "Variation 3" too; the thumbnail is the one in Properties, above it.
+    let thumb = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Variation 3").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).unwrap();
+    thumb.click();
+    h.run_steps(4);
+    assert_eq!(shown(&h), [false, false, true]);
+    h.get_by_label("Generate More").click();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if shown(&h).len() == 6 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(shown(&h), [false, false, false, true, false, false]);
+}

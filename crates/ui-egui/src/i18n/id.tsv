@@ -3497,3 +3497,9 @@ curves	Smooth	Haluskan
 	the macOS Keychain	Rantai Kunci macOS
 	Windows Credential Manager	Pengelola Kredensial Windows
 	memory until PhotoCraft quits	memori sampai PhotoCraft ditutup
+# Generative Fill variations (#41)
+	Variations	Variasi
+	No prompt: continues the image	Tanpa deskripsi: melanjutkan gambar
+	Sends the same area and prompt to {name} again for three more.	Mengirim area dan deskripsi yang sama ke {name} lagi untuk tiga lagi.
+	Generate More	Buat Lagi
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Setiap Isian generatif membuat tiga variasi, jadi mengirim tiga permintaan, masing-masing ditagihkan ke kunci Anda.

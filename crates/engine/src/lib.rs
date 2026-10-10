@@ -569,6 +569,8 @@ pub struct Session {
     /// The generative image provider the app configured (see [`genai_cmds`]); `None` keeps
     /// generative commands off and the session network-free.
     genai: Option<genai_cmds::SharedProvider>,
+    /// What each generative layer made in this session was generated from (see [`genai_cmds`]).
+    genai_sources: std::collections::HashMap<LayerId, std::sync::Arc<genai_cmds::Source>>,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when

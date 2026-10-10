@@ -4205,3 +4205,9 @@ cameraData	Lens	Lens
 	memory until PhotoCraft quits	PhotoCraft kapanana kadar bellek
 	Fill the selection from a prompt	Seçimi bir istemle doldur
 	Set up Generative Fill with your own API key	Üretken Dolgu'yu kendi API anahtarınızla ayarlayın
+# Generative Fill variations (#41)
+	Variations	Varyasyonlar
+	No prompt: continues the image	İstem yok: görüntü devam eder
+	Sends the same area and prompt to {name} again for three more.	Üç tane daha için aynı alanı ve istemi yeniden şuraya gönderir: {name}.
+	Generate More	Daha Fazla Üret
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Her Üretken Dolgu üç varyasyon oluşturur; bu yüzden her biri anahtarınıza faturalandırılan üç istek gönderir.

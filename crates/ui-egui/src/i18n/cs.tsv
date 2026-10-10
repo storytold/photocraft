@@ -4225,3 +4225,9 @@ cameraRaw	Dehaze	Odstranění oparu
 	the macOS Keychain	klíčence macOS
 	Windows Credential Manager	Správci pověření Windows
 	memory until PhotoCraft quits	paměti, dokud se PhotoCraft neukončí
+# Generative Fill variations (#41)
+	Variations	Varianty
+	No prompt: continues the image	Bez popisu: pokračuje v obrázku
+	Sends the same area and prompt to {name} again for three more.	Odešle stejnou oblast a popis znovu do {name} pro tři další.
+	Generate More	Generovat další
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Každá generativní výplň vytvoří tři varianty, takže odešle tři požadavky a každý se účtuje na váš klíč.

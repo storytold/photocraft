@@ -13,16 +13,27 @@ the maintainers asked for in issue #41.
 2. Make a selection, then Edit › Generative Fill… (or the options bar button). Describe what to
    put there, or leave the prompt empty to continue the surrounding image through it (anything
    that runs into the selection carries on and partly covered objects are completed).
-3. The result lands as a new layer named after the prompt, masked by the selection, as
-   Photoshop's generative layer is. Nothing under it changes; one undo removes it. The request runs
-   as a background job and can be cancelled.
+3. Three variations come back, as in Photoshop. They land in a new group named after the prompt
+   and masked by the selection, one layer per variation (Variation 1, 2, 3), with the first
+   showing. Nothing under it changes; one undo removes it. The requests run side by side as one
+   background job that can be cancelled; if some fail and others succeed, the successes are kept.
+4. With the group (or one of its variations) active, Properties › Variations shows a thumbnail
+   per variation: click one to show it alone (`layer.generative.selectVariation`, one undo step).
+   Generate More sends the same image, mask and prompt again and adds three more
+   (`layer.generative.more`).
+
+Photoshop keeps its variations inside one generative layer. PhotoCraft uses a group of ordinary
+layers instead, so a PSD round trip needs no format changes and other apps see plain layers. What
+each group was generated from is kept in the session only: after reopening a file the group is an
+ordinary group (the variations are all still there; show one by hand), and Generate More is off.
 
 Providers today: **Google Gemini** (the Nano Banana image models, default
 `gemini-nano-banana-2.1`). Keys come from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ## What is sent
 
-Only when Generative Fill runs, and only to the configured provider:
+Only when Generative Fill or Generate More runs, and only to the configured provider, once per
+variation (so three requests by default, each billed to the user's key):
 
 - the selection's bounds plus a margin of context (half the selection's longer side, 64 to
   1024 px), grown toward the provider's output shape and kept inside the canvas, rendered
@@ -48,9 +59,11 @@ outside the selection is discarded. Gemini returns JPEG (its only output format)
 
 ## Automation
 
-`edit.generativeFill` is a normal engine command (one undo step, a cancellable job, `prompt`
-param) so scripts and recorded actions can run it locally, but automation (the control channel
-and MCP) may not: `authorize_engine_command` refuses it, because it uploads document pixels. An
+`edit.generativeFill` is a normal engine command (one undo step, a cancellable job, `prompt` and
+`variations` (1 to 4, default 3) params) so scripts and recorded actions can run it locally, but
+automation (the control channel and MCP) may not: `authorize_engine_command` refuses it and
+`layer.generative.more`, because they upload document pixels. `layer.generative.selectVariation`
+sends nothing and is allowed. An
 explicit opt-in for automation can come later.
 
 ## Code
@@ -58,8 +71,8 @@ explicit opt-in for automation can come later.
 | Where | What |
 |---|---|
 | `crates/genai` | `ImageProvider` (generate, edit with mask, variations; capabilities; output shape), `HttpTransport` (the network seam), `ApiKey`, and the Gemini backend. No network code: it builds for wasm and its tests use a fake transport. |
-| `crates/engine/src/genai_cmds.rs` | `edit.generativeFill`: context area, pixel interchange (after #730's approach), the job, the masked layer. `Session::set_image_provider` installs a provider. |
-| `crates/ui-egui/src/genai_ui.rs` | Generative AI Settings, the prompt dialog, the options bar button, `restore` at launch. |
+| `crates/engine/src/genai_cmds.rs` | `edit.generativeFill`, `layer.generative.selectVariation`, `layer.generative.more`: context area, pixel interchange (after #730's approach), the job, the masked group of variations. `Session::set_image_provider` installs a provider. |
+| `crates/ui-egui/src/genai_ui.rs` | Generative AI Settings, the prompt dialog, the options bar button, Properties › Variations, `restore` at launch. |
 | `apps/photocraft/src/genai.rs` | The desktop `GenAiServices`: credential store (`keyring`) and HTTPS transport (`ureq` + rustls). |
 
 ### Adding a provider

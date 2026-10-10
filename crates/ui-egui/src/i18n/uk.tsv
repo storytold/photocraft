@@ -4188,3 +4188,9 @@ curves	Smooth	Згладити
 	the macOS Keychain	зв’язці ключів macOS
 	Windows Credential Manager	диспетчері облікових даних Windows
 	memory until PhotoCraft quits	пам’яті до закриття PhotoCraft
+# Generative Fill variations (#41)
+	Variations	Варіанти
+	No prompt: continues the image	Без опису: продовжує зображення
+	Sends the same area and prompt to {name} again for three more.	Знову надсилає ту саму область і опис до {name}, щоб отримати ще три.
+	Generate More	Створити ще
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Кожна Генеративна заливка створює три варіанти, тож надсилає три запити, кожен оплачується за вашим ключем.

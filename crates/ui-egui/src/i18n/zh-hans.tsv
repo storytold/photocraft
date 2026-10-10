@@ -3156,3 +3156,9 @@ curves	Smooth	平滑
 	the macOS Keychain	macOS 钥匙串
 	Windows Credential Manager	Windows 凭据管理器
 	memory until PhotoCraft quits	内存中，直到 PhotoCraft 退出
+# Generative Fill variations (#41)
+	Variations	变体
+	No prompt: continues the image	无描述：延续图像
+	Sends the same area and prompt to {name} again for three more.	再次将相同区域和描述发送到 {name}，再生成三个。
+	Generate More	生成更多
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	每次生成式填充会生成三个变体，因此会发送三个请求，每个都计费到你的密钥。

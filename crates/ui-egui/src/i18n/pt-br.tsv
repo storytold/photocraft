@@ -4406,3 +4406,9 @@ layerLabel	No Color	Sem cor
 	the macOS Keychain	no Porta-Chaves do macOS
 	Windows Credential Manager	no Gerenciador de Credenciais do Windows
 	memory until PhotoCraft quits	na memória até o PhotoCraft ser fechado
+# Generative Fill variations (#41)
+	Variations	Variações
+	No prompt: continues the image	Sem descrição: continua a imagem
+	Sends the same area and prompt to {name} again for three more.	Envia a mesma área e descrição para {name} de novo para mais três.
+	Generate More	Gerar mais
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Cada Preenchimento generativo cria três variações, então envia três solicitações, cada uma cobrada na sua chave.

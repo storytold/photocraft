@@ -4518,3 +4518,9 @@ shape	Appearance	Apparence
 	the macOS Keychain	le trousseau macOS
 	Windows Credential Manager	le Gestionnaire d’identification Windows
 	memory until PhotoCraft quits	la mémoire jusqu’à la fermeture de PhotoCraft
+# Generative Fill variations (#41)
+	Variations	Variantes
+	No prompt: continues the image	Sans description : prolonge l'image
+	Sends the same area and prompt to {name} again for three more.	Renvoie la même zone et la même description à {name} pour trois de plus.
+	Generate More	En générer plus
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Chaque Remplissage génératif crée trois variantes : il envoie donc trois requêtes, chacune facturée sur votre clé.

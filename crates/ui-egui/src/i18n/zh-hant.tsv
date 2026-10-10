@@ -3114,3 +3114,9 @@ curves	Smooth	平滑
 	the macOS Keychain	macOS 鑰匙圈
 	Windows Credential Manager	Windows 認證管理員
 	memory until PhotoCraft quits	記憶體中，直到 PhotoCraft 結束
+# Generative Fill variations (#41)
+	Variations	變體
+	No prompt: continues the image	無描述：延續影像
+	Sends the same area and prompt to {name} again for three more.	再次將相同區域和描述傳送到 {name}，再產生三個。
+	Generate More	產生更多
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	每次生成式填色會產生三個變體，因此會傳送三個請求，每個都計費到你的金鑰。

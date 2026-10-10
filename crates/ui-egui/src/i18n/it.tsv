@@ -4593,3 +4593,9 @@ shape	Appearance	Aspetto
 	the macOS Keychain	il Portachiavi di macOS
 	Windows Credential Manager	Gestione credenziali di Windows
 	memory until PhotoCraft quits	memoria finché PhotoCraft non viene chiuso
+# Generative Fill variations (#41)
+	Variations	Varianti
+	No prompt: continues the image	Nessuna descrizione: prosegue l'immagine
+	Sends the same area and prompt to {name} again for three more.	Invia di nuovo la stessa area e la stessa descrizione a {name} per altre tre.
+	Generate More	Genera altre
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Ogni Riempimento generativo crea tre varianti, quindi invia tre richieste, ognuna addebitata sulla tua chiave.

@@ -4549,3 +4549,9 @@ shape	Appearance	Izgled
 	memory until PhotoCraft quits	memorija, dok se PhotoCraft ne zatvori
 	Fill the selection from a prompt	Popuni selekciju prema opisu
 	Set up Generative Fill with your own API key	Podesite Generativnu popunu sa sopstvenim API ključem
+# Generative Fill variations (#41)
+	Variations	Varijacije
+	No prompt: continues the image	Bez opisa: slika se nastavlja
+	Sends the same area and prompt to {name} again for three more.	Ponovo šalje istu oblast i opis ka {name} za još tri.
+	Generate More	Napravi još
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Svaka Generativna popuna pravi tri varijacije, pa šalje tri zahteva, a svaki se naplaćuje na vaš ključ.

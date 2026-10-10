@@ -7,6 +7,7 @@
 //! ([`crate::GenAiServices`]) and in process memory. The key is typed into a buffer outside the
 //! dialog's fields, so `ui.inspect` and the control channel never see it.
 
+use photocraft_doc::{Layer, LayerId};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -15,6 +16,10 @@ use crate::state::DialogKind;
 /// Opens Generative AI Settings.
 pub const SETTINGS: &str = "ui.generativeAiSettings";
 const FILL: &str = photocraft_engine::genai_cmds::FILL;
+const SELECT_VARIATION: &str = photocraft_engine::genai_cmds::SELECT_VARIATION;
+const MORE: &str = photocraft_engine::genai_cmds::MORE;
+/// Long side of a variation thumbnail, in texels.
+const THUMB: u32 = 96;
 const SETTINGS_MARK: &str = "__genaiSettings";
 const PROMPT_MARK: &str = "__genaiPrompt";
 /// `prefs.dialogs` entry holding `{"provider", "model"}`.
@@ -26,6 +31,9 @@ const KEY_PAGE: &str = "https://aistudio.google.com/apikey";
 pub struct Runtime {
     /// What is typed in the settings dialog's key field. Cleared when the dialog closes.
     key_input: String,
+    /// Variation thumbnails for the Properties panel, by variation layer: (pixels fingerprint,
+    /// texture).
+    thumbs: std::collections::HashMap<LayerId, (u64, egui::TextureHandle)>,
 }
 
 /// Providers the settings offer: (id, name). Only providers the app can build appear.
@@ -230,6 +238,8 @@ fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
             ),
         );
         ui.add_space(4.0);
+        faint(ui, tl!("Each Generative Fill makes three variations, so it sends three requests, each billed to your key."));
+        ui.add_space(4.0);
         let store = app.services.genai.as_ref().map_or("", |s| s.key_store_name);
         faint(ui, &crate::i18n::fmt(tl!("Your key is kept in {store}, never in PhotoCraft's settings files."), &[("store", tl!(store))]));
     }
@@ -298,6 +308,123 @@ pub fn prefs_rows(app: &PhotocraftApp, ui: &mut egui::Ui) -> bool {
     faint(ui, &status);
     ui.add_space(4.0);
     crate::widgets::secondary_button(ui, tl!("Generative AI Settings…"), 0.0).clicked()
+}
+
+/// The selection-shaped crop of a variation: its pixels inside the group mask's bounds, faded
+/// where the mask hides them.
+fn variation_image(variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) -> Option<egui::ColorImage> {
+    let s = variation.surface()?;
+    let area = mask.map_or_else(|| s.content_bounds(), |m| m.surface.content_bounds().intersect(&s.content_bounds()));
+    if area.is_empty() {
+        return None;
+    }
+    let k = f64::from(THUMB) / f64::from(area.width().max(area.height()));
+    let (w, h) = (((f64::from(area.width()) * k).round() as usize).max(1), ((f64::from(area.height()) * k).round() as usize).max(1));
+    let mut px = [0.0f32; 8];
+    let mut m = [0.0f32; 1];
+    let n = s.channels();
+    let mut out = Vec::with_capacity(w * h);
+    for ty in 0..h {
+        for tx in 0..w {
+            let x = area.x0 + ((tx as f64 + 0.5) / k) as i32;
+            let y = area.y0 + ((ty as f64 + 0.5) / k) as i32;
+            s.read_pixel(x, y, &mut px[..n]);
+            let c = photocraft_raster::to_rgba(&s.format(), &px[..n]);
+            let a = mask.map_or(1.0, |mask| {
+                mask.surface.read_pixel(x, y, &mut m);
+                m[0]
+            });
+            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            out.push(egui::Color32::from_rgba_unmultiplied(q(c[0]), q(c[1]), q(c[2]), q(c[3] * a.max(0.25))));
+        }
+    }
+    Some(egui::ColorImage::new([w, h], out))
+}
+
+fn variation_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) -> Option<egui::TextureId> {
+    let rev = variation.surface().map_or(0, crate::surface_fingerprint) ^ mask.map_or(0, |m| crate::surface_fingerprint(&m.surface));
+    if let Some((r, tex)) = app.genai.thumbs.get(&variation.id)
+        && *r == rev
+    {
+        return Some(tex.id());
+    }
+    let img = variation_image(variation, mask)?;
+    let tex = ctx.load_texture(format!("genai-variation-{}", variation.id.0), img, egui::TextureOptions::LINEAR);
+    let id = tex.id();
+    app.genai.thumbs.insert(variation.id, (rev, tex));
+    Some(id)
+}
+
+/// Properties › Variations, for the active generative layer (or one of its variations): a row of
+/// thumbnails, one per variation (click one to show it), and Generate More, as Photoshop's
+/// Properties panel offers for a generative layer. Compact, since the dock can be short.
+pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let Some(group_id) = app.session.generative_layer() else { return };
+    let Some(group) = app.session.active().and_then(|st| st.doc.layer(group_id).cloned()) else { return };
+    let Some(children) = group.children() else { return };
+    let t = crate::theme::Tokens::get(ui.ctx());
+    if let Some(st) = app.session.active() {
+        app.genai.thumbs.retain(|id, _| st.doc.layer(*id).is_some());
+    }
+    let prompt = app.session.generative_prompt(group_id).unwrap_or("").to_owned();
+    let tip = match app.session.image_provider().map(|p| p.info()) {
+        Some(info) => crate::i18n::fmt(tl!("Sends the same area and prompt to {name} again for three more."), &[("name", info.name)]),
+        None => app.session.disabled_reason(MORE).unwrap_or_default(),
+    };
+    let enabled = app.session.is_enabled(MORE);
+    let mut more = false;
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        let head = ui.label(egui::RichText::new(tl!("Variations")).font(crate::theme::semibold(12.5)).color(t.text));
+        head.on_hover_text(if prompt.is_empty() { tl!("No prompt: continues the image") } else { &prompt });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            more = ui.add_enabled_ui(enabled, |ui| crate::widgets::secondary_button(ui, tl!("Generate More"), 0.0).on_hover_text(tip)).inner.clicked();
+        });
+    });
+    ui.add_space(4.0);
+    let ctx = ui.ctx().clone();
+    let height = 48.0;
+    let mut chosen = None;
+    egui::ScrollArea::horizontal().id_salt("genai-variations").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (i, v) in children.iter().enumerate() {
+                let tex = variation_thumb(app, &ctx, v, group.mask.as_ref());
+                let size = app.genai.thumbs.get(&v.id).map_or(egui::vec2(1.0, 1.0), |(_, h)| h.size_vec2());
+                let width = (height * size.x / size.y.max(1.0)).clamp(36.0, 96.0);
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+                ui.painter().rect_filled(r, t.radius_sm, t.field);
+                if let Some(tex) = tex {
+                    let fit = ((width - 4.0) / size.x).min((height - 4.0) / size.y);
+                    let img = egui::Rect::from_center_size(r.center(), size * fit);
+                    ui.painter().image(tex, img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                }
+                let (w, c) = if v.visible {
+                    (2.0, t.accent)
+                } else if resp.hovered() {
+                    (1.0, t.accent_border)
+                } else {
+                    (1.0, t.field_border)
+                };
+                ui.painter().rect_stroke(r, t.radius_sm, egui::Stroke::new(w, c), egui::StrokeKind::Inside);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, v.visible, &v.name));
+                if resp.on_hover_text(&v.name).clicked() && !v.visible {
+                    chosen = Some(i);
+                }
+            }
+        });
+    });
+    if let Some(i) = chosen
+        && let Err(e) = app.run(SELECT_VARIATION, json!({"layer": group_id.0, "index": i}))
+    {
+        app.ui.status = e;
+    }
+    if more && let Err(e) = app.run(MORE, json!({"layer": group_id.0})) {
+        app.ui.status = e;
+    }
+    ui.add_space(6.0);
+    crate::widgets::hairline(ui);
+    ui.add_space(4.0);
 }
 
 #[cfg(test)]

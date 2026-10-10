@@ -4155,3 +4155,9 @@ curves	Smooth	スムーズ
 	the macOS Keychain	macOS のキーチェーン
 	Windows Credential Manager	Windows 資格情報マネージャー
 	memory until PhotoCraft quits	PhotoCraft を終了するまでのメモリ
+# Generative Fill variations (#41)
+	Variations	バリエーション
+	No prompt: continues the image	説明文なし：画像を続けます
+	Sends the same area and prompt to {name} again for three more.	同じ範囲と説明文を {name} にもう一度送り、さらに 3 つ生成します。
+	Generate More	さらに生成
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	生成塗りつぶしは毎回 3 つのバリエーションを作るため、3 回リクエストを送信し、それぞれがお使いのキーに課金されます。

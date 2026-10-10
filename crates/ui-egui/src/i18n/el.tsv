@@ -4178,3 +4178,9 @@ curves	Smooth	Εξομάλυνση
 	the macOS Keychain	Κλειδοθήκη του macOS
 	Windows Credential Manager	Διαχείριση διαπιστευτηρίων των Windows
 	memory until PhotoCraft quits	μνήμη μέχρι να κλείσει το PhotoCraft
+# Generative Fill variations (#41)
+	Variations	Παραλλαγές
+	No prompt: continues the image	Χωρίς περιγραφή: συνεχίζει την εικόνα
+	Sends the same area and prompt to {name} again for three more.	Στέλνει ξανά την ίδια περιοχή και περιγραφή στο {name} για τρεις ακόμη.
+	Generate More	Δημιουργία περισσότερων
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Κάθε Παραγωγικό γέμισμα δημιουργεί τρεις παραλλαγές, άρα στέλνει τρία αιτήματα, το καθένα χρεώνεται στο κλειδί σας.

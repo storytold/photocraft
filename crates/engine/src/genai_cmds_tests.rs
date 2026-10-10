@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use photocraft_genai::{Capabilities, EditRequest, GenError, GeneratedImage, ProviderInfo};
@@ -5,9 +6,12 @@ use photocraft_genai::{Capabilities, EditRequest, GenError, GeneratedImage, Prov
 use super::*;
 
 /// Answers every edit with a solid colour at the request's size (or `size` when set), and keeps
-/// what it was sent.
+/// what it was sent. With `vary` each call's colour differs; with `flaky` every second call fails.
 struct Fake {
     color: [u8; 3],
+    vary: bool,
+    flaky: bool,
+    calls: AtomicUsize,
     size: Option<(u32, u32)>,
     fail: Option<GenError>,
     aspect: Option<(u32, u32)>,
@@ -17,7 +21,17 @@ struct Fake {
 
 impl Fake {
     fn new(color: [u8; 3]) -> Arc<Fake> {
-        Arc::new(Fake { color, size: None, fail: None, aspect: None, jpeg: false, sent: Mutex::new(Vec::new()) })
+        Arc::new(Fake {
+            color,
+            vary: false,
+            flaky: false,
+            calls: AtomicUsize::new(0),
+            size: None,
+            fail: None,
+            aspect: None,
+            jpeg: false,
+            sent: Mutex::new(Vec::new()),
+        })
     }
 }
 
@@ -33,11 +47,16 @@ impl ImageProvider for Fake {
     }
     fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
         self.sent.lock().unwrap().push(r.clone());
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(e) = &self.fail {
             return Err(e.clone());
         }
+        if self.flaky && n % 2 == 1 {
+            return Err(GenError::Quota);
+        }
+        let color = if self.vary { [self.color[0].wrapping_add(n as u8 * 60), self.color[1], self.color[2]] } else { self.color };
         let (w, h) = self.size.or_else(|| photocraft_genai::png_size(&r.image)).unwrap();
-        let px: Vec<u8> = (0..w * h).flat_map(|_| [self.color[0], self.color[1], self.color[2], 255]).collect();
+        let px: Vec<u8> = (0..w * h).flat_map(|_| [color[0], color[1], color[2], 255]).collect();
         let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).unwrap();
         if self.jpeg {
             let rgb = img.convert(ChannelLayout::Rgb, CodecSample::U8);
@@ -79,7 +98,7 @@ fn needs_a_provider_and_a_selection() {
 }
 
 #[test]
-fn the_result_lands_on_a_new_layer_masked_by_the_selection_and_undoes_in_one_step() {
+fn the_results_land_in_a_new_group_masked_by_the_selection_and_undo_in_one_step() {
     let mut s = session(200, 100);
     s.execute("select.rect", json!({"x": 80, "y": 30, "width": 40, "height": 40})).unwrap();
     let fake = Fake::new([255, 0, 0]);
@@ -92,6 +111,7 @@ fn the_result_lands_on_a_new_layer_masked_by_the_selection_and_undoes_in_one_ste
     assert_eq!(d.layers.len(), before + 1);
     let layer = d.layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap();
     assert_eq!(layer.name, "a red balloon");
+    assert!(layer.is_group());
     assert!(layer.mask.is_some(), "masked by the selection, like Photoshop's generative layer");
     assert_eq!(s.active().unwrap().active_layer, Some(layer.id));
     assert_eq!(rgb_at(&s, 100, 50), [255, 0, 0], "inside the selection: the result");
@@ -102,6 +122,7 @@ fn the_result_lands_on_a_new_layer_masked_by_the_selection_and_undoes_in_one_ste
 
     // What was sent: the prompt, the image and a mask that is white only over the selection.
     let sent = fake.sent.lock().unwrap();
+    assert_eq!(sent.len(), 3, "three variations by default");
     assert_eq!(sent[0].prompt, "a red   balloon");
     let mask = codecs::decode(&sent[0].mask).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
     let area = Rect::from_xywh(r["bounds"][0].as_i64().unwrap() as i32, r["bounds"][1].as_i64().unwrap() as i32, 1, 1);
@@ -174,7 +195,7 @@ fn the_document_keeps_its_mode_and_depth() {
         s.set_image_provider(Some(Fake::new([128, 128, 128])));
         let r = s.execute(FILL, json!({"prompt": "x"})).unwrap();
         let d = doc(&s);
-        let l = d.layer(photocraft_doc::LayerId(r["layer"].as_u64().unwrap())).unwrap();
+        let l = d.layer(photocraft_doc::LayerId(r["variations"][0].as_u64().unwrap())).unwrap();
         let f = l.surface().unwrap().format();
         assert_eq!((f.mode, f.sample), (d.mode, d.depth), "{mode} {depth}");
     }
@@ -200,4 +221,132 @@ fn the_context_area_grows_toward_the_providers_shape_inside_the_canvas() {
     // It can't grow past the canvas: the remaining mismatch is scaled away.
     let r = context_area(Rect::from_xywh(0, 0, 1000, 600), canvas, |_, _| (21, 9));
     assert_eq!(r, canvas);
+}
+
+fn group(s: &Session, id: u64) -> &photocraft_doc::Layer {
+    doc(s).layer(photocraft_doc::LayerId(id)).unwrap()
+}
+
+fn shown(s: &Session, id: u64) -> Vec<bool> {
+    group(s, id).children().unwrap().iter().map(|l| l.visible).collect()
+}
+
+/// The colour variation `i` of group `id` holds at (`x`, `y`).
+fn variation_rgb(s: &Session, id: u64, i: usize, x: i32, y: i32) -> [u8; 3] {
+    let l = &group(s, id).children().unwrap()[i];
+    let surf = l.surface().unwrap();
+    let mut px = [0.0f32; 4];
+    surf.read_pixel(x, y, &mut px[..surf.channels()]);
+    let p = photocraft_raster::to_rgba(&surf.format(), &px[..surf.channels()]);
+    [0, 1, 2].map(|c| (p[c] * 255.0).round() as u8)
+}
+
+fn filled(variations: Option<u64>) -> (Session, Arc<Fake>, Value) {
+    let mut s = session(100, 100);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 40, "height": 40})).unwrap();
+    let fake = Arc::new(Fake { vary: true, ..Arc::into_inner(Fake::new([0, 0, 255])).unwrap() });
+    s.set_image_provider(Some(fake.clone()));
+    let r = s.execute(FILL, json!({"prompt": "a boat", "variations": variations})).unwrap();
+    (s, fake, r)
+}
+
+#[test]
+fn a_fill_makes_three_variations_with_the_first_showing() {
+    let (s, fake, r) = filled(None);
+    let id = r["layer"].as_u64().unwrap();
+    assert_eq!(r["variations"].as_array().unwrap().len(), 3);
+    let names: Vec<_> = group(&s, id).children().unwrap().iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names, ["Variation 1", "Variation 2", "Variation 3"]);
+    assert_eq!(shown(&s, id), [true, false, false]);
+    assert_eq!(rgb_at(&s, 50, 50), variation_rgb(&s, id, 0, 50, 50));
+    assert_eq!(fake.sent.lock().unwrap().len(), 3);
+    assert_eq!(s.generative_layer(), Some(photocraft_doc::LayerId(id)));
+    assert_eq!(s.generative_prompt(photocraft_doc::LayerId(id)), Some("a boat"));
+
+    let (_, fake, r) = filled(Some(1));
+    assert_eq!(r["variations"].as_array().unwrap().len(), 1);
+    assert_eq!(fake.sent.lock().unwrap().len(), 1);
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    s.set_image_provider(Some(Fake::new([0, 0, 0])));
+    for bad in [json!(0), json!(5), json!("3"), json!(-1)] {
+        assert!(s.execute(FILL, json!({"variations": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn choosing_a_variation_shows_it_alone_in_one_undo_step() {
+    let (mut s, _, r) = filled(None);
+    let id = r["layer"].as_u64().unwrap();
+    let colors: Vec<_> = (0..3).map(|i| variation_rgb(&s, id, i, 50, 50)).collect();
+    assert_ne!(colors[0], colors[1]);
+    let history = s.active().unwrap().history.past_len();
+    s.execute(SELECT_VARIATION, json!({"index": 2})).unwrap();
+    assert_eq!(shown(&s, id), [false, false, true]);
+    assert_eq!(rgb_at(&s, 50, 50), colors[2]);
+    assert_eq!(rgb_at(&s, 10, 10), [255, 255, 255], "still masked by the selection");
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    // With a variation itself active, the command still finds its group.
+    let child = group(&s, id).children().unwrap()[0].id;
+    s.execute("layer.select", json!({"layer": child.0})).unwrap();
+    s.execute(SELECT_VARIATION, json!({"index": 1})).unwrap();
+    assert_eq!(shown(&s, id), [false, true, false]);
+    assert!(s.execute(SELECT_VARIATION, json!({"index": 3})).is_err());
+    assert!(s.execute(SELECT_VARIATION, json!({})).is_err());
+    assert!(s.undo());
+    assert_eq!(shown(&s, id), [false, false, true]);
+}
+
+#[test]
+fn variation_commands_need_a_generative_layer() {
+    let mut s = session(64, 64);
+    s.set_image_provider(Some(Fake::new([0, 0, 0])));
+    assert!(!s.is_enabled(SELECT_VARIATION));
+    assert!(!s.is_enabled(MORE));
+    // A group that wasn't made by Generative Fill isn't one.
+    s.execute("type.create", json!({"text": "Hi", "size": 20, "x": 5, "y": 30})).unwrap();
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    assert_eq!(s.generative_layer(), None);
+    assert!(s.execute(SELECT_VARIATION, json!({"index": 0})).is_err());
+    assert!(s.execute(MORE, json!({})).is_err());
+}
+
+#[test]
+fn generate_more_resends_the_same_request_and_adds_variations() {
+    let (mut s, fake, r) = filled(None);
+    let id = r["layer"].as_u64().unwrap();
+    s.execute(SELECT_VARIATION, json!({"index": 1})).unwrap();
+    // A later edit to the canvas doesn't change what is sent: the same image, mask and prompt.
+    s.execute("select.deselect", json!({})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let more = s.execute(MORE, json!({"count": 2})).unwrap();
+    assert_eq!(more["variations"].as_array().unwrap().len(), 2);
+    let names: Vec<_> = group(&s, id).children().unwrap().iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names, ["Variation 1", "Variation 2", "Variation 3", "Variation 4", "Variation 5"]);
+    assert_eq!(shown(&s, id), [false, false, false, true, false], "the first new one shows");
+    let sent = fake.sent.lock().unwrap();
+    assert_eq!(sent.len(), 5);
+    assert_eq!(sent[4].image, sent[0].image);
+    assert_eq!(sent[4].mask, sent[0].mask);
+    assert_eq!(sent[4].prompt, "a boat");
+    drop(sent);
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    assert!(s.undo());
+    assert_eq!(shown(&s, id), [false, true, false]);
+    assert!(s.execute(MORE, json!({"count": 9})).is_err());
+    // Without a provider there is nothing to ask.
+    s.set_image_provider(None);
+    assert!(!s.is_enabled(MORE));
+    assert!(s.is_enabled(SELECT_VARIATION), "flipping between results needs no provider");
+}
+
+#[test]
+fn a_failed_variation_is_dropped_when_others_succeed() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let fake = Arc::new(Fake { flaky: true, ..Arc::into_inner(Fake::new([0, 200, 0])).unwrap() });
+    s.set_image_provider(Some(fake));
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 3})).unwrap();
+    assert_eq!(r["variations"].as_array().unwrap().len(), 2);
+    assert_eq!(rgb_at(&s, 16, 16), [0, 200, 0]);
 }

@@ -4236,3 +4236,9 @@ curves	Smooth	Vloeiend maken
 	the macOS Keychain	de macOS-sleutelhanger
 	Windows Credential Manager	Windows Referentiebeheer
 	memory until PhotoCraft quits	het geheugen totdat PhotoCraft stopt
+# Generative Fill variations (#41)
+	Variations	Variaties
+	No prompt: continues the image	Geen beschrijving: zet de afbeelding voort
+	Sends the same area and prompt to {name} again for three more.	Stuurt hetzelfde gebied en dezelfde beschrijving opnieuw naar {name} voor nog drie.
+	Generate More	Meer genereren
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Elk Generatief vullen maakt drie variaties en stuurt dus drie verzoeken, die elk op uw sleutel worden gefactureerd.

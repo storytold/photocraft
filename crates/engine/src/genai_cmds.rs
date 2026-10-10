@@ -3,9 +3,11 @@
 //! nothing is ever sent anywhere.
 //!
 //! The selection's bounds plus some surrounding context are rendered (all visible layers, in
-//! sRGB) and sent with a mask of the selection. The result lands as a new layer masked by the
-//! selection, as Photoshop's generative layer is, so nothing under it changes and one undo
-//! removes it. The network call runs as a cancellable background job.
+//! sRGB) and sent with a mask of the selection, once per variation (three by default, as
+//! Photoshop makes). The results land in a new group masked by the selection, one layer per
+//! variation with the first showing, so nothing under it changes and one undo removes it.
+//! `layer.generative.selectVariation` flips between them and `layer.generative.more` asks for
+//! more. The network calls run as one cancellable background job.
 //!
 //! Pixel interchange follows #730's approach (composite through the document's profile to sRGB,
 //! and back into the document's mode and depth on the way in).
@@ -15,7 +17,7 @@ use std::sync::Arc;
 use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CodecSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Layer, LayerMask};
+use photocraft_doc::{Document, Layer, LayerId, LayerMask};
 use photocraft_genai::{EditRequest, ImageProvider, ImageSize};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -25,10 +27,14 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 pub const FILL: &str = "edit.generativeFill";
+pub const SELECT_VARIATION: &str = "layer.generative.selectVariation";
+pub const MORE: &str = "layer.generative.more";
 const LABEL: &str = "Generative Fill";
 /// Longest side sent to the provider; larger areas are scaled down for the request and the
 /// result is scaled back up.
 const UPLOAD_SIDE: u32 = 2048;
+const DEFAULT_VARIATIONS: usize = 3;
+const MAX_VARIATIONS: u64 = 4;
 /// Largest result accepted, per side.
 const RESULT_SIDE: u32 = 8192;
 
@@ -184,6 +190,78 @@ fn layer_name(prompt: &str) -> String {
     }
 }
 
+/// What a generative layer was made from (the image and mask sent, the prompt and where the
+/// result goes), so Generate More can ask the provider again without re-rendering a document that
+/// now holds the earlier results. Kept in the session only: a reopened file's generative layer is
+/// an ordinary group.
+pub(crate) struct Source {
+    prompt: String,
+    area: Rect,
+    request: EditRequest,
+}
+
+fn variations_param(p: &Value, key: &str) -> Result<usize> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(DEFAULT_VARIATIONS),
+        Some(v) => match v.as_u64() {
+            Some(n @ 1..=MAX_VARIATIONS) => Ok(n as usize),
+            _ => Err(bad(format!("`{key}` must be a whole number from 1 to {MAX_VARIATIONS}"))),
+        },
+    }
+}
+
+/// Ask for `count` results of one request. The calls run side by side (each is a slow network
+/// round trip); any that fail are dropped as long as one succeeds.
+fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request: &EditRequest, count: usize) -> Result<Vec<Vec<u8>>> {
+    let name = provider.info().name;
+    let msg = if count == 1 { format!("Waiting for {name}") } else { format!("Waiting for {name} ({count} variations)") };
+    ctx.progress(0.15, &msg);
+    #[cfg(not(target_arch = "wasm32"))]
+    let results: Vec<_> = if count == 1 {
+        vec![provider.edit(request)]
+    } else {
+        std::thread::scope(|scope| {
+            let calls: Vec<_> = (0..count).map(|_| scope.spawn(|| provider.edit(request))).collect();
+            calls.into_iter().map(|c| c.join().unwrap_or(Err(photocraft_genai::GenError::BadResponse("the request failed")))).collect()
+        })
+    };
+    #[cfg(target_arch = "wasm32")]
+    let results: Vec<_> = (0..count).map(|_| provider.edit(request)).collect();
+    ctx.check()?;
+    let mut first_error = None;
+    let mut images = Vec::new();
+    for r in results {
+        match r {
+            Ok(img) => images.push(img.bytes),
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    match (images.is_empty(), first_error) {
+        (true, Some(e)) => Err(other(e)),
+        (true, None) => Err(other("the image service returned nothing")),
+        _ => Ok(images),
+    }
+}
+
+/// A provider's image scaled into `area`, in document coordinates.
+fn place(bytes: &[u8], area: Rect) -> Result<Surface> {
+    let (got, full) = decode(bytes)?;
+    let fitted = scaled(&got, full, area.width(), area.height());
+    let mut placed = Surface::new(fitted.format());
+    placed.write_region(area, &fitted.read_region(Rect::from_xywh(0, 0, area.width(), area.height())));
+    Ok(placed)
+}
+
+fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {
+    let converted = to_document(doc, pixels)?;
+    let mut layer = Layer::raster(format!("Variation {n}"), converted.format());
+    *layer.surface_mut().ok_or_else(|| other("could not create the layer"))? = converted;
+    layer.visible = visible;
+    Ok(layer)
+}
+
 fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let prompt = match p.get("prompt") {
         None | Some(Value::Null) => String::new(),
@@ -191,6 +269,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad("`prompt` must be text")),
     };
     photocraft_genai::check_prompt(&prompt, false).map_err(|e| bad(e.to_string()))?;
+    let count = variations_param(p, "variations")?;
     fill_enabled(s).map_err(bad)?;
     let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -210,43 +289,159 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let image = encode_png(&scaled(&srgb_composite(&doc, area)?, area, w, h), w, h)?;
             let mask = mask_png(&sel, area, w, h)?;
             ctx.check()?;
-            ctx.progress(0.15, &format!("Waiting for {}", provider.info().name));
             let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)) };
-            let result = provider.edit(&request).map_err(other)?;
-            ctx.check()?;
-            ctx.progress(0.9, "Placing the result");
-            let (got, full) = decode(&result.bytes)?;
-            let fitted = scaled(&got, full, area.width(), area.height());
-            let mut placed = Surface::new(fitted.format());
-            placed.write_region(area, &fitted.read_region(Rect::from_xywh(0, 0, area.width(), area.height())));
-            Ok((placed, sel))
+            let results = request_all(ctx, provider.as_ref(), &request, count)?;
+            ctx.progress(0.9, "Placing the results");
+            let placed = results.iter().map(|b| place(b, area)).collect::<Result<Vec<_>>>()?;
+            let source = Source { prompt: request.prompt.clone(), area, request };
+            Ok((placed, sel, source))
         },
-        move |s, (pixels, sel)| {
-            let id = s.edit(LABEL, |doc, active| {
-                let converted = to_document(doc, &pixels)?;
-                let mut layer = Layer::raster(name, converted.format());
-                *layer.surface_mut().ok_or_else(|| other("could not create the layer"))? = converted;
-                layer.mask = Some(LayerMask { surface: sel, ..LayerMask::reveal_all() });
-                let id = doc.insert_above(*active, layer);
+        move |s, (placed, sel, source)| {
+            let (group, ids) = s.edit(LABEL, |doc, active| {
+                // Photoshop's generative layer holds its variations; here that is a group masked by
+                // the selection with one layer per variation, the first one showing.
+                let children = placed.iter().enumerate().map(|(i, px)| variation_layer(doc, px, i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
+                let ids: Vec<u64> = children.iter().map(|l| l.id.0).collect();
+                let mut group = Layer::group(name, children);
+                group.mask = Some(LayerMask { surface: sel, ..LayerMask::reveal_all() });
+                let id = doc.insert_above(*active, group);
+                crate::layer_multi_cmds::check_group_depth(doc, LABEL)?;
                 *active = Some(id);
-                Ok(id)
+                Ok((id, ids))
             })?;
-            Ok(json!({"layer": id.0, "bounds": [area.x0, area.y0, area.width(), area.height()]}))
+            s.genai_sources.insert(group, Arc::new(source));
+            Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()]}))
+        },
+    )
+}
+
+/// The generative layer `p["layer"]` names, or the active one: the group itself or one of its
+/// variations.
+fn generative_target(s: &Session, p: &Value) -> Option<LayerId> {
+    let st = s.active()?;
+    let id = match p.get("layer").and_then(Value::as_u64) {
+        Some(id) => LayerId(id),
+        None => st.active_layer?,
+    };
+    let is_generative = |id: LayerId| s.genai_sources.contains_key(&id) && st.doc.layer(id).is_some_and(Layer::is_group);
+    if is_generative(id) {
+        return Some(id);
+    }
+    let path = st.doc.path_of(id)?;
+    let parent = st.doc.layer_at(path.get(..path.len().checked_sub(1)?)?)?.id;
+    is_generative(parent).then_some(parent)
+}
+
+impl Session {
+    /// The active generative layer (a Generative Fill group, or the active variation's group), for
+    /// the Properties panel's variations.
+    pub fn generative_layer(&self) -> Option<LayerId> {
+        generative_target(self, &Value::Null)
+    }
+
+    /// The prompt a generative layer was made with.
+    pub fn generative_prompt(&self, id: LayerId) -> Option<&str> {
+        self.genai_sources.get(&id).map(|s| s.prompt.as_str())
+    }
+}
+
+fn select_enabled(s: &Session) -> std::result::Result<(), String> {
+    generative_target(s, &Value::Null).map(|_| ()).ok_or_else(|| "select a generative layer first".into())
+}
+
+fn select_variation(s: &mut Session, p: &Value) -> Result<Value> {
+    let bad = |msg: &str| EngineError::BadParams { cmd: SELECT_VARIATION.into(), msg: msg.into() };
+    let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first"))?;
+    let index = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad("`index` must be a variation number from 0"))? as usize;
+    let children = s.active().and_then(|st| st.doc.layer(group)).and_then(Layer::children).map_or(0, <[Layer]>::len);
+    if index >= children {
+        return Err(bad(&format!("this generative layer has {children} variations")));
+    }
+    s.edit("Generative Variation", |doc, _| {
+        let layers = doc.layer_mut(group).and_then(Layer::children_mut).ok_or_else(|| other("the generative layer is gone"))?;
+        for (i, l) in layers.iter_mut().enumerate() {
+            l.visible = i == index;
+        }
+        Ok(())
+    })?;
+    Ok(json!({"layer": group.0, "index": index}))
+}
+
+fn more_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = s.image_provider().ok_or("set up a generative AI provider first (Generative AI Settings)")?;
+    if !p.capabilities().edit {
+        return Err(format!("{} can't fill selections", p.info().name));
+    }
+    select_enabled(s)
+}
+
+fn more(s: &mut Session, p: &Value) -> Result<Value> {
+    let bad = |msg: String| EngineError::BadParams { cmd: MORE.into(), msg };
+    let count = variations_param(p, "count").map_err(|_| bad(format!("`count` must be a whole number from 1 to {MAX_VARIATIONS}")))?;
+    more_enabled(s).map_err(bad)?;
+    let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first".into()))?;
+    let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider".into()))?;
+    let source = s.genai_sources.get(&group).cloned().ok_or_else(|| bad("select a generative layer first".into()))?;
+    crate::jobs::run(
+        s,
+        LABEL,
+        true,
+        move |ctx| {
+            let results = request_all(ctx, provider.as_ref(), &source.request, count)?;
+            ctx.progress(0.9, "Placing the results");
+            results.iter().map(|b| place(b, source.area)).collect::<Result<Vec<_>>>()
+        },
+        move |s, placed| {
+            let ids = s.edit("Generate More", |doc, _| {
+                let have = doc.layer(group).and_then(Layer::children).map(<[Layer]>::len).ok_or_else(|| other("the generative layer is gone"))?;
+                let new = placed.iter().enumerate().map(|(i, px)| variation_layer(doc, px, have + i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
+                let ids: Vec<u64> = new.iter().map(|l| l.id.0).collect();
+                let layers = doc.layer_mut(group).and_then(Layer::children_mut).ok_or_else(|| other("the generative layer is gone"))?;
+                // The first new variation shows, as when the layer was made.
+                for l in layers.iter_mut() {
+                    l.visible = false;
+                }
+                layers.extend(new);
+                Ok(ids)
+            })?;
+            Ok(json!({"layer": group.0, "variations": ids}))
         },
     )
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec {
-        id: FILL,
-        label: "Generative Fill…",
-        menu: &["Edit"],
-        shortcut: None,
-        params: r#"{"prompt":str?} fills the selection on a new masked layer through the configured provider; an empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider."#,
-        enabled: fill_enabled,
-        run: fill,
-        journal: true,
-    }]
+    vec![
+        CommandSpec {
+            id: FILL,
+            label: "Generative Fill…",
+            menu: &["Edit"],
+            shortcut: None,
+            params: r#"{"prompt":str?,"variations":1..4=3} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. An empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider, once per variation."#,
+            enabled: fill_enabled,
+            run: fill,
+            journal: true,
+        },
+        CommandSpec {
+            id: SELECT_VARIATION,
+            label: "Generative Variation",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"index":uint,"layer":id?} shows variation `index` (0 = the first) of the active generative layer and hides the others."#,
+            enabled: select_enabled,
+            run: select_variation,
+            journal: true,
+        },
+        CommandSpec {
+            id: MORE,
+            label: "Generate More",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"count":1..4=3,"layer":id?} asks the provider for more variations of the active generative layer, with the same image, mask and prompt, and adds them to it. Sends that area to the provider again."#,
+            enabled: more_enabled,
+            run: more,
+            journal: true,
+        },
+    ]
 }
 
 #[cfg(test)]

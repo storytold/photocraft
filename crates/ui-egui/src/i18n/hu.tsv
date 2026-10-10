@@ -4391,3 +4391,9 @@ cameraRaw	Yellow	Sárga
 	memory until PhotoCraft quits	a memória, amíg a PhotoCraft be nem zárul
 	Fill the selection from a prompt	A kijelölés kitöltése leírás alapján
 	Set up Generative Fill with your own API key	Generatív kitöltés beállítása a saját API-kulcsoddal
+# Generative Fill variations (#41)
+	Variations	Változatok
+	No prompt: continues the image	Nincs leírás: a kép folytatódik
+	Sends the same area and prompt to {name} again for three more.	Ugyanazt a területet és leírást újra elküldi ide: {name}, további háromért.
+	Generate More	Továbbiak létrehozása
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Minden Generatív kitöltés három változatot készít, ezért három kérést küld, mindegyiket a kulcsodra számlázzák.

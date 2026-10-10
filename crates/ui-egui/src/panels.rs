@@ -4155,6 +4155,8 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         widgets::hairline(ui);
         ui.add_space(6.0);
     }
+    // A generative layer's variations, above its own sections.
+    crate::genai_ui::variations_section(app, ui);
     if let LayerContent::Adjustment(adj) = &layer.content {
         adjustment_controls(app, ui, id, adj);
     } else if layer.artboard().is_some() {
