@@ -7,8 +7,9 @@ name: Perf (nightly)
 # scenario's p50 regresses more than 15 % against its baseline from the same machine class (other
 # classes are never compared). Budgets in perf/budgets.toml were set on a faster developer machine,
 # so here they are reported, not enforced (--advisory-budgets). Hosted Linux/Windows runners
-# have no real GPU: the GPU rows run on a software adapter (llvmpipe, WARP), compared only with
-# themselves.
+# have no hardware GPU (only software ones, llvmpipe/WARP, which take seconds per refresh and
+# would measure themselves), so they run the CPU canvas (--cpu; GPU-only benches read "not run"
+# there). macOS measures the GPU canvas.
 #
 # To (re)record the baselines: run this workflow by hand with "update_baseline", download the
 # `perf-baseline-<os>` artifacts and commit them as perf/baseline-<os>.json in a PR.
@@ -46,8 +47,9 @@ jobs:
         include:
           # Pinned images, not -latest: the machine class must stay fixed for comparisons.
           - { name: macos, os: macos-15 }
-          - { name: linux, os: ubuntu-24.04 }
-          - { name: windows, os: windows-2025 }
+          # No hardware GPU on hosted Linux/Windows: they measure the CPU canvas.
+          - { name: linux, os: ubuntu-24.04, extra: --cpu }
+          - { name: windows, os: windows-2025, extra: --cpu }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     defaults:
@@ -67,20 +69,18 @@ jobs:
           shared-key: perf-release-${{ matrix.name }}
           cache-on-failure: true
 
-      # The hosted Linux image has no Vulkan driver; llvmpipe gives the GPU benches a fixed adapter.
-      - name: Software Vulkan (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers
-
       - name: Run benchmarks
         id: perf
         env:
           QUICK: ${{ inputs.quick }}
           UPDATE: ${{ inputs.update_baseline }}
+          EXTRA: ${{ matrix.extra }}
         run: |
           args=(--baseline "perf/baseline-${{ matrix.name }}.json" --advisory-budgets)
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline); fi
+          # shellcheck disable=SC2206 # EXTRA is a list of flags
+          args+=($EXTRA)
           cargo xtask perf "${args[@]}"
 
       - name: Job summary
