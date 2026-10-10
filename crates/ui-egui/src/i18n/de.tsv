@@ -2465,3 +2465,26 @@ fontWeight	Italic	Kursiv
 	Previous Document	Vorheriges Dokument
 	W x H x Resolution	B x H x Auflösung
 	Front Image	Vorderes Bild
+# Generative Fill and Generative AI Settings (#41)
+	API key	API-Schlüssel
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Beschreiben Sie, was in der Auswahl entstehen soll, oder lassen Sie das Feld leer, um das Bild darin fortzusetzen.
+	Generative AI	Generative KI
+	Generative AI Settings…	Einstellungen für generative KI…
+	Generative AI needs the desktop app.	Generative KI gibt es nur in der Desktop-App.
+	Generative Fill uses {name} ({model}).	Generatives Füllen verwendet {name} ({model}).
+	Generative Fill…	Generatives Füllen…
+	Get a Gemini API key from Google AI Studio	Gemini-API-Schlüssel bei Google AI Studio holen
+	No API key is saved for {provider}.	Für {provider} ist kein API-Schlüssel gespeichert.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Es wird nichts gesendet, bis Sie Generatives Füllen ausführen. Dann sendet PhotoCraft jedes Mal den ausgewählten Bereich mit seiner Umgebung, eine Schwarzweißmaske der Auswahl und Ihre Beschreibung mit Ihrem API-Schlüssel an Google (generativelanguage.googleapis.com). Es gelten die Nutzungsbedingungen und die Datenschutzerklärung der Gemini API von Google; die Nutzung wird über Ihren Schlüssel abgerechnet. Ergebnisse tragen Googles SynthID-Wasserzeichen.
+	Off. Set up a provider with your own API key to use Generative Fill.	Aus. Richten Sie einen Anbieter mit Ihrem eigenen API-Schlüssel ein, um Generatives Füllen zu verwenden.
+	Paste your Gemini API key	Gemini-API-Schlüssel einfügen
+	Prompt (optional)	Beschreibung (optional)
+	Provider	Anbieter
+	Remove Key	Schlüssel entfernen
+	Saved (paste to replace)	Gespeichert (zum Ersetzen einfügen)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Der ausgewählte Bereich, seine Umgebung und die Beschreibung werden an {name} ({model}) gesendet.
+	What is sent, and to whom	Was gesendet wird, und an wen
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Ihr Schlüssel wird in {store} aufbewahrt, nie in den Einstellungsdateien von PhotoCraft.
+	the macOS Keychain	der macOS-Schlüsselbundverwaltung
+	Windows Credential Manager	der Windows-Anmeldeinformationsverwaltung
+	memory until PhotoCraft quits	dem Arbeitsspeicher, bis PhotoCraft beendet wird

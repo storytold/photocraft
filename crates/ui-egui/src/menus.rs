@@ -22,6 +22,7 @@ pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Se
 /// UI-level commands (handled by the shell rather than the engine): id, label, menu, shortcut.
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.symmetryTransform", "Transform Symmetry", &[], None),
+    (crate::genai_ui::SETTINGS, "Generative AI Settings…", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
@@ -188,6 +189,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     }
     // Filter › Plug-ins (installed WebAssembly plug-ins, Install Plug-in…).
     if let Some(r) = crate::plugin_ui::menu(app, id, &params) {
+        return r;
+    }
+    // Edit › Generative Fill asks for its prompt; Generative AI Settings.
+    if let Some(r) = crate::genai_ui::menu(app, id, &params) {
         return r;
     }
     if id == "window.panel.brushes" {
@@ -934,6 +939,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     }
     if !prefs.menus.hidden.is_empty() {
         items.retain(|i| !prefs.menus.hidden.contains(&i.id));
+    }
+    // Edit › Generative Fill appears once a provider is set up (#41).
+    if !crate::genai_ui::menu_visible(app) {
+        items.retain(|i| i.id != photocraft_engine::genai_cmds::FILL);
     }
     if prefs.interface.show_menu_colors {
         for it in &mut items {

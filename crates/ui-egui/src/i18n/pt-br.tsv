@@ -2853,3 +2853,26 @@ fontWeight	Italic	Itálico
 	Previous Document	Documento anterior
 	W x H x Resolution	L x A x Resolução
 	Front Image	Imagem frontal
+# Generative Fill and Generative AI Settings (#41)
+	API key	Chave de API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Descreva o que gerar na seleção ou deixe vazio para continuar a imagem através dela.
+	Generative AI	IA generativa
+	Generative AI Settings…	Configurações de IA generativa…
+	Generative AI needs the desktop app.	A IA generativa precisa do aplicativo para desktop.
+	Generative Fill uses {name} ({model}).	O preenchimento generativo usa {name} ({model}).
+	Generative Fill…	Preenchimento generativo…
+	Get a Gemini API key from Google AI Studio	Obter uma chave de API do Gemini no Google AI Studio
+	No API key is saved for {provider}.	Nenhuma chave de API salva para {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Nada é enviado até você executar o preenchimento generativo. A cada execução, o PhotoCraft envia ao Google (generativelanguage.googleapis.com) a área selecionada e a imagem ao redor, uma máscara em preto e branco da seleção e a sua descrição, com a sua chave de API. Valem os termos e a política de privacidade da API Gemini do Google, e o uso é cobrado na sua chave. Os resultados levam a marca-d’água SynthID do Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Desativado. Configure um provedor com a sua própria chave de API para usar o preenchimento generativo.
+	Paste your Gemini API key	Cole sua chave de API do Gemini
+	Prompt (optional)	Descrição (opcional)
+	Provider	Provedor
+	Remove Key	Remover chave
+	Saved (paste to replace)	Salva (cole para substituir)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	A área selecionada, a imagem ao redor e a descrição são enviadas para {name} ({model}).
+	What is sent, and to whom	O que é enviado, e para quem
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Sua chave fica guardada em {store}, nunca nos arquivos de configuração do PhotoCraft.
+	the macOS Keychain	no Porta-Chaves do macOS
+	Windows Credential Manager	no Gerenciador de Credenciais do Windows
+	memory until PhotoCraft quits	na memória até o PhotoCraft ser fechado

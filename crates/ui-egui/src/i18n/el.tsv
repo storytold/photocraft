@@ -3535,3 +3535,26 @@ fontWeight	Thin	Πολύ λεπτά
 	Previous Document	Προηγούμενο έγγραφο
 	W x H x Resolution	Π x Υ x Ανάλυση
 	Front Image	Μπροστινή εικόνα
+# Generative Fill and Generative AI Settings (#41)
+	API key	Κλειδί API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Περιγράψτε τι θα δημιουργηθεί στην επιλογή ή αφήστε το κενό για να συνεχιστεί η εικόνα μέσα της.
+	Generative AI	Παραγωγική ΤΝ
+	Generative AI Settings…	Ρυθμίσεις παραγωγικής ΤΝ…
+	Generative AI needs the desktop app.	Η παραγωγική ΤΝ χρειάζεται την εφαρμογή υπολογιστή.
+	Generative Fill uses {name} ({model}).	Το παραγωγικό γέμισμα χρησιμοποιεί {name} ({model}).
+	Generative Fill…	Παραγωγικό γέμισμα…
+	Get a Gemini API key from Google AI Studio	Λήψη κλειδιού API του Gemini από το Google AI Studio
+	No API key is saved for {provider}.	Δεν υπάρχει αποθηκευμένο κλειδί API για {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Τίποτα δεν αποστέλλεται μέχρι να εκτελέσετε το παραγωγικό γέμισμα. Κάθε φορά που το κάνετε, το PhotoCraft στέλνει στην Google (generativelanguage.googleapis.com) την επιλεγμένη περιοχή και την εικόνα γύρω της, μια ασπρόμαυρη μάσκα της επιλογής και την περιγραφή σας, μαζί με το κλειδί API σας. Ισχύουν οι όροι και η πολιτική απορρήτου του Gemini API της Google, και η χρήση χρεώνεται στο κλειδί σας. Τα αποτελέσματα φέρουν το υδατογράφημα SynthID της Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Ανενεργό. Ορίστε έναν πάροχο με το δικό σας κλειδί API για να χρησιμοποιήσετε το παραγωγικό γέμισμα.
+	Paste your Gemini API key	Επικολλήστε το κλειδί API του Gemini
+	Prompt (optional)	Περιγραφή (προαιρετική)
+	Provider	Πάροχος
+	Remove Key	Αφαίρεση κλειδιού
+	Saved (paste to replace)	Αποθηκευμένο (επικολλήστε για αντικατάσταση)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Η επιλεγμένη περιοχή, η εικόνα γύρω της και η περιγραφή αποστέλλονται στο {name} ({model}).
+	What is sent, and to whom	Τι αποστέλλεται και σε ποιον
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Το κλειδί σας φυλάσσεται στη {store}, ποτέ στα αρχεία ρυθμίσεων του PhotoCraft.
+	the macOS Keychain	Κλειδοθήκη του macOS
+	Windows Credential Manager	Διαχείριση διαπιστευτηρίων των Windows
+	memory until PhotoCraft quits	μνήμη μέχρι να κλείσει το PhotoCraft

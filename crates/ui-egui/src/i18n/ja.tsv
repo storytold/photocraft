@@ -3446,3 +3446,26 @@ fontWeight	Italic	斜体
 	Previous Document	前のドキュメント
 	W x H x Resolution	幅 x 高さ x 解像度
 	Front Image	前面の画像
+# Generative Fill and Generative AI Settings (#41)
+	API key	API キー
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	選択範囲に生成する内容を入力してください。空のままにすると、周囲の画像を選択範囲の中へ続けます。
+	Generative AI	生成 AI
+	Generative AI Settings…	生成 AI の設定…
+	Generative AI needs the desktop app.	生成 AI はデスクトップアプリでのみ使えます。
+	Generative Fill uses {name} ({model}).	生成塗りつぶしは {name}（{model}）を使用します。
+	Generative Fill…	生成塗りつぶし…
+	Get a Gemini API key from Google AI Studio	Google AI Studio で Gemini API キーを取得
+	No API key is saved for {provider}.	{provider} の API キーは保存されていません。
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	生成塗りつぶしを実行するまで、何も送信されません。実行するたびに、PhotoCraft は選択範囲とその周囲の画像、選択範囲の白黒マスク、入力した説明文を、API キーとともに Google（generativelanguage.googleapis.com）へ送信します。Google の Gemini API の利用規約とプライバシーポリシーが適用され、利用料金はお使いのキーに請求されます。結果には Google の SynthID 透かしが入ります。
+	Off. Set up a provider with your own API key to use Generative Fill.	オフです。生成塗りつぶしを使うには、ご自身の API キーでプロバイダーを設定してください。
+	Paste your Gemini API key	Gemini API キーを貼り付け
+	Prompt (optional)	説明文（省略可）
+	Provider	プロバイダー
+	Remove Key	キーを削除
+	Saved (paste to replace)	保存済み（貼り付けると置き換え）
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	選択範囲、その周囲の画像、説明文が {name}（{model}）に送信されます。
+	What is sent, and to whom	送信される内容と送信先
+	Your key is kept in {store}, never in PhotoCraft's settings files.	キーは {store} に保管され、PhotoCraft の設定ファイルには保存されません。
+	the macOS Keychain	macOS のキーチェーン
+	Windows Credential Manager	Windows 資格情報マネージャー
+	memory until PhotoCraft quits	PhotoCraft を終了するまでのメモリ

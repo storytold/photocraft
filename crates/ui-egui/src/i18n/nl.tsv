@@ -3605,3 +3605,26 @@ cameraRaw	Whites	Witten
 	W x H x Resolution	B x H x Resolutie
 	Front Image	Voorste afbeelding
 	PhotoCraft — Screen Color Picker	PhotoCraft — Schermkleurkiezer
+# Generative Fill and Generative AI Settings (#41)
+	API key	API-sleutel
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Beschrijf wat er in de selectie moet komen, of laat leeg om de afbeelding erdoorheen voort te zetten.
+	Generative AI	Generatieve AI
+	Generative AI Settings…	Instellingen voor generatieve AI…
+	Generative AI needs the desktop app.	Generatieve AI werkt alleen in de desktop-app.
+	Generative Fill uses {name} ({model}).	Generatief vullen gebruikt {name} ({model}).
+	Generative Fill…	Generatief vullen…
+	Get a Gemini API key from Google AI Studio	Een Gemini-API-sleutel halen bij Google AI Studio
+	No API key is saved for {provider}.	Er is geen API-sleutel bewaard voor {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Er wordt niets verstuurd totdat u Generatief vullen uitvoert. Elke keer dat u dat doet, stuurt PhotoCraft het geselecteerde gebied met de omringende afbeelding, een zwart-wit masker van de selectie en uw beschrijving met uw API-sleutel naar Google (generativelanguage.googleapis.com). De voorwaarden en het privacybeleid van de Gemini API van Google zijn van toepassing en het gebruik wordt via uw sleutel gefactureerd. Resultaten dragen het SynthID-watermerk van Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Uit. Stel een aanbieder in met uw eigen API-sleutel om Generatief vullen te gebruiken.
+	Paste your Gemini API key	Plak uw Gemini-API-sleutel
+	Prompt (optional)	Beschrijving (optioneel)
+	Provider	Aanbieder
+	Remove Key	Sleutel verwijderen
+	Saved (paste to replace)	Bewaard (plak om te vervangen)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Het geselecteerde gebied, de omringende afbeelding en de beschrijving worden naar {name} ({model}) gestuurd.
+	What is sent, and to whom	Wat er wordt verstuurd, en naar wie
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Uw sleutel wordt bewaard in {store}, nooit in de instellingenbestanden van PhotoCraft.
+	the macOS Keychain	de macOS-sleutelhanger
+	Windows Credential Manager	Windows Referentiebeheer
+	memory until PhotoCraft quits	het geheugen totdat PhotoCraft stopt
