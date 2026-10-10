@@ -10,7 +10,7 @@ use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement};
-use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke};
+use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Stroke, StrokePoint, StrokeRenderer, TipShape};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -253,7 +253,24 @@ fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_color::conver
 }
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
-fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
+fn stroke_with(s: &mut Session, p: &Value, label: &str, cmd: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
+    if let Some(live) = s.prepared_stroke.take()
+        && live.matches(s, cmd, p, &brush, &pts)
+    {
+        let damage = live.bounds();
+        // Moving the rendered document preserves the exact tiles already on screen and in the
+        // GPU cache. Session::edit still applies single-channel restrictions and records undo.
+        let rendered = match std::sync::Arc::try_unwrap(live.doc) {
+            Ok(doc) => doc,
+            Err(doc) => (*doc).clone(),
+        };
+        s.edit(label, |doc, _| {
+            *doc = rendered;
+            Ok(())
+        })?;
+        return Ok(damage_json(s, damage));
+    }
+    let accelerator = s.brush_accelerator();
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
@@ -268,29 +285,36 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
             if auto_erase {
                 apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
             }
+            let render = |surf: &mut Surface| {
+                let pre = surf.clone();
+                let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_accelerator(accelerator.clone());
+                renderer.push(&pts);
+                renderer.finish();
+                renderer.composite(&pre, surf, sel.as_ref(), lock, true)
+            };
             let damage = if let Some(axis) = &symmetry {
                 let reflected = axis.reflected_passes(&pts);
                 let copies: Vec<_> = reflected
                     .iter()
                     .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
                     .map(|p| {
-                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_accelerator(accelerator.clone());
                         renderer.push(p);
                         renderer.finish();
                         renderer
                     })
                     .collect();
                 if copies.is_empty() {
-                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                    render(surf)
                 } else {
                     let pre = surf.clone();
-                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_accelerator(accelerator.clone());
                     original.push(&pts);
                     original.finish();
                     original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
                 }
             } else {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                render(surf)
             };
             Ok(damage)
         })
@@ -377,13 +401,17 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase { "Eraser" } else { "Brush Tool" };
-    stroke_with(s, p, label, brush, pts, false)
+    stroke_with(s, p, label, "paint.stroke", brush, pts, false)
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
 /// shows the real dabs before the stroke commits. Committing the same params and points with
 /// `"seed": live.seed` gives the same pixels.
 pub struct LiveStroke {
+    source: std::sync::Arc<photocraft_doc::Document>,
+    revision: u64,
+    original_brush: BrushSettings,
+    points: Vec<StrokePoint>,
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<photocraft_doc::Document>,
     /// Jitter seed to pass to `paint.stroke`.
@@ -424,6 +452,9 @@ impl LiveStroke {
             other => return Err(bad(other, "live strokes are `paint.stroke` or `paint.pencil`")),
         };
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
+        let original_brush = brush.clone();
+        let source = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+        let revision = s.active().ok_or(EngineError::NoDocument)?.revision;
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
@@ -433,12 +464,18 @@ impl LiveStroke {
         if pencil && flag(p, "autoErase", false) {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_accelerator(s.brush_accelerator());
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
+        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count()))
+            .map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_accelerator(s.brush_accelerator()))
+            .collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
         let mut live = Self {
+            source,
+            revision,
+            original_brush,
+            points: Vec::new(),
             doc: std::sync::Arc::new(doc),
             seed,
             cmd: cmd.into(),
@@ -465,6 +502,37 @@ impl LiveStroke {
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 
+    /// Offer this gesture to the next normal paint command. A changed document, brush, target
+    /// or sample sequence makes the command discard it and render normally instead.
+    pub fn prepare(self, s: &mut Session) {
+        s.prepared_stroke = Some(Box::new(self));
+    }
+
+    /// Clear an offered gesture when dispatch was refused before entering the paint command.
+    pub fn clear_prepared(s: &mut Session) {
+        s.prepared_stroke = None;
+    }
+
+    fn matches(&self, s: &Session, cmd: &str, p: &Value, brush: &BrushSettings, points: &[StrokePoint]) -> bool {
+        let Some(st) = s.active() else { return false };
+        let mut before = self.params.clone();
+        let mut after = p.clone();
+        for params in [&mut before, &mut after] {
+            if let Some(obj) = params.as_object_mut() {
+                obj.remove("points");
+                obj.remove("seed");
+            }
+        }
+        self.cmd == cmd
+            && std::sync::Arc::ptr_eq(&self.source, &st.doc)
+            && st.revision == self.revision
+            && st.symmetry == self.symmetry
+            && self.original_brush == *brush
+            && self.points == points
+            && before == after
+            && stroke_target(s, p, brush.clone()).is_ok_and(|(layer, _, _)| layer == self.layer)
+    }
+
     /// Does the stroke change with time while the pointer is held still (airbrush Build-up, or
     /// smoothing still catching up)? See `photocraft_paint::dynamics::DabGenerator::wants_time`.
     pub fn wants_time(&self) -> bool {
@@ -479,7 +547,7 @@ impl LiveStroke {
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
         let cmyk = self.cmyk.clone();
-        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        let result = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
             self.renderer.push(pts);
             if let Some(symmetry) = &self.symmetry {
                 for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -531,7 +599,11 @@ impl LiveStroke {
                 dmg = dmg.union(&self.tail);
             }
             Ok(dmg)
-        })
+        });
+        if result.is_ok() {
+            self.points.extend_from_slice(pts);
+        }
+        result
     }
 }
 
@@ -539,7 +611,7 @@ fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.pencil")?;
     let brush = pencil_brush(s, p)?;
     let label = if brush.erase { "Eraser" } else { "Pencil" };
-    stroke_with(s, p, label, brush, pts, flag(p, "autoErase", false))
+    stroke_with(s, p, label, "paint.pencil", brush, pts, flag(p, "autoErase", false))
 }
 
 fn pct(p: &Value, k: &str, d: f32) -> f32 {

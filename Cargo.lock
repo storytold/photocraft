@@ -4403,6 +4403,7 @@ dependencies = [
  "photocraft-compose",
  "photocraft-doc",
  "photocraft-geom",
+ "photocraft-paint",
  "photocraft-raster",
  "photocraft-vector",
  "pollster 1.0.1",
@@ -4460,6 +4461,7 @@ dependencies = [
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
+ "rayon",
  "serde",
  "serde_json",
 ]

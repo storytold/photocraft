@@ -320,6 +320,11 @@ impl Default for ToolState {
 
 #[derive(Default)]
 pub struct Session {
+    /// Optional hardware coverage backend supplied by the native shell.
+    pub brush_accelerator: Option<Arc<dyn photocraft_paint::render::CoverageAccelerator>>,
+    /// A rendered gesture offered to the next paint command. It still passes through normal
+    /// dispatch, authorization, history, colour-channel restriction and journal bookkeeping.
+    prepared_stroke: Option<Box<brush_cmds::LiveStroke>>,
     docs: Vec<DocState>,
     active: Option<usize>,
     pub tools: ToolState,
@@ -385,6 +390,11 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 }
 
 impl Session {
+    /// Respect the same CPU rendering preference as the canvas, including runtime changes.
+    pub fn brush_accelerator(&self) -> Option<Arc<dyn photocraft_paint::render::CoverageAccelerator>> {
+        if self.prefs().performance.effective_rendering_mode() == prefs::RenderingMode::Cpu { None } else { self.brush_accelerator.clone() }
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

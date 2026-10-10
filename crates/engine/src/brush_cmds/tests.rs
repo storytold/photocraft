@@ -15,8 +15,100 @@ fn rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
     surface(s).rgba(x, y)
 }
 
+#[test]
+fn cpu_rendering_preference_disables_brush_acceleration() {
+    #[derive(Debug, Default)]
+    struct Backend(std::sync::atomic::AtomicUsize);
+    impl photocraft_paint::render::CoverageAccelerator for Backend {
+        fn supports(&self, _: &BrushSettings, _: bool, _: &[photocraft_paint::Dab], _: usize) -> bool {
+            true
+        }
+        fn rasterize(&self, _: &BrushSettings, _: bool, _: &[photocraft_paint::Dab], _: &mut [photocraft_paint::render::RasterTile]) -> bool {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            false // Exercise the same graceful fallback as an unsupported/lost device.
+        }
+    }
+    let backend = std::sync::Arc::new(Backend::default());
+    let mut s = session(600, 600);
+    s.brush_accelerator = Some(backend.clone());
+    let p = json!({"points": [[300,300]], "size": 300, "smoothing": 0});
+    s.execute("paint.stroke", p.clone()).unwrap();
+    let before = backend.0.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(before > 0);
+    s.execute("prefs.set", json!({"values": {"performance.renderingMode": "cpu"}})).unwrap();
+    s.execute("paint.stroke", p).unwrap();
+    assert_eq!(backend.0.load(std::sync::atomic::Ordering::Relaxed), before);
+    assert!(rgba(&s, 300, 300)[3] > 0.0);
+}
+
 fn same_pixels(a: &Surface, b: &Surface, r: Rect) -> bool {
     (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| a.pixel(x, y) == b.pixel(x, y)))
+}
+
+#[test]
+fn prepared_stroke_reuses_rendered_tiles_and_preserves_undo_redo_and_journal() {
+    for depth in [8, 16, 32] {
+        for cmd in ["paint.stroke", "paint.pencil"] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 600, "height": 400, "depth": depth, "background": "transparent"})).unwrap();
+            let points = vec![[120.25, 150.75, 0.8], [230.5, 170.25, 1.0], [380.75, 240.5, 0.6]];
+            let p = json!({"points": points, "size": 300, "seed": 31, "color": "#3080c0", "target": "pixels", "brush": {"pressureSize": true, "flow": 0.4}});
+            let before = surface(&s);
+            s.execute(cmd, p.clone()).unwrap();
+            let expected = surface(&s);
+            s.execute("edit.undo", json!({})).unwrap();
+            let mut initial = p.clone();
+            initial["points"] = json!([points[0]]);
+            let mut live = LiveStroke::begin_with(&s, cmd, &initial).unwrap();
+            for point in &points[1..] {
+                live.push(&[StrokePoint::new(point[0], point[1], point[2] as f32)]).unwrap();
+            }
+            let rendered = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+            let history = s.active().unwrap().history.past_len();
+            let journal = s.journal.len();
+            live.prepare(&mut s);
+            s.execute(cmd, p.clone()).unwrap();
+            assert!(s.prepared_stroke.is_none());
+            let committed = surface(&s);
+            assert_eq!(committed, expected, "{cmd} {depth}");
+            for (key, tile) in rendered.tiles() {
+                assert!(std::sync::Arc::ptr_eq(tile, committed.tile(*key).unwrap()), "rendered pixels must be adopted, not rerasterized");
+            }
+            assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+            assert_eq!(s.journal.len(), journal + 1);
+            assert_eq!(s.journal.last().unwrap(), &(cmd.to_string(), p));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(surface(&s), before);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(surface(&s), expected);
+        }
+    }
+}
+
+#[test]
+fn prepared_stroke_is_discarded_when_document_or_samples_change() {
+    for change_document in [false, true] {
+        let mut s = session(80, 80);
+        let p = json!({"points": [[20, 20]], "size": 10, "seed": 4, "color": "#ff0000"});
+        let live = LiveStroke::begin(&s, &p).unwrap();
+        if change_document {
+            s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        }
+        live.prepare(&mut s);
+        let mut final_params = p;
+        if !change_document {
+            final_params["points"] = json!([[60, 60]]);
+        }
+        s.execute("paint.stroke", final_params).unwrap();
+        assert!(s.prepared_stroke.is_none());
+        if change_document {
+            assert!(rgba(&s, 20, 20)[0] > 0.9);
+            assert!(rgba(&s, 60, 60)[2] > 0.9, "the newer document must survive");
+        } else {
+            assert!(rgba(&s, 60, 60)[0] > 0.9);
+            assert!(rgba(&s, 20, 20)[0] < 0.1);
+        }
+    }
 }
 
 #[test]
@@ -545,6 +637,7 @@ fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
                 s.execute("paint.stroke", commit).unwrap();
                 let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
                 let done = surface(&s);
+                assert_eq!(shown, done, "incremental smoothing must replay exactly");
                 let worst = (0..120).flat_map(|y| (0..200).map(move |x| (x, y))).map(|(x, y)| {
                     let (a, b) = (shown.rgba(x, y), done.rgba(x, y));
                     (0..4).map(|i| (a[i] - b[i]).abs()).fold(0.0f32, f32::max)
@@ -738,5 +831,22 @@ fn strokes_convert_through_the_documents_cmyk_profile() {
     let mut plain = cmyk_session(false);
     plain.execute("paint.stroke", params).unwrap();
     let untagged = ink(&surface(&plain));
+    // Non-normal compositing converts in both directions on workers. A large hard dab's
+    // centre must match the small serial dab under the embedded profile exactly.
+    for mode in ["multiply", "color"] {
+        let mut reference = cmyk_session(true);
+        let mut parallel = cmyk_session(true);
+        for (session, size) in [(&mut reference, 8), (&mut parallel, 500)] {
+            session.execute("edit.fill", json!({"color": "#5980ba"})).unwrap();
+            session
+                .execute(
+                    "paint.stroke",
+                    json!({"points": [[16, 16]], "size": size, "hardness": 1,
+                "opacity": 0.65, "flow": 1, "color": "#996699", "smoothing": 0, "mode": mode}),
+                )
+                .unwrap();
+        }
+        assert_eq!(ink(&surface(&reference)), ink(&surface(&parallel)), "worker ICC context, {mode}");
+    }
     assert!(tagged != untagged, "the document's CMYK profile must convert the painted ink: {tagged:?} vs {untagged:?}");
 }
