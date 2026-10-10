@@ -93,6 +93,35 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
     Ok((action, from))
 }
 
+/// The actions that `steps` call through Play Action steps, followed transitively, in list order,
+/// so a droplet can run without the Actions panel that made it (#2794). Index references in
+/// `steps` and in the copies become names, which resolve without the rest of the list. A target
+/// that doesn't resolve is left alone: it fails at playback, as it would have before.
+pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Action> {
+    fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut Vec<(usize, usize)>) {
+        for (_, params) in steps.iter_mut().filter(|(id, _)| id == "actions.play") {
+            let Ok(i) = resolve(list, params, "actions.play") else { continue };
+            if let (Some(action), Some(obj)) = (list.get(i), params.as_object_mut()) {
+                obj.insert("action".into(), json!(action.name));
+            }
+            queue.push((i, depth));
+        }
+    }
+    let mut queue = Vec::new();
+    targets(list, steps, 1, &mut queue);
+    let mut found = std::collections::BTreeMap::new();
+    while let Some((i, depth)) = queue.pop() {
+        // Playback stops at 16 levels, so deeper calls never run.
+        if depth > 16 || found.contains_key(&i) {
+            continue;
+        }
+        let Some(mut action) = list.get(i).cloned() else { continue };
+        targets(list, &mut action.steps, depth + 1, &mut queue);
+        found.insert(i, action);
+    }
+    found.into_values().collect()
+}
+
 fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }

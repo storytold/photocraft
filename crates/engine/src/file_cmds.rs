@@ -782,12 +782,19 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
-    let actions = crate::actions_cmds::ActionState {
-        list: s.actions.list.clone(),
-        playing: s.actions.playing,
-        playback_stack: s.actions.playback_stack.clone(),
-        ..Default::default()
+    let list = match p.get("calledActions") {
+        None | Some(Value::Null) => s.actions.list.clone(),
+        // A droplet brings the actions it calls (#2794) and runs with those alone.
+        Some(v) => {
+            let list: Vec<crate::actions_cmds::Action> =
+                serde_json::from_value(v.clone()).map_err(|e| EngineError::BadParams { cmd: cmd.into(), msg: format!("\"calledActions\": {e}") })?;
+            if list.len() > 4096 {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: "\"calledActions\" holds more than 4096 actions".into() });
+            }
+            list
+        }
     };
+    let actions = crate::actions_cmds::ActionState { list, playing: s.actions.playing, playback_stack: s.actions.playback_stack.clone(), ..Default::default() };
     let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
         scratch.actions = actions.clone();
         for (id, params) in &steps {
@@ -1336,7 +1343,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Batch…",
             &["File", "Automate"],
             None,
-            r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action),"input":folder|[paths],"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"tiffLayers":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action),"input":folder|[paths],"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"tiffLayers":bool=false,"calledActions":[{"name","steps"}…]? (the actions Play Action steps call; default: the session's)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
             native,
             batch
         ),
