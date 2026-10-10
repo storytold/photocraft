@@ -1607,15 +1607,18 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(tex) = crate::canvas::navigator_texture(app, &ctx, idx) else { return };
     let size = app.session.documents()[idx].doc.size;
     let avail = ui.available_width();
-    let box_h = 150.0;
+    // The preview fills the group's height above the zoom controls (their height as measured
+    // last frame), so it grows when the group is made taller, as in Photoshop (#2726).
+    let controls_h = ui.data(|d| d.get_temp::<f32>(navigator_controls_id())).unwrap_or(48.0);
+    let left = ui.available_height() - controls_h;
+    let box_h = if left.is_finite() { left.max(40.0) } else { 150.0 };
     let (frame, resp) = ui.allocate_exact_size(vec2(avail, box_h), Sense::click_and_drag());
     ui.painter().rect_filled(frame, t.radius_sm, t.canvas);
-    let aspect = size.width as f32 / size.height.max(1) as f32;
-    let (w, h) = if aspect > avail / box_h { (avail - 16.0, (avail - 16.0) / aspect) } else { ((box_h - 16.0) * aspect, box_h - 16.0) };
-    let rect = Rect::from_center_size(frame.center(), vec2(w, h));
+    let rect = navigator_fit(frame, size.width, size.height);
+    ui.data_mut(|d| d.insert_temp(navigator_preview_id(), rect));
     widgets::checker(ui.painter(), rect, 6.0);
     ui.painter().image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-    let s = w / size.width as f32;
+    let s = rect.width() / size.width.max(1) as f32;
     if (resp.clicked() || resp.dragged())
         && let Some(pp) = resp.interact_pointer_pos()
     {
@@ -1632,28 +1635,69 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let c = pos2(rect.min.x + v.center[0] * s, rect.min.y + v.center[1] * s);
     let vr = Rect::from_center_size(c, vec2(vw, vh)).intersect(frame.shrink(1.0));
     ui.painter().rect_stroke(vr, 2.0, Stroke::new(1.5, Color32::from_rgb(255, 84, 84)), StrokeKind::Middle);
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        label(ui, tl!("Zoom"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            for (lbl, z) in [("200%", 2.0), ("100%", 1.0)] {
-                if widgets::pill_tab(ui, lbl, (v.zoom - z).abs() < 1e-3).clicked() {
-                    app.ui.views[idx].zoom = z;
-                    app.ui.views[idx].fit_pending = false;
+    let controls = ui.vertical(|ui| {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            label(ui, tl!("Zoom"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for (lbl, z) in [("200%", 2.0), ("100%", 1.0)] {
+                    if widgets::pill_tab(ui, lbl, (v.zoom - z).abs() < 1e-3).clicked() {
+                        app.ui.views[idx].zoom = z;
+                        app.ui.views[idx].fit_pending = false;
+                    }
                 }
-            }
-            if widgets::pill_tab(ui, tl!("Fit"), false).clicked() {
-                app.ui.views[idx].fit_pending = true;
-            }
+                if widgets::pill_tab(ui, tl!("Fit"), false).clicked() {
+                    app.ui.views[idx].fit_pending = true;
+                }
+            });
         });
+        // The whole zoom range, and always the current zoom: a narrower slider would pull it back.
+        let (lo, hi) = (crate::zoom_levels::min(v.doc_size).min(v.zoom).log2(), crate::zoom_levels::MAX.max(v.zoom).log2());
+        let mut lz = v.zoom.log2();
+        if lz.is_finite() && widgets::slider(ui, &mut lz, lo..=hi, None).changed() {
+            app.ui.views[idx].zoom = crate::zoom_levels::clamp(2f32.powf(lz), v.doc_size);
+            app.ui.views[idx].fit_pending = false;
+        }
     });
-    // The whole zoom range, and always the current zoom: a narrower slider would pull it back.
-    let (lo, hi) = (crate::zoom_levels::min(v.doc_size).min(v.zoom).log2(), crate::zoom_levels::MAX.max(v.zoom).log2());
-    let mut lz = v.zoom.log2();
-    if lz.is_finite() && widgets::slider(ui, &mut lz, lo..=hi, None).changed() {
-        app.ui.views[idx].zoom = crate::zoom_levels::clamp(2f32.powf(lz), v.doc_size);
-        app.ui.views[idx].fit_pending = false;
-    }
+    // From the preview's bottom, so the spacing above the controls counts too.
+    let controls = Rect::from_min_max(pos2(frame.left(), frame.bottom()), pos2(frame.right(), controls.response.rect.bottom()));
+    ui.data_mut(|d| {
+        d.insert_temp(navigator_controls_id(), controls.height());
+        d.insert_temp(navigator_controls_rect_id(), controls);
+    });
+}
+
+/// The document's `w` × `h` fitted inside the Navigator's `frame` with an 8 pt inset, centred and
+/// keeping its aspect.
+fn navigator_fit(frame: Rect, w: u32, h: u32) -> Rect {
+    let inner = (frame.size() - vec2(16.0, 16.0)).max(vec2(1.0, 1.0));
+    let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+    let s = (inner.x / w).min(inner.y / h);
+    Rect::from_center_size(frame.center(), vec2(w * s, h * s))
+}
+
+fn navigator_preview_id() -> egui::Id {
+    egui::Id::new("navigator-preview-rect")
+}
+
+fn navigator_controls_id() -> egui::Id {
+    egui::Id::new("navigator-controls-height")
+}
+
+fn navigator_controls_rect_id() -> egui::Id {
+    egui::Id::new("navigator-controls-rect")
+}
+
+/// Where the Navigator drew its document preview last frame.
+#[cfg(test)]
+pub(crate) fn last_navigator_preview(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data(|d| d.get_temp(navigator_preview_id()))
+}
+
+/// The Navigator's zoom controls (below the preview) last frame.
+#[cfg(test)]
+pub(crate) fn last_navigator_controls(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data(|d| d.get_temp(navigator_controls_rect_id()))
 }
 
 fn empty(ui: &mut egui::Ui, s: &str) {
