@@ -2406,3 +2406,14 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+	Camera Data	Údaje fotoaparátu
+cameraData	Make	Výrobce
+cameraData	Model	Model
+cameraData	Date Taken	Datum pořízení
+cameraData	Exposure	Expoziční čas
+cameraData	F-Stop	Clona
+cameraData	ISO Speed	Citlivost ISO
+cameraData	Focal Length	Ohnisková vzdálenost
+cameraData	Focal Length (35 mm)	Ohnisková vzdálenost (35 mm)
+cameraData	Lens	Objektiv

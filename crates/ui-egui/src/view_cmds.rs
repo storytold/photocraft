@@ -806,6 +806,24 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             ui.end_row();
         }
     });
+    camera_data(ui, f);
+}
+
+/// File Info's read-only Camera Data section (`__camera`, from the document's EXIF/XMP).
+fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
+    let Some(camera) = f.get("__camera").and_then(Value::as_object).filter(|c| !c.is_empty()) else { return };
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new(tl!("Camera Data")).font(crate::theme::semibold(13.0)));
+    ui.add_space(4.0);
+    egui::Grid::new("form-camera-data").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+        for (key, label) in photocraft_engine::file_cmds::CAMERA_FIELDS {
+            if let Some(v) = camera.get(key).and_then(Value::as_str) {
+                ui.label(crate::i18n::tr_ctx(crate::i18n::current(), "cameraData", label));
+                ui.add(egui::Label::new(v).selectable(true));
+                ui.end_row();
+            }
+        }
+    });
 }
 
 /// Folder the batch dialogs start from: next to the active document, else the working directory.
@@ -866,7 +884,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             let kw = info["keywords"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default();
             dialog(
                 app,
-                json!({"title": info["title"], "author": info["author"], "authorTitle": info["authorTitle"], "description": info["description"], "keywords": kw, "copyright": info["copyright"], "copyrightStatus": info["copyrightStatus"], "copyrightUrl": info["copyrightUrl"]}),
+                json!({"title": info["title"], "author": info["author"], "authorTitle": info["authorTitle"], "description": info["description"], "keywords": kw, "copyright": info["copyright"], "copyrightStatus": info["copyrightStatus"], "copyrightUrl": info["copyrightUrl"], "__camera": info["camera"]}),
                 json!({"copyrightStatus": ["unknown", "copyrighted", "publicDomain"]}),
             )
         }

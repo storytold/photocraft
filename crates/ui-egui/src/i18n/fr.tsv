@@ -2825,3 +2825,13 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+cameraData	Make	Marque
+cameraData	Model	Modèle
+cameraData	Date Taken	Date de prise de vue
+cameraData	Exposure	Temps de pose
+cameraData	F-Stop	Ouverture
+cameraData	ISO Speed	Sensibilité ISO
+cameraData	Focal Length	Focale
+cameraData	Focal Length (35 mm)	Focale (35 mm)
+cameraData	Lens	Objectif
