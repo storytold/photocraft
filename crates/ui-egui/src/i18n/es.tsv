@@ -948,6 +948,17 @@
 	Delete current channel	Eliminar el canal actual
 	Delete current state	Eliminar el estado actual
 	Delete effect layer	Eliminar capa de efecto
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	¿Eliminar la capa «{name}»?
+	Delete {count} layers? {names}	¿Eliminar {count} capas? {names}
+	Delete layer?	¿Eliminar capa?
+	The document is closed	El documento está cerrado
+	The document or selected layers changed. Please request deletion again.	El documento o las capas seleccionadas han cambiado. Solicita la eliminación de nuevo.
+	Missing delete command	Falta el comando de eliminación
+	Invalid delete command	Comando de eliminación no válido
+	Layer deleted, but confirmation preference could not be saved: {error}	La capa se eliminó, pero no se pudo guardar la preferencia de confirmación: {error}
+
 	Delete layer	Eliminar capa
 	Delete layer comp	Eliminar composición de capa
 	Delete note	Eliminar nota
@@ -2383,6 +2394,9 @@ fontWeight	Italic	Cursiva
 	Cycle Orientation	Alternar orientación
 	Set the overlay options for the Crop tool	Definir las opciones de superposición de la herramienta Recortar
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	El Alt+clic lo recibió el escritorio, que mueve ventanas con Alt+arrastrar. Cambia su tecla para mover ventanas a Super o bloquea Alt en Ventana › Teclas modificadoras.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Selector de color (color del estilo de capa)
 	Auto Hide Notifications	Ocultar notificaciones automáticamente
 	Notification Duration (seconds)	Duración de la notificación (segundos)
 	Appearance Mode	Modo de apariencia
@@ -2421,3 +2435,7 @@ fontWeight	Italic	Cursiva
 	XOR	XOR
 	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
 	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+	No subject found — try Object Selection or the Lasso	No se encontró ningún sujeto — pruebe Selección de objeto o el Lazo
+	Quick Selection found nothing there	Selección rápida no encontró nada ahí
+	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
+	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto

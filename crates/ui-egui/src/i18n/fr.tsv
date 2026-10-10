@@ -938,6 +938,17 @@
 	Delete current channel	Supprimer le canal actif
 	Delete current state	Supprimer l'état actuel
 	Delete effect layer	Supprimer le calque d'effet
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Supprimer le calque « {name} » ?
+	Delete {count} layers? {names}	Supprimer {count} calques ? {names}
+	Delete layer?	Supprimer le calque ?
+	The document is closed	Le document est fermé
+	The document or selected layers changed. Please request deletion again.	Le document ou les calques sélectionnés ont changé. Demandez à nouveau la suppression.
+	Missing delete command	Commande de suppression manquante
+	Invalid delete command	Commande de suppression non valide
+	Layer deleted, but confirmation preference could not be saved: {error}	Le calque a été supprimé, mais la préférence de confirmation n’a pas pu être enregistrée : {error}
+
 	Delete layer	Supprimer le calque
 	Delete layer comp	Supprimer la composition de calques
 	Delete note	Supprimer la note
@@ -2736,6 +2747,9 @@ fontWeight	Italic	Italique
 	Cycle Orientation	Changer d’orientation
 	Set the overlay options for the Crop tool	Définir les options de superposition de l’outil Recadrage
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-clic a été intercepté par le bureau, qui déplace les fenêtres avec Alt-glisser. Réglez sa touche de déplacement des fenêtres sur Super, ou verrouillez Alt dans Fenêtre › Touches de modification.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Sélecteur de couleurs (couleur du style de calque)
 	Auto Hide Notifications	Masquer automatiquement les notifications
 	Notification Duration (seconds)	Durée de la notification (secondes)
 	Appearance Mode	Mode d’apparence
@@ -2774,3 +2788,7 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Aucun sujet trouvé — essayez la Sélection d'objet ou le Lasso
+	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
+	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
+	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
