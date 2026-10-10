@@ -915,6 +915,13 @@ fn humanize(key: &str) -> String {
     if key == "notificationDurationSeconds" {
         return "Notification Duration (seconds)".into();
     }
+    // Tools: arrow-key nudges bundle into one History state (#2259).
+    if key == "bundleNudges" {
+        return "Bundle Arrow-Key Nudges".into();
+    }
+    if key == "nudgeBundlePauseMs" {
+        return "Nudge Bundle Pause (ms)".into();
+    }
     let mut s = String::new();
     for (i, ch) in key.chars().enumerate() {
         if i == 0 {
@@ -1121,6 +1128,11 @@ fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
     }
 }
 
+/// The pause that bundles arrow-key nudges means nothing with Bundle Arrow-Key Nudges off (#2259).
+fn tools_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
+    key != "nudgeBundlePauseMs" || obj.get("bundleNudges").and_then(Value::as_bool) != Some(false)
+}
+
 fn theme_preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
     let p = Tokens::for_kind(kind);
     let (rect, _) = ui.allocate_exact_size(vec2(width, 108.0), Sense::hover());
@@ -1268,6 +1280,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                 || prefs::is_hidden(&path)
                 || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
                 || (section == "export" && !export_field_visible(obj, &k))
+                || (section == "tools" && !tools_field_visible(obj, &k))
             {
                 continue;
             }
@@ -1815,6 +1828,21 @@ mod tests {
         assert!(export_field_visible(&obj, "webpQuality"));
         assert_eq!(humanize("webpLossless"), "Lossless");
         assert_eq!(humanize("webpQuality"), "Quality");
+    }
+
+    #[test]
+    fn the_nudge_pause_is_hidden_while_nudges_are_not_bundled() {
+        let mut tools = Map::new();
+        tools.insert("bundleNudges".into(), json!(true));
+        assert!(tools_field_visible(&tools, "nudgeBundlePauseMs"));
+        assert!(tools_field_visible(&tools, "bundleNudges"));
+        tools.insert("bundleNudges".into(), json!(false));
+        assert!(!tools_field_visible(&tools, "nudgeBundlePauseMs"));
+        assert!(tools_field_visible(&tools, "bundleNudges") && tools_field_visible(&tools, "showTooltips"));
+        // A section without the flag (an older preferences object) shows the field.
+        assert!(tools_field_visible(&Map::new(), "nudgeBundlePauseMs"));
+        assert_eq!(humanize("bundleNudges"), "Bundle Arrow-Key Nudges");
+        assert_eq!(humanize("nudgeBundlePauseMs"), "Nudge Bundle Pause (ms)");
     }
 
     #[test]

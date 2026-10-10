@@ -3378,6 +3378,8 @@ fontWeight	Italic	斜体
 	Color Picker (Layer Style Color)	カラーピッカー（レイヤースタイルの色）
 	Auto Hide Notifications	通知を自動的に隠す
 	Notification Duration (seconds)	通知の表示時間（秒）
+	Bundle Arrow-Key Nudges	矢印キーの移動をまとめる
+	Nudge Bundle Pause (ms)	移動をまとめる間隔（ms）
 	Appearance Mode	外観モード
 	Dark Theme	ダークテーマ
 	Light Theme	ライトテーマ

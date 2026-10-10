@@ -3465,6 +3465,8 @@ cameraRaw	Masking	Маскування
 	Color Picker (Layer Style Color)	Палітра кольорів (колір стилю шару)
 	Auto Hide Notifications	Автоматично приховувати сповіщення
 	Notification Duration (seconds)	Тривалість сповіщення (секунди)
+	Bundle Arrow-Key Nudges	Поєднувати зсуви стрілками
+	Nudge Bundle Pause (ms)	Пауза поєднання зсувів (мс)
 	Appearance Mode	Режим вигляду
 	Dark Theme	Темна тема
 	Light Theme	Світла тема

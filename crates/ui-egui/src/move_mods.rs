@@ -8,7 +8,8 @@
 //!   pointer actually moves, and the drag then moves the copies. Duplicate and move land as one
 //!   history step ("Duplicate + Move"). ⇧⌥ combines both.
 //! - Arrow keys nudge the selected layers 1 px (⇧: 10 px); ⌥ duplicates first. While Free
-//!   Transform is active they nudge the box instead.
+//!   Transform is active they nudge the box instead. A run of nudges is one History state
+//!   (`nudge_bundle`, #2259).
 //! - With a selection the drag and the arrow keys move the selected pixels (`move_ui`): ⇧ locks
 //!   the drag to multiples of 45° and ⌥ copies the pixels instead of duplicating the layer.
 //!
@@ -185,6 +186,7 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         for mods in [Modifiers::SHIFT | Modifiers::ALT, Modifiers::SHIFT, Modifiers::ALT, Modifiers::NONE] {
             if ctx.input_mut(|i| i.consume_key(base | mods, key)) {
                 let k = if mods.shift { 10.0 } else { 1.0 };
+                app.nudge_bundle.now = ctx.input(|i| i.time);
                 nudge(app, ux * k, uy * k, mods.alt);
                 return true;
             }
@@ -194,13 +196,12 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 }
 
 /// Moves the selected layers (or the Free Transform box, or the selected pixels) by `(dx, dy)`
-/// pixels, as the Move tool (also when ⌘ makes it the temporary Move tool).
+/// pixels, as the Move tool (also when ⌘ makes it the temporary Move tool). Nudges that follow
+/// each other are one History state, or one Undo step of the box (`nudge_bundle`); the selected
+/// pixels float until dropped, which is one state already.
 pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
-    if let Some(t) = app.ui.transform.as_mut() {
-        if t.warp.is_none() {
-            t.quad = t.quad.map(|q| [q[0] + dx, q[1] + dy]);
-            t.pivot = [t.pivot[0] + dx, t.pivot[1] + dy];
-        }
+    if app.ui.transform.is_some() {
+        crate::transform_tool::nudge(app, dx, dy);
         return;
     }
     if app.drag.is_some() {
@@ -211,7 +212,14 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
         return;
     }
     let from = if duplicate_first { duplicate(app) } else { None };
-    if let Err(e) = app.run("layer.translate", json!({"dx": dx, "dy": dy})) {
+    let moved = if duplicate_first {
+        // A copy is a state of its own, folded with its move below.
+        app.nudge_bundle.reset();
+        app.run("layer.translate", json!({"dx": dx, "dy": dy}))
+    } else {
+        crate::nudge_bundle::run(app, "layers", "layer.translate", json!({"dx": dx, "dy": dy}))
+    };
+    if let Err(e) = moved {
         app.ui.status = e;
     }
     if let Some(from) = from {
@@ -220,9 +228,10 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
 }
 
 /// Arrow keys with a selection tool (#1428), as in Photoshop: nudge the selection outline 1 px
-/// (⇧ 10 px) through `select.transformSelection`, one history step per press; the pixels stay
-/// put. A floating piece (⌘-dragged pixels) moves instead, like a plain drag on it. Not while a
-/// drag, a polygon or a Magnetic Lasso border is in progress. Returns true when a key was used.
+/// (⇧ 10 px) through `select.transformSelection`, a run of presses being one history step
+/// (`nudge_bundle`); the pixels stay put. A floating piece (⌘-dragged pixels) moves instead, like
+/// a plain drag on it. Not while a drag, a polygon or a Magnetic Lasso border is in progress.
+/// Returns true when a key was used.
 fn selection_arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if !crate::tool_feedback::is_selection_tool(app.ui.tool) || app.drag.is_some() || !app.ui.polygon.is_empty() || app.ui.magnetic.active() {
         return false;
@@ -239,8 +248,14 @@ fn selection_arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             if ctx.input_mut(|i| i.consume_key(mods, key)) {
                 let k = if mods.shift { 10.0 } else { 1.0 };
                 let (dx, dy) = (ux * k, uy * k);
-                let id = if floating { "select.float" } else { "select.transformSelection" };
-                if let Err(e) = app.run(id, json!({"dx": dx, "dy": dy})) {
+                app.nudge_bundle.now = ctx.input(|i| i.time);
+                // A floating piece is no state until dropped; the outline's nudges bundle.
+                let result = if floating {
+                    app.run("select.float", json!({"dx": dx, "dy": dy}))
+                } else {
+                    crate::nudge_bundle::run(app, "selection", "select.transformSelection", json!({"dx": dx, "dy": dy}))
+                };
+                if let Err(e) = result {
                     app.ui.status = e;
                     app.ui.status_error = true;
                 }
@@ -396,8 +411,14 @@ mod tests {
 
     /// One key press through `arrow_keys`, as egui delivers it.
     fn press(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers) -> bool {
+        press_at(app, key, mods, 0.0)
+    }
+
+    /// [`press`] at egui time `time` (seconds).
+    fn press_at(app: &mut PhotocraftApp, key: egui::Key, mods: egui::Modifiers, time: f64) -> bool {
         let ctx = egui::Context::default();
         ctx.input_mut(|i| {
+            i.time = time;
             i.modifiers = mods;
             i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods });
         });
@@ -492,11 +513,13 @@ mod tests {
         assert!(!press(&mut app, egui::Key::ArrowRight, CTRL));
     }
 
-    /// #1428: with a selection tool the arrows nudge the selection outline (⇧ 10 px), one step
-    /// each; the layer stays put. Without a selection they are left alone.
+    /// #1428: with a selection tool the arrows nudge the selection outline (⇧ 10 px); the layer
+    /// stays put. Without a selection they are left alone. One step each with Bundle Arrow-Key
+    /// Nudges off (#2259).
     #[test]
     fn arrow_keys_nudge_the_selection_with_a_selection_tool() {
         let mut app = app_with_layer();
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
         let id = app.session.active().unwrap().active_layer.unwrap();
         app.ui.tool = Tool::Lasso;
         assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE), "no selection: not used");
@@ -512,5 +535,198 @@ mod tests {
         app.ui.tool = Tool::PolygonLasso;
         app.ui.polygon = vec![[1.0, 1.0]];
         assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+    }
+    fn history(app: &PhotocraftApp) -> usize {
+        app.session.active().unwrap().history.past_len()
+    }
+
+    fn left_edge(app: &PhotocraftApp, id: photocraft_doc::LayerId) -> i32 {
+        bounds(app, id).x0
+    }
+
+    /// #2259: tapping or holding an arrow key is one History state, so one Undo takes the whole
+    /// run back (Photoshop folds a run of nudges into one "Move").
+    #[test]
+    fn a_run_of_arrow_nudges_is_one_history_step() {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let h0 = history(&app);
+        // Twelve taps, 0.2 s apart, then ⇧ for ten more px: still the same run.
+        for i in 0..12 {
+            assert!(press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 5.0 + 0.2 * f64::from(i)));
+        }
+        assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT, 7.6));
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(20, 18, 36, 34));
+        assert_eq!(history(&app), h0 + 1, "thirteen presses, one state");
+        assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"));
+        assert!(app.session.undo());
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24), "one Undo takes back the run");
+        assert!(app.session.redo());
+        assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(20, 18, 36, 34), "and one Redo does it again");
+    }
+
+    /// A pause longer than Nudge Bundle Pause starts a new run; a longer pause setting keeps it.
+    #[test]
+    fn a_pause_ends_the_run() {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let h0 = history(&app);
+        press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 1.0);
+        press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 1.9);
+        assert_eq!(history(&app), h0 + 1, "0.9 s: the same run");
+        press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 3.0);
+        assert_eq!(history(&app), h0 + 2, "1.1 s of quiet: a new run");
+        app.session.edit_prefs(|p| p.tools.nudge_bundle_pause_ms = 5000);
+        press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 7.0);
+        assert_eq!(history(&app), h0 + 2, "4 s with a 5 s pause: the same run");
+        assert_eq!(left_edge(&app, id), 12);
+        assert!(app.session.undo());
+        assert_eq!(left_edge(&app, id), 10, "Undo takes back the second run only");
+    }
+
+    /// With Bundle Arrow-Key Nudges off every press is a state, as before (#2259).
+    #[test]
+    fn every_press_is_a_step_with_bundling_off() {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
+        let h0 = history(&app);
+        for _ in 0..5 {
+            assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        }
+        assert_eq!(history(&app), h0 + 5);
+        assert!(app.session.undo());
+        assert_eq!(left_edge(&app, id), 12, "one pixel back");
+        // Turning it back on bundles the next run, which doesn't swallow the earlier steps.
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = true);
+        for _ in 0..3 {
+            press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE);
+        }
+        assert_eq!(history(&app), h0 + 5);
+        assert_eq!(left_edge(&app, id), 15);
+    }
+
+    /// Any other change to the document ends the run: another edit, Undo, a different layer
+    /// selected, a save.
+    #[test]
+    fn other_changes_end_the_run() {
+        let mut app = app_with_layer();
+        let a = app.session.active().unwrap().active_layer.unwrap();
+        let tap = |app: &mut PhotocraftApp| assert!(press(app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        let h0 = history(&app);
+        tap(&mut app);
+        tap(&mut app);
+        assert_eq!(history(&app), h0 + 1);
+        // An edit of another kind between two nudges.
+        app.session.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+        tap(&mut app);
+        tap(&mut app);
+        assert_eq!(history(&app), h0 + 3, "nudges, the edit, nudges");
+        // Undo ends it too: the next nudge is a state of its own, not folded into the one before.
+        assert!(app.session.undo());
+        tap(&mut app);
+        assert_eq!(history(&app), h0 + 3);
+        assert!(app.session.undo());
+        assert_eq!(left_edge(&app, a), 10, "the new run was undone alone");
+        // Saving keeps the saved state a step of its own.
+        tap(&mut app);
+        tap(&mut app);
+        let before = history(&app);
+        let st = app.session.active_mut().unwrap();
+        st.saved_revision = st.revision;
+        tap(&mut app);
+        assert_eq!(history(&app), before + 1, "a save between two nudges ends the run");
+        // Selecting another layer: the same keys now move that one, in a run of its own.
+        let b = {
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.session.active().unwrap().active_layer.unwrap()
+        };
+        assert_ne!(a, b);
+        let before = history(&app);
+        app.session
+            .edit("paint", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        tap(&mut app);
+        app.session.select_layer(a).unwrap();
+        tap(&mut app);
+        assert_eq!(history(&app), before + 3, "paint, a nudge of the new layer, a nudge of the first");
+    }
+
+    /// ⌥ copies, so ⌥-nudges are never folded into a run (the copy is part of each step).
+    #[test]
+    fn alt_nudges_do_not_join_a_run() {
+        let mut app = app_with_layer();
+        let h0 = history(&app);
+        press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE);
+        press(&mut app, egui::Key::ArrowRight, egui::Modifiers::ALT);
+        press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE);
+        assert_eq!(history(&app), h0 + 3);
+        assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"), "the run after the copy is a state of its own");
+    }
+
+    /// #2259: nudges of the selection outline bundle the same way.
+    #[test]
+    fn selection_outline_nudges_bundle_into_one_step() {
+        let mut app = app_with_layer();
+        app.ui.tool = Tool::Lasso;
+        app.session.execute("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
+        let sel = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+        let h0 = history(&app);
+        for i in 0..5 {
+            assert!(press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 2.0 + 0.1 * f64::from(i)));
+        }
+        assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT, 2.6));
+        assert_eq!(sel(&app), photocraft_geom::Rect::new(9, 14, 19, 24));
+        assert_eq!(history(&app), h0 + 1);
+        assert!(app.session.undo());
+        assert_eq!(sel(&app), photocraft_geom::Rect::new(4, 4, 14, 14), "Undo takes the outline back where it was drawn");
+        // The layer nudge and the outline nudge are different runs even back to back.
+        app.session.execute("select.deselect", json!({})).unwrap();
+        app.ui.tool = Tool::Move;
+        let h1 = history(&app);
+        press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 3.0);
+        assert_eq!(history(&app), h1 + 1);
+    }
+
+    /// Free Transform: nudges of the box that follow each other are one Undo step of the session
+    /// (it has its own history); a drag or a pause starts another.
+    #[test]
+    fn free_transform_nudges_bundle_into_one_undo_step() {
+        let mut app = app_with_layer();
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        let quad = |app: &PhotocraftApp| app.ui.transform.as_ref().unwrap().quad;
+        let q0 = quad(&app);
+        let moved = |dx: f64, dy: f64| q0.map(|q| [q[0] + dx, q[1] + dy]);
+        let settle = |app: &mut PhotocraftApp| crate::transform_tool::track_steps(app, &ctx);
+        for i in 0..6 {
+            assert!(press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 4.0 + 0.1 * f64::from(i)));
+            settle(&mut app);
+        }
+        assert_eq!(quad(&app), moved(6.0, 0.0));
+        // A pause, and the next nudge is a step of its own.
+        assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE, 9.0));
+        settle(&mut app);
+        assert_eq!(
+            quad(&app),
+            [[q0[0][0] + 6.0, q0[0][1] + 1.0], [q0[1][0] + 6.0, q0[1][1] + 1.0], [q0[2][0] + 6.0, q0[2][1] + 1.0], [q0[3][0] + 6.0, q0[3][1] + 1.0]]
+        );
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(quad(&app), moved(6.0, 0.0), "Undo takes back the late nudge only");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(quad(&app), q0, "and the next one the six that were bundled");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(quad(&app), q0, "nothing is left of the session to undo");
+        // With bundling off every nudge is a step.
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
+        for i in 0..3 {
+            press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 20.0 + 0.1 * f64::from(i));
+            settle(&mut app);
+        }
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(quad(&app), moved(2.0, 0.0));
     }
 }

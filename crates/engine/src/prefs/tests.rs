@@ -553,3 +553,34 @@ fn ruler_units_round_to_their_own_decimal_places() {
     let r = super::UnitsAndRulers { rulers: Unit::Inches, ..Default::default() };
     assert_eq!(r.format(100.0, 300.0, 1500.0), "0.333");
 }
+
+/// #2259: arrow-key nudges bundle into one History state by default, within a pause long enough
+/// for a held key's auto-repeat delay; both are Tools preferences with a validated range.
+#[test]
+fn nudge_bundling_preferences() {
+    let p = Preferences::default();
+    assert!(p.tools.bundle_nudges);
+    assert_eq!(p.tools.nudge_bundle_pause_ms, 1000);
+    // Preferences saved before these existed load with the defaults.
+    let old: Preferences = serde_json::from_value(json!({"tools": {"showTooltips": false}})).unwrap();
+    assert!(old.tools.bundle_nudges && !old.tools.show_tooltips);
+    assert_eq!(old.tools.nudge_bundle_pause_ms, 1000);
+
+    let mut s = session();
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.bundleNudges"})).unwrap(), json!(true));
+    s.execute("prefs.set", json!({"values": {"tools.bundleNudges": false, "tools.nudgeBundlePauseMs": 250}})).unwrap();
+    assert!(!s.prefs().tools.bundle_nudges);
+    assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, 250);
+    for edge in [100, 10_000] {
+        s.execute("prefs.set", json!({"path": "tools.nudgeBundlePauseMs", "value": edge})).unwrap();
+        assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, edge);
+    }
+    for bad in [json!(0), json!(99), json!(10_001), json!(-1), json!(1.5e300), json!("long"), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": "tools.nudgeBundlePauseMs", "value": bad.clone()})).is_err(), "{bad}");
+    }
+    assert!(s.execute("prefs.set", json!({"path": "tools.bundleNudges", "value": "yes"})).is_err());
+    assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, 10_000, "a rejected value changes nothing");
+    s.execute("prefs.reset", json!({"path": "tools"})).unwrap();
+    assert!(s.prefs().tools.bundle_nudges);
+    assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, 1000);
+}

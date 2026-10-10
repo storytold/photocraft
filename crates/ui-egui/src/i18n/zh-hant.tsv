@@ -2333,6 +2333,8 @@ fontWeight	Italic	斜體
 	Color Picker (Layer Style Color)	檢色器（圖層樣式顏色）
 	Auto Hide Notifications	自動隱藏通知
 	Notification Duration (seconds)	通知持續時間（秒）
+	Bundle Arrow-Key Nudges	合併方向鍵微移
+	Nudge Bundle Pause (ms)	微移合併間隔（毫秒）
 	Appearance Mode	外觀模式
 	Dark Theme	深色主題
 	Light Theme	淺色主題
