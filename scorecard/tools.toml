@@ -120,9 +120,9 @@ note = "Opens the generic select.refineEdge dialog (menus.rs:308)"
 [[item]]
 id = "TOOL-214-2"
 target = "Marquee: Shift square, Alt from centre, live W x H readout"
-status = "partial"
+status = "done"
 issue = 214
-note = "marquee_end supports shift (chrome_ui.rs:167) but canvas.rs passes false (#208)"
+note = "canvas.rs marquee_corners: Shift square or circle, Alt from the centre, live W x H readout beside the cursor (marquee_readout); marquee_tests.rs"
 
 [[item]]
 id = "TOOL-214-3"
