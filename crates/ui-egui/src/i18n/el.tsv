@@ -3389,3 +3389,5 @@ fontWeight	Thin	Πολύ λεπτά
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
+
+	Rasterize svg groups deeper than	Ραστεροποίηση ομάδων SVG πέρα από αυτό το βάθος

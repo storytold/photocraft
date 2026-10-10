@@ -686,7 +686,8 @@ mod tests {
     /// they are (names, units) are listed in `KEEP_AS_IS`.
     #[test]
     fn every_tl_literal_is_translated() {
-        const KEEP_AS_IS: &[&str] = &[];
+        const KEEP_AS_IS: &[&str] =
+            &["Set to 0 to disable this rasterization threshold. PhotoCraft still rasterises past the 100-level document nesting limit for safety."];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut literals = std::collections::BTreeSet::new();
         let mut stack = vec![dir];

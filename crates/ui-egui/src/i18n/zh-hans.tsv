@@ -2287,3 +2287,5 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
+
+	Rasterize svg groups deeper than	栅格化超过此深度的 SVG 组

@@ -20,6 +20,7 @@ const OPEN_EXTS: &[&str] = &[
     "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
     "afdesign", "afphoto", "afpub",
 ];
+const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
 /// On Linux and the BSDs rfd turns each extension into a case-sensitive `*.ext` glob for the XDG
@@ -29,6 +30,12 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
     let case_sensitive_globs = cfg!(all(unix, not(target_os = "macos")));
     let class = |c: char| if c.is_ascii_alphabetic() { format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase()) } else { c.to_string() };
     extensions.iter().map(|ext| if case_sensitive_globs { ext.chars().map(class).collect() } else { ext.to_string() }).collect()
+}
+
+/// An explicit SVG filter keeps vector artwork discoverable even when a native picker defaults to
+/// the PhotoCraft-only filter. SVG is also included in All Formats for normal multi-format opens.
+fn open_filters() -> Vec<(&'static str, Vec<String>)> {
+    vec![("All Formats", open_filter_extensions(OPEN_EXTS)), ("PhotoCraft", open_filter_extensions(&["pcraft"])), ("SVG", open_filter_extensions(SVG_EXTS))]
 }
 
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
@@ -80,7 +87,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             if let Some(dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
-            let dialog = dialog.add_filter("All Formats", &open_filter_extensions(OPEN_EXTS)).add_filter("PhotoCraft", &open_filter_extensions(&["pcraft"]));
+            let dialog = open_filters().into_iter().fold(dialog, |dialog, (name, extensions)| dialog.add_filter(name, &extensions));
             if multiple {
                 let picked = dialog.pick_files();
                 Box::pin(async move { picked.await.map(|files| FileDialogAnswer::Paths(files.iter().map(path_of).collect())) })
@@ -257,8 +264,10 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationCommandFn
     });
     Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8]| {
-            crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))
+        import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
+            crate::crash_guard::guard("Open", || {
+                photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let mut opts = photocraft_io::ExportOptions::default();
@@ -428,6 +437,9 @@ mod tests {
             assert!(!matches(glob, &format!("{ext}x")) && !matches(glob, &ext[..ext.len() - 1]), "{glob} matches only .{ext}");
         }
         assert!(!globs.iter().any(|glob| matches(glob, "txt")));
+        let svg_filter = open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts).unwrap_or_default();
+        assert_eq!(svg_filter, open_filter_extensions(SVG_EXTS));
+        assert!(svg_filter.iter().any(|glob| matches(glob, "svg")) && svg_filter.iter().any(|glob| matches(glob, "svgz")));
     }
 
     #[cfg(not(all(unix, not(target_os = "macos"))))]
@@ -435,6 +447,7 @@ mod tests {
     fn open_filters_keep_literal_extensions_on_windows_and_macos() {
         assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
         assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
+        assert_eq!(open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts), Some(vec!["svg".to_string(), "svgz".to_string()]));
     }
 
     #[test]

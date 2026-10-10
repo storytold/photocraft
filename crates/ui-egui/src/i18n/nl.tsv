@@ -3464,3 +3464,5 @@ cameraRaw	Whites	Witten
 	Dual Axis	Dubbele as
 	Diagonal	Diagonaal
 	Transform Symmetry	Symmetrie transformeren
+
+	Rasterize svg groups deeper than	SVG-groepen rasteriseren dieper dan deze grens

@@ -3302,3 +3302,5 @@ cameraRaw	Roughness	Chropowatość
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
+
+	Rasterize svg groups deeper than	Rasteryzuj grupy SVG głębsze niż ten poziom

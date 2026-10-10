@@ -2707,3 +2707,5 @@ fontWeight	Italic	Itálico
 	Color to Alpha…	Cor para alfa…
 	Transparency Threshold	Limiar de transparência
 	Opacity Threshold	Limiar de opacidade
+
+	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade

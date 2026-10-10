@@ -2279,3 +2279,5 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+
+	Rasterize svg groups deeper than	Rasterizovat skupiny SVG hlubší než tato úroveň

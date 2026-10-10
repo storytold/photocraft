@@ -18,7 +18,7 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8]| {
+        import: Some(Box::new(|name: &str, bytes: &[u8], _depth: usize| {
             if bytes == b"bad" {
                 return Err("not an image".into());
             }
@@ -398,6 +398,9 @@ fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     std::fs::create_dir_all(&dir).unwrap();
     let abs = dir.join("photo.png");
     std::fs::write(&abs, png_bytes(200, 100)).unwrap();
+    let svg = dir.join("logo.svg");
+    std::fs::write(&svg, b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\"><rect width=\"20\" height=\"10\" fill=\"red\"/></svg>")
+        .unwrap();
     let ctx = egui::Context::default();
     let mut app = app_with_canvas();
     let (layers, steps) = (layer_count(&app), history_steps(&app));
@@ -439,6 +442,13 @@ fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     app.place_next_dropped(&ctx);
     assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
     assert!(app.ui.recent_files.is_empty(), "placing isn't opening");
+    app.open_dropped(&ctx, vec![dropped(svg, Err("egui's reader must not be used".into()))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    let st = app.session.active().unwrap();
+    let placed_svg = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    assert_eq!(placed_svg.name, "logo");
+    assert!(matches!(placed_svg.content, photocraft_doc::LayerContent::Smart(_)), "SVG drops use Place Embedded");
+    assert!(app.ui.transform.is_some(), "SVG drop should enter Free Transform");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

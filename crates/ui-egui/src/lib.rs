@@ -171,7 +171,7 @@ pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
-pub type ImportFn = Box<dyn Fn(&str, &[u8]) -> Result<(Document, Vec<String>), String>>;
+pub type ImportFn = Box<dyn Fn(&str, &[u8], usize) -> Result<(Document, Vec<String>), String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
@@ -842,7 +842,8 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let (doc, warnings) = import(name, bytes)?;
+        let max_svg_group_depth = self.session.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
+        let (doc, warnings) = import(name, bytes, max_svg_group_depth)?;
         // Edit › Color Settings policies apply on open; mismatches can ask what to do.
         // No path yet: a bare name isn't a location to save back to (`open_file` sets the path).
         let (_, color) = self.session.open_document(doc, None);
@@ -891,7 +892,8 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let (doc, warnings) = import(name, bytes)?;
+        let max_svg_group_depth = self.session.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
+        let (doc, warnings) = import(name, bytes, max_svg_group_depth)?;
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {

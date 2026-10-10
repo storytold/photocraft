@@ -21,6 +21,7 @@ const OPEN_EXTS: &[&str] = &[
     "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
     "afdesign", "afphoto", "afpub",
 ];
+const SVG_EXTS: &[&str] = &["svg", "svgz"];
 const CANVAS_ID: &str = "photocraft_canvas";
 
 /// Fonts the host serves next to the page (`photocraft_ui_egui::served_fonts`): craft-fonts' manifest
@@ -259,7 +260,9 @@ impl eframe::App for WebShell {
 fn services(inbox: Inbox) -> Services {
     Services {
         screen_pick: screen_color_service(),
-        import: Some(Box::new(|name: &str, bytes: &[u8]| photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
+        import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
+            photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+        })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let mut opts = photocraft_io::ExportOptions::default();
             if let Some(q) = settings.jpeg_quality {
@@ -276,7 +279,7 @@ fn services(inbox: Inbox) -> Services {
         file_dialog: Some(Box::new(|request, _parent, reply| match request {
             // The browser's file picker hands over the file's contents, not a path.
             FileDialogRequest::Open { .. } => wasm_bindgen_futures::spawn_local(async move {
-                let picked = rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).pick_file().await;
+                let picked = rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("SVG", SVG_EXTS).pick_file().await;
                 let answer = match picked {
                     Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
                     None => None,

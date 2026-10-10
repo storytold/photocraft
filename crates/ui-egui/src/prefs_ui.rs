@@ -909,6 +909,14 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang);
+                    if section == "fileHandling" {
+                        ui.label(
+                            RichText::new(tl!(
+                                "Set to 0 to disable this rasterization threshold. PhotoCraft still rasterises past the 100-level document nesting limit for safety."
+                            ))
+                            .color(t.text_faint),
+                        );
+                    }
                     if section == "performance" {
                         gpu_status_rows(ui, f.get("__gpuInfo"), obj);
                     }

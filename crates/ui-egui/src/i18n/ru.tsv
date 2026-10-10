@@ -2552,3 +2552,5 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+
+	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня

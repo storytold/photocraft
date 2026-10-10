@@ -417,6 +417,7 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
+        let max_svg_group_depth = self.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
         self.start_job(
             OPEN_JOB,
             json!({"name": name}),
@@ -430,10 +431,11 @@ impl Session {
                 };
                 ctx.check()?;
                 ctx.progress(0.02, "Decoding");
-                ctx.stage(0.02, 1.0, "Decoding", |ctl| photocraft_io::import_with(&name_w, &bytes, ctl)).map_err(|e| match e {
-                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                    e => EngineError::Other(e.to_string()),
-                })
+                ctx.stage(0.02, 1.0, "Decoding", |ctl| photocraft_io::import_with_svg_group_depth_and_interrupt(&name_w, &bytes, max_svg_group_depth, ctl))
+                    .map_err(|e| match e {
+                        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                        e => EngineError::Other(e.to_string()),
+                    })
             },
             move |s, r: photocraft_io::ImportResult| {
                 let (index, color) = s.open_document(r.document, None);

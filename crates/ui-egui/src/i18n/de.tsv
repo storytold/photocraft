@@ -2317,3 +2317,5 @@ fontWeight	Italic	Kursiv
 	Color to Alpha…	Farbe zu Alpha…
 	Transparency Threshold	Transparenz-Schwellenwert
 	Opacity Threshold	Deckkraft-Schwellenwert
+
+	Rasterize svg groups deeper than	SVG-Gruppen ab dieser Tiefe rastern

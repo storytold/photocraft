@@ -384,7 +384,14 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();
     let vector = photocraft_io::svg::is_svg(&bytes);
-    let src = import(name, &bytes)?;
+    let max_svg_group_depth = s.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
+    let imported = photocraft_io::import_with_svg_group_depth(name, &bytes, max_svg_group_depth).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+    if imported.preview_only {
+        return Err(EngineError::Other(format!(
+            "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
+        )));
+    }
+    let src = imported.document;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     let scale = match f64_param(p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
