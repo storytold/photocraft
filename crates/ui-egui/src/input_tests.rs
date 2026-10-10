@@ -481,6 +481,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
         dragging: false,
         resize: None,
         preedit: None,
+        ..Default::default()
     });
     h.run_steps(2);
     let s0 = steps(&h);

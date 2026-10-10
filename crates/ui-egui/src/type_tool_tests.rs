@@ -284,6 +284,7 @@ fn size_applies_at_layer_and_selection_scope() {
             dragging: false,
             resize: None,
             preedit: None,
+            ..Default::default()
         });
         super::apply(&mut app, &ctx, json!({"size": 10.0}));
         assert_eq!((size_at(&app, id, 0), size_at(&app, id, 5), size_at(&app, id, 6), size_at(&app, id, 10)), (30.0, 30.0, 10.0, 10.0), "psd {psd}");
@@ -344,6 +345,111 @@ fn vglyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32
 fn key(h: &mut Harness<'static, PhotocraftApp>, k: egui::Key) {
     h.event(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
+}
+
+fn key_with(h: &mut Harness<'static, PhotocraftApp>, k: egui::Key, modifiers: Modifiers) {
+    h.event(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.run_steps(1);
+}
+
+/// An edit session on new left-aligned point text `s`, caret and anchor at character indices.
+fn editing(s: &str, caret: usize, anchor: usize) -> (Harness<'static, PhotocraftApp>, LayerId) {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": s, "size": 40, "x": 300, "y": 420, "align": "left"})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, caret, anchor, session: "s".into(), ..Default::default() });
+    (harness(1.0, app), id)
+}
+
+fn caret_side(h: &Harness<'static, PhotocraftApp>) -> (usize, bool) {
+    let e = h.state().ui.text_edit.clone().unwrap();
+    (e.caret, e.upstream)
+}
+
+/// Spec 5.1.3–5.1.4: ←/→ move visually; in RTL text ← reads forward. Where the directions meet,
+/// the caret keeps the side it came from.
+#[test]
+fn arrows_move_visually_in_arabic_and_mixed_text() {
+    let kataba = "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E}";
+    let (mut h, _) = editing(kataba, 0, 0);
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (0, 0), "→ at the right edge of the first paragraph");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(selection(&h), (2, 2), "← over كَ");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(selection(&h), (4, 4));
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (2, 2));
+    // Mixed: → walks "ab " and then the reversed Arabic word, from its left end.
+    let (mut h, _) = editing("ab مرحبا", 2, 2);
+    let mut seen = Vec::new();
+    for _ in 0..7 {
+        key(&mut h, egui::Key::ArrowRight);
+        seen.push(caret_side(&h));
+    }
+    assert_eq!(seen, [(3, true), (7, false), (6, false), (5, false), (4, false), (3, false), (3, false)]);
+    // Shift+→ into the run selects the space and the word's last four letters: two pieces on screen.
+    let (mut h, id) = editing("ab مرحبا", 2, 2);
+    key_with(&mut h, egui::Key::ArrowRight, Modifiers::SHIFT);
+    key_with(&mut h, egui::Key::ArrowRight, Modifiers::SHIFT);
+    assert_eq!(selection(&h), (2, 7));
+    let (l, _, t) = layout(h.state_mut(), id).unwrap();
+    let segs = photocraft_text::navigate::selection_segments(&l, &t, photocraft_text::byte_index(&t, 2), photocraft_text::byte_index(&t, 7));
+    assert_eq!(segs.len(), 2, "{segs:?}");
+    // Without Shift, → collapses the selection to the end that lies further right.
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (7, 7), "the selection end that lies further right on screen: after the word's fourth letter");
+}
+
+#[test]
+fn ctrl_arrows_jump_visual_words_and_home_end_keep_the_line() {
+    let (mut h, id) = editing("abc مرحبا def", 0, 0);
+    let x_at = |h: &mut Harness<'static, PhotocraftApp>| {
+        let (c, up) = caret_side(h);
+        let (l, _, t) = layout(h.state_mut(), id).unwrap();
+        photocraft_text::navigate::caret_geometry(&l, &t, photocraft_text::navigate::Caret::new(photocraft_text::byte_index(&t, c), up)).x
+    };
+    let mut xs = vec![x_at(&mut h)];
+    for _ in 0..6 {
+        key_with(&mut h, egui::Key::ArrowRight, type_command());
+        xs.push(x_at(&mut h));
+    }
+    xs.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+    assert!(xs.windows(2).all(|p| p[1] > p[0]), "{xs:?}");
+    assert!(xs.len() >= 3 && xs.len() < 14, "word stops, not letters: {xs:?}");
+    key(&mut h, egui::Key::Home);
+    assert_eq!(caret_side(&h), (0, false));
+    key(&mut h, egui::Key::End);
+    assert_eq!(caret_side(&h), (13, true));
+}
+
+/// Spec 5.1.4: a click places the caret where clicked; at a direction change it keeps the side.
+#[test]
+fn a_click_keeps_the_side_of_a_direction_change() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "abcمرحبا", "size": 60, "x": 300, "y": 420, "align": "left"})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = harness(1.0, app);
+    let p = glyph(&mut h, id, 2, 0.8);
+    click(&mut h, p);
+    assert_eq!(caret_side(&h), (3, true), "the right part of c: after c");
+    let p = glyph(&mut h, id, 3, 0.8);
+    click(&mut h, p);
+    assert_eq!(caret_side(&h), (3, false), "the right part of م (the run's right end): before م");
+    super::insert(h.state_mut(), "x");
+    assert_eq!(caret_side(&h), (4, true), "typing keeps the caret with the typed letter");
+}
+
+/// Spec 5.1.5: Backspace removes one code point (the last haraka first), Delete one grapheme.
+#[test]
+fn backspace_takes_harakat_off_one_by_one_and_delete_removes_the_letter() {
+    let shin = "\u{634}\u{64E}\u{651}"; // شَّ: sheen, fatha, shadda
+    let (mut h, id) = editing(shin, 3, 3);
+    key(&mut h, egui::Key::Backspace);
+    assert_eq!(text(h.state(), id).text, "\u{634}\u{64E}");
+    key(&mut h, egui::Key::Backspace);
+    assert_eq!(text(h.state(), id).text, "\u{634}");
+    let (mut h, id) = editing(&format!("{shin}\u{628}"), 0, 0);
+    key(&mut h, egui::Key::Delete);
+    assert_eq!(text(h.state(), id).text, "\u{628}", "Delete removes the letter with both marks");
 }
 
 /// Vertical type (#199): clicks and drags land on the glyph under the pointer down the column,
@@ -414,17 +520,19 @@ fn arrows_and_delete_step_over_a_letter_and_its_marks() {
             dragging: false,
             resize: None,
             preedit: None,
+            ..Default::default()
         });
         (harness(1.0, app), id)
     };
     let kataba = "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E}";
+    // RTL: arrows move visually (stage 1b), so ← reads forward.
     let (mut h, _) = edit_at(kataba, 0);
-    key(&mut h, egui::Key::ArrowRight);
-    assert_eq!(selection(&h), (2, 2), "→ over كَ");
-    key(&mut h, egui::Key::ArrowRight);
-    assert_eq!(selection(&h), (4, 4), "→ over تَ");
     key(&mut h, egui::Key::ArrowLeft);
-    assert_eq!(selection(&h), (2, 2), "← back over تَ");
+    assert_eq!(selection(&h), (2, 2), "← over كَ");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(selection(&h), (4, 4), "← over تَ");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(selection(&h), (2, 2), "→ back over تَ");
     let (mut h, id) = edit_at(kataba, 0);
     key(&mut h, egui::Key::Delete);
     assert_eq!(text(h.state(), id).text, "\u{62A}\u{64E}\u{628}\u{64E}", "Delete removes كَ whole");
@@ -468,6 +576,7 @@ fn foreground_colour_recolours_only_selected_type() {
         dragging: false,
         resize: None,
         preedit: None,
+        ..Default::default()
     };
     app.ui.text_edit = Some(edit(3, 3));
     super::foreground_changed(&mut app);
@@ -538,6 +647,7 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
         dragging: false,
         resize: None,
         preedit: None,
+        ..Default::default()
     });
     let foreground = app.session.tools.foreground;
     let before = app.session.active().unwrap().history.entries().len();
@@ -585,8 +695,17 @@ fn text_color_dialog_without_a_selection_edits_the_whole_layer() {
 fn empty_ime_events_never_delete_the_selection() {
     let mut app = new_app();
     let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 40, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
-    app.ui.text_edit =
-        Some(crate::state::TextEdit { layer: id.0, caret: 5, anchor: 0, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        caret: 5,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+        ..Default::default()
+    });
     let mut h = harness(1.0, app);
     let ime = |h: &mut Harness<'static, PhotocraftApp>, e: egui::ImeEvent| {
         h.event(egui::Event::Ime(e));
@@ -1303,16 +1422,7 @@ mod multi_layer_formatting {
     }
 
     fn editing(app: &mut PhotocraftApp, id: LayerId) {
-        app.ui.text_edit = Some(crate::state::TextEdit {
-            layer: id.0,
-            caret: 3,
-            anchor: 1,
-            session: "batch-type-edit".into(),
-            created: false,
-            dragging: false,
-            resize: None,
-            preedit: None,
-        });
+        app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, caret: 3, anchor: 1, session: "batch-type-edit".into(), ..Default::default() });
     }
 
     #[test]
