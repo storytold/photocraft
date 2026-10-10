@@ -2750,8 +2750,12 @@
 	Print resolution	Ανάλυση εκτύπωσης
 	Printer	Εκτυπωτής
 	Pro (Dark)	Pro (σκοτεινό)
+	Pro (Light)	Pro (φωτεινό)
+	Pro (Light Gray)	Pro (ανοιχτό γκρι)
 	Pro (Medium Gray)	Pro (μεσαίο γκρι)
 	Pro Medium Gray Theme	Θέμα Pro μεσαίου γκρι
+	Pro Light Gray Theme	Θέμα Pro ανοιχτού γκρι
+	Pro Light Theme	Φωτεινό θέμα Pro
 	Pro Theme	Θέμα Pro
 	Profile	Προφίλ
 	Progressive	Προοδευτικό
@@ -3379,6 +3383,8 @@ cameraRaw	Yellow	Κίτρινο
 	Pattern Stamp Tool	Σφραγίδα μοτίβου (Pattern Stamp Tool)
 	Png	PNG
 	Pro	Pro
+	Pro light	Pro φωτεινό
+	Pro light gray	Pro ανοιχτό γκρι
 	Pro medium	Pro μεσαίο
 	Pro photo	ProPhoto
 	Red Eye	Κόκκινα μάτια

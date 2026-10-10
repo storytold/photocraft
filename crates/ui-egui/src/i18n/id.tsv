@@ -660,6 +660,8 @@
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro Abu-abu Sedang
+	Pro Light Gray Theme	Tema Pro Abu-abu Terang
+	Pro Light Theme	Tema Pro Terang
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio Terang
 	Adwaita Light Theme	Tema Adwaita Terang
@@ -1641,6 +1643,8 @@
 	Postcard	Kartu Pos
 	Poster	Poster
 	Pro (Dark)	Pro (Gelap)
+	Pro (Light)	Pro (Terang)
+	Pro (Light Gray)	Pro (Abu-abu Terang)
 	Pro (Medium Gray)	Pro (Abu-abu Sedang)
 	Protect Texture	Lindungi Tekstur
 	Purple	Ungu
@@ -1833,6 +1837,8 @@
 	Preserve details	Pertahankan detail
 	Print resolution	Resolusi cetak
 	Pro	Pro
+	Pro light	Pro terang
+	Pro light gray	Pro abu-abu terang
 	Pro medium	Pro sedang
 	Pro photo	Pro photo
 	Quick export format	Format ekspor cepat

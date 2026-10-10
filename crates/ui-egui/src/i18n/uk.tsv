@@ -1374,6 +1374,8 @@
 	Studio Light Theme	Світла тема «Студія»
 	Pro Theme	Тема «Профі»
 	Pro Medium Gray Theme	Середньосіра тема «Профі»
+	Pro Light Gray Theme	Світло-сіра тема «Профі»
+	Pro Light Theme	Світла тема «Профі»
 
 # Workspaces
 	Workspace…	Робочий простір…
@@ -2261,6 +2263,8 @@
 	Preserve details	Зберігати деталі
 	Print resolution	Роздільність друку
 	Pro	Профі
+	Pro light	Профі: світла
+	Pro light gray	Профі: світло-сіра
 	Pro medium	Профі: середня
 	Pro photo	ProPhoto
 	Purple	Фіолетовий
@@ -2723,6 +2727,8 @@ fontWeight	Italic	Курсивний
 	Postcard	Листівка
 	Poster	Плакат
 	Pro (Dark)	Профі (темна)
+	Pro (Light)	Профі (світла)
+	Pro (Light Gray)	Профі (світло-сіра)
 	Pro (Medium Gray)	Профі (середньосіра)
 	Radial	Радіальний
 	Rasterize Layer	Растеризувати шар

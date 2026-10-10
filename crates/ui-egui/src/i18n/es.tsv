@@ -675,6 +675,8 @@
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro (gris medio)
+	Pro Light Gray Theme	Tema Pro (gris claro)
+	Pro Light Theme	Tema Pro (claro)
 	Studio Theme	Tema Estudio
 	Studio Light Theme	Tema Estudio (claro)
 	Adwaita Light Theme	Tema Adwaita (claro)
@@ -1668,6 +1670,8 @@
 	Postcard	Postal
 	Poster	Póster
 	Pro (Dark)	Pro (oscuro)
+	Pro (Light)	Pro (claro)
+	Pro (Light Gray)	Pro (gris claro)
 	Pro (Medium Gray)	Pro (gris medio)
 	Protect Texture	Proteger textura
 	Purple	Morado
@@ -1866,6 +1870,8 @@
 	Preserve details	Conservar detalles
 	Print resolution	Resolución de impresión
 	Pro	Pro
+	Pro light	Pro (claro)
+	Pro light gray	Pro (gris claro)
 	Pro medium	Pro (medio)
 	Pro photo	ProPhoto
 	Quick export format	Formato de exportación rápida

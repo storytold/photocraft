@@ -673,6 +673,8 @@
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro grigio medio
+	Pro Light Gray Theme	Tema Pro grigio chiaro
+	Pro Light Theme	Tema Pro chiaro
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio chiaro
 	Adwaita Light Theme	Tema Adwaita chiaro
@@ -1666,6 +1668,8 @@
 	Postcard	Cartolina
 	Poster	Poster
 	Pro (Dark)	Pro (scuro)
+	Pro (Light)	Pro (chiaro)
+	Pro (Light Gray)	Pro (grigio chiaro)
 	Pro (Medium Gray)	Pro (grigio medio)
 	Protect Texture	Proteggi texture
 	Purple	Viola
@@ -1864,6 +1868,8 @@
 	Preserve details	Conserva dettagli
 	Print resolution	Risoluzione stampa
 	Pro	Pro
+	Pro light	Pro chiaro
+	Pro light gray	Pro grigio chiaro
 	Pro medium	Pro medio
 	Pro photo	ProPhoto
 	Quick export format	Formato esportazione rapida

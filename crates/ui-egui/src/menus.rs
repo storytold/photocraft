@@ -66,6 +66,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.toggle", "Next Appearance Mode", &["Window"], None),
     ("window.theme.pro", "Pro Theme", &["Window", "Theme"], None),
     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
+    ("window.theme.proLightGray", "Pro Light Gray Theme", &["Window", "Theme"], None),
+    ("window.theme.proLight", "Pro Light Theme", &["Window", "Theme"], None),
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
@@ -315,6 +317,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         "window.theme.pro"
         | "window.theme.proMedium"
+        | "window.theme.proLightGray"
+        | "window.theme.proLight"
         | "window.theme.studio"
         | "window.theme.studioLight"
         | "window.theme.classic"

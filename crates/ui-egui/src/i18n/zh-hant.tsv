@@ -683,6 +683,8 @@
 	Theme	主題
 	Pro Theme	專業主題
 	Pro Medium Gray Theme	專業中灰主題
+	Pro Light Gray Theme	專業淺灰主題
+	Pro Light Theme	專業淺色主題
 	Studio Theme	工作室主題
 	Studio Light Theme	工作室淺色主題
 	Adwaita Light Theme	Adwaita 淺色主題
@@ -1674,6 +1676,8 @@
 	Postcard	明信片
 	Poster	海報
 	Pro (Dark)	Pro (深色)
+	Pro (Light)	Pro (淺色)
+	Pro (Light Gray)	Pro (淺灰)
 	Pro (Medium Gray)	Pro (中灰)
 	Protect Texture	保護紋理
 	Purple	紫色
@@ -1868,6 +1872,8 @@
 	Preserve details	保留細節
 	Print resolution	列印解析度
 	Pro	Pro
+	Pro light	Pro 淺色
+	Pro light gray	Pro 淺灰
 	Pro medium	Pro 中灰
 	Pro photo	ProPhoto
 	Quick export format	快速匯出格式

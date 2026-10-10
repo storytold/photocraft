@@ -655,6 +655,8 @@
 	Theme	테마
 	Pro Theme	프로 테마
 	Pro Medium Gray Theme	프로 중간 회색 테마
+	Pro Light Gray Theme	프로 밝은 회색 테마
+	Pro Light Theme	프로 밝은 테마
 	Studio Theme	스튜디오 테마
 	Studio Light Theme	스튜디오 밝은 테마
 	Adwaita Light Theme	Adwaita 밝은 테마
@@ -1642,6 +1644,8 @@
 	Postcard	엽서
 	Poster	포스터
 	Pro (Dark)	프로(어둡게)
+	Pro (Light)	프로(밝게)
+	Pro (Light Gray)	프로(밝은 회색)
 	Pro (Medium Gray)	프로(중간 회색)
 	Protect Texture	텍스처 보호
 	Purple	보라
@@ -1834,6 +1838,8 @@
 	Preserve details	세부 정보 유지
 	Print resolution	인쇄 해상도
 	Pro	프로
+	Pro light	프로 밝게
+	Pro light gray	프로 밝은 회색
 	Pro medium	프로 중간 회색
 	Pro photo	ProPhoto
 	Quick export format	빠른 내보내기 형식

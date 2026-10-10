@@ -60,6 +60,17 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
     assert_eq!(s.prefs().interface.light_theme, LightTheme::StudioLight);
     assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
+    // #2661: the light Pro brightness levels are light themes.
+    for (theme, light) in [("proLightGray", LightTheme::ProLightGray), ("proLight", LightTheme::ProLight)] {
+        s.execute("prefs.set", json!({"path": "interface.theme", "value": theme})).unwrap();
+        assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
+        assert_eq!(s.prefs().interface.light_theme, light);
+        s.execute("prefs.set", json!({"path": "interface.lightTheme", "value": theme})).unwrap();
+        let mut migrated = Session::new();
+        migrated.load_prefs_json(&json!({"interface": {"theme": theme}}).to_string()).unwrap();
+        assert_eq!(migrated.prefs().interface.appearance_mode, AppearanceMode::Light);
+        assert_eq!(migrated.prefs().interface.light_theme, light);
+    }
 }
 
 #[test]

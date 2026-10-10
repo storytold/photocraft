@@ -1391,6 +1391,8 @@
 	Adwaita Dark Theme	Тёмная тема Adwaita
 	Pro Theme	Тема Pro
 	Pro Medium Gray Theme	Средне-серая тема Pro
+	Pro Light Gray Theme	Светло-серая тема Pro
+	Pro Light Theme	Светлая тема Pro
 
 # Workspaces
 	Workspace…	Рабочая среда…
@@ -2282,6 +2284,8 @@
 	Preserve details	Сохранять детали
 	Print resolution	Разрешение при печати
 	Pro	Pro
+	Pro light	Светлая Pro
+	Pro light gray	Светло-серая Pro
 	Pro medium	Средняя Pro
 	Pro photo	ProPhoto
 	Purple	Фиолетовая

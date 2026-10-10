@@ -10,6 +10,9 @@
 //! - **Solarized Dark**: Ethan Schoonover's Solarized palette (base03/base02 surfaces, base0 text,
 //!   Solarized blue accent) with the Studio layout.
 //!
+//! - **Pro (Light Gray)** and **Pro (Light)**: Photoshop's third and fourth interface brightness
+//!   levels (#B8B8B8 and #F0F0F0 panels) with the Pro layout (#2661).
+//!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
@@ -24,6 +27,10 @@ pub enum ThemeKind {
     /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas (default).
     #[default]
     ProMedium,
+    /// Photoshop's third interface brightness: #B8B8B8 panels (#2661).
+    ProLightGray,
+    /// Photoshop's fourth (lightest) interface brightness: #F0F0F0 panels (#2661).
+    ProLight,
     Studio,
     StudioLight,
     Classic,
@@ -37,9 +44,11 @@ pub enum ThemeKind {
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 8] = [
+    pub const ALL: [ThemeKind; 10] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
+        ThemeKind::ProLightGray,
+        ThemeKind::ProLight,
         ThemeKind::Studio,
         ThemeKind::StudioLight,
         ThemeKind::Classic,
@@ -51,6 +60,8 @@ impl ThemeKind {
         match self {
             ThemeKind::Pro => "Pro (Dark)",
             ThemeKind::ProMedium => "Pro (Medium Gray)",
+            ThemeKind::ProLightGray => "Pro (Light Gray)",
+            ThemeKind::ProLight => "Pro (Light)",
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
             ThemeKind::Classic => "Classic",
@@ -65,6 +76,8 @@ impl ThemeKind {
         match self {
             ThemeKind::Pro => "pro",
             ThemeKind::ProMedium => "proMedium",
+            ThemeKind::ProLightGray => "proLightGray",
+            ThemeKind::ProLight => "proLight",
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
             ThemeKind::Classic => "classic",
@@ -72,6 +85,10 @@ impl ThemeKind {
             ThemeKind::AdwaitaDark => "adwaitaDark",
             ThemeKind::SolarizedDark => "solarizedDark",
         }
+    }
+    /// Photoshop-grammar layout (tab strips, flat panels): the four Pro brightness levels.
+    pub fn is_pro(self) -> bool {
+        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight)
     }
     pub fn next(self) -> Self {
         let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
@@ -81,6 +98,8 @@ impl ThemeKind {
         match s.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "").as_str() {
             "pro" | "prodark" | "photoshop" | "dark" => Some(ThemeKind::Pro),
             "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
+            "prolightgray" | "lightgray" | "mediumlight" => Some(ThemeKind::ProLightGray),
+            "prolight" | "prolightest" | "lightest" => Some(ThemeKind::ProLight),
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" | "light" => Some(ThemeKind::StudioLight),
             "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
@@ -177,6 +196,56 @@ impl Tokens {
                 separator: Color32::from_rgb(62, 62, 62),
                 tab_strip: Color32::from_rgb(74, 74, 74),
                 row_selected: Color32::from_rgb(107, 107, 107),
+                ..Tokens::for_kind(ThemeKind::Pro)
+            },
+            // Photoshop's medium-light brightness: #B8B8B8 panels, dark text, a mid-grey canvas.
+            ThemeKind::ProLightGray => Tokens {
+                kind,
+                chrome: Color32::from_rgb(184, 184, 184),
+                canvas: Color32::from_rgb(160, 160, 160),
+                canvas_dot: Color32::from_rgb(160, 160, 160),
+                dock: Color32::from_rgb(168, 168, 168),
+                card: Color32::from_rgb(184, 184, 184),
+                card_border: Color32::from_rgb(160, 160, 160),
+                field: Color32::from_rgb(214, 214, 214),
+                field_border: Color32::from_rgb(140, 140, 140),
+                hover: Color32::from_rgb(198, 198, 198),
+                pressed: Color32::from_rgb(170, 170, 170),
+                text: Color32::from_rgb(20, 20, 20),
+                text_dim: Color32::from_rgb(52, 52, 52),
+                text_faint: Color32::from_rgb(96, 96, 96),
+                icon: Color32::from_rgb(38, 38, 38),
+                accent_soft: Color32::from_rgb(208, 208, 208),
+                accent_text: Color32::from_rgb(0, 66, 150),
+                separator: Color32::from_rgb(158, 158, 158),
+                shadow: Color32::from_black_alpha(70),
+                tab_strip: Color32::from_rgb(170, 170, 170),
+                row_selected: Color32::from_rgb(212, 212, 212),
+                ..Tokens::for_kind(ThemeKind::Pro)
+            },
+            // Photoshop's lightest brightness: #F0F0F0 panels, dark text, a light-grey canvas.
+            ThemeKind::ProLight => Tokens {
+                kind,
+                chrome: Color32::from_rgb(240, 240, 240),
+                canvas: Color32::from_rgb(214, 214, 214),
+                canvas_dot: Color32::from_rgb(214, 214, 214),
+                dock: Color32::from_rgb(226, 226, 226),
+                card: Color32::from_rgb(240, 240, 240),
+                card_border: Color32::from_rgb(214, 214, 214),
+                field: Color32::WHITE,
+                field_border: Color32::from_rgb(186, 186, 186),
+                hover: Color32::from_rgb(226, 226, 226),
+                pressed: Color32::from_rgb(206, 206, 206),
+                text: Color32::from_rgb(20, 20, 20),
+                text_dim: Color32::from_rgb(64, 64, 64),
+                text_faint: Color32::from_rgb(120, 120, 120),
+                icon: Color32::from_rgb(46, 46, 46),
+                accent_soft: Color32::from_rgb(214, 214, 214),
+                accent_text: Color32::from_rgb(16, 98, 196),
+                separator: Color32::from_rgb(214, 214, 214),
+                shadow: Color32::from_black_alpha(50),
+                tab_strip: Color32::from_rgb(226, 226, 226),
+                row_selected: Color32::from_rgb(204, 204, 204),
                 ..Tokens::for_kind(ThemeKind::Pro)
             },
             ThemeKind::Pro => Tokens {
@@ -851,6 +920,36 @@ mod tests {
             .textures_delta
             .clear();
         }
+    }
+
+    #[test]
+    fn pro_light_gray_and_light_themes() {
+        // #2661: Photoshop's third and fourth brightness levels, with the Pro layout.
+        for (kind, panel, id, label) in
+            [(ThemeKind::ProLightGray, 184, "proLightGray", "Pro (Light Gray)"), (ThemeKind::ProLight, 240, "proLight", "Pro (Light)")]
+        {
+            let t = Tokens::for_kind(kind);
+            assert!(t.pro && !t.dark() && !t.bevel && kind.is_pro(), "{kind:?}");
+            assert_eq!((t.kind, t.card, t.chrome), (kind, Color32::from_gray(panel), Color32::from_gray(panel)));
+            assert_eq!((kind.id(), kind.label()), (id, label));
+            assert_eq!(ThemeKind::from_name(id), Some(kind));
+            assert_eq!(ThemeKind::from_name(label), Some(kind));
+            assert!(ThemeKind::ALL.contains(&kind));
+            // Text stays readable (WCAG AA for body text, 3:1 for dim and faint labels and icons).
+            for bg in [t.card, t.chrome, t.dock, t.field, t.hover, t.row_selected, t.tab_strip] {
+                assert!(contrast(t.text, bg) >= 4.5, "{kind:?} text on {bg:?}: {}", contrast(t.text, bg));
+                assert!(contrast(t.icon, bg) >= 3.0, "{kind:?} icon on {bg:?}");
+                assert!(contrast(t.text_dim, bg) >= 3.0, "{kind:?} dim text on {bg:?}");
+            }
+            assert!(contrast(t.text_faint, t.card) >= 2.0, "{kind:?} faint text");
+            assert!(contrast(t.accent_text, t.card) >= 3.0, "{kind:?} accent text");
+        }
+        // The four Pro levels step from darkest to lightest, as in Photoshop.
+        let cards = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::ProLightGray, ThemeKind::ProLight].map(|k| Tokens::for_kind(k).card.r());
+        assert!(cards.windows(2).all(|w| w[0] < w[1]), "{cards:?}");
+        assert!(!ThemeKind::Studio.is_pro() && !ThemeKind::StudioLight.is_pro() && !ThemeKind::Classic.is_pro());
+        assert_eq!(ThemeKind::from_name("light gray"), Some(ThemeKind::ProLightGray));
+        assert_eq!(ThemeKind::from_name("lightest"), Some(ThemeKind::ProLight));
     }
 
     #[test]

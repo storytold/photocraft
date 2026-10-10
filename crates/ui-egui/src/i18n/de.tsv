@@ -673,6 +673,8 @@
 	Theme	Design
 	Pro Theme	Pro-Design
 	Pro Medium Gray Theme	Pro-Design (Mittelgrau)
+	Pro Light Gray Theme	Pro-Design (Hellgrau)
+	Pro Light Theme	Pro-Design (Hell)
 	Studio Theme	Studio-Design
 	Studio Light Theme	Studio-Design (Hell)
 	Adwaita Light Theme	Adwaita-Design (Hell)
@@ -1664,6 +1666,8 @@
 	Postcard	Postkarte
 	Poster	Poster
 	Pro (Dark)	Pro (Dunkel)
+	Pro (Light)	Pro (Hell)
+	Pro (Light Gray)	Pro (Hellgrau)
 	Pro (Medium Gray)	Pro (Mittelgrau)
 	Protect Texture	Textur schützen
 	Purple	Lila
@@ -1858,6 +1862,8 @@
 	Preserve details	Details erhalten
 	Print resolution	Druckauflösung
 	Pro	Pro
+	Pro light	Pro hell
+	Pro light gray	Pro hellgrau
 	Pro medium	Pro mittel
 	Pro photo	Pro Foto
 	Quick export format	Schnellexport-Format

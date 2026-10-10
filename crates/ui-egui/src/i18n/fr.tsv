@@ -667,6 +667,8 @@
 	Theme	Thème
 	Pro Theme	Thème Pro
 	Pro Medium Gray Theme	Thème Pro gris moyen
+	Pro Light Gray Theme	Thème Pro gris clair
+	Pro Light Theme	Thème Pro clair
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
 	Adwaita Light Theme	Thème Adwaita clair
@@ -1647,6 +1649,8 @@
 	Postcard	Carte postale
 	Poster	Affiche
 	Pro (Dark)	Pro (sombre)
+	Pro (Light)	Pro (clair)
+	Pro (Light Gray)	Pro (gris clair)
 	Pro (Medium Gray)	Pro (gris moyen)
 	Protect Texture	Protéger la texture
 	Purple	Violet
@@ -1839,6 +1843,8 @@
 	Preserve details	Préserver les détails
 	Print resolution	Résolution d'impression
 	Pro	Pro
+	Pro light	Pro clair
+	Pro light gray	Pro gris clair
 	Pro medium	Pro moyen
 	Pro photo	ProPhoto
 	Quick export format	Format d'exportation rapide

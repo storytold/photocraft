@@ -677,6 +677,8 @@
 	Theme	Motyw
 	Pro Theme	Motyw Pro
 	Pro Medium Gray Theme	Motyw Pro (średni szary)
+	Pro Light Gray Theme	Motyw Pro (jasnoszary)
+	Pro Light Theme	Motyw Pro (jasny)
 	Studio Theme	Motyw Studio
 	Studio Light Theme	Motyw Studio (jasny)
 	Adwaita Light Theme	Motyw Adwaita (jasny)
@@ -1665,6 +1667,8 @@
 	Postcard	Pocztówka
 	Poster	Plakat
 	Pro (Dark)	Pro (ciemny)
+	Pro (Light)	Pro (jasny)
+	Pro (Light Gray)	Pro (jasnoszary)
 	Pro (Medium Gray)	Pro (średni szary)
 	Protect Texture	Chroń teksturę
 	Purple	Fioletowy
@@ -1862,6 +1866,8 @@
 	Preserve details	Zachowaj szczegóły
 	Print resolution	Rozdzielczość wydruku
 	Pro	Pro
+	Pro light	Pro jasny
+	Pro light gray	Pro jasnoszary
 	Pro medium	Pro średni
 	Pro photo	ProPhoto
 	Quick export format	Format szybkiego eksportu

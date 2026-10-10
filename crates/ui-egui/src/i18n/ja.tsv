@@ -679,6 +679,8 @@
 	Theme	テーマ
 	Pro Theme	プロテーマ
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
+	Pro Light Gray Theme	プロ(ライトグレー)テーマ
+	Pro Light Theme	プロ(ライト)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
 	Adwaita Light Theme	Adwaita(ライト)テーマ
@@ -1672,6 +1674,8 @@
 	Postcard	はがき
 	Poster	ポスター
 	Pro (Dark)	プロ(ダーク)
+	Pro (Light)	プロ(ライト)
+	Pro (Light Gray)	プロ(ライトグレー)
 	Pro (Medium Gray)	プロ(中間グレー)
 	Protect Texture	テクスチャを保護
 	Purple	紫
@@ -1870,6 +1874,8 @@
 	Preserve details	ディテールを保持
 	Print resolution	印刷解像度
 	Pro	プロ
+	Pro light	プロ(ライト)
+	Pro light gray	プロ(ライトグレー)
 	Pro medium	プロ(中間)
 	Pro photo	ProPhoto
 	Quick export format	クイック書き出しの形式
