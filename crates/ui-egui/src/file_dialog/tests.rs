@@ -144,7 +144,8 @@ fn layered_save_respects_explicit_jpeg_choices() {
     answer(&open, Some(FileDialogAnswer::SaveTo("/exports/chosen.JPEG".into())));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(*written.borrow(), ["/exports/chosen.jpeg"]);
-    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/exports/chosen.jpeg"));
+    // The JPEG can't hold the layers, so it is a copy and the document keeps its file (#2550).
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/My image.JPEG"));
     // Explicit command paths carry the same choice and bypass the picker.
     for command in ["file.save", "file.saveAs"] {
         let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);

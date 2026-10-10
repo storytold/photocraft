@@ -149,6 +149,12 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     // With no document open there is nothing to fit.
                                     let _ = app.run("view.fitOnScreen", json!({}));
                                 }
+                                // Double-clicking the Zoom tool zooms to 100% (Photoshop).
+                                if resp.double_clicked() && tool == Tool::Zoom {
+                                    app.ui.tool = tool;
+                                    // With no document open there is nothing to zoom.
+                                    let _ = app.run("view.actualPixels", json!({}));
+                                }
                                 // Right-click or long-press opens the flyout (Photoshop).
                                 let held_for =
                                     resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
@@ -3902,14 +3908,18 @@ mod toolbar_tests {
         }
     }
 
-    /// The Hand tool's toolbar button: tool buttons have no label, so find it by slot order.
-    fn hand_button(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Pos2 {
+    /// A tool's toolbar button: tool buttons have no label, so find it by slot order.
+    fn tool_button(h: &egui_kittest::Harness<'_, PhotocraftApp>, tool: Tool) -> egui::Pos2 {
         let size = egui::Vec2::splat(if Tokens::get(&h.ctx).pro { 30.0 } else { 36.0 });
         let buttons: Vec<Rect> = h.ctx.viewport(|v| {
             v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).map(|w| w.rect).collect()
         });
-        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Hand)).unwrap();
+        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&tool)).unwrap();
         buttons[index].center()
+    }
+
+    fn hand_button(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Pos2 {
+        tool_button(h, Tool::Hand)
     }
 
     fn toolbar_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
@@ -3958,6 +3968,41 @@ mod toolbar_tests {
         click(&mut h, p);
         click(&mut h, p);
         assert_eq!(h.state().ui.tool, Tool::Hand);
+        assert!(h.state().session.active().is_none());
+    }
+
+    /// Double-clicking the Zoom tool zooms to 100% (Photoshop); a single click only picks the tool.
+    #[test]
+    fn double_clicking_the_zoom_tool_zooms_to_actual_pixels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.views[0].fit_pending = true;
+        app.ui.views[0].zoom = 0.25;
+        let mut h = toolbar_harness(app);
+        let p = tool_button(&h, Tool::Zoom);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+        assert_eq!(h.state().ui.views[0].zoom, 0.25, "a single click doesn't zoom");
+        // Past the double-click window, so the next two clicks are a fresh double-click.
+        h.run_steps(40);
+        click(&mut h, p);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+        assert_eq!(h.state().ui.views[0].zoom, 1.0, "a double-click zooms to 100%");
+        assert!(!h.state().ui.views[0].fit_pending, "100% replaces a pending fit");
+    }
+
+    /// With no document open the double-click still picks the tool and doesn't panic.
+    #[test]
+    fn double_clicking_the_zoom_tool_without_a_document_is_harmless() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.tool = Tool::Move;
+        let mut h = toolbar_harness(app);
+        let p = tool_button(&h, Tool::Zoom);
+        click(&mut h, p);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
         assert!(h.state().session.active().is_none());
     }
 }

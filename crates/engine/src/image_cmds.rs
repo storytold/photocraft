@@ -3,7 +3,7 @@
 
 use photocraft_algo::resample::{Resample, crop_surface, resize_surface_in_canvas, translate_surface};
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, Effect, Effects, FxPaint, Layer, LayerContent, Size};
+use photocraft_doc::{Document, Effect, Effects, FxPaint, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -62,6 +62,34 @@ pub(crate) fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)
         if let Some(ch) = l.children_mut() {
             for_each_layer(ch, f);
         }
+    }
+}
+
+/// Assign new layer ids to a copied document and update every saved layer-comp reference.
+///
+/// A document copy needs fresh identities, but its comps must still target the copied
+/// layers. Deliberately leave references to already-deleted layers untouched so their
+/// missing-layer warnings remain meaningful. The same applies to Last Document State.
+pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
+    let mut ids = std::collections::HashMap::new();
+    for_each_layer(&mut doc.layers, &mut |layer| {
+        let previous = layer.id;
+        layer.id = LayerId::fresh();
+        ids.insert(previous, layer.id);
+    });
+
+    let remap = |comp: &mut photocraft_doc::LayerComp| {
+        for state in &mut comp.states {
+            if let Some(&new_id) = ids.get(&state.layer) {
+                state.layer = new_id;
+            }
+        }
+    };
+    for comp in &mut doc.layer_comps {
+        remap(comp);
+    }
+    if let Some(last) = &mut doc.last_document_state {
+        remap(last);
     }
 }
 
@@ -479,8 +507,13 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         surf.write_region(doc.bounds(), &vals);
         surf.prune();
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(surf))];
+        // A merged-only copy has no original layers for saved comps to restore.
+        // Don't carry dangling comp state into a single-layer flattened document.
+        doc.layer_comps.clear();
+        doc.last_applied_comp = None;
+        doc.last_document_state = None;
     }
-    for_each_layer(&mut doc.layers, &mut |l| l.id = photocraft_doc::LayerId::fresh());
+    reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
     Ok(json!({ "document": index, "name": name }))

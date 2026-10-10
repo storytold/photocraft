@@ -92,6 +92,13 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: Native CMYK solid and gradient fills share depth-quantized samples between
+rendering and PSD export. The uncached 16-bit CMYK gradient now round-trips with zero
+rendered error; psd-tools round trips rise from 307 to 308. Mixed and Photoshop round
+trips remain 169 and 258; rendering oracle counts remain 146, 237 and 133.
+Exact 8-bit CMYK row reuse reduces 1 MP conversion-read time by 77% for smooth ramps,
+33% with dithering and 10% for random colours (M4 Max, release optimization level 3).
+
 2026-10-10: [Shape stroke controls](shape-strokes.md) expose existing Solid/Dashed/Dotted,
 custom dash/gap, offset, caps, joins, alignment, miter-limit and opacity capabilities in
 Shape/Pen options and Properties. Properties stages a cached canvas preview before one

@@ -210,6 +210,29 @@ impl Default for ExportSettings {
     }
 }
 
+/// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
+/// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234).
+pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
+    match doc.layers.as_slice() {
+        [layer]
+            if matches!(layer.content, photocraft_doc::LayerContent::Raster(_))
+                && layer.visible
+                && layer.opacity >= 1.0
+                && layer.fill_opacity >= 1.0
+                && layer.mask.is_none()
+                && layer.vector_mask.is_none()
+                && layer.effects.items.is_empty()
+                && layer.effects.psd_raw.is_none()
+                && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
+                && photocraft_compose::channel_weights(layer, doc.mode).is_none()
+                && !photocraft_compose::blend_if_active(layer, doc.mode) =>
+        {
+            Some(layer)
+        }
+        _ => None,
+    }
+}
+
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
@@ -446,9 +469,10 @@ pub struct PhotocraftApp {
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
-    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`). The
-    /// canvas maps document pixels to physical pixels, so point-space geometry divides the view
-    /// zoom by this (see [`Self::point_zoom`]).
+    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
+    /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
+    /// to physical pixels, so point-space geometry divides the view zoom by this (see
+    /// [`Self::point_zoom`]).
     pub ppp: f32,
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
@@ -1028,18 +1052,11 @@ impl PhotocraftApp {
         // Other files keep their format only when it can retain their layers. A plain raster
         // (including an unlocked transparent PNG) can keep its flat format; editable contents,
         // masks and layer appearance settings need a layered format even with just one layer.
-        let plain_raster = matches!(st.doc.layers.as_slice(), [layer]
-            if matches!(layer.content, photocraft_doc::LayerContent::Raster(_))
-                && layer.visible && layer.opacity >= 1.0 && layer.fill_opacity >= 1.0
-                && layer.mask.is_none() && layer.vector_mask.is_none()
-                && layer.effects.items.is_empty() && layer.effects.psd_raw.is_none()
-                && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
-                && photocraft_compose::channel_weights(layer, st.doc.mode).is_none()
-                && !photocraft_compose::blend_if_active(layer, st.doc.mode));
+        let flat = plain_raster(&st.doc).is_some();
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff" | "ora")
-                || (plain_raster && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+                || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
@@ -1061,7 +1078,14 @@ impl PhotocraftApp {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        match self.write_document(path.clone(), &ExportSettings::default(), false)? {
+        // A flat file that can't hold the document (its layers, or the layered file it lives in)
+        // is written as a copy, as in Photoshop: the document keeps its file, so Save still
+        // writes the layered original and the edits stay unsaved (#2550).
+        let st = self.session.active().ok_or("no document")?;
+        let layered =
+            |p: &str| photocraft_engine::file_cmds::saves_in_place(p) || matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
+        let copy = !layered(&path) && (plain_raster(&st.doc).is_none() || st.path.as_deref().is_some_and(layered));
+        match self.write_document(path.clone(), &ExportSettings::default(), copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
         }
@@ -1133,7 +1157,11 @@ impl PhotocraftApp {
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
-        if let Some(state) = self.session.active_mut() {
+        // Only a layered save becomes the document's file; a flat one is a copy, as in the
+        // headless server (#2579).
+        if photocraft_engine::file_cmds::extension(&target).is_some_and(|e| photocraft_engine::file_cmds::layered_extension(&e))
+            && let Some(state) = self.session.active_mut()
+        {
             state.saved_to(target.clone());
         }
         self.ui.status = format!("Saved {target}");
@@ -1888,6 +1916,9 @@ mod move_auto_select_tests;
 
 #[cfg(test)]
 mod new_group_button_tests;
+
+#[cfg(test)]
+mod move_outline_tests;
 
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
