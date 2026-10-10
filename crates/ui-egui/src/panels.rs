@@ -83,9 +83,12 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
     let w = if double { w1 + bx + 2.0 } else { w1 };
-    egui::Panel::left("toolbar").resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
-        ui,
-        |ui| {
+    egui::Panel::left("toolbar")
+        .resizable(false)
+        .exact_size(w)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8)))
+        .show(ui, |ui| {
             if t.pro {
                 // Photoshop's toolbar header chevrons switch between one and two columns.
                 let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
@@ -1448,17 +1451,22 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let p = app.ui.panels.clone();
-    if t.pro {
-        dock_panels(app, ui, &p, &t);
+    // Center-facing x of each divider, outside in: (x, resizes). The seam is painted once
+    // in `paint_chrome_dividers` below, so rail|dock has a single owner however Pro/Studio
+    // order the panels (egui's own separator would be white `t.text` on hover).
+    let mut dividers: Vec<(f32, bool)> = Vec::new();
+    if t.pro && dock_panels(app, ui, &p, &t) {
+        dividers.push((ui.available_rect_before_wrap().max.x, true));
     }
     // Narrow icon rail, unless an embedding app hides it: shows, expands or collapses panel groups.
     if p.rail {
         let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
-        egui::Panel::right("rail").resizable(false).exact_size(rw).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8))).show(
-            ui,
-            |ui| {
-                let r = ui.max_rect();
-                ui.painter().line_segment([r.left_top() - vec2(6.0, 8.0), r.left_bottom() + vec2(-6.0, 8.0)], Stroke::new(1.0, t.separator));
+        egui::Panel::right("rail")
+            .resizable(false)
+            .exact_size(rw)
+            .show_separator_line(false)
+            .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8)))
+            .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 use crate::dock::Group;
                 let entries: [(&str, &str, Group); 5] = [
@@ -1476,13 +1484,40 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         crate::dock::rail_click(app, g, docked);
                     }
                 }
-            },
-        );
+            });
+        dividers.push((ui.available_rect_before_wrap().max.x, false));
     }
-    if !t.pro {
-        dock_panels(app, ui, &p, &t);
+    if !t.pro && dock_panels(app, ui, &p, &t) {
+        dividers.push((ui.available_rect_before_wrap().max.x, true));
     }
+    paint_chrome_dividers(ui, &t, &dividers);
     crate::dock::persist(app, ui.ctx());
+}
+
+/// Vertical chrome dividers between the canvas and the right panels.
+///
+/// egui paints its own `Panel` separator in `widgets.text` white on hover, while the
+/// horizontal dock splitters (`dock.rs`) highlight `t.accent`: two languages for one gesture.
+/// All side panels opt out via `show_separator_line(false)` and each seam is painted here
+/// exactly once instead: 1px `t.separator` idle, 2px `t.accent` while the dock edge is
+/// hovered or dragged. Inset into the panel so the later `CentralPanel` background (which
+/// starts exactly at the seam) never covers the line.
+fn paint_chrome_dividers(ui: &mut egui::Ui, t: &Tokens, dividers: &[(f32, bool)]) {
+    if dividers.is_empty() {
+        return;
+    }
+    let avail = ui.available_rect_before_wrap();
+    let down = ui.ctx().input(|i| i.pointer.any_down());
+    let pos = ui.ctx().pointer_hover_pos().or_else(|| down.then(|| ui.ctx().pointer_interact_pos()).flatten());
+    for &(x, resizable) in dividers {
+        let hot = resizable && pos.is_some_and(|p| (p.x - x).abs() <= if down { 8.0 } else { 5.0 } && avail.y_range().contains(p.y));
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            ui.painter().vline(x + 1.5, avail.y_range(), Stroke::new(2.0, t.accent.gamma_multiply(0.7)));
+        } else {
+            ui.painter().vline(x + 1.0, avail.y_range(), Stroke::new(1.0, t.separator));
+        }
+    }
 }
 
 /// The right dock's width range (points).
@@ -1498,7 +1533,7 @@ pub fn request_dock_width(ctx: &egui::Context, w: f32) {
     ctx.data_mut(|d| d.insert_temp(dock_width_id(), w));
 }
 
-fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Panels, t: &Tokens) {
+fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Panels, t: &Tokens) -> bool {
     use crate::dock::Group;
     // Floating in Studio, Properties docks only in Pro (Photoshop).
     let shown: Vec<Group> = [
@@ -1513,10 +1548,11 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
     .filter_map(|(g, on)| on.then_some(g))
     .collect();
     if shown.is_empty() {
-        return;
+        return false;
     }
     let margin = if t.pro { 2 } else { 8 };
-    let mut panel = egui::Panel::right("dock").resizable(true).default_size(if t.pro { 290.0 } else { 300.0 }).size_range(DOCK_WIDTH);
+    let mut panel =
+        egui::Panel::right("dock").resizable(true).show_separator_line(false).default_size(if t.pro { 290.0 } else { 300.0 }).size_range(DOCK_WIDTH);
     if let Some(w) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())) {
         panel = panel.exact_size(w);
     }
@@ -1524,6 +1560,7 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
         // Groups keep their heights whatever they show (#88): see `dock`.
         crate::dock::show(app, ui, &shown, dock_body);
     });
+    true
 }
 
 /// One dock group's tab content; `dock` bounds it and scrolls it when it's taller.
@@ -4450,3 +4487,73 @@ mod opacity_row_layout_tests {
 #[cfg(test)]
 #[path = "mask_props_ui_tests.rs"]
 mod mask_properties_tests;
+
+#[cfg(test)]
+mod chrome_divider_tests {
+    use super::*;
+
+    /// The rail|dock seam must be a single dark divider idle and an accent highlight on
+    /// hover, never egui's white `t.text` resize line (which the other splitters don't use).
+    fn divider_harness() -> (egui_kittest::Harness<'static, PhotocraftApp>, f32) {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    right_dock(app, ui);
+                    // Central max.x is the rail's outer left; the Pro rail is 36pt wide,
+                    // so the dock seam sits one rail width to its right.
+                    let central = ui.available_rect_before_wrap();
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("divider-test-central"), central));
+                    egui::CentralPanel::default().show(ui, |_| {});
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.state_mut().ui.theme = crate::theme::ThemeKind::Pro;
+        h.run_steps(4);
+        let central: Rect = h.ctx.data(|d| d.get_temp(egui::Id::new("divider-test-central"))).expect("right dock not drawn");
+        (h, central.max.x + 36.0)
+    }
+
+    #[test]
+    fn dock_seam_is_dark_idle_and_accent_on_hover() {
+        let (mut h, seam_x) = divider_harness();
+        // (near-white pixels, bluish accent pixels) in a ±3px strip around the seam.
+        let strip_stats = |img: &image::RgbaImage, x: f32, y0: u32, y1: u32| {
+            let (mut white, mut blue) = (0, 0);
+            let mut whites: Vec<(u32, u32, [u8; 4])> = Vec::new();
+            for px in (x as i32 - 3)..=(x as i32 + 3) {
+                for py in y0..y1 {
+                    let p = img.get_pixel(px as u32, py);
+                    if p[0] > 200 && p[1] > 200 && p[2] > 200 {
+                        white += 1;
+                        if whites.len() < 12 {
+                            whites.push((px as u32, py, [p[0], p[1], p[2], p[3]]));
+                        }
+                    }
+                    if p[2] > 120 && (p[2] as i16) > (p[0] as i16) + 30 && p[1] > p[0] {
+                        blue += 1;
+                    }
+                }
+            }
+            (white, blue, whites)
+        };
+        // Idle: a single dark divider, no white line, no accent.
+        let img = h.render().expect("software render");
+        let (white, blue, whites) = strip_stats(&img, seam_x, 300, 700);
+        assert_eq!(white, 0, "white resize line visible without hover at x={seam_x}: {whites:?}");
+        assert_eq!(blue, 0, "accent highlight visible without hover at x={seam_x}");
+
+        // Hover the dock edge: accent highlight appears, still no white line.
+        // (Rows near the pointer are skipped: the software renderer draws the white
+        // cursor arrow there.)
+        h.hover_at(pos2(seam_x, 500.0));
+        h.run_steps(3);
+        let img = h.render().expect("software render");
+        let (white, blue, whites) = strip_stats(&img, seam_x, 300, 700);
+        let (white_near_cursor, _, _) = strip_stats(&img, seam_x, 485, 530);
+        assert_eq!(white - white_near_cursor, 0, "white resize line visible on hover at x={seam_x}: {whites:?}");
+        assert!(blue >= 30, "no accent highlight on hover at x={seam_x} (blue={blue})");
+    }
+}

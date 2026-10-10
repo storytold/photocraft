@@ -50,6 +50,8 @@ egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
 photocraft-testkit = { workspace = true }
 # Only for examples/perf_scenarios.rs (a 500-brush .abr for the #210 import row).
 photocraft-psd = { workspace = true }
+# Pixel assertions in the chrome divider tests (`Harness::render`).
+image = { workspace = true }
 
 [build-dependencies]
 # Deflates the translation catalogs (build.rs); already linked at run time to inflate them.
