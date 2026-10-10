@@ -958,6 +958,7 @@
 	Brush Preset Options	Параметры наборов кистей
 	New Brush	Новая кисть
 	Create new brush from these settings	Создать новую кисть из этих параметров
+	Update the current brush with these settings	Обновить текущую кисть этими параметрами
 	Reset the brush to the defaults	Сбросить кисть к значениям по умолчанию
 	No brush presets	Нет наборов кистей
 	Override Pressure	Переопределить нажим
@@ -1357,6 +1358,8 @@
 	Switch theme	Сменить тему
 	Next Theme	Следующая тема
 	Classic Theme	Классическая тема
+	Solarized dark	Solarized тёмная
+	Solarized Dark Theme	Тёмная тема Solarized
 	Studio Theme	Тема Studio
 	Studio Light Theme	Светлая тема Studio
 	Pro Theme	Тема Pro
@@ -2100,7 +2103,14 @@
 	Outside	Снаружи
 	Tetrahedral	Тетраэдрическая
 	Texture Each Tip	Текстура на каждый отпечаток
-	The current gradient (pick one in Window › Gradients)	Текущий градиент (выберите в Окно › Градиенты)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Редактор градиентов
+	Gradient picker	Выбор градиента
+	Save As Preset	Сохранить как набор
+	The gradient the Gradient tool paints with	Градиент, которым рисует инструмент «Градиент»
+	Adds the current gradient to the Gradients panel	Добавляет текущий градиент на панель «Градиенты»
+	Gradient stops	Точки градиента
+	Click to edit the gradient	Щёлкните, чтобы изменить градиент
 	Tilt X	Наклон X
 	Tilt Y	Наклон Y
 	Toggle count group visibility	Вкл/выкл видимость группы счёта
@@ -2315,6 +2325,9 @@
 	Cancelled {label}	{label}: отменено
 	Esc to cancel	Esc — отмена
 	Opening {name}	Открытие {name}
+	Saving {name}	Сохранение {name}
+	A save to {name} is still running; try again when it finishes	Сохранение в {name} ещё выполняется; повторите попытку после его завершения
+	{label} is writing the file and can no longer be cancelled	{label}: идёт запись файла, отменить уже нельзя
 	Opening {name}…	Открытие {name}…
 	Opening…	Открытие…
 	Reading…	Чтение…
@@ -2567,3 +2580,25 @@ fontWeight	Italic	Курсив
 	Cycle Orientation	Сменить ориентацию
 	Set the overlay options for the Crop tool	Задать параметры перекрытия для инструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+щелчок перехватило окружение рабочего стола: оно перемещает окна через Alt+перетаскивание. Назначьте для перемещения окон клавишу Super или зафиксируйте Alt в меню Окно › Клавиши-модификаторы.
+	Color Picker (Solid Color)	Выбор цвета (сплошной цвет)
+	Straighten the image by drawing a line on it	Выровнять изображение, нарисовав на нем линию
+	Set additional Crop options	Задать дополнительные параметры кадрирования
+	Show Cropped Area	Показать отсекаемую область
+	Enable Crop Shield	Включить экран кадрирования
+	Match Canvas	Как у холста
+	Auto Adjust Opacity	Автоматически настраивать непрозрачность
+	Crop Shield color	Цвет экрана кадрирования
+	Color Picker (Crop Shield Color)	Палитра цветов (Цвет экрана кадрирования)
+	From Center	От центра
+	Link radii	Связать радиусы
+	Star Ratio:	Коэффициент звезды:
+	Create Rectangle	Создать прямоугольник
+	Create Ellipse	Создать эллипс
+	Create Triangle	Создать треугольник
+	Create Polygon	Создать многоугольник
+	Some brush presets could not be loaded	Не удалось загрузить некоторые наборы кистей
+	Retry saving presets	Повторить сохранение наборов
+	Brush preset changes are not saved: {error}	Изменения наборов кистей не сохранены: {error}
+	Keep this tab open to retain your brushes.	Не закрывайте эту вкладку, чтобы сохранить кисти.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Хранилище браузера недоступно; кисти действуют только в этом сеансе. Не закрывайте эту вкладку, чтобы сохранить их.
+	Saving brush presets… Keep this tab open until saving finishes.	Сохранение наборов кистей… Не закрывайте эту вкладку, пока сохранение не завершится.

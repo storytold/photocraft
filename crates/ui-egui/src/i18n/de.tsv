@@ -669,6 +669,8 @@
 	Studio Theme	Studio-Design
 	Studio Light Theme	Studio-Design (Hell)
 	Classic Theme	Klassisches Design
+	Solarized dark	Solarized dunkel
+	Solarized Dark Theme	Solarized-Design (Dunkel)
 	Next Theme	Nächstes Design
 	Actions	Aktionen
 	Brush Settings	Pinseleinstellungen
@@ -1912,6 +1914,7 @@
 	Collapse group  ({key}-click: all groups)	Gruppe einklappen  ({key}-Klick: alle Gruppen)
 	Create new brush from the current settings	Neuen Pinsel aus den aktuellen Einstellungen erstellen
 	Create new brush from these settings	Neuen Pinsel aus diesen Einstellungen erstellen
+	Update the current brush with these settings	Aktuellen Pinsel mit diesen Einstellungen aktualisieren
 	Delete brush	Pinsel löschen
 	Drag the arrow to set the angle, the dots to set the roundness	Ziehe den Pfeil für den Winkel, die Punkte für die Rundung
 	Expand	Ausklappen
@@ -1987,6 +1990,13 @@
 	Align with layer	An Ebene ausrichten
 	Reset Alignment	Ausrichtung zurücksetzen
 	Centre the gradient (offset 0, 0)	Verlauf zentrieren (Versatz 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Gradienten-Editor
+	Gradient picker	Verlaufsauswahl
+	Gradient stops	Verlaufsstufen
+	Save As Preset	Als Vorgabe speichern
+	The gradient the Gradient tool paints with	Der Verlauf, mit dem das Verlaufswerkzeug malt
+	Adds the current gradient to the Gradients panel	Fügt den aktuellen Verlauf zum Bedienfeld „Verläufe" hinzu
 	The current gradient (pick one in Window › Gradients)	Der aktuelle Verlauf (wähle einen unter Fenster › Verläufe)
 	Select a type layer to edit its character and paragraph settings.	Wähle eine Textebene, um ihre Zeichen- und Absatzeinstellungen zu bearbeiten.
 	Text color	Textfarbe
@@ -2019,6 +2029,9 @@
 	Cancelled {label}	{label} abgebrochen
 	Esc to cancel	Esc zum Abbrechen
 	Opening {name}	Öffne {name}
+	Saving {name}	Speichere {name}
+	A save to {name} is still running; try again when it finishes	{name} wird noch gespeichert; versuchen Sie es erneut, wenn der Vorgang abgeschlossen ist
+	{label} is writing the file and can no longer be cancelled	{label} schreibt die Datei und kann nicht mehr abgebrochen werden
 	Opening {name}…	Öffne {name}…
 	Opening…	Öffnen…
 	Reading…	Lesen…
@@ -2331,3 +2344,25 @@ fontWeight	Italic	Kursiv
 	Cycle Orientation	Ausrichtung wechseln
 	Set the overlay options for the Crop tool	Überlagerungsoptionen für das Freistellungswerkzeug festlegen
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Der Alt-Klick ging an die Arbeitsumgebung, die Fenster mit Alt-Ziehen verschiebt. Stelle dort die Taste zum Verschieben von Fenstern auf Super oder raste Alt unter Fenster › Modifikatortasten ein.
+	Color Picker (Solid Color)	Farbwähler (Volltonfarbe)
+	Straighten the image by drawing a line on it	Bild durch Ziehen einer Linie gerade ausrichten
+	Set additional Crop options	Zusätzliche Freistellungsoptionen festlegen
+	Show Cropped Area	Freigestellten Bereich anzeigen
+	Enable Crop Shield	Freistellungsschutz aktivieren
+	Match Canvas	An Arbeitsfläche anpassen
+	Auto Adjust Opacity	Deckkraft automatisch anpassen
+	Crop Shield color	Farbe des Freistellungsschutzes
+	Color Picker (Crop Shield Color)	Farbwähler (Farbe des Freistellungsschutzes)
+	From Center	Vom Mittelpunkt aus
+	Link radii	Radien verknüpfen
+	Star Ratio:	Sternverhältnis:
+	Create Rectangle	Rechteck erstellen
+	Create Ellipse	Ellipse erstellen
+	Create Triangle	Dreieck erstellen
+	Create Polygon	Polygon erstellen
+	Some brush presets could not be loaded	Einige Pinselvorgaben konnten nicht geladen werden
+	Retry saving presets	Speichern der Vorgaben erneut versuchen
+	Brush preset changes are not saved: {error}	Änderungen an Pinselvorgaben sind nicht gespeichert: {error}
+	Keep this tab open to retain your brushes.	Lass diesen Tab geöffnet, um deine Pinsel zu behalten.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Der Browserspeicher ist nicht verfügbar; Pinsel gelten nur für diese Sitzung. Lass diesen Tab geöffnet, um sie zu behalten.
+	Saving brush presets… Keep this tab open until saving finishes.	Pinselvorgaben werden gespeichert… Lass diesen Tab geöffnet, bis das Speichern abgeschlossen ist.

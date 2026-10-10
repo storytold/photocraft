@@ -5,6 +5,8 @@
 //! - **Studio Light**: the same system on light surfaces.
 //! - **Classic**: a deliberately Windows-2000-era look (grey bevels, square corners, navy selection)
 //!   for people who prefer it.
+//! - **Solarized Dark**: Ethan Schoonover's Solarized palette (base03/base02 surfaces, base0 text,
+//!   Solarized blue accent) with the Studio layout.
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
@@ -23,12 +25,16 @@ pub enum ThemeKind {
     Studio,
     StudioLight,
     Classic,
+    /// Solarized Dark (Ethan Schoonover's palette): the base03 background, base02 panels and
+    /// base0 body text, with the Solarized blue accent.
+    SolarizedDark,
     /// Follow the OS appearance without replacing the saved choice.
     System,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 6] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic, ThemeKind::System];
+    pub const ALL: [ThemeKind; 7] =
+        [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic, ThemeKind::SolarizedDark, ThemeKind::System];
     pub fn label(self) -> &'static str {
         match self {
             ThemeKind::Pro => "Pro (Dark)",
@@ -36,6 +42,7 @@ impl ThemeKind {
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
             ThemeKind::Classic => "Classic",
+            ThemeKind::SolarizedDark => "Solarized Dark",
             ThemeKind::System => "System",
         }
     }
@@ -48,6 +55,7 @@ impl ThemeKind {
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
             ThemeKind::Classic => "classic",
+            ThemeKind::SolarizedDark => "solarizedDark",
             ThemeKind::System => "system",
         }
     }
@@ -71,6 +79,7 @@ impl ThemeKind {
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" | "light" => Some(ThemeKind::StudioLight),
             "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
+            "solarizeddark" | "solarized" => Some(ThemeKind::SolarizedDark),
             "system" => Some(ThemeKind::System),
             _ => None,
         }
@@ -319,6 +328,48 @@ impl Tokens {
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
             },
+            // Ethan Schoonover's Solarized Dark palette: base03 canvas, base02 surfaces, base0
+            // body text and the Solarized blue accent. https://ethanschoonover.com/solarized/
+            // (MIT; see LICENSE-solarized.txt)
+            ThemeKind::SolarizedDark => Tokens {
+                kind,
+                chrome: Color32::from_rgb(7, 54, 66),
+                canvas: Color32::from_rgb(0, 43, 54),
+                canvas_dot: Color32::from_rgb(10, 61, 74),
+                dock: Color32::from_rgb(0, 37, 47),
+                card: Color32::from_rgb(7, 54, 66),
+                card_border: Color32::from_rgb(0, 37, 47),
+                field: Color32::from_rgb(0, 37, 47),
+                field_border: Color32::from_rgb(21, 80, 95),
+                hover: Color32::from_rgb(14, 74, 90),
+                pressed: Color32::from_rgb(18, 89, 107),
+                text: Color32::from_rgb(131, 148, 150),
+                text_dim: Color32::from_rgb(101, 123, 131),
+                text_faint: Color32::from_rgb(88, 110, 117),
+                icon: Color32::from_rgb(147, 161, 161),
+                accent: Color32::from_rgb(38, 139, 210),
+                accent_soft: Color32::from_rgba_unmultiplied(38, 139, 210, 46),
+                accent_border: Color32::from_rgba_unmultiplied(38, 139, 210, 120),
+                accent_text: Color32::from_rgb(253, 246, 227),
+                separator: Color32::from_rgb(0, 37, 47),
+                shadow: Color32::from_black_alpha(150),
+                primary_bg: Color32::from_rgb(38, 139, 210),
+                primary_text: Color32::from_rgb(253, 246, 227),
+                danger: Color32::from_rgb(220, 50, 47),
+                warning: Color32::from_rgb(181, 137, 0),
+                radius_sm: 6.0,
+                radius: 8.0,
+                radius_lg: 12.0,
+                bevel: false,
+                pro: false,
+                tab_strip: Color32::TRANSPARENT,
+                row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_rgb(0, 43, 54),
+                histogram_level: 225,
+                caption_close: Color32::from_rgb(220, 50, 47),
+                caption_close_text: Color32::from_rgb(253, 246, 227),
+                scrim: Color32::from_black_alpha(110),
+            },
         }
     }
 
@@ -377,7 +428,7 @@ impl Tokens {
     }
 
     pub fn dark(&self) -> bool {
-        matches!(self.kind, ThemeKind::Studio | ThemeKind::Pro | ThemeKind::ProMedium)
+        matches!(self.kind, ThemeKind::Studio | ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::SolarizedDark)
     }
 }
 
@@ -711,9 +762,33 @@ mod tests {
         assert_eq!(ThemeKind::from_name("dark"), Some(ThemeKind::Pro));
         assert_eq!(ThemeKind::from_name("studio"), Some(ThemeKind::Studio));
         assert_eq!(ThemeKind::from_name("Pro (Medium Gray)"), Some(ThemeKind::ProMedium));
+        assert_eq!(ThemeKind::from_name("Solarized Dark"), Some(ThemeKind::SolarizedDark));
+        assert_eq!(ThemeKind::from_name("solarized"), Some(ThemeKind::SolarizedDark));
         let m = Tokens::for_kind(ThemeKind::ProMedium);
         assert!(m.pro && m.dark() && m.kind == ThemeKind::ProMedium && m.card == Color32::from_rgb(83, 83, 83));
+        let s = Tokens::for_kind(ThemeKind::SolarizedDark);
+        assert!(s.dark() && !s.bevel && s.kind == ThemeKind::SolarizedDark && s.card == Color32::from_rgb(7, 54, 66));
         assert_eq!(ThemeKind::from_name("neon"), None);
+    }
+
+    #[test]
+    fn theme_cycle_includes_solarized_and_system_without_changing_the_default() {
+        assert_eq!(ThemeKind::default(), ThemeKind::ProMedium);
+        let mut current = ThemeKind::ALL[0];
+        for kind in ThemeKind::ALL {
+            assert_eq!(current, kind);
+            assert_eq!(ThemeKind::from_name(kind.id()), Some(kind));
+            if kind != ThemeKind::System {
+                for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+                    assert_eq!(kind.resolved(appearance), kind);
+                }
+            }
+            current = current.next();
+        }
+        assert_eq!(current, ThemeKind::ALL[0]);
+        assert_eq!(ThemeKind::System.resolved(Some(egui::Theme::Light)), ThemeKind::StudioLight);
+        assert_eq!(ThemeKind::System.resolved(Some(egui::Theme::Dark)), ThemeKind::ProMedium);
+        assert_eq!(ThemeKind::System.resolved(None), ThemeKind::ProMedium);
     }
 
     #[test]

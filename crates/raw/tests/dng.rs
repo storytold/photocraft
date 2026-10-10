@@ -450,3 +450,113 @@ fn deflate_8_bit_predictor_and_packed_12_bit() {
     bytes[at..at + old.len()].copy_from_slice(&new);
     assert_eq!(sensor(&bytes).data, data12, "12-bit packed");
 }
+
+// ---------------------------------------------------------------- JPEG XL (DNG 1.7)
+
+/// Losslessly encodes `w × h` samples (1 = grey, 3 = RGB) at 8 or 16 bits as a JPEG XL codestream.
+fn jxl(samples: &[u16], w: usize, h: usize, channels: usize, bits: u16) -> Vec<u8> {
+    use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions};
+    let (depth, bytes): (BitDepth, Vec<u8>) = match bits {
+        8 => (BitDepth::Eight, samples.iter().map(|&v| v as u8).collect()),
+        _ => (BitDepth::Sixteen, samples.iter().flat_map(|v| v.to_ne_bytes()).collect()),
+    };
+    let space = if channels == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
+    let mut out = Vec::new();
+    zune_jpegxl::JxlSimpleEncoder::new(&bytes, EncoderOptions::new(w, h, space, depth)).encode(&mut out).unwrap();
+    out
+}
+
+/// `data` (`w × h × spp`) cut into `tw × th` tiles, edge tiles padded by repeating the last row / column.
+fn tiles(data: &[u16], w: usize, h: usize, spp: usize, tw: usize, th: usize) -> Vec<Vec<u16>> {
+    let mut out = Vec::new();
+    for ty in (0..h).step_by(th) {
+        for tx in (0..w).step_by(tw) {
+            let mut t = Vec::with_capacity(tw * th * spp);
+            for y in 0..th {
+                for x in 0..tw {
+                    let at = ((ty + y).min(h - 1) * w + (tx + x).min(w - 1)) * spp;
+                    t.extend_from_slice(&data[at..at + spp]);
+                }
+            }
+            out.push(t);
+        }
+    }
+    out
+}
+
+#[test]
+fn jpeg_xl_layouts_decode_exactly() {
+    let (w, h) = (37, 23); // odd sizes: a short last strip and partial edge tiles
+    for (name, spp, bits, tiled) in [
+        ("LinearRaw 16-bit strips", 3, 16, false),
+        ("LinearRaw 16-bit tiles", 3, 16, true),
+        ("CFA 16-bit strips", 1, 16, false),
+        ("CFA 16-bit tiles", 1, 16, true),
+        ("LinearRaw 8-bit strips", 3, 8, false),
+        ("CFA 8-bit tiles", 1, 8, true),
+    ] {
+        let data = noise(w * h * spp, bits);
+        let mut spec = DngSpec::cfa(w, h, data.clone());
+        spec.samples = spp;
+        spec.bits = bits;
+        spec.white = (1u32 << bits) - 1;
+        if tiled {
+            let (tw, th) = (16, 16);
+            spec.storage = DngStorage::JxlTiles { width: tw, height: th };
+            spec.jxl_segments = tiles(&data, w, h, spp, tw, th).iter().map(|t| jxl(t, tw, th, spp, bits)).collect();
+        } else {
+            let rows = 10;
+            spec.storage = DngStorage::JxlStrips { rows };
+            spec.jxl_segments =
+                (0..h).step_by(rows).map(|y| (y, (y + rows).min(h) - y)).map(|(y, r)| jxl(&data[y * w * spp..(y + r) * w * spp], w, r, spp, bits)).collect();
+        }
+        let s = sensor(&spec.build());
+        assert_eq!((s.width, s.height, s.samples), (w, h, spp), "{name}");
+        assert_eq!(s.data, data, "{name}");
+    }
+}
+
+#[test]
+fn jpeg_xl_linear_raw_develops() {
+    // A Samsung Expert RAW-like file: one 16-bit LinearRaw JPEG XL strip with a baseline exposure.
+    let (w, h) = (24, 16);
+    let data: Vec<u16> = scene(w, h).iter().flat_map(|p| p.map(|v| (v * 20000.0) as u16)).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.samples = 3;
+    spec.storage = DngStorage::JxlStrips { rows: h };
+    spec.jxl_segments = vec![jxl(&data, w, h, 3, 16)];
+    spec.baseline_exposure = Some(1.0);
+    let b = spec.build();
+    let d = develop(&b, &DevelopOptions::default()).unwrap();
+    assert_eq!((d.width as usize, d.height as usize, d.rgb.len()), (w, h, w * h * 3));
+    // Same pixels stored uncompressed develop identically.
+    spec.storage = DngStorage::Strips { rows: h };
+    assert_eq!(develop(&spec.build(), &DevelopOptions::default()).unwrap().rgb, d.rgb);
+}
+
+#[test]
+fn jpeg_xl_mismatches_are_errors() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h * 3, 16);
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.samples = 3;
+    spec.storage = DngStorage::JxlStrips { rows: h };
+    // Codestream smaller than the strip.
+    spec.jxl_segments = vec![jxl(&data[..w * 4 * 3], w, 4, 3, 16)];
+    assert!(matches!(decode(&spec.build(), &Limits::default()), Err(RawError::Malformed(_))));
+    // Grey codestream for RGB samples.
+    spec.jxl_segments = vec![jxl(&data[..w * h], w, h, 1, 16)];
+    assert!(matches!(decode(&spec.build(), &Limits::default()), Err(RawError::Unsupported(_))));
+    // Not a codestream at all.
+    spec.jxl_segments = vec![vec![0xff, 0x0a, 1, 2, 3, 4, 5]];
+    assert!(matches!(decode(&spec.build(), &Limits::default()), Err(RawError::Malformed(_))));
+}
+
+#[test]
+fn profile_gain_table_map_is_reported() {
+    let gain_table = |s: &Sensor| s.warnings.iter().any(|w| w.contains("ProfileGainTableMap"));
+    let mut spec = DngSpec::cfa(8, 8, vec![500; 64]);
+    assert!(!gain_table(&sensor(&spec.build())));
+    spec.profile_gain_table_map = Some(vec![0; 64]);
+    assert!(gain_table(&sensor(&spec.build())));
+}

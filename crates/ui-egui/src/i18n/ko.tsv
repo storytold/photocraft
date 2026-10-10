@@ -651,6 +651,8 @@
 	Studio Theme	스튜디오 테마
 	Studio Light Theme	스튜디오 밝은 테마
 	Classic Theme	클래식 테마
+	Solarized dark	Solarized 어두움
+	Solarized Dark Theme	Solarized 어두운 테마
 	Next Theme	다음 테마
 	Actions	액션
 	Brush Settings	브러시 설정
@@ -1887,6 +1889,7 @@
 	Collapse group  ({key}-click: all groups)	그룹 접기  ({key} 키를 누른 채 클릭: 모든 그룹)
 	Create new brush from the current settings	현재 설정으로 새 브러시 만들기
 	Create new brush from these settings	이 설정으로 새 브러시 만들기
+	Update the current brush with these settings	이 설정으로 현재 브러시 업데이트
 	Delete brush	브러시 삭제
 	Drag the arrow to set the angle, the dots to set the roundness	화살표를 드래그하여 각도를, 점을 드래그하여 원형률을 설정하세요
 	Expand	펼치기
@@ -1963,6 +1966,13 @@
 	Centre the gradient (offset 0, 0)	그레이디언트를 중앙에 배치(오프셋 0, 0)
 	The current gradient (pick one in Window › Gradients)	현재 그레이디언트(창 › 그레이디언트에서 선택)
 	Select a type layer to edit its character and paragraph settings.	문자 및 단락 설정을 편집하려면 문자 레이어를 선택하세요.
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	그라디언트 편집기
+	Gradient picker	그라디언트 선택기
+	Save As Preset	프리셋으로 저장
+	The gradient the Gradient tool paints with	그라디언트 도구가 칠하는 그라디언트입니다
+	Adds the current gradient to the Gradients panel	현재 그라디언트를 그라디언트 패널에 추가합니다
+	Gradient stops	그라디언트 스톱
 	Text color	텍스트 색상
 	Type Options	문자 옵션
 	Anti-aliasing method	앤티 앨리어스 방식
@@ -1992,6 +2002,9 @@
 	Cancelled {label}	{label} 작업을 취소했습니다
 	Esc to cancel	Esc 키로 취소
 	Opening {name}	{name} 여는 중
+	Saving {name}	{name} 저장 중
+	A save to {name} is still running; try again when it finishes	{name}에 저장하는 작업이 아직 진행 중입니다. 완료된 후 다시 시도하세요
+	{label} is writing the file and can no longer be cancelled	{label}: 파일을 쓰는 중이므로 더 이상 취소할 수 없습니다
 	Opening {name}…	{name} 여는 중…
 	Opening…	여는 중…
 	Reading…	읽는 중…
@@ -2871,3 +2884,25 @@ fontWeight	Italic	기울임
 	Cycle Orientation	방향 순환
 	Set the overlay options for the Crop tool	자르기 도구의 오버레이 옵션 설정
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 클릭이 데스크톱으로 전달되었습니다. 데스크톱이 Alt 드래그로 창을 이동합니다. 창 이동 키를 Super로 바꾸거나 창 › 보조 키에서 Alt를 고정하세요.
+	Color Picker (Solid Color)	색상 피커 (단색)
+	Straighten the image by drawing a line on it	이미지에 선을 그려 수평 맞추기
+	Set additional Crop options	추가 자르기 옵션 설정
+	Show Cropped Area	잘린 영역 표시
+	Enable Crop Shield	자르기 방패 사용
+	Match Canvas	캔버스와 일치
+	Auto Adjust Opacity	자동으로 불투명도 조정
+	Crop Shield color	자르기 방패 색상
+	Color Picker (Crop Shield Color)	색상 선택기 (자르기 방패 색상)
+	From Center	중앙에서
+	Link radii	반경 연결
+	Star Ratio:	별 비율:
+	Create Rectangle	사각형 만들기
+	Create Ellipse	타원 만들기
+	Create Triangle	삼각형 만들기
+	Create Polygon	다각형 만들기
+	Some brush presets could not be loaded	일부 브러시 사전 설정을 불러오지 못했습니다
+	Retry saving presets	사전 설정 저장 다시 시도
+	Brush preset changes are not saved: {error}	브러시 사전 설정 변경 내용이 저장되지 않았습니다: {error}
+	Keep this tab open to retain your brushes.	브러시를 유지하려면 이 탭을 열어 두세요.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	브라우저 저장소를 사용할 수 없어 브러시는 이 세션에서만 유지됩니다. 유지하려면 이 탭을 열어 두세요.
+	Saving brush presets… Keep this tab open until saving finishes.	브러시 사전 설정 저장 중… 저장이 끝날 때까지 이 탭을 열어 두세요.

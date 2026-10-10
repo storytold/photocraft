@@ -69,6 +69,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
+    ("window.theme.solarizedDark", "Solarized Dark Theme", &["Window", "Theme"], None),
     ("window.theme.system", "System", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
@@ -306,7 +307,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.set_theme(ctx, next);
             Ok(Value::Null)
         }
-        "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" | "window.theme.classic" | "window.theme.system" => {
+        "window.theme.pro"
+        | "window.theme.proMedium"
+        | "window.theme.studio"
+        | "window.theme.studioLight"
+        | "window.theme.classic"
+        | "window.theme.solarizedDark"
+        | "window.theme.system" => {
             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, k);
             Ok(Value::Null)
@@ -351,8 +358,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(Value::Null)
         }
-        // Layer Content Options…: the adjustment / fill controls live in Properties.
+        // Solid Color uses the Color Picker; other adjustment / fill controls use Properties.
         "layer.layerContentOptions" => {
+            if let Some(dialog) = crate::solid_fill_ui::open(app) {
+                return Ok(json!({"dialog": dialog}));
+            }
             let r = app.run(id, params)?;
             app.ui.panels.properties = true;
             app.ui.dock_tabs.properties = 0;

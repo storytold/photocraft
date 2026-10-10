@@ -69,6 +69,18 @@ pub struct TransformPreview {
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
     path: Option<photocraft_doc::vector::Path>,
+    /// A layer's session keeps `doc` and `opacity` up to date with edits made while the box is
+    /// open ([`follow_edits`]); `None` for a lone mask or channel and Transform Selection.
+    follow: Option<Follow>,
+}
+
+/// What [`follow_edits`] needs to rebuild the preview document.
+#[derive(Clone, Copy, Debug)]
+struct Follow {
+    /// The document revision `doc` was built from.
+    revision: u64,
+    /// The moving layer is hidden in `doc` (nothing was lifted out of it).
+    hidden: bool,
 }
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
@@ -139,7 +151,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     let target = crate::canvas::paint_target(app);
     let st = app.session.active().ok_or("no document")?;
-    let doc = st.doc.clone();
+    let (doc, revision) = (st.doc.clone(), st.revision);
     let lone = photocraft_engine::transform_cmds::lone_target(&doc, st.active_layer, &json!({ "target": target })).map_err(|e| e.to_string())?.cloned();
     if let Some(surf) = lone {
         return begin_lone(app, ctx, doc, surf, target);
@@ -177,6 +189,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
+        follow: Some(Follow { revision, hidden: lifted.is_none() }),
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -313,6 +326,7 @@ fn begin_lone(
         doc: Arc::new(pd),
         texture,
         opacity: 0.6,
+        follow: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -368,6 +382,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         steps: Steps::default(),
         tool: app.ui.tool,
         path: Some(path),
+        follow: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -437,6 +452,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         doc: Arc::new(pd),
         texture,
         opacity: 1.0,
+        follow: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -679,6 +695,27 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     {
         commit(app);
     }
+}
+
+/// Edits made while the box is open show in the preview at once, not only after the commit
+/// (#1384): the moving layer's opacity, fill and visibility tint the moving pixels, and the
+/// document under them (other layers, and the part of the layer a selection leaves behind) is
+/// rebuilt from the current one. The moving pixels keep the session's. Called before the canvas
+/// reads the preview, so it never caches a revision with the old preview.
+pub fn follow_edits(app: &mut PhotocraftApp) {
+    let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) else { return };
+    let Some(follow) = pv.follow.as_mut() else { return };
+    let Some(st) = app.session.active().filter(|st| st.doc.id == pv.doc.id && st.revision != follow.revision) else { return };
+    let id = LayerId(t.layer);
+    let (Some(live), Some(moving)) = (st.doc.layer(id), pv.doc.layer(id)) else { return };
+    let mut pd = (*st.doc).clone();
+    if let Some(l) = pd.layer_mut(id) {
+        l.content = moving.content.clone();
+        l.visible = l.visible && !follow.hidden;
+    }
+    pv.opacity = if live.visible { live.opacity * live.fill_opacity } else { 0.0 };
+    follow.revision = st.revision;
+    pv.doc = Arc::new(pd);
 }
 
 pub fn cancel(app: &mut PhotocraftApp) {
@@ -2383,6 +2420,83 @@ mod tests {
         let st = app.session.active().unwrap();
         assert!(Arc::ptr_eq(&st.doc, &doc));
         assert_eq!(st.history.entries(), history);
+    }
+
+    /// #1384: the Layers panel's opacity, fill, visibility and blend edits to the moving layer
+    /// and to the others show while the box is open, and survive the commit.
+    #[test]
+    fn edits_during_a_transform_show_in_the_preview() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Move;
+        let bg = app.session.active().unwrap().doc.layers[0].id;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        if let Some(t) = h.state_mut().ui.transform.as_mut() {
+            t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+        }
+        h.run_steps(2);
+        let layer = h.state().ui.transform.as_ref().unwrap().layer;
+        assert_eq!(h.state().transform_preview.as_ref().unwrap().opacity, 1.0);
+
+        h.state_mut().run("layer.setProps", json!({"layer": layer, "opacity": 0.5, "fill": 0.6, "blend": "Multiply"})).unwrap();
+        h.state_mut().run("layer.setProps", json!({"layer": bg.0, "visible": false})).unwrap();
+        h.run_steps(2);
+        let app = h.state();
+        assert!(app.ui.transform.is_some(), "the edits leave the box open");
+        let pv = app.transform_preview.as_ref().unwrap();
+        assert!((pv.opacity - 0.3).abs() < 1e-6, "the moving pixels take the new opacity × fill: {}", pv.opacity);
+        assert!(!pv.doc.layer(bg).unwrap().visible, "the document under the box follows");
+        let moving = pv.doc.layer(LayerId(layer)).unwrap();
+        assert!(!moving.visible, "the moving layer stays out of the document under the box");
+        assert_eq!(moving.blend, photocraft_color::BlendMode::Multiply);
+
+        h.state_mut().run("layer.setProps", json!({"layer": layer, "visible": false})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().transform_preview.as_ref().unwrap().opacity, 0.0, "hiding the layer hides the moving pixels");
+        h.state_mut().run("layer.setProps", json!({"layer": layer, "visible": true})).unwrap();
+
+        commit(h.state_mut());
+        let st = h.state().session.active().unwrap();
+        let l = st.doc.layer(LayerId(layer)).unwrap();
+        assert_eq!((l.opacity, l.fill_opacity, l.blend), (0.5, 0.6, photocraft_color::BlendMode::Multiply));
+        assert_eq!(l.surface().unwrap().content_bounds(), photocraft_geom::Rect::new(28, 8, 44, 24));
+    }
+
+    /// #1384 with a selection: the pixels it leaves behind stay in the rebuilt preview without
+    /// the lifted ones, and take the layer's new properties.
+    #[test]
+    fn edits_during_a_selection_transform_keep_the_lifted_pixels_out() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Move;
+        app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 16})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        h.run_steps(2);
+        let layer = LayerId(h.state().ui.transform.as_ref().unwrap().layer);
+        // Alpha in the preview's copy of the layer: in the lifted half (x 8..16) and the rest (16..24).
+        let left = |app: &PhotocraftApp| {
+            let s = app.transform_preview.as_ref().unwrap().doc.layer(layer).unwrap().surface().unwrap().clone();
+            (s.sample_channel(10, 12, 3), s.sample_channel(20, 12, 3))
+        };
+        assert_eq!(left(h.state()), (0.0, 1.0), "the selected half is lifted out");
+
+        h.state_mut().run("layer.setProps", json!({"layer": layer.0, "opacity": 0.4})).unwrap();
+        h.run_steps(2);
+        let app = h.state();
+        assert_eq!(left(app), (0.0, 1.0), "still without the lifted pixels");
+        let moving = app.transform_preview.as_ref().unwrap().doc.layer(layer).unwrap();
+        assert!(moving.visible && (moving.opacity - 0.4).abs() < 1e-6, "what stays behind is drawn with the new opacity");
+        assert!((app.transform_preview.as_ref().unwrap().opacity - 0.4).abs() < 1e-6);
     }
 
     /// #670: picking another tool applies the open transform, as one history step.

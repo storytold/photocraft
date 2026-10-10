@@ -673,6 +673,8 @@
 	Studio Theme	Motyw Studio
 	Studio Light Theme	Motyw Studio (jasny)
 	Classic Theme	Motyw klasyczny
+	Solarized dark	Solarized ciemny
+	Solarized Dark Theme	Ciemny motyw Solarized
 	Next Theme	Następny motyw
 	Actions	Akcje
 	Brush Settings	Ustawienia pędzla
@@ -1918,6 +1920,7 @@
 	Collapse group  ({key}-click: all groups)	Zwiń grupę  (kliknięcie z {key}: wszystkie grupy)
 	Create new brush from the current settings	Utwórz nowy pędzel z bieżących ustawień
 	Create new brush from these settings	Utwórz nowy pędzel z tych ustawień
+	Update the current brush with these settings	Zaktualizuj bieżący pędzel tymi ustawieniami
 	Delete brush	Usuń pędzel
 	Drag the arrow to set the angle, the dots to set the roundness	Przeciągnij strzałkę, aby ustawić kąt, a punkty, aby ustawić zaokrąglenie
 	Expand	Rozwiń
@@ -1992,6 +1995,13 @@
 	Align with layer	Wyrównaj do warstwy
 	Reset Alignment	Resetuj wyrównanie
 	Centre the gradient (offset 0, 0)	Wyśrodkuj gradient (przesunięcie 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Edytor gradientu
+	Gradient picker	Wybór gradientu
+	Gradient stops	Punkty gradientu
+	Save As Preset	Zapisz jako preset
+	The gradient the Gradient tool paints with	Gradient, którym maluje narzędzie Gradient
+	Adds the current gradient to the Gradients panel	Dodaje bieżący gradient do panelu Gradienty
 	The current gradient (pick one in Window › Gradients)	Bieżący gradient (wybierz w Okno › Gradienty)
 	Select a type layer to edit its character and paragraph settings.	Zaznacz warstwę tekstową, aby edytować jej ustawienia znaków i akapitów.
 	Text color	Kolor tekstu
@@ -2023,6 +2033,9 @@
 	Cancelled {label}	Anulowano: {label}
 	Esc to cancel	Esc, aby anulować
 	Opening {name}	Otwieranie {name}
+	Saving {name}	Zapisywanie {name}
+	A save to {name} is still running; try again when it finishes	Zapisywanie do {name} wciąż trwa; spróbuj ponownie, gdy się zakończy
+	{label} is writing the file and can no longer be cancelled	{label} zapisuje plik i nie można już tego anulować
 	Opening {name}…	Otwieranie {name}…
 	Opening…	Otwieranie…
 	Reading…	Odczyt…
@@ -3315,3 +3328,25 @@ cameraRaw	Roughness	Chropowatość
 	Cycle Orientation	Przełącz orientację
 	Set the overlay options for the Crop tool	Ustaw opcje nakładki narzędzia Kadrowanie
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+kliknięcie przejęło środowisko pulpitu, które przesuwa okna przez Alt+przeciąganie. Ustaw w nim klawisz przesuwania okien na Super lub zablokuj Alt w Okno › Klawisze modyfikujące.
+	Color Picker (Solid Color)	Próbnik kolorów (kolor jednolity)
+	Straighten the image by drawing a line on it	Wyprostuj obraz, rysując na nim linię
+	Set additional Crop options	Ustaw dodatkowe opcje kadrowania
+	Show Cropped Area	Pokaż wykadrowany obszar
+	Enable Crop Shield	Włącz osłonę kadrowania
+	Match Canvas	Dopasuj do obszaru roboczego
+	Auto Adjust Opacity	Automatycznie dopasuj krycie
+	Crop Shield color	Kolor osłony kadrowania
+	Color Picker (Crop Shield Color)	Próbnik kolorów (Kolor osłony kadrowania)
+	From Center	Od środka
+	Link radii	Połącz promienie
+	Star Ratio:	Proporcja gwiazdy:
+	Create Rectangle	Utwórz prostokąt
+	Create Ellipse	Utwórz elipsę
+	Create Triangle	Utwórz trójkąt
+	Create Polygon	Utwórz wielokąt
+	Some brush presets could not be loaded	Nie udało się wczytać niektórych ustawień predefiniowanych pędzli
+	Retry saving presets	Ponów zapisywanie ustawień predefiniowanych
+	Brush preset changes are not saved: {error}	Zmiany w ustawieniach predefiniowanych pędzli nie zostały zapisane: {error}
+	Keep this tab open to retain your brushes.	Nie zamykaj tej karty, aby zachować pędzle.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Pamięć przeglądarki jest niedostępna; pędzle działają tylko w tej sesji. Nie zamykaj tej karty, aby je zachować.
+	Saving brush presets… Keep this tab open until saving finishes.	Zapisywanie ustawień predefiniowanych pędzli… Nie zamykaj tej karty, dopóki zapis się nie zakończy.

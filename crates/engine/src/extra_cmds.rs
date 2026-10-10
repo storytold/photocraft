@@ -744,8 +744,11 @@ pub fn specs() -> Vec<CommandSpec> {
             },
             |s, p| {
                 let id = layer_param(s, p)?;
-                let (fx, blend, fill, advanced) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
+                let (mut fx, blend, fill, advanced) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 s.edit("Paste Layer Style", |doc, _| {
+                    // A style copied from a document in another mode takes this one's colours.
+                    let mode = doc.mode;
+                    fx.items = std::mem::take(&mut fx.items).into_iter().map(|e| e.in_mode(mode)).collect();
                     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                     l.effects = fx;
                     l.blend = blend;

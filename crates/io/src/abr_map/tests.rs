@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_psd::abr::{LegacyBrush, write_v6, write_v12};
+use photocraft_psd::abr::{LegacyBrush, write_v6, write_v6_folders, write_v12};
 use photocraft_psd::descriptor::{Id, UnicodeString};
 
 fn sample(id: &str, w: u32, h: u32, depth: u16) -> AbrSample {
@@ -186,6 +186,26 @@ fn missing_pattern_and_tip_are_reported() {
     assert!(matches!(imp.presets[0].brush.texture.pattern, Pattern::Procedural { .. }));
     assert!(imp.warnings.iter().any(|w| w.contains("Grit")), "{:?}", imp.warnings);
     assert!(imp.warnings.iter().any(|w| w.contains("Orphan")), "{:?}", imp.warnings);
+}
+
+#[test]
+fn file_folders_nest_inside_the_import_group() {
+    let named = |n: &str| Descriptor::new("brushPreset").with("Nm  ", t(n));
+    let orphan = Descriptor::new("brushPreset").with("Nm  ", t("Orphan")).with("Brsh", Value::Descriptor(sampled_tip("$nowhere")));
+    let presets = [named("Top"), named("Pen"), orphan, named("Nib"), named("Chalk")];
+    let path = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    let folders = [path(&[]), path(&["Inks"]), path(&["Inks"]), path(&["Inks", "Fine"]), path(&["Dry"])];
+    let bytes = write_v6_folders(2, &[sample("$a", 4, 4, 8), sample("$b", 4, 4, 8)], &[], &presets, &folders, false).unwrap();
+    let imp = read_abr(&bytes, "My Set").unwrap();
+    // The skipped preset (missing tip) doesn't shift the others' folders.
+    let got: Vec<(&str, &str, String)> = imp.presets.iter().map(|p| (p.name.as_str(), p.group.as_str(), p.folder.join("/"))).collect();
+    assert_eq!(
+        got,
+        [("Top", "My Set", String::new()), ("Pen", "My Set", "Inks".into()), ("Nib", "My Set", "Inks/Fine".into()), ("Chalk", "My Set", "Dry".into())]
+    );
+    // Without a hierarchy every preset is directly in the group.
+    let flat = read_abr(&write_v6(2, &[], &[], &[named("A")], false).unwrap(), "Flat").unwrap();
+    assert!(flat.presets.iter().all(|p| p.group == "Flat" && p.folder.is_empty()));
 }
 
 #[test]

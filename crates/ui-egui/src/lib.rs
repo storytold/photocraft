@@ -47,6 +47,8 @@ pub mod comps_ui;
 pub mod control;
 pub mod credits;
 pub mod crop_overlay;
+pub mod crop_shield;
+pub mod crop_straighten;
 pub mod crop_ui;
 pub mod dialog_blend_ui;
 pub mod dialogs;
@@ -123,12 +125,14 @@ pub mod rulers;
 pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
+pub mod shape_dialog;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
+pub(crate) mod solid_fill_ui;
 pub mod state;
 pub mod stroke_constraint;
 pub mod stroke_trail;
@@ -200,6 +204,10 @@ impl Default for ExportSettings {
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Encode a document and write it to a path, reporting the stage to the job; returns the export
+/// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
+/// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
+pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &jobs_ui::SaveCtl) -> Result<Vec<String>, String> + Send + Sync>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -225,20 +233,21 @@ pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>
 pub type AutosaveResultsFn = Box<dyn FnMut() -> Vec<(u64, u64, Result<(), String>)>>;
 /// Drop the recovery data of a document (by `DocId` value) once it is saved or closed.
 pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
-/// Load recoverable documents left by a previous session. Their recovery data stays until the
-/// documents are saved or closed.
-pub type RecoverFn = Box<dyn FnMut() -> Vec<Recovered>>;
+/// List recoverable documents without decoding them. Their data stays until the documents are
+/// saved or closed; the shell runs each entry's loader on a background worker.
+pub type RecoverFn = Box<dyn FnMut() -> Vec<Recoverable>>;
 /// A recovered document (by `DocId` value, once open) takes over its recovery entry (by key):
 /// its autosaves replace the entry, and saving or closing it drops the entry.
 pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
 
-/// A document [`RecoverFn`] found.
-pub struct Recovered {
-    /// The recovery entry it was loaded from (see [`AdoptAutosaveFn`]).
+/// A recovery entry [`RecoverFn`] found; its loader owns only the data it needs to read.
+pub struct Recoverable {
+    /// The recovery entry to adopt once loading succeeds (see [`AdoptAutosaveFn`]).
     pub key: String,
+    pub name: String,
     /// Where the user last saved it, if anywhere.
     pub path: Option<String>,
-    pub doc: Document,
+    pub load: Box<dyn FnOnce() -> Result<Document, String> + Send + 'static>,
 }
 /// Append text to a file (History Log).
 pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
@@ -248,6 +257,9 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 pub type QuitFn = Box<dyn FnMut()>;
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
+/// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
+/// report it (native Wayland): the cursor then follows the cursor preference (#1758).
+pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -263,6 +275,9 @@ pub struct Services {
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
+    /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
+    pub save_file: Option<SaveFileFn>,
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
@@ -304,9 +319,12 @@ pub struct Services {
     /// The pointer position read from the OS (desktop): winit 0.30's file drops carry none, and
     /// the window gets no pointer events during an OS drag (see `file_open::DropTarget`).
     pub cursor_pos: Option<CursorPosFn>,
+    /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
+    /// the canvas can show the precise crosshair for painting tools, whatever the preference.
+    pub caps_lock: Option<CapsLockFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
-    /// one, brush presets are session-only (web, tests).
+    /// one, brush presets are session-only unless the shell attached a store before startup.
     pub preset_store: Option<std::sync::mpsc::Receiver<photocraft_engine::preset_store::Opened>>,
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
@@ -372,6 +390,9 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
+    /// show the precise crosshair whatever the cursor preference (#1758).
+    pub caps_lock: bool,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
@@ -448,6 +469,7 @@ pub struct PhotocraftApp {
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
+    pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
     /// Liquify dialog, Puppet Warp and Perspective Warp sessions (distort_ui).
     pub(crate) distort: distort_ui::Distort,
     /// Gradient tool live-mode drags and previews (gradient_ui).
@@ -541,6 +563,7 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            caps_lock: false,
             opacity_keys: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
@@ -589,6 +612,7 @@ impl PhotocraftApp {
             transform_preview: None,
             move_mods: Default::default(),
             style_preview: None,
+            solid_fill_preview: None,
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
@@ -612,7 +636,7 @@ impl PhotocraftApp {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
-        // Saved preferences (and recovered documents) are in place before the first frame.
+        // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
@@ -723,6 +747,12 @@ impl PhotocraftApp {
         let params = self.with_mask_target(id, params);
         let params = vector_ui::with_active_path(self, id, params);
         let path_mask = vector_ui::takes_path_mask(id) && params.get("path").is_some_and(|v| !v.is_null());
+        let creates_active_mask =
+            matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection")
+                && self
+                    .session
+                    .active()
+                    .is_some_and(|st| st.active_layer.is_some_and(|layer| params.get("layer").and_then(Value::as_u64).is_none_or(|target| target == layer.0)));
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -738,6 +768,11 @@ impl PhotocraftApp {
             // The new layer's vector mask becomes the active path, as in Photoshop: the path it
             // was made from is no longer selected, so the next fill layer isn't masked by it too.
             self.ui.selected_path = Some("layer".into());
+        }
+        if r.is_ok() && creates_active_mask {
+            // Adding a mask selects its thumbnail: the next brush or footer Delete targets it.
+            self.ui.mask_target = true;
+            self.ui.vector_mask_target = false;
         }
         if r.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
             self.clip_external = false;
@@ -949,34 +984,63 @@ impl PhotocraftApp {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        let (path, warnings) = self.write_document(path, &ExportSettings::default(), false)?;
-        Ok(serde_json::json!({"path": path, "warnings": warnings}))
+        match self.write_document(path.clone(), &ExportSettings::default(), false)? {
+            Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
+            None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
+        }
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
     /// document's path unless saving a copy. A copy leaves the original's path and unsaved
-    /// changes intact. Returns the path and the export warnings (also shown to the user).
-    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<(String, Vec<String>), String> {
+    /// changes intact. Returns the path and the export warnings (also shown to the user), or
+    /// `None` when the save went to a background job (#2017), which finishes it in
+    /// [`jobs_ui::tick`].
+    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        if self.background_jobs
+            && let Some(save) = self.services.save_file.clone()
+        {
+            return jobs_ui::start_save(self, path, settings.clone(), copy, save);
+        }
         let st = self.session.active().ok_or("no document")?;
+        let (doc, revision) = (st.doc.id, st.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
-        if !copy && let Some(st) = self.session.active_mut() {
-            st.saved_to(path.clone());
-        }
+        self.saved(doc, revision, &path, &warnings, copy);
+        Ok(Some((path, warnings)))
+    }
+
+    /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
+    /// state (unless a copy), the status, script events and the warnings.
+    pub(crate) fn saved(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
         self.ui.status = format!("Saved {path}");
-        // "Save Document" script events and File › Generate › Image Assets.
-        if !copy
-            && let Some(i) = self.session.active_index()
-            && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut self.session, i)
-        {
-            self.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
+        if !copy {
+            // A background save may finish while another document is active (or after its
+            // document was closed, when there is nothing left to record).
+            let _ = self.with_document(doc, |app| {
+                if let Some(st) = app.session.active_mut() {
+                    st.saved_to(path.to_string());
+                    // The job locked the document, but record the revision that was written.
+                    st.saved_revision = revision;
+                }
+                // "Save Document" script events and File › Generate › Image Assets.
+                if let Some(i) = app.session.active_index()
+                    && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, i)
+                {
+                    app.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
+                }
+                Ok(())
+            });
         }
         self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&path)), &warnings);
+        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(path)), warnings);
         self.sync_views();
-        Ok((path, warnings))
+    }
+
+    /// A save is running in the background.
+    pub(crate) fn saving(&self) -> bool {
+        !self.jobs.saves.is_empty()
     }
 
     /// Save through the control session's capability-scoped writer. No file
@@ -1070,6 +1134,9 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
+        // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
+        self.caps_lock = self.services.caps_lock.as_mut().is_some_and(|f| f());
         if !self.styled {
             Self::setup_context(ctx, self.ui.theme);
             self.styled = true;
@@ -1217,6 +1284,7 @@ impl eframe::App for PhotocraftApp {
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
+        gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
@@ -1303,6 +1371,9 @@ impl PhotocraftApp {
         }
         if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
             self.ui.vector_mask_target = false;
+        }
+        if self.ui.mask_target && !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some()) {
+            self.ui.mask_target = false;
         }
     }
 
@@ -1719,6 +1790,12 @@ mod blend_dropdown_wheel_tests;
 
 #[cfg(test)]
 mod marquee_tests;
+
+#[cfg(test)]
+mod caps_lock_tests;
+
+#[cfg(test)]
+mod view_sync_tests;
 
 #[cfg(test)]
 mod stamp_tests;

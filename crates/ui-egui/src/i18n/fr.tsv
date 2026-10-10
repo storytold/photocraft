@@ -663,6 +663,8 @@
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
 	Classic Theme	Thème Classique
+	Solarized dark	Solarized sombre
+	Solarized Dark Theme	Thème Solarized sombre
 	Next Theme	Thème suivant
 	Actions	Actions
 	Brush Settings	Paramètres du pinceau
@@ -1891,6 +1893,7 @@
 	Collapse group  ({key}-click: all groups)	Réduire le groupe  ({key}-clic : tous les groupes)
 	Create new brush from the current settings	Créer un nouveau pinceau à partir des paramètres actuels
 	Create new brush from these settings	Créer un nouveau pinceau à partir de ces paramètres
+	Update the current brush with these settings	Mettre à jour le pinceau actuel avec ces paramètres
 	Delete brush	Supprimer le pinceau
 	Drag the arrow to set the angle, the dots to set the roundness	Faites glisser la flèche pour régler l'angle, les points pour régler l'arrondi
 	Expand	Développer
@@ -1965,7 +1968,13 @@
 	Align with layer	Aligner sur le calque
 	Reset Alignment	Réinitialiser l'alignement
 	Centre the gradient (offset 0, 0)	Centrer le dégradé (décalage 0, 0)
-	The current gradient (pick one in Window › Gradients)	Le dégradé actuel (choisissez-en un dans Fenêtre › Dégradés)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Éditeur de dégradé
+	Gradient picker	Sélecteur de dégradé
+	Save As Preset	Enregistrer comme préreglage
+	The gradient the Gradient tool paints with	Le dégradé que l'outil Dégradé applique
+	Adds the current gradient to the Gradients panel	Ajoute le dégradé actuel au panneau Dégradés
+	Gradient stops	Arrêts de dégradé
 	Select a type layer to edit its character and paragraph settings.	Sélectionnez un calque de texte pour modifier ses paramètres de caractère et de paragraphe.
 	Text color	Couleur du texte
 	Type Options	Options de texte
@@ -1997,6 +2006,9 @@
 	Cancelled {label}	{label} : annulé
 	Esc to cancel	Échap pour annuler
 	Opening {name}	Ouverture de {name}
+	Saving {name}	Enregistrement de {name}
+	A save to {name} is still running; try again when it finishes	Un enregistrement de {name} est encore en cours ; réessayez lorsqu’il sera terminé
+	{label} is writing the file and can no longer be cancelled	{label} écrit le fichier et ne peut plus être annulé
 	Opening {name}…	Ouverture de {name}…
 	Opening…	Ouverture…
 	Reading…	Lecture…
@@ -2714,3 +2726,25 @@ fontWeight	Italic	Italique
 	Cycle Orientation	Changer d’orientation
 	Set the overlay options for the Crop tool	Définir les options de superposition de l’outil Recadrage
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-clic a été intercepté par le bureau, qui déplace les fenêtres avec Alt-glisser. Réglez sa touche de déplacement des fenêtres sur Super, ou verrouillez Alt dans Fenêtre › Touches de modification.
+	Color Picker (Solid Color)	Sélecteur de couleurs (couleur unie)
+	Straighten the image by drawing a line on it	Redresser l’image en traçant une ligne dessus
+	Set additional Crop options	Définir d’autres options de recadrage
+	Show Cropped Area	Afficher la zone recadrée
+	Enable Crop Shield	Activer le masque de recadrage
+	Match Canvas	Identique à la zone de travail
+	Auto Adjust Opacity	Réglage automatique de l’opacité
+	Crop Shield color	Couleur du masque de recadrage
+	Color Picker (Crop Shield Color)	Sélecteur de couleurs (Couleur du masque de recadrage)
+	From Center	À partir du centre
+	Link radii	Lier les rayons
+	Star Ratio:	Proportion de l'étoile :
+	Create Rectangle	Créer un rectangle
+	Create Ellipse	Créer une ellipse
+	Create Triangle	Créer un triangle
+	Create Polygon	Créer un polygone
+	Some brush presets could not be loaded	Certains paramètres prédéfinis de forme n'ont pas pu être chargés
+	Retry saving presets	Réessayer d'enregistrer les paramètres prédéfinis
+	Brush preset changes are not saved: {error}	Les modifications des paramètres prédéfinis de forme ne sont pas enregistrées : {error}
+	Keep this tab open to retain your brushes.	Gardez cet onglet ouvert pour conserver vos formes.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Le stockage du navigateur n'est pas disponible ; les formes ne durent que le temps de la session. Gardez cet onglet ouvert pour les conserver.
+	Saving brush presets… Keep this tab open until saving finishes.	Enregistrement des paramètres prédéfinis de forme… Gardez cet onglet ouvert jusqu'à la fin de l'enregistrement.

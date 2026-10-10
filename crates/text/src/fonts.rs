@@ -218,6 +218,12 @@ impl FontDb {
         }
         let order = crate::cjk::ui_script_order();
         self.fallbacks = fallback_candidates(&order).into_iter().filter(|f| c.family_id(f).is_some()).map(str::to_string).collect();
+        // Served fonts that are a script's fallback (the manifest's `scripts`), once they arrived.
+        for f in crate::served::script_fallback_families() {
+            if c.family_id(&f).is_some() && !self.fallbacks.contains(&f) {
+                self.fallbacks.push(f);
+            }
+        }
     }
 
     /// Families available after the requested one (bundled default + installed coverage fonts).

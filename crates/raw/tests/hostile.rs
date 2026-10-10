@@ -4,6 +4,15 @@
 use photocraft_raw::testgen::{Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, orf, rw2, scene, sony_craw, tiff_ep};
 use photocraft_raw::*;
 
+/// Losslessly encodes 16-bit RGB as a JPEG XL codestream.
+fn jxl_rgb16(rgb: &[u16], w: usize, h: usize) -> Vec<u8> {
+    use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions};
+    let bytes: Vec<u8> = rgb.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let mut out = Vec::new();
+    zune_jpegxl::JxlSimpleEncoder::new(&bytes, EncoderOptions::new(w, h, ColorSpace::RGB, BitDepth::Sixteen)).encode(&mut out).unwrap();
+    out
+}
+
 fn samples() -> Vec<Vec<u8>> {
     let (w, h) = (24, 12);
     let cfa = mosaic(&scene(w, h), w, [0, 1, 1, 2], 64, 4000);
@@ -22,6 +31,14 @@ fn samples() -> Vec<Vec<u8>> {
     d.storage = DngStorage::Strips { rows: 5 };
     d.big_endian = true;
     out.push(d.build());
+    // LinearRaw in one JPEG XL strip (DNG 1.7, as Samsung Expert RAW writes it).
+    let rgb: Vec<u16> = scene(w, h).iter().flat_map(|p| p.map(|v| (v * 30000.0) as u16)).collect();
+    let mut j = DngSpec::cfa(w, h, rgb.clone());
+    j.samples = 3;
+    j.storage = DngStorage::JxlStrips { rows: h };
+    j.jxl_segments = vec![jxl_rgb16(&rgb, w, h)];
+    j.profile_gain_table_map = Some(vec![0; 32]);
+    out.push(j.build());
     let mut data = vec![600u16; 40 * 10];
     for (i, v) in data.iter_mut().enumerate() {
         *v = 600 + (i as u16 * 7) % 3000;

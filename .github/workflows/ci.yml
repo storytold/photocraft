@@ -39,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       os: ${{ steps.pick.outputs.os }}
+      web: ${{ steps.pick.outputs.web }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,7 +55,16 @@ jobs:
           all='["ubuntu-latest","windows-latest"]'
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
             echo "os=$all" >> "$GITHUB_OUTPUT"
+            echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # The browser build (a fat-LTO wasm build) runs only when something it compiles or
+          # packages changed: the web app and its packaging, crate sources and manifests (the web
+          # build compiles nearly every crate), the workspace manifests and this workflow.
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/photocraft-web/|packaging/web/|packaging/env\.sh$|crates/[^/]+/(src/|Cargo\.toml$|build\.rs$)|Cargo\.(toml|lock)$|rust-toolchain(\.toml)?$|\.github/workflows/ci\.yml$)'; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web=false" >> "$GITHUB_OUTPUT"
           fi
           if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
             echo "os=$all" >> "$GITHUB_OUTPUT"
@@ -190,6 +200,50 @@ jobs:
           cache-on-failure: true
       - name: Check wasm-safe crates
         run: cargo xtask wasm
+
+  web:
+    name: web build and wasm size gate
+    # PRs run it only when web-relevant files change (see `platforms`); main always does.
+    needs: platforms
+    if: needs.platforms.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # Match release.yml so PR results reflect what would actually ship.
+      TRUNK_VERSION: 0.21.14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-web
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin" trunk
+          trunk --version
+      # package.sh runs Trunk's release build, validates relative URLs, checks the 24 MiB
+      # wasm limit and exercises the same packaging step used by release.yml.
+      - name: Build and verify browser release
+        run: packaging/web/package.sh
+      - name: Report wasm size
+        if: success()
+        run: |
+          {
+            echo "### Browser WebAssembly size"
+            echo
+            echo "| File | Bytes | MiB | Limit |"
+            echo "| --- | ---: | ---: | ---: |"
+            for wasm in dist/web/*.wasm; do
+              [ -f "$wasm" ] || continue
+              bytes=$(wc -c < "$wasm" | tr -d ' ')
+              mib=$(awk -v n="$bytes" 'BEGIN { printf "%.2f", n / 1048576 }')
+              echo "| $(basename "$wasm") | $bytes | $mib | 24 MiB |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
   fuzz:
     name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})

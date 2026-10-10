@@ -56,6 +56,8 @@ pub struct CropState {
     pub editing: bool,
     /// The document the pending frame (or gesture) belongs to ([`cancel_stale`], #1918).
     doc: Option<photocraft_doc::DocId>,
+    /// The options-bar Straighten button and ⌘-drag (`crop_straighten`).
+    pub straighten: crate::crop_straighten::Straighten,
 }
 
 /// A crop gesture in progress. Rects are `[x0, y0, x1, y1]` in document coordinates.
@@ -252,6 +254,7 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) {
 pub fn ensure_frame(app: &mut PhotocraftApp) {
     if app.ui.tool != Tool::Crop {
         app.crop.editing = false;
+        crate::crop_straighten::reset(app);
         // Leaving the tool drops an untouched default frame (a drawn one stays pending).
         if app.crop.default_frame {
             app.ui.crop_rect = None;
@@ -302,6 +305,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
     app.crop.default_frame = false;
     app.crop.frame_for = None;
     app.crop.editing = false;
+    crate::crop_straighten::reset(app);
 }
 
 /// The pending frame belongs to the active document.
@@ -515,6 +519,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     if app.session.active().is_none() || !p[0].is_finite() || !p[1].is_finite() {
         return true;
     }
+    // The Straighten button, or ⌘ held: the drag draws a line to level the frame on.
+    if crate::crop_straighten::pointer(app, ev, mods) {
+        claim(app);
+        return true;
+    }
     match ev {
         ToolEvent::Down { .. } => {
             claim(app);
@@ -603,6 +612,9 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
     if app.ui.tool != Tool::Crop {
         return None;
     }
+    if crate::crop_straighten::mode(app) {
+        return Some(CursorIcon::Crosshair);
+    }
     let deg = angle(app);
     let h = match app.crop.drag {
         Some(CropDrag::Move { .. }) => Hit::Inside,
@@ -623,7 +635,7 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
 /// it): towards the frame corner of `p`'s quadrant, along the diagonal of the frame's own axes.
 /// As in Photoshop that gives four cursors, one per corner; they turn with the frame.
 pub fn turn_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
-    if app.ui.tool != Tool::Crop {
+    if app.ui.tool != Tool::Crop || crate::crop_straighten::mode(app) {
         return None;
     }
     let r = app.ui.crop_rect.filter(|r| r.iter().all(|v| v.is_finite()))?;
