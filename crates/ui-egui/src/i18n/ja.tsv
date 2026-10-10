@@ -1625,6 +1625,7 @@
 	Millimeters	ミリメートル
 	Mobile	モバイル
 	Move Tool	移動ツール
+	Could not use the move tool because the layer is locked.	レイヤーがロックされているため、移動ツールを使用できません。
 	Multiply	乗算
 	My Brushes	マイブラシ
 	Neutrals	中間色系
