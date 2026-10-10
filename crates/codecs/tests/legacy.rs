@@ -111,3 +111,27 @@ fn independent_handwritten_text_and_sgi_rle_fixtures() {
     bytes[520] = 4;
     assert!(decode(&bytes).is_err());
 }
+
+#[test]
+fn metadata_presence_agrees_with_every_new_capability_and_embed_option() {
+    let mut image = sample(ChannelLayout::Rgba, SampleType::U8);
+    image.icc = Some(photocraft_profile_fixture());
+    image.meta.xmp = Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into());
+    image.meta.text.push(("Description".into(), "synthetic fixture".into()));
+    image.meta.dpi = Some((144.0, 144.0));
+    for format in FORMATS {
+        for embed in [true, false] {
+            let options = EncodeOptions { embed_icc: embed, embed_metadata: embed, ..Default::default() };
+            let back = decode(&encode(&image, format, &options).unwrap()).unwrap();
+            let caps = format.caps();
+            assert_eq!(back.icc.is_some(), caps.icc && embed, "{format:?}");
+            assert_eq!(back.meta.xmp.is_some(), caps.xmp && embed, "{format:?}");
+            assert_eq!(!back.meta.text.is_empty(), caps.text && embed, "{format:?}");
+            assert_eq!(back.meta.dpi.is_some(), caps.dpi && embed, "{format:?}");
+        }
+    }
+}
+fn photocraft_profile_fixture() -> Vec<u8> {
+    // PNG transports profile bytes without imposing a CMS dependency on the standalone crate.
+    vec![1, 2, 3, 4]
+}

@@ -253,7 +253,8 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::SunRaster => FormatCaps { layouts: &[L::Rgb], alpha: false, ..base },
         Format::Farbfeld => FormatCaps { depths: &[S::U16], layouts: &[L::Rgba], ..base },
         Format::Wbmp | Format::Xbm => FormatCaps { layouts: &[L::Gray], alpha: false, lossy: true, ..base },
-        Format::Xpm | Format::Cur | Format::Icns | Format::Gbr => FormatCaps { layouts: &[L::Rgba], ..base },
+        Format::Xpm | Format::Cur | Format::Gbr => FormatCaps { layouts: &[L::Rgba], ..base },
+        Format::Icns => FormatCaps { layouts: &[L::Rgba], icc: true, exif: true, xmp: true, dpi: true, text: true, ..base },
         Format::GimpPat => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Png => {
             FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, exif: true, xmp: true, dpi: true, text: true, animation: true, ..base }
