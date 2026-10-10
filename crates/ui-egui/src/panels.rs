@@ -1854,6 +1854,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let filter = app.ui.layer_filter.clone();
             let fx_collapsed = app.session.active().map(|d| d.fx_collapsed.clone()).unwrap_or_default();
             crate::layer_row_ui::begin(ui.ctx());
+            // The drawn rows, top to bottom (#1721): the space between them and below the last
+            // one is a drop zone too.
+            let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
             for &(depth, l) in &rows {
                 // Select › Isolate Layers.
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
@@ -1874,7 +1877,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
                 let top = ui.cursor().top();
-                layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions);
+                drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
                 if reveal == Some(l.id) {
                     crate::layer_reveal::scroll_to_row(ui, top);
                 }
@@ -1882,6 +1885,17 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     effect_rows(app, ui, l, depth, &mut actions);
                 }
                 crate::smart_ui::filter_rows(app, ui, l, depth, &mut actions);
+            }
+            // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
+            // between two rows lands above the lower one, the empty space below the bottom-most
+            // row below it. Both copy with ⌥ held, move without.
+            for w in drawn.windows(2) {
+                let gap = Rect::from_min_max(pos2(w[0].1.left(), w[0].1.bottom()), pos2(w[0].1.right(), w[1].1.top()));
+                layer_drop_zone(app, &ctx, ui, gap, (w[1].0, w[1].1), "above", &mut actions);
+            }
+            if let Some(&(last, last_rect)) = drawn.last() {
+                let below = Rect::from_min_max(pos2(last_rect.left(), last_rect.bottom()), pos2(last_rect.right(), ui.clip_rect().bottom()));
+                layer_drop_zone(app, &ctx, ui, below, (last, last_rect), "below", &mut actions);
             }
             // ⌥-click the line between two layers: clip / release the upper one (#967).
             crate::clip_line_ui::show(ui, &doc, &mut actions);
@@ -2142,7 +2156,7 @@ fn layer_row(
     depth: usize,
     row: RowSel,
     actions: &mut Vec<(String, Value)>,
-) {
+) -> Rect {
     let selected = row.selected;
     let t = Tokens::get(ctx);
     // Photoshop's default (medium) thumbnails: 32 pt rows.
@@ -2159,7 +2173,7 @@ fn layer_row(
     // otherwise lay out names, icons and thumbnails every frame. Group rows stay whole: their
     // disclosure triangle is a widget (accessibility, scroll-to).
     if !ui.is_rect_visible(rect) && !l.is_group() && !resp.context_menu_opened() && crate::layer_row_ui::renaming(ctx) != Some(l.id.0) {
-        return;
+        return rect;
     }
     let painter = ui.painter_at(rect.expand(1.0));
     if t.pro {
@@ -2362,6 +2376,7 @@ fn layer_row(
             actions.push(done);
         }
     });
+    rect
 }
 
 /// Screen rect and UVs for a layer thumbnail: the document-shaped part of the square cell and of
@@ -3054,6 +3069,28 @@ fn layer_drag_and_drop(
         if copy {
             ctx.set_cursor_icon(egui::CursorIcon::Copy);
         }
+        // #1721: with ⌥ held the row also takes the drop onto itself — the only drop target a
+        // single-layer document has. The copy lands above or below it (never into a group's own
+        // centre). A multi-selection is left alone: the engine copies it beside each of its own
+        // layers, not onto one of them.
+        let selected = app.session.active().map(|st| st.selected_layers()).unwrap_or_default();
+        let in_multi = selected.len() > 1 && selected.contains(&l.id);
+        if copy && !in_multi && let Some(p) = pointer.filter(|p| rect.contains(*p)) {
+            let position = if (p.y - rect.top()) / rect.height() < 0.5 { "above" } else { "below" };
+            let painter = ui.painter();
+            if position == "above" {
+                painter.line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, t.accent));
+            } else {
+                painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, t.accent));
+            }
+            if released {
+                let mut payload = layer_drop_payload(dragged, l.id, position, &selected);
+                if let Some(o) = payload.as_object_mut() {
+                    o.insert("copy".into(), json!(true));
+                }
+                actions.push(("layer.moveTo".into(), payload));
+            }
+        }
         return;
     }
     let Some(p) = pointer else { return };
@@ -3084,6 +3121,46 @@ fn layer_drag_and_drop(
         let selected = app.session.active().map(|st| st.selected_layers()).unwrap_or_default();
         let mut payload = layer_drop_payload(dragged, l.id, position, &selected);
         if copy && let Some(o) = payload.as_object_mut() {
+            o.insert("copy".into(), json!(true));
+        }
+        actions.push(("layer.moveTo".into(), payload));
+    }
+}
+
+/// #1721: the drop zones no row owns — the space between two rows and the empty space below the
+/// bottom-most one. The drop lands on `target` at `position` (`above` or `below` its row): a copy
+/// with ⌥ held on release (Photoshop), a move without. A multi-selection dropped on the row it
+/// was grabbed from is left alone: the engine can only copy it beside each of its own layers.
+fn layer_drop_zone(
+    app: &PhotocraftApp,
+    ctx: &egui::Context,
+    ui: &egui::Ui,
+    zone: Rect,
+    target: (LayerId, Rect),
+    position: &'static str,
+    actions: &mut Vec<(String, Value)>,
+) {
+    let Some(dragged) = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag"))) else { return };
+    let selected = app.session.active().map(|st| st.selected_layers()).unwrap_or_default();
+    if target.0 == LayerId(dragged) && selected.len() > 1 && selected.contains(&target.0) {
+        return;
+    }
+    let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
+    if !zone.contains(p) {
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let line = if position == "above" {
+        [target.1.left_top(), target.1.right_top()]
+    } else {
+        [target.1.left_bottom(), target.1.right_bottom()]
+    };
+    ui.painter().line_segment(line, Stroke::new(2.0, t.accent));
+    if ctx.input(|i| i.pointer.any_released()) {
+        let mut payload = layer_drop_payload(dragged, target.0, position, &selected);
+        if ctx.input(|i| i.modifiers.alt)
+            && let Some(o) = payload.as_object_mut()
+        {
             o.insert("copy".into(), json!(true));
         }
         actions.push(("layer.moveTo".into(), payload));
