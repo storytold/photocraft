@@ -110,6 +110,38 @@ fn text_name_still_renames_and_mask_double_click_does_not_edit_text() {
     assert!(h.state().ui.dialogs.is_empty());
 }
 
+/// With the preference off, double-clicking a pixel mask targets it and opens its settings.
+/// The default preference on launches Select and Mask instead (the test above).
+#[test]
+fn pixel_mask_double_click_with_preference_off_opens_properties() {
+    let mut s = session();
+    let id = s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("prefs.set", json!({"values": {"tools.doubleClickLayerMaskLaunchesSelectAndMask": false}})).unwrap();
+    let mut h = harness(s, 1.0);
+    let masks = crate::mask_thumbs_ui::recorded(&h.ctx, id).unwrap().0;
+    let at = masks.iter().find(|(kind, _)| *kind == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
+    double_click(&mut h, at);
+    assert!(h.state().ui.mask_target, "the mask is targeted");
+    assert!(h.state().ui.panels.properties, "Properties opened");
+    assert!(!h.state().ui.dock.collapsed.contains(&crate::dock::Group::Properties), "Properties un-collapsed");
+    assert!(h.state().ui.dialogs.is_empty(), "no Select and Mask dialog with the preference off");
+}
+
+#[test]
+fn vector_mask_double_click_opens_its_properties() {
+    let mut s = session();
+    let id = s.execute("layer.new.layer", json!({"name": "Vector"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
+    let mut h = harness(s, 1.0);
+    let masks = crate::mask_thumbs_ui::recorded(&h.ctx, id).unwrap().0;
+    let at = masks.iter().find(|(kind, _)| *kind == crate::mask_thumbs_ui::MaskKind::Vector).unwrap().1.center();
+    double_click(&mut h, at);
+    assert!(h.state().ui.vector_mask_target, "the vector mask is targeted");
+    assert!(h.state().ui.panels.properties, "Properties opened");
+    assert!(!h.state().ui.dock.collapsed.contains(&crate::dock::Group::Properties), "Properties un-collapsed");
+}
+
 #[test]
 fn mask_double_click_launches_select_and_mask_with_preference() {
     let mut s = session();

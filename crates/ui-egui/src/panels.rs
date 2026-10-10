@@ -1999,6 +1999,13 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.mask_target = false;
             continue;
         }
+        // Double-clicking a mask thumbnail opens its settings: show Properties.
+        if id == "ui.properties" {
+            app.ui.panels.properties = true;
+            app.ui.dock_tabs.properties = 0;
+            app.ui.dock.collapsed.retain(|g| *g != crate::dock::Group::Properties);
+            continue;
+        }
         if p.is_null() {
             // Context-menu items behave like their menu-bar twins (dialogs included).
             let ctx = ui.ctx().clone();
@@ -2329,11 +2336,16 @@ fn layer_row(
                 actions.push(done);
             }
         } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
-            if kind == crate::mask_thumbs_ui::MaskKind::Pixel {
-                actions.push(("ui.maskTarget".into(), json!(true)));
+            match kind {
+                crate::mask_thumbs_ui::MaskKind::Pixel => actions.push(("ui.maskTarget".into(), json!(true))),
+                crate::mask_thumbs_ui::MaskKind::Vector => actions.push(("ui.vectorMaskTarget".into(), json!(true))),
             }
             if let Some((cmd, val)) = crate::mask_thumbs_ui::double_click_command(app, kind) {
+                // The preference launches Select and Mask on a pixel mask.
                 actions.push((cmd.into(), val));
+            } else {
+                // Otherwise double-click opens the mask's settings (Density/Feather).
+                actions.push(("ui.properties".into(), json!(true)));
             }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
             let id = match &l.content {
@@ -2523,9 +2535,10 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(id) = st.active_layer else { return };
     let doc = st.doc.clone();
     let Some(layer) = doc.layer(id) else { return };
-    // Pixel-mask controls also belong here when their thumbnail is targeted.
+    // Mask controls (pixel or vector) also belong here when their thumbnail is targeted.
     let mask_target = crate::mask_props_ui::targeted(app, layer);
-    if !mask_target && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    let vector_target = crate::mask_props_ui::vector_targeted(app, layer);
+    if !mask_target && !vector_target && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
         return;
     }
     let t = Tokens::get(ctx);
@@ -2588,6 +2601,8 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.push_id(id, |ui| {
                 if mask_target {
                     crate::mask_props_ui::properties(app, ui, layer);
+                } else if vector_target {
+                    crate::mask_props_ui::vector_properties(app, ui, layer);
                 } else if let LayerContent::Adjustment(adj) = &layer.content {
                     adjustment_controls(app, ui, id, adj);
                 } else {
@@ -2669,6 +2684,14 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         crate::props_layout::header(ui, layer);
         crate::mask_props_ui::properties(app, ui, layer);
+        return;
+    }
+    // The vector mask's own controls, when its thumbnail is targeted.
+    if let Some(layer) = st.active_layer.and_then(|id| doc.layer(id))
+        && crate::mask_props_ui::vector_targeted(app, layer)
+    {
+        crate::props_layout::header(ui, layer);
+        crate::mask_props_ui::vector_properties(app, ui, layer);
         return;
     }
     // Photoshop shows the Document properties when nothing or the Background layer is selected.
