@@ -734,6 +734,15 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
         LayerContent::Fill(f) => match &layer.fill_cache {
             // Photoshop's own rendering, valid while the fill is unchanged.
             Some(c) if c.fill == *f => surface_to_buffer(&c.surface, rect),
+            _ if cx.mode == photocraft_color::ColorMode::Cmyk => {
+                let frame = fill_frame(layer, cx.canvas);
+                let native_rect = if matches!(f, Fill::Solid(_)) { Rect::new(0, 0, 1, 1) } else { rect };
+                match gradient_fill::render_cmyk_fill(f, native_rect, frame, cx.depth) {
+                    Some(s) if matches!(f, Fill::Solid(_)) => Buffer::filled(rect, s.rgba(0, 0)),
+                    Some(s) => surface_to_buffer(&s, rect),
+                    None => render_fill(f, rect, frame, cx.patterns),
+                }
+            }
             _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns),
         },
         LayerContent::Adjustment(_) => return None,

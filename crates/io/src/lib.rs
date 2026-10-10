@@ -16,6 +16,8 @@
 //! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
 //!   layers through the PSD path and are written back the same way; see `tiff_layers`.
 //! * Paint.NET PDN3 documents open as editable bitmap layers (import only).
+//! * OpenRaster (`.ora`) documents open and save with their layers, groups, blend modes,
+//!   opacity and visibility; see `ora`.
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
@@ -40,6 +42,7 @@ mod flat;
 mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
+mod ora;
 pub mod pattern_map;
 mod pdn;
 pub mod pixels;
@@ -69,6 +72,9 @@ pub enum IoError {
     /// Paint.NET document decode failure.
     #[error("PDN: {0}")]
     Pdn(String),
+    /// OpenRaster read failure.
+    #[error("OpenRaster: {0}")]
+    Ora(String),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -222,6 +228,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
     }
+    if ora::is_ora(bytes) || has_extension(name, "ora") {
+        return ora::import(name, bytes, ctl);
+    }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
         return pdn::import(name, bytes, ctl);
     }
@@ -263,6 +272,9 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
     }
     if affinity::EXTENSIONS.contains(&ext.as_str()) {
         return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
+    }
+    if ext == "ora" {
+        return ora::export(doc);
     }
     if ext == photocraft_format::EXTENSION {
         let previews = photocraft_format::SaveOptions {

@@ -134,6 +134,7 @@ pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
 pub mod shape_dialog;
+pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
@@ -390,6 +391,7 @@ pub struct PhotocraftApp {
     pub(crate) blend_preview: Option<blend_preview::BlendPreview>,
     /// Patch Tool drag: the healed document at the pointer (`patch_preview`).
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
+    pub(crate) shape_stroke_preview: Option<shape_stroke_ui::ShapeStrokePreview>,
     /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).
     pub(crate) magnetic: magnetic_lasso_ui::Runtime,
     /// The next tool `Down` is a right-button drag that erases (see `paint_mouse`).
@@ -444,9 +446,10 @@ pub struct PhotocraftApp {
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
-    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`). The
-    /// canvas maps document pixels to physical pixels, so point-space geometry divides the view
-    /// zoom by this (see [`Self::point_zoom`]).
+    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
+    /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
+    /// to physical pixels, so point-space geometry divides the view zoom by this (see
+    /// [`Self::point_zoom`]).
     pub ppp: f32,
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
@@ -584,6 +587,7 @@ impl PhotocraftApp {
             move_preview: None,
             blend_preview: None,
             patch_preview: None,
+            shape_stroke_preview: None,
             magnetic: Default::default(),
             secondary_erase: false,
             defer_live_stroke: false,
@@ -670,8 +674,8 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
-        // After the saved preferences and their revision mark, so the imported set is saved.
-        kys_import::auto_import(&mut app);
+        // After the saved preferences, which say whether the set was already offered.
+        kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
@@ -1035,7 +1039,7 @@ impl PhotocraftApp {
                 && !photocraft_compose::blend_if_active(layer, st.doc.mode));
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
-            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
+            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff" | "ora")
                 || (plain_raster && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
@@ -1379,11 +1383,16 @@ impl eframe::App for PhotocraftApp {
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
+        kys_import::show_offer(self, &ctx);
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);
+        // The Brush Preset picker's view (its gear's card parts and the footer scale) is
+        // remembered once the pointer is up. Here, after every panel, rather than in the
+        // picker's own code: the control channel can set it while the picker is closed.
+        brush_picker::persist(self, &ctx);
         self.automation_input = false;
         native_menu::sync(self, &ctx);
         if screen_picker::busy(&ctx) {
@@ -1877,6 +1886,9 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod move_outline_tests;
 
 #[cfg(test)]
 mod mask_thumb_refresh_tests;

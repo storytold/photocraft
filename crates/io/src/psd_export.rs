@@ -891,6 +891,12 @@ impl Ex {
         {
             return c.surface.clone();
         }
+        if self.cmyk
+            && let Some(s) =
+                photocraft_compose::gradient_fill::render_cmyk_fill(f, self.canvas, photocraft_compose::fill_frame(l, self.canvas), self.fmt.sample)
+        {
+            return s;
+        }
         // In the frame the layer's masks give it, like the compositor (masks are stored apart).
         // Readers composite these pixels (ours keeps them as the fill's rendering), so a pattern
         // fill must be rendered from the document's patterns, not left transparent (#1907).
@@ -1320,7 +1326,8 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
             ex.text_index.insert(l.id, index);
         }
     }
-    ex.emit(&doc.layers);
+    let space = photocraft_compose::cmyk_space(doc);
+    photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers));
 
     // Merged composite, rendered and encoded in bands (no full-size float composite). Matting
     // against white only changes pixels with alpha < 1; if some are slightly translucent but all

@@ -176,6 +176,23 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         return;
     }
     let preview = crate::patch_preview::take(app);
+    let o = &app.ui.tool_options;
+    if o.patch_content_aware {
+        // A background job (progress dialog, Esc cancels), like the Content-Aware Move.
+        let p = json!({
+            "offset": off,
+            "contentAware": true,
+            "structure": o.patch_structure.round().clamp(1.0, 7.0),
+            "color": o.patch_color.round().clamp(0.0, 10.0),
+            "sampleAllLayers": o.sample_all_layers,
+            "target": crate::canvas::paint_target(app),
+        });
+        if let Err(e) = app.run("paint.patch", p) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
     let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
     match app.run("paint.patch", p) {
         Ok(_) => crate::patch_preview::committed(app, preview, off),
@@ -313,11 +330,25 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
         }
         Tool::Patch => {
+            // Photoshop's options bar: Patch: Normal (Source / Destination) or Content-Aware
+            // (Structure, Color, Sample All Layers).
             opt(ui, tl!("Patch:"));
-            for (k, l) in [("source", tl!("Source")), ("destination", tl!("Destination"))] {
-                let mut on = o.patch_mode == k;
-                if crate::widgets::checkbox(ui, &mut on, l).clicked() {
-                    o.patch_mode = k.into();
+            let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
+            let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
+            crate::widgets::dropdown(ui, "patch-kind", &mut kind, &kinds, 120.0);
+            o.patch_content_aware = kind == "contentAware";
+            if o.patch_content_aware {
+                opt(ui, tl!("Structure:"));
+                crate::widgets::value_field(ui, &mut o.patch_structure, 1.0..=7.0, "", 40.0);
+                opt(ui, tl!("Color:"));
+                crate::widgets::value_field(ui, &mut o.patch_color, 0.0..=10.0, "", 40.0);
+                crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            } else {
+                for (k, l) in [("source", tl!("Source")), ("destination", tl!("Destination"))] {
+                    let mut on = o.patch_mode == k;
+                    if crate::widgets::checkbox(ui, &mut on, l).clicked() {
+                        o.patch_mode = k.into();
+                    }
                 }
             }
             crate::widgets::vline(ui, 22.0);
@@ -667,6 +698,27 @@ mod tests {
         assert!(!app.ui.status_error, "{}", app.ui.status);
         let px = active(&app).surface().unwrap().rgba(71, 30);
         assert!(px[0] > 0.95 && px[1] > 0.95 && px[2] > 0.95, "blemish patched with the white background: {px:?}");
+    }
+
+    #[test]
+    fn patch_tool_content_aware_fills_from_where_it_is_dropped() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[68, 30], [74, 30]], "size": 6, "color": "#ff0000"})).unwrap();
+        app.run("select.rect", json!({"x": 60, "y": 20, "width": 24, "height": 20})).unwrap();
+        app.ui.tool = Tool::Patch;
+        app.ui.tool_options.patch_content_aware = true;
+        app.ui.tool_options.patch_structure = 5.0;
+        app.ui.tool_options.patch_color = 3.0;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 70.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 31.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 30.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let (id, p) = app.session.journal.last().cloned().unwrap();
+        assert_eq!(id, "paint.patch");
+        assert_eq!((p["contentAware"].as_bool(), p["structure"].as_f64(), p["color"].as_f64()), (Some(true), Some(5.0), Some(3.0)));
+        let px = active(&app).surface().unwrap().rgba(71, 30);
+        assert!(px[0] > 0.95 && px[1] > 0.95 && px[2] > 0.95, "blemish filled from the white background: {px:?}");
     }
 
     #[test]

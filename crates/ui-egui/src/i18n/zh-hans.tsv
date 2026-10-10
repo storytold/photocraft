@@ -1333,6 +1333,11 @@
 	{n} commands are not in PhotoCraft.	{n} 个命令在 PhotoCraft 中不存在。
 	Keyboard shortcuts imported	已导入键盘快捷键
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此处正在使用你的键盘快捷键集 {set}：{n} 个快捷键与默认值不同。可在“编辑 › 键盘快捷键”中查看；“全部重置为默认值”可撤销。
+	Import keyboard shortcuts?	导入键盘快捷键？
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft 在这台电脑上找到了你在其他图像编辑器中的键盘快捷键集 {set}：其中 {n} 个快捷键与 PhotoCraft 不同。要导入吗？
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	“编辑 › 键盘快捷键 › 全部重置为默认值”可撤销导入。
+	Don't Import	不导入
+	The keyboard shortcut set was not imported: {error}	未导入键盘快捷键集：{error}
 	Reset Section	重置此部分
 	Reset Transform	重置变换
 	Reset to defaults	重置为默认值
@@ -2064,8 +2069,9 @@ cameraRaw	Blending	混合
 	Brush Preset Options	画笔预设选项
 	Group name	组名称
 	Brush name	画笔名称
-	Grid view	网格视图
-	List view	列表视图
+	Brush Name	画笔名称
+	Brush Stroke	画笔描边
+	Brush Tip	画笔笔尖
 	Off: the speed of the pointer sets the spacing	关闭：由指针移动速度决定间距
 	Tilt Scale	倾斜缩放
 	Brush Projection	画笔投影
@@ -2383,6 +2389,27 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
 	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)
+	Stroke Options	描边选项
+	Solid	实线
+	Dashed	虚线
+	Dotted	点线
+	Alignment	对齐
+	Caps	端点
+	Butt / Flat	平头
+	Corners	拐角
+	Miter	斜接
+	Round	圆角
+	Bevel	斜角
+	Miter limit	斜接限制
+	Dashed line	虚线
+	Dash	线段
+	Gap	间隔
+	Dash / gap lengths × stroke width	线段 / 间隔长度 × 描边宽度
+	Add pair	添加一对
+	Remove pair	移除一对
+	Dash offset	虚线偏移
+	Open paths use centered strokes	开放路径使用居中描边
+	Use finite lengths and a positive pattern total	请使用有限长度和正数图案总长度
 	No subject found — try Object Selection or the Lasso	未找到主体 — 请尝试对象选择工具或套索工具
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形

@@ -1302,6 +1302,11 @@
 	{n} commands are not in PhotoCraft.	{n} perintah tidak ada di PhotoCraft.
 	Keyboard shortcuts imported	Pintasan keyboard diimpor
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan keyboard Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
+	Import keyboard shortcuts?	Impor pintasan keyboard?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft menemukan set pintasan keyboard Anda {set} dari editor gambar lain di komputer ini: {n} pintasannya berbeda dari PhotoCraft. Impor?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Edit › Pintasan Keyboard › Setel Ulang Semua ke Bawaan membatalkan impor.
+	Don't Import	Jangan Impor
+	The keyboard shortcut set was not imported: {error}	Set pintasan keyboard tidak diimpor: {error}
 	Reset Section	Reset Bagian
 	Reset Transform	Reset Transformasi
 	Reset to defaults	Reset ke default
@@ -1966,8 +1971,8 @@
 	Brush Preset Options	Opsi Preset Kuas
 	Group name	Nama grup
 	Brush name	Nama kuas
-	Grid view	Tampilan grid
-	List view	Tampilan daftar
+	Brush Name	Nama kuas
+	Brush Stroke	Sapuan kuas
 	Off: the speed of the pointer sets the spacing	Mati: kecepatan penunjuk menentukan jarak
 	Tilt Scale	Skala Kemiringan
 	Brush Projection	Proyeksi Kuas
@@ -2783,6 +2788,26 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+	Stroke Options	Opsi goresan
+	Solid	Utuh
+	Dashed	Putus-putus
+	Dotted	Titik-titik
+	Caps	Ujung
+	Butt / Flat	Datar
+	Corners	Sudut
+	Miter	Tajam
+	Round	Bulat
+	Bevel	Miring
+	Miter limit	Batas sudut tajam
+	Dashed line	Garis putus-putus
+	Dash	Garis
+	Gap	Celah
+	Dash / gap lengths × stroke width	Panjang garis / celah × lebar goresan
+	Add pair	Tambah pasangan
+	Remove pair	Hapus pasangan
+	Dash offset	Offset garis
+	Open paths use centered strokes	Jalur terbuka menggunakan goresan tengah
+	Use finite lengths and a positive pattern total	Gunakan panjang terbatas dan total pola positif
 	No subject found — try Object Selection or the Lasso	Subjek tidak ditemukan — coba Seleksi Objek atau Laso
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat

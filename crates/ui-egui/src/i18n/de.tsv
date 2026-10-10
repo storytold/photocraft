@@ -1323,6 +1323,11 @@
 	{n} commands are not in PhotoCraft.	{n} Befehle gibt es in PhotoCraft nicht.
 	Keyboard shortcuts imported	Tastaturbefehle importiert
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Dein Tastaturbefehlssatz {set} wird hier verwendet: {n} Tastaturbefehle weichen von den Standardwerten ab. Bearbeiten › Tastaturbefehle zeigt sie; Alles auf Standardwerte zurücksetzen macht es rückgängig.
+	Import keyboard shortcuts?	Tastaturbefehle importieren?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft hat auf diesem Computer deinen Tastaturbefehlssatz {set} aus einem anderen Bildbearbeitungsprogramm gefunden: {n} seiner Tastaturbefehle weichen von denen in PhotoCraft ab. Importieren?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Bearbeiten › Tastaturbefehle › Alles auf Standardwerte zurücksetzen macht einen Import rückgängig.
+	Don't Import	Nicht importieren
+	The keyboard shortcut set was not imported: {error}	Der Tastaturbefehlssatz wurde nicht importiert: {error}
 	Reset Section	Abschnitt zurücksetzen
 	Reset Transform	Transformation zurücksetzen
 	Reset to defaults	Auf Standardwerte zurücksetzen
@@ -1993,8 +1998,9 @@
 	Brush Preset Options	Pinselvorgaben-Optionen
 	Group name	Gruppenname
 	Brush name	Pinselname
-	Grid view	Rasteransicht
-	List view	Listenansicht
+	Brush Name	Pinselname
+	Brush Stroke	Pinselstrich
+	Brush Tip	Pinselspitze
 	Off: the speed of the pointer sets the spacing	Aus: die Zeigergeschwindigkeit setzt den Abstand
 	Tilt Scale	Neigungsskala
 	Brush Projection	Pinselprojektion
@@ -2414,6 +2420,27 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+	Stroke Options	Konturoptionen
+	Solid	Durchgezogen
+	Dashed	Gestrichelt
+	Dotted	Gepunktet
+	Alignment	Ausrichtung
+	Caps	Enden
+	Butt / Flat	Stumpf / Flach
+	Corners	Ecken
+	Miter	Gehrung
+	Round	Rund
+	Bevel	Abgeschrägt
+	Miter limit	Gehrungsgrenze
+	Dashed line	Gestrichelte Linie
+	Dash	Strich
+	Gap	Lücke
+	Dash / gap lengths × stroke width	Strich- / Lückenlängen × Konturbreite
+	Add pair	Paar hinzufügen
+	Remove pair	Paar entfernen
+	Dash offset	Strichversatz
+	Open paths use centered strokes	Offene Pfade verwenden zentrierte Konturen
+	Use finite lengths and a positive pattern total	Endliche Längen und eine positive Mustersumme verwenden
 	No subject found — try Object Selection or the Lasso	Kein Motiv gefunden — versuchen Sie das Objektauswahlwerkzeug oder das Lasso
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck

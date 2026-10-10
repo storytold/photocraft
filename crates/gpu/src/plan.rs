@@ -821,6 +821,10 @@ impl<'a> Planner<'a> {
     }
 
     fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) -> Result<(), Unsupported> {
+        // The RGB shader cannot interpolate or dither native ink channels.
+        if self.cx.mode == photocraft_color::ColorMode::Cmyk && !matches!(f, Fill::Pattern { .. }) {
+            return Err(Unsupported("native CMYK fill (composited on the CPU)".into()));
+        }
         match f {
             Fill::Solid(c) => {
                 let rgb = c.to_rgb();
@@ -1681,6 +1685,26 @@ mod tests {
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
 
+    #[test]
+    fn native_cmyk_fills_fall_back_only_without_a_valid_cache() {
+        use photocraft_doc::{FillCache, GradientStyle};
+        for depth in photocraft_color::SampleType::ALL {
+            for fill in [Fill::Solid(Color::WHITE), Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false)] {
+                let mut doc = Document::new("CMYK", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Cmyk, depth);
+                doc.layers.push(Layer::new("Fill", LayerContent::Fill(fill.clone())));
+                assert!(plan(&doc).unwrap_err().0.contains("native CMYK fill"));
+                doc.layers[0].visible = false;
+                assert!(plan(&doc).is_ok());
+                doc.layers[0].visible = true;
+                doc.layers[0].fill_cache = Some(FillCache { fill, surface: photocraft_raster::Surface::new(doc.pixel_format()) });
+                assert!(plan(&doc).is_ok());
+                doc.layers[0].fill_cache.as_mut().unwrap().fill = Fill::Solid(Color::TRANSPARENT);
+                assert!(plan(&doc).is_err());
+                doc.mode = photocraft_color::ColorMode::Rgb;
+                assert!(plan(&doc).is_ok());
+            }
+        }
+    }
     #[test]
     fn outer_glow_plan_knocks_out_see_through_fill() {
         use photocraft_doc::{Contour, FxCommon, GlowSource, GlowTechnique};

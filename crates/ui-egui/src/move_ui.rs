@@ -60,6 +60,8 @@ pub(crate) struct MovePreview {
     revision: u64,
     /// Layers that move ([`photocraft_engine::layer_multi_cmds::move_targets`]).
     ids: Vec<LayerId>,
+    /// `ids` and every layer inside them: the layers shown at the drag's offset.
+    moving: Vec<LayerId>,
     /// What moving them can change at offset (0, 0), not clipped to the canvas: a layer larger
     /// than the canvas brings its pixels from beyond the edge into view (`None` = anything).
     bounds: Option<Rect>,
@@ -127,7 +129,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let all = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
+        let moving = with_descendants(&doc, &ids);
+        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
     }
     let p = app.move_preview.as_mut()?;
     if offset == (0, 0) && p.offsets.is_empty() {
@@ -153,6 +156,25 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     Some((p.shown.clone()?, p.key()))
 }
 
+/// `ids` and every layer inside them (groups move their contents).
+fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+    let walk = doc.walk();
+    let roots: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.as_slice()).collect();
+    walk.iter().filter(|(p, _, _)| roots.iter().any(|r| p.starts_with(r))).map(|(_, _, l)| l.id).collect()
+}
+
+/// Where the canvas shows layer `id` of document `doc` at `revision` relative to where it is: the
+/// offset of the latest Move drag frame drawn ([`display_doc`]) when the layer moves with the drag,
+/// so its Layer Edges outline moves in lockstep with its pixels (#2413). `None` when it shows
+/// where it is.
+pub(crate) fn shown_offset(app: &PhotocraftApp, doc: DocId, revision: u64, id: LayerId) -> Option<(i32, i32)> {
+    let p = app.move_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision && !p.floating && p.shown.is_some())?;
+    if !p.moving.contains(&id) {
+        return None;
+    }
+    p.offsets.last().copied()
+}
+
 /// A floating selection's offset plus a drag of it in progress (`canvas::selection_drag_delta`).
 pub(crate) fn floating_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     let f = photocraft_engine::float_cmds::floating(app.session.active()?)?;
@@ -172,7 +194,17 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
     if !fresh {
         let bounds = st.doc.selection.as_ref().map(|s| s.content_bounds());
         let canvas = st.doc.bounds();
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids: vec![f.layer], bounds, canvas, offsets: Vec::new(), shown: None, floating: true });
+        app.move_preview = Some(MovePreview {
+            doc: doc_id,
+            revision,
+            ids: vec![f.layer],
+            moving: Vec::new(),
+            bounds,
+            canvas,
+            offsets: Vec::new(),
+            shown: None,
+            floating: true,
+        });
     }
     let st = app.session.documents().get(idx)?;
     let shown = app.move_preview.as_ref()?.offsets.last() != Some(&offset);

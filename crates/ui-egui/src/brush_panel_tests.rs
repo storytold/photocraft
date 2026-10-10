@@ -801,6 +801,9 @@ fn options_bar_reaches_brush_settings_and_the_preset_library() {
     }
     let target = presets.iter().find(|p| p.group == "Dry Media").or(presets.last()).unwrap().name.clone();
     assert_ne!(h.state().session.tools.current_preset.as_deref(), Some(target.as_str()));
+    // The picker's cards are tall: scroll the target into the list before clicking it.
+    h.get_by_label(&target).scroll_to_me();
+    h.run_steps(3);
     h.get_by_label(&target).click();
     h.run_steps(3);
     assert_eq!(last_journal(h.state()).unwrap(), ("tools.setBrush".to_string(), json!({ "preset": target })));
