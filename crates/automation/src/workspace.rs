@@ -169,7 +169,16 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
     if id.starts_with("file.") && !safe_file_command {
         return Err(command_error(id));
     }
-    if (id.starts_with("layer.smartObjects.") && id != "layer.smartObjects.convertToSmartObject")
+    // Contents commands re-check the resolved source in the engine before any disk read.
+    // Photoshop's embedded linked-layer blocks count as in-memory sources too.
+    let in_memory_smart_command = matches!(
+        id,
+        "layer.smartObjects.convertToSmartObject"
+            | "layer.smartObjects.editContents"
+            | "layer.smartObjects.convertToLayers"
+            | "layer.smartObjects.saveContents"
+    );
+    if (id.starts_with("layer.smartObjects.") && !in_memory_smart_command)
         || matches!(
             id,
             "pattern.import"
@@ -217,7 +226,9 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
     let keys: &[&str] = match id {
         "image.adjustments.colorLookup" | "layer.newAdjustmentLayer.colorLookup" | "layer.setAdjustment" => &["file"],
         "filter.distort.displace" => &["mapPath"],
-        "layer.quickExportAsPng" | "layer.exportAs" | "image.applyDataSet" => &["path"],
+        "layer.quickExportAsPng" | "layer.exportAs" | "image.applyDataSet" | "layer.smartObjects.editContents" | "layer.smartObjects.convertToLayers" => {
+            &["path"]
+        }
         "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" => &["profile"],
         "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo" | "view.proofSetup" | "view.gamutWarning" => &["profile"],
         "edit.colorSettings" => &["workingRgb", "workingCmyk", "workingGray"],
@@ -526,6 +537,9 @@ mod tests {
             "file.export.saveForWebLegacy",
             "pattern.import",
             "layer.smartObjects.exportContents",
+            "layer.smartObjects.replaceContents",
+            "layer.smartObjects.relinkToFile",
+            "layer.smartObjects.convertToLinked",
             "measurementLog.export",
             "layer.videoLayers.reloadFrame",
             "edit.colorSettings",
@@ -533,6 +547,12 @@ mod tests {
             assert!(authorize_engine_command(id, &serde_json::json!({})).is_err());
         }
         assert!(authorize_engine_command("file.new", &serde_json::json!({})).is_ok());
+        for id in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers", "layer.smartObjects.saveContents"] {
+            assert!(authorize_desktop_engine_command(id, &serde_json::json!({"layer": 19})).is_ok(), "{id}");
+        }
+        for id in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
+            assert!(authorize_engine_command(id, &serde_json::json!({"path": "/outside/source.psb"})).is_err(), "{id}");
+        }
         // The UI-level examples in docs/control-protocol.md.
         for id in ["view.zoomIn", "window.theme.pro", "edit.search"] {
             assert!(authorize_desktop_engine_command(id, &serde_json::json!({})).is_ok(), "{id}");

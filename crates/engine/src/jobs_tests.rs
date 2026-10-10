@@ -454,3 +454,26 @@ fn cancel_takes_effect_within_200_ms_on_24_mp() {
         assert!(worst < 200.0, "{cmd}: cancel took {worst:.1} ms");
     }
 }
+
+#[test]
+fn an_inline_job_ctx_lets_another_thread_cancel_inline_work() {
+    // A live filter preview runs the filter inline in a private session; when the dialog's
+    // parameters change, the stale computation is cancelled through this context.
+    let mut s = session(96, 64);
+    let before = pixels(&s);
+    let revision = s.active().unwrap().revision;
+    let ctx = JobCtx::new();
+    ctx.cancel();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    for (id, p) in [("filter.blur.gaussianBlur", json!({"radius": 40})), ("filter.blur.motionBlur", json!({"distance": 40}))] {
+        assert!(matches!(s.execute(id, p), Err(EngineError::Cancelled)), "{id}");
+        assert_eq!(pixels(&s), before, "{id}: the document is unchanged");
+        assert_eq!(s.active().unwrap().revision, revision, "{id}: no edit recorded");
+    }
+    // Not cancelled: the same session runs as before.
+    s.set_inline_job_ctx(Some(JobCtx::new()));
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+    assert_ne!(pixels(&s), before);
+    s.set_inline_job_ctx(None);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+}

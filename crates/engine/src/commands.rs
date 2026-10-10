@@ -235,7 +235,7 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
 pub fn blend_from_str(s: &str) -> Option<BlendMode> {
     let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
     let want = norm(s);
-    std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
+    std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
 /// The active selection as the mask of a layer being created, or None without a selection.
@@ -248,7 +248,8 @@ pub(crate) fn selection_mask(doc: &Document) -> Option<LayerMask> {
 /// Mask a fill or adjustment layer being created, as Photoshop does: the path selected in the
 /// Paths panel (`"path"`: `"work"`, a saved path's name or a path object) becomes its vector
 /// mask, which makes a Solid Color fill a shape (#1419); without one, the selection becomes its
-/// layer mask ([`selection_mask`]). A path that isn't there is an error.
+/// layer mask ([`selection_mask`]); without either, a white mask reveals the whole layer (#1768).
+/// A path that isn't there is an error.
 pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str) -> Result<()> {
     let path = match p.get("path") {
         None | Some(Value::Null) => None,
@@ -260,14 +261,14 @@ pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str
     };
     match path {
         Some(path) => l.vector_mask = Some(photocraft_doc::VectorMask::new(path)),
-        None => l.mask = selection_mask(doc),
+        None => l.mask = Some(selection_mask(doc).unwrap_or_else(LayerMask::reveal_all)),
     }
     Ok(())
 }
 
 /// The `"path"` param of the new fill and adjustment layer commands ([`mask_new_layer`]).
 pub(crate) const NEW_LAYER_PATH: &str =
-    r##""path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)"##;
+    r##""path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask, or white with no selection)"##;
 
 fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Result<Value> {
     let label = format!("New {} Layer", adj.label());
@@ -339,10 +340,11 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":u32=1920,"height":u32=1080,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":ppi=72,"name":str}"##,
+            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
+                crate::document_preset_cmds::validate_new_params(s, p)?;
                 // A size given as a float (`512.0`, as JSON from a UI field) is still that size (#254).
                 let px = |k: &str, d: u32| match p.get(k) {
                     Some(v) => v
@@ -513,6 +515,7 @@ fn build() -> Vec<CommandSpec> {
                 *active = Some(id);
                 Ok(id)
             })?;
+            crate::layer_multi_cmds::note_inert_insert(s, id);
             Ok(json!({ "layer": id.0 }))
         }),
         cmd!("layer.new.group", "Group…", ["Layer", "New"], None, r##"{"name":str?}"##, has_doc, |s, p| {
@@ -522,6 +525,7 @@ fn build() -> Vec<CommandSpec> {
                 *active = Some(id);
                 Ok(id)
             })?;
+            crate::layer_multi_cmds::note_inert_insert(s, id);
             Ok(json!({ "layer": id.0 }))
         }),
         cmd!(
@@ -743,7 +747,8 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let c = color_param(p, "color", s.tools.foreground);
                 let id = s.edit("New Color Fill Layer", |doc, active| {
-                    let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3]))));
+                    let fill = Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode);
+                    let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor")?;
                     let id = doc.insert_above(*active, l);
                     *active = Some(id);
@@ -772,7 +777,8 @@ fn build() -> Vec<CommandSpec> {
                         1.0,
                         style,
                         reverse,
-                    );
+                    )
+                    .in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient")?;
                     let id = doc.insert_above(*active, l);
@@ -1092,6 +1098,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::color_to_alpha_cmds::specs());
     v.extend(crate::gallery_cmds::specs());
     v.extend(crate::gradient_fill_cmds::specs());
+    v.extend(crate::solid_fill_cmds::specs());
     v.extend(crate::type_cmds::specs());
     v.extend(crate::transform_cmds::specs());
     v.extend(crate::float_cmds::specs());
@@ -1146,6 +1153,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::distort_cmds::specs());
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());
+    v.extend(crate::history_cmds::specs());
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
     v.extend(crate::document_preset_cmds::specs());

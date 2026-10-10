@@ -18,7 +18,7 @@ use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde_json::json;
 
-use crate::brush_panel::{BrushesPanelState, BrushesView, Renaming, is_current, new_preset_name, run_or_status};
+use crate::brush_panel::{BrushesPanelState, BrushesView, Renaming, new_preset_name, run_or_status};
 use crate::brushes_tab::{self, Action, ListLayout};
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
@@ -26,7 +26,7 @@ use crate::{PhotocraftApp, icons, widgets};
 /// Width of the picker's contents.
 pub const WIDTH: f32 = 300.0;
 /// The picker's preset list: denser than the Brushes tab's.
-const LIST: ListLayout = ListLayout { id: "brush-picker-presets", max_height: 300.0, cell: 44.0, indent: 4.0 };
+pub(crate) const LIST: ListLayout = ListLayout { id: "brush-picker-presets", max_height: 300.0, cell: 44.0, indent: 4.0 };
 
 /// What the picker asks for beyond the size and hardness edits.
 #[derive(Clone, Debug, PartialEq)]
@@ -82,7 +82,7 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
                 run_or_status(app, "brush.presets.save", json!({ "name": name }));
                 // Photoshop asks for the new preset's name: the picker's rename bar does.
                 if app.session.tools.presets.iter().any(|p| p.name == name) {
-                    app.ui.brush_picker_list.renaming = Some(Renaming { group: false, name, text: String::new() });
+                    app.ui.brush_picker_list.renaming = Some(Renaming { group: false, name, folder: Vec::new(), text: String::new() });
                 }
             }
             Pick::Import => {
@@ -121,8 +121,9 @@ pub(crate) fn named(resp: egui::Response, label: &str) -> egui::Response {
 }
 
 /// The picker's contents: Size, Hardness (round tips only: a sampled tip has none), a search
-/// field with the Brush Settings, New Preset and gear buttons, and the preset list.
-pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], st: &mut BrushesPanelState) -> Vec<Pick> {
+/// field with the Brush Settings, New Preset and gear buttons, and the preset list. `current` is
+/// the selected preset's name (by identity, so edits don't deselect).
+pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], current: Option<&str>, st: &mut BrushesPanelState) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
     let mut picks = Vec::new();
     ui.set_width(WIDTH);
@@ -154,7 +155,7 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], s
         ui.add_space(20.0);
         ui.add(egui::TextEdit::singleline(&mut st.filter).hint_text(tl!("Search Brushes")).desired_width(WIDTH - 118.0).id_salt("brush-picker-search"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            gear_menu(ui, b, presets, st, &mut picks);
+            gear_menu(ui, current, presets, st, &mut picks);
             if named(icons::button(ui, "square-plus", 24.0, false, "Create new brush preset from the current settings"), "New Brush Preset").clicked() {
                 picks.push(Pick::NewPreset);
             }
@@ -165,13 +166,13 @@ pub fn body(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], s
         });
     });
     ui.add_space(4.0);
-    picks.extend(brushes_tab::preset_list(ui, presets, b, st, LIST).into_iter().map(Pick::List));
+    picks.extend(brushes_tab::preset_list(ui, presets, current, st, LIST).into_iter().map(Pick::List));
     picks
 }
 
 /// The gear: Photoshop's picker menu. A new preset, rename or delete the current one, the list's
 /// view, and Import Brushes.
-fn gear_menu(ui: &mut egui::Ui, b: &BrushSettings, presets: &[BrushPreset], st: &mut BrushesPanelState, picks: &mut Vec<Pick>) {
+fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], st: &mut BrushesPanelState, picks: &mut Vec<Pick>) {
     let gear = named(icons::button(ui, "settings", 24.0, false, tl!("Brush Preset Options")), "Brush Preset Options");
     egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         if ui.button(tl!("New Brush Preset…")).clicked() {
@@ -179,12 +180,12 @@ fn gear_menu(ui: &mut egui::Ui, b: &BrushSettings, presets: &[BrushPreset], st: 
             ui.close();
         }
         ui.separator();
-        let current = presets.iter().find(|p| is_current(&p.brush, b)).map(|p| p.name.clone());
+        let current = current.filter(|n| presets.iter().any(|p| p.name.eq_ignore_ascii_case(n))).map(str::to_string);
         ui.add_enabled_ui(current.is_some(), |ui| {
             if ui.button(tl!("Rename Brush…")).clicked()
                 && let Some(name) = current.clone()
             {
-                st.renaming = Some(Renaming { group: false, name, text: String::new() });
+                st.renaming = Some(Renaming { group: false, name, folder: Vec::new(), text: String::new() });
                 ui.close();
             }
             if ui.button(tl!("Delete Brush")).clicked()

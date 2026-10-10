@@ -1,5 +1,7 @@
 use super::*;
 
+mod selection;
+
 const DEPTHS: [u64; 3] = [8, 16, 32];
 const W: i32 = 64;
 const H: i32 = 48;
@@ -113,6 +115,31 @@ fn masked_layer_and_group_convert_within_rounding() {
     let before = flat(&s);
     convert(&mut s);
     assert!(max_diff(&flat(&s), &before) <= 1.0 / 255.0 + 1e-6);
+}
+
+#[test]
+fn pattern_fill_converts_to_editable_smart_object_without_losing_its_pattern() {
+    let mut s = session(8);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Bricks"})).unwrap();
+    let before = flat(&s);
+    let pattern_id = s.active().unwrap().doc.patterns[0].id.clone();
+    assert!(before.iter().any(|p| p[3] > 0.0), "the pattern fill is visible");
+
+    convert(&mut s);
+    assert!(max_diff(&flat(&s), &before) < 1e-6, "conversion keeps every pattern pixel");
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert!(inner.patterns.iter().any(|p| p.id == pattern_id), "the embedded source keeps the pattern resource");
+
+    // The smart object's source remains live after opening and editing its contents.
+    let child = s.execute("layer.smartObjects.editContents", json!({})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(s.active_index(), Some(child));
+    assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.id == pattern_id));
+    s.set_active(0);
+    assert!(max_diff(&flat(&s), &before) < 1e-6);
+    s.undo();
+    assert!(max_diff(&flat(&s), &before) < 1e-6);
 }
 
 #[test]
@@ -732,6 +759,186 @@ fn convert_to_layers_conforms_the_contents_to_the_document_mode_and_depth() {
     convert_to_layers(&mut s);
     let fmt = s.active().unwrap().doc.pixel_format();
     assert!(matches!(&active_layer(&s).content, LayerContent::Raster(px) if px.format().mode == fmt.mode && px.format().sample == fmt.sample));
+}
+
+fn deny_contents_paths(cmd: &str, p: &Value) -> Result<()> {
+    if matches!(cmd, "layer.smartObjects.editContents" | "layer.smartObjects.convertToLayers" | "layer.smartObjects.saveContents") && p.get("path").is_some() {
+        return Err(other(format!("source path refused: {cmd}: {}", p["path"])));
+    }
+    Ok(())
+}
+
+#[test]
+fn automation_smart_contents_accepts_memory_sources_and_explicit_targets() {
+    for (depth, psd_uuid) in [(8, false), (16, true), (32, false)] {
+        let mut s = session(depth);
+        paint(&mut s);
+        let id = convert(&mut s);
+        if psd_uuid {
+            s.edit("PSD source", |doc, _| {
+                let SmartSource::Embedded { file_name, bytes } = smart(doc, LayerId(id))?.source.clone() else { panic!() };
+                let linked = photocraft_io::linked::LinkedFile { uuid: "embedded-id".into(), file_name, bytes: bytes.to_vec() };
+                doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(photocraft_io::linked::encode_linked_file(&linked))));
+                smart_mut(doc, LayerId(id))?.source = SmartSource::Linked { path: linked.uuid };
+                Ok(())
+            })
+            .unwrap();
+        }
+        // An explicit smart-object target must work while a pixel layer is selected.
+        let raster = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.authorize = Some(deny_contents_paths);
+        let child = s.execute("layer.smartObjects.editContents", json!({"layer": id})).unwrap()["document"].as_u64().unwrap() as usize;
+        assert_eq!(s.active().unwrap().doc.depth.bits(), depth as u32);
+        assert!(s.active().unwrap().path.is_none());
+        assert_eq!(s.documents()[0].active_layer, Some(LayerId(raster)));
+        s.close(child).unwrap();
+        let r = s.execute("layer.smartObjects.convertToLayers", json!({"layer": id})).unwrap();
+        assert!(matches!(s.active().unwrap().doc.layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().content, LayerContent::Raster(_)));
+    }
+}
+
+fn contents_file() -> std::path::PathBuf {
+    let doc = Document::with_background(
+        "source",
+        Size::new(4, 4),
+        photocraft_doc::ColorMode::Rgb,
+        photocraft_doc::SampleType::U8,
+        photocraft_color::Color::rgb(1.0, 0.0, 0.0),
+    );
+    let path = std::env::temp_dir().join(format!("pcraft-contents-{}-{}.pcraft", std::process::id(), doc.id.0));
+    std::fs::write(&path, encode_source(&doc).unwrap()).unwrap();
+    path
+}
+
+#[test]
+fn automation_smart_contents_refuses_disk_sources_before_changes() {
+    let path = contents_file();
+    let source_bytes = std::fs::read(&path).unwrap();
+    for cmd in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
+        let mut s = session(8);
+        paint(&mut s);
+        let id = convert(&mut s);
+        let sibling = s
+            .edit("linked sources", |doc, _| {
+                let source = SmartSource::Linked { path: path.to_string_lossy().into_owned() };
+                smart_mut(doc, LayerId(id))?.source = source.clone();
+                let mut cache = Surface::new(doc.pixel_format());
+                cache.fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+                let sibling = Layer::new("linked sibling", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, Some(cache))));
+                let sid = sibling.id;
+                doc.layers.insert(0, sibling);
+                Ok(sid)
+            })
+            .unwrap();
+        s.authorize = Some(deny_contents_paths);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.entries().len();
+        let error = s.execute(cmd, json!({"layer": id})).unwrap_err().to_string();
+        // The error Debug-quotes the path (doubled backslashes on Windows), so match its file name.
+        assert!(error.contains("source path refused") && error.contains(path.file_name().unwrap().to_str().unwrap()), "{error}");
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert_eq!((s.documents().len(), s.active().unwrap().revision, s.active().unwrap().history.entries().len()), (1, revision, history));
+
+        // Human commands retain their linked-file behavior. Returning to an already-open child
+        // reads no source, and saving it updates only its parent layer, never a linked sibling.
+        s.authorize = None;
+        let r = s.execute(cmd, json!({"layer": id})).unwrap();
+        if cmd.ends_with("editContents") {
+            let child = r["document"].as_u64().unwrap() as usize;
+            s.set_active(0);
+            s.authorize = Some(deny_contents_paths);
+            let again = s.execute(cmd, json!({"layer": id})).unwrap();
+            assert_eq!(again["document"], r["document"]);
+            assert_eq!(s.documents().len(), 2);
+            s.execute("image.adjustments.invert", json!({})).unwrap();
+            s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+            assert!(!s.active().unwrap().is_dirty());
+            let parent = &s.documents()[0].doc;
+            assert!(matches!(smart(parent, LayerId(id)).unwrap().source, SmartSource::Embedded { .. }));
+            assert_eq!(smart(parent, sibling).unwrap().cache.as_ref().unwrap().rgba(1, 1), [0.0, 0.0, 1.0, 1.0]);
+            s.close(child).unwrap();
+        } else {
+            assert_eq!(s.active().unwrap().doc.layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().surface().unwrap().rgba(-5, 6), [1.0, 0.0, 0.0, 1.0]);
+        }
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), source_bytes, "committing contents does not overwrite the linked file");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn automation_smart_contents_checks_nested_reads_at_nontrivial_placements() {
+    let path = contents_file();
+    for (scale, psd_uuid, allowed) in [(1.0, false, true), (1.5, false, false), (1.5, true, true)] {
+        let mut inner = Document::new("inner", Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let source_path = if psd_uuid {
+            let linked =
+                photocraft_io::linked::LinkedFile { uuid: "nested-id".into(), file_name: "source.pcraft".into(), bytes: std::fs::read(&path).unwrap() };
+            inner.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(photocraft_io::linked::encode_linked_file(&linked))));
+            linked.uuid
+        } else {
+            path.to_string_lossy().into_owned()
+        };
+        let mut cache = Surface::new(inner.pixel_format());
+        cache.fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+        let nested =
+            Layer::new("nested", LayerContent::Smart(SmartObject::new(SmartSource::Linked { path: source_path }, Affine::IDENTITY, Some(cache.clone()))));
+        inner.layers.push(Layer::group("group", vec![nested]));
+        let mut parent = Document::new("parent", Size::new(8, 8), inner.mode, inner.depth);
+        parent.layers.push(Layer::new(
+            "outer",
+            LayerContent::Smart(SmartObject::new(
+                SmartSource::Embedded { file_name: "inner.pcraft".into(), bytes: Arc::new(encode_source(&inner).unwrap()) },
+                Affine { m: [scale, 0.0, 0.0, scale, 0.0, 0.0] },
+                Some(cache),
+            )),
+        ));
+        let mut s = Session::new();
+        s.add_document(parent, None);
+        s.authorize = Some(deny_contents_paths);
+        let before = s.active().unwrap().doc.clone();
+        let r = s.execute("layer.smartObjects.convertToLayers", json!({}));
+        if !allowed {
+            assert!(r.unwrap_err().to_string().contains("source path refused"));
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().revision, 1);
+        } else {
+            r.unwrap();
+            let sm = s
+                .active()
+                .unwrap()
+                .doc
+                .walk()
+                .into_iter()
+                .find_map(|(_, _, l)| match &l.content {
+                    LayerContent::Smart(sm) => Some(sm),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(sm.cache.as_ref().unwrap().rgba(1, 1), if psd_uuid { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] });
+        }
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn automation_smart_contents_malformed_embedded_sources_leave_documents_unchanged() {
+    for cmd in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
+        let mut s = session(8);
+        paint(&mut s);
+        let id = convert(&mut s);
+        s.edit("bad source", |doc, _| {
+            smart_mut(doc, LayerId(id))?.source = SmartSource::Embedded { file_name: "broken.psd".into(), bytes: Arc::new(b"8BPS".to_vec()) };
+            Ok(())
+        })
+        .unwrap();
+        s.authorize = Some(deny_contents_paths);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        assert!(s.execute(cmd, json!({})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert_eq!((s.documents().len(), s.active().unwrap().revision), (1, revision));
+    }
 }
 
 #[test]

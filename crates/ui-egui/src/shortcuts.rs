@@ -252,6 +252,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::menu_nav::is_open(ctx) {
         return;
     }
+    let symmetry_editing = app.ui.symmetry_transform.is_some();
+    crate::symmetry_ui::track(app, ctx);
+    if symmetry_editing && (app.ui.symmetry_transform.is_none() || egui::Popup::is_any_open(ctx)) {
+        return;
+    }
     // Liquify is a full-window custom dialog with focusable sliders. egui can therefore claim
     // keyboard input before the distortion-mode handler below runs. Give Liquify's local
     // shortcuts first refusal (Undo, brush size, tool keys), but never steal keys from text edits.
@@ -290,6 +295,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    // Crop tool with a pending frame: arrows nudge it (⇧ ×10) and X swaps its orientation, before
+    // the selection / layer nudge and the X colour swap (#1919).
+    if focus == Focus::None && crate::crop_ui::keys(app, ctx) {
+        return;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return;
@@ -304,6 +314,24 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.status_error = true;
         }
         return;
+    }
+    // A Pen path's points are uncommitted gesture state, not History entries (#1466).
+    // Intercept Cmd/Ctrl+Z before the normal Edit › Undo shortcut, as well as unmodified
+    // Backspace/Delete. Once the last anchor is removed, regular Undo works again.
+    if app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+        let mods = ctx.input(|i| i.modifiers);
+        let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+            .and_then(|shortcut| parse(&shortcut))
+            .is_some_and(|shortcut| consume(ctx, &shortcut));
+        let remove = !mods.command
+            && !mods.ctrl
+            && !mods.shift
+            && !mods.alt
+            && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete));
+        if command_undo || remove {
+            crate::vector_ui::pen_undo_last_point(app);
+            return;
+        }
     }
     // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
     if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -342,6 +370,14 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if editing {
         return;
     }
+    // Crop tool showing a box: O cycles its overlay, ⇧O the overlay's orientation (#1919).
+    if crate::crop_overlay::keys(app, ctx) {
+        return;
+    }
+    // ... and H toggles Show Cropped Area.
+    if crate::crop_shield::keys(app, ctx) {
+        return;
+    }
     // Single-key tools (no modifiers). D and X (`tools.defaultColors` / `tools.swapColors`) and the
     // brush keys [ ] ⇧[ ⇧] (`tools.decreaseBrushSize`…) are commands, dispatched above with any
     // Keyboard Shortcuts override.
@@ -370,8 +406,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
-            app.ui.crop_rect = None;
-            app.crop.drag = None;
+            crate::crop_ui::cancel(app);
             return;
         }
     }
@@ -399,6 +434,70 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pen_command_z_and_backspace_retract_points_before_document_undo() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+        app.ui.tool = crate::state::Tool::Pen;
+        app.run("shape.create", serde_json::json!({"kind": "rect", "rect": [10, 10, 40, 40], "fill": "#ff0000"})).unwrap();
+        let history = app.session.active().unwrap().history.past_len();
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0)] {
+            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_up(&mut app);
+        }
+        let ctx = egui::Context::default();
+        let press = |app: &mut PhotocraftApp, key, modifiers| {
+            let raw = egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            };
+            ctx.begin_pass(raw);
+            handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+
+        press(&mut app, Key::Z, Modifiers::COMMAND);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 2);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        press(&mut app, Key::Backspace, Modifiers::NONE);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 1);
+        press(&mut app, Key::Delete, Modifiers::NONE);
+        assert!(app.ui.pen.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        // No unfinished Pen points remain, so regular Undo can now affect the document.
+        app.run("edit.undo", serde_json::json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), history - 1);
+    }
+
+    #[test]
+    fn pen_custom_undo_binding_and_menu_retract_pending_points() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+        app.ui.tool = crate::state::Tool::Pen;
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0)] {
+            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_up(&mut app);
+        }
+        app.session.prefs.edit(|p| p.shortcuts.insert("edit.undo".into(), "Cmd+Shift+Y".into()));
+        let ctx = egui::Context::default();
+        let press = |app: &mut PhotocraftApp, key: Key, modifiers: Modifiers| {
+            ctx.begin_pass(egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            });
+            handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+        // Once rebound, the default key must no longer intercept pending points.
+        press(&mut app, Key::Z, Modifiers::COMMAND);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 2);
+        press(&mut app, Key::Y, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.len(), 1);
+        assert!(crate::menus::is_enabled(&app, "edit.undo"));
+        crate::menus::invoke(&mut app, &ctx, "edit.undo", serde_json::json!({})).unwrap();
+        assert!(app.ui.pen.is_none());
+    }
 
     #[test]
     fn parses_registry_shortcuts() {

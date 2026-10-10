@@ -1,9 +1,12 @@
 //! OpenEXR via the pure-Rust `exr` crate: F16/F32, Y/YA/RGB/RGBA channels,
-//! lossless compression. Reads the first valid layer at full resolution;
-//! pixel data is taken from the data window.
+//! lossless compression. Multi-part files (a Maya/Arnold render writes one part
+//! per AOV) open the part that looks most like a colour image, with a warning
+//! naming how many parts exist; [`info`] lists every part and [`decode_part`]
+//! decodes a chosen one. Pixel data is taken from the data window.
 
 use std::io::Cursor;
 
+use exr::meta::MetaData;
 use exr::prelude::{
     AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, Layer, LayerAttributes, LineOrder, ReadChannels, ReadLayers, WritableImage, read,
 };
@@ -12,7 +15,7 @@ use half::f16;
 use crate::Format;
 use crate::error::CodecError;
 use crate::fidelity::Plan;
-use crate::image::{ChannelLayout, Image, SampleType};
+use crate::image::{ChannelLayout, DecodeWarning, ExrChannelInfo, ExrPartInfo, Image, SampleType, base_channel_name};
 use crate::options::{EncodeOptions, ExrCompression, Limits};
 
 const F: Format = Format::OpenExr;
@@ -30,40 +33,78 @@ fn map_exr(e: exr::error::Error) -> CodecError {
     }
 }
 
-/// Strip an optional `layer.` prefix from a channel name.
-fn base_name(name: &str) -> &str {
-    name.rsplit('.').next().unwrap_or(name)
-}
-
-pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
-    // Check declared sizes before any pixel allocation.
-    let meta = exr::meta::MetaData::read_from_buffered(Cursor::new(bytes), false).map_err(err)?;
+/// Read the headers without the `exr` crate's validation (it rejects deep parts outright),
+/// after checking every part's declared size against the limits, before any pixel allocation.
+fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData, CodecError> {
+    let meta = MetaData::read_from_buffered(Cursor::new(bytes), false).map_err(err)?;
+    // Flat decoding reads every part at once, so the parts' sizes are also capped together.
+    let mut total: u64 = 0;
     for header in meta.headers.iter() {
         let size = header.layer_size;
         let (w, h) = (u32::try_from(size.0).unwrap_or(u32::MAX), u32::try_from(size.1).unwrap_or(u32::MAX));
         let bpp = header.channels.list.len().max(1) as u64 * 4;
         limits.check_bytes(w, h, bpp)?;
+        total = total.saturating_add(u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bpp));
     }
-
-    // Deep parts are rejected by the `exr` crate's reader; walk their chunks ourselves and
-    // composite the samples into the flat image (a warning says what was lost).
-    if meta.requirements.has_deep_data {
-        let deep = super::deep_exr::decode_deep(&meta, bytes, limits)?;
-        return super::deep_exr::flatten(&deep);
+    if total > limits.max_alloc {
+        return Err(CodecError::LimitExceeded(format!("{total} bytes across {} parts exceed max_alloc {}", meta.headers.len(), limits.max_alloc)));
     }
+    Ok(meta)
+}
 
-    let image = read()
-        .no_deep_data()
-        .largest_resolution_level()
-        .all_channels()
-        .first_valid_layer()
-        .all_attributes()
-        .from_buffered(Cursor::new(bytes))
-        .map_err(map_exr)?;
-    let layer = &image.layer_data;
+/// Header facts of one part, in file order.
+fn part_info(index: usize, header: &exr::meta::header::Header) -> ExrPartInfo {
+    let (w, h) = (u32::try_from(header.layer_size.0).unwrap_or(u32::MAX), u32::try_from(header.layer_size.1).unwrap_or(u32::MAX));
+    let sample = |t: exr::meta::attribute::SampleType| match t {
+        exr::meta::attribute::SampleType::F16 => SampleType::F16,
+        // U32 channels (Arnold ID buffers) are listed as F32: exact up to 2^24.
+        exr::meta::attribute::SampleType::F32 | exr::meta::attribute::SampleType::U32 => SampleType::F32,
+    };
+    ExrPartInfo {
+        index,
+        name: header.own_attributes.layer_name.as_ref().map(|n| n.to_string()),
+        view: header.own_attributes.view_name.as_ref().map(|v| v.to_string()),
+        width: w,
+        height: h,
+        deep: header.deep,
+        tiled: matches!(header.blocks, exr::meta::BlockDescription::Tiles(_)),
+        channels: header.channels.list.iter().map(|c| ExrChannelInfo { name: c.name.to_string(), sample: sample(c.sample_type) }).collect(),
+    }
+}
+
+/// Lists every part of the file (header facts only, no pixel data): what a multi-part
+/// chooser offers, and what [`decode_part`] takes an index into.
+pub(crate) fn info(bytes: &[u8], limits: &Limits) -> Result<Vec<ExrPartInfo>, CodecError> {
+    let meta = read_meta(bytes, limits)?;
+    Ok(meta.headers.iter().enumerate().map(|(i, h)| part_info(i, h)).collect())
+}
+
+/// The part plain [`decode`] opens: the highest [`ExrPartInfo::color_rank`], earliest wins.
+fn pick_part(meta: &MetaData) -> usize {
+    let mut best = 0;
+    let mut best_rank = meta.headers.first().map_or(0, |h| part_info(0, h).color_rank());
+    for (i, header) in meta.headers.iter().enumerate().skip(1) {
+        let rank = part_info(i, header).color_rank();
+        if rank > best_rank {
+            best = i;
+            best_rank = rank;
+        }
+    }
+    best
+}
+
+/// Decode the flat layers via the `exr` crate (it handles every flat compression) and
+/// return the requested part's layer.
+fn read_layer(bytes: &[u8], index: usize) -> Result<Layer<AnyChannels<FlatSamples>>, CodecError> {
+    let image =
+        read().no_deep_data().largest_resolution_level().all_channels().all_layers().all_attributes().from_buffered(Cursor::new(bytes)).map_err(map_exr)?;
+    image.layer_data.into_iter().nth(index).ok_or_else(|| err(format!("part {index} is missing from the file")))
+}
+
+fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>) -> Result<Image, CodecError> {
     let (w, h) = (layer.size.0, layer.size.1);
     let channels = &layer.channel_data.list;
-    let find = |n: &str| channels.iter().find(|c| base_name(c.name.to_string().as_str()) == n);
+    let find = |n: &str| channels.iter().find(|c| base_channel_name(&c.name.to_string()) == n);
     let (color, layout): (Vec<_>, ChannelLayout) = if let (Some(r), Some(g), Some(b)) = (find("R"), find("G"), find("B")) {
         match find("A") {
             Some(a) => (vec![r, g, b, a], ChannelLayout::Rgba),
@@ -106,6 +147,38 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     };
     debug_assert_eq!(img.sample_type(), sample);
     Ok(img)
+}
+
+pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
+    let meta = read_meta(bytes, limits)?;
+
+    // Deep parts are rejected by the `exr` crate's reader; walk their chunks ourselves and
+    // composite the samples into the flat image (a warning says what was lost).
+    if meta.requirements.has_deep_data {
+        let deep = super::deep_exr::decode_deep(&meta, bytes, limits)?;
+        return super::deep_exr::flatten(&deep);
+    }
+
+    let pick = pick_part(&meta);
+    let mut img = layer_to_image(&read_layer(bytes, pick)?)?;
+    if meta.headers.len() > 1 {
+        let total = u32::try_from(meta.headers.len()).ok();
+        img.warnings.push(DecodeWarning::MoreParts { total });
+    }
+    Ok(img)
+}
+
+/// Decode one part of a multi-part file by its index into [`info`]'s list. A file with
+/// deep parts is not mixed: the deep decoder composites those instead.
+pub(crate) fn decode_part(bytes: &[u8], index: usize, limits: &Limits) -> Result<Image, CodecError> {
+    let meta = read_meta(bytes, limits)?;
+    if meta.requirements.has_deep_data {
+        return Err(CodecError::unsupported(F, "this file has deep parts; the deep decoder composites those (mixing flat and deep parts is not supported)"));
+    }
+    if index >= meta.headers.len() {
+        return Err(err(format!("part index {index} is out of range ({} parts)", meta.headers.len())));
+    }
+    layer_to_image(&read_layer(bytes, index)?)
 }
 
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {

@@ -32,6 +32,15 @@ Tool execution failures return `isError:true`. A worker panic becomes a tool err
 existing poisoned-session recovery keeps serving. Invalid JSON lines receive `-32700` with
 `id:null`; the next line is still processed.
 
+Embedded Smart Objects support `command_run` with `layer.smartObjects.editContents` and
+`layer.smartObjects.convertToLayers`, optionally targeting `params.layer`. Use
+`layer.smartObjects.saveContents` in an opened contents document to update its parent in memory;
+save nested contents from the inside outward, then `doc_save` the parent to a scoped path.
+`doc_save` on a contents document exports that document rather than updating its parent.
+No filesystem root is needed for the in-memory commands. External linked sources that require
+a file read remain refused. See the [control policy](control-protocol.md#engine-commands)
+for the shared restrictions.
+
 `photocraft://document` and `photocraft://commands` return live JSON matching `doc_inspect`
 and `command_list`. Resource reads are uncached; tool/resource catalogs are private and cached
 for ten minutes. List/read responses include the MCP 2026-07-28 result/cache fields.

@@ -169,6 +169,63 @@ async fn command_list_filters() {
     client.cancel().await.unwrap();
 }
 
+/// Constructs strict tool-schema validators reject: a `$ref` / `$defs`, or a boolean in a schema
+/// position (`items: true`), anywhere in `schema`.
+fn strict_schema_problems(path: &str, schema: &Value, out: &mut Vec<String>) {
+    let Value::Object(m) = schema else {
+        if schema.is_boolean() {
+            out.push(format!("{path}: boolean schema {schema}"));
+        }
+        return;
+    };
+    for key in ["$ref", "$defs", "definitions"] {
+        if m.contains_key(key) {
+            out.push(format!("{path}: {key}"));
+        }
+    }
+    if let Some(Value::Object(props)) = m.get("properties") {
+        for (k, v) in props {
+            strict_schema_problems(&format!("{path}.properties.{k}"), v, out);
+        }
+    }
+    for key in ["items", "not"] {
+        if let Some(v) = m.get(key) {
+            strict_schema_problems(&format!("{path}.{key}"), v, out);
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        for (i, v) in m.get(key).and_then(Value::as_array).into_iter().flatten().enumerate() {
+            strict_schema_problems(&format!("{path}.{key}[{i}]"), v, out);
+        }
+    }
+    if let Some(v) = m.get("additionalProperties").filter(|v| v.is_object()) {
+        strict_schema_problems(&format!("{path}.additionalProperties"), v, out);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tool_schemas_pass_strict_validators() {
+    // #1782: `ui_pointer`'s `items: true` and `command_batch`'s `$ref`/`$defs` made strict
+    // providers (e.g. Moonshot via Volcano Ark) reject the whole request.
+    let client = connect(PhotocraftMcp::headless()).await;
+    let tools = client.list_all_tools().await.unwrap();
+    let mut problems = Vec::new();
+    for t in &tools {
+        strict_schema_problems(&t.name, &Value::Object((*t.input_schema).clone()), &mut problems);
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    let schema = |name: &str| Value::Object((*tools.iter().find(|t| t.name == name).unwrap().input_schema).clone());
+    // The inlined shapes still describe the arguments.
+    let event = &schema("ui_pointer")["properties"]["events"]["items"];
+    assert_eq!(event["type"], "object", "{event}");
+    for k in ["kind", "x", "y", "pressure"] {
+        assert!(event["properties"][k].is_object(), "ui_pointer event field {k}: {event}");
+    }
+    let step = &schema("command_batch")["properties"]["steps"]["items"];
+    assert!(step["properties"]["id"]["description"].as_str().is_some_and(|d| d.contains("layer.new.layer")), "{step}");
+    client.cancel().await.unwrap();
+}
+
 /// The backticked examples in every `id` property description of a schema.
 fn id_examples(schema: &Value, out: &mut Vec<String>) {
     match schema {
@@ -506,6 +563,68 @@ async fn filesystem_policy_rejects_absolute_and_escaping_paths_before_effects() 
     assert!(text(&response).contains("ambient filesystem paths"), "{}", text(&response));
     client.cancel().await.unwrap();
     cleanup(&base);
+}
+
+/// The template workflow stays in memory, including saving nested contents back to the parent.
+#[tokio::test(flavor = "multi_thread")]
+async fn embedded_smart_objects_can_be_edited_saved_and_unpacked_without_file_authority() {
+    let client = connect(PhotocraftMcp::headless()).await;
+    let run = async |id: &str, params: Value| json_of(&call(&client, "command_run", json!({"id": id, "params": params})).await);
+    json_of(&call(&client, "doc_new", json!({"width": 16, "height": 12, "background": "white"})).await);
+    run("layer.smartObjects.convertToSmartObject", json!({})).await;
+    let outer = run("layer.smartObjects.convertToSmartObject", json!({})).await["layer"].clone();
+    // An explicit target works even with a regular pixel layer selected.
+    run("layer.new.layer", json!({"name": "Other layer"})).await;
+    assert_eq!(run("layer.smartObjects.editContents", json!({"layer": outer})).await["document"], 1);
+    assert_eq!(run("layer.smartObjects.editContents", json!({})).await["document"], 2);
+    run("layer.setProps", json!({"name": "Edited photo", "opacity": 0.5})).await;
+    assert_eq!(run("layer.smartObjects.saveContents", json!({})).await["updated"], true);
+    json_of(&call(&client, "doc_close", json!({})).await);
+    run("layer.smartObjects.saveContents", json!({})).await;
+    json_of(&call(&client, "doc_close", json!({})).await);
+    assert_eq!(json_of(&call(&client, "session_list", json!({})).await)["documents"].as_array().unwrap().len(), 1);
+
+    // Reopening the saved nested source proves both in-memory parent updates survived closing.
+    run("layer.smartObjects.editContents", json!({"layer": outer})).await;
+    run("layer.smartObjects.editContents", json!({})).await;
+    let doc = json_of(&call(&client, "doc_inspect", json!({})).await);
+    assert_eq!(doc["layers"][0]["name"], "Edited photo");
+    assert_eq!(doc["layers"][0]["opacity"], 0.5);
+    json_of(&call(&client, "doc_close", json!({})).await);
+    json_of(&call(&client, "doc_close", json!({})).await);
+    let unpacked = run("layer.smartObjects.convertToLayers", json!({"layer": outer})).await["layer"].clone();
+    run("layer.smartObjects.convertToLayers", json!({"layer": unpacked})).await;
+    let doc = json_of(&call(&client, "doc_inspect", json!({})).await);
+    assert!(doc["layers"].as_array().unwrap().iter().all(|l| l["kind"] == "Pixel"));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn smart_object_commands_refuse_real_linked_files_without_changing_the_session() {
+    use photocraft_engine::doc::{LayerContent, SmartSource};
+
+    let dir = tmp("linked-smart-object");
+    let original = write_image(&dir, "external.png", photocraft_codecs::Format::Png);
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
+    let layer = session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].clone();
+    let state = session.active_mut().unwrap();
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    smart.source = SmartSource::Linked { path: dir.join("external.png").to_string_lossy().into_owned() };
+    std::fs::write(dir.join("parent.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+    let client = connect(headless_in(&dir)).await;
+    json_of(&call(&client, "doc_open", json!({"path": "parent.pcraft"})).await);
+    let before = json_of(&call(&client, "doc_inspect", json!({})).await);
+    for id in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
+        let response = call(&client, "command_run", json!({"id": id, "params": {"layer": layer}})).await;
+        assert_eq!(response.is_error, Some(true));
+        assert!(text(&response).contains("ambient filesystem paths"), "{}", text(&response));
+        assert_eq!(json_of(&call(&client, "doc_inspect", json!({})).await), before);
+        assert_eq!(json_of(&call(&client, "session_list", json!({})).await)["documents"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(std::fs::read(dir.join("external.png")).unwrap(), original);
+    client.cancel().await.unwrap();
+    cleanup(&dir);
 }
 
 // ---------------------------------------------------------------------------

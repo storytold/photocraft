@@ -329,6 +329,10 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => None,
     };
+    if let Some(a) = crop_angle(p)? {
+        let rect = explicit.ok_or_else(|| bad("image.crop", "an `angle` needs an explicit `x`, `y`, `width` and `height`"))?;
+        return rotated_crop(s, rect, a, delete);
+    }
     // An explicit rectangle (the Crop tool) may extend past the canvas; a selection crop is clamped.
     let r = explicit
         .or_else(|| s.active().and_then(|d| d.doc.selection.as_ref().map(|sel| sel.content_bounds().intersect(&d.doc.bounds()))))
@@ -342,6 +346,62 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height() }))
+}
+
+/// The largest crop angle accepted (degrees), as for Image Rotation › Arbitrary.
+const MAX_CROP_ANGLE: f64 = 3600.0;
+
+/// `image.crop`'s optional `angle` in degrees, normalised to (-180, 180]; `None` when it is absent,
+/// null or (after normalising) zero, so an unrotated crop takes the plain, resampling-free path.
+fn crop_angle(p: &Value) -> Result<Option<f64>> {
+    let a = match p.get("angle") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(v) => v.as_f64().ok_or_else(|| bad("image.crop", "`angle` must be a number of degrees"))?,
+    };
+    if !a.is_finite() || a.abs() > MAX_CROP_ANGLE {
+        return Err(bad("image.crop", format!("`angle` must be a finite number of degrees within ±{MAX_CROP_ANGLE}")));
+    }
+    let a = a.rem_euclid(360.0);
+    let a = if a > 180.0 { a - 360.0 } else { a };
+    Ok((a.abs() >= 1e-9).then_some(a))
+}
+
+/// The Crop tool's rotated frame: `r` (document px) turned clockwise on screen by `angle` degrees
+/// about its centre. The document is rotated counter-clockwise by `angle` (Image Rotation ›
+/// Arbitrary: the canvas grows to fit, the Background fills what the rotation uncovers with the
+/// background colour, other layers keep transparency there and every pixel of theirs), which makes
+/// the frame upright, then cropped to it (`deleteCroppedPixels` as for an unrotated crop), all in
+/// one undo step.
+fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool) -> Result<Value> {
+    const CMD: &str = "image.crop";
+    let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
+    let (w, h) = (f64::from(r.width()), f64::from(r.height()));
+    let (cx, cy) = (f64::from(r.x0) + w / 2.0, f64::from(r.y0) + h / 2.0);
+    // Where the frame's centre lands: the rotation `image.rotation.arbitrary` applies, clockwise
+    // by `-angle` (x' = c·x − s·y, y' = s·x + c·y) about the old and new canvas centres.
+    let new = crate::mode_cmds::rotated_size(size, -angle);
+    let (sn, cs) = (-angle).to_radians().sin_cos();
+    let (dx, dy) = (cx - f64::from(size.width) / 2.0, cy - f64::from(size.height) / 2.0);
+    let (ncx, ncy) = (f64::from(new.width) / 2.0 + cs * dx - sn * dy, f64::from(new.height) / 2.0 + sn * dx + cs * dy);
+    let (x, y) = ((ncx - w / 2.0).round(), (ncy - h / 2.0).round());
+    let far = || bad(CMD, "the rotated frame is outside the 32-bit coordinate range");
+    let limit = f64::from(i32::MAX / 2);
+    if !(x.is_finite() && y.is_finite()) || x.abs() > limit || y.abs() > limit {
+        return Err(far());
+    }
+    let (x, y) = (x as i32, y as i32);
+    let end = |o: i32, len: u32| i32::try_from(len).ok().and_then(|l| o.checked_add(l));
+    let (Some(x1), Some(y1)) = (end(x, r.width()), end(y, r.height())) else { return Err(far()) };
+    let target = Rect::new(x, y, x1, y1);
+    crate::analysis_cmds::compound(s, "Crop", |s| {
+        crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
+        s.edit("Crop", |doc, _| {
+            crop_doc(doc, CMD, target, delete)?;
+            doc.selection = None;
+            Ok(())
+        })
+    })?;
+    Ok(json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "angle": angle }))
 }
 
 /// Image → Trim.
@@ -451,7 +511,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             canvas_size
         ),
-        spec!("image.crop", "Crop", ["Image"], r##"{"x":px,"y":px,"width":px,"height":px,"deleteCroppedPixels":bool=true}"##, has_doc, crop),
+        spec!(
+            "image.crop",
+            "Crop",
+            ["Image"],
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true}"##,
+            has_doc,
+            crop
+        ),
         spec!(
             "image.trim",
             "Trim…",
@@ -738,6 +805,143 @@ mod tests {
         s.execute("image.crop", json!({"x": -10, "y": 0, "width": 60, "height": 20})).unwrap();
         assert_eq!(doc(&s).size, Size::new(60, 20));
         assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 5), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    /// A document (`mode`, `depth`) with a white Background and a layer holding a red pixel at
+    /// (12, 8) and a blue one at (30, 3).
+    fn marked(mode: &str, depth: u32) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 20, "mode": mode, "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        for (x, y, c) in [(12, 8, "#ff0000"), (30, 3, "#0000ff")] {
+            s.execute("select.rect", json!({"x": x, "y": y, "width": 1, "height": 1})).unwrap();
+            s.execute("edit.fill", json!({"color": c})).unwrap();
+        }
+        s.execute("select.deselect", json!({})).unwrap();
+        s
+    }
+
+    fn layer_rgba(s: &Session, layer: usize, x: i32, y: i32) -> [f32; 4] {
+        doc(s).layers[layer].surface().unwrap().rgba(x, y)
+    }
+
+    /// #1792: a frame turned 90° clockwise crops what Image Rotation › Arbitrary 90° CCW and a
+    /// plain crop give, in one undo step that restores the document, at 8, 16 and 32 bits.
+    #[test]
+    fn crop_at_90_degrees_is_rotate_then_crop_in_one_step() {
+        for depth in [8, 16, 32] {
+            let mut s = marked("rgb", depth);
+            let before = doc(&s).clone();
+            let past = s.active().unwrap().history.past_len();
+            // The 10 × 20 frame at (10, 0), turned 90° about (15, 10), covers x 5..25, y 5..15.
+            let r = s.execute("image.crop", json!({"x": 10, "y": 0, "width": 10, "height": 20, "angle": 90})).unwrap();
+            assert_eq!(r["angle"], json!(90.0), "{depth}");
+            assert_eq!(doc(&s).size, Size::new(10, 20), "{depth}");
+            assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{depth}: one undo step");
+            // (12, 8) is 2.5 left of and 1.5 above the centre: in the upright frame, 1.5 left of
+            // and 2.5 below its centre (5, 10).
+            let red = layer_rgba(&s, 1, 3, 12);
+            assert!(red[0] > 0.9 && red[1] < 0.1 && red[3] > 0.9, "{depth}: {red:?}");
+            let mut reference = marked("rgb", depth);
+            reference.execute("image.rotation.arbitrary", json!({"angle": 90, "direction": "ccw"})).unwrap();
+            reference.execute("image.crop", json!({"x": 5, "y": 15, "width": 10, "height": 20})).unwrap();
+            for l in 0..2 {
+                for y in 0..20 {
+                    for x in 0..10 {
+                        let (a, b) = (layer_rgba(&s, l, x, y), layer_rgba(&reference, l, x, y));
+                        assert!(a.iter().zip(b).all(|(p, q)| (p - q).abs() < 1e-3), "{depth} layer {l} ({x}, {y}): {a:?} vs {b:?}");
+                    }
+                }
+            }
+            s.execute("edit.undo", json!({})).unwrap();
+            let d = doc(&s);
+            assert_eq!(d.size, before.size, "{depth}");
+            assert_eq!(d.depth, before.depth);
+            for y in 0..20 {
+                for x in 0..40 {
+                    assert_eq!(layer_rgba(&s, 1, x, y), before.layers[1].surface().unwrap().rgba(x, y), "{depth} undo at ({x}, {y})");
+                }
+            }
+        }
+    }
+
+    /// A slightly turned frame keeps its own size, the pixel under its centre and the Background's
+    /// colour; the turn's sign matters (a counter-clockwise frame is a negative angle).
+    #[test]
+    fn crop_at_a_small_angle_keeps_the_frame_size_in_every_mode() {
+        for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("grayscale", 16), ("cmyk", 8), ("lab", 16)] {
+            for angle in [5.0, -7.5, 365.0] {
+                let mut s = marked(mode, depth);
+                s.execute("image.crop", json!({"x": 2, "y": 1, "width": 21, "height": 15, "angle": angle})).unwrap();
+                let d = doc(&s);
+                assert_eq!(d.size, Size::new(21, 15), "{mode} {depth} {angle}");
+                assert_eq!(d.depth.bytes() * 8, depth as usize, "{mode} {depth}");
+                assert_eq!(format!("{:?}", d.mode).to_lowercase(), mode, "{mode} {depth}");
+                assert_eq!(d.layers.len(), 2);
+                // The frame's centre (12.5, 8.5) is the red pixel (the layer's only paint nearby);
+                // it stays at the centre, its colour kept.
+                let want = layer_rgba(&marked(mode, depth), 1, 12, 8);
+                let red = layer_rgba(&s, 1, 10, 7);
+                assert!(red[3] > 0.5 && (0..3).all(|c| (red[c] - want[c]).abs() < 0.2), "{mode} {depth} {angle}: {red:?} vs {want:?}");
+                // The Background stays opaque white inside the canvas it came from.
+                let bg = layer_rgba(&s, 0, 10, 7);
+                assert!(bg.iter().all(|v| (v - 1.0).abs() < 0.02), "{mode} {depth} {angle}: {bg:?}");
+            }
+        }
+    }
+
+    /// Angle 0 (or a whole turn) is the plain crop: no resampling, the same document.
+    #[test]
+    fn crop_at_angle_zero_is_the_plain_crop() {
+        let mut plain = marked("rgb", 16);
+        plain.execute("image.crop", json!({"x": 3, "y": 2, "width": 30, "height": 10})).unwrap();
+        for angle in [json!(0), json!(0.0), json!(360), json!(-720), json!(null)] {
+            let mut s = marked("rgb", 16);
+            let r = s.execute("image.crop", json!({"x": 3, "y": 2, "width": 30, "height": 10, "angle": angle})).unwrap();
+            assert!(r.get("angle").is_none(), "{angle}: {r}");
+            assert_eq!(doc(&s).size, Size::new(30, 10));
+            for l in 0..2 {
+                for y in 0..10 {
+                    for x in 0..30 {
+                        assert_eq!(layer_rgba(&s, l, x, y), layer_rgba(&plain, l, x, y), "{angle} layer {l} ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bad angles fail cleanly, before anything changes.
+    #[test]
+    fn crop_angle_rejects_bad_values_without_changing_the_document() {
+        let bad = [
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": "NaN"}),
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": "12"}),
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": [1]}),
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": true}),
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": 1e308}),
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": -3601}),
+            json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": f64::MAX}),
+            // An angle needs the frame: a selection crop has none.
+            json!({"angle": 10}),
+            json!({"x": 0, "y": 0, "width": 0, "height": 10, "angle": 10}),
+            json!({"x": 0, "y": 0, "width": 300_001, "height": 10, "angle": 10}),
+            json!({"x": i32::MAX - 5, "y": 0, "width": 10, "height": 10, "angle": 10}),
+        ];
+        for p in bad {
+            let mut s = marked("rgb", 8);
+            s.execute("select.all", json!({})).unwrap();
+            let before = doc(&s).clone();
+            let past = s.active().unwrap().history.past_len();
+            assert!(s.execute("image.crop", p.clone()).is_err(), "{p}");
+            assert_eq!(doc(&s).size, before.size, "{p}");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{p}");
+        }
+        // Far-off but representable frames turn and crop without panicking.
+        for (x, y) in [(-1_000_000, 0), (0, 1_000_000), (i32::MIN / 4, i32::MAX / 4)] {
+            let mut s = marked("rgb", 8);
+            s.execute("image.crop", json!({"x": x, "y": y, "width": 4, "height": 3, "angle": 33.3})).unwrap();
+            assert_eq!(doc(&s).size, Size::new(4, 3));
+        }
     }
 
     #[test]

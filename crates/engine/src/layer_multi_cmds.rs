@@ -568,13 +568,36 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         && *duotone == b.duotone
 }
 
+/// Whether `a` and `b` composite to the same pixels: they differ at most in fields the
+/// compositor never reads (selection, guides, paths, names, …), by the same classification as
+/// [`step_damage`] but without computing any bounds. Cheap: pixels compare by tile pointer.
+/// Conservative (`false`) past a nesting depth no real document reaches.
+pub fn same_pixels(a: &Document, b: &Document) -> bool {
+    fn walk(xs: &[Layer], ys: &[Layer], depth: usize) -> bool {
+        depth < 256
+            && xs.len() == ys.len()
+            && xs.iter().zip(ys).all(|(x, y)| {
+                x.video.is_none()
+                    && y.video.is_none()
+                    && layer_pixels_equal(x, y)
+                    && match (x.children(), y.children()) {
+                        (Some(xc), Some(yc)) => walk(xc, yc, depth + 1),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            })
+    }
+    doc_pixels_equal(a, b) && walk(&a.layers, &b.layers, 0)
+}
+
 /// Pixels a single history step can have changed between `a` and `b` (the documents on either
 /// side of an undo or redo): the union of the change bounds of every layer whose pixels
 /// differ, so undoing a local edit recomposites only that area instead of the whole canvas.
 /// `None` (composite everything, as before) when the step touched anything the layer walk
 /// cannot bound: document-level fields the compositor reads (canvas size, mode, depth,
 /// profile, global light, patterns, channels, palettes), the layer structure (order,
-/// additions, removals, kind changes), layer properties that reach outside their own bounds
+/// additions, removals, kind changes; adding or removing a layer that draws nothing, see
+/// [`inert_at`], is no change), layer properties that reach outside their own bounds
 /// (clipping, excluded channels — what `layer.setProps` already reports as unbounded), and
 /// video layers.
 pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
@@ -582,11 +605,26 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
         return None;
     }
     fn walk(xs: &[Layer], ys: &[Layer], a: &Document, b: &Document, out: &mut Rect) -> bool {
-        if xs.len() != ys.len() {
-            return false;
-        }
-        for (x, y) in xs.iter().zip(ys) {
-            if x.id != y.id || x.video.is_some() || y.video.is_some() {
+        // Pair the layers by id, stepping over layers only one side has when they draw nothing
+        // (a new empty layer or group, #1771): adding or deleting one changes no pixels.
+        let (mut i, mut j) = (0, 0);
+        loop {
+            let (x, y) = match (xs.get(i), ys.get(j)) {
+                (None, None) => return true,
+                (Some(x), Some(y)) if x.id == y.id => (x, y),
+                _ if inert_at(ys, j) => {
+                    j += 1;
+                    continue;
+                }
+                _ if inert_at(xs, i) => {
+                    i += 1;
+                    continue;
+                }
+                _ => return false,
+            };
+            i += 1;
+            j += 1;
+            if x.video.is_some() || y.video.is_some() {
                 return false;
             }
             // Clipping and channel exclusion change how *other* layers render, outside this
@@ -611,10 +649,44 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                 _ => return false,
             }
         }
-        true
     }
     let mut out = Rect::EMPTY;
     if walk(&a.layers, &b.layers, a, b, &mut out) { Some(out) } else { None }
+}
+
+/// Whether `layers[k]` draws nothing wherever it sits, so adding or removing it leaves the
+/// composite as it was: an empty pixel layer (no tiles, transparent default) or an empty group,
+/// in a Normal or Pass Through blend with no mask, vector mask, effects or Advanced Blending.
+/// A clipping base that would gain or lose the clipped layers above it is not inert.
+fn inert_at(layers: &[Layer], k: usize) -> bool {
+    let Some(l) = layers.get(k) else { return false };
+    let empty = match &l.content {
+        LayerContent::Raster(s) => s.tile_count() == 0 && s.format().alpha && s.default_bytes().iter().all(|b| *b == 0),
+        LayerContent::Group(g) => g.children.is_empty() && g.artboard.is_none(),
+        _ => false,
+    };
+    empty
+        && matches!(l.blend, photocraft_doc::BlendMode::Normal | photocraft_doc::BlendMode::PassThrough)
+        && l.mask.is_none()
+        && l.vector_mask.is_none()
+        && !photocraft_compose::effects::has_effects(l)
+        && l.fill_cache.is_none()
+        && l.video.is_none()
+        && l.advanced == photocraft_doc::AdvancedBlending::default()
+        && (l.clipped || layers.get(k + 1).is_none_or(|above| !above.clipped))
+}
+
+/// Report that adding layer `id` to the active document changed no pixels when it draws
+/// nothing ([`inert_at`]), so the canvas doesn't recomposite every layer for it (#1771). Looks
+/// only at the new layer and its neighbour, never at other layers' tiles.
+pub(crate) fn note_inert_insert(s: &mut Session, id: LayerId) {
+    let Some(st) = s.active_mut() else { return };
+    let Some(path) = st.doc.path_of(id) else { return };
+    let Some((&k, parent)) = path.split_last() else { return };
+    let siblings = if parent.is_empty() { Some(st.doc.layers.as_slice()) } else { st.doc.layer_at(parent).and_then(Layer::children) };
+    if siblings.is_some_and(|sib| inert_at(sib, k)) {
+        st.last_damage = Some(Rect::EMPTY);
+    }
 }
 
 /// Content bounds used by Align/Distribute: the layer's pixels (type and shape layers use their
@@ -1275,6 +1347,83 @@ mod tests {
         // Bad params still fail cleanly.
         assert!(s.execute("layer.setProps", json!({"layer": 999_999, "visible": true})).is_err());
         assert!(s.execute("layer.translate", json!({"layer": 999_999, "dx": 1})).is_err());
+    }
+
+    /// #1771: a new empty layer or group changes no pixels, so it (and undoing or redoing it)
+    /// must not make the canvas recomposite every layer of the document.
+    #[test]
+    fn new_empty_layers_and_groups_damage_nothing() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let a = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+            let composite = |s: &Session| photocraft_compose::render(doc(s), doc(s).bounds());
+            let shown = composite(&s);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::EMPTY), "{depth}-bit new layer");
+            assert_eq!(composite(&s), shown, "an empty layer changes no pixels");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::EMPTY), "{depth}-bit undo New Layer");
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::EMPTY), "{depth}-bit redo New Layer");
+            s.execute("layer.new.group", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::EMPTY), "{depth}-bit new group");
+            // Inside a group too.
+            let child = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+            let g = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+            s.execute("layer.select", json!({"layer": child})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::EMPTY), "{depth}-bit new layer in a group");
+            assert!(doc(&s).layer(LayerId(g)).and_then(Layer::children).is_some_and(|c| c.len() == 2));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::EMPTY));
+            // Undoing a step that painted still reports that area, not nothing.
+            s.execute("layer.select", json!({"layer": a.0})).unwrap();
+            s.execute("layer.translate", json!({"dx": 5, "dy": 0})).unwrap();
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(damage(&s), Some(Rect::new(10, 10, 25, 20)));
+        }
+    }
+
+    #[test]
+    fn new_layers_that_change_pixels_still_recomposite_everything() {
+        let mut s = session(8);
+        let base = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+        let clipped = rect_layer(&mut s, Rect::new(0, 0, 100, 80));
+        s.edit("green", |doc, _| {
+            doc.layer_mut(clipped).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 100, 80), &[0.0, 1.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": clipped.0, "clipped": true})).unwrap();
+        // A new layer between a clipping base and its clipped layer becomes their base.
+        s.execute("layer.select", json!({"layer": base.0})).unwrap();
+        let shown = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        s.execute("layer.new.layer", json!({})).unwrap();
+        assert_eq!(damage(&s), None);
+        assert_ne!(photocraft_compose::render(doc(&s), doc(&s).bounds()), shown);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(damage(&s), None);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(damage(&s), None);
+        // A step that adds a layer with pixels (Layer via Copy, paste…) is not inert either.
+        let before = doc(&s).clone();
+        let mut after = before.clone();
+        let mut l = Layer::raster("painted", after.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(1, 1, 2, 2), &[0.0, 1.0, 0.0, 1.0]);
+        after.insert_above(None, l);
+        assert_eq!(step_damage(&before, &after), None);
+        assert_eq!(step_damage(&after, &before), None);
+        // Nor, conservatively, an empty layer in another blend mode.
+        let mut styled = before.clone();
+        let mut l = Layer::raster("styled", styled.pixel_format());
+        l.blend = photocraft_doc::BlendMode::Multiply;
+        styled.insert_above(None, l);
+        assert_eq!(step_damage(&before, &styled), None);
+        // An empty layer in Normal mode is.
+        let mut plain = before.clone();
+        plain.insert_above(None, Layer::raster("plain", plain.pixel_format()));
+        assert_eq!(step_damage(&before, &plain), Some(Rect::EMPTY));
+        assert_eq!(step_damage(&plain, &before), Some(Rect::EMPTY));
     }
 
     #[test]

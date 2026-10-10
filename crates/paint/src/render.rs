@@ -97,8 +97,10 @@ fn prepare_pattern(b: &BrushSettings) -> Option<Arc<PatternImage>> {
     }
     let mut img = match &t.pattern {
         Pattern::Procedural { style, size, seed } => crate::procedural::pattern(*style, *size, *seed),
-        Pattern::Tile(g) if g.is_valid() => PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
-        Pattern::Tile(_) => return None,
+        p => match p.bitmap() {
+            Some(g) if g.is_valid() => PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
+            _ => return None,
+        },
     };
     let (br, ct) = (t.brightness.clamp(-1.0, 1.0), t.contrast.clamp(-1.0, 1.0));
     for v in &mut img.data {
@@ -121,8 +123,8 @@ pub(crate) fn rect_around(d: &Dab, reach: f32) -> Rect {
 impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
-        let mips = |t: &TipShape| match t {
-            TipShape::Sampled(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
+        let mips = |t: &TipShape| match t.bitmap() {
+            Some(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
             _ => None,
         };
         Self {
@@ -423,10 +425,24 @@ impl StrokeRenderer {
     /// Composite the union of this stroke and a mirrored pass as one stroke. This keeps
     /// overlapping dabs on a symmetry axis under one opacity ceiling at every bit depth.
     pub fn composite_union(&self, other: &Self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) -> Rect {
+        self.composite_union_many(std::iter::once(other), pre, target, selection, lock_transparency)
+    }
+
+    /// Combine all symmetry passes before applying brush opacity and selection once.
+    pub fn composite_union_many<'a>(
+        &self,
+        others: impl IntoIterator<Item = &'a Self>,
+        pre: &Surface,
+        target: &mut Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+    ) -> Rect {
         let mut merged = self.clone();
-        merged.cov.union_max(&other.cov);
-        if let (Some(to), Some(from)) = (&mut merged.dual, &other.dual) {
-            to.union_max(from);
+        for other in others {
+            merged.cov.union_max(&other.cov);
+            if let (Some(to), Some(from)) = (&mut merged.dual, &other.dual) {
+                to.union_max(from);
+            }
         }
         merged.composite(pre, target, selection, lock_transparency, true)
     }
@@ -499,6 +515,11 @@ impl StrokeRenderer {
         duals.clear();
         self.dab_buf = dabs;
         self.dual_buf = duals;
+    }
+
+    /// See [`DabGenerator::wants_time`].
+    pub fn wants_time(&self) -> bool {
+        self.generator.wants_time()
     }
 
     /// Feed input points (any chunking gives the same result).

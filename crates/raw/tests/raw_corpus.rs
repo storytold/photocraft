@@ -68,7 +68,9 @@ const WANTS: &[Want] = &[
         model: "DSC-RX0",
         size: (4832, 3224),
         cfa: [0, 1, 1, 2],
-        black: &[0.0],
+        // No readable BlackLevel tag: the cRAW fallback of 512 (#1902). The file's darkest
+        // samples sit near 800, so this body's real level is still to be read.
+        black: &[512.0],
         white: [16301.0; 3],
     },
     // The G9's high-resolution mode: a 10480 × 7794 sensor cropped to 10368 × 7776.

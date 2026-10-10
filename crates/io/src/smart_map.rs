@@ -372,7 +372,7 @@ fn adjustments(p: &J, curves: bool) -> Result<Value, String> {
     let allowed: &[&str] =
         if curves { &["points", "red", "green", "blue"] } else { &["inBlack", "inWhite", "gamma", "outBlack", "outWhite", "red", "green", "blue"] };
     if let Some(k) = obj.keys().find(|k| !is_meta(k) && !allowed.contains(&k.as_str())) {
-        return Err(format!("setting `{k}` has no Photoshop equivalent"));
+        return Err(format!("setting `{k}` has no PSD equivalent"));
     }
     let mut list = Vec::new();
     for (code, key) in CHANNELS {
@@ -411,7 +411,7 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
     Ok(Some(match k.class {
         "GsnB" | "boxblur" | "Mdn " | "HghP" | "Mxm " | "Mnm " => {
             if p.get("preserve").and_then(J::as_str).is_some_and(|s| s == "roundness") {
-                return Err("“preserve roundness” has no Photoshop equivalent".into());
+                return Err("“preserve roundness” has no PSD equivalent".into());
             }
             d.with("Rds ", unit(b"#Pxl", pf(p, "radius", 1.0)))
         }
@@ -434,7 +434,7 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
             }
             return Ok(None);
         }
-        _ => return Err("not a Photoshop filter".into()),
+        _ => return Err("not a recognized filter".into()),
     }))
 }
 
@@ -447,13 +447,13 @@ pub fn item_for_filter(f: &SmartFilter) -> Result<Descriptor, String> {
         return Ok(d);
     }
     if f.command == UNSUPPORTED_FILTER {
-        let raw = f.params.get("psd").and_then(J::as_str).and_then(from_hex).ok_or("its Photoshop data is missing")?;
-        let mut d = Descriptor::from_bytes(&raw).map_err(|e| format!("its Photoshop data is unreadable ({e})"))?;
+        let raw = f.params.get("psd").and_then(J::as_str).and_then(from_hex).ok_or("its filter data is missing")?;
+        let mut d = Descriptor::from_bytes(&raw).map_err(|e| format!("its filter data is unreadable ({e})"))?;
         set(&mut d, "blendOptions", blend_options(f));
         set(&mut d, "enab", Value::Boolean(f.visible));
         return Ok(d);
     }
-    let k = known_by_command(&f.command).ok_or("Photoshop has no equivalent filter")?;
+    let k = known_by_command(&f.command).ok_or("this filter has no PSD equivalent")?;
     let fltr = fltr_for(k, &f.params)?;
     let mut d = Descriptor::new("filterFX")
         .with("Nm  ", Value::Text(UnicodeString::new_nul(k.name)))

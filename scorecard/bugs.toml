@@ -53,14 +53,14 @@ id = "BUG-204-1"
 target = "Interface prefs (UI scale, font size, channels in colour, sliders, tooltips) wired or hidden"
 status = "done"
 issue = 204
-note = "prefs_ui.rs tick reads ui_scale (sync_display_scale), ui_font_size (theme::set_ui_font_size) and show_tooltips (sync_tooltips); show_channels_in_color and dynamic_color_sliders are in prefs::HIDDEN_UNTIL_IMPLEMENTED"
+note = "prefs_ui.rs tick reads ui_scale (sync_display_scale), ui_font_size (theme::set_ui_font_size) and show_tooltips (sync_tooltips); show_channels_in_color is wired in channel_thumbs; dynamic_color_sliders is in prefs::HIDDEN_UNTIL_IMPLEMENTED"
 
 [[item]]
 id = "BUG-204-2"
 target = "workspace.large_tabs, animated_zoom, auto_show_home_screen wired or hidden"
 status = "done"
 issue = 204
-note = "large_tabs and animated_zoom are in prefs::HIDDEN_UNTIL_IMPLEMENTED; auto_show_home_screen drives the Home screen (chrome_ui.rs home_button, canvas.rs)"
+note = "workspace.large_tabs controls document tab height in canvas.rs; auto_show_home_screen drives the Home screen; animated_zoom is in prefs::HIDDEN_UNTIL_IMPLEMENTED"
 
 [[item]]
 id = "BUG-204-3"

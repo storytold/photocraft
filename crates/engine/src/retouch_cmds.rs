@@ -552,6 +552,30 @@ fn dilate(w: usize, h: usize, m: &[bool], r: usize) -> Vec<bool> {
     out
 }
 
+/// Copy a translated Proximity Match patch from the *pre-healing* pixels. Reading
+/// `out` here would make overlapping offsets repeatedly copy the pixels just written,
+/// leaving streaks instead of the selected source texture.
+fn proximity_source_patch(img: &[f32], w: usize, h: usize, ch: usize, mask: &[bool], dx: i32, dy: i32) -> Option<Vec<f32>> {
+    if w == 0 || h == 0 || ch == 0 || mask.len() != w.checked_mul(h)? || img.len() != mask.len().checked_mul(ch)? {
+        return None;
+    }
+    let mut out = img.to_vec();
+    for (p, masked) in mask.iter().enumerate() {
+        if !masked {
+            continue;
+        }
+        let x = i32::try_from(p % w).ok()?.checked_add(dx)?;
+        let y = i32::try_from(p / w).ok()?.checked_add(dy)?;
+        if x < 0 || y < 0 || x >= i32::try_from(w).ok()? || y >= i32::try_from(h).ok()? {
+            return None;
+        }
+        let src = (usize::try_from(y).ok()?.checked_mul(w)? + usize::try_from(x).ok()?).checked_mul(ch)?;
+        let dst = p.checked_mul(ch)?;
+        out.get_mut(dst..dst + ch)?.copy_from_slice(img.get(src..src + ch)?);
+    }
+    Some(out)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SpotType {
     ContentAware,
@@ -597,18 +621,7 @@ fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: 
         SpotType::ProximityMatch => {
             let ring = (size / 8.0).clamp(3.0, 16.0) as usize;
             match inpaint::best_offset(w, h, ch, &img.data, &domain, ring, margin) {
-                Some((dx, dy)) => {
-                    let mut out = img.data.clone();
-                    for y in 0..h {
-                        for x in 0..w {
-                            if domain[y * w + x] {
-                                let (i, j) = ((y * w + x) * ch, (((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize) * ch);
-                                out.copy_within(j..j + ch, i);
-                            }
-                        }
-                    }
-                    out
-                }
+                Some((dx, dy)) => proximity_source_patch(&img.data, w, h, ch, &domain, dx, dy).unwrap_or_else(|| content_aware(&img.data)),
                 None => content_aware(&img.data),
             }
         }

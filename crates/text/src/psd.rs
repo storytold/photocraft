@@ -690,6 +690,121 @@ pub(crate) fn font_entry(name: &str) -> E {
     E::Dict(vec![("Name".into(), E::String(name.into())), ("Script".into(), E::Int(0)), ("FontType".into(), E::Int(1)), ("Synthetic".into(), E::Int(0))])
 }
 
+/// The `Txt2` auto-kern mode of a style: 0 manual, 1 metrics, 2 optical — the values
+/// [`apply_txt2`] maps back to [`Kerning`]. EngineData's `AutoKerning` can't say Metrics from
+/// Optical, so the mode only lives in `Txt2`.
+fn txt2_mode(s: &CharStyle) -> i64 {
+    if manual(s) {
+        0
+    } else if s.kerning == Kerning::Optical {
+        2
+    } else {
+        1
+    }
+}
+
+/// `Txt2` style runs for `layer`: `(mode, UTF-16 length)` over the engine text (`\r` breaks and
+/// the trailing `\r`, which takes the last run's mode), split where the auto-kern mode changes.
+fn txt2_mode_runs(layer: &TextLayer) -> Vec<(i64, usize)> {
+    let runs = layer.char_runs();
+    let ed_text = format!("{}\r", layer.text.replace('\n', "\r"));
+    let mut out: Vec<(i64, usize)> = Vec::new();
+    let (mut ri, mut run_end) = (0usize, runs.first().map_or(0, |r| r.len));
+    for (b, ch) in ed_text.char_indices() {
+        while b >= run_end && ri + 1 < runs.len() {
+            ri += 1;
+            run_end = run_end.saturating_add(runs.get(ri).map_or(0, |r| r.len));
+        }
+        let mode = runs.get(ri).map_or(1, |r| txt2_mode(&r.style));
+        match out.last_mut() {
+            Some(last) if last.0 == mode => last.1 += ch.len_utf16(),
+            _ => out.push((mode, ch.len_utf16())),
+        }
+    }
+    out
+}
+
+/// The highest text-object number honoured here (`TextIndex`, and the slot array [`build_txt2`]
+/// sizes). PSD text objects are numbered densely from 0; a crafted file can name object
+/// `i32::MAX`, and sizing the array by it would make every save allocate gigabytes.
+pub const MAX_TEXT_INDEX: i32 = 0xFFFF;
+
+/// The document's `Txt2` block for `objects`: `(TextIndex, layer)` pairs, one text object each
+/// at the slot its `TextIndex` names (see [`set_text_index`] and [`text_index`]; unused slots are
+/// empty dictionaries), carrying the automatic kerning mode of every pair (`/11`: 0 manual,
+/// 1 metrics, 2 optical) — the one thing EngineData can't say (`AutoKerning true` covers Metrics
+/// and Optical alike). PSD export writes this block for the type layers it writes `TySh` data
+/// for; [`apply_txt2`] reads it back. Numbers outside `0..=`[`MAX_TEXT_INDEX`] are skipped: the
+/// slot array is sized by real text objects, never by a file's numbers.
+///
+/// `previous` is the block this replaces (the file's own). A kept object — one whose text is
+/// unchanged — keeps everything the file held beyond the two regenerated keys (its model's text
+/// and style runs): Photoshop stores glyph pen positions under `/21 /1` there, and a save with
+/// no text edit must not drop them. A changed text invalidates those extras along with the old
+/// runs, so they are dropped rather than left stale.
+pub fn build_txt2(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>) -> Vec<u8> {
+    let prev = previous.and_then(parse_txt2);
+    let prev_objects: &[E] = prev.as_ref().and_then(|p| p.path(&["1", "1"]).and_then(E::as_array)).unwrap_or(&[]);
+    let mut slots: Vec<E> = Vec::new();
+    for (index, layer) in objects {
+        if !(0..=MAX_TEXT_INDEX).contains(index) {
+            continue;
+        }
+        let text = format!("{}\r", layer.text.replace('\n', "\r"));
+        let runs: Vec<E> = txt2_mode_runs(layer)
+            .into_iter()
+            .map(|(mode, len)| {
+                // `<< /0 << /0 << /0 () /6 << /0 0 /11 mode >> >> >> /1 len >>`.
+                let style = E::Dict(vec![("0".into(), E::Int(0)), ("11".into(), E::Int(mode))]);
+                let data = E::Dict(vec![("0".into(), E::String(String::new())), ("6".into(), style)]);
+                E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), data)])), ("1".into(), E::Int(len as i64))])
+            })
+            .collect();
+        let at = *index as usize;
+        let kept = prev_objects.get(at).filter(|o| o.get("0").and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str()));
+        let mut object = kept.cloned().unwrap_or_else(E::dict);
+        let mut model = object.get("0").cloned().filter(|m| matches!(m, E::Dict(_))).unwrap_or_else(E::dict);
+        model.set("0", E::String(text));
+        model.set("6", E::Dict(vec![("0".into(), E::Array(runs))]));
+        object.set("0", model);
+        if slots.len() <= at {
+            slots.resize(at + 1, E::dict());
+        }
+        slots[at] = object;
+    }
+    // The outer dictionary keeps whatever the block held (`/98` version, block extras, …).
+    let mut outer = prev.unwrap_or_else(|| E::Dict(vec![("98".into(), E::Dict(vec![("0".into(), E::Int(14))])), ("0".into(), E::dict())]));
+    outer.set("1", E::Dict(vec![("1".into(), E::Array(slots))]));
+    match outer {
+        E::Dict(items) => ed::write_bare(&items),
+        // Unreachable: `parse_txt2` and the fallback above both yield a dictionary.
+        _ => ed::write_bare(&[]),
+    }
+}
+
+/// The layer's text-object number in the document's `Txt2` block, when its `TySh` names one
+/// within `0..=`[`MAX_TEXT_INDEX`]. PSD export keeps a preserved number — its regenerated `Txt2`
+/// object sits at that slot, and [`apply_txt2`] looks the slot up — and numbers layers without
+/// one (or with a file-controlled out-of-range one) afresh.
+pub fn text_index(tysh: &[u8]) -> Option<i32> {
+    let t = parse_tysh(tysh)?;
+    match t.text.get("TextIndex") {
+        Some(D::Integer(i)) if (0..=MAX_TEXT_INDEX).contains(i) => Some(*i),
+        _ => None,
+    }
+}
+
+/// Rewrites a `TySh`'s `TextIndex`: the layer's text-object number in the document's `Txt2`
+/// block ([`build_txt2`] writes them in this order). `None` when `tysh` doesn't parse.
+pub fn set_text_index(tysh: &[u8], index: i32) -> Option<Vec<u8>> {
+    let mut t = parse_tysh(tysh)?;
+    match t.text.items.iter_mut().find(|(k, _)| k.is("TextIndex")) {
+        Some(e) => e.1 = D::Integer(index),
+        None => t.text.items.push((Id::new("TextIndex"), D::Integer(index))),
+    }
+    Some(write_tysh(&t))
+}
+
 /// Updates (or creates) an EngineData tree for `layer`.
 pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E {
     let k = 72.0 / if dpi > 0.0 { dpi } else { 72.0 };
