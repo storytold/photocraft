@@ -2616,7 +2616,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         {
             let d = xf.to_doc(p);
             app.ui.canvas_tool_menu = None;
-            crate::layer_pick_ui::open(app, [p.x, p.y], d[0], d[1]);
+            // No layers there (the pasteboard, with the Move tool): its colour menu instead.
+            if !crate::layer_pick_ui::open(app, [p.x, p.y], d[0], d[1]) && !mods.command && crate::canvas_tool_menu::pasteboard_at(app, tool, d) {
+                crate::canvas_tool_menu::open_pasteboard(app, tool, [p.x, p.y]);
+            }
         }
         if response.secondary_clicked()
             && !lasso_retracted
@@ -2624,7 +2627,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && !crate::layer_pick_ui::is_gesture(tool, mods)
             && let Some(p) = response.interact_pointer_pos()
         {
-            crate::canvas_tool_menu::open(app, tool, [p.x, p.y]);
+            // Outside the image: the pasteboard colour menu (#2462), else the tool's own.
+            if crate::canvas_tool_menu::pasteboard_at(app, tool, xf.to_doc(p)) {
+                crate::canvas_tool_menu::open_pasteboard(app, tool, [p.x, p.y]);
+            } else {
+                crate::canvas_tool_menu::open(app, tool, [p.x, p.y]);
+            }
         }
         // The (temporary) Hand pans above; its gestures never reach the tool underneath.
         if tool == Tool::Hand {
