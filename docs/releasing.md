@@ -182,6 +182,13 @@ Why these formats:
 - **AppImage** runs on any distribution without installing anything. The
   download-and-go option and the fallback for distros the packages don't cover. It's built
   with the maintained `AppImage/appimagetool`, whose static runtime doesn't need libfuse2.
+  The packaging script verifies pinned AppImageTool 1.9.1 and type2 runtime 20251108 binaries.
+  For an offline build, pre-seed `$CARGO_TARGET_DIR/appimagetool-1.9.1-$ARCH.AppImage` and
+  `$CARGO_TARGET_DIR/type2-runtime-20251108-$ARCH` with the matching official release assets;
+  the script checks both SHA-256 digests and makes the cached AppImageTool executable after verification;
+  the runtime is only read as data.
+  An `APPIMAGETOOL` override must point to that same verified AppImageTool binary and already be
+  executable (`chmod +x` it before packaging).
   Each AppImage embeds update information (`gh-releases-zsync|…|latest|…`, #349) and ships
   with a `.zsync` beside it, so AppImageUpdate, AppImageLauncher and similar tools can find
   the next release and download only the blocks that changed.
