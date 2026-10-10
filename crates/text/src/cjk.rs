@@ -53,6 +53,33 @@ pub fn classify(c: char) -> Option<CjkChar> {
     })
 }
 
+/// The CJK kinds a face covers, from one representative character each, given its file bytes and
+/// collection face index. The UI shell uses it to know a loaded script font already covers a kind
+/// (so it needn't load another), independent of the rest of the UI font stack — a broad font that
+/// happens to cover Han must not make the shell think its locale CJK fonts aren't needed.
+pub fn covered_kinds(bytes: &[u8], index: u32) -> Vec<CjkChar> {
+    use skrifa::MetadataProvider as _;
+    let Ok(face) = skrifa::FontRef::from_index(bytes, index) else {
+        return Vec::new();
+    };
+    let cmap = face.charmap();
+    let has = |c: char| cmap.map(c).is_some_and(|g| g.to_u32() != 0);
+    let mut v = Vec::new();
+    if has('\u{4E00}') {
+        v.push(CjkChar::Han);
+    }
+    if has('\u{3042}') {
+        v.push(CjkChar::Kana);
+    }
+    if has('\u{AC00}') {
+        v.push(CjkChar::Hangul);
+    }
+    if has('\u{3105}') {
+        v.push(CjkChar::Bopomofo);
+    }
+    v
+}
+
 /// Script order for a locale tag such as `ja_JP.UTF-8`, `zh-Hant-TW`, `zh_CN` or `ko-KR`.
 /// Non-CJK (or unknown) locales get Simplified Chinese first, so Japanese forms only win
 /// for shared Han when the locale is Japanese.

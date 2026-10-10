@@ -87,6 +87,16 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
     v
 }
 
+/// A system face for the UI shell's lazy fallback: the family, its bytes, the collection face
+/// index and whether it is *broad* (covers CJK too). The shell registers broad faces after the
+/// script fonts, so a broad font (Arial Unicode) never shadows the locale CJK choice.
+pub struct FallbackFace {
+    pub family: String,
+    pub bytes: Vec<u8>,
+    pub index: u32,
+    pub broad: bool,
+}
+
 /// Does a face cover CJK (a Han, Kana or Hangul representative)? A broad fallback such as Arial
 /// Unicode does; a script font (Thai, Arabic) does not. Used to keep a broad fallback from
 /// shadowing the UI shell's locale-ordered CJK fonts.
@@ -335,21 +345,20 @@ impl FontDb {
         faces
     }
 
-    /// Family, bytes and collection face index of the first installed fallback face (in the Type
-    /// tool's fallback order) that has a glyph for `c`. The UI shell registers it as a lazy UI
-    /// fallback font, so a Layer name in a script the bundled UI fonts lack (Thai, Arabic, …)
-    /// draws instead of a missing-glyph box. `None` for ASCII or when nothing installed covers it.
+    /// The first installed fallback face (in the Type tool's fallback order) that has a glyph for
+    /// `c`, for the UI shell to register as a lazy UI fallback font. This is the same family the
+    /// canvas would pick, so a Layer name in a script the bundled UI fonts lack (Thai, Arabic,
+    /// Devanagari, …) draws instead of a missing-glyph box. `None` for ASCII or when nothing
+    /// installed covers it.
     ///
-    /// The Regular (400, upright) face of each family is chosen, like the UI's Inter Regular. For
-    /// a non-CJK character a face that also covers CJK is skipped: a broad font such as Arial
-    /// Unicode must not shadow the shell's locale-ordered CJK fonts (the canvas keeps CJK ahead of
-    /// it in the same way). Bounded by [`MAX_FALLBACK_FACE_BYTES`]; malformed data yields no face,
-    /// never a panic.
-    pub fn fallback_face_for(&mut self, c: char) -> Option<(String, Vec<u8>, u32)> {
+    /// The Regular (400, upright) face of each family is chosen, like the UI's Inter Regular. The
+    /// returned [`FallbackFace::broad`] is true when the face also covers CJK, so the shell can
+    /// keep such a face after its locale-ordered CJK fonts (a broad font must not shadow them).
+    /// Bounded by [`MAX_FALLBACK_FACE_BYTES`]; malformed data yields no face, never a panic.
+    pub fn fallback_face_for(&mut self, c: char) -> Option<FallbackFace> {
         if c.is_ascii() {
             return None;
         }
-        let non_cjk = crate::cjk::classify(c).is_none();
         for name in self.fallbacks.clone() {
             let Some(info) = self.fcx.collection.family_by_name(&name) else {
                 continue;
@@ -368,13 +377,10 @@ impl FontDb {
                 continue;
             };
             let cmap = face.charmap();
-            if !cmap.map(c).is_some_and(|g| g.to_u32() != 0) {
-                continue;
+            if cmap.map(c).is_some_and(|g| g.to_u32() != 0) {
+                let broad = covers_cjk(&cmap);
+                return Some(FallbackFace { family: name.clone(), bytes: bytes.to_vec(), index: font.index(), broad });
             }
-            if non_cjk && covers_cjk(&cmap) {
-                continue;
-            }
-            return Some((name.clone(), bytes.to_vec(), font.index()));
         }
         None
     }
@@ -701,9 +707,24 @@ mod tests {
     fn fallback_face_selects_the_regular_face() {
         let mut db = super::FontDb::new();
         db.fallbacks = vec!["Inter".to_string()];
-        let (family, bytes, index) = db.fallback_face_for('é').expect("Inter covers é");
-        assert_eq!((family.as_str(), index), ("Inter", 0));
+        let super::FallbackFace { family, bytes, index, broad } = db.fallback_face_for('é').expect("Inter covers é");
+        assert_eq!((family.as_str(), index, broad), ("Inter", 0, false));
         assert_eq!(bytes, *super::INTER_REGULAR, "the Regular face, not Medium or SemiBold");
+    }
+
+    /// A broad font is returned for a script with no dedicated family (not rejected for also
+    /// covering CJK); [`super::FallbackFace::broad`] tells the shell to order it after the CJK
+    /// fonts. Skipped when no installed fallback covers the sample.
+    #[test]
+    fn fallback_face_returns_a_broad_face_for_an_uncovered_script() {
+        let mut db = super::FontDb::with_system_fonts();
+        let Some(f) = db.fallback_face_for('अ') else {
+            eprintln!("skipping: no installed fallback covers Devanagari");
+            return;
+        };
+        use skrifa::MetadataProvider as _;
+        let face = skrifa::FontRef::from_index(&f.bytes, f.index).expect("the returned face parses");
+        assert!(face.charmap().map('अ').is_some_and(|g| g.to_u32() != 0), "{} does not cover Devanagari", f.family);
     }
 
     /// The broad-font guard used by [`super::FontDb::fallback_face_for`]: Inter is not broad, a

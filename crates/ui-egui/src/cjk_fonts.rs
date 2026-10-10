@@ -34,13 +34,14 @@ pub const FONT_PREFIX: &str = "system-cjk";
 /// Characters whose fallback lookup failed are remembered so they don't stall the scan; a bound
 /// keeps odd text from growing it without limit (served fonts arriving reset the loader).
 const MAX_GAVE_UP: usize = 256;
+/// Distinct classifiable characters collected per frame before coverage is checked; a generous
+/// bound so a long run of already-covered characters can't hide a later one.
+const MAX_CANDIDATES: usize = 1024;
 
-/// A system face the UI can register: `(family, bytes, collection face index)`.
-pub type SystemFace = (String, Vec<u8>, u32);
+/// A system face the UI can register, from the Type tool's font database.
+pub use photocraft_text::fonts::FallbackFace as SystemFace;
 
-/// What a glyphless UI character needs: a CJK script font (in locale order), or a system face
-/// for another script the bundled UI fonts lack. `None` for characters no fallback applies to
-/// (the bundled fonts cover Latin, Greek and Cyrillic).
+/// The fallback a glyphless UI character needs, or `None` when none applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Missing {
     Cjk(CjkChar),
@@ -114,18 +115,20 @@ pub struct CjkFallback {
     order: Option<[CjkScript; 4]>,
     tried: Vec<CjkScript>,
     last_resort_tried: bool,
+    /// CJK kinds a loaded script font already covers. Kept independently of the whole egui font
+    /// stack so a broad font that happens to cover Han doesn't make us think the locale CJK fonts
+    /// aren't needed.
+    resolved_kinds: Vec<CjkChar>,
     /// Glyphless non-CJK characters whose fallback lookup found nothing, so the scan moves past
     /// them instead of retrying forever (bounded by [`MAX_GAVE_UP`]).
     gave_up: Vec<char>,
-    /// A non-CJK character was still missing at the last scan: keep scanning even once the CJK
-    /// scripts are done, so a Thai label isn't starved by a Japanese label.
-    pending_other: bool,
     loaded: Vec<PathBuf>,
     /// `(family, face index)` of the non-CJK system faces already registered, so two characters
     /// of the same script don't register the same face twice.
     loaded_system: Vec<String>,
-    /// Fonts registered so far: (name, path, face index).
-    pub registered: Vec<(String, PathBuf, u32)>,
+    /// Fonts registered so far: `(name, path, face index, broad)`. `broad` puts a broad fallback
+    /// (Arial Unicode) after the script fonts in every family.
+    pub registered: Vec<(String, PathBuf, u32, bool)>,
 }
 
 impl CjkFallback {
@@ -136,8 +139,8 @@ impl CjkFallback {
             order: None,
             tried: Vec::new(),
             last_resort_tried: false,
+            resolved_kinds: Vec::new(),
             gave_up: Vec::new(),
-            pending_other: false,
             loaded: Vec::new(),
             loaded_system: Vec::new(),
             registered: Vec::new(),
@@ -149,10 +152,14 @@ impl CjkFallback {
         *self.order.get_or_insert_with(|| cjk::script_order((self.sources.locale)().as_deref()))
     }
 
-    /// Every CJK script and the last-resort fonts have been tried, no non-CJK character is
-    /// pending, and the give-up list isn't full: nothing more to load.
-    pub fn exhausted(&self) -> bool {
-        self.tried.len() >= 4 && self.last_resort_tried && !self.pending_other && self.gave_up.len() < MAX_GAVE_UP
+    /// Every CJK script and the last-resort fonts have been tried: no more CJK font can be loaded.
+    fn cjk_done(&self) -> bool {
+        self.tried.len() >= 4 && self.last_resort_tried
+    }
+
+    /// `(name, broad)` of every registered lazy font, for ordering the family stacks.
+    fn registered_order(&self) -> Vec<(String, bool)> {
+        self.registered.iter().map(|(n, _, _, b)| (n.clone(), *b)).collect()
     }
 
     /// The next font to register for a glyphless character `c` that no current font covers: a
@@ -161,15 +168,27 @@ impl CjkFallback {
     /// (then `c` is remembered so the scan doesn't stall on it).
     pub fn next_font(&mut self, c: char) -> Option<(String, FontData)> {
         let order = self.order();
-        let font = match classify(c, &order) {
-            Some(Missing::Cjk(kind)) => self.next_cjk_font(kind),
-            Some(Missing::Other) => self.load_by_char(c),
+        match classify(c, &order) {
+            Some(Missing::Cjk(kind)) => {
+                let font = self.next_cjk_font(kind);
+                if let Some((_, data)) = &font {
+                    for k in cjk::covered_kinds(data.font.as_ref(), data.index) {
+                        if !self.resolved_kinds.contains(&k) {
+                            self.resolved_kinds.push(k);
+                        }
+                    }
+                }
+                font
+            }
+            Some(Missing::Other) => {
+                let font = self.load_by_char(c);
+                if font.is_none() && !self.gave_up.contains(&c) && self.gave_up.len() < MAX_GAVE_UP {
+                    self.gave_up.push(c);
+                }
+                font
+            }
             None => None,
-        };
-        if font.is_none() && !self.gave_up.contains(&c) && self.gave_up.len() < MAX_GAVE_UP {
-            self.gave_up.push(c);
         }
-        font
     }
 
     /// The next CJK script font for a character of kind `kind` (see [`Self::next_font`]).
@@ -199,17 +218,17 @@ impl CjkFallback {
 
     /// A non-CJK system face covering `c`, registered once per face.
     fn load_by_char(&mut self, c: char) -> Option<(String, FontData)> {
-        let (family, bytes, index) = (self.sources.by_char)(c)?;
-        let key = format!("{family}#{index}");
-        if self.loaded_system.contains(&key) || bytes.len() as u64 > MAX_FONT_BYTES {
+        let face = (self.sources.by_char)(c)?;
+        let key = format!("{}#{}", face.family, face.index);
+        if self.loaded_system.contains(&key) || face.bytes.len() as u64 > MAX_FONT_BYTES {
             return None;
         }
         self.loaded_system.push(key);
         let name = format!("{FONT_PREFIX}-{}", self.registered.len());
-        log::info!("UI font fallback: registered system face {family} (face {index}) as {name}");
-        self.registered.push((name.clone(), PathBuf::from(&family), index));
-        let mut data = FontData::from_owned(bytes);
-        data.index = index;
+        log::info!("UI font fallback: registered system face {} (face {}) as {name}", face.family, face.index);
+        self.registered.push((name.clone(), PathBuf::from(&face.family), face.index, face.broad));
+        let mut data = FontData::from_owned(face.bytes);
+        data.index = face.index;
         Some((name, data))
     }
 
@@ -223,7 +242,7 @@ impl CjkFallback {
         self.loaded.push(path.clone());
         let name = format!("{FONT_PREFIX}-{}", self.registered.len());
         log::info!("UI font fallback: registered embedded {} as {name}", path.display());
-        self.registered.push((name.clone(), path, 0));
+        self.registered.push((name.clone(), path, 0, false));
         Some((name, FontData::from_static(f.bytes)))
     }
 
@@ -241,7 +260,7 @@ impl CjkFallback {
             self.loaded.push(f.path.clone());
             let name = format!("{FONT_PREFIX}-{}", self.registered.len());
             log::info!("UI font fallback: registered {} (face {index}) as {name}", f.path.display());
-            self.registered.push((name.clone(), f.path.clone(), index));
+            self.registered.push((name.clone(), f.path.clone(), index, false));
             let mut data = FontData::from_owned(bytes);
             data.index = index;
             return Some((name, data));
@@ -250,40 +269,60 @@ impl CjkFallback {
     }
 }
 
-/// Characters in the frame's text that the UI fonts can't draw and a fallback applies to,
-/// excluding those already given up on. Only classifiable characters count against the bound, so
-/// Latin-1, emoji and the like can't crowd out a later CJK or Thai character.
-fn missing_chars(ctx: &egui::Context, shapes: &[egui::epaint::ClippedShape], order: &[CjkScript; 4], gave_up: &[char]) -> Vec<char> {
-    fn collect(shape: &Shape, out: &mut Vec<char>, order: &[CjkScript; 4]) {
+/// Characters in the frame's text that still need a fallback: CJK characters of a kind no loaded
+/// font covers (and before the CJK scripts are exhausted), and non-CJK characters no registered
+/// font draws. Classifiable characters already covered are dropped during collection, so they
+/// can't crowd out a later one, and only [`MAX_CANDIDATES`] are kept.
+fn missing_chars(
+    ctx: &egui::Context,
+    shapes: &[egui::epaint::ClippedShape],
+    order: &[CjkScript; 4],
+    gave_up: &[char],
+    resolved: &[CjkChar],
+    cjk_done: bool,
+) -> Vec<char> {
+    fn collect(shape: &Shape, out: &mut Vec<char>, order: &[CjkScript; 4], resolved: &[CjkChar], cjk_done: bool) {
         match shape {
             Shape::Text(t) => {
                 let text = &t.galley.job.text;
                 if !text.is_ascii() {
                     for c in text.chars().filter(|c| !c.is_ascii()) {
-                        if out.len() >= 256 {
+                        if out.len() >= MAX_CANDIDATES {
                             return;
                         }
-                        if !out.contains(&c) && classify(c, order).is_some() {
+                        let wanted = match cjk::classify(c) {
+                            Some(kind) => !cjk_done && !resolved.contains(&kind),
+                            None => served::script_of(c, order).is_some(),
+                        };
+                        if wanted && !out.contains(&c) {
                             out.push(c);
                         }
                     }
                 }
             }
-            Shape::Vec(v) => v.iter().for_each(|s| collect(s, out, order)),
+            Shape::Vec(v) => v.iter().for_each(|s| collect(s, out, order, resolved, cjk_done)),
             _ => {}
         }
     }
     let mut chars = Vec::new();
     for s in shapes {
-        collect(&s.shape, &mut chars, order);
+        collect(&s.shape, &mut chars, order, resolved, cjk_done);
     }
     let font = FontId::proportional(12.0);
     let mut missing = Vec::new();
     ctx.fonts_mut(|f| {
         for &c in &chars {
-            if !gave_up.contains(&c) && !f.has_glyph(&font, c) {
-                missing.push(c);
+            if missing.len() >= 256 {
+                break;
             }
+            if gave_up.contains(&c) {
+                continue;
+            }
+            // A CJK character is missing by kind (handled above); a non-CJK one by the stack.
+            if cjk::classify(c).is_none() && f.has_glyph(&font, c) {
+                continue;
+            }
+            missing.push(c);
         }
     });
     missing
@@ -329,22 +368,57 @@ fn baseline_offset(face: (f32, f32, f32), primary: (f32, f32, f32)) -> f32 {
     if off.is_finite() { off.clamp(-0.5, 0.5) } else { 0.0 }
 }
 
-/// Registers `name` at the lowest priority in every font family.
-fn add_to_all_families(ctx: &egui::Context, name: String, mut data: FontData) {
+/// Registers `name` at the lowest priority in every family. Broad faces (Arial Unicode) must come
+/// after the script fonts so they never shadow the locale-ordered CJK fonts. The common case (no
+/// broad face, or the new face is itself broad) just appends with `add_font`, which composes with
+/// the UI font-size plugin's `set_fonts`. When a narrow face arrives after a broad one the append
+/// order is wrong, so the definitions are rebuilt in `set_fonts`.
+fn add_to_all_families(ctx: &egui::Context, name: String, mut data: FontData, registered: &[(String, bool)]) {
     // Align to Inter, the primary of every UI family; JetBrains Mono differs by under 0.005em.
     let primary = ctx.fonts(|f| f.definitions().font_data.get("Inter").and_then(|p| vertical_metrics(&p.font, p.index)));
     if let (Some(face), Some(primary)) = (vertical_metrics(&data.font, data.index), primary) {
         data.tweak.y_offset_factor = baseline_offset(face, primary);
     }
+    crate::theme::size_ui_font(ctx, &name, &mut data);
     let mut families: Vec<FontFamily> = ctx.fonts(|f| f.definitions().families.keys().cloned().collect());
     for f in [FontFamily::Proportional, FontFamily::Monospace] {
         if !families.contains(&f) {
             families.push(f);
         }
     }
-    let families = families.into_iter().map(|family| InsertFontFamily { family, priority: FontPriority::Lowest }).collect();
-    crate::theme::size_ui_font(ctx, &name, &mut data);
-    ctx.add_font(FontInsert { name, data, families });
+    let new_broad = registered.iter().find(|(k, _)| k == &name).is_some_and(|(_, b)| *b);
+    let reorder = !new_broad && registered.iter().any(|(_, b)| *b);
+    if !reorder {
+        let families = families.into_iter().map(|family| InsertFontFamily { family, priority: FontPriority::Lowest }).collect();
+        ctx.add_font(FontInsert { name, data, families });
+        return;
+    }
+    // A broad font is already in the stack and a narrow one is arriving: rebuild the family tails
+    // so the lazy fonts stay ordered (primaries, then script fonts, then broad fonts).
+    let broad_of = |n: &str| registered.iter().find(|(k, _)| k == n).map(|(_, b)| *b);
+    let mut fonts = ctx.fonts(|f| f.definitions().clone());
+    fonts.font_data.insert(name.clone(), std::sync::Arc::new(data));
+    for family in families {
+        let stack = fonts.families.entry(family).or_default();
+        let mut primaries = Vec::new();
+        let mut narrow = Vec::new();
+        let mut broad = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for n in std::mem::take(stack).into_iter().chain(std::iter::once(name.clone())) {
+            if !seen.insert(n.clone()) {
+                continue;
+            }
+            match broad_of(&n) {
+                None => primaries.push(n),
+                Some(false) => narrow.push(n),
+                Some(true) => broad.push(n),
+            }
+        }
+        *stack = primaries;
+        stack.extend(narrow);
+        stack.extend(broad);
+    }
+    ctx.set_fonts(fonts);
 }
 
 /// The egui plugin that watches drawn text and loads fallback fonts on demand.
@@ -360,22 +434,14 @@ impl egui::Plugin for CjkFontPlugin {
             ctx.request_repaint();
             return;
         }
-        if self.0.exhausted() {
-            return;
-        }
         let order = self.0.order();
-        let missing = missing_chars(ctx, &output.shapes, &order, &self.0.gave_up);
-        if missing.is_empty() {
-            self.0.pending_other = false;
-            return;
-        }
-        // A non-CJK character still missing keeps the scan going once the CJK scripts are done.
-        self.0.pending_other = missing.iter().any(|c| cjk::classify(*c).is_none());
-        let c = missing[0];
+        let missing = missing_chars(ctx, &output.shapes, &order, &self.0.gave_up, &self.0.resolved_kinds, self.0.cjk_done());
+        let Some(&c) = missing.first() else { return };
         let progress = |f: &CjkFallback| f.tried.len() + usize::from(f.last_resort_tried) + f.gave_up.len() + f.registered.len();
         let before = progress(&self.0);
         if let Some((name, data)) = self.0.next_font(c) {
-            add_to_all_families(ctx, name, data);
+            let order = self.0.registered_order();
+            add_to_all_families(ctx, name, data, &order);
             ctx.request_repaint();
         } else if progress(&self.0) > before {
             // No font covered this character; it was given up, so try the next one next frame.
@@ -419,7 +485,7 @@ mod tests {
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         crate::theme::set_ui_font_size(&ctx, UiFontSize::Large);
         let name = "test-lazy-fallback".to_string();
-        add_to_all_families(&ctx, name.clone(), FontData::from_static(photocraft_text::fonts::INTER_REGULAR.as_slice()));
+        add_to_all_families(&ctx, name.clone(), FontData::from_static(photocraft_text::fonts::INTER_REGULAR.as_slice()), &[(name.clone(), false)]);
         for (size, scale) in [(UiFontSize::Large, 16.0 / 12.0), (UiFontSize::Tiny, 10.0 / 12.0), (UiFontSize::Small, 1.0)] {
             crate::theme::set_ui_font_size(&ctx, size);
             for _ in 0..2 {
@@ -450,10 +516,10 @@ mod tests {
             })
             .expect("font plugin");
             crate::i18n::sync_context(&ctx, "ja");
-            assert!(ctx.with_plugin::<CjkFontPlugin, _>(|plugin| plugin.0.exhausted()).expect("font plugin"), "idle frames must not reload fonts");
+            assert!(ctx.with_plugin::<CjkFontPlugin, _>(|plugin| plugin.0.cjk_done()).expect("font plugin"), "idle frames must not reload fonts");
             crate::i18n::sync_context(&ctx, "ko");
             ctx.with_plugin::<CjkFontPlugin, _>(|plugin| {
-                assert!(!plugin.0.exhausted());
+                assert!(!plugin.0.cjk_done());
                 assert_eq!(plugin.0.order()[0], CjkScript::Korean);
             })
             .expect("font plugin");
@@ -481,6 +547,11 @@ mod tests {
         None
     }
 
+    /// A stand-in system face (Inter bytes, which parse but cover no CJK).
+    fn face(family: &str, broad: bool) -> SystemFace {
+        SystemFace { family: family.into(), bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), index: 0, broad }
+    }
+
     fn fake_sources(locale: fn() -> Option<String>) -> Sources {
         Sources {
             locale,
@@ -499,7 +570,7 @@ mod tests {
     #[test]
     fn picks_preferred_script_skips_unreadable_and_exhausts() {
         let mut fb = CjkFallback::new(fake_sources(|| Some("en_US".into())));
-        assert!(!fb.exhausted());
+        assert!(!fb.cjk_done());
         // Hangul: Korean first; missing and empty files are skipped.
         let (name, data) = fb.next_font('카').expect("korean font");
         assert!(name.starts_with(FONT_PREFIX));
@@ -509,10 +580,9 @@ mod tests {
         // already loaded, so nothing new; the CJK scripts are now all tried.
         assert!(fb.next_font('圖').is_none());
         assert_eq!(fb.tried, vec![CjkScript::Korean, CjkScript::SimplifiedChinese, CjkScript::TraditionalChinese, CjkScript::Japanese]);
-        assert!(fb.exhausted());
+        assert!(fb.cjk_done());
         assert_eq!(fb.registered.len(), 1, "a file is read at most once");
         assert!(fb.next_font('レ').is_none());
-        assert!(fb.gave_up.contains(&'圖') && fb.gave_up.contains(&'レ'), "uncoverable characters are given up");
     }
 
     #[test]
@@ -534,7 +604,7 @@ mod tests {
     #[test]
     fn a_non_cjk_face_is_not_registered_twice() {
         fn by_char(c: char) -> Option<SystemFace> {
-            (0x0E00..=0x0E7F).contains(&(c as u32)).then(|| ("Thai Face".into(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), 0))
+            (0x0E00..=0x0E7F).contains(&(c as u32)).then(|| face("Thai Face", false))
         }
         let mut fb = CjkFallback::new(Sources { locale: || Some("en".into()), files: |_| vec![], last_resort: Vec::new, embedded: no_embedded, by_char });
         let (name, _data) = fb.next_font('ส').expect("thai face");
@@ -551,8 +621,8 @@ mod tests {
     fn different_characters_of_a_script_get_their_own_covering_face() {
         fn by_char(c: char) -> Option<SystemFace> {
             match c {
-                'ส' => Some(("Thai One".into(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), 0)),
-                'า' => Some(("Thai Two".into(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), 0)),
+                'ส' => Some(face("Thai One", false)),
+                'า' => Some(face("Thai Two", false)),
                 _ => None,
             }
         }
@@ -624,7 +694,7 @@ mod tests {
     #[test]
     fn lazy_registration_loads_a_system_face_for_thai() {
         fn by_char(c: char) -> Option<SystemFace> {
-            (0x0E00..=0x0E7F).contains(&(c as u32)).then(|| ("Thai Face".into(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), 0))
+            (0x0E00..=0x0E7F).contains(&(c as u32)).then(|| face("Thai Face", false))
         }
         let ctx = egui::Context::default();
         install_with(&ctx, Sources { locale: || Some("th".into()), files: |_| vec![], last_resort: Vec::new, embedded: no_embedded, by_char });
@@ -670,6 +740,71 @@ mod tests {
         let _ = render(&ctx, &format!("{prefix}レ"));
         let n = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
         assert_eq!(n, 1, "the later Japanese character is still collected");
+    }
+
+    /// A non-CJK character that appears only after the CJK scripts are exhausted must still load:
+    /// the loader keeps scanning, with no stale "nothing to do" state.
+    #[test]
+    fn a_later_non_cjk_character_still_loads_after_cjk_is_exhausted() {
+        fn by_char(c: char) -> Option<SystemFace> {
+            (0x0E00..=0x0E7F).contains(&(c as u32)).then(|| face("Thai Face", false))
+        }
+        let ctx = egui::Context::default();
+        install_with(&ctx, Sources { locale: || Some("en".into()), files: |_| vec![], last_resort: Vec::new, embedded: no_embedded, by_char });
+        let _ = render(&ctx, "レ"); // no CJK font: the scripts are tried and exhausted
+        let before = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
+        assert_eq!(before, 0);
+        let _ = render(&ctx, "สวัสดี"); // Thai appears afterwards
+        let after = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
+        assert_eq!(after, 1, "Thai must still load after CJK exhaustion");
+    }
+
+    /// A broad face (one that also covers CJK) is placed after the narrow script faces in every
+    /// family, so it never shadows them, even when it was registered first.
+    #[test]
+    fn a_broad_fallback_is_registered_after_a_narrow_one() {
+        fn by_char(c: char) -> Option<SystemFace> {
+            match c as u32 {
+                0x0900..=0x097F => Some(face("Broad", true)),   // Devanagari: only a broad face
+                0x0E00..=0x0E7F => Some(face("Narrow", false)), // Thai: a script face
+                _ => None,
+            }
+        }
+        let ctx = egui::Context::default();
+        install_with(&ctx, Sources { locale: || Some("en".into()), files: |_| vec![], last_resort: Vec::new, embedded: no_embedded, by_char });
+        let _ = render(&ctx, "अ"); // the broad face registers first
+        let _ = render(&ctx, "ก"); // the narrow face arrives later
+        let fonts = ctx.fonts(|f| f.definitions().clone());
+        let broad = format!("{FONT_PREFIX}-0");
+        let narrow = format!("{FONT_PREFIX}-1");
+        assert!(fonts.font_data.contains_key(&broad) && fonts.font_data.contains_key(&narrow));
+        for (fam, stack) in &fonts.families {
+            let pb = stack.iter().position(|n| n == &broad).expect("broad in stack");
+            let pn = stack.iter().position(|n| n == &narrow).expect("narrow in stack");
+            assert!(pn < pb, "{fam:?}: narrow before broad");
+        }
+    }
+
+    /// A long run of already-covered CJK characters before a Thai one must not consume the scan
+    /// budget: a real CJK font resolves the Han kind, so the Thai face still loads.
+    #[test]
+    fn covered_cjk_does_not_consume_the_scan_budget() {
+        if !cjk::font_files(CjkScript::Japanese).iter().any(|f| f.path.is_file()) {
+            eprintln!("skipping: no installed Japanese font");
+            return;
+        }
+        fn by_char(c: char) -> Option<SystemFace> {
+            (0x0E00..=0x0E7F).contains(&(c as u32)).then(|| face("Thai Face", false))
+        }
+        fn files(s: CjkScript) -> Vec<FontFile> {
+            if s == CjkScript::Japanese { cjk::font_files(s) } else { Vec::new() }
+        }
+        let ctx = egui::Context::default();
+        install_with(&ctx, Sources { locale: || Some("ja".into()), files, last_resort: Vec::new, embedded: no_embedded, by_char });
+        let han: String = (0x4E00..0x4E00 + 256).filter_map(char::from_u32).collect();
+        let _ = render(&ctx, &format!("{han}สวัสดี"));
+        let n = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
+        assert_eq!(n, 2, "the Japanese and Thai faces are both registered");
     }
 
     #[test]

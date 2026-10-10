@@ -1156,12 +1156,12 @@ fn thai_in_latin_font_falls_back_to_installed_thai_font() {
     // The UI shell asks for a covering face's bytes (not just a family name) to register as a
     // lazy fallback, so a Thai Layer name draws instead of a missing-glyph box (#2275).
     use skrifa::MetadataProvider as _;
-    let (family, bytes, index) = e.fonts.fallback_face_for('ก').expect("a face covering Thai");
+    let fonts::FallbackFace { family, bytes, index, broad } = e.fonts.fallback_face_for('ก').expect("a face covering Thai");
     assert!(!family.is_empty());
+    assert!(!broad, "{family} is broad; the UI would have to order it after its CJK fonts");
     let face = skrifa::FontRef::from_index(&bytes, index).expect("the returned face parses");
     let cmap = face.charmap();
     assert!(cmap.map('ก').is_some_and(|g| g.to_u32() != 0), "{family} does not cover Thai");
-    assert!(!cmap.map('漢').is_some_and(|g| g.to_u32() != 0), "{family} also covers Han; it would shadow the locale CJK fonts");
     let l = e.layout(&point(THAI_SAMPLE, 24.0), 72.0);
     assert!(!l.glyphs.is_empty());
     assert!(l.glyphs.iter().all(|g| g.id != 0), "Thai drawn with .notdef although {thai} is installed");
