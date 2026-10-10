@@ -46,6 +46,26 @@ pub struct LangInfo {
     catalog: OnceLock<Catalog>,
 }
 
+/// Arabic: 0 → zero, 1 → one, 2 → two, 3–10 → few, 11–99 → many, 100+ → other.
+fn plural_arabic(n: u64) -> usize {
+    if n == 0 {
+        0
+    } else if n == 1 {
+        1
+    } else if n == 2 {
+        2
+    } else {
+        let mod100 = n % 100;
+        if (3..=10).contains(&mod100) {
+            3
+        } else if (11..=99).contains(&mod100) {
+            4
+        } else {
+            5
+        }
+    }
+}
+
 fn plural_one_other(n: u64) -> usize {
     usize::from(n != 1)
 }
@@ -122,7 +142,7 @@ fn inflate(source: &[u8]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 17] = [
+pub static LANGUAGES: [LangInfo; 18] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -145,6 +165,7 @@ pub static LANGUAGES: [LangInfo; 17] = [
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
     LangInfo { code: "nl", name: "Nederlands", source: catalog!("nl"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "it", name: "Italiano", source: catalog!("it"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
