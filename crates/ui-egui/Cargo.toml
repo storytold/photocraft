@@ -30,11 +30,6 @@ photocraft-codecs = { workspace = true }
 egui = { workspace = true }
 egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
-
-# eframe 0.36 does not support accesskit with Android NativeActivity.
-# Keep accessibility on desktop and web without activating it for Android.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-eframe = { workspace = true, features = ["accesskit"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -44,6 +39,11 @@ base64 = "0.22"
 roxmltree = "0.20"
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
 flate2 = { workspace = true }
+
+# eframe 0.36 does not support accesskit with Android NativeActivity.
+# Keep accessibility on desktop and web without activating it for Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { workspace = true, features = ["accesskit"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
