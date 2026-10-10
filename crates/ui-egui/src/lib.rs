@@ -46,6 +46,7 @@ pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
 pub mod credits;
+pub mod crop_mode;
 pub mod crop_overlay;
 pub mod crop_shield;
 pub mod crop_size;
@@ -63,6 +64,7 @@ pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
 pub mod eyedropper_ui;
+pub mod field_tab;
 pub mod file_dialog;
 pub mod file_open;
 pub mod file_ui;
@@ -166,6 +168,7 @@ mod type_transform;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod warp_preview;
 pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
@@ -1919,6 +1922,9 @@ impl PhotocraftApp {
         true
     }
 }
+
+#[cfg(test)]
+mod color_swatch_tests;
 
 #[cfg(test)]
 mod input_tests;

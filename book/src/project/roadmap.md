@@ -1,6 +1,6 @@
 # Roadmap
 
-The live product roadmap, milestone definitions, parity measurements, and current focus are maintained in [`docs/roadmap.md`](https://github.com/storytold/photocraft/blob/main/docs/roadmap.md). Menu coverage is generated into [`docs/parity.md`](https://github.com/storytold/photocraft/blob/main/docs/parity.md) by `cargo xtask parity`.
+The live product roadmap, milestone definitions, parity measurements, and current focus are maintained in [`docs/roadmap.md`](https://github.com/storytold/photocraft/blob/main/docs/roadmap.md). Menu coverage is generated into [`docs/parity-checklist.md`](https://github.com/storytold/photocraft/blob/main/docs/parity-checklist.md) by `cargo xtask parity`.
 
 Security hardening is cross-cutting rather than a replacement for those product milestones. The current security sequence is:
 
