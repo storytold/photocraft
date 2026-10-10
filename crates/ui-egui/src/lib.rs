@@ -745,6 +745,12 @@ impl PhotocraftApp {
             }
         };
         self.perf.gpu_info.canvas = "gpu".into();
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::var("PHOTOCRAFT_GPU_BRUSH").as_deref() != Ok("0") {
+            let accelerator = std::sync::Arc::new(photocraft_gpu::brush::Rasterizer::new(rs.device.clone(), rs.queue.clone(), gpu.health().clone()));
+            accelerator.prewarm();
+            self.session.brush_accelerator = Some(accelerator);
+        }
         self.gpu = Some(gpu);
         self.prefs_rt.gpu_style = None;
     }

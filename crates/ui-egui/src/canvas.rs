@@ -4351,13 +4351,19 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
                 p["seed"] = json!(seed);
             }
+            let shown = live.as_ref().map(|l| (l.doc, l.key, l.damage.len()));
+            if let Some(LiveStroke { stroke: EngineStroke::Brush(stroke), .. }) = live {
+                stroke.prepare(&mut app.session);
+            }
             // The canvas already shows the stroke: let the commit's damage rect refresh it rather
             // than recompositing the whole document.
-            if app.run(stroke_command(app, d.tool), p).is_ok()
-                && let Some(l) = live
+            let result = app.run(stroke_command(app, d.tool), p);
+            photocraft_engine::brush_cmds::LiveStroke::clear_prepared(&mut app.session);
+            if result.is_ok()
+                && let Some((doc, key, count)) = shown
             {
                 // Raw preview key 0 = the document itself (its colour display folded in).
-                shown_as_document(app, l.doc, |k| l.since(k).is_some());
+                shown_as_document(app, doc, |k| k == 0 || k.checked_sub(key).is_some_and(|i| i <= count as u64));
             }
         }
         Tool::RectMarquee | Tool::EllipseMarquee => {
@@ -5533,6 +5539,10 @@ mod tests {
         tool_event(&mut app, ToolEvent::Up { x: last, y: 40.0 + (last / 7.0).sin() * 8.0 }, m);
         let (next, key) = display_doc(&mut app, 0);
         assert_eq!(key, 0, "the frame after release shows the committed document");
+        let (shown, committed) = (live.layers[0].surface().unwrap(), next.layers[0].surface().unwrap());
+        for (key, tile) in shown.tiles() {
+            assert!(std::sync::Arc::ptr_eq(tile, committed.tile(*key).unwrap()), "release must reuse the live pixels");
+        }
         ensure_texture(&mut app, &ctx, 0, None);
         let partial = app.perf.last_refresh == "rect";
         (live, next, partial, app)
