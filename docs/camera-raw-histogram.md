@@ -32,6 +32,13 @@ pixels, and use selection/filter-mask coverage. They replace the sliders rather 
 another pixel edit; confirm to commit, or cancel to discard. The engine query is
 `cameraRaw.autoSettings`; control-channel usage is described in [control-protocol.md](control-protocol.md).
 
+Dehaze uses PhotoCraft's independent, bounded dark-channel estimate, inspired by
+[He, Sun and Tang (CVPR 2009)](https://mlanthology.org/cvpr/2009/he2009cvpr-single/).
+Positive values adjust luminance contrast while preserving hue; negative values add a neutral
+veil. The bounds protect clear and low-light images from severe black clipping and colour casts.
+The slider follows [Adobe's documented direction](https://helpx.adobe.com/in/camera-raw/desktop/edit-and-enhance-images/tone-and-color/vignette-grain-effects-camera-raw.html),
+but its rendering is not pixel-identical to Adobe Camera Raw.
+
 Camera Raw's before/after textures and full-resolution crops are ICC-converted from the
 document profile to the configured monitor profile, including soft proofing. Analysis and
 filter pixels remain in document space; display conversion is not baked into the image or
