@@ -1978,6 +1978,13 @@
 	Align with layer	Uitlijnen met laag
 	Reset Alignment	Uitlijning herstellen
 	Centre the gradient (offset 0, 0)	Het verloop centreren (verschuiving 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Verloopeditor
+	Gradient picker	Verloopkiezer
+	Gradient stops	Verloopstops
+	Save As Preset	Opslaan als voorinstelling
+	The gradient the Gradient tool paints with	Het verloop waarmee het gereedschap Verloop tekent
+	Adds the current gradient to the Gradients panel	Voegt het huidige verloop toe aan het paneel Verlopen
 	The current gradient (pick one in Window › Gradients)	Het huidige verloop (kies er een via Venster › Verlopen)
 	Select a type layer to edit its character and paragraph settings.	Selecteer een tekstlaag om de teken- en alinea-instellingen te bewerken.
 	Text color	Tekstkleur

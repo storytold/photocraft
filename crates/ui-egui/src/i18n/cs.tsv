@@ -2016,7 +2016,13 @@
 	Align with layer	Zarovnat s vrstvou
 	Reset Alignment	Obnovit zarovnání
 	Centre the gradient (offset 0, 0)	Vystředit přechod (posun 0, 0)
-	The current gradient (pick one in Window › Gradients)	Aktuální přechod (vyberte v nabídce Okno › Přechody)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor přechodů
+	Gradient picker	Výběr přechodu
+	Save As Preset	Uložit jako preset
+	The gradient the Gradient tool paints with	Přechod, který kreslí nástroj Přechod
+	Adds the current gradient to the Gradients panel	Přidá aktuální přechod do panelu Přechody
+	Gradient stops	Zarážky přechodu
 	Select a type layer to edit its character and paragraph settings.	Vyberte textovou vrstvu a upravte nastavení znaků a odstavce.
 	Text color	Barva textu
 	Type Options	Možnosti textu

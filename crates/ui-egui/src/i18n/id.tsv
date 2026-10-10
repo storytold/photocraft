@@ -1960,7 +1960,13 @@
 	Align with layer	Sejajarkan dengan layer
 	Reset Alignment	Reset Penyelarasan
 	Centre the gradient (offset 0, 0)	Tengahkan gradien (offset 0, 0)
-	The current gradient (pick one in Window › Gradients)	Gradien saat ini (pilih di Jendela › Gradien)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor Gradien
+	Gradient picker	Pemilih gradien
+	Save As Preset	Simpan sebagai Preset
+	The gradient the Gradient tool paints with	Gradien yang digambar oleh alat Gradien
+	Adds the current gradient to the Gradients panel	Menambahkan gradien saat ini ke panel Gradien
+	Gradient stops	Titik gradien
 	Select a type layer to edit its character and paragraph settings.	Pilih layer teks untuk mengedit pengaturan karakter dan paragrafnya.
 	Text color	Warna teks
 	Type Options	Opsi Teks

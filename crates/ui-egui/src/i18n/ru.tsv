@@ -2101,7 +2101,14 @@
 	Outside	Снаружи
 	Tetrahedral	Тетраэдрическая
 	Texture Each Tip	Текстура на каждый отпечаток
-	The current gradient (pick one in Window › Gradients)	Текущий градиент (выберите в Окно › Градиенты)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Редактор градиентов
+	Gradient picker	Выбор градиента
+	Save As Preset	Сохранить как набор
+	The gradient the Gradient tool paints with	Градиент, которым рисует инструмент «Градиент»
+	Adds the current gradient to the Gradients panel	Добавляет текущий градиент на панель «Градиенты»
+	Gradient stops	Точки градиента
+	Click to edit the gradient	Щёлкните, чтобы изменить градиент
 	Tilt X	Наклон X
 	Tilt Y	Наклон Y
 	Toggle count group visibility	Вкл/выкл видимость группы счёта

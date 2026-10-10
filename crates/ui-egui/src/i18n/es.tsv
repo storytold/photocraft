@@ -2000,7 +2000,13 @@
 	Align with layer	Alinear con la capa
 	Reset Alignment	Restablecer la alineación
 	Centre the gradient (offset 0, 0)	Centrar el degradado (desplazamiento 0, 0)
-	The current gradient (pick one in Window › Gradients)	El degradado actual (elija uno en Ventana › Degradados)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor de degradados
+	Gradient picker	Selector de degradados
+	Save As Preset	Guardar como preajuste
+	The gradient the Gradient tool paints with	El degradado con el que pinta la herramienta Degradado
+	Adds the current gradient to the Gradients panel	Añade el degradado actual al panel Degradados
+	Gradient stops	Paradas de degradado
 	Select a type layer to edit its character and paragraph settings.	Seleccione una capa de texto para editar sus ajustes de carácter y párrafo.
 	Text color	Color del texto
 	Type Options	Opciones de texto

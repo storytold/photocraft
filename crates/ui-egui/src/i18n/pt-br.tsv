@@ -1965,6 +1965,13 @@
 	Align with layer	Alinhar com a camada
 	Reset Alignment	Redefinir alinhamento
 	Centre the gradient (offset 0, 0)	Centralizar o degradê (deslocamento 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor de degradê
+	Gradient picker	Seletor de degradê
+	Gradient stops	Paradas do degradê
+	Save As Preset	Salvar como predefinição
+	The gradient the Gradient tool paints with	O degradê com que a ferramenta Degradê pinta
+	Adds the current gradient to the Gradients panel	Adiciona o degradê atual ao painel Degradês
 	The current gradient (pick one in Window › Gradients)	O degradê atual (escolha um em Janela › Degradês)
 	Select a type layer to edit its character and paragraph settings.	Selecione uma camada de texto para editar as configurações de caractere e parágrafo.
 	Text color	Cor do texto

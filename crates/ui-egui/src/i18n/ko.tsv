@@ -1964,6 +1964,13 @@
 	Centre the gradient (offset 0, 0)	그레이디언트를 중앙에 배치(오프셋 0, 0)
 	The current gradient (pick one in Window › Gradients)	현재 그레이디언트(창 › 그레이디언트에서 선택)
 	Select a type layer to edit its character and paragraph settings.	문자 및 단락 설정을 편집하려면 문자 레이어를 선택하세요.
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	그라디언트 편집기
+	Gradient picker	그라디언트 선택기
+	Save As Preset	프리셋으로 저장
+	The gradient the Gradient tool paints with	그라디언트 도구가 칠하는 그라디언트입니다
+	Adds the current gradient to the Gradients panel	현재 그라디언트를 그라디언트 패널에 추가합니다
+	Gradient stops	그라디언트 스톱
 	Text color	텍스트 색상
 	Type Options	문자 옵션
 	Anti-aliasing method	앤티 앨리어스 방식

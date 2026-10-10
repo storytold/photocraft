@@ -2058,7 +2058,13 @@ cameraRaw	Blending	混合
 	Align with layer	与图层对齐
 	Reset Alignment	重置对齐
 	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
-	The current gradient (pick one in Window › Gradients)	当前渐变（在“窗口 › 渐变”中选择）
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	渐变编辑器
+	Gradient picker	渐变拾色器
+	Save As Preset	存储为预设
+	The gradient the Gradient tool paints with	渐变工具所使用的渐变
+	Adds the current gradient to the Gradients panel	将当前渐变添加到“渐变”面板
+	Gradient stops	渐变色标
 	Select a type layer to edit its character and paragraph settings.	选择文字图层以编辑字符和段落设置。
 	Text color	文字颜色
 	Type Options	文字选项

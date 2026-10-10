@@ -1998,6 +1998,13 @@
 	Align with layer	Allinea con livello
 	Reset Alignment	Reimposta allineamento
 	Centre the gradient (offset 0, 0)	Centra sfumatura (offset 0,0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor sfumatura
+	Gradient picker	Selettore sfumatura
+	Gradient stops	Flag sfumatura
+	Save As Preset	Salva come preimpostazione
+	The gradient the Gradient tool paints with	La sfumatura con cui disegna lo strumento Sfumatura
+	Adds the current gradient to the Gradients panel	Aggiunge la sfumatura corrente al pannello Sfumature
 	The current gradient (pick one in Window › Gradients)	Sfumatura corrente (scegline una in Finestra › Sfumature)
 	Select a type layer to edit its character and paragraph settings.	Seleziona un livello testo per modificarne impostazioni carattere e paragrafo.
 	Text color	Colore testo

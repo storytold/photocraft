@@ -1506,6 +1506,13 @@
 	Align with layer	Στοίχιση με το επίπεδο
 	Reset Alignment	Επαναφορά στοίχισης
 	Centre the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Επεξεργασία διαβάθμισης
+	Gradient picker	Επιλογή διαβάθμισης
+	Gradient stops	Σημεία διαβάθμισης
+	Save As Preset	Αποθήκευση ως προεπιλογή
+	The gradient the Gradient tool paints with	Η διαβάθμιση με την οποία ζωγραφίζει το εργαλείο Διαβάθμιση
+	Adds the current gradient to the Gradients panel	Προσθέτει την τρέχουσα διαβάθμιση στον πίνακα Διαβαθμίσεις
 	The current gradient (pick one in Window › Gradients)	Η τρέχουσα διαβάθμιση (επιλέξτε μία από Παράθυρο › Διαβαθμίσεις)
 	Select a type layer to edit its character and paragraph settings.	Επιλέξτε επίπεδο κειμένου για επεξεργασία των ρυθμίσεων χαρακτήρων και παραγράφων.
 	Text color	Χρώμα κειμένου

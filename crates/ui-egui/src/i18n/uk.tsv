@@ -1901,6 +1901,13 @@
 	Capture	Зберегти стан
 	Center Crop Marks	Центральні мітки обрізання
 	Centre the gradient (offset 0, 0)	Центрувати градієнт (зсув 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Редактор градієнтів
+	Gradient picker	Вибір градієнта
+	Gradient stops	Точки градієнта
+	Save As Preset	Зберегти як набір
+	The gradient the Gradient tool paints with	Градієнт, яким малює інструмент «Градієнт»
+	Adds the current gradient to the Gradients panel	Додає поточний градієнт на панель «Градіенти»
 	Change Screen Mode  (F)	Змінити режим екрана  (F)
 	Change To:	Змінити на:
 	Clear All	Очистити все

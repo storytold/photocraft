@@ -1270,6 +1270,7 @@ impl eframe::App for PhotocraftApp {
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
+        gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
@@ -1769,6 +1770,9 @@ mod marquee_tests;
 
 #[cfg(test)]
 mod caps_lock_tests;
+
+#[cfg(test)]
+mod view_sync_tests;
 
 #[cfg(test)]
 mod stamp_tests;

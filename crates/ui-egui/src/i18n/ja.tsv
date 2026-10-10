@@ -2005,7 +2005,13 @@
 	Align with layer	レイヤーに揃える
 	Reset Alignment	位置をリセット
 	Centre the gradient (offset 0, 0)	グラデーションを中央に配置(オフセット 0, 0)
-	The current gradient (pick one in Window › Gradients)	現在のグラデーション(ウィンドウ › グラデーション で選択)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	グラデーションエディター
+	Gradient picker	グラデーションピッカー
+	Save As Preset	プリセットとして保存
+	The gradient the Gradient tool paints with	グラデーションツールで描画されるグラデーション
+	Adds the current gradient to the Gradients panel	現在のグラデーションをグラデーション パネルに追加します
+	Gradient stops	グラデーション ストップ
 	Select a type layer to edit its character and paragraph settings.	文字レイヤーを選択すると、文字と段落の設定を編集できます。
 	Text color	文字色
 	Type Options	文字オプション

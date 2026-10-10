@@ -1988,6 +1988,13 @@
 	Align with layer	An Ebene ausrichten
 	Reset Alignment	Ausrichtung zurücksetzen
 	Centre the gradient (offset 0, 0)	Verlauf zentrieren (Versatz 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Gradienten-Editor
+	Gradient picker	Verlaufsauswahl
+	Gradient stops	Verlaufsstufen
+	Save As Preset	Als Vorgabe speichern
+	The gradient the Gradient tool paints with	Der Verlauf, mit dem das Verlaufswerkzeug malt
+	Adds the current gradient to the Gradients panel	Fügt den aktuellen Verlauf zum Bedienfeld „Verläufe" hinzu
 	The current gradient (pick one in Window › Gradients)	Der aktuelle Verlauf (wähle einen unter Fenster › Verläufe)
 	Select a type layer to edit its character and paragraph settings.	Wähle eine Textebene, um ihre Zeichen- und Absatzeinstellungen zu bearbeiten.
 	Text color	Textfarbe

@@ -1966,7 +1966,13 @@
 	Align with layer	Aligner sur le calque
 	Reset Alignment	Réinitialiser l'alignement
 	Centre the gradient (offset 0, 0)	Centrer le dégradé (décalage 0, 0)
-	The current gradient (pick one in Window › Gradients)	Le dégradé actuel (choisissez-en un dans Fenêtre › Dégradés)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Éditeur de dégradé
+	Gradient picker	Sélecteur de dégradé
+	Save As Preset	Enregistrer comme préreglage
+	The gradient the Gradient tool paints with	Le dégradé que l'outil Dégradé applique
+	Adds the current gradient to the Gradients panel	Ajoute le dégradé actuel au panneau Dégradés
+	Gradient stops	Arrêts de dégradé
 	Select a type layer to edit its character and paragraph settings.	Sélectionnez un calque de texte pour modifier ses paramètres de caractère et de paragraphe.
 	Text color	Couleur du texte
 	Type Options	Options de texte

@@ -1998,7 +1998,13 @@
 	Align with layer	與圖層對齊
 	Reset Alignment	重設對齊
 	Centre the gradient (offset 0, 0)	置中漸層 (位移 0, 0)
-	The current gradient (pick one in Window › Gradients)	目前的漸層 (請在 視窗 › 漸層 挑選)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	漸層編輯器
+	Gradient picker	漸層挑選器
+	Save As Preset	儲存為預設
+	The gradient the Gradient tool paints with	漸變工具所使用的漸變
+	Adds the current gradient to the Gradients panel	將目前漸變新增至「漸層」面板
+	Gradient stops	漸層色標
 	Select a type layer to edit its character and paragraph settings.	選取文字圖層以編輯其字元和段落設定。
 	Text color	文字顏色
 	Type Options	文字選項

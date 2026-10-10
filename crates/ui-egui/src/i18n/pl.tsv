@@ -1993,6 +1993,13 @@
 	Align with layer	Wyrównaj do warstwy
 	Reset Alignment	Resetuj wyrównanie
 	Centre the gradient (offset 0, 0)	Wyśrodkuj gradient (przesunięcie 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Edytor gradientu
+	Gradient picker	Wybór gradientu
+	Gradient stops	Punkty gradientu
+	Save As Preset	Zapisz jako preset
+	The gradient the Gradient tool paints with	Gradient, którym maluje narzędzie Gradient
+	Adds the current gradient to the Gradients panel	Dodaje bieżący gradient do panelu Gradienty
 	The current gradient (pick one in Window › Gradients)	Bieżący gradient (wybierz w Okno › Gradienty)
 	Select a type layer to edit its character and paragraph settings.	Zaznacz warstwę tekstową, aby edytować jej ustawienia znaków i akapitów.
 	Text color	Kolor tekstu
