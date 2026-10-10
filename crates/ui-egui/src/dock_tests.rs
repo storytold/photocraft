@@ -158,14 +158,17 @@ fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
     assert!((layers2.top() - (layers.top() - 60.0)).abs() < 2.0, "{layers:?} -> {layers2:?}");
     assert_eq!(rect_of(&h, Group::Color), color, "the group above keeps its place");
     assert_eq!(layers2.bottom(), layers.bottom());
-    let stored = h.state().ui.dock.heights.get(&Group::Properties).copied().unwrap();
-    // Dragging past the minimum stops at it.
+    // Dragging past the minimum pushes the group above down to its minimum too (#2573), then stops.
     let split = Pos2::new(props2.center().x, props2.bottom() + GAP / 2.0);
     drag(&mut h, split, split - vec2(0.0, 600.0));
     assert_eq!(rect_of(&h, Group::Properties).height(), Group::Properties.min_height());
+    assert_eq!(rect_of(&h, Group::Color).height(), Group::Color.min_height());
+    assert_eq!(rect_of(&h, Group::Layers).bottom(), layers.bottom());
+    // Dragging back down grows Properties alone; Color stays where it was pushed.
     let from = Pos2::new(split.x, rect_of(&h, Group::Properties).bottom() + GAP / 2.0);
     drag(&mut h, from, split);
-    assert!((h.state().ui.dock.heights[&Group::Properties] - stored).abs() < 2.0);
+    assert!((rect_of(&h, Group::Properties).bottom() - props2.bottom()).abs() < 2.0);
+    assert_eq!(rect_of(&h, Group::Color).height(), Group::Color.min_height());
 
     // Save and restore the UI state (what `ui.inspect` / `ui.set` and workspaces carry).
     let saved = serde_json::to_value(&h.state().ui).unwrap();
@@ -190,6 +193,116 @@ fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
     assert_eq!(app4.ui.dock, DockLayout::default());
 }
 
+/// `resize` on `shown` laid out in a column `avail` tall, then the new layout.
+fn resized(l: &mut DockLayout, shown: &[Group], avail: f32, i: usize, dy: f32) -> Vec<(Group, f32)> {
+    let hs = l.heights_for(shown, avail, 28.0);
+    resize(l, &hs, i, dy);
+    l.heights_for(shown, avail, 28.0)
+}
+
+fn total(hs: &[(Group, f32)]) -> f32 {
+    hs.iter().map(|(_, h)| h).sum::<f32>() + GAP * hs.len().saturating_sub(1) as f32
+}
+
+#[test]
+fn dragging_a_splitter_down_pushes_every_group_below_in_turn() {
+    let shown = [Group::Color, Group::Properties, Group::Navigator, Group::Layers];
+    let mut l = DockLayout::default();
+    let before = l.heights_for(&shown, 1200.0, 28.0);
+    // Properties gives way first, then Navigator, then the filler; the column stays 1200.
+    let hs = resized(&mut l, &shown, 1200.0, 0, 300.0);
+    assert_eq!(hs[0].1, before[0].1 + 300.0, "{hs:?}");
+    assert_eq!(hs[1].1, Group::Properties.min_height());
+    assert_eq!(hs[2].1, before[2].1 - (300.0 - (before[1].1 - Group::Properties.min_height())));
+    assert_eq!(hs[3].1, before[3].1, "the filler is untouched until the groups above it are at minimum");
+    assert!((total(&hs) - 1200.0).abs() < 1e-3);
+    // Far past the end: everything below is at its minimum and the drag stops there.
+    let hs = resized(&mut l, &shown, 1200.0, 0, 5000.0);
+    assert_eq!(hs[1].1, Group::Properties.min_height());
+    assert_eq!(hs[2].1, Group::Navigator.min_height());
+    assert_eq!(hs[3].1, Group::Layers.min_height());
+    assert!((total(&hs) - 1200.0).abs() < 1e-3, "{hs:?}");
+    let full = hs[0].1;
+    assert_eq!(resized(&mut l, &shown, 1200.0, 0, 50.0)[0].1, full);
+}
+
+#[test]
+fn dragging_a_splitter_up_pushes_every_group_above_in_turn() {
+    let shown = [Group::Color, Group::Properties, Group::Navigator, Group::Layers];
+    let mut l = DockLayout::default();
+    let before = l.heights_for(&shown, 1200.0, 28.0);
+    // The splitter under Navigator: Navigator shrinks first, then Properties, then Color.
+    let hs = resized(&mut l, &shown, 1200.0, 2, -200.0);
+    assert_eq!(hs[2].1, Group::Navigator.min_height());
+    assert_eq!(hs[1].1, before[1].1 - (200.0 - (before[2].1 - Group::Navigator.min_height())));
+    assert_eq!(hs[0].1, before[0].1);
+    assert_eq!(hs[3].1, before[3].1 + 200.0, "the filler takes the room");
+    let hs = resized(&mut l, &shown, 1200.0, 2, -5000.0);
+    assert!(hs[..3].iter().all(|(g, h)| *h == g.min_height()), "{hs:?}");
+    assert!((total(&hs) - 1200.0).abs() < 1e-3);
+    // The group grown when the filler isn't next: the splitter under Color grows Properties.
+    let mut l = DockLayout::default();
+    let hs = resized(&mut l, &shown, 1200.0, 0, -500.0);
+    assert_eq!(hs[0].1, Group::Color.min_height());
+    assert_eq!(hs[1].1, before[1].1 + (before[0].1 - Group::Color.min_height()));
+    assert_eq!(hs[2].1, before[2].1);
+}
+
+#[test]
+fn pushing_skips_collapsed_groups_and_respects_the_filler() {
+    let shown = [Group::Color, Group::Properties, Group::Navigator, Group::History, Group::Layers];
+    let mut l = DockLayout::default();
+    l.set_collapsed(Group::Properties, true);
+    l.set_collapsed(Group::Layers, true);
+    let before = l.heights_for(&shown, 1200.0, 28.0);
+    // History is the filler now; Properties keeps its strip and Layers stays collapsed.
+    let hs = resized(&mut l, &shown, 1200.0, 0, 5000.0);
+    assert_eq!(hs[1].1, 28.0);
+    assert_eq!(hs[4].1, 28.0);
+    assert_eq!(hs[2].1, Group::Navigator.min_height());
+    assert_eq!(hs[3].1, Group::History.min_height());
+    assert_eq!(hs[0].1, before[0].1 + (before[2].1 - Group::Navigator.min_height()) + (before[3].1 - Group::History.min_height()));
+    assert!((total(&hs) - 1200.0).abs() < 1e-3);
+    assert!(!l.heights.contains_key(&Group::History), "the filler's height is never stored");
+    // Dragging up from Navigator over the collapsed Properties shrinks Color.
+    let hs = resized(&mut l, &shown, 1200.0, 2, -5000.0);
+    assert_eq!(hs[0].1, Group::Color.min_height());
+    assert_eq!(hs[1].1, 28.0);
+    assert_eq!(hs[2].1, Group::Navigator.min_height());
+    assert!((total(&hs) - 1200.0).abs() < 1e-3);
+    // Nothing to resize against, bad deltas and out-of-range splitters are ignored.
+    let snapshot = l.clone();
+    for (i, dy) in [(3, 50.0), (4, 50.0), (9, 50.0), (0, f32::NAN), (0, f32::INFINITY), (0, 0.0)] {
+        let hs = l.heights_for(&shown, 1200.0, 28.0);
+        resize(&mut l, &hs, i, dy);
+        assert_eq!(l, snapshot, "splitter {i} by {dy}");
+    }
+}
+
+#[test]
+fn dragging_swatches_down_pushes_properties_then_layers() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let color = rect_of(&h, Group::Color);
+    let props = rect_of(&h, Group::Properties);
+    let layers = rect_of(&h, Group::Layers);
+    let room = (props.height() - Group::Properties.min_height()) + (layers.height() - Group::Layers.min_height());
+    let split = Pos2::new(color.center().x, color.bottom() + GAP / 2.0);
+    // Past Properties' minimum: Layers gives way too instead of the drag hard-stopping.
+    let dy = props.height() - Group::Properties.min_height() + 40.0;
+    drag(&mut h, split, split + vec2(0.0, dy));
+    assert!((rect_of(&h, Group::Color).height() - (color.height() + dy)).abs() < 2.0, "{color:?} -> {:?}", rect_of(&h, Group::Color));
+    assert_eq!(rect_of(&h, Group::Properties).height(), Group::Properties.min_height());
+    assert!((rect_of(&h, Group::Layers).height() - (layers.height() - 40.0)).abs() < 2.0);
+    assert_eq!(rect_of(&h, Group::Layers).bottom(), layers.bottom());
+    // All the way: everything below at its minimum.
+    let split = Pos2::new(color.center().x, rect_of(&h, Group::Color).bottom() + GAP / 2.0);
+    drag(&mut h, split, split + vec2(0.0, 2000.0));
+    assert!((rect_of(&h, Group::Color).height() - (color.height() + room)).abs() < 2.0);
+    assert_eq!(rect_of(&h, Group::Layers).height(), Group::Layers.min_height());
+    assert_eq!(rect_of(&h, Group::Layers).bottom(), layers.bottom());
+}
+
 #[test]
 fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() {
     let (app, _, _) = app_with_layers();
@@ -208,6 +321,33 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     assert_eq!(last_rects(&h.ctx), default);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Tall Layers"})).unwrap();
     assert_eq!(h.state().ui.dock, mine);
+}
+
+#[test]
+fn a_single_tab_click_expands_a_collapsed_panel() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        for tab_index in [0, 1] {
+            let (mut app, _, _) = app_with_layers();
+            app.ui.dock_tabs.color = 0;
+            app.ui.dock.set_collapsed(Group::Color, true);
+            // Locking prevents rearrangement, not opening an existing panel.
+            app.session.prefs.edit(|p| p.workspace_locked = true);
+            let mut h = harness(app, vec2(1200.0, 800.0), theme);
+            let collapsed_height = rect_of(&h, Group::Color).height();
+            let strips = last_strips(&h.ctx);
+            let strip = strips.iter().find(|s| s.group == Group::Color).unwrap();
+            let tab = strip.tabs.iter().find(|(i, _)| *i == tab_index).unwrap().1.center();
+            h.event(egui::Event::PointerMoved(tab));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+            assert!(!h.state().ui.dock.is_collapsed(Group::Color), "{theme:?}: tab {tab_index}");
+            assert_eq!(h.state().ui.dock_tabs.color, tab_index);
+            assert!(rect_of(&h, Group::Color).height() > collapsed_height);
+        }
+    }
 }
 
 #[test]
@@ -348,6 +488,88 @@ fn clicking_around_the_ui_keeps_the_panels_put() {
             assert_eq!(last_rects(&h.ctx), rects, "click at {p:?} moved the dock groups");
         }
         h.state_mut().ui.dialogs.clear();
+    }
+}
+
+#[test]
+fn closing_tabs_keeps_stable_names_across_themes_and_workspace_round_trips() {
+    let mut dock = DockLayout::default();
+    // In Pro the first Color group tab is Color; in Studio it is Swatches.
+    dock.hide_tab(Group::Color, 0, true);
+    assert_eq!(dock.visible_tabs(Group::Color, true).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns"]);
+    assert_eq!(dock.visible_tabs(Group::Color, false).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec!["Swatches", "Gradients", "Patterns"]);
+    dock.hide_tab(Group::Color, 999, true);
+    assert_eq!(dock.hidden_tabs[&Group::Color], vec!["Color"]);
+    let saved = serde_json::to_value(&dock).unwrap();
+    let mut restored: DockLayout = serde_json::from_value(saved).unwrap();
+    assert_eq!(restored, dock);
+    // Window › Color (Studio index 1) brings back precisely that tab.
+    restored.show_tab(Group::Color, 1, false);
+    assert!(restored.hidden_tabs.is_empty());
+    assert_eq!(restored.visible_tabs(Group::Color, false).len(), 4);
+}
+
+fn right_click_tab(h: &mut Harness<'static, PhotocraftApp>, group: Group, original_index: usize) {
+    let p = last_strips(&h.ctx)
+        .into_iter()
+        .find(|s| s.group == group)
+        .and_then(|s| s.tabs.into_iter().find(|(i, _)| *i == original_index))
+        .map(|(_, r)| r.center())
+        .unwrap_or_else(|| panic!("requested dock tab visible: {:?}", last_strips(&h.ctx).iter().map(|s| (s.group, s.tabs.clone())).collect::<Vec<_>>()));
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+/// #1753: both themes offer Close for the clicked tab and Close Tab Group independently.
+/// Closing the last tab hides its group; Window restores a hidden tab. (Studio floats
+/// Properties outside the dock, so it closes Layers tabs instead.)
+#[test]
+fn panel_tab_context_menu_closes_one_tab_or_its_group() {
+    use egui_kittest::kittest::Queryable;
+
+    for (theme, g, window) in [(ThemeKind::ProMedium, Group::Properties, "window.panel.properties"), (ThemeKind::Studio, Group::Layers, "window.panel.layers")]
+    {
+        let pro = is_pro(theme);
+        let names = g.tabs(pro);
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1300.0, 850.0), theme);
+        // Close the first tab: the group stays, showing (and selecting) the next one.
+        right_click_tab(&mut h, g, 0);
+        h.get_by_label("Close").click();
+        h.run_steps(3);
+        assert!(g.shown(&h.state().ui.panels), "{theme:?}: closing one tab keeps the group");
+        assert_eq!(*g.tab_mut(&mut h.state_mut().ui.dock_tabs), 1);
+        let rest: Vec<(usize, &str)> = names.iter().copied().enumerate().skip(1).collect();
+        assert_eq!(h.state().ui.dock.visible_tabs(g, pro), rest);
+        let strip: Vec<usize> = last_strips(&h.ctx).iter().find(|s| s.group == g).unwrap().tabs.iter().map(|(i, _)| *i).collect();
+        assert_eq!(strip, rest.iter().map(|(i, _)| *i).collect::<Vec<_>>());
+
+        // Close the remaining tabs: the last one hides this group, not the other dock groups.
+        for i in 1..names.len() {
+            right_click_tab(&mut h, g, i);
+            h.get_by_label("Close").click();
+            h.run_steps(3);
+        }
+        assert!(!g.shown(&h.state().ui.panels), "{theme:?}");
+        assert!(h.state().ui.panels.color, "{theme:?}");
+
+        // The Window menu reopens only the requested tab; hidden tabs stay hidden.
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, window, json!({})).unwrap();
+        h.run_steps(3);
+        assert!(g.shown(&h.state().ui.panels) && !h.state().ui.dock.is_collapsed(g));
+        assert_eq!(h.state().ui.dock.visible_tabs(g, pro), vec![(0, names[0])]);
+
+        // A tab's Close Tab Group closes the entire group without hiding its one tab.
+        right_click_tab(&mut h, g, 0);
+        h.get_by_label("Close Tab Group").click();
+        h.run_steps(3);
+        assert!(!g.shown(&h.state().ui.panels));
+        assert_eq!(h.state().ui.dock.visible_tabs(g, pro), vec![(0, names[0])]);
     }
 }
 

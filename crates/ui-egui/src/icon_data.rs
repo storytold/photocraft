@@ -1,4 +1,4 @@
-//! Lucide icons (ISC licence), embedded and tinted at runtime.
+//! Icons embedded and tinted at runtime; sources and licences are listed in `ATTRIBUTION.md`.
 
 pub static ICONS: &[(&str, &[u8])] = &[
     ("adjustment-layer", include_bytes!("../../../assets/icons/adjustment-layer.svg")),
@@ -10,6 +10,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("arrow-left-right", include_bytes!("../../../assets/icons/arrow-left-right.svg")),
     ("ban", include_bytes!("../../../assets/icons/ban.svg")),
     ("bandage", include_bytes!("../../../assets/icons/bandage.svg")),
+    ("bandage-sparkle", include_bytes!("../../../assets/icons/bandage-sparkle.svg")),
     ("blend", include_bytes!("../../../assets/icons/blend.svg")),
     ("brush", include_bytes!("../../../assets/icons/brush.svg")),
     ("brush-cleaning", include_bytes!("../../../assets/icons/brush-cleaning.svg")),
@@ -67,10 +68,12 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("message-square", include_bytes!("../../../assets/icons/message-square.svg")),
     ("minus", include_bytes!("../../../assets/icons/minus.svg")),
     ("moon", include_bytes!("../../../assets/icons/moon.svg")),
+    ("monitor", include_bytes!("../../../assets/icons/monitor.svg")),
     ("mouse-pointer-2", include_bytes!("../../../assets/icons/mouse-pointer-2.svg")),
     ("move", include_bytes!("../../../assets/icons/move.svg")),
     ("navigation", include_bytes!("../../../assets/icons/navigation.svg")),
     ("paint-bucket", include_bytes!("../../../assets/icons/paint-bucket.svg")),
+    ("painting-symmetry", include_bytes!("../../../assets/icons/painting-symmetry.svg")),
     ("palette", include_bytes!("../../../assets/icons/palette.svg")),
     ("panel-right", include_bytes!("../../../assets/icons/panel-right.svg")),
     ("panels-top-left", include_bytes!("../../../assets/icons/panels-top-left.svg")),
@@ -105,6 +108,10 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("squares-subtract", include_bytes!("../../../assets/icons/squares-subtract.svg")),
     ("stamp", include_bytes!("../../../assets/icons/stamp.svg")),
     ("sun", include_bytes!("../../../assets/icons/sun.svg")),
+    ("symmetry-diagonal", include_bytes!("../../../assets/icons/symmetry-diagonal.svg")),
+    ("symmetry-dual", include_bytes!("../../../assets/icons/symmetry-dual.svg")),
+    ("symmetry-horizontal", include_bytes!("../../../assets/icons/symmetry-horizontal.svg")),
+    ("symmetry-vertical", include_bytes!("../../../assets/icons/symmetry-vertical.svg")),
     ("swatch-book", include_bytes!("../../../assets/icons/swatch-book.svg")),
     ("text-cursor", include_bytes!("../../../assets/icons/text-cursor.svg")),
     ("toggle-left", include_bytes!("../../../assets/icons/toggle-left.svg")),

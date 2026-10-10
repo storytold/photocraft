@@ -43,7 +43,8 @@ ron = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
-core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link"] }
+# `event` (CGEventSource) is used for the Caps Lock poll (#1758).
+core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link", "event"] }
 # Finder double-click / Open With / Dock drops arrive as Apple events; this small audited crate
 # registers the handler (Objective-C interop needs unsafe, which our workspace forbids) behind a
 # safe API. Pinned exactly: review the diff before bumping.
@@ -63,7 +64,7 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr"] }
+x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
 # Wayland desktop color selection through the existing XDG portal transport.
 zbus = "=5.19.0"
 # Already used by the portal stack; bounded waits let cancelling close the OS request.
@@ -73,8 +74,9 @@ async-io = "=2.6.0"
 # re-export winit's `EventLoopBuilderExtX11`. Already in Cargo.lock (eframe); pinned exactly.
 winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 
-# Drop position on Windows (`cursor.rs`): safe Win32 wrappers (GetCursorPos), no dependencies of
-# its own. Pinned exactly: review the diff before bumping.
+# Safe Win32 wrappers on Windows: the pointer position for file drops (`cursor.rs`,
+# GetCursorPos) and the window frame for the custom title bar (`window_frame.rs`, window styles),
+# no dependencies of its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"

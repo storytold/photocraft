@@ -84,15 +84,9 @@ fn setup(h: &mut Harness, background: &str, tool: &str) {
 }
 
 fn xf(h: &Harness) -> ViewXform {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    ViewXform {
-        rect: photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
-        center: v.center,
-        flip: app.ui.view.flip_horizontal,
-        rotation: v.rotation,
-    }
+    // The same mapping the canvas draws with: `View::zoom` is device pixels per document pixel,
+    // and the transform works in the viewport's egui points.
+    ViewXform::active(h.state()).expect("an active document view")
 }
 
 /// Screen point (egui points) of document point `(x, y)`.
@@ -182,11 +176,11 @@ fn marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x() {
                     }
                 } else {
                     // The ellipse touches its box at the edge midpoints: check short arcs there.
-                    let c = screen(&h, 200.0, 150.0);
-                    let (rx, ry) = (100.0, 70.0);
-                    for (dx, dy) in [(0.0, -ry), (rx, 0.0), (0.0, ry), (-rx, 0.0)] {
-                        let m = c + egui::vec2(dx, dy);
-                        let along = if dx == 0.0 { egui::vec2(14.0, 0.0) } else { egui::vec2(0.0, 14.0) };
+                    // The arcs keep a physical length at any scale, so their sagitta stays inside
+                    // `coverage`'s ±2 physical px search.
+                    for (mx, my) in [(200.0, 80.0), (300.0, 150.0), (200.0, 220.0), (100.0, 150.0)] {
+                        let m = screen(&h, mx, my);
+                        let along = if mx == 200.0 { egui::vec2(14.0 / ppp, 0.0) } else { egui::vec2(0.0, 14.0 / ppp) };
                         let now = coverage(&img, ppp, m - along, m + along, ink(bg));
                         assert!(now > 0.3, "{tool} on {bg} @{ppp}x at {m:?}: {now:.2} contrasting");
                     }

@@ -92,6 +92,28 @@ fn revert_reloads_as_one_undoable_step() {
 }
 
 #[test]
+fn injected_import_failure_does_not_open_a_document() {
+    let mut s = session(8, 8, 8);
+    let before = s.documents().len();
+    crate::allocation::fail_next_for_test();
+    let result = open_bytes_as(&mut s, "image.png", b"not decoded", None, None);
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for importing document")));
+    assert_eq!(s.documents().len(), before);
+}
+
+#[test]
+fn injected_save_failure_does_not_modify_the_destination() {
+    let dir = tmp("allocation-save");
+    let path = join(&dir, "existing.psd");
+    std::fs::write(&path, b"previous file").unwrap();
+    let s = session(8, 8, 8);
+    crate::allocation::fail_next_for_test();
+    let result = save_doc(doc(&s), &path, None);
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for saving document")));
+    assert_eq!(std::fs::read(path).unwrap(), b"previous file");
+}
+
+#[test]
 fn save_a_copy_keeps_path_and_dirty_state() {
     let dir = tmp("copy");
     let mut s = session(20, 10, 16);
@@ -219,6 +241,73 @@ fn file_info_round_trips_through_xmp_and_psd() {
     let out = write_file_info(Some(foreign), &json!({"authorTitle": "Artist"}));
     assert!(out.contains("xmp:CreatorTool=\"Other App\""));
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+const MULTILINGUAL_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/"
+ xmp:CreatorTool="Other App" xmpRights:Marked="True" xmpRights:WebStatement="https://example.com/license">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Sun</rdf:li><rdf:li xml:lang="fr">Soleil</rdf:li><rdf:li xml:lang="ar">الشمس</rdf:li></rdf:Alt></dc:title>
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Sunrise</rdf:li><rdf:li xml:lang="fr">Lever du soleil</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">All rights reserved</rdf:li><rdf:li xml:lang="fr">Tous droits réservés</rdf:li></rdf:Alt></dc:rights>
+<dc:subject><rdf:Bag><rdf:li>sky</rdf:li></rdf:Bag></dc:subject>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+fn assert_translations_kept(xmp: &str) {
+    for prop in ["dc:title", "dc:description", "dc:rights"] {
+        assert_eq!(find_element(xmp, prop).unwrap().2, find_element(MULTILINGUAL_XMP, prop).unwrap().2, "{prop}");
+        assert_eq!(xmp.matches(&format!("<{prop}>")).count(), 1);
+    }
+    assert!(xmp.contains("xmp:CreatorTool=\"Other App\""));
+    assert!(xmp.contains("xmpRights:Marked=\"True\""));
+    assert!(xmp.contains("xmpRights:WebStatement=\"https://example.com/license\""));
+}
+
+#[test]
+fn file_info_keeps_translations_when_editing_keywords() {
+    let partial = json!({"keywords": ["sky", "sunrise"]});
+    let mut dialog = read_file_info(Some(MULTILINGUAL_XMP));
+    dialog["keywords"] = json!("sky; sunrise");
+    for params in [partial, dialog] {
+        let out = write_file_info(Some(MULTILINGUAL_XMP), &params);
+        assert_translations_kept(&out);
+        assert_eq!(read_file_info(Some(&out))["keywords"], json!(["sky", "sunrise"]));
+    }
+    let unchanged = read_file_info(Some(MULTILINGUAL_XMP));
+    assert_eq!(write_file_info(Some(MULTILINGUAL_XMP), &unchanged), MULTILINGUAL_XMP);
+    assert_eq!(write_file_info(Some(MULTILINGUAL_XMP), &json!({})), MULTILINGUAL_XMP);
+}
+
+#[test]
+fn file_info_clears_only_the_requested_field() {
+    let out = write_file_info(Some(MULTILINGUAL_XMP), &json!({"keywords": []}));
+    assert_translations_kept(&out);
+    assert!(find_element(&out, "dc:subject").is_none());
+    assert_eq!(read_file_info(Some(&out))["keywords"], json!([]));
+}
+
+#[test]
+fn file_info_translations_survive_undo_and_psd_round_trip() {
+    for depth in [8, 16, 32] {
+        let mut s = session(8, 8, depth);
+        s.edit("Set metadata", |doc, _| {
+            doc.metadata.xmp = Some(MULTILINGUAL_XMP.to_string());
+            Ok(())
+        })
+        .unwrap();
+        s.execute("file.fileInfo", json!({"keywords": ["sunrise"]})).unwrap();
+        let edited = doc(&s).metadata.xmp.clone().unwrap();
+        assert_translations_kept(&edited);
+        assert!(s.undo());
+        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(MULTILINGUAL_XMP));
+        assert!(s.redo());
+        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(edited.as_str()));
+        let (bytes, _) = encode(doc(&s), "x.psd", None).unwrap();
+        let back = photocraft_io::import("x.psd", &bytes).unwrap().document;
+        assert_translations_kept(back.metadata.xmp.as_deref().unwrap());
+        assert_eq!(read_file_info(back.metadata.xmp.as_deref())["keywords"], json!(["sunrise"]));
+    }
 }
 
 #[test]
@@ -368,6 +457,87 @@ fn color_lookup_table_bakes_the_adjustment_stack() {
 }
 
 #[test]
+fn cube_export_uses_only_selected_adjustments_in_document_order() {
+    let mut s = session(8, 8, 8);
+    let first = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let second = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let both = s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap();
+    let all = photocraft_cms::lutfile::parse_cube(both["cube"].as_str().unwrap()).unwrap();
+    assert_eq!(both["layerCount"], 2);
+    assert!(all.data[0] < 0.001, "two Invert adjustments produce identity");
+
+    // Selection comes from the Layers panel rather than the active layer alone.
+    s.execute("layer.select", json!({"layer": first})).unwrap();
+    let selected = s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
+    let one = photocraft_cms::lutfile::parse_cube(selected["cube"].as_str().unwrap()).unwrap();
+    assert_eq!(selected["layerCount"], 1);
+    assert!(one.data[0] > 0.999, "one invert maps black to white");
+    assert_eq!(all.size, one.size);
+    assert_eq!(s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [first]})).unwrap()["cube"], selected["cube"]);
+
+    // Reversing the caller's ID list must not reverse document stack order.
+    let normal = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [first, second]})).unwrap();
+    let reversed = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [second, first]})).unwrap();
+    assert_eq!(normal["cube"], reversed["cube"]);
+    assert_eq!(normal["cube"], both["cube"]);
+
+    // Additional non-adjustment layers must not affect the LUT export.
+    s.execute("layer.new.layer", json!({"name": "Raster"})).unwrap();
+    assert_eq!(s.execute("file.export.colorLookupTables", json!({"size": 3})).unwrap()["cube"], both["cube"]);
+}
+
+#[test]
+fn selected_cube_validation_is_explicit_and_never_mutates_the_document() {
+    let mut s = session(8, 8, 8);
+    let a = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let raster = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let rev = s.active().unwrap().revision;
+    let history = s.active().unwrap().history.past_len();
+    let valid = s.execute("file.export.colorLookupTables", json!({"size": 3, "layers": [a]})).unwrap();
+    assert_eq!(valid["layerCount"], 1);
+    for params in [
+        json!({"size": 1}),
+        json!({"size": 130}),
+        json!({"size": 1.5}),
+        json!({"size": -3}),
+        json!({"scope": "unknown"}),
+        json!({"scope": 42}),
+        json!({"scope": "selected", "layers": [a]}),
+        json!({"layers": []}),
+        json!({"layers": 42}),
+        json!({"layers": [a, a]}),
+        json!({"layers": [a, "oops"]}),
+        json!({"layers": [u64::MAX]}),
+        json!({"layers": [raster]}),
+    ] {
+        assert!(s.execute("file.export.colorLookupTables", params.clone()).is_err(), "{params}");
+        assert_eq!(s.active().unwrap().revision, rev, "{params}: export must be read-only");
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    s.execute("layer.select", json!({"layer": raster})).unwrap();
+    assert!(s.execute("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).is_err());
+}
+
+#[test]
+fn exported_selected_cube_round_trips_through_lookup_importer() {
+    let dir = tmp("selected_cube");
+    let mut s = session(8, 8, 8);
+    let a = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let path = join(&dir, "chosen.cube");
+    let r = s.execute("file.export.colorLookupTables", json!({"size": 17, "title": "Chosen", "layers": [a], "path": path})).unwrap();
+    assert_eq!(r["size"], 17);
+    assert_eq!(r["layerCount"], 1);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let parsed = photocraft_cms::lutfile::parse_cube(&text).unwrap();
+    assert_eq!(parsed.size, 17);
+    assert_eq!(parsed.data.len(), 17 * 17 * 17 * 3);
+    assert!(parsed.data[..3].iter().all(|v| *v > 0.999));
+    assert!(parsed.data[parsed.data.len() - 3..].iter().all(|v| *v < 0.001));
+    s.execute("layer.newAdjustmentLayer.colorLookup", json!({"file": path})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layers.len(), 3);
+}
+
+#[test]
 fn guide_layouts() {
     let mut s = session(100, 50, 8);
     let r = s.execute("view.newGuideLayout", json!({"columns": 2, "gutter": 10, "margin": [5, 10, 5, 10]})).unwrap();
@@ -395,11 +565,11 @@ fn guide_layouts() {
 
 #[test]
 fn only_layered_files_save_in_place() {
-    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd"] {
+    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd", "a.ora", "dir/A.ORA"] {
         assert!(saves_in_place(path), "{path}");
     }
     // Flat formats, no extension, a dotted folder with an extensionless file, a dot file.
-    for path in ["a.png", "a.jpg", "a", "my.psd/a", ".psd", "a.", ""] {
+    for path in ["a.png", "a.jpg", "a.pdn", "a.PDN", "a", "my.psd/a", ".psd", "a.", ""] {
         assert!(!saves_in_place(path), "{path}");
     }
     assert_eq!(extension("dir/Photo.JPEG").as_deref(), Some("jpeg"));
@@ -467,4 +637,28 @@ fn batch_reports_inputs_that_share_an_output_name() {
     let kept = photocraft_io::import("a.png", &std::fs::read(join(&out, "a.png")).unwrap()).unwrap().document;
     let px = photocraft_compose::render(&kept, Rect::new(1, 1, 2, 2)).px[0];
     assert!(px[0] > 0.99 && px[1] < 0.01, "the first input's result is kept: {px:?}");
+}
+
+/// `file.revealInFinder` (the document tab's Reveal, UI-217-6) reveals the clicked document's
+/// saved path — the tab menu passes `document`, not just the active one.
+#[test]
+fn reveal_in_finder_reveals_the_documents_saved_path() {
+    let mut s = session(8, 8, 8);
+    assert!(s.is_enabled("file.revealInFinder"));
+    // A new document has no file yet.
+    let err = s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap_err();
+    assert!(err.to_string().contains("no saved file"), "{err}");
+    let path = "/tmp/pics/a.psd";
+    s.active_mut().unwrap().path = Some(path.into());
+    let r = s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap();
+    let (program, args) = crate::layer_menu_cmds::reveal_command(path);
+    assert_eq!(r["program"], json!(program));
+    assert_eq!(r["args"], json!(args));
+    // The tab menu names a background tab: the active document is not the one revealed.
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "other"})).unwrap();
+    let err = s.execute("file.revealInFinder", json!({"document": 1, "dryRun": true})).unwrap_err();
+    assert!(err.to_string().contains("no saved file"), "{err}");
+    let r = s.execute("file.revealInFinder", json!({"document": 0, "dryRun": true})).unwrap();
+    assert_eq!(r["program"], json!(program));
+    assert_eq!(r["args"], json!(args));
 }

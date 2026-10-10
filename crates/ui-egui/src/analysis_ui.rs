@@ -203,7 +203,7 @@ fn export_log(app: &mut PhotocraftApp, rows: Option<Vec<u64>>) -> Result<Value, 
 // ------------------------------------------------------------------ tools
 
 fn tolerance(app: &PhotocraftApp) -> f64 {
-    7.0 / f64::from(app.current_zoom().max(0.01))
+    7.0 / f64::from(app.point_zoom().max(0.01))
 }
 
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -227,7 +227,7 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 
 /// Pointer input for the Ruler, Count and Note tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    let tool = app.ui.tool;
+    let tool = app.active_tool();
     if !matches!(tool, Tool::Ruler | Tool::Count | Tool::Note) {
         return false;
     }
@@ -293,7 +293,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
         }
         (Tool::Note, ToolEvent::Down { x, y, .. }) => {
-            let z = f64::from(app.current_zoom().max(0.01));
+            let z = f64::from(app.point_zoom().max(0.01));
             let hit =
                 doc.notes.iter().rposition(|n| x >= n.position[0] && x <= n.position[0] + 16.0 / z && y >= n.position[1] && y <= n.position[1] + 20.0 / z);
             match hit {

@@ -63,7 +63,7 @@ fn main() {
     for size in [30.0f32, 300.0] {
         let x = c + rad - size * 2.0;
         let t = Instant::now();
-        let r = quick::quick_select(&sampler, canvas, &[(x, c - size), (x, c + size)], size, quick::WORK_PX).expect("region");
+        let r = quick::quick_select(&sampler, canvas, &[(x, c - size), (x, c + size)], size).expect("region");
         println!("quick selection stroke (brush {size} px): {:.2?}  (region {}x{})", t.elapsed(), r.bbox.width(), r.bbox.height());
     }
 

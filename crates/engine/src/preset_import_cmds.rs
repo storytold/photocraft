@@ -1,7 +1,8 @@
 //! Importing Photoshop preset files.
 //!
 //! - `brush.presets.importAbr` adds the presets of an `.abr` file (v1, v2, v6+) to the brush
-//!   library as one group (Brushes panel › Import Brushes…, Preset Manager). Parsing lives in
+//!   library as one group named after the file, with the file's own folders nested inside it
+//!   as Photoshop does (Brushes panel › Import Brushes…, Preset Manager). Parsing lives in
 //!   `photocraft-psd` (`abr`), the mapping onto [`BrushSettings`] in `photocraft-io` (`abr_map`).
 //! - `gradient.presets.importGrd` adds the gradients of a `.grd` file (version 5) to the
 //!   Gradients panel as one group.
@@ -102,9 +103,15 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         && let Some(first) = names.first()
         && let Some(pr) = photocraft_paint::presets::find(&s.tools.presets, first)
     {
-        s.tools.brush = pr.brush.clone().picked_over(&s.tools.brush);
+        let mut b = pr.brush.clone().picked_over(&s.tools.brush);
+        s.load_brush_tips(&mut b).map_err(|e| bad("brush.presets.importAbr", e))?;
+        s.tools.brush = b;
     }
-    Ok(json!({ "group": group, "imported": names, "count": names.len(), "version": imp.version, "warnings": imp.warnings }))
+    // Distinct folder paths the file brought (its Photoshop folders, nested inside `group`).
+    let folders: std::collections::BTreeSet<&[String]> =
+        s.tools.presets.iter().filter(|x| !x.builtin && x.group == group).flat_map(|x| (1..=x.folder.len()).filter_map(|d| x.folder.get(..d))).collect();
+    let folders = folders.len();
+    Ok(json!({ "group": group, "imported": names, "count": names.len(), "folders": folders, "version": imp.version, "warnings": imp.warnings }))
 }
 
 /// Brush-file import command specs.
@@ -115,7 +122,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Brushes…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".abr file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name),"select":bool=false (make the first imported preset current)}"##,
+            params: r##"{"path":".abr file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name),"select":bool=false (make the first imported preset current)} → {group, imported, count, folders (nested folders kept from the file), version, warnings}"##,
             enabled: always,
             run: import_abr,
             journal: true,
@@ -193,7 +200,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         None if !stem.is_empty() => stem,
         None => "Imported Gradients".to_string(),
     };
-    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable Photoshop gradient file: {e}")))?;
+    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
     let mut warnings = Vec::new();
     let mut items = Vec::new();
     let (mut noise, mut midpoints) = (0, false);

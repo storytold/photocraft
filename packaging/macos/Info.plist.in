@@ -74,9 +74,39 @@
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.photocraft.ora</string>
+      <key>UTTypeDescription</key>
+      <string>OpenRaster Image</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.image</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>ora</string></array>
+        <key>public.mime-type</key>
+        <array><string>image/openraster</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.photocraft.pdn</string>
+      <key>UTTypeDescription</key>
+      <string>Paint.NET Document</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.image</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>pdn</string></array>
+        <key>public.mime-type</key>
+        <array><string>image/x-paintnet</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
       <string>com.adobe.photoshop-large-image</string>
       <key>UTTypeDescription</key>
-      <string>Photoshop Large Document</string>
+      <string>PSD Large Document</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.data</string>
@@ -122,7 +152,7 @@
     </dict>
     <dict>
       <key>CFBundleTypeName</key>
-      <string>Photoshop Document</string>
+      <string>PSD Document</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
@@ -155,6 +185,8 @@
         <string>public.radiance</string>
         <string>public.avif</string>
         <string>ai.storyteller.photocraft.qoi</string>
+        <string>ai.storyteller.photocraft.pdn</string>
+        <string>ai.storyteller.photocraft.ora</string>
       </array>
     </dict>
   </array>

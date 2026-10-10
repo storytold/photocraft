@@ -1,8 +1,11 @@
-//! Painting symmetry along a path. A sampled Bézier polyline is kept as per-document tool state;
-//! each brush sample reflects across its nearest segment, including curved paths.
+//! Per-document painting symmetry: straight presets or a sampled Bézier path.
+//! Path samples reflect across their nearest segment, including curved paths.
 
 use photocraft_doc::{LayerContent, vector::Path};
-use photocraft_paint::StrokePoint;
+use photocraft_paint::{
+    StrokePoint,
+    symmetry::{PresetSymmetry, SymmetryMode},
+};
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session, commands::CommandSpec};
@@ -11,10 +14,72 @@ use crate::{EngineError, Result, Session, commands::CommandSpec};
 const MAX_SEGMENTS: usize = 1024;
 const SAMPLES_PER_CURVE: usize = 12;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SymmetryAxis {
     pub source: String,
     pub segments: Vec<[[f64; 2]; 2]>,
+}
+
+/// Per-document painting tool state, never stored in the document's paths or pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaintingSymmetry {
+    Path(SymmetryAxis),
+    Preset(PresetSymmetry),
+}
+
+impl PaintingSymmetry {
+    pub fn preset(&self) -> Option<PresetSymmetry> {
+        match self {
+            Self::Preset(p) => Some(*p),
+            Self::Path(_) => None,
+        }
+    }
+    pub fn path_source(&self) -> Option<&str> {
+        match self {
+            Self::Path(p) => Some(&p.source),
+            Self::Preset(_) => None,
+        }
+    }
+    pub fn mirror_count(&self) -> usize {
+        match self {
+            Self::Path(_) => 1,
+            Self::Preset(p) => p.mirror_count(),
+        }
+    }
+    pub fn reflected_passes(&self, points: &[StrokePoint]) -> Vec<Vec<StrokePoint>> {
+        match self {
+            Self::Path(axis) => vec![axis.reflect_points(points)],
+            Self::Preset(p) => p.reflected_passes(points),
+        }
+    }
+    pub fn inspect(&self) -> Value {
+        match self {
+            Self::Path(axis) => json!({"mode":"path", "source":axis.source, "segments":axis.segments.len()}),
+            Self::Preset(p) => json!({"mode":p.mode.id(), "center":p.center, "rotation":p.rotation}),
+        }
+    }
+}
+
+fn set_preset(s: &mut Session, p: &Value) -> Result<Value> {
+    let fail = || EngineError::Other("symmetry requires a valid mode, a finite [x,y] centre and a finite rotation".into());
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let mode = p.get("mode").and_then(Value::as_str).and_then(SymmetryMode::from_id).ok_or_else(fail)?;
+    let center = match p.get("center") {
+        None => [f64::from(st.doc.size.width) / 2.0, f64::from(st.doc.size.height) / 2.0],
+        Some(v) => {
+            let values = v.as_array().filter(|v| v.len() == 2).ok_or_else(fail)?;
+            [values.first().and_then(Value::as_f64).ok_or_else(fail)?, values.get(1).and_then(Value::as_f64).ok_or_else(fail)?]
+        }
+    };
+    let rotation = match p.get("rotation") {
+        None => 0.0,
+        Some(v) => v.as_f64().ok_or_else(fail)?,
+    };
+    let preset = PresetSymmetry::new(mode, center, rotation).ok_or_else(fail)?;
+    let symmetry = PaintingSymmetry::Preset(preset);
+    let result = symmetry.inspect();
+    s.active_mut().ok_or(EngineError::NoDocument)?.symmetry = Some(symmetry);
+    Ok(result)
 }
 
 impl SymmetryAxis {
@@ -109,18 +174,28 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     let axis = SymmetryAxis::from_path(name.to_owned(), &active_path(s, name)?)?;
     let count = axis.segments.len();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    st.symmetry_path = Some(axis);
+    st.symmetry = Some(PaintingSymmetry::Path(axis));
     Ok(json!({"enabled": true, "source": name, "segments": count}))
 }
 
 fn disable(s: &mut Session) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    st.symmetry_path = None;
+    st.symmetry = None;
     Ok(json!({"enabled": false}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "paint.setSymmetry",
+            label: "Set Painting Symmetry",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"mode":"vertical|horizontal|dual|diagonal","center":[x,y]?,"rotation":degrees=0}"#,
+            enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
+            run: set_preset,
+            journal: true,
+        },
         CommandSpec {
             id: "paint.symmetryFromPath",
             label: "Make Symmetry Path",
@@ -133,11 +208,11 @@ pub fn specs() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "paint.symmetryDisable",
-            label: "Disable Symmetry Path",
+            label: "Disable Painting Symmetry",
             menu: &[],
             shortcut: None,
             params: "{}",
-            enabled: |s| s.active().filter(|st| st.symmetry_path.is_some()).map(|_| ()).ok_or_else(|| "no active symmetry path".into()),
+            enabled: |s| s.active().filter(|st| st.symmetry.is_some()).map(|_| ()).ok_or_else(|| "no active painting symmetry".into()),
             run: |s, _| disable(s),
             journal: true,
         },
@@ -262,3 +337,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod preset_tests;

@@ -533,12 +533,15 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
     Ok(Some(surf))
 }
 
-/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table
-/// and the filters. A mask target enables them on any layer with a mask, so ⌘I inverts an
-/// adjustment layer's mask as in Photoshop (#780).
+/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table,
+/// the filters and the fills (Edit › Fill and its keys). A mask target enables them on any layer
+/// with a mask, so ⌘I inverts an adjustment layer's mask (#780) and Fill fills it (#2456) as in
+/// Photoshop.
 fn edits_mask(id: &str) -> bool {
     id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
         || crate::filters::params_for(id, &Value::Null).is_some()
+        || id == "edit.fill"
+        || crate::fill_key_cmds::IDS.contains(&id)
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
@@ -553,7 +556,8 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`
 /// (filters, adjustments, paint and fill commands); the shell adds its mask target to these.
 pub fn follows_target(id: &str) -> bool {
-    routed(id)
+    // Moving the selected pixels (⌘-drag, Move tool) moves the targeted mask's, not the layer's.
+    routed(id) || id == "select.float"
 }
 
 /// Commands whose target follows the Channels panel.
@@ -579,6 +583,7 @@ fn routed(id: &str) -> bool {
                 | "paint.smudge"
                 | "paint.historyBrush"
                 | "paint.redEye"
+                | "paint.remove"
         )
 }
 

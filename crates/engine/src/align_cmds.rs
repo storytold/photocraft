@@ -84,11 +84,14 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
             let l = doc.layer(ids[i]).ok_or(EngineError::NoLayer(ids[i]))?;
             let surf = l.surface().ok_or(EngineError::NoLayer(ids[i]))?;
             let b = surf.content_bounds();
-            let px = if b.is_empty() { surf.clone() } else { warp_placed(surf, b, (0.0, 0.0), pl, (0.0, 0.0), interp) };
-            let mask = l.mask.as_ref().map(|m| {
-                let mb = m.surface.content_bounds();
-                if mb.is_empty() { m.surface.clone() } else { warp_placed(&m.surface, mb, (0.0, 0.0), pl, (0.0, 0.0), Interp::Bilinear) }
-            });
+            let px = if b.is_empty() { surf.clone() } else { warp_placed(surf, b, (0.0, 0.0), pl, (0.0, 0.0), interp)? };
+            let mask = match l.mask.as_ref() {
+                Some(m) => {
+                    let mb = m.surface.content_bounds();
+                    Some(if mb.is_empty() { m.surface.clone() } else { warp_placed(&m.surface, mb, (0.0, 0.0), pl, (0.0, 0.0), Interp::Bilinear)? })
+                }
+                None => None,
+            };
             Ok((ids[i], px, mask))
         })
         .collect::<Result<_>>()?;

@@ -106,6 +106,38 @@ pub enum Channels {
     Other,
 }
 
+/// The menu name of the adjustment a PSD key holds (for messages).
+pub fn label(key: &[u8; 4]) -> &'static str {
+    match key {
+        b"levl" => "Levels",
+        b"curv" => "Curves",
+        b"hue2" => "Hue/Saturation",
+        b"brit" => "Brightness/Contrast",
+        b"nvrt" => "Invert",
+        b"thrs" => "Threshold",
+        b"post" => "Posterize",
+        b"expA" => "Exposure",
+        b"vibA" => "Vibrance",
+        b"blnc" => "Color Balance",
+        b"mixr" => "Channel Mixer",
+        b"grdm" => "Gradient Map",
+        b"phfl" => "Photo Filter",
+        b"selc" => "Selective Color",
+        b"blwh" => "Black & White",
+        b"clrL" => "Color Lookup",
+        _ => "adjustment",
+    }
+}
+
+/// Why [`parse`] keeps a block as [`Adjustment::Unsupported`], when there is more to say than
+/// "it could not be read" (so far: Color Lookup).
+pub fn unreadable_reason(key: &[u8; 4], data: &[u8]) -> Option<String> {
+    match key {
+        b"clrL" => read_lookup(data).err(),
+        _ => None,
+    }
+}
+
 /// Parses an adjustment block. `cged` is the optional `CgEd` block data
 /// (modern brightness/contrast parameters). Levels/Curves store the
 /// composite record first, then one per document channel (see [`Channels`]).
@@ -346,23 +378,31 @@ fn desc_enum<'a>(d: &'a Descriptor, key: &str) -> Option<&'a [u8]> {
 /// the format named by `LUTFormat`). Profile-based lookups (abstract / device link) have no
 /// table and stay [`Adjustment::Unsupported`].
 fn parse_lookup(d: &[u8]) -> Option<Adjustment> {
-    if be16(d, 0)? != 1 {
-        return None;
+    read_lookup(d).ok()
+}
+
+/// [`parse_lookup`] with the reason a block can't be read.
+fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
+    match be16(d, 0) {
+        Some(1) => {}
+        Some(v) => return Err(format!("unknown version {v}")),
+        None => return Err("the block is truncated".into()),
     }
-    let (v, _) = VersionedDescriptor::parse_prefix(d.get(2..)?).ok()?;
+    let (v, _) = VersionedDescriptor::parse_prefix(d.get(2..).unwrap_or_default()).map_err(|e| format!("unreadable settings ({e})"))?;
     let desc = v.descriptor;
-    let bytes = match desc.get("LUT3DFileData")? {
-        Value::RawData(b) if !b.is_empty() => b,
-        _ => return None,
+    let bytes = match desc.get("LUT3DFileData") {
+        Some(Value::RawData(b)) if !b.is_empty() => b,
+        Some(_) => return Err("its LUT data is empty".into()),
+        None => return Err("it uses a colour profile (abstract or device link), not a LUT file, which isn't supported yet".into()),
     };
-    let ext = match desc_enum(&desc, "LUTFormat") {
-        Some(b"LUTFormat3DL") => "x.3dl",
-        Some(b"LUTFormatLOOK") => "x.look",
-        _ => "x.cube",
+    let (ext, format) = match desc_enum(&desc, "LUTFormat") {
+        Some(b"LUTFormat3DL") => ("x.3dl", "3DL"),
+        Some(b"LUTFormatLOOK") => ("x.look", "LOOK"),
+        _ => ("x.cube", "CUBE"),
     };
-    let lut = photocraft_cms::lutfile::parse(ext, bytes).ok()?;
+    let lut = photocraft_cms::lutfile::parse(ext, bytes).map_err(|e| format!("its {format} LUT can't be read ({e})"))?;
     let name = desc_text(&desc, "LUT3DFileName").or_else(|| desc_text(&desc, "NM  ")).unwrap_or_default();
-    Some(Adjustment::ColorLookup {
+    Ok(Adjustment::ColorLookup {
         name,
         size: lut.size as u32,
         lut: Some(std::sync::Arc::new(lut.data)),
@@ -860,6 +900,18 @@ mod tests {
         let mut p = vec![0, 1];
         p.extend(VersionedDescriptor::new(Descriptor::new("null").with("lookupType", en("colorLookupType", "abstractProfile"))).to_bytes());
         assert!(matches!(parse(b"clrL", &p, None, Channels::Rgb), Adjustment::Unsupported { .. }));
+        // Each way a lookup can't be read has a reason for the import warning (#1763).
+        assert_eq!(unreadable_reason(b"clrL", &d), None);
+        assert!(unreadable_reason(b"clrL", &p).unwrap().contains("colour profile"));
+        assert!(unreadable_reason(b"clrL", &[0]).unwrap().contains("truncated"));
+        assert!(unreadable_reason(b"clrL", &[0, 2, 0, 0]).unwrap().contains("version 2"));
+        assert!(unreadable_reason(b"clrL", &[0, 1, 9]).unwrap().contains("unreadable settings"));
+        let bad = Descriptor::new("null").with("LUTFormat", en("LUTFormatType", "LUTFormat3DL")).with("LUT3DFileData", Value::RawData(b"not a lut".to_vec()));
+        let mut b = vec![0, 1];
+        b.extend(VersionedDescriptor::new(bad).to_bytes());
+        assert!(matches!(parse(b"clrL", &b, None, Channels::Rgb), Adjustment::Unsupported { .. }));
+        assert!(unreadable_reason(b"clrL", &b).unwrap().contains("3DL LUT can't be read"), "{:?}", unreadable_reason(b"clrL", &b));
+        assert_eq!(label(b"clrL"), "Color Lookup");
         assert!(matches!(parse(b"clrL", &[0, 1, 9], None, Channels::Rgb), Adjustment::Unsupported { .. }));
         assert!(matches!(parse(b"selc", &[0, 1, 0, 0], None, Channels::Rgb), Adjustment::Unsupported { .. }));
     }

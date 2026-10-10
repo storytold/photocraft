@@ -145,20 +145,18 @@ impl Headless {
                 warnings
             }
         };
-        // A layered document save (PSD, PSB or .pcraft) is a full write, not a flattened copy:
+        // A layered document save (PSD, PSB, OpenRaster or .pcraft) is a full write, not a flattened copy:
         // record the current revision as saved so the session stops reporting `dirty`, and make
         // the file the document's path. A flat export (PNG, JPEG, …) is a copy and leaves both
         // alone (#1547).
         let ext =
             format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()));
-        let layered = matches!(ext.as_deref(), Some("psd" | "psb")) || ext.as_deref() == Some(photocraft_format::EXTENSION);
-        if layered {
+        if ext.as_deref().is_some_and(file_cmds::layered_extension) {
             // Saving by index must not retarget the next automation command.
             let previously_active = self.session.active_index();
             self.session.set_active(i);
             if let Some(st) = self.session.active_mut() {
-                st.saved_revision = st.revision;
-                st.path = Some(target.to_string_lossy().into_owned());
+                st.saved_to(target.to_string_lossy().into_owned());
             }
             if let Some(active) = previously_active {
                 self.session.set_active(active);

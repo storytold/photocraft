@@ -85,26 +85,97 @@ fn cmyk_to_png_is_colour_managed_and_tagged_srgb() {
 }
 
 #[test]
-fn cmyk_fill_pixels_use_the_embedded_profile() {
+fn cmyk_fills_survive_psd_roundtrip_at_every_depth() {
+    use photocraft_doc::{Color, Document, Fill, GradientStyle, Layer, LayerContent};
+    let icc = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+        tvi: [0.26, 0.26, 0.26, 0.3],
+        grid_a2b: 5,
+        grid_b2a: 9,
+        ..Default::default()
+    })
+    .to_bytes();
+    let a = Color { mode: ColorMode::Cmyk, c: [0.2, 0.4, 0.6, 0.3], alpha: 0.7 };
+    let b = Color { mode: ColorMode::Cmyk, c: [0.6, 0.2, 0.3, 0.1], alpha: 0.4 };
+    for depth in SampleType::ALL {
+        for profile in [None, Some(icc.clone())] {
+            for style in [
+                None,
+                Some(GradientStyle::Linear),
+                Some(GradientStyle::Radial),
+                Some(GradientStyle::Angle),
+                Some(GradientStyle::Reflected),
+                Some(GradientStyle::Diamond),
+            ] {
+                let mut fill = style.map_or(Fill::Solid(a), |s| Fill::gradient(vec![(1.0, b), (0.0, a)], 35.0, 0.8, s, true));
+                if let Fill::Gradient { midpoints, opacity_stops, dither, offset, .. } = &mut fill {
+                    *midpoints = vec![0.25];
+                    *opacity_stops = vec![(0.0, 0.6), (1.0, 0.9)];
+                    *offset = (0.1, -0.2);
+                    *dither = true;
+                }
+                let mut doc = Document::new("CMYK fill", photocraft_geom::Size::new(9, 6), ColorMode::Cmyk, depth);
+                doc.icc_profile = profile.clone();
+                doc.layers.push(Layer::new("Fill", LayerContent::Fill(fill)));
+                let expected = photocraft_compose::flatten(&doc).px;
+                assert!(max_diff(&expected, &photocraft_compose::render_tiled(&doc, doc.bounds(), 3).px) <= 1e-6);
+                let bytes = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
+                let back = import("x.psd", &bytes).unwrap().document;
+                let actual = photocraft_compose::flatten(&back).px;
+                let diff = max_diff(&expected, &actual);
+                assert!(diff <= 1e-6, "{depth:?} {style:?}: round-trip error {diff}");
+                assert_eq!(back.icc_profile, doc.icc_profile);
+                if style.is_none() {
+                    let native = photocraft_raster::Surface::with_default(doc.pixel_format(), &[a.c[0], a.c[1], a.c[2], a.c[3], a.alpha]);
+                    let actual = back.layers[0].fill_cache.as_ref().unwrap().surface.read_region(doc.bounds());
+                    for (actual, expected) in actual.iter().zip(native.read_region(doc.bounds())) {
+                        let tolerance = if depth == SampleType::F32 { 1e-6 } else { 0.0 };
+                        assert!((actual - expected).abs() <= tolerance, "{depth:?}: {actual} vs {expected}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "corpus")]
+#[test]
+fn uncached_cmyk_gradient_corpus_roundtrip() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/psd-tools/colormodes/4x4_16bit_cmyk.psd");
+    let bytes = std::fs::read(path).expect("run cargo xtask corpus --all");
+    let doc = import("x.psd", &bytes).unwrap().document;
+    assert!(doc.layers.iter().any(|l| matches!(l.content, photocraft_doc::LayerContent::Fill(_)) && l.fill_cache.is_none()));
+    let expected = photocraft_compose::flatten(&doc).px;
+    let saved = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let back = import("x.psd", &saved).unwrap().document;
+    let diff = max_diff(&expected, &photocraft_compose::flatten(&back).px);
+    eprintln!("uncached 16-bit CMYK gradient round-trip max error: {diff:.8}");
+    assert!(diff <= 1e-6, "round-trip error {diff}");
+    assert_eq!(back.icc_profile, doc.icc_profile);
+}
+
+#[test]
+fn rgb_fill_colours_separate_through_the_document_cmyk_profile() {
     use photocraft_cms::{Intent, Transform, synth};
-    use photocraft_doc::{Document, Fill, Layer, LayerContent};
+    use photocraft_doc::{Color, Document, Fill, Layer, LayerContent};
     let profile = synth::cmyk_profile(&synth::CmykParams { tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() });
     let profile = Profile::parse(&profile.to_bytes()).unwrap();
     let rgb = [0.2, 0.4, 0.6];
     let mut expected = [0.0; 4];
     Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, true).unwrap().eval_fast(&rgb, &mut expected);
-    for depth in [SampleType::U8, SampleType::U16] {
-        let mut doc = Document::new("Fill", photocraft_geom::Size::new(1, 1), ColorMode::Cmyk, depth);
+    for depth in SampleType::ALL {
+        let mut doc = Document::new("RGB fill", photocraft_geom::Size::new(1, 1), ColorMode::Cmyk, depth);
         doc.icc_profile = Some(profile.to_bytes());
-        doc.layers.push(Layer::new("Fill", LayerContent::Fill(Fill::Solid(photocraft_color::Color::rgb(rgb[0], rgb[1], rgb[2])))));
+        doc.layers.push(Layer::new("Fill", LayerContent::Fill(Fill::Solid(Color::rgb(rgb[0], rgb[1], rgb[2])))));
         let bytes = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
         let back = import("x.psd", &bytes).unwrap().document;
-        let cache = &back.layers[0].fill_cache.as_ref().unwrap().surface;
-        let samples = cache.read_region(back.bounds());
-        let quantum = if depth == SampleType::U8 { 255.0 } else { 65535.0 };
+        let samples = back.layers[0].fill_cache.as_ref().unwrap().surface.read_region(back.bounds());
+        let tolerance = match depth {
+            SampleType::U8 => 1.0 / 255.0,
+            SampleType::U16 => 1.0 / 65535.0,
+            SampleType::F32 => 1e-6,
+        };
         for (actual, expected) in samples.iter().zip(expected) {
-            assert!((actual - expected).abs() <= 1.0 / quantum, "{depth:?}: {samples:?} vs {expected:?}");
+            assert!((actual - expected).abs() <= tolerance, "{depth:?}: {actual} vs {expected}");
         }
-        assert_eq!(back.icc_profile, doc.icc_profile);
     }
 }

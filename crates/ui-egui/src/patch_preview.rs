@@ -31,6 +31,10 @@ pub(crate) struct PatchPreview {
 
 /// The offset of the current Patch drag, if one is dragging the patch (not drawing a lasso).
 fn drag_offset(app: &mut PhotocraftApp) -> Option<[i32; 2]> {
+    // Content-Aware patches are background jobs: the canvas shows the result when it is done.
+    if app.ui.tool_options.patch_content_aware {
+        return None;
+    }
     let d = app.drag.as_ref().filter(|d| d.tool == Tool::Patch)?;
     let (start, mods) = (d.start, d.modifiers);
     let end = d.points.last().map_or(start, |p| [p[0], p[1]]);
@@ -63,7 +67,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if app.patch_preview.as_ref()?.offsets.last().map(|o| o.0) != Some(offset) {
         let t0 = crate::gpu_canvas::now_ms();
         // Zoomed out, a finer colour fit than the screen shows is wasted.
-        let min_step = (1.0 / app.current_zoom().max(1e-3)).floor().clamp(1.0, 64.0) as u32;
+        let min_step = (1.0 / app.point_zoom().max(1e-3)).floor().clamp(1.0, 64.0) as u32;
         let params = json!({"offset": offset, "mode": mode, "target": crate::canvas::paint_target(app)});
         let result = photocraft_engine::retouch_cmds::patch_preview(&app.session, &params, MAX_CELLS, min_step);
         let p = app.patch_preview.as_mut()?;

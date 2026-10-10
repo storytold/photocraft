@@ -40,6 +40,13 @@ pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
     idx.and_then(|i| list.get(i)).or_else(|| list.first())
 }
 
+/// Index of the playback target. Photoshop's Play button uses the first action when
+/// the panel has actions but none of its rows is selected.
+fn playback_selection(app: &PhotocraftApp) -> Option<usize> {
+    let n = app.session.actions.list.len();
+    if n == 0 { None } else { Some(app.ui.actions.selected.filter(|i| *i < n).unwrap_or(0)) }
+}
+
 /// Steps in the `[[id, params], …]` shape batch and droplets already accept.
 pub fn action_steps(action: &Action) -> Vec<Value> {
     action.steps.iter().map(|(id, p)| json!([id, p])).collect()
@@ -397,8 +404,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if rec.on_hover_text(tl!("Begin recording")).clicked() && !recording_now {
             begin_recording(app, true);
         }
-        if crate::icons::button(ui, "play", 24.0, false, tl!("Play selection")).clicked() {
-            play_idx = app.ui.actions.selected;
+        let play = crate::icons::button(ui, "play", 24.0, false, tl!("Play selection"));
+        play.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Play selection")));
+        if play.clicked() {
+            play_idx = playback_selection(app);
         }
         if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new action")).clicked() && !recording_now {
             begin_recording(app, false);
@@ -412,16 +421,58 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
     });
-    if let Some(i) = play_idx
-        && let Ok(v) = app.run("actions.play", json!({"action": i}))
-    {
-        report_play(app, &v);
+    if let Some(i) = play_idx {
+        match app.run("actions.play", json!({"action": i})) {
+            Ok(v) => report_play(app, &v),
+            Err(e) => {
+                app.ui.status = format!("Action playback failed: {e}");
+                app.ui.status_error = true;
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn play_button_targets_first_action_if_nothing_is_selected() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        assert_eq!(playback_selection(&app), None);
+        app.session.actions.list.push(Action { name: "Make Layer".into(), steps: vec![("layer.new.layer".into(), json!({}))] });
+        app.session.actions.list.push(Action { name: "Fit".into(), steps: vec![("view.fitOnScreen".into(), json!({}))] });
+        assert_eq!(playback_selection(&app), Some(0));
+        app.ui.actions.selected = Some(1);
+        assert_eq!(playback_selection(&app), Some(1));
+        app.ui.actions.selected = Some(999);
+        assert_eq!(playback_selection(&app), Some(0));
+
+        app.ui.actions.selected = None;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder().with_size(vec2(400.0, 320.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(3);
+        let before = h.state().session.active().unwrap().doc.layers.len();
+        h.get_by_label("Play selection").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
+        assert!(!h.state().ui.status_error);
+    }
+
+    #[test]
+    fn playback_errors_are_visible_in_status_bar() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.session.actions.list.push(Action { name: "Bad action".into(), steps: vec![("not.a.command".into(), json!({}))] });
+        let mut h = Harness::builder().with_size(vec2(400.0, 320.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(3);
+        h.get_by_label("Play selection").click();
+        h.run_steps(3);
+        assert!(h.state().ui.status_error);
+        assert!(h.state().ui.status.contains("not.a.command") || h.state().ui.status.contains("unknown command"));
+    }
 
     #[test]
     fn recording_reveals_new_action_and_latest_step_in_a_long_panel() {
@@ -572,7 +623,7 @@ mod tests {
         let idx = app.session.active_index().unwrap();
         assert!(app.ui.views[idx].fit_pending);
         let doc = &app.session.active().unwrap().doc;
-        crate::canvas::fit_view(&mut app.ui.views[idx], doc, vec2(100.0, 100.0));
+        crate::canvas::fit_view(&mut app.ui.views[idx], doc, vec2(100.0, 100.0), 1.0);
         assert_eq!(app.ui.views[idx].zoom, 0.75);
         assert_eq!(app.ui.views[idx].center, [40.0, 30.0]);
         assert!(!app.ui.views[idx].fit_pending);

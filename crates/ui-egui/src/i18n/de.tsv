@@ -21,6 +21,8 @@
 	Layer	Ebene
 	Type	Text
 	Select	Auswahl
+	Selected	Ausgewählt
+	Scope	Umfang
 	Top Left	Oben links
 	Top Right	Oben rechts
 	Bottom Left	Unten links
@@ -34,6 +36,11 @@
 	New from Clipboard	Neu aus Zwischenablage
 	Open…	Öffnen…
 	Open As…	Öffnen als…
+	Open EXR Parts…	EXR-Teile öffnen…
+	Add beauty precomp from the AOVs	Schönheits-Vorkomposition aus den AOVs hinzufügen
+	Both	Beide
+	Left	Links
+	Right	Rechts
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
 	Close	Schließen
@@ -83,6 +90,8 @@
 	Import	Importieren
 	Browse…	Durchsuchen…
 	Reveal in Finder	Im Finder anzeigen
+	Show in Explorer	Im Explorer anzeigen
+	Show in Folder	Im Ordner anzeigen
 	File Info…	Dateiinformationen…
 	Print…	Drucken…
 	Print One Copy	Eine Kopie drucken
@@ -666,7 +675,11 @@
 	Pro Medium Gray Theme	Pro-Design (Mittelgrau)
 	Studio Theme	Studio-Design
 	Studio Light Theme	Studio-Design (Hell)
+	Adwaita Light Theme	Adwaita-Design (Hell)
+	Adwaita Dark Theme	Adwaita-Design (Dunkel)
 	Classic Theme	Klassisches Design
+	Solarized dark	Solarized dunkel
+	Solarized Dark Theme	Solarized-Design (Dunkel)
 	Next Theme	Nächstes Design
 	Actions	Aktionen
 	Brush Settings	Pinseleinstellungen
@@ -750,7 +763,7 @@
 	All Caps	Großbuchstaben
 	All Slices	Alle Slices
 	All User Slices	Alle Benutzer-Slices
-	All shortcuts reset to Photoshop defaults.	Alle Kurzbefehle wurden auf die Photoshop-Standards zurückgesetzt.
+	All shortcuts reset to PhotoCraft defaults.	Alle Kurzbefehle wurden auf die PhotoCraft-Standards zurückgesetzt.
 	Alt	Alt
 	Always use pressure for opacity	Druck immer für Deckkraft verwenden
 	Always use pressure for size	Druck immer für Größe verwenden
@@ -798,7 +811,6 @@
 	Blending Options	Fusionsoptionen
 	Blue	Blau
 	Blue, Red, Yellow	Blau, Rot, Gelb
-	Both	Beide
 	Both Axes	Beide Achsen
 	Bottom	Unten
 	Brightness	Helligkeit
@@ -941,6 +953,17 @@
 	Delete current channel	Aktuellen Kanal löschen
 	Delete current state	Aktuellen Status löschen
 	Delete effect layer	Effektebene löschen
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Ebene „{name}“ löschen?
+	Delete {count} layers? {names}	{count} Ebenen löschen? {names}
+	Delete layer?	Ebene löschen?
+	The document is closed	Das Dokument ist geschlossen
+	The document or selected layers changed. Please request deletion again.	Das Dokument oder die ausgewählten Ebenen haben sich geändert. Bitte die Löschung erneut anfordern.
+	Missing delete command	Löschbefehl fehlt
+	Invalid delete command	Ungültiger Löschbefehl
+	Layer deleted, but confirmation preference could not be saved: {error}	Die Ebene wurde gelöscht, aber die Bestätigungseinstellung konnte nicht gespeichert werden: {error}
+
 	Delete layer	Ebene löschen
 	Delete layer comp	Ebenenkomposition löschen
 	Delete note	Notiz löschen
@@ -1074,7 +1097,7 @@
 	Ignore All	Alle ignorieren
 	Image Size	Bildgröße
 	Import Brushes…	Pinsel importieren…
-	Import Photoshop brushes (.abr)	Photoshop-Pinsel (.abr) importieren
+	Import brushes (.abr)	Pinsel (.abr) importieren
 	Import Presets	Vorgaben importieren
 	Imported	Importiert
 	Indent First	Erste Zeile einrücken
@@ -1109,7 +1132,6 @@
 	Leading	Zeilenabstand
 	Leading (set to the font size × auto-leading when Auto)	Zeilenabstand (bei „Automatisch“ auf Schriftgröße × automatischer Zeilenabstand gesetzt)
 	Leave as is (don't color manage)	Unverändert lassen (keine Farbverwaltung)
-	Left	Links
 	Left align text	Text links ausrichten
 	Length:	Länge:
 	Level	Stufe
@@ -1124,7 +1146,6 @@
 	Liquify is not open	Verflüssigen ist nicht geöffnet
 	Load	Laden
 	Load 3D LUT…	3D-LUT laden…
-	Load Photoshop brushes (.abr)	Photoshop-Pinsel (.abr) laden
 	Load channel as selection	Kanal als Auswahl laden
 	Load…	Laden…
 	Localized Color Clusters	Lokalisierte Farbcluster
@@ -1291,6 +1312,7 @@
 	Remove All Pins	Alle Pins entfernen
 	Remove Background	Hintergrund entfernen
 	Remove Planes	Flächen entfernen
+	Remove Tool	Entfernen-Werkzeug
 	Remove stop	Farbstopp entfernen
 	Remove variable	Variable entfernen
 	Rename	Umbenennen
@@ -1300,6 +1322,17 @@
 	Rename…	Umbenennen…
 	Resample	Neu berechnen
 	Reset All to Defaults	Alles auf Standardwerte zurücksetzen
+	Import Shortcuts…	Tastaturbefehle importieren…
+	Load a keyboard shortcut set saved as .kys	Einen als .kys gespeicherten Tastaturbefehlssatz laden
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} Tastaturbefehle aus {file} importiert. Mit OK übernehmen.
+	{n} commands are not in PhotoCraft.	{n} Befehle gibt es in PhotoCraft nicht.
+	Keyboard shortcuts imported	Tastaturbefehle importiert
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Dein Tastaturbefehlssatz {set} wird hier verwendet: {n} Tastaturbefehle weichen von den Standardwerten ab. Bearbeiten › Tastaturbefehle zeigt sie; Alles auf Standardwerte zurücksetzen macht es rückgängig.
+	Import keyboard shortcuts?	Tastaturbefehle importieren?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft hat auf diesem Computer deinen Tastaturbefehlssatz {set} aus einem anderen Bildbearbeitungsprogramm gefunden: {n} seiner Tastaturbefehle weichen von denen in PhotoCraft ab. Importieren?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Bearbeiten › Tastaturbefehle › Alles auf Standardwerte zurücksetzen macht einen Import rückgängig.
+	Don't Import	Nicht importieren
+	The keyboard shortcut set was not imported: {error}	Der Tastaturbefehlssatz wurde nicht importiert: {error}
 	Reset Section	Abschnitt zurücksetzen
 	Reset Transform	Transformation zurücksetzen
 	Reset to defaults	Auf Standardwerte zurücksetzen
@@ -1308,7 +1341,6 @@
 	Restore All	Alle wiederherstellen
 	Restore Defaults	Standardwerte wiederherstellen
 	Restrictive (Web)	Restriktiv (Web)
-	Right	Rechts
 	Right align text	Text rechts ausrichten
 	Rigid	Starr
 	Rotate:	Drehen:
@@ -1391,6 +1423,8 @@
 	Stroke	Kontur
 	Stroke Catch-up	Strich nachführen
 	Stroke:	Kontur:
+	Location	Position
+	Location:	Position:
 	Style	Stil
 	Style Options	Stiloptionen
 	Style Options…	Stiloptionen…
@@ -1515,7 +1549,7 @@
 	Current Tool	Aktuelles Werkzeug
 	Custom Shape Tool	Werkzeug für benutzerdefinierte Formen
 	Cyans	Cyantöne
-	Default Photoshop Size	Standard-Photoshop-Größe
+	Default PhotoCraft Size	Standard-PhotoCraft-Größe
 	Delete Workspace	Arbeitsbereich löschen
 	Diamond	Raute
 	Dimensions:	Abmessungen:
@@ -1592,6 +1626,7 @@
 	Millimeters	Millimeter
 	Mobile	Mobil
 	Move Tool	Verschieben-Werkzeug
+	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -1636,6 +1671,7 @@
 	Quick Selection Tool	Schnellauswahl-Werkzeug
 	Radial	Radial
 	Rasterize Layer	Ebene rasterisieren
+	Rasterize Layers	Ebenen rasterisieren
 	Ratio	Verhältnis
 	Recent	Zuletzt
 	Rectangle Tool	Rechteck-Werkzeug
@@ -1860,6 +1896,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio hell
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita dunkel
 	Subdivisions	Unterteilungen
 	System	System
 	Text engine	Text-Engine
@@ -1909,6 +1947,7 @@
 	Collapse group  ({key}-click: all groups)	Gruppe einklappen  ({key}-Klick: alle Gruppen)
 	Create new brush from the current settings	Neuen Pinsel aus den aktuellen Einstellungen erstellen
 	Create new brush from these settings	Neuen Pinsel aus diesen Einstellungen erstellen
+	Update the current brush with these settings	Aktuellen Pinsel mit diesen Einstellungen aktualisieren
 	Delete brush	Pinsel löschen
 	Drag the arrow to set the angle, the dots to set the roundness	Ziehe den Pfeil für den Winkel, die Punkte für die Rundung
 	Expand	Ausklappen
@@ -1963,8 +2002,9 @@
 	Brush Preset Options	Pinselvorgaben-Optionen
 	Group name	Gruppenname
 	Brush name	Pinselname
-	Grid view	Rasteransicht
-	List view	Listenansicht
+	Brush Name	Pinselname
+	Brush Stroke	Pinselstrich
+	Brush Tip	Pinselspitze
 	Off: the speed of the pointer sets the spacing	Aus: die Zeigergeschwindigkeit setzt den Abstand
 	Tilt Scale	Neigungsskala
 	Brush Projection	Pinselprojektion
@@ -1984,6 +2024,13 @@
 	Align with layer	An Ebene ausrichten
 	Reset Alignment	Ausrichtung zurücksetzen
 	Centre the gradient (offset 0, 0)	Verlauf zentrieren (Versatz 0, 0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Gradienten-Editor
+	Gradient picker	Verlaufsauswahl
+	Gradient stops	Verlaufsstufen
+	Save As Preset	Als Vorgabe speichern
+	The gradient the Gradient tool paints with	Der Verlauf, mit dem das Verlaufswerkzeug malt
+	Adds the current gradient to the Gradients panel	Fügt den aktuellen Verlauf zum Bedienfeld „Verläufe" hinzu
 	The current gradient (pick one in Window › Gradients)	Der aktuelle Verlauf (wähle einen unter Fenster › Verläufe)
 	Select a type layer to edit its character and paragraph settings.	Wähle eine Textebene, um ihre Zeichen- und Absatzeinstellungen zu bearbeiten.
 	Text color	Textfarbe
@@ -2016,6 +2063,9 @@
 	Cancelled {label}	{label} abgebrochen
 	Esc to cancel	Esc zum Abbrechen
 	Opening {name}	Öffne {name}
+	Saving {name}	Speichere {name}
+	A save to {name} is still running; try again when it finishes	{name} wird noch gespeichert; versuchen Sie es erneut, wenn der Vorgang abgeschlossen ist
+	{label} is writing the file and can no longer be cancelled	{label} schreibt die Datei und kann nicht mehr abgebrochen werden
 	Opening {name}…	Öffne {name}…
 	Opening…	Öffnen…
 	Reading…	Lesen…
@@ -2076,7 +2126,7 @@
 	Pixel	Pixel
 	Adjustment	Anpassung
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Ziehen (Lasso) oder Punkte klicken (polygonal) · {add} hinzufügen · {sub} abziehen
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Freistellrahmen ziehen · innen ziehen verschiebt · Kanten skalieren ({ratio} Verhältnis, {centre} zentriert) · Leertaste verschiebt beim Zeichnen · {commit} übernimmt · Esc bricht ab
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Freistellrahmen ziehen · innen ziehen verschiebt · Kanten skalieren ({ratio} Verhältnis, {centre} zentriert) · Leertaste verschiebt beim Zeichnen · Pfeiltasten verschieben · X tauscht Ausrichtung · {commit} übernimmt · Esc bricht ab
 	{mode} Color · {bits} bit	{mode}-Farbe · {bits} Bit
 	Scrubby Zoom	Schleppzoom
 	Auto Erase	Automatisch löschen
@@ -2217,6 +2267,10 @@
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Farbwähler (Textfarbe)
+	Color Picker (Fill Color)	Farbwähler (Füllfarbe)
+	Fill color	Füllfarbe
+	Color Picker (Stroke Color)	Farbwähler (Konturfarbe)
+	Stroke color	Konturfarbe
 	Pick screen color	Bildschirmfarbe auswählen
 	Sample a pixel anywhere on the screen	Ein Pixel an beliebiger Stelle auf dem Bildschirm auswählen
 	Click to pick · Esc to cancel	Klicken zum Auswählen · Esc zum Abbrechen
@@ -2289,6 +2343,11 @@ fontWeight	Italic	Kursiv
 	Reset View	Ansicht zurücksetzen
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Ansicht drehen: im Bogen ziehen · Umschalt: 15°-Schritte
 
+# Painting symmetry presets.
+	Dual Axis	Duale Achse
+	Diagonal	Diagonal
+	Transform Symmetry	Symmetrie transformieren
+
 # Eyedropper Sample Size and Sample (#1649).
 	Point Sample	1 Pixel
 	3 by 3 Average	3 x 3 Pixel Durchschnitt
@@ -2308,3 +2367,87 @@ fontWeight	Italic	Kursiv
 	Color to Alpha…	Farbe zu Alpha…
 	Transparency Threshold	Transparenz-Schwellenwert
 	Opacity Threshold	Deckkraft-Schwellenwert
+
+	Rasterize svg groups deeper than	SVG-Gruppen ab dieser Tiefe rastern
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schaltet diese Schwelle aus; SVG-Gruppen, die tiefer als 100 Ebenen verschachtelt sind, werden immer gerastert.
+	Rule of Thirds	Drittel-Regel
+	Triangle	Dreieck
+	Golden Ratio	Goldener Schnitt
+	Golden Spiral	Goldene Spirale
+	Auto Show Overlay	Überlagerung automatisch anzeigen
+	Always Show Overlay	Überlagerung immer anzeigen
+	Never Show Overlay	Überlagerung nie anzeigen
+	Cycle Overlay	Überlagerung wechseln
+	Cycle Orientation	Ausrichtung wechseln
+	Set the overlay options for the Crop tool	Überlagerungsoptionen für das Freistellungswerkzeug festlegen
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Der Alt-Klick ging an die Arbeitsumgebung, die Fenster mit Alt-Ziehen verschiebt. Stelle dort die Taste zum Verschieben von Fenstern auf Super oder raste Alt unter Fenster › Modifikatortasten ein.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Farbwähler (Ebenenstilfarbe)
+	Auto Hide Notifications	Benachrichtigungen automatisch ausblenden
+	Notification Duration (seconds)	Dauer der Benachrichtigung (Sekunden)
+	Appearance Mode	Erscheinungsmodus
+	Dark Theme	Dunkles Design
+	Light Theme	Helles Design
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Nächster Erscheinungsmodus
+	Sync with system	Mit System synchronisieren
+	Active	Aktiv
+	Color Picker (Solid Color)	Farbwähler (Volltonfarbe)
+	Straighten the image by drawing a line on it	Bild durch Ziehen einer Linie gerade ausrichten
+	Set additional Crop options	Zusätzliche Freistellungsoptionen festlegen
+	Show Cropped Area	Freigestellten Bereich anzeigen
+	Enable Crop Shield	Freistellungsschutz aktivieren
+	Match Canvas	An Arbeitsfläche anpassen
+	Auto Adjust Opacity	Deckkraft automatisch anpassen
+	Crop Shield color	Farbe des Freistellungsschutzes
+	Color Picker (Crop Shield Color)	Farbwähler (Farbe des Freistellungsschutzes)
+	From Center	Vom Mittelpunkt aus
+	Link radii	Radien verknüpfen
+	Star Ratio:	Sternverhältnis:
+	Create Rectangle	Rechteck erstellen
+	Create Ellipse	Ellipse erstellen
+	Create Triangle	Dreieck erstellen
+	Create Polygon	Polygon erstellen
+	Pressure curve	Druckkurve
+	Click to add a point, right-click to remove	Klicken fügt einen Punkt hinzu, Rechtsklick entfernt ihn
+	Some brush presets could not be loaded	Einige Pinselvorgaben konnten nicht geladen werden
+	Retry saving presets	Speichern der Vorgaben erneut versuchen
+	Brush preset changes are not saved: {error}	Änderungen an Pinselvorgaben sind nicht gespeichert: {error}
+	Keep this tab open to retain your brushes.	Lass diesen Tab geöffnet, um deine Pinsel zu behalten.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Der Browserspeicher ist nicht verfügbar; Pinsel gelten nur für diese Sitzung. Lass diesen Tab geöffnet, um sie zu behalten.
+	Saving brush presets… Keep this tab open until saving finishes.	Pinselvorgaben werden gespeichert… Lass diesen Tab geöffnet, bis das Speichern abgeschlossen ist.
+	Reflect	Reflektieren
+	Glow	Glühen
+	Negation	Negation
+	XOR	XOR
+	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
+	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+	Stroke Options	Konturoptionen
+	Solid	Durchgezogen
+	Dashed	Gestrichelt
+	Dotted	Gepunktet
+	Alignment	Ausrichtung
+	Caps	Enden
+	Butt / Flat	Stumpf / Flach
+	Corners	Ecken
+	Miter	Gehrung
+	Round	Rund
+	Bevel	Abgeschrägt
+	Miter limit	Gehrungsgrenze
+	Dashed line	Gestrichelte Linie
+	Dash	Strich
+	Gap	Lücke
+	Dash / gap lengths × stroke width	Strich- / Lückenlängen × Konturbreite
+	Add pair	Paar hinzufügen
+	Remove pair	Paar entfernen
+	Dash offset	Strichversatz
+	Open paths use centered strokes	Offene Pfade verwenden zentrierte Konturen
+	Use finite lengths and a positive pattern total	Endliche Längen und eine positive Mustersumme verwenden
+	No subject found — try Object Selection or the Lasso	Kein Motiv gefunden — versuchen Sie das Objektauswahlwerkzeug oder das Lasso
+	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
+	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
+	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+	W x H x Resolution	B x H x Auflösung
+	Front Image	Vorderes Bild

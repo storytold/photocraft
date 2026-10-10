@@ -43,16 +43,16 @@ note = "No floating groups in dock.rs/panels.rs"
 [[item]]
 id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
-status = "partial"
+status = "done"
 issue = 217
-note = "canvas.rs: Close/Others/All context menu with unsaved prompt; overflow, Reveal, drag reorder still missing"
+note = "canvas.rs: Close/Others/All menu with unsaved prompt; Reveal reuses file.revealInFinder (engine layer_menu_cmds::reveal); the » chevron (tab_strip) lists overflow; dragging a tab reorders via document.move"
 
 [[item]]
 id = "UI-217-7"
 target = "Command palette shows recently run commands on an empty query"
-status = "missing"
+status = "done"
 issue = 217
-note = "palette.rs:83-108 fuzzy hits only"
+note = "palette.rs: note_recent from menus::invoke keeps the last 8 commands (dedup, newest first); an empty query lists them via recent_hits; the_palette_records_and_replays_recent_commands_on_an_empty_query covers record -> empty query -> replay"
 
 [[item]]
 id = "UI-217-8"
@@ -99,9 +99,9 @@ note = "widgets.rs:132 DragValue scrubs and takes + - * / arithmetic; no units i
 [[item]]
 id = "UI-217-14"
 target = "Layers panel: wheel steps blend modes, drop on New/Trash duplicates/deletes, checker behind art"
-status = "missing"
+status = "partial"
 issue = 217
-note = "panels.rs:1108 plain dropdown; trash is click-only (panels.rs:1213)"
+note = "panels.rs: the wheel steps the blend-mode dropdown (widgets::dropdown_wheel_hovered, #1747); trash is click-only, no drop on New/Trash, no checker behind art"
 
 [[item]]
 id = "UI-217-15"
@@ -134,9 +134,9 @@ note = "canvas.rs:1107-1125 no Alt handling"
 [[item]]
 id = "UI-217-19"
 target = "Shortcut hints rendered per platform; Reveal label per OS"
-status = "missing"
+status = "done"
 issue = 217
-note = "~33 hard-coded modifier glyph strings in ui-egui; menu_catalog.rs:341 one label"
+note = "hints and tooltips go through shortcuts::pretty (6266b7a9, #262; pretty_uses_the_platform_notation); menus::reveal_label names Reveal in Finder per OS (Show in Explorer / Show in Folder) in the Smart Objects menu and the tab menu; reveal_label_names_the_platform_file_manager + smart_objects_reveal_item_names_the_platform_file_manager"
 
 [[item]]
 id = "UI-217-20"

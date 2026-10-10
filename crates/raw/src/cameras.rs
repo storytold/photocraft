@@ -15,6 +15,9 @@
 //! camera's embedded JPEGs (Picture Control Standard, Active D-Lighting off; 52 frames, smooth
 //! areas, 4 × 4 means): on 15 held-out frames the development is 7.2/255 per channel off the
 //! camera's JPEG on average, against 34 without a profile.
+//!
+//! Bodies whose full profile is not measured yet can still get their measured image area — the
+//! same alignment method, see [`IMAGE_AREAS`] — so their frames crop like the camera's JPEG.
 
 use crate::color::{Calibration, ColorInfo, IDENTITY, Mat3};
 use crate::sensor::{Rect, Sensor};
@@ -82,10 +85,40 @@ const PROFILES: &[Profile] = &[Profile {
     tone: &D4_TONE,
 }];
 
-/// Applies the measured profile of the camera that made `s`, when there is one.
+/// A measured image area of a body whose remaining profile has not been
+/// measured yet. Measured the same way as the profiles: by aligning the decoded
+/// plane with the camera's own JPEG.
+///
+/// Both origins are even, so the Bayer phase of the crop is unchanged.
+/// * **D800E** (2 files): the camera's JPEG sits 8 x 6 pixels in from the left
+///   and top of the 7424 x 4924 sensor data (56 and 4 pixels of margin on the
+///   right and bottom), the same corner as the D4.
+/// * **ILCE-7** (2 files): 12 x 12 pixels in from the left and top of the
+///   6048 x 4024 cRAW data (36 and 12 pixels of margin on the right and bottom).
+struct ImageArea {
+    make: &'static str,
+    model: &'static str,
+    /// Sensor data size the measurement was taken on.
+    size: (usize, usize),
+    /// The image area: x, y, width, height.
+    crop: (usize, usize, usize, usize),
+}
+
+const IMAGE_AREAS: &[ImageArea] = &[
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D800E", size: (7424, 4924), crop: (8, 6, 7360, 4912) },
+    ImageArea { make: "SONY", model: "ILCE-7", size: (6048, 4024), crop: (12, 12, 6000, 4000) },
+];
+
+/// Applies the measured profile of the camera that made `s`, when there is one,
+/// and its measured image area when the profile is not measured yet.
 pub(crate) fn apply(s: &mut Sensor) {
     let (Some(make), Some(model)) = (s.make.as_deref(), s.model.as_deref()) else { return };
-    let Some(p) = PROFILES.iter().find(|p| make.trim() == p.make && model.trim() == p.model && (s.width, s.height) == p.size) else { return };
+    let (make, model) = (make.trim(), model.trim());
+    if let Some(a) = IMAGE_AREAS.iter().find(|a| a.make == make && a.model == model && a.size == (s.width, s.height)) {
+        let (x, y, w, h) = a.crop;
+        s.crop = Rect::new(x, y, w, h);
+    }
+    let Some(p) = PROFILES.iter().find(|p| make == p.make && model == p.model && (s.width, s.height) == p.size) else { return };
     let (x, y, w, h) = p.crop;
     s.crop = Rect::new(x, y, w, h);
     s.white = [p.white; 3];
@@ -107,10 +140,10 @@ mod tests {
     use crate::color::apply as mat_apply;
     use crate::sensor::BlackLevels;
 
-    fn nef(model: &str, width: usize, height: usize) -> Sensor {
+    fn sensor(make: &str, model: &str, width: usize, height: usize) -> Sensor {
         Sensor {
             format: RawFormat::Nef,
-            make: Some("NIKON CORPORATION".into()),
+            make: Some(make.into()),
             model: Some(model.into()),
             width,
             height,
@@ -132,6 +165,10 @@ mod tests {
         }
     }
 
+    fn nef(model: &str, width: usize, height: usize) -> Sensor {
+        sensor("NIKON CORPORATION", model, width, height)
+    }
+
     #[test]
     fn a_d4_nef_gets_its_crop_levels_matrix_and_curve() {
         let mut s = nef("NIKON D4", 4992, 3292);
@@ -144,6 +181,28 @@ mod tests {
         assert!(s.warnings.is_empty(), "the D4's black level is known: {:?}", s.warnings);
         // The profile gives a colour conversion for the as-shot white balance.
         assert!(s.color.balanced_to_xyz_d50([0.5, 1.0, 0.7]).is_some());
+    }
+
+    #[test]
+    fn measured_image_areas_crop_the_borders_without_touching_the_rest() {
+        let mut s = nef("NIKON D800E", 7424, 4924);
+        apply(&mut s);
+        assert_eq!(s.crop, Rect::new(8, 6, 7360, 4912));
+        // Only the image area is measured: levels, colour and tone stay untouched.
+        assert!(s.color.calibrations.is_empty() && s.tone_curve.is_empty());
+        assert_eq!(s.white, [16383.0; 3]);
+
+        let mut s = sensor("SONY", "ILCE-7", 6048, 4024);
+        apply(&mut s);
+        assert_eq!(s.crop, Rect::new(12, 12, 6000, 4000));
+
+        // Another size or model of the same maker is left alone.
+        let mut s = nef("NIKON D800E", 2496, 1646);
+        apply(&mut s);
+        assert_eq!(s.crop, Rect::new(0, 0, 2496, 1646));
+        let mut s = nef("NIKON D800", 7424, 4924);
+        apply(&mut s);
+        assert_eq!(s.crop, Rect::new(0, 0, 7424, 4924));
     }
 
     #[test]

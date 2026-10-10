@@ -243,8 +243,10 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
 
 /// Clear's key (Delete / Backspace) with nothing selected deletes the selected layers, of any
 /// kind, as in Photoshop (#1077): Edit › Clear only clears pixel layers, so on an adjustment, fill,
-/// type or shape layer the key did nothing. A selection, a targeted layer mask, a single channel
-/// or Quick Mask keeps Clear.
+/// type or shape layer the key did nothing. A selection, a single channel or Quick Mask keeps Clear.
+/// With the active layer's mask targeted the key edits the mask, never the layer's pixels: a
+/// selection is filled with the background colour in the mask (Photoshop's Delete on a mask), and
+/// with no selection the mask itself is deleted, as Layer › Layer Mask › Delete.
 fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     if id != "edit.clear" {
         return id;
@@ -252,7 +254,11 @@ fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     let Some(st) = app.session.active() else { return id };
     let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
     let mask = app.ui.mask_target && st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
-    if st.doc.selection.is_some() || !composite || mask {
+    if mask && composite {
+        let cmd = if st.doc.selection.is_some() { "edit.fillBackground" } else { "layer.layerMask.delete" };
+        return cmd.into();
+    }
+    if st.doc.selection.is_some() || !composite {
         return id;
     }
     "layer.delete".into()

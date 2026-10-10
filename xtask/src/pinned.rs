@@ -182,7 +182,11 @@ impl PinnedCorpus {
             let mut tar = Command::new("tar");
             tar.arg("-xzf").arg(&tgz).arg("-C").arg(&out).arg(format!("{top}/{}", up.subdir));
             for (from, _) in up.extras {
-                tar.arg(format!("{top}/{from}"));
+                // A root-level corpus selection (`subdir == ""`) already extracts the whole repo
+                // root; adding the same root files as individual tar selectors fails on GNU tar.
+                if !up.subdir.is_empty() {
+                    tar.arg(format!("{top}/{from}"));
+                }
             }
             run(tar, &format!("tar -xzf {}", tgz.display()))?;
             let _ = std::fs::remove_file(&tgz);

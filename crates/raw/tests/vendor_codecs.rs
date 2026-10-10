@@ -101,6 +101,45 @@ fn craw_unusual_variants_are_unsupported() {
     assert!(decode(cut, &Limits::default()).is_err());
 }
 
+/// Renames a tag of the raw SubIFD (tag 330 of IFD0), hiding it from the
+/// decoder: the first cRAW bodies write no BlackLevel tag at all.
+fn hide_raw_sub_ifd_tag(b: &mut [u8], tag: u16) {
+    let ifd = u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize;
+    let n = u16::from_le_bytes([b[ifd], b[ifd + 1]]) as usize;
+    for i in 0..n {
+        let e = ifd + 2 + 12 * i;
+        if u16::from_le_bytes([b[e], b[e + 1]]) == 330 {
+            let sub = u32::from_le_bytes(b[e + 8..e + 12].try_into().unwrap()) as usize;
+            let sn = u16::from_le_bytes([b[sub], b[sub + 1]]) as usize;
+            for j in 0..sn {
+                let se = sub + 2 + 12 * j;
+                if u16::from_le_bytes([b[se], b[se + 1]]) == tag {
+                    b[se..se + 2].copy_from_slice(&0xFFFEu16.to_le_bytes());
+                    return;
+                }
+            }
+        }
+    }
+    panic!("tag {tag:#x} not found in the raw SubIFD");
+}
+
+#[test]
+fn craw_without_a_black_level_tag_reads_black_from_the_tone_curve() {
+    // An ILCE-7 cRAW carries no BlackLevel tag (0x7310): the tone curve maps
+    // the black code (256) to 512, so the decoded data has a 512 black level.
+    let (w, h) = (64, 4);
+    let codes = vec![1024u16; w * h];
+    let mut b = sony_craw(w, h, &codes, CURVE);
+    hide_raw_sub_ifd_tag(&mut b, 0x7310);
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!(s.black.values, vec![512.0]);
+    assert!(!s.warnings.iter().any(|w| w.contains("black level")), "{:?}", s.warnings);
+    // With the tag present the level is the same: 512 either way.
+    let b = sony_craw(w, h, &codes, CURVE);
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!(s.black.values, vec![512.0; 4]);
+}
+
 #[test]
 fn rw2_round_trip_12_and_14_bit() {
     for (bits, w, h) in [(12u32, 120usize, 300usize), (14, 117, 260)] {

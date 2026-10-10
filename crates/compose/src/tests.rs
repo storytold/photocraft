@@ -87,6 +87,57 @@ fn every_blend_mode_matches_reference_on_opaque_pixels() {
     }
 }
 
+/// One opaque pixel: `top` in `mode` over `bottom`, in a document of `depth`.
+fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3]) -> [f32; 4] {
+    let mut d = Document::new("b", Size::new(1, 1), ColorMode::Rgb, depth);
+    let fmt = d.pixel_format();
+    let mut b = Layer::raster("b", fmt);
+    b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [bottom[0], bottom[1], bottom[2], 1.0]));
+    let mut t = Layer::raster("t", fmt);
+    t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
+    t.blend = mode;
+    d.layers = vec![b, t];
+    px(&d, 0, 0)
+}
+
+#[test]
+fn non_separable_modes_keep_values_above_one_in_32_bit() {
+    use photocraft_color::blend::{blend_rgb_within, lum};
+    let modes = [BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+    // Hue over a grey of 2: the grey (the backdrop has no saturation), not ClipColor dividing
+    // by the rounding noise of `max − lum` (Hue over (4, 3.9999, 4) gave 27.7 in blue).
+    for bg in [[2.0, 2.0, 2.0], [2.0, 2.0, 1.999_99], [4.0, 3.999_9, 4.0]] {
+        for m in modes {
+            for top in [[3.0, 0.25, 0.125], [2.0, 2.0, 2.0], [4.0, 3.999_9, 4.0]] {
+                let got = blend_px(SampleType::F32, m, bg, top);
+                let want = blend_rgb_within(m, bg, top, f32::MAX);
+                assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-4 * w.abs().max(1.0)), "{m:?} {bg:?} {top:?}: {got:?} vs {want:?}");
+                assert!(got.iter().all(|v| v.is_finite() && *v >= -1e-5), "{m:?} {bg:?} {top:?}: {got:?}");
+            }
+        }
+    }
+    // A saturated colour keeps its brightness above 1 in 32-bit, and is clipped into 0..1
+    // (exactly as before) in 8/16-bit.
+    let (bg, top) = ([0.5, 0.5, 0.5], [1.0, 0.0, 0.0]);
+    let hdr = blend_px(SampleType::F32, BlendMode::Color, bg, top);
+    assert!((hdr[0] - 1.2).abs() < 1e-4 && (lum([hdr[0], hdr[1], hdr[2]]) - 0.5).abs() < 1e-4, "{hdr:?}");
+    for depth in [SampleType::U8, SampleType::U16] {
+        for m in modes {
+            let got = blend_px(depth, m, bg, top);
+            let want = photocraft_color::blend::blend_rgb(m, bg, top);
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1.0 / 255.0), "{m:?} {depth:?}: {got:?} vs {want:?}");
+        }
+        let got = blend_px(depth, BlendMode::Color, bg, top);
+        assert!(got[0] <= 1.0 && got[0] > 0.9, "{depth:?}: {got:?}");
+    }
+    // A 32-bit document's in-range colours that stay in range are unchanged.
+    for m in modes {
+        let got = blend_px(SampleType::F32, m, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        let want = photocraft_color::blend::blend_rgb(m, [0.6, 0.3, 0.2], [0.2, 0.7, 0.5]);
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-5), "{m:?}: {got:?} vs {want:?}");
+    }
+}
+
 #[test]
 fn layer_mask_hides_pixels() {
     let mut d = doc_white(4, 4);
@@ -819,15 +870,15 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     doc.layers.push(l);
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
     let cx = Ctx::for_doc(&doc, &patterns);
-    let a = effect_maps(&doc.layers[1], &cx);
-    let b = effect_maps(&doc.layers[1], &cx);
+    let a = effect_maps(&doc.layers[1], doc.bounds(), &cx);
+    let b = effect_maps(&doc.layers[1], doc.bounds(), &cx);
     assert!(std::sync::Arc::ptr_eq(&a, &b), "second request hits the cache");
     let first = flatten(&doc);
     // Editing the layer's pixels changes its tiles, so the maps are rebuilt.
     doc.layers[1].surface_mut().unwrap().fill_rect(Rect::new(8, 8, 20, 20), &[0.0, 0.0, 1.0, 1.0]);
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
     let cx = Ctx::for_doc(&doc, &patterns);
-    let c = effect_maps(&doc.layers[1], &cx);
+    let c = effect_maps(&doc.layers[1], doc.bounds(), &cx);
     assert!(!std::sync::Arc::ptr_eq(&a, &c), "pixel edit invalidates");
     // Cached rendering equals a fresh build (tiled and full renders agree too).
     let again = flatten(&doc);
@@ -848,6 +899,171 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     cold.layers[1].id = Layer::raster("uncached", cold.pixel_format()).id;
     assert!(warm.px == flatten(&cold).px, "default-only mask changes must invalidate cached effects");
     assert!(close4(px(&masked, 20, 32), [1.0; 4]));
+}
+
+// ---------- Transparency Shapes Layer off on tall documents (#1909) ----------
+
+fn bevel_fx(style: photocraft_doc::BevelStyle, soften: f32) -> Effect {
+    Effect::BevelEmboss(photocraft_doc::Bevel {
+        enabled: true,
+        style,
+        technique: photocraft_doc::BevelTechnique::Smooth,
+        depth: 1.0,
+        up: true,
+        size: 5.0,
+        soften,
+        angle: 120.0,
+        altitude: 30.0,
+        use_global_light: false,
+        gloss_contour: photocraft_doc::Contour::Linear,
+        highlight: FxCommon::new(photocraft_color::BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    })
+}
+
+/// A tall page of layers with Transparency Shapes Layer off, one effect stack each (every local
+/// kind), most masked to a soft-edged block so their effect shapes vary down the page.
+fn shapeless_fx_doc(depth: SampleType) -> Document {
+    use photocraft_doc::BevelStyle;
+    let mut d = Document::with_background("t", Size::new(48, 640), ColorMode::Rgb, depth, Color::WHITE);
+    let satin = Effect::Satin(Satin {
+        common: FxCommon::new(photocraft_color::BlendMode::Multiply, 1.0),
+        color: Color::BLACK,
+        angle: 19.0,
+        distance: 4.0,
+        size: 5.0,
+        contour: photocraft_doc::Contour::Linear,
+        anti_alias: true,
+        invert: false,
+    });
+    let stacks = vec![
+        vec![stroke(3.0, StrokePosition::Outside)],
+        vec![stroke(2.0, StrokePosition::Inside), Effect::DropShadow(Shadow { size: 6.0, spread: 0.3, noise: 0.2, ..shadow(5.0, 120.0) })],
+        vec![stroke(4.0, StrokePosition::Center)],
+        vec![Effect::InnerShadow(Shadow { size: 4.0, spread: 0.0, ..shadow(3.0, 30.0) })],
+        vec![Effect::OuterGlow(Glow { size: 6.0, spread: 0.2, noise: 0.1, ..glow(GlowTechnique::Softer, GlowSource::Edge) })],
+        vec![Effect::InnerGlow(glow(GlowTechnique::Softer, GlowSource::Center)), satin],
+        vec![bevel_fx(BevelStyle::Emboss, 2.0)],
+        vec![bevel_fx(BevelStyle::PillowEmboss, 0.0), bevel_fx(BevelStyle::OuterBevel, 1.0)],
+        vec![stroke(3.0, StrokePosition::Outside), Effect::InnerGlow(glow(GlowTechnique::Softer, GlowSource::Edge))],
+    ];
+    let mask_fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
+    for (i, fx) in stacks.into_iter().enumerate() {
+        let y = 24 + i as i32 * 66;
+        let mut l = Layer::raster(format!("fx{i}"), d.pixel_format());
+        let c = [0.2 + 0.08 * i as f32, 0.5, 1.0 - 0.1 * i as f32, 1.0];
+        l.surface_mut().unwrap().fill_rect(Rect::new(10, y, 38, y + 18), &photocraft_raster::from_rgba(&d.pixel_format(), c));
+        l.effects.items = fx;
+        l.advanced.transparency_shapes = false;
+        l.opacity = 0.8;
+        // The last layer stays unmasked: its shape is the whole canvas, edged only at its sides.
+        if i < 8 {
+            let mut m = photocraft_raster::Surface::new(mask_fmt);
+            m.fill_rect(Rect::new(4 + i as i32, y - 12, 44, y + 30), &[1.0]);
+            m.fill_rect(Rect::new(4 + i as i32, y + 30, 30, y + 34), &[0.5]);
+            l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        }
+        d.layers.push(l);
+    }
+    // A tsly-off stroked layer inside a group whose own effects reach much further: the group's
+    // effect shape composites its children over the group's whole region, far past any band.
+    let mut inner = Layer::raster("inner", d.pixel_format());
+    inner.surface_mut().unwrap().fill_rect(Rect::new(12, 300, 30, 310), &photocraft_raster::from_rgba(&d.pixel_format(), [0.1, 0.9, 0.3, 1.0]));
+    inner.effects.items = vec![stroke(3.0, StrokePosition::Outside)];
+    inner.advanced.transparency_shapes = false;
+    let mut m = photocraft_raster::Surface::new(mask_fmt);
+    m.fill_rect(Rect::new(8, 240, 36, 380), &[1.0]);
+    inner.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    let mut g = Layer::group("g", vec![inner]);
+    g.effects.items = vec![Effect::DropShadow(Shadow { size: 40.0, spread: 0.1, ..shadow(90.0, 70.0) }), stroke(120.0, StrokePosition::Outside)];
+    g.opacity = 0.6;
+    d.layers.push(g);
+    // A clipping mask: a tsly-off stroked layer clipped to a base with large effects of its own.
+    let mut base = Layer::raster("base", d.pixel_format());
+    base.surface_mut().unwrap().fill_rect(Rect::new(6, 420, 42, 470), &photocraft_raster::from_rgba(&d.pixel_format(), [0.9, 0.9, 0.2, 1.0]));
+    base.effects.items = vec![Effect::OuterGlow(Glow { size: 150.0, ..glow(GlowTechnique::Softer, GlowSource::Edge) })];
+    let mut clip = Layer::raster("clip", d.pixel_format());
+    clip.surface_mut().unwrap().fill_rect(Rect::new(14, 430, 34, 450), &photocraft_raster::from_rgba(&d.pixel_format(), [0.6, 0.1, 0.6, 1.0]));
+    clip.effects.items = vec![stroke(2.0, StrokePosition::Center), Effect::InnerShadow(Shadow { size: 3.0, spread: 0.0, ..shadow(2.0, 45.0) })];
+    clip.advanced.transparency_shapes = false;
+    clip.clipped = true;
+    d.layers.push(base);
+    d.layers.push(clip);
+    d
+}
+
+#[test]
+fn shapeless_effects_render_the_same_in_bands_and_parts() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let d = shapeless_fx_doc(depth);
+        // Bands and parts first, from an empty cache: maps a band builds (a group's, say) must not
+        // borrow from a whole render's.
+        purge_effect_cache();
+        let mut banded = Vec::new();
+        render_bands(&d, d.bounds(), 64, |b| -> Result<(), ()> {
+            banded.extend_from_slice(&b.px);
+            Ok(())
+        })
+        .unwrap();
+        purge_effect_cache();
+        let parts: Vec<(Rect, Buffer)> =
+            [Rect::new(3, 290, 41, 333), Rect::new(0, 0, 48, 20), Rect::new(20, 600, 48, 640), Rect::new(0, 296, 20, 312), Rect::new(10, 425, 40, 445)]
+                .into_iter()
+                .map(|r| (r, render(&d, r)))
+                .collect();
+        let whole = render(&d, d.bounds());
+        assert_eq!(banded.len(), whole.px.len());
+        let diff = banded.iter().zip(&whole.px).position(|(a, b)| a != b);
+        assert!(diff.is_none(), "{depth:?}: band render differs at {diff:?}");
+        // A small part (an edit's damage) and a tiled render agree with the whole render too.
+        for (part, p) in &parts {
+            let part = *part;
+            for y in part.y0..part.y1 {
+                for x in part.x0..part.x1 {
+                    assert_eq!(p.get(x, y), whole.get(x, y), "{depth:?}: part {part:?} differs at ({x},{y})");
+                }
+            }
+        }
+        assert!(render_tiled(&d, d.bounds(), 16).px == whole.px, "{depth:?}: tiled render differs");
+    }
+}
+
+#[test]
+fn shapeless_effect_maps_cover_only_the_band_being_rendered() {
+    // Transparency Shapes Layer off makes an effect region the whole canvas: on a 1920 × 103675
+    // page each stroked type layer's maps took ~2.4 GB, for every layer at once (#1909). Rendering
+    // a band builds them over that band (plus the effects' reach) only.
+    let d = shapeless_fx_doc(SampleType::U8);
+    let patterns = pattern::PreparedPatterns::new(&d.patterns, pattern::PREPARED_PATTERN_BYTES);
+    let cx = Ctx::for_doc(&d, &patterns);
+    let l = &d.layers[9];
+    let whole = effect_maps(l, Rect::new(0, 256, 48, 320), &cx).bytes();
+    cx.set_fx_clip(Rect::new(0, 256, 48, 320));
+    let band = effect_maps(l, Rect::new(0, 256, 48, 320), &cx).bytes();
+    assert!(band * 4 < whole, "band maps {band} B vs whole-canvas maps {whole} B");
+    // The next band lets the previous band's maps go.
+    cx.set_fx_clip(Rect::new(0, 320, 48, 384));
+    let _ = effect_maps(l, Rect::new(0, 320, 48, 384), &cx);
+    assert_eq!(cx.fx_maps.lock().unwrap().len(), 2, "the unclipped maps and this band's");
+    // Composited over more than the band (a group's effect shape renders its children over the
+    // group's whole region): the whole region.
+    let full = effect_region(l, Rect::new(0, 320, 48, 384), &cx).0;
+    assert_eq!(
+        effect_region(l, Rect::new(0, 200, 48, 500), &cx),
+        (layer_bounds(l, cx.canvas).inflate(effects::margin(l)).intersect(&cx.canvas.inflate(effects::margin(l))), false)
+    );
+    assert!(full.height() < 100, "{full:?}");
+    // Effects whose maps aren't local keep the whole region.
+    let mut g = l.clone();
+    g.effects.items = vec![Effect::OuterGlow(glow(GlowTechnique::Precise, GlowSource::Edge))];
+    assert_eq!(
+        effect_region(&g, Rect::new(0, 320, 48, 384), &cx),
+        (layer_bounds(&g, cx.canvas).inflate(effects::margin(&g)).intersect(&cx.canvas.inflate(effects::margin(&g))), false)
+    );
 }
 
 // ---------- PSD-fidelity effect semantics (fitted on Photoshop composites) ----------
@@ -1555,7 +1771,7 @@ fn large_documents_thumbnail_from_a_proxy() {
 /// parallel), each carrying a different effect.
 #[cfg(not(target_arch = "wasm32"))]
 fn nested_parallel_fx_doc() -> Document {
-    use photocraft_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
+    use photocraft_doc::{Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
     let mut d = doc_white(512, 512);
     let g = |a: f32| Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::rgb(0.2, 0.5, 0.9))], a, 1.0, photocraft_doc::GradientStyle::Linear, false);
     let mut shadow = Layer::new("shadow", LayerContent::Fill(g(0.0)));
@@ -1583,11 +1799,32 @@ fn nested_parallel_fx_doc() -> Document {
         noise: 0.0,
         source: GlowSource::Edge,
     })];
+    // A chiselled bevel: its distance transforms run on threads of their own, inside the tile that builds them.
+    let mut chisel = solid_layer("chisel", Rect::new(60, 60, 450, 450), [0.8, 0.6, 0.2, 1.0]);
+    chisel.effects.items = vec![Effect::BevelEmboss(Bevel {
+        enabled: true,
+        style: BevelStyle::InnerBevel,
+        technique: BevelTechnique::ChiselHard,
+        depth: 1.5,
+        up: true,
+        size: 9.0,
+        soften: 0.0,
+        angle: 120.0,
+        altitude: 32.0,
+        use_global_light: false,
+        gloss_contour: Contour::Linear,
+        highlight: FxCommon::new(BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    })];
     // Unaffected layers whose rows also render in parallel keep both workers stealing.
     let base = Layer::new("base", LayerContent::Fill(g(30.0)));
     let mut top = Layer::new("top", LayerContent::Fill(g(60.0)));
     top.opacity = 0.3;
-    d.layers.extend([base, shadow, stroke, glow, top]);
+    d.layers.extend([base, shadow, stroke, glow, chisel, top]);
     d
 }
 
@@ -1757,4 +1994,44 @@ fn clipped_brightness_and_desaturation_whiten_a_lighter_color_logo() {
     let p = px(&d, 0, 0);
     assert!(p[..3].iter().all(|v| *v * 255.0 >= 252.0), "logo whitened: {p:?}");
     assert!(close4(px(&d, 1, 0), yellow), "the yellow beside it is untouched");
+}
+
+#[test]
+fn outer_glow_does_not_paint_through_a_zero_fill_layer() {
+    use photocraft_doc::{Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique};
+
+    let background = [0.18, 0.42, 0.85, 1.0];
+    let rect = Rect::new(24, 24, 72, 72);
+    for technique in [GlowTechnique::Softer, GlowTechnique::Precise] {
+        let mut d = doc_white(96, 96);
+        let bounds = d.bounds();
+        d.layers[0].surface_mut().unwrap().fill_rect(bounds, &background);
+        let mut layer = solid_layer("glow", rect, [1.0, 0.92, 0.25, 1.0]);
+        layer.fill_opacity = 0.0;
+        layer.effects.items.push(Effect::OuterGlow(Glow {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            paint: FxPaint::Color(Color::rgb(1.0, 0.94, 0.28)),
+            technique,
+            spread: 0.5,
+            size: 12.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        }));
+        d.layers.push(layer);
+
+        let center = px(&d, 48, 48);
+        assert!(close4(center, background), "{technique:?}: glow leaked into fully transparent fill: {center:?}");
+        let distant = px(&d, 5, 5);
+        assert!(close4(distant, background), "{technique:?}: changed distant background: {distant:?}");
+        let halo = px(&d, 22, 48);
+        assert!(halo[0] > background[0] + 0.1, "{technique:?}: exterior halo disappeared: {halo:?}");
+
+        d.layers[1].fill_opacity = 1.0;
+        let opaque = px(&d, 48, 48);
+        assert!(opaque[0] > 0.9 && opaque[1] > 0.8, "{technique:?}: opaque fill disappeared: {opaque:?}");
+    }
 }

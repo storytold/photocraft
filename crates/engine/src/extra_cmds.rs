@@ -52,6 +52,21 @@ fn has_background(s: &Session) -> std::result::Result<(), String> {
     d.doc.layers.first().filter(|l| is_background(l)).map(|_| ()).ok_or_else(|| "the document has no Background layer".into())
 }
 
+/// The layers a layer-style command acts on: as [`crate::layer_multi_cmds::targets`], but with
+/// several layers selected only those `fits` (the Background carries no style, Clear needs one).
+pub(crate) fn style_targets(s: &Session, p: &Value, fits: impl Fn(&Layer) -> bool) -> Result<Vec<LayerId>> {
+    let ids = crate::layer_multi_cmds::targets(s, p)?;
+    if ids.len() < 2 {
+        return Ok(ids);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| !is_background(l) && fits(l))).collect();
+    if ids.is_empty() {
+        return Err(EngineError::Other("none of the selected layers can take this layer style change".into()));
+    }
+    Ok(ids)
+}
+
 /// A key that makes the sub-commands of one command share a single history step.
 fn step_key(s: &Session, what: &str) -> String {
     format!("{what}#{}", s.active().map_or(0, |d| d.revision))
@@ -122,9 +137,31 @@ fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut
 
 /// Edit › Stroke: a band along the selection edge (or the layer's opaque edge without a selection).
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let width = p.get("width").and_then(Value::as_f64).unwrap_or(1.0).clamp(1.0, 250.0) as f32;
-    let mut color = color_param(p, "color", s.tools.foreground);
-    color[3] *= (p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32 / 100.0).clamp(0.0, 1.0);
+    // Whole pixels, rounded up, as in Photoshop (0.5 px strokes 1 px).
+    let width = p.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()).unwrap_or(1.0).clamp(1.0, 250.0).ceil() as usize;
+    let color = color_param(p, "color", s.tools.foreground);
+    let mode = match p.get("mode") {
+        None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
+        Some(Value::String(m)) => crate::commands::blend_from_str(m)
+            .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
+            .ok_or_else(|| EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("unknown blend mode `{m}`") })?,
+        Some(v) => return Err(EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("mode must be a blend mode name, not {v}") }),
+    };
+    let opacity = match p.get("opacity") {
+        None | Some(Value::Null) => 1.0,
+        Some(v) => {
+            (v.as_f64()
+                .filter(|x| x.is_finite())
+                .ok_or_else(|| EngineError::BadParams { cmd: "edit.stroke".into(), msg: "opacity must be a finite number from 0 to 100".into() })?
+                .clamp(0.0, 100.0)
+                / 100.0) as f32
+        }
+    };
+    let preserve = match p.get("preserveTransparency") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(EngineError::BadParams { cmd: "edit.stroke".into(), msg: "preserveTransparency must be true or false".into() }),
+    };
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
     s.edit("Stroke", |doc, _| {
@@ -140,18 +177,48 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
                 px.iter().map(|p| p[3]).collect()
             }
         };
-        let (outer, inner) = match location.as_str() {
-            "inside" => (edge.clone(), sel::contract(&edge, w, h, width)),
-            "outside" => (sel::expand(&edge, w, h, width), edge.clone()),
-            _ => (sel::expand(&edge, w, h, width / 2.0), sel::contract(&edge, w, h, width / 2.0)),
+        // Past the canvas nothing is selected, so the canvas edge is a selection edge like any
+        // other (Select All, then Stroke › Inside, frames the canvas): stroke on a padded copy.
+        let pad = width + 1;
+        let (pw, ph) = (w + 2 * pad, h + 2 * pad);
+        let mut padded = vec![0.0f32; pw * ph];
+        for (row, src) in padded.chunks_exact_mut(pw).skip(pad).zip(edge.chunks_exact(w.max(1))) {
+            if let Some(dst) = row.get_mut(pad..pad + w) {
+                dst.copy_from_slice(src);
+            }
+        }
+        // Whole-pixel bands, fully opaque: Center puts the odd pixel inside (1 px is all inside).
+        let (out_px, in_px) = match location.as_str() {
+            "inside" => (0, width),
+            "outside" => (width, 0),
+            _ => (width / 2, width.div_ceil(2)),
         };
-        let band: Vec<f32> = outer.iter().zip(&inner).map(|(o, i)| (o - i).clamp(0.0, 1.0)).collect();
+        // A hard-edged selection strokes hard, matching Photoshop pixel for pixel on curves:
+        // outside, a pixel is stroked when its centre is less than width + 1 from a selected
+        // pixel's; inside, less than width + ½ from an unselected pixel's (fitted to Photoshop's
+        // strokes of a 14 px circle: 6 px Outside; 3, 5 and 6 px Inside). Both give whole
+        // pixels on straight edges. Soft selections keep soft edges.
+        let hard = padded.iter().all(|v| *v <= 0.0 || *v >= 1.0);
+        let in_r = if hard && in_px > 0 { in_px as f32 - 0.5 } else { in_px as f32 };
+        let mut outer = sel::expand(&padded, pw, ph, out_px as f32);
+        let mut inner = sel::contract(&padded, pw, ph, in_r);
+        if hard {
+            outer.iter_mut().for_each(|v| *v = if *v > 0.0 { 1.0 } else { 0.0 });
+            inner.iter_mut().for_each(|v| *v = if *v >= 1.0 { 1.0 } else { 0.0 });
+        }
+        let band: Vec<f32> = outer
+            .chunks_exact(pw)
+            .zip(inner.chunks_exact(pw))
+            .skip(pad)
+            .take(h)
+            .flat_map(|(o, i)| o.iter().zip(i).skip(pad).take(w).map(|(o, i)| (o - i).clamp(0.0, 1.0)))
+            .collect();
         let band = sel::mask_to_surface(&band, canvas);
         let lock = doc.effective_locks(id).transparency;
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::pixels::fill_surface(surf, area, color, Some(&band), lock);
+            crate::fill_cmds::blend_color_mask(surf, area, color, &band, mode, opacity, preserve || lock)?;
             surf.prune();
         }
         Ok(())
@@ -363,7 +430,7 @@ fn layer_from_background(s: &mut Session) -> Result<Value> {
     Ok(json!({"layer": id.0}))
 }
 
-fn unlock_background(l: &mut Layer) {
+pub(crate) fn unlock_background(l: &mut Layer) {
     l.name = "Layer 0".into();
     l.locks.transparency = false;
     l.locks.position = false;
@@ -585,16 +652,29 @@ fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) ->
     Ok(true)
 }
 
-fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) -> Result<Value> {
-    let id = layer_param(s, p)?;
+/// Layer › Rasterize › Layer / Type / Shape / Fill Content / Smart Object. With a `layer` param,
+/// just that layer. Otherwise, as in Photoshop ("select the layer or layers you'd like to
+/// rasterize"), every selected layer the command applies to, in one history step.
+pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) -> Result<Value> {
+    let ids = crate::layer_multi_cmds::targets(s, p)?;
+    let many = ids.len() > 1;
     let key = step_key(s, "rasterize");
-    if !rasterize_one(s, id, only, &key)? {
-        return Err(EngineError::Other(match only {
-            Some(k) => format!("the layer is not a {k} layer"),
-            None => "the layer has nothing to rasterize".into(),
-        }));
+    let mut done = Vec::new();
+    for id in ids {
+        if rasterize_one(s, id, only, &key)? {
+            done.push(id.0);
+        }
     }
-    Ok(json!({"layer": id.0}))
+    let Some(&first) = done.first() else {
+        return Err(EngineError::Other(match (only, many) {
+            (Some(k), false) => format!("the layer is not a {k} layer"),
+            (Some(k), true) => format!("none of the selected layers is a {k} layer"),
+            (None, false) => "the layer has nothing to rasterize".into(),
+            (None, true) => "none of the selected layers has anything to rasterize".into(),
+        }));
+    };
+    let active = s.active().and_then(|d| d.active_layer).map(|id| id.0).filter(|id| done.contains(id));
+    Ok(json!({"layer": active.unwrap_or(first), "layers": done}))
 }
 
 fn rasterize_all(s: &mut Session) -> Result<Value> {
@@ -624,7 +704,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Stroke…",
             &["Edit"],
             None,
-            r##"{"width":1..250=1,"color":"#rrggbb|[r,g,b,a]"=foreground,"location":"inside|center|outside"="center","opacity":0..100=100}"##,
+            r##"{"width":1..250=1,"color":"#rrggbb|[r,g,b,a]"=foreground,"location":"inside|center|outside"="center","mode":"any layer blend mode"="normal","opacity":0..100=100,"preserveTransparency":bool=false}"##,
             has_pixels,
             stroke
         ),
@@ -685,20 +765,25 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Layer Style",
             &["Layer", "Layer Style"],
             None,
-            r##"{"layer":id?}"##,
+            r##"{"layer":id?} (no layer: every selected layer but the Background)"##,
             |s| {
                 has_layer(s)?;
                 s.style_clipboard.as_ref().map(|_| ()).ok_or_else(|| "no layer style has been copied".into())
             },
             |s, p| {
-                let id = layer_param(s, p)?;
-                let (fx, blend, fill, advanced) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
+                let ids = style_targets(s, p, |_| true)?;
+                let (mut fx, blend, fill, advanced) = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 s.edit("Paste Layer Style", |doc, _| {
-                    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-                    l.effects = fx;
-                    l.blend = blend;
-                    l.fill_opacity = fill;
-                    l.advanced = advanced;
+                    // A style copied from a document in another mode takes this one's colours.
+                    let mode = doc.mode;
+                    fx.items = std::mem::take(&mut fx.items).into_iter().map(|e| e.in_mode(mode)).collect();
+                    for id in ids {
+                        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                        l.effects = fx.clone();
+                        l.blend = blend;
+                        l.fill_opacity = fill;
+                        l.advanced = advanced;
+                    }
                     Ok(())
                 })?;
                 Ok(Value::Null)
@@ -724,19 +809,43 @@ pub fn specs() -> Vec<CommandSpec> {
             has_mask,
             |s, p| toggle_mask(s, p, "linked")
         ),
-        spec!("layer.rasterize.layer", "Layer", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(s, p, None)),
+        spec!(
+            "layer.rasterize.layer",
+            "Layer",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, None)
+        ),
         spec!("layer.rasterize.allLayers", "All Layers", &["Layer", "Rasterize"], None, "{}", has_doc, |s, _| rasterize_all(s)),
-        spec!("layer.rasterize.type", "Type", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(s, p, Some("type"))),
-        spec!("layer.rasterize.fillContent", "Fill Content", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(
-            s,
-            p,
-            Some("fill")
-        )),
-        spec!("layer.rasterize.smartObject", "Smart Object", &["Layer", "Rasterize"], None, r##"{"layer":id?}"##, has_layer, |s, p| rasterize(
-            s,
-            p,
-            Some("smart")
-        )),
+        spec!(
+            "layer.rasterize.type",
+            "Type",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, Some("type"))
+        ),
+        spec!(
+            "layer.rasterize.fillContent",
+            "Fill Content",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, Some("fill"))
+        ),
+        spec!(
+            "layer.rasterize.smartObject",
+            "Smart Object",
+            &["Layer", "Rasterize"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer it applies to)"##,
+            has_layer,
+            |s, p| rasterize(s, p, Some("smart"))
+        ),
         spec!("layer.delete.hiddenLayers", "Hidden Layers", &["Layer", "Delete"], None, "{}", has_doc, |s, _| delete_where(s, "Delete Hidden Layers", |l| !l
             .visible)),
         spec!("file.scripts.deleteAllEmptyLayers", "Delete All Empty Layers", &["File", "Scripts"], None, "{}", has_doc, |s, _| delete_where(
@@ -885,6 +994,282 @@ mod tests {
         s.execute("edit.stroke", json!({"width": 3, "color": "#00ff00", "location": "outside"})).unwrap();
         assert_eq!(pixel(&s, 8, 15), vec![0.0, 1.0, 0.0, 1.0]);
         assert_eq!(pixel(&s, 15, 15), vec![0.0, 0.0, 1.0, 1.0]);
+    }
+
+    /// Photoshop's Edit › Stroke on a selection (checked by hand): Center puts ceil(w/2) px inside
+    /// and floor(w/2) outside (1 px is all inside), fractional widths round up, and every stroked
+    /// pixel is fully opaque, on every edge, horizontal ones included. Inside and Outside are
+    /// w px on their side.
+    #[test]
+    fn stroke_widths_are_whole_opaque_pixels_like_photoshop() {
+        // Selection x 10..30, y 10..30; the edge pixels inside are 10 and 29 on each axis.
+        let band = |loc: &str, w: i32| -> (i32, i32) {
+            match loc {
+                "inside" => (w, 0),
+                "outside" => (0, w),
+                _ => ((w + 1) / 2, w / 2),
+            }
+        };
+        let mut wrong = Vec::new();
+        for depth in [8, 16, 32] {
+            for loc in ["center", "inside", "outside"] {
+                for (param, w) in [(json!(1), 1), (json!(2), 2), (json!(3), 3), (json!(4), 4), (json!(5), 5), (json!(0.5), 1), (json!(2.5), 3)] {
+                    let mut s = Session::new();
+                    s.execute("file.new", json!({"width": 50, "height": 50, "depth": depth})).unwrap();
+                    s.execute("layer.new.layer", json!({})).unwrap();
+                    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+                    s.execute("edit.stroke", json!({"width": param, "color": "#ff0000", "location": loc})).unwrap();
+                    let (inside, outside) = band(loc, w);
+                    // (edge pixel inside, step inward) for left, right, top and bottom; the other
+                    // coordinate is the middle of the edge.
+                    for (name, first_in, inward, horizontal) in
+                        [("left", 10, 1, false), ("right", 29, -1, false), ("top", 10, 1, true), ("bottom", 29, -1, true)]
+                    {
+                        for k in -7..7 {
+                            // k ≥ 0: k px inside from the edge; k < 0: -k px outside.
+                            let c = first_in + k * inward;
+                            let (x, y) = if horizontal { (20, c) } else { (c, 20) };
+                            let want = if (k >= 0 && k < inside) || (k < 0 && -k <= outside) { 1.0 } else { 0.0 };
+                            let a = pixel(&s, x, y)[3];
+                            if (a - want).abs() > 0.004 {
+                                wrong.push(format!("{depth}-bit {loc} width {param} {name} edge, {k:+} px: alpha {a}, want {want}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{} pixels differ from Photoshop:\n{}", wrong.len(), wrong.iter().take(40).cloned().collect::<Vec<_>>().join("\n"));
+    }
+
+    /// Photoshop's 6 px Outside stroke of a 14 px circle selection made without anti-aliasing,
+    /// read pixel by pixel from Photoshop (`#` stroked, `.` not; the hole is the selection). A
+    /// hard selection gives a hard stroke: a pixel is stroked when its centre is less than
+    /// width + 1 from a selected pixel's centre (no partial pixels on the curve).
+    const PS_CIRCLE_OUTSIDE_6: [&str; 31] = [
+        "..................................",
+        "..................................",
+        "...........############...........",
+        "..........##############..........",
+        ".........################.........",
+        "........##################........",
+        ".......####################.......",
+        "......######################......",
+        ".....#########......#########.....",
+        "....#########........#########....",
+        "....########..........########....",
+        "....#######............#######....",
+        "....######..............######....",
+        "....######..............######....",
+        "....######..............######....",
+        "....######..............######....",
+        "....######..............######....",
+        "....######..............######....",
+        "....#######............#######....",
+        "....########..........########....",
+        "....#########........#########....",
+        ".....#########......#########.....",
+        "......######################......",
+        ".......####################.......",
+        "........##################........",
+        ".........################.........",
+        "..........##############..........",
+        "...........############...........",
+        "..................................",
+        "..................................",
+        "..................................",
+    ];
+
+    /// Photoshop's 3 px Inside stroke of the same 14 px hard circle (the selection is the ring
+    /// plus its hole). Inside, a pixel is stroked when its centre is less than width + ½ from an
+    /// unselected pixel's: that offset is the one fitting this, the 5 px and the 6 px samples
+    /// (any value from +0.41 to +0.60), so 6 px fills this circle (its deepest pixel is 6.4 px in).
+    const PS_CIRCLE_INSIDE_3: [&str; 17] = [
+        "...................",
+        "......######.......",
+        ".....########......",
+        "....##########.....",
+        "...####....####....",
+        "..####......####...",
+        "..###........###...",
+        "..###........###...",
+        "..###........###...",
+        "..###........###...",
+        "..####......####...",
+        "...####....####....",
+        "....##########.....",
+        ".....########......",
+        "......######.......",
+        "...................",
+        "...................",
+    ];
+
+    /// The selection of a Photoshop sample grid: an Outside stroke's hole, or an Inside stroke's
+    /// ring and hole.
+    fn grid_selection(rows: &[&str], outside: bool) -> Vec<f32> {
+        let (w, h) = (rows[0].len(), rows.len());
+        let mut mask = vec![0.0f32; w * h];
+        for (y, row) in rows.iter().enumerate() {
+            let b = row.as_bytes();
+            if let (Some(first), Some(last)) = (b.iter().position(|c| *c == b'#'), b.iter().rposition(|c| *c == b'#')) {
+                for x in first..=last {
+                    if !outside || b[x] == b'.' {
+                        mask[y * w + x] = 1.0;
+                    }
+                }
+            }
+        }
+        mask
+    }
+
+    /// Strokes `mask` as the selection of a `w` × `h` layer and returns its alpha per pixel.
+    fn stroke_alpha(mask: &[f32], w: usize, h: usize, depth: u32, params: Value) -> Vec<f32> {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": w, "height": h, "depth": depth})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("select", |doc, _| {
+            doc.selection = Some(sel::mask_to_surface(mask, doc.bounds()));
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.stroke", params).unwrap();
+        (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| pixel(&s, x as i32, y as i32)[3]).collect()
+    }
+
+    #[test]
+    fn a_hard_circle_strokes_inside_like_photoshop() {
+        let rows = PS_CIRCLE_INSIDE_3;
+        let (w, h) = (rows[0].len(), rows.len());
+        let mask = grid_selection(&rows, false);
+        for depth in [8, 16, 32] {
+            let got = stroke_alpha(&mask, w, h, depth, json!({"width": 3, "color": "#000000", "location": "inside"}));
+            let wrong: Vec<String> = rows
+                .iter()
+                .enumerate()
+                .flat_map(|(y, row)| row.bytes().enumerate().map(move |(x, c)| (x, y, c)))
+                .filter_map(|(x, y, c)| {
+                    let want = if c == b'#' { 1.0 } else { 0.0 };
+                    let a = got[y * w + x];
+                    ((a - want).abs() > 0.004).then(|| format!("({x}, {y}): {a}, Photoshop {want}"))
+                })
+                .collect();
+            assert!(wrong.is_empty(), "{depth}-bit: {} pixels differ from Photoshop: {wrong:?}", wrong.len());
+            // Checked in Photoshop: a 5 px Inside stroke leaves a plus-shaped hole of 12 pixels in
+            // the middle (rows 2, 4, 4, 2 wide), and 6 px fills the whole circle.
+            let hole = [(8, 6), (9, 6), (7, 7), (8, 7), (9, 7), (10, 7), (7, 8), (8, 8), (9, 8), (10, 8), (8, 9), (9, 9)];
+            let five = stroke_alpha(&mask, w, h, depth, json!({"width": 5, "color": "#000000", "location": "inside"}));
+            for (i, m) in mask.iter().enumerate() {
+                let stroked = *m > 0.0 && !hole.contains(&(i % w, i / w));
+                assert_eq!(five[i] > 0.996, stroked, "{depth}-bit 5 px Inside at ({}, {})", i % w, i / w);
+            }
+            let full = stroke_alpha(&mask, w, h, depth, json!({"width": 6, "color": "#000000", "location": "inside"}));
+            for (i, m) in mask.iter().enumerate() {
+                assert_eq!(full[i] > 0.996, *m > 0.0, "{depth}-bit 6 px Inside at ({}, {})", i % w, i / w);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hard_circle_strokes_like_photoshop() {
+        let rows = PS_CIRCLE_OUTSIDE_6;
+        let (w, h) = (rows[0].len(), rows.len());
+        // The selection: the `.` cells enclosed by the ring on each row.
+        let mask = grid_selection(&rows, true);
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": w, "height": h, "depth": depth})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.edit("select", |doc, _| {
+                doc.selection = Some(sel::mask_to_surface(&mask, doc.bounds()));
+                Ok(())
+            })
+            .unwrap();
+            s.execute("edit.stroke", json!({"width": 6, "color": "#000000", "location": "outside"})).unwrap();
+            let mut wrong = Vec::new();
+            for (y, row) in rows.iter().enumerate() {
+                for (x, c) in row.bytes().enumerate() {
+                    let want = if c == b'#' { 1.0 } else { 0.0 };
+                    let a = pixel(&s, x as i32, y as i32)[3];
+                    if (a - want).abs() > 0.004 {
+                        wrong.push(format!("({x}, {y}): {a}, Photoshop {want}"));
+                    }
+                }
+            }
+            assert!(wrong.is_empty(), "{depth}-bit: {} pixels differ from Photoshop: {wrong:?}", wrong.len());
+        }
+    }
+
+    /// Select All, then Stroke › Inside draws a border around the canvas (a common Photoshop
+    /// technique): the canvas edge is a selection edge like any other, on all four sides.
+    #[test]
+    fn stroking_a_selection_at_the_canvas_edge_draws_that_edge() {
+        for depth in [8, 16, 32] {
+            for (loc, w, inside) in [("inside", 3, 3), ("center", 3, 2), ("center", 1, 1)] {
+                let mut s = session(depth);
+                s.execute("select.all", json!({})).unwrap();
+                s.execute("edit.stroke", json!({"width": w, "color": "#ff0000", "location": loc})).unwrap();
+                // 40 × 30 canvas: k px in from each side, in the middle of the side.
+                for name in ["left", "right", "top", "bottom"] {
+                    for k in 0..6 {
+                        let (x, y) = match name {
+                            "left" => (k, 15),
+                            "right" => (39 - k, 15),
+                            "top" => (20, k),
+                            _ => (20, 29 - k),
+                        };
+                        let want = if k < inside { 1.0 } else { 0.0 };
+                        let a = pixel(&s, x, y)[3];
+                        assert!((a - want).abs() < 0.004, "{depth}-bit {loc} {w} px, {name} side, {k} px in: alpha {a}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stroke_uses_fill_blending_and_preserves_transparency_at_every_depth() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            paint_square(&mut s, Rect::new(10, 10, 20, 20), [0.5, 0.5, 0.5, 1.0]);
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+
+            let past = s.active().unwrap().history.past_len();
+            s.execute(
+                "edit.stroke",
+                json!({"width": 2, "color": "#ffffff", "location": "inside", "mode": "multiply", "opacity": 100, "preserveTransparency": true}),
+            )
+            .unwrap();
+            assert_eq!(s.active().unwrap().history.past_len(), past + 1, "Stroke is one history step");
+            let edge = pixel(&s, 10, 15);
+            assert!((edge[0] - 0.5).abs() < 0.015, "{depth}-bit Multiply must preserve gray: {edge:?}");
+            assert_eq!(edge[3], 1.0);
+
+            s.execute("edit.stroke", json!({"width": 2, "color": "#ffffff", "location": "outside", "preserveTransparency": true})).unwrap();
+            assert_eq!(pixel(&s, 9, 15)[3], 0.0, "{depth}-bit transparency lock prevents new outer pixels");
+
+            s.execute("edit.stroke", json!({"width": 2, "color": "#ffffff", "location": "outside", "opacity": 50})).unwrap();
+            let out = pixel(&s, 9, 15);
+            assert!((out[3] - 0.5).abs() < 0.015, "{depth}-bit 50% stroke opacity: {out:?}");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(pixel(&s, 9, 15)[3], 0.0);
+        }
+    }
+
+    #[test]
+    fn stroke_rejects_invalid_blending_options_without_modifying_the_document() {
+        let mut s = session(8);
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+        let past = s.active().unwrap().history.past_len();
+        for params in [
+            json!({"mode": "unknown-mode"}),
+            json!({"mode": 42}),
+            json!({"mode": "passThrough"}),
+            json!({"opacity": "lots"}),
+            json!({"preserveTransparency": "true"}),
+        ] {
+            assert!(s.execute("edit.stroke", params.clone()).is_err(), "{params}");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{params} should not create a history step");
+        }
     }
 
     #[test]

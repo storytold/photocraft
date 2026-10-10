@@ -18,7 +18,15 @@
 //!              264 if 2), bounds 4 × i32, depth i16, compression u8, data
 //! "patt"    := patterns as in the `Patt` global block
 //! "desc"    := version u32 (16) + ActionDescriptor; key `Brsh` lists `brushPreset` objects
+//! "phry"    := version u32 (16) + ActionDescriptor; key `hierarchy` lists objects read as a
+//!              token stream: `Grup` { `Nm  ` name, `zuid` uuid } opens a folder, `preset` {} is
+//!              the next preset of `desc` (in order), `groupEnd` {} closes the current folder
 //! ```
+//!
+//! The `phry` (preset hierarchy) section keeps the Brushes panel folders of Photoshop CC (2018+)
+//! files: [`AbrFile::folders`] gives each preset's folder path. Folders nest (a `Grup` inside a
+//! `Grup`); presets outside any folder are at the top level. A damaged hierarchy never fails the
+//! parse: mismatches become warnings and the presets they affect land at the top level.
 //!
 //! [`parse`] never panics: every length is bounds-checked, sizes are capped ([`MAX_EDGE`],
 //! [`MAX_TOTAL_BYTES`]) and a damaged brush is skipped with a warning when the rest of the file
@@ -110,6 +118,10 @@ pub struct AbrFile {
     pub patterns: Vec<PsdPattern>,
     /// v6+ brush presets: the `brushPreset` objects of the `desc` section, in file order.
     pub presets: Vec<Descriptor>,
+    /// v6+ folder of each preset, parallel to [`AbrFile::presets`]: the folder names from the
+    /// outermost in, empty for a preset at the top level. Empty when the file has no readable
+    /// preset hierarchy (`phry`), i.e. every preset is at the top level.
+    pub folders: Vec<Vec<String>>,
     /// Problems that did not stop the parse (skipped brushes, unknown sections…).
     pub warnings: Vec<String>,
 }
@@ -308,12 +320,113 @@ fn read_desc(data: &[u8], out: &mut AbrFile) {
     }
 }
 
+/// Deepest folder nesting read from or written to a preset hierarchy; deeper folders are merged
+/// into their ancestor at this depth.
+pub const MAX_FOLDER_DEPTH: usize = 32;
+/// Longest folder name kept (characters).
+const MAX_FOLDER_NAME: usize = 255;
+
+/// Most bytes of folder names held across all presets' folder paths (each name also counts its
+/// `String`). Presets past it are imported at the top level. 20,000 presets three folders deep
+/// with 20-character names take about 3 MB.
+const MAX_FOLDER_BYTES: usize = 16 << 20;
+
+/// Reads the `phry` token stream into one folder path per preset (`presets` of them, the count
+/// read from `desc`), in order. Paths are built only for those presets, within
+/// [`MAX_FOLDER_BYTES`]: a small section can't make the reader allocate more than that. `None`
+/// (with a warning) when the section is unreadable.
+fn read_phry(data: &[u8], presets: usize, warnings: &mut Vec<String>) -> Option<Vec<Vec<String>>> {
+    let vd = match VersionedDescriptor::parse_prefix(data) {
+        Ok((vd, _)) => vd,
+        Err(e) => {
+            warnings.push(format!("brush folders (phry) unreadable: {e}; brushes imported without folders"));
+            return None;
+        }
+    };
+    let Some(Value::List(items)) = vd.descriptor.get("hierarchy") else {
+        warnings.push("brush folders (phry) hold no hierarchy; brushes imported without folders".into());
+        return None;
+    };
+    let mut stack: Vec<String> = Vec::new();
+    // Folders opened past MAX_FOLDER_DEPTH: their `groupEnd`s close nothing on `stack`.
+    let mut overflow = 0usize;
+    let mut out = Vec::with_capacity(presets.min(MAX_BRUSHES));
+    // Preset tokens seen (only counted past `presets`), and the bytes held by `out`'s paths.
+    let (mut listed, mut bytes) = (0usize, 0usize);
+    let (mut unbalanced, mut too_deep, mut too_big) = (false, false, false);
+    for v in items {
+        let Value::Descriptor(d) = v else { continue };
+        if d.class_id.is("Grup") {
+            if stack.len() >= MAX_FOLDER_DEPTH {
+                overflow = overflow.saturating_add(1);
+                too_deep = true;
+                continue;
+            }
+            let name = match d.get("Nm  ") {
+                Some(Value::Text(t)) => t.to_string_lossy(),
+                _ => String::new(),
+            };
+            let name: String = name.trim().chars().take(MAX_FOLDER_NAME).collect();
+            stack.push(if name.is_empty() { "Group".to_string() } else { name });
+        } else if d.class_id.is("groupEnd") {
+            if overflow > 0 {
+                overflow -= 1;
+            } else if stack.pop().is_none() {
+                unbalanced = true;
+            }
+        } else if d.class_id.is("preset") {
+            listed = listed.saturating_add(1);
+            if out.len() >= presets {
+                continue;
+            }
+            let size = stack.iter().map(|n| n.len().saturating_add(size_of::<String>())).fold(0usize, usize::saturating_add);
+            match bytes.checked_add(size).filter(|&b| b <= MAX_FOLDER_BYTES) {
+                Some(b) if !too_big => {
+                    bytes = b;
+                    out.push(stack.clone());
+                }
+                _ => {
+                    too_big = true;
+                    out.push(Vec::new());
+                }
+            }
+        }
+    }
+    if unbalanced {
+        warnings.push("brush folders (phry): a folder end without a folder was ignored".into());
+    }
+    if too_deep {
+        warnings.push(format!("brush folders nested deeper than {MAX_FOLDER_DEPTH} levels were merged into their parent"));
+    }
+    if too_big {
+        warnings.push("brush folders (phry) too large; the remaining brushes were imported at the top level".into());
+    }
+    if listed != presets {
+        warnings.push(format!(
+            "brush folders (phry) list {listed} brushes but the file holds {presets}; {}",
+            if listed > presets { "the extra entries were ignored" } else { "the rest were imported at the top level" }
+        ));
+        out.resize(presets, Vec::new());
+    }
+    Some(out)
+}
+
+/// Pairs the `phry` section's preset tokens with the presets read from `desc`, in order.
+fn apply_hierarchy(out: &mut AbrFile, phry: Option<&[u8]>) {
+    let Some(data) = phry else { return };
+    let Some(folders) = read_phry(data, out.presets.len(), &mut out.warnings) else { return };
+    if folders.iter().any(|f| !f.is_empty()) {
+        out.folders = folders;
+    }
+}
+
 fn parse_v6(r: &mut Rd, out: &mut AbrFile) -> Result<()> {
     out.subversion = r.u16()?;
     if !matches!(out.subversion, 1 | 2) {
         return Err(PsdError::Unsupported(format!("brush file subversion {}", out.subversion)));
     }
     let mut budget = Budget(MAX_TOTAL_BYTES);
+    let mut hierarchy = None;
     while r.left() >= 12 {
         let sig = r.arr::<4>()?;
         if &sig != b"8BIM" {
@@ -341,11 +454,14 @@ fn parse_v6(r: &mut Rd, out: &mut AbrFile) -> Result<()> {
                 Err(e) => out.warnings.push(format!("embedded patterns unreadable: {e}")),
             },
             b"desc" => read_desc(data, out),
-            // Preset hierarchy (groups) and tool presets: not needed for the tips.
-            b"phry" | b"lPdc" => {}
+            // Read once `desc` gives the preset count; `phry` may come first.
+            b"phry" => hierarchy = Some(data),
+            // Tool presets: not needed for the brushes.
+            b"lPdc" => {}
             k => out.warnings.push(format!("section {} ignored", String::from_utf8_lossy(k))),
         }
     }
+    apply_hierarchy(out, hierarchy);
     Ok(())
 }
 
@@ -441,8 +557,68 @@ fn section(o: &mut Vec<u8>, key: &[u8; 4], data: &[u8]) {
 }
 
 /// Writes a v6 (`subversion` 1 or 2) file: sampled tips, embedded patterns and the preset
-/// descriptors (each a `brushPreset` object), listed under `Brsh`.
+/// descriptors (each a `brushPreset` object), listed under `Brsh`. Every preset is at the top
+/// level ([`write_v6_folders`] keeps folders).
 pub fn write_v6(subversion: u16, samples: &[AbrSample], patterns: &[PsdPattern], presets: &[Descriptor], rle: bool) -> Result<Vec<u8>> {
+    write_v6_folders(subversion, samples, patterns, presets, &[], rle)
+}
+
+/// A stable uuid-shaped folder id (`zuid`) derived from the folder's path and position.
+fn folder_uuid(path: &[&str], seq: usize) -> String {
+    // FNV-1a over the path, with two seeds, for 128 bits.
+    let hash = |seed: u64| {
+        let mut h = 0xcbf2_9ce4_8422_2325u64 ^ seed;
+        for b in path.iter().flat_map(|s| s.bytes().chain(std::iter::once(0))).chain(seq.to_le_bytes()) {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    };
+    let (a, b) = (hash(1), hash(2));
+    format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", a >> 32, (a >> 16) & 0xffff, a & 0xffff, b >> 48, b & 0xffff_ffff_ffff)
+}
+
+/// The `phry` descriptor for presets in `folders` (one path per preset, in preset order).
+/// Presets of one folder that are not adjacent reopen it (a reader merges them by path).
+fn hierarchy_descriptor(folders: &[Vec<String>]) -> Descriptor {
+    let text = |s: &str| Value::Text(crate::descriptor::UnicodeString::new_nul(s));
+    let mut items = Vec::new();
+    let mut open: Vec<&str> = Vec::new();
+    let mut seq = 0usize;
+    for path in folders {
+        let path: Vec<&str> = path.iter().take(MAX_FOLDER_DEPTH).map(String::as_str).collect();
+        let common = open.iter().zip(&path).take_while(|(a, b)| a == b).count();
+        while open.len() > common {
+            open.pop();
+            items.push(Value::Descriptor(Descriptor::new("groupEnd")));
+        }
+        for name in path.iter().skip(common) {
+            open.push(name);
+            seq += 1;
+            items.push(Value::Descriptor(Descriptor::new("Grup").with("Nm  ", text(name)).with("zuid", text(&folder_uuid(&open, seq)))));
+        }
+        items.push(Value::Descriptor(Descriptor::new("preset")));
+    }
+    for _ in open {
+        items.push(Value::Descriptor(Descriptor::new("groupEnd")));
+    }
+    Descriptor::new("null").with("hierarchy", Value::List(items))
+}
+
+/// [`write_v6`] that also writes the preset hierarchy (`phry`): `folders` holds each preset's
+/// folder path (outermost first; empty = top level), parallel to `presets`. With no folders (an
+/// empty slice, or only empty paths) no hierarchy is written.
+pub fn write_v6_folders(
+    subversion: u16,
+    samples: &[AbrSample],
+    patterns: &[PsdPattern],
+    presets: &[Descriptor],
+    folders: &[Vec<String>],
+    rle: bool,
+) -> Result<Vec<u8>> {
+    if !folders.is_empty() && folders.len() != presets.len() {
+        return Err(PsdError::invalid(format!("{} folder paths for {} brush presets", folders.len(), presets.len())));
+    }
     if !matches!(subversion, 1 | 2) {
         return Err(PsdError::Unsupported(format!("brush file subversion {subversion}")));
     }
@@ -470,6 +646,9 @@ pub fn write_v6(subversion: u16, samples: &[AbrSample], patterns: &[PsdPattern],
     let list = Value::List(presets.iter().cloned().map(Value::Descriptor).collect());
     let desc = VersionedDescriptor::new(Descriptor::new("null").with("Brsh", list));
     section(&mut o, b"desc", &desc.to_bytes());
+    if folders.iter().any(|f| !f.is_empty()) {
+        section(&mut o, b"phry", &VersionedDescriptor::new(hierarchy_descriptor(folders)).to_bytes());
+    }
     Ok(o)
 }
 
@@ -556,5 +735,163 @@ mod tests {
         }
         // A huge declared count with no data is an error, not an allocation.
         assert!(parse(&[0, 2, 0xff, 0xff]).is_err());
+    }
+
+    fn named(n: &str) -> Descriptor {
+        Descriptor::new("brushPreset").with("Nm  ", Value::Text(UnicodeString::new_nul(n)))
+    }
+
+    /// Hierarchy tokens: `G(name)` opens, `P` is a preset, `E` closes.
+    enum Tok<'a> {
+        G(&'a str),
+        P,
+        E,
+    }
+
+    /// A v6 file with `n` presets and a hand-made `phry` token stream.
+    fn with_phry(n: usize, toks: &[Tok]) -> Vec<u8> {
+        let presets: Vec<Descriptor> = (0..n).map(|i| named(&format!("B{i}"))).collect();
+        let mut bytes = write_v6(2, &[], &[], &presets, false).unwrap();
+        section(&mut bytes, b"phry", &phry_bytes(toks));
+        bytes
+    }
+
+    /// A `phry` section body holding `toks`.
+    fn phry_bytes(toks: &[Tok]) -> Vec<u8> {
+        let items = toks
+            .iter()
+            .map(|t| {
+                Value::Descriptor(match t {
+                    Tok::G(name) => Descriptor::new("Grup")
+                        .with("Nm  ", Value::Text(UnicodeString::new_nul(name)))
+                        .with("zuid", Value::Text(UnicodeString::new_nul("c9ee8fd5-eb7d-924c-9e95-ddc98e40bb6c"))),
+                    Tok::P => Descriptor::new("preset"),
+                    Tok::E => Descriptor::new("groupEnd"),
+                })
+            })
+            .collect();
+        VersionedDescriptor::new(Descriptor::new("null").with("hierarchy", Value::List(items))).to_bytes()
+    }
+
+    fn path(p: &[&str]) -> Vec<String> {
+        p.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn phry_flat_folders_like_photoshop_25() {
+        // The layout of Photoshop 25.1's default brushes: four folders, every preset in one.
+        use Tok::*;
+        let f = parse(&with_phry(5, &[G("General"), P, P, E, G("Dry Media"), P, E, G("Wet Media"), P, E, G("Special Effects"), P, E])).unwrap();
+        assert_eq!(f.folders, vec![path(&["General"]), path(&["General"]), path(&["Dry Media"]), path(&["Wet Media"]), path(&["Special Effects"])]);
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+    }
+
+    #[test]
+    fn phry_nested_folders_and_top_level_presets() {
+        use Tok::*;
+        let f = parse(&with_phry(5, &[P, G("Animals"), G("Birds"), P, E, P, G("Fish"), P, E, E, P])).unwrap();
+        assert_eq!(f.folders, vec![path(&[]), path(&["Animals", "Birds"]), path(&["Animals"]), path(&["Animals", "Fish"]), path(&[])]);
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        // No folder at all: no hierarchy.
+        let f = parse(&with_phry(2, &[P, P])).unwrap();
+        assert!(f.folders.is_empty());
+    }
+
+    #[test]
+    fn phry_mismatches_become_warnings() {
+        use Tok::*;
+        // A stray groupEnd is ignored; an unclosed folder still holds its presets.
+        let f = parse(&with_phry(2, &[E, G("A"), P, E, E, G("B"), P])).unwrap();
+        assert_eq!(f.folders, vec![path(&["A"]), path(&["B"])]);
+        assert!(f.warnings.iter().any(|w| w.contains("folder end")), "{:?}", f.warnings);
+        // Fewer preset tokens than presets: the rest are at the top level.
+        let f = parse(&with_phry(3, &[G("A"), P, E])).unwrap();
+        assert_eq!(f.folders, vec![path(&["A"]), path(&[]), path(&[])]);
+        assert!(f.warnings.iter().any(|w| w.contains("list 1 brushes but the file holds 3")), "{:?}", f.warnings);
+        // More preset tokens than presets: extras ignored.
+        let f = parse(&with_phry(1, &[G("A"), P, P, P, E])).unwrap();
+        assert_eq!(f.folders, vec![path(&["A"])]);
+        assert_eq!(f.presets.len(), 1);
+        assert!(!f.warnings.is_empty());
+        // A depth bomb: folders deeper than the limit merge into their ancestor at the limit.
+        let mut toks: Vec<Tok> = (0..10_000).map(|_| G("deep")).collect();
+        toks.push(P);
+        toks.extend((0..10_000).map(|_| E));
+        toks.extend([G("next"), P, E]);
+        let f = parse(&with_phry(2, &toks)).unwrap();
+        assert_eq!(f.folders[0].len(), MAX_FOLDER_DEPTH);
+        assert_eq!(f.folders[1], path(&["next"]));
+        assert!(f.warnings.iter().any(|w| w.contains("deeper")), "{:?}", f.warnings);
+        // An unreadable hierarchy: imported flat, with a warning.
+        let mut bytes = write_v6(2, &[], &[], &[named("x")], false).unwrap();
+        section(&mut bytes, b"phry", &[0, 0, 0, 16, 0xff, 0xff]);
+        let f = parse(&bytes).unwrap();
+        assert!(f.folders.is_empty() && f.presets.len() == 1);
+        assert!(f.warnings.iter().any(|w| w.contains("phry")), "{:?}", f.warnings);
+        // Truncations and bit flips of a file with a hierarchy never panic.
+        let good = with_phry(3, &[G("A"), P, G("B"), P, E, E, P]);
+        for cut in 0..good.len() {
+            let _ = parse(&good[..cut]);
+        }
+        for i in 0..good.len() {
+            let mut b = good.clone();
+            b[i] ^= 0x5a;
+            let _ = parse(&b);
+        }
+    }
+
+    #[test]
+    fn phry_builds_paths_only_for_the_files_presets() {
+        use Tok::*;
+        // A few-KB section listing 100,000 deep presets for a file with 2: two paths are built.
+        let mut toks: Vec<Tok> = (0..MAX_FOLDER_DEPTH).map(|_| G("folder")).collect();
+        toks.extend((0..100_000).map(|_| P));
+        let mut warnings = Vec::new();
+        let folders = read_phry(&phry_bytes(&toks), 2, &mut warnings).unwrap();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders.capacity(), 2);
+        assert_eq!(folders[1].len(), MAX_FOLDER_DEPTH);
+        assert!(warnings.iter().any(|w| w.contains("list 100000 brushes but the file holds 2")), "{warnings:?}");
+        // `phry` before `desc` still pairs with the file's presets.
+        let mut bytes = write_v6(2, &[], &[], &[named("a"), named("b")], false).unwrap();
+        let at = bytes.windows(8).position(|w| w == b"8BIMdesc").unwrap();
+        let mut phry = Vec::new();
+        section(&mut phry, b"phry", &phry_bytes(&[G("A"), P, E, P]));
+        bytes.splice(at..at, phry);
+        let f = parse(&bytes).unwrap();
+        assert_eq!(f.folders, vec![path(&["A"]), path(&[])]);
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+    }
+
+    #[test]
+    fn phry_folder_paths_stay_within_their_byte_budget() {
+        use Tok::*;
+        // Thousands of presets under 32 folders of 255-character names would need ~27 MB of paths.
+        let long = "x".repeat(MAX_FOLDER_NAME);
+        let mut toks: Vec<Tok> = (0..MAX_FOLDER_DEPTH).map(|_| G(&long)).collect();
+        toks.extend((0..3_000).map(|_| P));
+        let mut warnings = Vec::new();
+        let folders = read_phry(&phry_bytes(&toks), 3_000, &mut warnings).unwrap();
+        assert_eq!(folders.len(), 3_000);
+        let held: usize = folders.iter().flatten().map(|n| n.len() + size_of::<String>()).sum();
+        assert!(held <= MAX_FOLDER_BYTES, "{held}");
+        assert_eq!(folders[0].len(), MAX_FOLDER_DEPTH);
+        assert!(folders[2_999].is_empty(), "past the budget: top level");
+        assert!(warnings.iter().any(|w| w.contains("too large")), "{warnings:?}");
+    }
+
+    #[test]
+    fn phry_round_trips_through_the_writer() {
+        let presets: Vec<Descriptor> = (0..6).map(|i| named(&format!("B{i}"))).collect();
+        let folders = vec![path(&[]), path(&["Set", "Ink"]), path(&["Set", "Ink"]), path(&["Set"]), path(&["Other"]), path(&["Set", "Ink"])];
+        let bytes = write_v6_folders(2, &[], &[], &presets, &folders, true).unwrap();
+        let f = parse(&bytes).unwrap();
+        assert_eq!(f.presets, presets);
+        assert_eq!(f.folders, folders);
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        // No folders: no phry section, same bytes as write_v6.
+        assert_eq!(write_v6_folders(2, &[], &[], &presets, &vec![Vec::new(); 6], true).unwrap(), write_v6(2, &[], &[], &presets, true).unwrap());
+        // Mismatched lengths are an error.
+        assert!(write_v6_folders(2, &[], &[], &presets, &folders[..2], true).is_err());
     }
 }

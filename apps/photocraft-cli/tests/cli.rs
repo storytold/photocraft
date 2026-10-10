@@ -136,7 +136,8 @@ fn info_prints_layer_tree_json() {
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["width"], 10);
     assert_eq!(v["height"], 6);
-    assert_eq!(v["layers"][0]["name"], "Background");
+    // An RGBA PNG opens as a normal "Layer 0", not the locked Background (as in Photoshop).
+    assert_eq!(v["layers"][0]["name"], "Layer 0");
     assert!(v.get("history").is_none());
     let (out, _) = ok(bin().arg("info").arg(&a).arg("--compact"));
     assert_eq!(out.trim().lines().count(), 1);
@@ -218,6 +219,24 @@ fn run_errors() {
     assert_eq!(o.status.code(), Some(1));
     let e = String::from_utf8_lossy(&o.stderr);
     assert!(e.contains("layer.new.layer") && e.contains("must be a JSON object"), "{e}");
+}
+
+#[test]
+fn run_rejects_invalid_filter_parameters_without_exporting() {
+    let d = tmp("invalid-filter-params");
+    let out = d.join("result.png");
+    for (params, key) in [(r#"{"radius":"big"}"#, "radius"), (r#"{"radus":3}"#, "radus"), (r#"{"radius":5000}"#, "radius"), (r#"{"radius":-4}"#, "radius")] {
+        let result = bin()
+            .args(["run", "--new", r#"{"width":8,"height":8}"#, "--cmd", "filter.blur.gaussianBlur", "--params", params, "--out"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains("filter.blur.gaussianBlur") && error.contains(key), "{error}");
+        assert!(!out.exists());
+    }
+    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]

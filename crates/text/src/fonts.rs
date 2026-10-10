@@ -4,10 +4,11 @@
 //! data, and PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
-use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
+use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
 use skrifa::raw::{FileRef, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
 
@@ -16,24 +17,52 @@ pub const DEFAULT_FAMILY: &str = "Inter";
 /// Bundled monospace family.
 pub const MONO_FAMILY: &str = "JetBrains Mono";
 
+/// An `assets/fonts` file as deflated by build.rs.
+macro_rules! bundled_font {
+    ($file:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/fonts/", $file, ".deflate"))
+    };
+}
+
 // The font files are embedded once, here. The UI (`ui-egui` theme) uses these same statics:
 // a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the wasm.
-pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
-pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
-pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+// They are stored deflated by build.rs (0.73 MB instead of 1.5 MB: the web build's 24 MiB size
+// gate, packaging/web/package.sh) and inflated on first use, once per process.
+pub static INTER_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Regular.ttf")));
+pub static INTER_MEDIUM: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Medium.ttf")));
+pub static INTER_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-SemiBold.ttf")));
+pub static JETBRAINS_MONO_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("JetBrainsMono-Regular.ttf")));
 
 /// Fonts shipped with Photocraft (OFL; licences in `assets/fonts`).
-pub static BUNDLED: &[(&str, &[u8])] = &[
-    ("Inter-Regular.ttf", INTER_REGULAR),
-    ("Inter-Medium.ttf", INTER_MEDIUM),
-    ("Inter-SemiBold.ttf", INTER_SEMIBOLD),
-    ("JetBrainsMono-Regular.ttf", JETBRAINS_MONO_REGULAR),
+pub static BUNDLED: [(&str, &LazyLock<Vec<u8>>); 4] = [
+    ("Inter-Regular.ttf", &INTER_REGULAR),
+    ("Inter-Medium.ttf", &INTER_MEDIUM),
+    ("Inter-SemiBold.ttf", &INTER_SEMIBOLD),
+    ("JetBrainsMono-Regular.ttf", &JETBRAINS_MONO_REGULAR),
 ];
 
-/// Families tried (if installed) after the requested one, for missing glyphs. The CJK families
-/// ([`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
+/// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.
+const MAX_BUNDLED_FONT_BYTES: u64 = 16 << 20;
+
+/// Inflate a bundled font. Data that doesn't inflate gives no font (empty bytes, which every
+/// consumer skips), never a panic; `bundled_fonts_inflate_to_their_files` keeps it from happening.
+fn inflate_font(deflated: &[u8]) -> Vec<u8> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    match flate2::read::DeflateDecoder::new(deflated).take(MAX_BUNDLED_FONT_BYTES + 1).read_to_end(&mut out) {
+        Ok(_) if out.len() as u64 <= MAX_BUNDLED_FONT_BYTES => out,
+        _ => Vec::new(),
+    }
+}
+
+/// Families tried (if installed) after the requested one, for missing glyphs. The Thai and CJK
+/// families ([`THAI_FAMILIES`], [`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
 const FALLBACK_CANDIDATES: &[&str] = &["Noto Sans", "Segoe UI", "DejaVu Sans", "Geeza Pro", "Arial Hebrew", "Noto Sans Arabic", "Noto Sans Hebrew"];
+/// Thai-capable families: Windows (Leelawadee UI since Windows 8; Tahoma and Leelawadee on
+/// older systems), macOS (Thonburi, Sukhumvit Set) and Linux (Noto). Text in a font without Thai
+/// glyphs falls back to these, as with Photoshop's missing glyph protection (#1909).
+pub const THAI_FAMILIES: &[&str] =
+    &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Sukhumvit Set", "Noto Sans Thai", "Noto Sans Thai Looped", "Noto Sans Thai UI"];
 /// Broad-coverage and emoji fonts, tried after the CJK script fonts so shared Han characters get
 /// the locale's forms instead of Arial Unicode's.
 const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"];
@@ -41,6 +70,7 @@ const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe
 /// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]).
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
+    v.extend_from_slice(THAI_FAMILIES);
     for s in order {
         // craft-fonts' Japanese fonts (if built in) go ahead of the installed Japanese fonts, in
         // the Japanese slot of the locale order, so shared Han keeps the locale's forms.
@@ -53,10 +83,24 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
     v
 }
 
+/// Bumped whenever font data is registered: fonts can arrive after start (the web build fetches
+/// served fonts on demand, [`crate::served`]), so lists derived from the database, such as font
+/// menus, compare it to know when to refresh.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Changes whenever font data is registered in any [`FontDb`].
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
 /// One face in the database (for font menus).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaceInfo {
     pub family: String,
+    /// OpenType typographic subfamily (name 17), or legacy subfamily (name 2).
+    pub style: String,
+    /// Stable face identity, including faces that share the same CSS attributes.
+    pub postscript_name: Option<String>,
     /// CSS weight (100–900); variable fonts report their default.
     pub weight: f32,
     pub italic: bool,
@@ -80,6 +124,8 @@ pub struct FontDb {
     /// PostScript name → (family, weight, italic), filled lazily.
     ps_cache: HashMap<String, Option<ResolvedFont>>,
     fallbacks: Vec<String>,
+    face_cache: HashMap<String, Vec<FaceInfo>>,
+    face_aliases: HashMap<(String, usize), String>,
 }
 
 impl Default for FontDb {
@@ -97,9 +143,11 @@ impl FontDb {
             system_loaded: false,
             ps_cache: HashMap::new(),
             fallbacks: Vec::new(),
+            face_cache: HashMap::new(),
+            face_aliases: HashMap::new(),
         };
         for (_, bytes) in BUNDLED {
-            db.register_font_data(bytes.to_vec());
+            db.register_static_font(bytes.as_slice());
         }
         // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
         // wasm32), before any system font.
@@ -139,6 +187,7 @@ impl FontDb {
                 self.fcx.collection.load_fonts_from_paths([f]);
             }
             self.ps_cache.clear();
+            self.face_cache.clear();
             self.refresh_generics();
         }
     }
@@ -168,7 +217,9 @@ impl FontDb {
         // metrics differ from the public family's.
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
         self.ps_cache.clear();
+        self.face_cache.clear();
         self.refresh_generics();
+        GENERATION.fetch_add(1, Ordering::Relaxed);
         names
     }
 
@@ -190,6 +241,12 @@ impl FontDb {
         }
         let order = crate::cjk::ui_script_order();
         self.fallbacks = fallback_candidates(&order).into_iter().filter(|f| c.family_id(f).is_some()).map(str::to_string).collect();
+        // Served fonts that are a script's fallback (the manifest's `scripts`), once they arrived.
+        for f in crate::served::script_fallback_families() {
+            if c.family_id(&f).is_some() && !self.fallbacks.contains(&f) {
+                self.fallbacks.push(f);
+            }
+        }
     }
 
     /// Families available after the requested one (bundled default + installed coverage fonts).
@@ -235,20 +292,75 @@ impl FontDb {
             .is_some_and(|features| features.feature_records().iter().any(|record| record.feature_tag() == feature))
     }
 
-    /// Faces of a family (weights, italics, variation axes).
+    /// Faces of a family, preserving names even when multiple faces share CSS attributes.
     pub fn faces(&mut self, family: &str) -> Vec<FaceInfo> {
+        if let Some(faces) = self.face_cache.get(family) {
+            return faces.clone();
+        }
         let Some(info) = self.fcx.collection.family_by_name(family) else {
             return Vec::new();
         };
-        info.fonts()
+        let faces: Vec<_> = info
+            .fonts()
             .iter()
-            .map(|f| FaceInfo {
-                family: info.name().to_string(),
-                weight: f.weight().value(),
-                italic: !matches!(f.style(), FontStyle::Normal),
-                axes: f.axes().iter().map(|a| (a.tag.to_string(), a.min, a.default, a.max)).collect(),
+            .map(|f| {
+                let blob = f.load(Some(&mut self.fcx.source_cache));
+                let font = blob.as_ref().and_then(|b| skrifa::FontRef::from_index(b.as_ref(), f.index()).ok());
+                let name = |id| font.as_ref().and_then(|f| f.localized_strings(id).english_or_first()).map(|s| s.to_string()).filter(|s| !s.is_empty());
+                let italic = !matches!(f.style(), FontStyle::Normal);
+                FaceInfo {
+                    family: info.name().to_string(),
+                    style: name(StringId::TYPOGRAPHIC_SUBFAMILY_NAME)
+                        .or_else(|| name(StringId::SUBFAMILY_NAME))
+                        .unwrap_or_else(|| fallback_style(f.weight().value(), italic)),
+                    postscript_name: name(StringId::POSTSCRIPT_NAME),
+                    weight: f.weight().value(),
+                    italic,
+                    axes: f.axes().iter().map(|a| (a.tag.to_string(), a.min, a.default, a.max)).collect(),
+                }
             })
-            .collect()
+            .collect();
+        self.face_cache.insert(family.to_string(), faces.clone());
+        faces
+    }
+
+    /// Resolve a menu style to its actual metadata instead of guessing from its spelling.
+    pub fn named_face(&mut self, family: &str, style: &str) -> Option<FaceInfo> {
+        self.faces(family).into_iter().find(|f| f.style.eq_ignore_ascii_case(style))
+    }
+
+    /// Select an exact face for shaping. Private aliases are runtime-only: the document keeps
+    /// its public family and PostScript name. CSS matching alone cannot distinguish e.g. the
+    /// numeric subfamilies of Yoon fonts, all of which declare weight 400 / normal.
+    pub(crate) fn select_named_face(&mut self, style: &mut photocraft_doc::text::CharStyle) {
+        let family = style.font_family.clone();
+        let faces = self.faces(&family);
+        let index = style.postscript_name.as_ref().and_then(|ps| faces.iter().position(|f| f.postscript_name.as_ref() == Some(ps))).or_else(|| {
+            faces.iter().position(|f| {
+                !style.font_style.is_empty()
+                    && f.style.eq_ignore_ascii_case(&style.font_style)
+                    && f.weight.round() as u16 == style.weight
+                    && f.italic == style.italic
+            })
+        });
+        let Some(index) = index else { return };
+        let Some(face) = faces.get(index) else { return };
+        let key = (family.clone(), index);
+        let alias = if let Some(alias) = self.face_aliases.get(&key) {
+            alias.clone()
+        } else {
+            let Some(info) = self.fcx.collection.family_by_name(&family) else { return };
+            let Some(font) = info.fonts().get(index) else { return };
+            let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else { return };
+            let Some(blob) = isolated_face(blob, font.index()) else { return };
+            let alias = format!(".PhotoCraft-face-{}-{index}", info.id().to_u64());
+            self.fcx.collection.register_fonts(blob, Some(FontInfoOverride { family_name: Some(&alias), ..Default::default() }));
+            self.face_aliases.insert(key, alias.clone());
+            alias
+        };
+        style.font_family = alias;
+        style.weight = face.weight.round() as u16;
+        style.italic = face.italic;
     }
 
     /// Finds a face by PostScript name (as stored in PSD files): exact match by reading the
@@ -275,30 +387,59 @@ impl FontDb {
 
     fn find_exact(&mut self, ps: &str, family_guess: &str) -> Option<ResolvedFont> {
         let first_word = family_guess.split(' ').next().unwrap_or(family_guess).to_lowercase();
-        let candidates: Vec<String> = self.families().into_iter().filter(|f| f.to_lowercase().replace(' ', "").starts_with(&first_word)).collect();
+        let mut candidates = self.families();
+        candidates.sort_by_key(|f| !f.to_lowercase().replace(' ', "").starts_with(&first_word));
         for fam in candidates {
-            let Some(info) = self.fcx.collection.family_by_name(&fam) else {
-                continue;
-            };
-            for font in info.fonts() {
-                let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else {
-                    continue;
-                };
-                let Ok(fr) = skrifa::FontRef::from_index(blob.as_ref(), font.index()) else {
-                    continue;
-                };
-                let name = fr.localized_strings(StringId::POSTSCRIPT_NAME).english_or_first().map(|s| s.to_string());
-                if name.as_deref() == Some(ps) {
-                    return Some(ResolvedFont {
-                        family: info.name().to_string(),
-                        weight: font.weight().value().round() as u16,
-                        italic: !matches!(font.style(), FontStyle::Normal),
-                        exact: true,
-                    });
+            for face in self.faces(&fam) {
+                let Some(name) = face.postscript_name else { continue };
+                let resolved = ResolvedFont { family: face.family, weight: face.weight.round() as u16, italic: face.italic, exact: true };
+                self.ps_cache.insert(name.clone(), Some(resolved.clone()));
+                if name == ps {
+                    return Some(resolved);
                 }
             }
         }
         None
+    }
+}
+
+/// Make a collection expose only the requested face without rewriting any font tables.
+/// TTC table offsets are absolute; changing its face directory preserves them verbatim.
+fn isolated_face(blob: Blob<u8>, index: u32) -> Option<Blob<u8>> {
+    match FileRef::new(blob.as_ref()).ok()? {
+        FileRef::Font(_) => (index == 0).then_some(blob),
+        FileRef::Collection(collection) => {
+            collection.get(index).ok()?;
+            // Bound a copy of untrusted font data. Ordinary single-face fonts need no copy.
+            if blob.as_ref().len() > 256 * 1024 * 1024 {
+                return None;
+            }
+            let offset = 12usize.checked_add(usize::try_from(index).ok()?.checked_mul(4)?)?;
+            let face_offset: [u8; 4] = blob.as_ref().get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+            let mut bytes = blob.as_ref().to_vec();
+            bytes.get_mut(8..12)?.copy_from_slice(&1u32.to_be_bytes());
+            bytes.get_mut(12..16)?.copy_from_slice(&face_offset);
+            Some(Blob::new(Arc::new(bytes)))
+        }
+    }
+}
+
+fn fallback_style(weight: f32, italic: bool) -> String {
+    let name = match weight.round() as i32 {
+        ..=150 => "Thin",
+        151..=250 => "ExtraLight",
+        251..=350 => "Light",
+        351..=450 => "Regular",
+        451..=550 => "Medium",
+        551..=650 => "SemiBold",
+        651..=750 => "Bold",
+        751..=850 => "ExtraBold",
+        _ => "Black",
+    };
+    match (name, italic) {
+        ("Regular", true) => "Italic".into(),
+        (_, true) => format!("{name} Italic"),
+        (_, false) => name.into(),
     }
 }
 
@@ -442,7 +583,7 @@ mod tests {
         let czech = "aábcčdďeéěfghiíjklmnňoópqrřsštťuúůvwxyýzž„“";
         let letters: String = czech.chars().chain(czech.chars().flat_map(char::to_uppercase)).collect();
         for (name, bytes) in super::BUNDLED {
-            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let font = skrifa::FontRef::new(bytes.as_slice()).expect("bundled font parses");
             let cmap = font.charmap();
             let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
             assert!(missing.is_empty(), "{name} lacks Czech glyphs: {missing}");
@@ -457,11 +598,29 @@ mod tests {
         let french = "àâæçéèêëîïôœùûüÿ";
         let letters: String = french.chars().chain(french.chars().flat_map(char::to_uppercase)).chain("«»\u{a0}’".chars()).collect();
         for (name, bytes) in super::BUNDLED {
-            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let font = skrifa::FontRef::new(bytes.as_slice()).expect("bundled font parses");
             let cmap = font.charmap();
             let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
             assert!(missing.is_empty(), "{name} lacks French glyphs: {missing:?}");
         }
+    }
+
+    /// The deflated fonts in the binary inflate to exactly the files in `assets/fonts`.
+    #[test]
+    fn bundled_fonts_inflate_to_their_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+        for (name, bytes) in super::BUNDLED {
+            assert_eq!(bytes.as_slice(), std::fs::read(dir.join(name)).unwrap(), "{name}");
+        }
+    }
+
+    /// Corrupt or oversized font data gives no font, not a panic.
+    #[test]
+    fn corrupt_bundled_font_data_gives_no_font() {
+        assert!(super::inflate_font(b"\xff\xff not deflate").is_empty());
+        assert!(super::inflate_font(b"").is_empty());
+        let mut db = super::FontDb::new();
+        assert!(db.register_font_data(super::inflate_font(b"\x00garbage")).is_empty());
     }
 
     #[test]
@@ -471,3 +630,7 @@ mod tests {
         assert!(files.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "font_names_tests.rs"]
+mod font_names_tests;

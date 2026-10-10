@@ -175,6 +175,82 @@ fn csv_import_preserves_unicode_headers_names_and_text() {
 }
 
 #[test]
+fn csv_multiline_values_apply_persist_and_export_as_two_data_sets() {
+    for (ending, suffix) in [("\n", "lf"), ("\r\n", "crlf")] {
+        let (mut s, _photo, badge, title) = session();
+        s.execute(
+            "image.variables.define",
+            json!({"defs": [
+                {"name": "showBadge", "layer": badge.0, "type": "visibility"},
+                {"name": "headline", "layer": title.0, "type": "textReplacement"},
+            ]}),
+        )
+        .unwrap();
+        let first = format!("Café, \"quoted\"{ending}{ending}日本語 👩‍🎨");
+        let second = format!("Fin{ending}e\u{301}");
+        let dir = tmp(&format!("multiline-{suffix}"));
+        let csv = format!("{dir}/sets.csv");
+        // Blank physical lines inside a quoted field are data; blank records between rows are
+        // ignored. The last quoted field ends at EOF, without a final record terminator.
+        std::fs::write(&csv, format!("DataSet,showBadge,headline{ending}one,true,\"{}\"{ending}{ending}two,false,\"{second}\"", first.replace('"', "\"\"")))
+            .unwrap();
+        let result = s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap();
+        assert_eq!(result["imported"], 2, "{suffix}");
+        let rows = s.execute("variables.list", json!({})).unwrap();
+        assert_eq!(rows["dataSets"][0]["values"][1]["value"], first);
+        assert_eq!(rows["dataSets"][1]["values"][1]["value"], second);
+        for (name, text, visible) in [("one", &first, true), ("two", &second, false)] {
+            s.execute("image.applyDataSet", json!({"name": name})).unwrap();
+            assert_eq!(text_of(&s, title), *text);
+            assert_eq!(doc(&s).layer(badge).unwrap().visible, visible);
+        }
+
+        let native = format!("{dir}/multiline.pcraft");
+        crate::file_cmds::save_doc(doc(&s), &native, None).unwrap();
+        let mut reopened = Session::new();
+        crate::file_cmds::open_bytes_as(&mut reopened, "multiline.pcraft", &std::fs::read(&native).unwrap(), None, Some(native)).unwrap();
+        assert_eq!(doc(&reopened).variables, doc(&s).variables);
+        assert_eq!(text_of(&reopened, title), second);
+        reopened.execute("image.applyDataSet", json!({"name": "one"})).unwrap();
+        assert_eq!(text_of(&reopened, title), first);
+        let before_export = doc(&reopened).clone();
+        let out = reopened.execute("file.export.dataSetsAsFiles", json!({"dir": format!("{dir}/out"), "format": "png"})).unwrap();
+        assert_eq!(out["count"], 2);
+        let files = out["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        let images: Vec<_> = files
+            .iter()
+            .map(|path| {
+                let path = path.as_str().unwrap();
+                photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document
+            })
+            .collect();
+        assert!(images.iter().all(|image| image.size == doc(&reopened).size));
+        assert_ne!(images[0].layers[0].surface(), images[1].layers[0].surface(), "the exported rows have different content");
+        assert_eq!(*doc(&reopened), before_export, "export keeps the live document unchanged");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn csv_multiline_default_names_count_logical_nonblank_records() {
+    let dir = tmp("multiline-default-names");
+    let csv = format!("{dir}/sets.csv");
+    for (header, first, second) in [("headline", "\"first\n\nline\"", "\"\""), ("DataSet,headline", ",\"first\n\nline\"", ",\"\"")] {
+        let (mut s, _, _, title) = session();
+        s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
+        std::fs::write(&csv, format!("\n \t\n{header}\n\n{first}\n \n{second}")).unwrap();
+        assert_eq!(s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap()["imported"], 2);
+        let rows = s.execute("variables.list", json!({})).unwrap();
+        assert_eq!(rows["dataSets"][0]["name"], "Data Set 1");
+        assert_eq!(rows["dataSets"][1]["name"], "Data Set 2");
+        assert_eq!(rows["dataSets"][0]["values"][0]["value"], "first\n\nline");
+        assert_eq!(rows["dataSets"][1]["values"][0]["value"], "", "a quoted empty field is a record");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn csv_import_preserves_unicode_pixel_paths() {
     let (mut s, photo, _badge, _title) = session();
     let dir = tmp("unicode-pixels");
@@ -243,6 +319,88 @@ fn export_data_sets_as_files() {
     // Exporting doesn't mutate the live document.
     assert!(doc(&s).layer(badge).unwrap().visible);
     assert_eq!(text_of(&s, title), "Old");
+}
+
+fn visibility_export_session(names: &[&str]) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "white", "name": "card"})).unwrap();
+    let layer = doc(&s).layers[0].id;
+    s.execute("image.variables.define", json!({"defs": [{"name": "show", "layer": layer.0, "type": "visibility"}]})).unwrap();
+    let sets: Vec<_> =
+        names.iter().enumerate().map(|(i, name)| json!({"name": name, "values": [{"variable": "show", "kind": "visibility", "value": i == 0}]})).collect();
+    s.execute("image.variables.dataSets", json!({"dataSets": sets})).unwrap();
+    s
+}
+
+#[test]
+fn export_data_sets_rejects_collisions_before_writing() {
+    for (label, names, naming, collision) in [
+        ("sanitized", ["unique", "a b", "a_b"], "{name}", "a_b.png"),
+        ("constant", ["unique", "a b", "a_b"], "{document}", "card.png"),
+        ("case", ["unique", "Card", "card"], "{name}", "card.png"),
+    ] {
+        let mut s = visibility_export_session(&names);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.entries();
+        let past = s.active().unwrap().history.past_len();
+        let redo = s.active().unwrap().history.can_redo();
+        let dir = tmp(&format!("collision-{label}"));
+        let first = format!("{dir}/unique.png");
+        let collided = format!("{dir}/{collision}");
+        std::fs::write(&first, b"keep earlier export").unwrap();
+        std::fs::write(&collided, b"keep colliding export").unwrap();
+        let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": naming})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{err}");
+        let message = err.to_string();
+        assert!(message.contains(collision) && message.contains("{index}"), "{message}");
+        assert_eq!(std::fs::read(&first).unwrap(), b"keep earlier export");
+        assert_eq!(std::fs::read(&collided).unwrap(), b"keep colliding export");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let absent = format!("{dir}/not-created");
+        assert!(s.execute("file.export.dataSetsAsFiles", json!({"dir": absent, "naming": naming})).is_err());
+        assert!(!std::path::Path::new(&absent).exists());
+        let after = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before, &after.doc));
+        assert_eq!(after.revision, revision);
+        assert_eq!(after.history.entries(), history);
+        assert_eq!(after.history.past_len(), past);
+        assert_eq!(after.history.can_redo(), redo);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn export_data_sets_unique_paths_preserve_variations_and_document() {
+    for (label, names, naming, selected, expected) in [
+        ("indexed", ["a b", "a_b"], "card-{index}", None, vec!["card-001.png", "card-002.png"]),
+        ("distinct", ["a-b", "a_b"], "{name}", None, vec!["a-b.png", "a_b.png"]),
+        ("subset", ["a b", "a_b"], "{name}", Some(vec!["a b"]), vec!["a_b.png"]),
+    ] {
+        let mut s = visibility_export_session(&names);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.entries();
+        let past = s.active().unwrap().history.past_len();
+        let redo = s.active().unwrap().history.can_redo();
+        let dir = tmp(&format!("unique-{label}"));
+        let result = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": naming, "dataSets": selected})).unwrap();
+        let paths: Vec<_> = expected.iter().map(|name| format!("{dir}/{name}")).collect();
+        assert_eq!(result, json!({"files": paths, "count": paths.len()}));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), paths.len());
+        for (i, path) in paths.iter().enumerate() {
+            let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
+            let pixel = photocraft_compose::render(&exported, Rect::new(0, 0, 1, 1)).px[0];
+            assert_eq!(pixel, if i == 0 { [1.0; 4] } else { [0.0; 4] });
+        }
+        let after = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before, &after.doc));
+        assert_eq!(after.revision, revision);
+        assert_eq!(after.history.entries(), history);
+        assert_eq!(after.history.past_len(), past);
+        assert_eq!(after.history.can_redo(), redo);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]

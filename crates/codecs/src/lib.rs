@@ -23,13 +23,16 @@ pub mod orientation;
 pub mod resolution;
 pub mod web;
 
+pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::png::encode_indexed as encode_png_indexed;
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
 pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect, from_extension};
-pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, Metadata, SampleType};
+pub use crate::image::{
+    ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, Image, Metadata, SampleType,
+};
 pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
@@ -128,6 +131,44 @@ fn finish_decode(img: Image, o: u16, opts: &DecodeOptions) -> Result<Image, Code
         l.check(img.height(), img.width(), img.layout(), img.sample_type())?;
     }
     img.oriented(o)
+}
+
+/// Lists the parts of an OpenEXR file without decoding pixels: header facts per part
+/// (name, view, size, channels, deep/tiled), what a multi-part chooser — a Maya/Arnold
+/// render writes one part per AOV — offers. The indices are what [`decode_exr_part`]
+/// takes; [`decode_as_with`] opens the part with the highest [`ExrPartInfo::color_rank`].
+pub fn exr_info(bytes: &[u8], limits: &Limits) -> Result<Vec<ExrPartInfo>, CodecError> {
+    exr::info(bytes, limits)
+}
+
+/// Decodes part `part` (an index into [`exr_info`]'s list) of an OpenEXR file.
+/// Deep parts stay with [`decode_deep_exr`]; a file that has any is refused here.
+pub fn decode_exr_part(bytes: &[u8], part: usize, opts: &DecodeOptions) -> Result<Image, CodecError> {
+    let img = exr::decode_part(bytes, part, &opts.limits)?;
+    finish_decode(img, 1, opts)
+}
+
+/// Lists every Cryptomatte layer of an EXR file (specification 1.2: object/material IDs
+/// with coverage, as written by Arnold, V-Ray, Redshift, Mantra/Karma and Cycles) from the
+/// headers alone: name, metadata key, channels and the parsed embedded manifest. The
+/// samples come from [`decode_cryptomatte`]; names hash to IDs with [`cryptomatte_id`].
+pub fn cryptomatte_layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLayer>, CodecError> {
+    codecs::exr_cryptomatte::layers(bytes, limits)
+}
+
+/// Decodes the samples of the Cryptomatte layer called `layer_name` (a
+/// [`CryptomatteLayer::name`]): per pixel its (ID, coverage) pairs, coverage above zero,
+/// sorted by descending coverage.
+pub fn decode_cryptomatte(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<CryptomatteBuffer, CodecError> {
+    codecs::exr_cryptomatte::decode(bytes, layer_name, limits)
+}
+
+/// Decodes the named channels of one part (exact names as the file stores them, e.g.
+/// `diffuse.R`) into an image: R/G/B (plus A when named) give Rgba, a lone Y gives Gray.
+/// This renders a channel group without the part's other channels in the way.
+pub fn decode_exr_channels(bytes: &[u8], part: usize, names: &[&str], opts: &DecodeOptions) -> Result<Image, CodecError> {
+    let img = exr::decode_channels(bytes, part, names, &opts.limits)?;
+    finish_decode(img, 1, opts)
 }
 
 /// Deep OpenEXR samples (`deepscanline`/`deeptile`): the structured per-pixel sample lists

@@ -341,7 +341,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "af" | "afdesign" | "afphoto" | "afpub")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "af" | "afdesign" | "afphoto" | "afpub")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
     p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
@@ -545,6 +545,26 @@ mod missing_font_warning_tests {
         assert!(stdout.is_empty());
         assert_eq!(stderr.matches(family).count(), 1);
 
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn convert_reads_and_writes_openraster() {
+        let folder = std::env::temp_dir().join(format!("photocraft-cli-ora-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = |name: &str| folder.join(name).to_string_lossy().to_string();
+        let (native, ora, png) = (path("layers.pcraft"), path("layers.ora"), path("back.png"));
+        let (code, _, stderr) = invoke(&["run", "--new", r#"{"width":16,"height":12}"#, "--cmd", "layer.new.layer", "--out", &native]);
+        assert_eq!(code, 0, "{stderr}");
+        let (code, _, stderr) = invoke(&["convert", &native, &ora]);
+        assert_eq!(code, 0, "{stderr}");
+        let (code, stdout, stderr) = invoke(&["info", &ora, "--compact"]);
+        assert_eq!(code, 0, "{stderr}");
+        let info: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(info["layers"].as_array().map(Vec::len), Some(2), "{info}");
+        let (code, _, stderr) = invoke(&["convert", &ora, &png]);
+        assert_eq!(code, 0, "{stderr}");
+        assert!(is_input(std::path::Path::new(&ora)));
         let _ = std::fs::remove_dir_all(&folder);
     }
 

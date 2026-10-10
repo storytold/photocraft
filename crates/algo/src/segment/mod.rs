@@ -11,9 +11,8 @@
 //!   Superpixel Methods", PAMI 2012).
 //! * [`grabcut`]: GrabCut (Rother, Kolmogorov & Blake, SIGGRAPH 2004): iterated graph cuts
 //!   (Boykov & Jolly, ICCV 2001) with GMM colour models.
-//! * [`quick`]: Quick Selection brush: stroke seeds, geodesic background sampling (Criminisi et
-//!   al., "GeoS", ECCV 2008; Bai & Sapiro 2007) and a contrast-sensitive graph cut, in the spirit
-//!   of "Paint Selection" (Liu, Sun & Shum, SIGGRAPH 2009).
+//! * [`quick`]: Quick Selection brush: one contrast-sensitive min cut with an area cost, its
+//!   behaviour and constants measured on Photoshop (see the module).
 //! * [`subject`]: Select Subject: superpixel saliency (boundary connectivity + background-weighted
 //!   contrast, Zhu et al., "Saliency Optimization from Robust Background Detection", CVPR 2014;
 //!   frequency-tuned saliency, Achanta et al., CVPR 2009) seeding a GrabCut. Heuristic.
@@ -267,6 +266,57 @@ pub fn grid_cut(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], 
                 match (idx[i] != u32::MAX, idx[j] != u32::MAX) {
                     (true, true) => g.add_edge(idx[i] as usize, idx[j] as usize, wt, wt),
                     // Neighbour fixed: disagreeing with it costs `wt`.
+                    (true, false) => add_fixed_link(&mut g, idx[i] as usize, fixed[j], wt),
+                    (false, true) => add_fixed_link(&mut g, idx[j] as usize, fixed[i], wt),
+                    (false, false) => {}
+                }
+            }
+        }
+    }
+    g.maxflow();
+    for i in 0..n {
+        if idx[i] != u32::MAX {
+            out[i] = g.in_source(idx[i] as usize);
+        }
+    }
+    out
+}
+
+/// [`grid_cut`] with any edge weight: separating neighbours costs `weight(‖z_p−z_q‖²) / dist(p,q)`.
+pub fn grid_cut_with(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], weight: impl Fn(f32) -> f32) -> Vec<bool> {
+    let (w, h) = (img.w as i32, img.h as i32);
+    let n = img.w * img.h;
+    let mut idx = vec![u32::MAX; n];
+    let mut count = 0u32;
+    for i in 0..n {
+        if fixed[i] == FREE {
+            idx[i] = count;
+            count += 1;
+        }
+    }
+    let mut out: Vec<bool> = fixed.iter().map(|f| *f == HARD_FG).collect();
+    if count == 0 {
+        return out;
+    }
+    let mut g = Graph::with_capacity(count as usize, count as usize * 4);
+    for i in 0..n {
+        if idx[i] != u32::MAX {
+            g.add_tweights(idx[i] as usize, cost_bg[i], cost_fg[i]);
+        }
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            let a = img.px[i];
+            for (dx, dy, len) in NB {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || nx >= w || ny >= h {
+                    continue;
+                }
+                let j = (ny * w + nx) as usize;
+                let wt = weight(d2(a, img.px[j])) / len;
+                match (idx[i] != u32::MAX, idx[j] != u32::MAX) {
+                    (true, true) => g.add_edge(idx[i] as usize, idx[j] as usize, wt, wt),
                     (true, false) => add_fixed_link(&mut g, idx[i] as usize, fixed[j], wt),
                     (false, true) => add_fixed_link(&mut g, idx[j] as usize, fixed[i], wt),
                     (false, false) => {}

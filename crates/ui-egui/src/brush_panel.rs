@@ -67,20 +67,51 @@ pub struct Renaming {
     pub group: bool,
     /// The preset (or group) being renamed.
     pub name: String,
+    /// With `group`: the nested folder of group `name` being renamed (empty = the group itself).
+    pub folder: Vec<String>,
     /// The text typed so far.
     pub text: String,
 }
 
 /// Brushes panel view state (serde, so the control channel can read and drive it).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BrushesPanelState {
-    /// Names of collapsed groups.
+    /// Collapsed groups and folders: a group's label, or for a nested folder the group's label and
+    /// the folder path joined with `/` ([`crate::brushes_tab::folder_view_key`]).
     pub collapsed: Vec<String>,
     /// Case-insensitive name filter.
     pub filter: String,
     pub view: BrushesView,
     pub renaming: Option<Renaming>,
+    /// The Brush Preset picker's cards: show the preset's name. At least one of the three parts
+    /// is always on, and the picker's cards never go empty (see [`crate::brush_picker`]).
+    pub show_name: bool,
+    /// The Brush Preset picker's cards: show the stroke preview.
+    pub show_stroke: bool,
+    /// The Brush Preset picker's cards: show the tip thumbnail.
+    pub show_tip: bool,
+    /// The Brush Preset picker's cards: their size scale, from the picker's footer slider
+    /// (`crate::brush_picker::body`). 1 is the standard size; the cards' width, height and
+    /// insides multiply by it (`crate::brushes_tab`) — the height down to a 0.50 floor, the
+    /// width all the way — the text holds its 1.0 size, and at or below the compact threshold
+    /// the tips drop the size number under them and take their cell whole.
+    pub scale: f32,
+}
+
+impl Default for BrushesPanelState {
+    fn default() -> Self {
+        Self {
+            collapsed: Vec::new(),
+            filter: String::new(),
+            view: BrushesView::default(),
+            renaming: None,
+            show_name: true,
+            show_stroke: true,
+            show_tip: true,
+            scale: 1.0,
+        }
+    }
 }
 
 /// The enable flag behind section `i` (None for Brush Tip Shape and Smoothing).
@@ -185,23 +216,6 @@ pub fn grouped_presets(presets: &[paint::BrushPreset]) -> Vec<(String, Vec<usize
         }
     }
     out
-}
-
-/// Does the current brush match `preset` (everything but colour, size and the tool state that
-/// picking a preset keeps: smoothing and the section locks)? Cheap fields first: the full
-/// comparison clones the preset and its tip.
-pub fn is_current(preset: &BrushSettings, brush: &BrushSettings) -> bool {
-    preset.hardness == brush.hardness
-        && preset.spacing == brush.spacing
-        && preset.tip == brush.tip
-        && BrushSettings {
-            color: brush.color,
-            size: brush.size,
-            background: brush.background,
-            smoothing: brush.smoothing.clone(),
-            locks: brush.locks.clone(),
-            ..preset.clone()
-        } == *brush
 }
 
 /// A fresh "Brush N" name.
@@ -313,8 +327,14 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let on = section_flag(&mut b, section).is_none_or(|f| *f);
             egui::ScrollArea::vertical().id_salt(("brush-section", section)).max_height(450.0).auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(WIDTH - 204.0);
-                // A section that's off shows its options greyed out (Photoshop).
-                ui.add_enabled_ui(on, |ui| section_body(ui, &mut b, section, &app.session.tools.presets));
+                // A section that's off shows its options greyed out (Photoshop). A tip picked in
+                // the grid copies the tip fields only — the dynamics sections stay (Photoshop).
+                // The picked preset is recorded by name (`brush.presets.setCurrent`, identity, so
+                // look-alike duplicates stay distinct), since the engine can't infer it from the
+                // brush afterwards.
+                ui.add_enabled_ui(on, |ui| section_body(ui, &mut b, section, &app.session.tools.presets, app.session.tools.current_preset.as_deref()))
+                    .inner
+                    .inspect(|name| run_or_status(app, "brush.presets.setCurrent", json!({ "name": name })));
             });
         });
     });
@@ -333,6 +353,15 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             if icons::button(ui, "undo-2", 24.0, false, tl!("Reset the brush to the defaults")).clicked() {
                 b = BrushSettings { color: b.color, background: b.background, smoothing: b.smoothing.clone(), locks: b.locks.clone(), ..Default::default() };
+            }
+            // Overwrite the preset the current brush was picked from (Photoshop's "update the
+            // selected brush"): no new preset, the brush keeps its place in the list.
+            let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
+            let update =
+                ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "check", 24.0, false, tl!("Update the current brush with these settings"))).inner;
+            update.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, current.is_some(), "Update the current brush with these settings"));
+            if update.clicked() {
+                run_or_status(app, "brush.presets.update", json!({ "brush": serde_json::to_value(&b).unwrap_or(Value::Null) }));
             }
         });
     });

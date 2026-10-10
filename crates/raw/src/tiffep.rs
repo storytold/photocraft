@@ -7,10 +7,12 @@
 //!
 //! Black and white levels use DNG-style tags when the camera writes them,
 //! then the vendor's publicly documented tags (Nikon maker note BlackLevel,
-//! Sony raw-IFD BlackLevel), else 0 with a warning. The white level falls
-//! back to the clipping point found in the data. The as-shot white balance
-//! comes from the documented vendor tags (Nikon WB_RBLevels, Sony
-//! WB_RGGBLevels); otherwise it is estimated.
+//! Sony raw-IFD BlackLevel), else 0 with a warning — cRAW files without a
+//! BlackLevel tag (the first generation of cRAW bodies) get the 512 that their
+//! tone curve gives the black code. The white level falls back to the clipping
+//! point found in the data. The as-shot white balance comes from the documented
+//! vendor tags (Nikon WB_RBLevels, Sony WB_RGGBLevels); otherwise it is
+//! estimated.
 
 use crate::cr2::clip_level;
 use crate::error::{RawError, Result};
@@ -124,7 +126,8 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         return Err(RawError::unsupported(format!("{}: no CFA image found", format.name())));
     };
     let nikon = if format == RawFormat::Nef { nikon_maker_note(t, &ifds) } else { None };
-    let plane = if format == RawFormat::Arw && sony::is_craw(t, &raw) {
+    let craw = format == RawFormat::Arw && sony::is_craw(t, &raw);
+    let plane = if craw {
         sony::read_craw(t, &raw, limits)?
     } else if format == RawFormat::Nef && t.tag_uint(&raw, tag::COMPRESSION) == Some(nefc::NIKON_COMPRESSION) {
         nefc::read_compressed(t, &raw, nikon.as_ref(), limits)?
@@ -159,6 +162,13 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         BlackLevels::uniform(*b as f32)
     } else if let Some(v) = rggb_by_position(&cfa, &vendor_black) {
         BlackLevels { rows: 2, cols: 2, values: v.to_vec(), delta_h: Vec::new(), delta_v: Vec::new() }
+    } else if craw {
+        // cRAW files of the first generation (an ILCE-7 writes none) carry no
+        // BlackLevel tag; the tone curve maps the black code to 512, so their
+        // decoded data has a 512 black level (see `sony.rs`). Other tag-less
+        // bodies sit higher (a DSC-RX0's darkest samples are near 800), so 512
+        // is a floor, still far closer than 0.
+        BlackLevels::uniform(512.0)
     } else if nikon.is_some() {
         // Nikon bodies that write no BlackLevel tag subtract the black level in camera: a D3200
         // NEF's darkest samples are 0–4 (noise around zero), median 81 of 4095.
