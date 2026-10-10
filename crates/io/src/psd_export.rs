@@ -504,7 +504,12 @@ impl Ex {
             let keep = raw.iter().any(|(k, d)| matches!(k, b"SoCo" | b"GdFl" | b"PtFl") && blocks::parse_fill(k, d).as_ref() == Some(f));
             if !keep {
                 raw.retain(|(k, _)| !matches!(k, b"SoCo" | b"GdFl" | b"PtFl"));
-                regenerated.push(blocks::write_fill(f));
+                // Photoshop pads layer-level blocks to a multiple of 4 inside the length (every
+                // one in its own files is). A fill descriptor of 2 mod 4 bytes, as a pattern
+                // name of the wrong length gives, left the record's extra data unaligned.
+                let (key, mut data) = blocks::write_fill(f);
+                data.resize(data.len().next_multiple_of(4), 0);
+                regenerated.push((key, data));
             }
         };
         match &l.content {
