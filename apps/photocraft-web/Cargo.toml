@@ -10,6 +10,9 @@ publish = false
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
+# Open JPEG XL images (the optional photocraft-jxl crate); official builds build with
+# `--features heif,jxl`.
+jxl = ["photocraft-codecs/jxl"]
 
 [lints]
 workspace = true
