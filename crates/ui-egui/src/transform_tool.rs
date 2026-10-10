@@ -83,6 +83,10 @@ struct Follow {
     hidden: bool,
 }
 
+/// Photoshop's alert when Free Transform (⌘T, Edit › Transform, the Move tool's transform controls)
+/// starts on a layer locked in place, by its own lock or a group's.
+pub const LOCKED: &str = "Could not complete the Free Transform command because the layer is locked.";
+
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
 /// just beyond it, outside the box, a drag rotates.
 pub const HANDLE_PX: f64 = 12.0;
@@ -158,6 +162,11 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     let id = st.active_layer.ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;
+    if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
+        // Photoshop refuses before the box opens rather than when it is committed (#2585).
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
+        return Err(LOCKED.into());
+    }
     if matches!(layer.content, LayerContent::Adjustment(_)) && layer.mask.is_none() {
         return Err("Adjustment layers have nothing to transform".into());
     }

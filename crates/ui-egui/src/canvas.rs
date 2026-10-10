@@ -5536,6 +5536,46 @@ mod transform_controls_tests {
         assert_eq!(t.rect, [20.0, 30.0, 100.0, 70.0]);
     }
 
+    /// #2585: Free Transform on a position-locked layer is refused before the box opens, with
+    /// Photoshop's alert, from ⌘T and from the Move tool's transform controls alike. It used to
+    /// open, preview every drag and fail only at commit.
+    #[test]
+    fn free_transform_on_a_locked_layer_is_refused_up_front() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+        app.session
+            .edit("lock", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().locks.position = true;
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        let errors = |app: &PhotocraftApp| -> Vec<String> {
+            app.ui
+                .dialogs
+                .iter()
+                .filter(|d| d.kind == crate::state::DialogKind::Error)
+                .filter_map(|d| d.fields.get("message")?.as_str().map(String::from))
+                .collect()
+        };
+        let ctx = egui::Context::default();
+        // ⌘T.
+        let r = crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({}));
+        assert_eq!(r, Err(crate::transform_tool::LOCKED.to_string()));
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "no box opened");
+        assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
+        app.ui.dialogs.clear();
+        // The Move tool's transform controls.
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_show_transform = true;
+        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+        let r = transform_controls_rect(&app, &xf).unwrap();
+        assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+        assert!(app.ui.transform.is_none());
+        assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
+    }
+
     #[test]
     fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
         let r = Rect::from_min_max(pos2(20.0, 30.0), pos2(100.0, 70.0));

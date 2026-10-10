@@ -1623,6 +1623,7 @@
 	Mobile	Mobil
 	Move Tool	Verschieben-Werkzeug
 	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
+	Could not complete the Free Transform command because the layer is locked.	Der Befehl „Frei transformieren“ konnte nicht ausgeführt werden, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
