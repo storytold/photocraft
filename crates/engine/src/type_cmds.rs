@@ -999,6 +999,11 @@ mod tests {
     fn size_keys_need_a_type_layer() {
         let mut s = session();
         assert!(s.execute("type.increaseSize", json!({})).is_err());
+        let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hi", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.increaseSize", json!({"by": "big"})).unwrap();
+        s.execute("type.increaseSize", json!({"by": -3})).unwrap();
+        s.execute("type.decreaseSize", json!({"by": 1e30, "range": [9, 0]})).unwrap();
+        assert_eq!(text_layer(&s, id).char_runs()[0].style.size_pt, TYPE_SIZE_MIN_PT as f32, "bad steps fall back or clamp, never panic");
         assert_eq!(crate::commands::find("type.increaseSize").and_then(|c| c.shortcut), Some("Cmd+Shift+."));
         assert_eq!(crate::commands::find("type.decreaseSize").and_then(|c| c.shortcut), Some("Cmd+Shift+,"));
     }
