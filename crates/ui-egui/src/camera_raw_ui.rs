@@ -474,6 +474,10 @@ fn open_pixels(
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
+    let mut params = params;
+    if params.encoding_gamma == 0.0 {
+        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
+    }
     // Use the engine filter domain, including pixels outside the canvas: spatial Camera Raw
     // stages (vignette, grain, local contrast) must agree with the committed result.
     let area = canvas.union(&surf.content_bounds());

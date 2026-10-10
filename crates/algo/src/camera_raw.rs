@@ -9,9 +9,10 @@
 //!    with the guided filter); negative amounts add haze toward the atmospheric light.
 //! 3. **Tone** on luminance with colour ratios kept: Highlights / Shadows as exposure changes
 //!    weighted by an edge-preserving base layer (guided filter: K. He, J. Sun, X. Tang, *Guided
-//!    Image Filtering*, ECCV 2010), so local contrast survives; Whites / Blacks move the ends of
-//!    the curve; Contrast is an S-curve about middle grey; Clarity (large radius, midtone
-//!    weighted) and Texture (small radius) add band-pass local contrast.
+//!    Image Filtering*, ECCV 2010), so local contrast survives; Contrast is an S-curve about
+//!    middle grey; Clarity (large radius, midtone weighted) and Texture (small radius) add
+//!    band-pass local contrast. Whites / Blacks follow as Photoshop's Camera Raw applies them:
+//!    image-adaptive global curves measured on Photoshop 25.4 (see `whites_blacks`).
 //! 4. **Presence**: Vibrance (weighted toward less saturated colours) and Saturation.
 //! 5. **Tone Curve**: parametric regions (Highlights, Lights, Darks, Shadows with movable splits)
 //!    then point curves (master and per channel), monotone cubic interpolation (F. Fritsch,
@@ -53,6 +54,38 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 }
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
+
+mod local_tone;
+mod whites_blacks;
+
+/// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
+/// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Encoding(f32);
+
+impl Encoding {
+    pub(crate) fn of(gamma: f32) -> Self {
+        Encoding(if gamma.is_finite() && gamma > 0.0 { gamma.clamp(0.5, 4.0) } else { 0.0 })
+    }
+    pub(crate) fn decode(self, v: f32) -> f32 {
+        if self.0 > 0.0 { v.max(0.0).powf(self.0) } else { srgb_to_linear(v) }
+    }
+    pub(crate) fn encode(self, v: f32) -> f32 {
+        if self.0 > 0.0 { v.max(0.0).powf(1.0 / self.0) } else { linear_to_srgb(v) }
+    }
+}
+
+fn srgb_encode(v: f32) -> f32 {
+    linear_to_srgb(v)
+}
+
+fn srgb_decode(v: f32) -> f32 {
+    srgb_to_linear(v)
+}
+
+fn luma_linear(c: [f32; 3]) -> f32 {
+    luma(c)
+}
 
 /// One colour grading wheel.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -136,6 +169,9 @@ pub struct CameraRaw {
     pub seed: u32,
     /// Pixel-size multiplier for previews on downsampled proxies (radii in px scale by it).
     pub pixel_scale: f32,
+    /// The document's transfer curve: 0 for sRGB's, else the gamma of a power-law space (1.8
+    /// for ProPhoto). Set from the document's profile; Whites and Blacks act on light.
+    pub encoding_gamma: f32,
 }
 
 impl Default for CameraRaw {
@@ -191,6 +227,7 @@ impl Default for CameraRaw {
             vignette_style: "highlightPriority".into(),
             seed: 0,
             pixel_scale: 1.0,
+            encoding_gamma: 0.0,
         }
     }
 }
@@ -491,7 +528,11 @@ impl CameraRaw {
         self.temperature == 0.0 && self.tint == 0.0 && self.exposure == 0.0
     }
     fn tone_neutral(&self) -> bool {
-        [self.contrast, self.highlights, self.shadows, self.whites, self.blacks, self.texture, self.clarity].iter().all(|v| *v == 0.0)
+        self.local_tone_neutral() && self.whites == 0.0 && self.blacks == 0.0
+    }
+    /// Contrast, Highlights, Shadows, Texture and Clarity (the luminance stage).
+    fn local_tone_neutral(&self) -> bool {
+        [self.contrast, self.highlights, self.shadows, self.texture, self.clarity].iter().all(|v| *v == 0.0)
     }
     fn hsl_neutral(&self) -> bool {
         self.hsl_hue.iter().chain(&self.hsl_sat).chain(&self.hsl_lum).all(|v| *v == 0.0)
@@ -561,16 +602,13 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
     if p.dehaze != 0.0 {
         dehaze(px, w, h, p.dehaze / 100.0);
     }
-    // 3. Tone on luminance.
-    if !p.tone_neutral() {
+    // 3. Tone. Highlights and Shadows: a local Laplacian filter (see `local_tone`).
+    if p.highlights != 0.0 || p.shadows != 0.0 {
+        local_tone::apply(px, w, h, p.shadows, p.highlights, Encoding::of(p.encoding_gamma));
+    }
+    if !p.local_tone_neutral() && [p.contrast, p.texture, p.clarity].iter().any(|v| *v != 0.0) {
         let l: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]]).max(0.0)).collect();
         let lc: Vec<f32> = l.iter().map(|v| v.min(1.0)).collect();
-        let base = if p.highlights != 0.0 || p.shadows != 0.0 {
-            let r = ((long * 0.015) as usize).max(2);
-            Some(guided_fast(&lc, &lc, w, h, r, 0.02))
-        } else {
-            None
-        };
         let clar = (p.clarity != 0.0).then(|| guided_fast(&lc, &lc, w, h, ((long * 0.02) as usize).max(3), 0.005));
         let tex = (p.texture != 0.0).then(|| gauss(&lc, w, h, (long * 0.002).max(1.5 * ps)));
         let k_con = p.contrast / 100.0 * 0.6;
@@ -580,24 +618,12 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
                 let i = y * w + x;
                 let l0 = l[i];
                 let mut lv = lc[i];
-                if let Some(b) = &base {
-                    let bv = b[i].clamp(0.0, 1.0);
-                    let hm = smoothstep(0.45, 0.95, bv);
-                    let sm = 1.0 - smoothstep(0.05, 0.5, bv);
-                    lv *= 2f32.powf(p.highlights / 100.0 * 1.2 * hm + p.shadows / 100.0 * 1.4 * sm);
-                }
                 if let Some(c) = &clar {
                     let mw = 1.0 - (2.0 * lv.clamp(0.0, 1.0) - 1.0).powi(2);
                     lv += p.clarity / 100.0 * 0.8 * (lc[i] - c[i]) * mw;
                 }
                 if let Some(t) = &tex {
                     lv += p.texture / 100.0 * 0.9 * (lc[i] - t[i]).clamp(-0.1, 0.1);
-                }
-                if p.whites != 0.0 {
-                    lv += p.whites / 100.0 * 0.25 * smoothstep(0.4, 1.0, lv);
-                }
-                if p.blacks != 0.0 {
-                    lv += p.blacks / 100.0 * 0.15 * (1.0 - smoothstep(0.0, 0.45, lv));
                 }
                 if k_con != 0.0 {
                     let xx = lv.clamp(0.0, 1.0);
@@ -610,6 +636,13 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
                 }
             }
         });
+    }
+    // 3b. Whites and Blacks: global curves adapted to the image's black and white points.
+    if p.whites != 0.0 || p.blacks != 0.0 {
+        let enc = Encoding::of(p.encoding_gamma);
+        let (bp, wp) = luminance_points(px, w, h, enc);
+        let (xw, xb) = whites_blacks::amounts(p.whites.clamp(-100.0, 100.0), p.blacks.clamp(-100.0, 100.0), bp, wp);
+        whites_blacks::apply(px, w, xw, xb, enc);
     }
     // 4–7: per-pixel colour stages.
     let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral();
@@ -730,6 +763,36 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
             }
         }
     }
+}
+
+/// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
+/// luminance and the 99.5th of the brightest channel, on a copy at most 256 pixels across (so a
+/// preview proxy and the full image agree).
+fn luminance_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding) -> (f32, f32) {
+    let f = w.max(h).div_ceil(256).max(1);
+    let (sw, sh) = (w.div_ceil(f), h.div_ceil(f));
+    let mut sum = vec![[0.0f64; 4]; sw * sh];
+    for y in 0..h {
+        for x in 0..w {
+            let q = px[y * w + x];
+            let s = &mut sum[(y / f) * sw + x / f];
+            for c in 0..3 {
+                s[c] += f64::from(enc.decode(q[c]).clamp(0.0, 1.0));
+            }
+            s[3] += 1.0;
+        }
+    }
+    let cells: Vec<[f32; 3]> = sum.iter().filter(|s| s[3] > 0.0).map(|s| [0, 1, 2].map(|c| (s[c] / s[3]) as f32)).collect();
+    if cells.is_empty() {
+        return (0.0, 1.0);
+    }
+    let pct = |mut v: Vec<f32>, q: f32| {
+        v.sort_by(f32::total_cmp);
+        v[((v.len() - 1) as f32 * q).round() as usize]
+    };
+    let bp = pct(cells.iter().map(|c| luma(*c)).collect(), 0.03);
+    let wp = pct(cells.iter().map(|c| c[0].max(c[1]).max(c[2])).collect(), 0.995);
+    (linear_to_srgb(bp), linear_to_srgb(wp))
 }
 
 fn value_noise(x: f32, y: f32, seed: u64) -> f32 {
