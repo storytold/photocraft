@@ -26,6 +26,9 @@ pub enum Gesture {
     Move { rect: [f64; 4] },
     /// Free Transform box dragged from inside: its bounds at the start of the drag.
     TransformMove { rect: [f64; 4] },
+    /// A selection outline (or its floating piece) dragged with a selection tool: its bounds at
+    /// the start of the drag.
+    SelectionMove { rect: [f64; 4] },
     /// A guide being moved with the Move tool.
     Guide,
 }
@@ -81,11 +84,17 @@ fn build(app: &PhotocraftApp, exclude: &[LayerId], smart: bool) -> SnapTargets {
 fn moving_rect(app: &PhotocraftApp) -> Option<[f64; 4]> {
     let st = app.session.active()?;
     if crate::move_ui::moves_selected_pixels(app) {
-        let (dx, dy) = photocraft_engine::float_cmds::floating(st).map_or((0, 0), |f| f.offset);
-        let r = st.doc.selection.as_ref()?.content_bounds().translate(dx, dy);
-        return (!r.is_empty()).then(|| [r.x0, r.y0, r.x1, r.y1].map(f64::from));
+        return selection_rect(app);
     }
     union(st.selected_layers().into_iter().filter_map(|id| layer_rect(&st.doc, id)))
+}
+
+/// The selection's bounds where it is shown: moved by its floating piece's offset.
+fn selection_rect(app: &PhotocraftApp) -> Option<[f64; 4]> {
+    let st = app.session.active()?;
+    let (dx, dy) = photocraft_engine::float_cmds::floating(st).map_or((0, 0), |f| f.offset);
+    let r = st.doc.selection.as_ref()?.content_bounds().translate(dx, dy);
+    (!r.is_empty()).then(|| [r.x0, r.y0, r.x1, r.y1].map(f64::from))
 }
 
 fn is_point_tool(t: Tool) -> bool {
@@ -140,8 +149,8 @@ fn override_held(mods: egui::Modifiers) -> bool {
     mods.ctrl && !mods.mac_cmd
 }
 
-/// Start snapping for a drag beginning at `p` (called on pointer down).
-fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
+/// Start snapping for a drag beginning at `p` with `mods` held (called on pointer down).
+fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
     if app.session.active().is_none() {
@@ -180,6 +189,12 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
         // Turning the frame, or moving a turned one (its edges don't line up with anything): no
         // snapping.
         None
+    } else if let Some(cut) = crate::canvas::selection_drag_kind(app, tool, p, mods) {
+        // A marquee or lasso inside the selection moves the outline (⌘: cuts its pixels into a
+        // floating piece): its bounds snap, as the Move tool's do, not the pointer. A cut piece
+        // doesn't snap to its own layer.
+        let exclude = if cut { app.session.active().map(|s| s.selected_layers()).unwrap_or_default() } else { Vec::new() };
+        selection_rect(app).map(|rect| (Gesture::SelectionMove { rect }, exclude))
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
     } else {
@@ -190,6 +205,10 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
     if gesture == Gesture::Guide {
         // A guide never snaps to itself (or other guides).
         targets = targets.filtered(|k| k != SnapKind::Guide);
+    }
+    if matches!(gesture, Gesture::SelectionMove { .. }) {
+        // A moving selection never snaps back to where it started.
+        targets = targets.filtered(|k| k != SnapKind::Selection);
     }
     let smart = if matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, &exclude, true) } else { SnapTargets::default() };
     app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
@@ -217,7 +236,7 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
     }
     let (out, lines) = match &snap.gesture {
         Gesture::Point | Gesture::Guide => snap.targets.snap_point(p, tol),
-        Gesture::Move { rect } | Gesture::TransformMove { rect } => {
+        Gesture::Move { rect } | Gesture::TransformMove { rect } | Gesture::SelectionMove { rect } => {
             let d = [p[0] - snap.start[0], p[1] - snap.start[1]];
             let moved = [rect[0] + d[0], rect[1] + d[1], rect[2] + d[0], rect[3] + d[1]];
             let set = if snap.targets.is_empty() { &snap.smart } else { &snap.targets };
@@ -233,7 +252,7 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
     match ev {
         ToolEvent::Down { x, y, pressure } => {
-            begin(app, [x, y]);
+            begin(app, [x, y], mods);
             // Moves snap their delta, which is zero at the start: keep the press point.
             let p = match app.prefs_rt.snap.as_ref().map(|s| &s.gesture) {
                 Some(Gesture::Point) => {
@@ -439,6 +458,32 @@ mod tests {
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 116.0, y: 50.0 }, m);
         let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
         assert_eq!(sel.x1, 116);
+    }
+
+    /// Dragging inside a selection with a marquee or lasso moves the outline (⌘ cuts the pixels
+    /// into a floating piece): its bounds snap, not the pointer.
+    #[test]
+    fn selection_drag_snaps_the_selection_bounds() {
+        for (tool, cut) in [(Tool::RectMarquee, false), (Tool::Lasso, false), (Tool::RectMarquee, true)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
+            app.sync_views();
+            app.ui.views[0].zoom = 1.0;
+            app.ui.views[0].fit_pending = false;
+            app.run("view.newGuide", json!({"orientation": "vertical", "position": 220})).unwrap();
+            app.run("select.rect", json!({"x": 100, "y": 100, "width": 50, "height": 40})).unwrap();
+            app.ui.tool = tool;
+            let m = if cut { egui::Modifiers { mac_cmd: true, command: true, ..Default::default() } } else { egui::Modifiers::NONE };
+            // The outline's right edge lands 2 px short of the guide (x = 218); the pointer ends
+            // 7 px from the document centre (x = 200), which it must not snap to.
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 125.0, y: 117.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 193.0, y: 117.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 193.0, y: 117.0 }, m);
+            let st = app.session.active().unwrap();
+            let off = photocraft_engine::float_cmds::floating(st).map_or((0, 0), |f| f.offset);
+            let sel = st.doc.selection.as_ref().unwrap().content_bounds().translate(off.0, off.1);
+            assert_eq!((sel.x0, sel.y0, sel.x1, sel.y1), (170, 100, 220, 140), "{tool:?} cut: {cut}");
+        }
     }
 
     #[test]
