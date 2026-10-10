@@ -101,3 +101,4 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
 | docs/images/pdf-binder-export.png | Binder export dialog with two synthetic blank documents | durtyrobbin | Contributor-original offscreen PhotoCraft UI capture | MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE) |
+| docs/images/pdf-page-picker.png | PDF page picker with resolution control and synthetic rectangle pages | durtyrobbin | Contributor-original offscreen PhotoCraft UI capture | MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE) |

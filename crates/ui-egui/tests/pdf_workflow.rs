@@ -84,13 +84,30 @@ fn picker_cancel_selected_and_all_pages_create_only_independent_tabs() {
 fn background_selected_import_creates_separate_tabs() {
     use photocraft_engine::jobs::{OpenSource, Started};
     let mut session = photocraft_engine::Session::new();
-    let started = session.start_open("binder.pdf", OpenSource::PdfPages { bytes: std::sync::Arc::new(binder()), pages: vec![0, 2] }).unwrap();
+    let started =
+        session.start_open("binder.pdf", OpenSource::PdfPages { bytes: std::sync::Arc::new(binder()), pages: vec![0, 2], resolution: 300.0 }).unwrap();
     if let Started::Job(job) = started {
         session.wait_job(job).unwrap();
     }
     assert_eq!(session.documents().len(), 2);
     assert_eq!(session.documents()[0].doc.name, "binder - Page 1.pdf");
     assert_eq!(session.documents()[1].doc.name, "binder - Page 3.pdf");
+    assert_eq!(session.documents()[0].doc.resolution_dpi, 300.0);
+    assert_eq!(session.documents()[0].doc.size, Size::new(300, 150));
+}
+
+#[test]
+fn picker_resolution_changes_pixels_but_not_physical_size() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.open_file("binder.pdf", &binder()).unwrap();
+    assert!(app.set_pdf_import_resolution(f32::NAN).is_err());
+    app.set_pdf_import_resolution(72.0).unwrap();
+    app.open_pdf_pages(&[0]).unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    assert_eq!(doc.size, Size::new(72, 36));
+    assert_eq!(doc.resolution_dpi, 72.0);
+    let bytes = export(doc, "pdf", &ExportOptions::default()).unwrap().bytes;
+    assert_eq!(photocraft_io::pdf::page_sizes(&bytes).unwrap(), [(72.0, 36.0)]);
 }
 
 #[test]

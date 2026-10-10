@@ -1,4 +1,4 @@
-//! PDF pages become raster artboards at 144 ppi. PDF export writes lossless, colour-managed
+//! PDF pages become raster artboards at the selected resolution (default 144 ppi). PDF export writes lossless, colour-managed
 //! raster pages, in Layers-panel order, retaining physical size and transparency.
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -20,6 +20,42 @@ const MAX_SIDE: u32 = 16384;
 const MAX_PIXELS: u64 = 64_000_000;
 const MAX_TOTAL_PIXELS: u64 = 512_000_000;
 
+#[path = "pdf_guard.rs"]
+mod guard;
+
+/// Raster resolution selected in the PDF open dialog (pixels per inch).
+#[derive(Clone, Copy, Debug)]
+pub struct ImportOptions {
+    pub resolution: f32,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self { resolution: DPI }
+    }
+}
+
+impl ImportOptions {
+    pub fn validate(self) -> Result<(), IoError> {
+        if !self.resolution.is_finite() || !(1.0..=2400.0).contains(&self.resolution) {
+            return Err(error("PDF resolution must be between 1 and 2400 ppi"));
+        }
+        Ok(())
+    }
+}
+
+// Hayro can panic or abort on malformed inputs. WebAssembly cannot unwind, and
+// its shared editor instance has no isolated renderer with a hard memory budget.
+// Reject before parsing, including the picker/preview paths; export remains available.
+fn require_native_import() -> Result<(), IoError> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(error(
+            "PDF import is available in the desktop app. This web editor cannot safely isolate the PDF renderer; existing documents are unchanged.",
+        ));
+    }
+    Ok(())
+}
+
 fn error(message: impl ToString) -> IoError {
     IoError::Pdf(message.to_string())
 }
@@ -39,15 +75,23 @@ pub fn import_pdf(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<ImportRes
 
 /// Import only the requested zero-based pages, in binder order. None imports every page.
 pub fn import_pdf_pages(name: &str, bytes: &[u8], selected: Option<&[usize]>, ctl: &Interrupt) -> Result<ImportResult, IoError> {
+    import_pdf_pages_with(name, bytes, selected, ImportOptions::default(), ctl)
+}
+
+pub fn import_pdf_pages_with(name: &str, bytes: &[u8], selected: Option<&[usize]>, options: ImportOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
+    require_native_import()?;
+    options.validate()?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     if bytes.len() > 256 * 1024 * 1024 {
         return Err(error("PDF exceeds the 256 MB import limit"));
     }
-    catch_unwind(AssertUnwindSafe(|| import_inner(name, bytes, selected, ctl))).map_err(|_| error("the PDF renderer could not process this document"))?
+    catch_unwind(AssertUnwindSafe(|| import_inner(name, bytes, selected, options, ctl)))
+        .map_err(|_| error("the PDF renderer could not process this document"))?
 }
 
 /// Read page sizes without rasterizing any page.
 pub fn page_sizes(bytes: &[u8]) -> Result<Vec<(f32, f32)>, IoError> {
+    require_native_import()?;
     catch_unwind(AssertUnwindSafe(|| page_sizes_inner(bytes))).map_err(|_| error("the PDF parser could not inspect this document"))?
 }
 
@@ -64,8 +108,16 @@ fn page_sizes_inner(bytes: &[u8]) -> Result<Vec<(f32, f32)>, IoError> {
 
 /// Small page preview for the import picker; it does not create an editing document.
 pub fn page_preview(bytes: Arc<Vec<u8>>, index: usize) -> Result<(u32, u32, Vec<u8>), IoError> {
+    require_native_import()?;
+    if bytes.len() > 256 * 1024 * 1024 {
+        return Err(error("PDF exceeds the 256 MB import limit"));
+    }
     catch_unwind(AssertUnwindSafe(|| {
         let pdf = Pdf::new(bytes).map_err(|e| error(format!("cannot preview PDF ({e:?})")))?;
+        if pdf.pages().is_empty() || pdf.pages().len() > MAX_PAGES {
+            return Err(error("PDF must contain between 1 and 100 pages"));
+        }
+        guard::preflight(&pdf, &Interrupt::default())?;
         let page = pdf.pages().get(index).ok_or_else(|| error("page number is out of range"))?;
         let (w, h) = page.render_dimensions();
         if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
@@ -81,13 +133,15 @@ pub fn page_preview(bytes: Arc<Vec<u8>>, index: usize) -> Result<(u32, u32, Vec<
     .map_err(|_| error("the PDF renderer could not preview this page"))?
 }
 
-fn import_inner(name: &str, bytes: &[u8], selected: Option<&[usize]>, ctl: &Interrupt) -> Result<ImportResult, IoError> {
+fn import_inner(name: &str, bytes: &[u8], selected: Option<&[usize]>, options: ImportOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     let pdf = Pdf::new(Arc::new(bytes.to_vec()))
         .map_err(|e| error(format!("cannot open PDF ({e:?}); password-protected files must first be unlocked in a PDF editor")))?;
     let pages = pdf.pages();
     if pages.is_empty() || pages.len() > MAX_PAGES {
         return Err(error("PDF must contain between 1 and 100 pages"));
     }
+    guard::preflight(&pdf, ctl)?;
+    let dpi = options.resolution;
     let indices: Vec<usize> = match selected {
         Some(s) if s.is_empty() || s.iter().any(|&i| i >= pages.len()) => return Err(error("select at least one valid PDF page")),
         Some(s) => (0..pages.len()).filter(|i| s.contains(i)).collect(),
@@ -103,7 +157,7 @@ fn import_inner(name: &str, bytes: &[u8], selected: Option<&[usize]>, ctl: &Inte
         if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
             return Err(error("invalid PDF page dimensions"));
         }
-        let (w, h) = ((w * DPI / 72.0).ceil() as u32, (h * DPI / 72.0).ceil() as u32);
+        let (w, h) = ((w * dpi / 72.0).ceil() as u32, (h * dpi / 72.0).ceil() as u32);
         total += check_size(w, h)?;
         if total > MAX_TOTAL_PIXELS {
             return Err(error("PDF exceeds 512 megapixels across its pages; split it into smaller PDFs first"));
@@ -116,7 +170,7 @@ fn import_inner(name: &str, bytes: &[u8], selected: Option<&[usize]>, ctl: &Inte
         sizes.push((w, h));
     }
     let mut doc = Document::new(name, Size::new(canvas_width, canvas_height - 32), ColorMode::Rgb, SampleType::U8);
-    doc.resolution_dpi = DPI;
+    doc.resolution_dpi = dpi;
     doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
     let cache = RenderCache::new();
     let mut y = 0i32;
@@ -124,13 +178,14 @@ fn import_inner(name: &str, bytes: &[u8], selected: Option<&[usize]>, ctl: &Inte
         let page = &pages[index];
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let settings = RenderSettings {
-            x_scale: DPI / 72.0,
-            y_scale: DPI / 72.0,
+            x_scale: dpi / 72.0,
+            y_scale: dpi / 72.0,
             width: Some(w as u16),
             height: Some(h as u16),
             bg_color: hayro::vello_cpu::color::palette::css::WHITE,
         };
         let pixels = hayro::render(page, &cache, &InterpreterSettings::default(), &settings);
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let rect = Rect::new(0, y, w as i32, y + h as i32);
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
         surface.write_interleaved(rect, pixels.data_as_u8_slice());
@@ -148,37 +203,12 @@ fn import_inner(name: &str, bytes: &[u8], selected: Option<&[usize]>, ctl: &Inte
     Ok(ImportResult {
         document: doc,
         warnings: vec![format!(
-            "Imported {} PDF page(s) as raster artboards at {DPI} ppi. PDF text, vectors, forms and links are not editable objects. Save As PDF exports each artboard as a page; save .pcraft to retain editing layers. The original PDF is not overwritten automatically.",
+            "Imported {} PDF page(s) as raster artboards at {dpi} ppi. PDF text, vectors, forms and links are not editable objects. Save As PDF exports each artboard as a page; save .pcraft to retain editing layers. The original PDF is not overwritten automatically.",
             indices.len()
         )],
         source_read_only: true,
         preview_only: false,
     })
-}
-
-fn stream(dict: &str, bytes: &[u8]) -> Vec<u8> {
-    let mut out = format!("<< {dict} /Length {} >>\nstream\n", bytes.len()).into_bytes();
-    out.extend_from_slice(bytes);
-    out.extend_from_slice(b"\nendstream");
-    out
-}
-
-fn finish(objects: Vec<Vec<u8>>) -> Result<Vec<u8>, IoError> {
-    let mut out = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, body) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        writeln!(&mut out, "{} 0 obj", i + 1).map_err(error)?;
-        out.extend_from_slice(body);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    write!(&mut out, "xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).map_err(error)?;
-    for offset in offsets {
-        writeln!(&mut out, "{offset:010} 00000 n ").map_err(error)?;
-    }
-    write!(&mut out, "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).map_err(error)?;
-    Ok(out)
 }
 
 /// Export a normal canvas as one page, or each artboard as a separate page.
@@ -213,8 +243,7 @@ pub fn export_pdf_documents(docs: &[&Document], opts: &ExportOptions) -> Result<
             return Err(error("PDF export exceeds 512 megapixels across its pages"));
         }
     }
-    let mut objects = vec![Vec::new(), Vec::new(), stream("/N 3", &Builtin::Srgb.profile().to_bytes())];
-    let mut kids = Vec::new();
+    let mut output_pages = Vec::new();
     for (doc, id, rect) in &pages {
         let gray = doc.mode == ColorMode::Grayscale;
         let source = if matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale) {
@@ -250,43 +279,28 @@ pub fn export_pdf_documents(docs: &[&Document], opts: &ExportOptions) -> Result<
         })?;
         let rgb = rgb.finish().map_err(error)?;
         let alpha = alpha.finish().map_err(error)?;
-        let page_id = objects.len() + 1;
-        kids.push(format!("{page_id} 0 R"));
-        let (content_id, image_id, mask_id) = (page_id + 1, page_id + 2, page_id + 3);
         let (w, h) = (rect.width(), rect.height());
         let (pw, ph) = (f64::from(w) * 72.0 / f64::from(doc.resolution_dpi), f64::from(h) * 72.0 / f64::from(doc.resolution_dpi));
         if !pw.is_finite() || !ph.is_finite() || pw > 14400.0 || ph > 14400.0 {
             return Err(error("PDF page exceeds 200 inches; increase the document resolution"));
         }
-        objects.push(
-            format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.6} {ph:.6}] /Resources << /XObject << /Im0 {image_id} 0 R >> >> /Contents {content_id} 0 R >>"
-            )
-            .into_bytes(),
-        );
-        objects.push(stream("", format!("q {pw:.6} 0 0 {ph:.6} 0 0 cm /Im0 Do Q").as_bytes()));
-        objects.push(stream(&format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace [/ICCBased 3 0 R] /BitsPerComponent 8 /Filter /FlateDecode /SMask {mask_id} 0 R"), &rgb));
-        objects.push(stream(
-            &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"),
-            &alpha,
-        ));
+        output_pages.push(crate::pdf_writer::RasterPage {
+            paper: (pw, ph),
+            content: format!("q {pw:.6} 0 0 {ph:.6} 0 0 cm /Im0 Do Q"),
+            image: crate::pdf_writer::RasterImage {
+                width: w,
+                height: h,
+                channels: 3,
+                data: rgb,
+                jpeg: false,
+                icc: Some(Builtin::Srgb.profile().to_bytes().to_vec()),
+                alpha: Some(alpha),
+            },
+        });
     }
     let metadata = if opts.xmp == XmpEmbed::All && docs.len() == 1 { docs.first().and_then(|d| d.metadata.xmp.as_ref()) } else { None };
-    let metadata_ref = if let Some(xmp) = metadata {
-        let id = objects.len() + 1;
-        objects.push(stream("/Type /Metadata /Subtype /XML", xmp.as_bytes()));
-        format!(" /Metadata {id} 0 R")
-    } else {
-        String::new()
-    };
-    if let Some(catalog) = objects.get_mut(0) {
-        *catalog = format!("<< /Type /Catalog /Pages 2 0 R{metadata_ref} >>").into_bytes();
-    }
-    if let Some(tree) = objects.get_mut(1) {
-        *tree = format!("<< /Type /Pages /Count {} /Kids [{}] >>", kids.len(), kids.join(" ")).into_bytes();
-    }
     Ok(ExportResult {
-        bytes: finish(objects)?,
+        bytes: crate::pdf_writer::write_pdf(&output_pages, metadata.map(String::as_str)),
         warnings: vec![format!(
             "Exported {} raster PDF page(s) in 8-bit sRGB with lossless compression. Editing layers and PDF text/vectors are not retained; use .pcraft to keep editing layers.",
             pages.len()

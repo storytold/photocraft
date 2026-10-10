@@ -116,3 +116,94 @@ fn pdf_all_depths_transparency_and_metadata_control() {
         assert!(pixel[0] < 3 && (125..=131).contains(&pixel[1]) && pixel[2] < 3 && (125..=131).contains(&pixel[3]), "{depth:?}: {pixel:?}");
     }
 }
+
+/// Tiny valid PDF container; dimensions/compression belong to the image, not the page.
+fn image_fixture(width: u32, height: u32, filter: &str, data: &[u8]) -> Vec<u8> {
+    let stream = |dict: &str, data: &[u8]| {
+        let mut out = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        out.extend_from_slice(data);
+        out.extend_from_slice(b"\nendstream");
+        out
+    };
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        stream("", b"q 1 0 0 1 0 0 cm /Im0 Do Q"),
+        stream(&format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 {filter}"), data),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+#[test]
+fn oversized_embedded_images_and_unbounded_codecs_fail_before_rendering() {
+    // A one-point page may hide a huge image, and codec headers can contradict its dictionary.
+    for (w, h, filter, data, expected) in [
+        (100_000, 100_000, "", vec![0], "embedded PDF image exceeds"),
+        (1, 1, "/Filter /JPXDecode", vec![0, 0, 0, 12, 106, 80, 32, 32], "no bounded decoder"),
+        (1, 1, "/Filter /JBIG2Decode", vec![0x97, 0x4a, 0x42, 0x32], "no bounded decoder"),
+        (1, 1, "/Filter /J#50XDecode", vec![0], "no bounded decoder"),
+        (
+            1,
+            1,
+            "/Filter /DCTDecode",
+            vec![0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0xff, 0xff, 0xff, 0xff, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0],
+            "embedded PDF image exceeds",
+        ),
+    ] {
+        let bytes = image_fixture(w, h, filter, &data);
+        assert_eq!(photocraft_io::pdf::page_sizes(&bytes).unwrap(), [(1.0, 1.0)]);
+        assert!(import("oversized.pdf", &bytes).unwrap_err().to_string().contains(expected));
+        assert!(photocraft_io::pdf::page_preview(Arc::new(bytes), 0).unwrap_err().to_string().contains(expected));
+    }
+}
+
+#[test]
+fn pdf_inflation_budget_and_cancellation_are_checked_inside_streams() {
+    use std::{
+        io::Write,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    for _ in 0..1025 {
+        encoder.write_all(&[0; 65536]).unwrap();
+    }
+    let bytes = image_fixture(1, 1, "/Filter /FlateDecode", &encoder.finish().unwrap());
+    assert!(import("bomb.pdf", &bytes).unwrap_err().to_string().contains("decoded stream exceeds"));
+    let calls = AtomicUsize::new(0);
+    let cancel = || calls.fetch_add(1, Ordering::Relaxed) >= 20;
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancel);
+    assert!(matches!(photocraft_io::pdf::import_pdf("bomb.pdf", &bytes, &ctl), Err(photocraft_io::IoError::Cancelled)));
+    assert_eq!(calls.load(Ordering::Relaxed), 21);
+}
+
+#[test]
+fn pdf_resolution_validation_and_physical_size() {
+    use photocraft_io::pdf::{ImportOptions, import_pdf_pages_with};
+    let bytes = export(&document(), "pdf", &ExportOptions::default()).unwrap().bytes;
+    let ctl = photocraft_raster::Interrupt::default();
+    for dpi in [0.0, -1.0, f32::NAN, f32::INFINITY, 2401.0] {
+        assert!(import_pdf_pages_with("test.pdf", &bytes, Some(&[0]), ImportOptions { resolution: dpi }, &ctl).is_err());
+    }
+    for dpi in [72.0, 300.0] {
+        let imported = import_pdf_pages_with("test.pdf", &bytes, Some(&[0]), ImportOptions { resolution: dpi }, &ctl).unwrap().document;
+        assert_eq!(imported.size, Size::new(dpi as u32, (dpi / 2.0) as u32));
+        assert_eq!(imported.resolution_dpi, dpi);
+        let output = export(&imported, "pdf", &ExportOptions::default()).unwrap();
+        assert_eq!(photocraft_io::pdf::page_sizes(&output.bytes).unwrap(), [(72.0, 36.0)]);
+    }
+}

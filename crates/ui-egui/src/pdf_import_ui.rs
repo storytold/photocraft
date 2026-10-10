@@ -18,6 +18,7 @@ pub(crate) struct Picker {
     shown: Option<usize>,
     texture: Option<egui::TextureHandle>,
     error: Option<String>,
+    resolution: f32,
     pub slot: Option<usize>,
 }
 
@@ -39,6 +40,7 @@ pub(crate) fn queue(app: &mut PhotocraftApp, name: &str, path: Option<String>, b
         shown: None,
         texture: None,
         error: None,
+        resolution: 144.0,
         slot: None,
     });
     app.ui.status = "Choose PDF pages to open".into();
@@ -47,6 +49,13 @@ pub(crate) fn queue(app: &mut PhotocraftApp, name: &str, path: Option<String>, b
 }
 
 impl PhotocraftApp {
+    /// Set the raster resolution for the pending open/drop picker.
+    pub fn set_pdf_import_resolution(&mut self, resolution: f32) -> Result<(), String> {
+        photocraft_io::pdf::ImportOptions { resolution }.validate().map_err(|e| e.to_string())?;
+        self.pdf_pickers.front_mut().ok_or("no PDF is waiting for a page selection")?.resolution = resolution;
+        Ok(())
+    }
+
     /// The pending PDF binder's page count. No page is opened until confirmed.
     pub fn pending_pdf_pages(&self) -> Option<usize> {
         self.pdf_pickers.front().map(|p| p.sizes.len())
@@ -61,13 +70,19 @@ impl PhotocraftApp {
         let p = self.pdf_pickers.pop_front().ok_or("no PDF is waiting for a page selection")?;
         if self.background_jobs {
             let count = self.jobs.opens.len();
-            crate::jobs_ui::start_open(self, &p.name, p.path, OpenSource::PdfPages { bytes: p.bytes, pages: pages.to_vec() })?;
+            crate::jobs_ui::start_open(self, &p.name, p.path, OpenSource::PdfPages { bytes: p.bytes, pages: pages.to_vec(), resolution: p.resolution })?;
             if let Some(tab) = self.jobs.opens.get_mut(count) {
                 tab.slot = p.slot;
             }
         } else {
-            let imported =
-                photocraft_io::pdf::import_pdf_pages(&p.name, &p.bytes, Some(pages), &photocraft_raster::Interrupt::default()).map_err(|e| e.to_string())?;
+            let imported = photocraft_io::pdf::import_pdf_pages_with(
+                &p.name,
+                &p.bytes,
+                Some(pages),
+                photocraft_io::pdf::ImportOptions { resolution: p.resolution },
+                &photocraft_raster::Interrupt::default(),
+            )
+            .map_err(|e| e.to_string())?;
             let documents = photocraft_engine::jobs::pdf_page_documents(&imported.document).map_err(|e| e.to_string())?;
             let first = self.session.documents().len();
             for doc in documents {
@@ -197,7 +212,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             });
         });
         ui.separator();
-        ui.label("Pages open as images at 144 ppi. PDF text and vector objects are rasterized.");
+        ui.horizontal(|ui| {
+            let label = ui.label("Resolution (ppi)");
+            ui.add(egui::DragValue::new(&mut p.resolution).range(1.0..=2400.0).speed(1.0)).labelled_by(label.id);
+        });
+        let (w, h) = p.sizes[p.preview];
+        ui.label(format!("Preview page: {:.0} × {:.0} pixels", (w * p.resolution / 72.0).ceil(), (h * p.resolution / 72.0).ceil()));
+        ui.label("Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.");
         ui.horizontal(|ui| {
             cancel = ui.button("Cancel").clicked();
             all = ui.button(format!("Open all {} pages", p.sizes.len())).clicked();
@@ -237,6 +258,7 @@ mod tests {
             shown: Some(0),
             texture: None,
             error: None,
+            resolution: 144.0,
             slot: None,
         });
         let mut h =

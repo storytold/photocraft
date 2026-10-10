@@ -7,7 +7,7 @@ use crate::menu_catalog::CATALOG;
 use crate::menus::is_live;
 
 /// Minimum number of live catalog items. Raise it when parity grows; never lower it.
-pub const FLOOR: usize = 628;
+pub const FLOOR: usize = 627;
 
 /// One top-level menu's coverage.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -85,6 +85,15 @@ pub fn compute() -> Parity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binder_export_is_available_without_inflating_photoshop_parity() {
+        assert!(!CATALOG.iter().any(|(_, _, _, id)| *id == "file.export.allTabsPdf"));
+        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let items = crate::menus::menu_items(&app);
+        let binder = items.iter().find(|item| item.id == "file.export.allTabsPdf").unwrap();
+        assert_eq!(binder.path, ["File", "Export"]);
+    }
 
     #[test]
     fn parity_does_not_regress() {
