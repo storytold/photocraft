@@ -50,6 +50,23 @@ codec_rt!(tiff_rgb16, "tif", ColorMode::Rgb, SampleType::U16, false, 0.0);
 codec_rt!(tiff_cmyk8, "tiff", ColorMode::Cmyk, SampleType::U8, false, 0.0);
 codec_rt!(tiff_cmyka16, "tiff", ColorMode::Cmyk, SampleType::U16, true, 0.0);
 codec_rt!(tiff_gray8, "tiff", ColorMode::Grayscale, SampleType::U8, false, 0.0);
+codec_rt!(fits_rgb8, "fits", ColorMode::Rgb, SampleType::U8, false, 0.0);
+codec_rt!(fits_gray16, "fit", ColorMode::Grayscale, SampleType::U16, false, 0.0);
+codec_rt!(fits_rgb32, "fits", ColorMode::Rgb, SampleType::F32, false, 0.0);
+
+/// FITS header cards travel as the document's text metadata, so an astro frame keeps its
+/// OBJECT, EXPTIME and the rest through an edit.
+#[test]
+fn fits_header_cards_round_trip_as_text() {
+    let mut d = single(ColorMode::Grayscale, SampleType::U16, false);
+    d.metadata.text = vec![("OBJECT".into(), "NGC 246".into()), ("EXPTIME".into(), "480.0".into())];
+    let r = export(&d, "a.fits", &ExportOptions::default()).unwrap();
+    assert!(r.bytes.starts_with(b"SIMPLE  ="));
+    let back = import("a.fits", &r.bytes).unwrap().document;
+    for kv in &d.metadata.text {
+        assert!(back.metadata.text.contains(kv), "{kv:?}: {:?}", back.metadata.text);
+    }
+}
 
 /// EXR stores linear light: a linear document round-trips exactly; an sRGB (untagged) one is
 /// linearised on export and comes back tagged linear sRGB with the same colours.
