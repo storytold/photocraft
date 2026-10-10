@@ -113,6 +113,15 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
 /// Clean-room drawing of Photoshop's Solid Color thumbnail: an inset colour sample with the
 /// small fill marker underneath, rather than a raster thumbnail covering the whole tile.
 pub(crate) fn paint_thumbnail(ui: &egui::Ui, color: Color, rect: Rect) {
+    thumbnail_frame(ui, rect, |swatch| {
+        let [r, g, b, a] = color.to_rgba8();
+        crate::widgets::checker(ui.painter(), swatch, 3.0);
+        ui.painter().rect_filled(swatch, 0.0, Color32::from_rgba_unmultiplied(r, g, b, a));
+    });
+}
+
+/// Shared fill-layer thumbnail frame and marker, drawn around the inset contents.
+pub(crate) fn thumbnail_frame(ui: &egui::Ui, rect: Rect, contents: impl FnOnce(Rect)) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
     p.rect_filled(rect, if t.pro { 0.0 } else { t.radius_sm }, t.field);
@@ -120,9 +129,7 @@ pub(crate) fn paint_thumbnail(ui: &egui::Ui, color: Color, rect: Rect) {
     let sample = Rect::from_center_size(rect.center() - vec2(0.0, size.y * 0.08), size);
     let bar_height = (size.y * 0.17).max(2.0);
     let swatch = Rect::from_min_max(sample.min, pos2(sample.right(), sample.bottom() - bar_height));
-    let [r, g, b, a] = color.to_rgba8();
-    crate::widgets::checker(p, swatch, 3.0);
-    p.rect_filled(swatch, 0.0, Color32::from_rgba_unmultiplied(r, g, b, a));
+    contents(swatch);
     p.rect_stroke(sample, 0.0, Stroke::new(1.0, t.text), StrokeKind::Outside);
     let y = swatch.bottom();
     p.line_segment([pos2(sample.left(), y), pos2(sample.right(), y)], Stroke::new(1.0, t.text));
