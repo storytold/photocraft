@@ -60,6 +60,8 @@
 	Right	Правий
 	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
+	Remove from Recent	Вилучити з нещодавніх
+	Remove {name} from Recent	Вилучити {name} з нещодавніх
 	Close	Закрити
 	Minimize	Згорнути
 	Maximize	Розгорнути
@@ -490,6 +492,7 @@
 	Wand	Чарівна паличка
 	Eyedropper	Піпетка
 	Brush	Пензель
+	Block	Блок
 	Pencil	Олівець
 	Eraser	Гумка
 	Clone Stamp	Клонувальний штамп
@@ -3550,3 +3553,4 @@ cameraRaw	Masking	Маскування
 	Previous Document	Попередній документ
 	W x H x Resolution	Ш x В x Роздільна здатність
 	Front Image	Зображення переднього плану
+	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана

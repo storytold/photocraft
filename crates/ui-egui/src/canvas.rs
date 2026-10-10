@@ -128,7 +128,7 @@ pub struct Drag {
     pub reposition: bool,
     /// A marquee or lasso drag that started inside the selection moves it instead of drawing:
     /// `Some(false)` moves the outline, `Some(true)` moves the floating piece (`select.float`), as
-    /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels`).
+    /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels_with`).
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
 }
@@ -217,9 +217,64 @@ pub fn marquee_px(a: [f64; 2], b: [f64; 2]) -> [f64; 4] {
     [a[0].min(b[0]).floor(), a[1].min(b[1]).floor(), a[0].max(b[0]).ceil(), a[1].max(b[1]).ceil()]
 }
 
+/// The marching ants of a marquee drag: its rectangle, or the ellipse inscribed in it, built in
+/// document space and mapped point by point through the view, so the hinting lands where the
+/// release commits the selection.
+///
+/// A rotated view projects the rectangle onto a rotated one, and an axis-aligned screen box
+/// through two of its corners is a different shape in a different place: the commit was always
+/// right, only the hinting was drawn elsewhere (#2512). Every point is snapped to the half-pixel
+/// grid like every other ants outline (`marching_ants_segments`), so the lines stay crisp at any
+/// zoom (#172).
+pub(crate) fn marquee_ants(xf: &ViewXform, tool: Tool, a: [f64; 2], b: [f64; 2]) -> Vec<Pos2> {
+    let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
+    let (y0, y1) = (a[1].min(b[1]), a[1].max(b[1]));
+    let at = |x: f64, y: f64| {
+        let p = xf.to_screen(x as f32, y as f32);
+        pos2(p.x.round() + 0.5, p.y.round() + 0.5)
+    };
+    if tool != Tool::EllipseMarquee {
+        return vec![at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)];
+    }
+    // As many vertices as the same ellipse would get drawn on screen (`ellipse_points`).
+    let scr = Rect::from_points(&[xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32)]);
+    let n = (((scr.width() + scr.height()) * 0.25) as usize).clamp(16, 256);
+    let (cx, cy, rx, ry) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5, (x1 - x0) * 0.5, (y1 - y0) * 0.5);
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64 * std::f64::consts::TAU;
+            at(cx + rx * t.cos(), cy + ry * t.sin())
+        })
+        .collect()
+}
+
+/// The ants of the marquee being drawn: `marquee` when the drag has one (the options-bar style
+/// and the modifiers applied), the raw press and pointer corners otherwise. This is the whole of
+/// what the hinting draws for the selection tools, so the test in `marquee_tests` checks it
+/// against the selection the release commits (#2512).
+pub(crate) fn marquee_drag_ants(d: &Drag, xf: &ViewXform, marquee: Option<[f64; 4]>) -> Vec<Pos2> {
+    let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
+    let (a, b) = marquee.map_or((d.start, last), |[x0, y0, x1, y1]| ([x0, y0], [x1, y1]));
+    marquee_ants(xf, d.tool, a, b)
+}
+
 /// The size readout shown beside the cursor while dragging a marquee: the width and height values.
 pub fn marquee_readout(r: [f64; 4]) -> [String; 2] {
     [format!("{} px", r[2] - r[0]), format!("{} px", r[3] - r[1])]
+}
+
+/// [`marquee_readout`] in the Units & Rulers unit, as Photoshop shows it (cm when the rulers are in
+/// centimeters), from the active document's resolution; pixels without a document.
+pub fn size_readout(app: &PhotocraftApp, r: [f64; 4]) -> [String; 2] {
+    let Some(d) = app.session.active() else { return marquee_readout(r) };
+    let (dpi, size) = (f64::from(d.doc.resolution_dpi), d.doc.size);
+    readout_in(&app.session.prefs().units_and_rulers, dpi, [size.width as f64, size.height as f64], r)
+}
+
+/// `r`'s width and height formatted in `ur`'s ruler unit at `dpi` (percent of `extent`).
+pub fn readout_in(ur: &photocraft_engine::prefs::UnitsAndRulers, dpi: f64, extent: [f64; 2], r: [f64; 4]) -> [String; 2] {
+    let s = ur.rulers.suffix();
+    [format!("{} {s}", ur.format(r[2] - r[0], dpi, extent[0])), format!("{} {s}", ur.format(r[3] - r[1], dpi, extent[1]))]
 }
 
 /// Draw the marquee size readout below-right of the cursor (kept on screen), like Photoshop's:
@@ -342,6 +397,10 @@ fn stroke_params(app: &PhotocraftApp, tool: Tool, erase: bool, points: &[Vec<f64
     if tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
+    // Block mode: the engine sizes the square from the stroke's zoom (16 / zoom px, #2770).
+    if crate::eraser_ui::block_mode(app, tool) {
+        p["block"] = json!(true);
+    }
     p
 }
 
@@ -362,9 +421,10 @@ fn live_retouch_command(tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// The command a live-stroking tool commits: the Pencil's `paint.pencil`, else `paint.stroke`.
-pub(crate) fn stroke_command(tool: Tool) -> &'static str {
-    if tool == Tool::Pencil { "paint.pencil" } else { "paint.stroke" }
+/// The command a live-stroking tool commits: the Pencil's (and the Pencil- or Block-mode
+/// Eraser's) `paint.pencil`, else `paint.stroke`.
+pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
+    if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
 /// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
@@ -386,6 +446,16 @@ pub(crate) fn pencil_cursor_rect(xf: &ViewXform, doc: [f64; 2], size: f32, ppp: 
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let snap = |v: f32| (v * ppp).round() / ppp;
     Rect::from_min_max(pos2(snap(r.min.x), snap(r.min.y)), pos2(snap(r.max.x), snap(r.max.y)))
+}
+
+/// Whether an aliased (Pencil) dab of `size` pixels is round rather than its whole
+/// [`pencil_cursor_rect`] square. The dab fills the pixels whose centres lie within its radius of
+/// the grid centre (`paint::grid_center`), so up to 3 px the corner pixels are in and the dab is
+/// a square; from 4 px on they fall outside and it is a disc (#2662).
+pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
+    let n = if size.is_finite() { size.round().clamp(1.0, 100_000.0) } else { 1.0 };
+    let h = n / 2.0;
+    (h - 0.5) * std::f32::consts::SQRT_2 > h
 }
 
 /// Whether a brush-tip circle draws its centre mark.
@@ -466,7 +536,7 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
         let p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?))
+        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
@@ -502,6 +572,19 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
     match l.stroke.push(&pts) {
         Ok(r) => l.damage.push(r),
         Err(_) => app.live_stroke = None,
+    }
+}
+
+/// A pen tap (a drag still at its one press point when released) paints its dab at the highest
+/// pressure the pen reached during the contact, not just the first sample's (#1798). A mouse is
+/// unchanged at full pressure.
+fn tap_at_peak_pressure(app: &mut PhotocraftApp) {
+    if app.stylus.sample().is_none() {
+        return;
+    }
+    let peak = f64::from(app.stylus.tap_pressure());
+    if let Some(p) = app.drag.as_mut().filter(|d| d.points.len() == 1).and_then(|d| d.points.first_mut()) {
+        p[2] = p[2].max(peak);
     }
 }
 
@@ -2098,7 +2181,9 @@ const HOME_RECENT: usize = 6;
 /// Height of one Home-screen recent-file row.
 const HOME_RECENT_ROW: f32 = 30.0;
 
-/// The Home screen's "Recent" list: file name, its folder on the right, click to open.
+/// The Home screen's "Recent" list: file name, its folder on the right, click to open. The
+/// hovered row shows a × that takes it off the list, and right-click offers Remove from Recent
+/// and Clear Recent Files (#2691).
 fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let width = 380.0;
@@ -2109,27 +2194,60 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     });
     ui.add_space(4.0);
     let mut open = None;
+    let mut remove = None;
+    let mut clear = false;
     for path in recent {
         let name = crate::file_open::display_name(path);
         let folder = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
         let (row, resp) = ui.allocate_exact_size(egui::vec2(width, HOME_RECENT_ROW), Sense::click());
-        if resp.hovered() {
+        // The × sits on top of the row, so the row counts as hovered while the pointer is on it.
+        let hovered = ui.rect_contains_pointer(row);
+        if hovered {
             ui.painter().rect_filled(row, t.radius_sm, t.hover);
         }
+        let close = Rect::from_center_size(egui::pos2(row.right() - 16.0, row.center().y), egui::vec2(22.0, 22.0));
+        let right = if hovered { close.left() - 4.0 } else { row.right() - 10.0 };
         let icon = Rect::from_center_size(egui::pos2(row.left() + 16.0, row.center().y), egui::vec2(16.0, 16.0));
         crate::icons::paint(ui, icon, "file", 14.0, t.text_dim);
         let x = row.left() + 32.0;
         let name_g = crate::tab_strip::elided(ui, &name, egui::FontId::proportional(12.5), t.text, 170.0);
         let name_w = name_g.size().x;
         ui.painter().galley(egui::pos2(x, row.center().y - name_g.size().y / 2.0), name_g, t.text);
-        let folder_max = (row.right() - 10.0 - (x + name_w + 14.0)).max(0.0);
+        let folder_max = (right - (x + name_w + 14.0)).max(0.0);
         if folder_max > 20.0 && !folder.is_empty() {
             let fg = crate::tab_strip::elided(ui, &folder, egui::FontId::proportional(11.5), t.text_faint, folder_max);
-            ui.painter().galley(egui::pos2(row.right() - 10.0 - fg.size().x, row.center().y - fg.size().y / 2.0), fg, t.text_faint);
+            ui.painter().galley(egui::pos2(right - fg.size().x, row.center().y - fg.size().y / 2.0), fg, t.text_faint);
         }
-        if resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        let resp = resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if hovered {
+            let x = ui.interact(close, resp.id.with("remove"), Sense::click());
+            let label = crate::i18n::fmt(tl!("Remove {name} from Recent"), &[("name", &name)]);
+            x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            let color = crate::icons::button_chrome(ui, close, false, x.hovered());
+            crate::icons::paint(ui, close, "x", 12.0, color);
+            if x.on_hover_text(tl!("Remove from Recent")).clicked() {
+                remove = Some(path.clone());
+            }
+        }
+        if resp.clicked() && remove.is_none() {
             open = Some(path.clone());
         }
+        resp.context_menu(|ui| {
+            if ui.button(tl!("Remove from Recent")).clicked() {
+                remove = Some(path.clone());
+                ui.close();
+            }
+            if ui.button(tl!("Clear Recent Files")).clicked() {
+                clear = true;
+                ui.close();
+            }
+        });
+    }
+    if clear {
+        app.clear_recent();
+    } else if let Some(path) = remove {
+        app.remove_recent(&path);
     }
     if let Some(path) = open
         && let Err(e) = app.open_path(&path)
@@ -2780,6 +2898,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p {
+                tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
             }
         }
@@ -2791,6 +2910,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if let Some(d) = p
                 && app.drag.is_some()
             {
+                tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
             }
         }
@@ -2824,6 +2944,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     // If this tool was not handled on pointer-down, fall back to a
                     // click-sized gesture while preserving pen pressure (mouse stays at 1).
                     tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                    tap_at_peak_pressure(app);
                     tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
                 }
             }
@@ -2964,18 +3085,34 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                         let painting = app.drag.is_some();
                         let brush = &app.session.tools.brush;
                         let full = (brush.size / 2.0 * xf.zoom).max(1.0);
-                        let r = if cur.painting == PaintingCursor::NormalTip { (full * (0.5 + 0.5 * brush.hardness.clamp(0.0, 1.0))).max(1.0) } else { full };
+                        let r = if cur.painting == PaintingCursor::NormalTip {
+                            photocraft_paint::half_coverage_radius(full, brush.hardness).max(1.0)
+                        } else {
+                            full
+                        };
                         match cur.painting {
                             PaintingCursor::Standard => egui::CursorIcon::Default,
                             PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
                             _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
-                            // The Pencil: the square of whole pixels its dab fills, on the pixel grid.
-                            _ if tool == Tool::Pencil => {
+                            // The Pencil (and the Eraser in Pencil mode): the outline of the
+                            // whole pixels its dab fills, on the pixel grid. A round tip is a
+                            // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
+                            // its square, 16 screen pixels at any zoom (#2770).
+                            _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
+                                let block = crate::eraser_ui::block_mode(app, tool);
+                                let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
                                 let ppp = painter.ctx().pixels_per_point();
-                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), brush.size, ppp);
+                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
                                 let px = 1.0 / ppp;
-                                painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_black_alpha(160)), egui::StrokeKind::Outside);
-                                painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_white_alpha(230)), egui::StrokeKind::Inside);
+                                let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+                                if !block && pencil_tip_is_round(size) {
+                                    let r = sq.width() / 2.0;
+                                    painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+                                    painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+                                } else {
+                                    painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+                                    painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+                                }
                                 // Too small to see where it is: the hotspot as well.
                                 if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
                                     crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
@@ -3469,7 +3606,7 @@ fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
             draw_readout(painter.ctx(), "crop-angle-readout", h, ["Angle:"], [format!("{a:.1}°")]);
         } else if let (Some([w, h]), Some(at)) = (crate::crop_ui::sizing(app), hover) {
             // Its W × H while it is drawn or resized (#1919), like the marquee's.
-            draw_marquee_readout(painter.ctx(), at, marquee_readout([0.0, 0.0, w, h]));
+            draw_marquee_readout(painter.ctx(), at, size_readout(app, [0.0, 0.0, w, h]));
         }
     }
 }
@@ -3556,7 +3693,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
     let last = d.points.last().map(|p| [p[0], p[1]]).unwrap_or(d.start);
     let marquee = marquee_preview_px(&app.ui.tool_options, d, app.point_zoom());
     if let Some(r) = marquee {
-        draw_marquee_readout(painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), marquee_readout(r));
+        draw_marquee_readout(painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), size_readout(app, r));
     }
     match d.tool {
         // The canvas shows the live stroke itself (`LiveStroke`); a stroke that couldn't start one
@@ -3587,15 +3724,9 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         // Nothing selected yet: no outline, as the release would deselect.
         Tool::RectMarquee | Tool::EllipseMarquee if marquee.is_none() => {}
         Tool::RectMarquee | Tool::EllipseMarquee | Tool::ObjectSelection => {
-            // Marching ants, visible on any pixels (#172).
-            let (a, b) = marquee.map_or((d.start, last), |[x0, y0, x1, y1]| ([x0, y0], [x1, y1]));
-            let r = Rect::from_two_pos(xf.to_screen(a[0] as f32, a[1] as f32), xf.to_screen(b[0] as f32, b[1] as f32));
-            let r = Rect::from_min_max(r.min.round() + vec2(0.5, 0.5), r.max.round() + vec2(0.5, 0.5));
-            let pts = if d.tool == Tool::EllipseMarquee {
-                crate::tool_feedback::ellipse_points(r)
-            } else {
-                vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()]
-            };
+            // Marching ants, visible on any pixels (#172): built in document space and mapped
+            // corner by corner, so a rotated view shows them where the release commits (#2512).
+            let pts = marquee_drag_ants(d, xf, marquee);
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
         // Patch / Content-Aware Move dragging the selection: its outline follows the pointer.
@@ -3752,10 +3883,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     // A press anywhere but on the floating piece (or with ⇧ / ⌥, to draw) drops it first; the
-    // Move tool drags it from anywhere.
+    // Move tool (⌘ with a painting tool too, `event_tool`) drags it from anywhere.
     if let ToolEvent::Down { x, y, .. } = raw
         && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some())
-        && !crate::move_ui::moves_selected_pixels(app)
+        && !crate::move_ui::moves_selected_pixels_with(app, event_tool(app, mods))
         && selection_drag_kind(app, app.ui.tool, [x, y], mods) != Some(true)
     {
         let _ = app.run("select.drop", json!({}));
@@ -3861,7 +3992,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
             // (not when the selected pixels move: those are the active layer's).
-            if !crate::move_ui::moves_selected_pixels(app) && app.ui.tool_options.move_auto_select != mods.command {
+            if !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.command {
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());
@@ -3878,7 +4009,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
-            if crate::move_ui::moves_selected_pixels(app) {
+            if crate::move_ui::moves_selected_pixels_with(app, tool) {
                 if crate::move_ui::float_selected(app, mods.alt, 0.0, 0.0) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
@@ -4171,7 +4302,7 @@ pub enum SelCursor {
 
 /// The cursor at document point `p` with `tool` in effect and `mods` held (`None`: not over a
 /// selection the press would move). The Move tool moves the selected pixels from anywhere
-/// (`move_ui::moves_selected_pixels`); a selection tool from inside the selection, or on the
+/// (`move_ui::moves_selected_pixels_with`); a selection tool from inside the selection, or on the
 /// floating piece (`selection_drag_kind`).
 pub fn selection_cursor(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<SelCursor> {
     if let Some(d) = &app.drag {
@@ -4271,7 +4402,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             }
             // The canvas already shows the stroke: let the commit's damage rect refresh it rather
             // than recompositing the whole document.
-            if app.run(stroke_command(d.tool), p).is_ok()
+            if app.run(stroke_command(app, d.tool), p).is_ok()
                 && let Some(l) = live
             {
                 // Raw preview key 0 = the document itself (its colour display folded in).
@@ -5036,6 +5167,55 @@ mod tests {
         let hint = start_screen_drop_hint(&wayland);
         assert!(!hint.contains("Drop"), "{hint}");
         assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
+    }
+
+    /// The Home screen's × takes a file off Recent without opening it, and its right-click menu
+    /// removes one entry or clears the list; the preferences keep the change (#2691).
+    #[test]
+    fn home_recent_entries_can_be_removed() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for name in ["c.tif", "b.psd", "a.png"] {
+            app.push_recent(&format!("/tmp/photocraft-2691/{name}"));
+        }
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 760.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.state_mut().1 = true;
+        h.run_steps(3);
+        let listed = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| {
+            let app = &h.state().0;
+            assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "stored in the preferences");
+            app.ui.recent_files.iter().map(|p| crate::file_open::display_name(p)).collect::<Vec<_>>()
+        };
+        assert_eq!(listed(&h), ["a.png", "b.psd", "c.tif"]);
+        assert!(h.query_by_label("Remove b.psd from Recent").is_none(), "the × shows on the hovered row only");
+
+        h.get_by_label("b.psd").hover();
+        h.run_steps(2);
+        h.get_by_label("Remove b.psd from Recent").click();
+        h.run_steps(2);
+        assert_eq!(listed(&h), ["a.png", "c.tif"]);
+        assert!(h.state().0.session.documents().is_empty(), "the file was not opened");
+
+        h.get_by_label("c.tif").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Remove from Recent").click();
+        h.run_steps(2);
+        assert_eq!(listed(&h), ["a.png"]);
+
+        h.get_by_label("a.png").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Clear Recent Files").click();
+        h.run_steps(2);
+        assert!(listed(&h).is_empty());
+        assert!(h.state().0.session.documents().is_empty());
     }
 
     #[test]

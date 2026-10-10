@@ -977,11 +977,9 @@ pub const SECTIONS: [(&str, &str); 18] = [
 pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
     "general.beepWhenDone",
-    "general.resizeImageDuringPlace",
     "general.alwaysCreateSmartObjectsWhenPlacing",
     "general.animatedZoom",
     "general.zoomResizesWindows",
-    "interface.dynamicColorSliders",
     "workspace.autoCollapseIconPanels",
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
