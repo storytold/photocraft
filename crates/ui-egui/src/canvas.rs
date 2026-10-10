@@ -358,9 +358,10 @@ fn live_retouch_command(tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// The command a live-stroking tool commits: the Pencil's `paint.pencil`, else `paint.stroke`.
-pub(crate) fn stroke_command(tool: Tool) -> &'static str {
-    if tool == Tool::Pencil { "paint.pencil" } else { "paint.stroke" }
+/// The command a live-stroking tool commits: the Pencil's (and the Pencil-mode Eraser's)
+/// `paint.pencil`, else `paint.stroke`.
+pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
+    if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
 /// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
@@ -382,6 +383,16 @@ pub(crate) fn pencil_cursor_rect(xf: &ViewXform, doc: [f64; 2], size: f32, ppp: 
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let snap = |v: f32| (v * ppp).round() / ppp;
     Rect::from_min_max(pos2(snap(r.min.x), snap(r.min.y)), pos2(snap(r.max.x), snap(r.max.y)))
+}
+
+/// Whether an aliased (Pencil) dab of `size` pixels is round rather than its whole
+/// [`pencil_cursor_rect`] square. The dab fills the pixels whose centres lie within its radius of
+/// the grid centre (`paint::grid_center`), so up to 3 px the corner pixels are in and the dab is
+/// a square; from 4 px on they fall outside and it is a disc (#2662).
+pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
+    let n = if size.is_finite() { size.round().clamp(1.0, 100_000.0) } else { 1.0 };
+    let h = n / 2.0;
+    (h - 0.5) * std::f32::consts::SQRT_2 > h
 }
 
 /// Whether a brush-tip circle draws its centre mark.
@@ -462,7 +473,7 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
         let p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?))
+        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
@@ -2931,13 +2942,22 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             PaintingCursor::Standard => egui::CursorIcon::Default,
                             PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
                             _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
-                            // The Pencil: the square of whole pixels its dab fills, on the pixel grid.
-                            _ if tool == Tool::Pencil => {
+                            // The Pencil (and the Eraser in Pencil mode): the outline of the
+                            // whole pixels its dab fills, on the pixel grid. A round tip is a
+                            // disc, a tiny one the whole square (#2662).
+                            _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) => {
                                 let ppp = painter.ctx().pixels_per_point();
                                 let sq = pencil_cursor_rect(&xf, xf.to_doc(p), brush.size, ppp);
                                 let px = 1.0 / ppp;
-                                painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_black_alpha(160)), egui::StrokeKind::Outside);
-                                painter.rect_stroke(sq, 0.0, Stroke::new(px, Color32::from_white_alpha(230)), egui::StrokeKind::Inside);
+                                let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+                                if pencil_tip_is_round(brush.size) {
+                                    let r = sq.width() / 2.0;
+                                    painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+                                    painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+                                } else {
+                                    painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+                                    painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+                                }
                                 // Too small to see where it is: the hotspot as well.
                                 if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
                                     crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
@@ -4117,7 +4137,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             }
             // The canvas already shows the stroke: let the commit's damage rect refresh it rather
             // than recompositing the whole document.
-            if app.run(stroke_command(d.tool), p).is_ok()
+            if app.run(stroke_command(app, d.tool), p).is_ok()
                 && let Some(l) = live
             {
                 // Raw preview key 0 = the document itself (its colour display folded in).

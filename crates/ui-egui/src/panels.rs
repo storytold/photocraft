@@ -831,21 +831,29 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         brush_preset_chip(ui, b, &mut app.ui);
                         crate::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
-                        opt_label(ui, tl!("Mode"));
-                        let mut mode = b.mode;
-                        let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
-                        if widgets::dropdown(ui, "brush-mode", &mut mode, &opts, 96.0) {
-                            b.mode = mode;
+                        // The Eraser has no blend mode: its Mode is Brush or Pencil (#2662).
+                        if app.ui.tool == Tool::Eraser {
+                            crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
+                        } else {
+                            opt_label(ui, tl!("Mode"));
+                            let mut mode = b.mode;
+                            let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+                            if widgets::dropdown(ui, "brush-mode", &mut mode, &opts, 96.0) {
+                                b.mode = mode;
+                            }
                         }
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
                         if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
                             b.pressure_opacity = !b.pressure_opacity;
                         }
-                        percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
-                        let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
-                        if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
-                            b.build_up = !b.build_up;
-                        }
+                        // A Pencil-mode Eraser is always full flow, without build-up (Photoshop).
+                        ui.add_enabled_ui(!crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
+                            percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
+                            let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
+                            if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
+                                b.build_up = !b.build_up;
+                            }
+                        });
                         opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 58.0);
                         smoothing_options(ui, b);
@@ -884,9 +892,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         opt_label(ui, tl!("Size"));
                         widgets::value_field(ui, &mut b.size, 1.0..=2500.0, "px", 76.0);
                         widgets::vline(ui, 22.0);
-                        percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0);
+                        if app.ui.tool == Tool::Eraser {
+                            crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
+                        }
+                        // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
+                        let pencil = crate::eraser_ui::pencil_mode(app, app.ui.tool);
+                        ui.add_enabled_ui(!pencil, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
                         percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0);
-                        percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0);
+                        ui.add_enabled_ui(!pencil, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
                         opt_label(ui, tl!("Smoothing"));
                         smoothing_field(ui, b, 66.0);
                         widgets::vline(ui, 22.0);
