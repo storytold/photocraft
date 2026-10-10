@@ -4203,3 +4203,5 @@ cameraData	Lens	Lens
 	the macOS Keychain	macOS Anahtar Zinciri
 	Windows Credential Manager	Windows Kimlik Bilgisi Yöneticisi
 	memory until PhotoCraft quits	PhotoCraft kapanana kadar bellek
+	Fill the selection from a prompt	Seçimi bir istemle doldur
+	Set up Generative Fill with your own API key	Üretken Dolgu'yu kendi API anahtarınızla ayarlayın

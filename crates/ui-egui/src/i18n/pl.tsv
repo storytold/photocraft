@@ -4073,6 +4073,7 @@ curves	Smooth	Wygładź
 # Generative Fill and Generative AI Settings (#41)
 	API key	Klucz API
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Opisz, co ma powstać w zaznaczeniu, albo zostaw puste, aby obraz był w nim kontynuowany.
+	Fill the selection from a prompt	Wypełnij zaznaczenie na podstawie opisu
 	Generative AI	Generatywna AI
 	Generative AI Settings…	Ustawienia generatywnej AI…
 	Generative AI needs the desktop app.	Generatywna AI wymaga aplikacji na komputer.
@@ -4087,6 +4088,7 @@ curves	Smooth	Wygładź
 	Provider	Dostawca
 	Remove Key	Usuń klucz
 	Saved (paste to replace)	Zapisany (wklej, aby zastąpić)
+	Set up Generative Fill with your own API key	Skonfiguruj wypełnienie generatywne z własnym kluczem API
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	Zaznaczony obszar, otaczający go obraz i opis są wysyłane do {name} ({model}).
 	What is sent, and to whom	Co jest wysyłane i do kogo
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Twój klucz jest przechowywany w {store}, nigdy w plikach ustawień PhotoCraft.

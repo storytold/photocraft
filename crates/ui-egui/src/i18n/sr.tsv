@@ -4547,3 +4547,5 @@ shape	Appearance	Izgled
 	the macOS Keychain	macOS privezak ključeva
 	Windows Credential Manager	Windows menadžer akreditiva
 	memory until PhotoCraft quits	memorija, dok se PhotoCraft ne zatvori
+	Fill the selection from a prompt	Popuni selekciju prema opisu
+	Set up Generative Fill with your own API key	Podesite Generativnu popunu sa sopstvenim API ključem

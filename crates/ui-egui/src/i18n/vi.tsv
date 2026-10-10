@@ -3971,3 +3971,5 @@ curves	Smooth	Làm mượt
 	the macOS Keychain	Chuỗi khóa macOS
 	Windows Credential Manager	Trình quản lý thông tin xác thực Windows
 	memory until PhotoCraft quits	bộ nhớ cho đến khi PhotoCraft thoát
+	Fill the selection from a prompt	Tô vùng chọn theo lời nhắc
+	Set up Generative Fill with your own API key	Thiết lập Tô tạo sinh bằng khóa API của riêng bạn

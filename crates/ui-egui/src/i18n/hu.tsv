@@ -4389,3 +4389,5 @@ cameraRaw	Yellow	Sárga
 	the macOS Keychain	a macOS-kulcskarika
 	Windows Credential Manager	a Windows Hitelesítőadat-kezelő
 	memory until PhotoCraft quits	a memória, amíg a PhotoCraft be nem zárul
+	Fill the selection from a prompt	A kijelölés kitöltése leírás alapján
+	Set up Generative Fill with your own API key	Generatív kitöltés beállítása a saját API-kulcsoddal
