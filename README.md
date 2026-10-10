@@ -22,6 +22,90 @@
   <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-d69e2e?style=flat-square">
 </p>
 
+## Download and install
+
+**[Download the latest release](https://github.com/storytold/photocraft/releases/latest)** ·
+[macOS](#macos) · [Windows](#windows) · [Arch / Omarchy](#arch-linux-and-omarchy) ·
+[Other Linux](#other-linux-distributions) · [FreeBSD](#freebsd) · [Web](#web)
+
+Choose your platform below. On the release page, expand **Assets** to see the downloads.
+Replace `<version>` in the commands with the downloaded release's version, and run them in
+its download folder. Linux downloads come in `x86_64` (Intel/AMD) and `aarch64` (ARM64) variants.
+
+### macOS
+
+Download `photocraft-<version>-macos-universal.dmg`, open it, and drag **PhotoCraft** into
+**Applications**. Launch it from Applications. The universal build supports Apple silicon
+and Intel Macs running macOS 11 or newer.
+
+### Windows
+
+Download `photocraft-<version>-windows-x64.msi`, open it, and follow the installer. Launch
+**PhotoCraft** from the Start menu. Use the `windows-x86.msi` for 32-bit Windows.
+For a portable copy, download the matching `windows-<arch>-portable.zip`, extract it, and
+run `photocraft.exe`. Requires Windows 10 or newer.
+
+### Arch Linux and Omarchy
+
+Install the community-maintained **[photocraft-bin AUR package](https://aur.archlinux.org/packages/photocraft-bin)**
+for the prebuilt release, including dependencies, launcher entry and icons:
+
+```sh
+yay -S photocraft-bin
+```
+
+On **Omarchy**, you can instead open **Omarchy menu → Install → AUR**, search for
+`photocraft-bin`, and install it. Then launch **PhotoCraft** from your application launcher.
+See the [Omarchy package guide](https://omarchy.org/manual/other-packages/).
+The alternative [photocraft AUR package](https://aur.archlinux.org/packages/photocraft)
+compiles from source and takes longer to install. AUR packages are maintained by the community;
+review the package recipe when prompted by your AUR helper.
+
+### Other Linux distributions
+
+Download the package for your distribution and CPU architecture:
+
+| Distribution / format | Install and launch |
+|---|---|
+| Ubuntu, Debian and derivatives (`.deb`) | Run `sudo apt install ./photocraft-<version>-linux-x86_64.deb`, then open PhotoCraft from your application launcher. |
+| Fedora (`.rpm`) | Run `sudo dnf install ./photocraft-<version>-linux-x86_64.rpm`, then open PhotoCraft from your application launcher. |
+| openSUSE (`.rpm`) | Run `sudo zypper install ./photocraft-<version>-linux-x86_64.rpm`, then open PhotoCraft from your application launcher. |
+| Portable (`.AppImage`) | Run `chmod +x photocraft-<version>-linux-x86_64.AppImage`, then `./photocraft-<version>-linux-x86_64.AppImage`. |
+
+For ARM64, substitute `aarch64` for `x86_64`. Native Linux binaries require **glibc 2.35 or
+newer** and working graphics drivers; see [Linux runtime dependencies](docs/releasing.md#linux).
+The AppImage runs without a system installation; it does not automatically add a launcher entry.
+
+**Flatpak:** if the release includes a `.flatpak` bundle, install [Flatpak](https://flatpak.org/setup/)
+for your distribution, then run:
+
+```sh
+flatpak install --user ./photocraft-<version>-linux-x86_64.flatpak
+flatpak run ai.storyteller.photocraft
+```
+
+Flatpak offers to install the required runtime from Flathub. **The published v0.2.0 release
+does not include a Flatpak bundle.** This is a release-file installation, not a Flathub listing.
+
+### FreeBSD
+
+If the release includes `photocraft-<version>-freebsd-x86_64.tar.gz`, install on FreeBSD 14
+(x86_64) with the following commands as root, then launch `photocraft` as your normal user:
+
+```sh
+pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
+tar -xzf photocraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+```
+
+The published v0.2.0 release does not include a FreeBSD tarball.
+
+### Web
+
+The `photocraft-web-<version>.zip` is a **self-hosted web build**. Extract it and serve the
+contents of its folder on an HTTPS static host, then open the hosted URL in your browser.
+See the [web hosting instructions](packaging/web/README.md). To build the native app from
+source instead, see [Get started](#get-started).
+
 <p align="center">
   <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
@@ -268,12 +352,7 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p photocraft
 
 New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then [`docs/`](docs/).
 
-Installers for macOS, Windows, Linux, FreeBSD and the web are attached to each [GitHub release](https://github.com/storytold/photocraft/releases). On Linux you can pick an AppImage, a `.deb`, an `.rpm`, a tarball or a Flatpak bundle. The bundle needs the freedesktop runtime from [Flathub](https://flathub.org/setup), which `flatpak` offers to install along with it:
-
-```sh
-flatpak install --user photocraft-<version>-linux-x86_64.flatpak   # or -linux-aarch64
-flatpak run ai.storyteller.photocraft
-```
+For desktop installation, see [Download and install](#download-and-install) above.
 
 The AppImage needs no install: the first run registers its launcher icon and menu entry in `~/.local/share` so the dock shows PhotoCraft's icon on Wayland. Set `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` to skip that, and see [`docs/releasing.md`](docs/releasing.md) › Linux to undo it.
 
@@ -285,14 +364,6 @@ On macOS, the command-line tool comes as `photocraft-cli-<version>-macos-univers
 ditto -x -k photocraft-cli-<version>-macos-universal.zip .
 spctl --assess --type install -vv photocraft-cli-<version>-macos-universal/photocraft-cli
 # ... accepted, source=Notarized Developer ID
-```
-
-On FreeBSD 14 (x86_64), the release has a tarball laid out like `/usr/local`. Install the runtime libraries, then unpack it there:
-
-```sh
-pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
-tar -xzf photocraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
-photocraft
 ```
 
 Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
