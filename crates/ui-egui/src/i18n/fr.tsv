@@ -45,6 +45,8 @@
 	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
+	Remove from Recent	Retirer des fichiers récents
+	Remove {name} from Recent	Retirer {name} des fichiers récents
 	Close	Fermer
 	Minimize	Réduire
 	Maximize	Agrandir
@@ -582,6 +584,10 @@
 	100%	100 %
 	200%	200 %
 	75%	75 %
+	80%	80 %
+	85%	85 %
+	90%	90 %
+	95%	95 %
 	125%	125 %
 	150%	150 %
 	175%	175 %
@@ -1506,6 +1512,7 @@
 	Blur Tool	Outil Flou
 	Bold	Gras
 	Brush	Pinceau
+	Block	Carré
 	Brush Pose	Position du pinceau
 	Brush Tip Shape	Forme de la pointe
 	Brush Tool	Outil Pinceau
@@ -1718,6 +1725,7 @@
 	Scratch: {size}	Travail : {size}
 	Untagged {mode}	{mode} sans profil
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppp)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppp)
 	Resolution: {dpi} pixels/inch	Résolution : {dpi} pixels/pouce
 	Doc: {w} × {h} px	Doc : {w} × {h} px
 	Frame {current} / {total}	Image {current} / {total}
@@ -2751,6 +2759,7 @@ fontWeight	Italic	Italique
 	Color to Alpha…	Couleur vers alpha…
 	Transparency Threshold	Seuil de transparence
 	Opacity Threshold	Seuil d'opacité
+	PhotoCraft — Screen Color Picker	PhotoCraft — Sélecteur de couleur d'écran
 
 	Rasterize svg groups deeper than	Pixelliser les groupes SVG au-delà de cette profondeur
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 désactive ce seuil ; les groupes SVG imbriqués sur plus de 100 niveaux sont toujours pixellisés.

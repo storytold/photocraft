@@ -189,6 +189,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         swatches: adjust_editors::swatches(app),
         gradients: adjust_editors::gradient_presets(app, &kind),
         dialog: true,
+        dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
     };
     let e = adjust_editors::editor(ui, &kind, &mut values, &cx);
     if e.changed

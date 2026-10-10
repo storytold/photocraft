@@ -939,6 +939,9 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
             reveal |= wheeled;
             chosen.extend(stepped);
         }
+        // The row nearest the pointer, by its distance to each row.
+        let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
+        let mut nearest: Option<(f32, &T)> = None;
         for (v, l) in options {
             let item = ui.selectable_label(v == current, tl!(l));
             if reveal && v == current {
@@ -947,10 +950,21 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
             if item.hovered() {
                 hovered = Some(v.clone());
             }
+            if let Some(p) = pointer {
+                let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
+                if nearest.is_none_or(|(n, _)| d < n) {
+                    nearest = Some((d, v));
+                }
+            }
             if item.clicked() {
                 *current = v.clone();
                 chosen.push(v.clone());
             }
+        }
+        // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
+        // so keep previewing the nearest row instead of flashing the current value back (#2553).
+        if hovered.is_none() {
+            hovered = nearest.map(|(_, v)| v.clone());
         }
     });
     if combo_box_arrow_keys(ui, &response.response, current, options) {
@@ -1419,7 +1433,7 @@ mod tests {
                 if round {
                     *v = v.round();
                 }
-                if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if ui.button(tl!("OK")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     *ok = Some(*v);
                 }
             },

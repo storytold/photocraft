@@ -291,3 +291,30 @@ fn clicking_the_last_point_again_closes_the_outline() {
     assert!(!active(&app));
     assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(150, 100, 0) > 0.9);
 }
+
+/// ⌘ (Ctrl) with the Lasso is the Move tool for the drag: through the real canvas, a ⌘-drag outside
+/// the selection (here: without one) moves the layer and draws no outline (`canvas::command_moves_layer`).
+#[test]
+fn real_canvas_cmd_drag_outside_the_selection_moves_the_layer() {
+    let mut h = harness();
+    h.state_mut().ui.extras.snap = false;
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut()
+        .session
+        .edit("paint", |doc, _| {
+            doc.layer_mut(layer).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(100, 100, 140, 140), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    h.run_steps(1);
+    mouse(&mut h, "down", 120.0, 120.0, Modifiers::COMMAND);
+    mouse(&mut h, "move", 130.0, 120.0, Modifiers::COMMAND);
+    mouse(&mut h, "move", 150.0, 120.0, Modifiers::COMMAND);
+    mouse(&mut h, "up", 150.0, 120.0, Modifiers::COMMAND);
+    let app = h.state();
+    let alpha = |x, y| app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().rgba(x, y)[3];
+    assert!(app.drag.is_none() && !active(app), "no outline in progress");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "no selection was made");
+    assert_eq!((alpha(105, 120), alpha(165, 120)), (0.0, 1.0), "the layer moved 30 px to the right");
+}
