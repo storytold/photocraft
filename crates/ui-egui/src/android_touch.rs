@@ -6,7 +6,7 @@
 //! conversion to eframe and change only visual/touch target sizing.
 #![cfg(target_os = "android")]
 
-use egui::{Context, vec2};
+use egui::{Context, Theme, vec2};
 
 /// Install touch-friendly sizes after the PhotoCraft theme is installed.
 ///
@@ -14,9 +14,11 @@ use egui::{Context, vec2};
 /// does not multiply input coordinates by Android's physical pixel density.
 pub fn configure_touch_ui(ctx: &Context) {
     ctx.set_zoom_factor(1.0);
-    ctx.style_mut(|style| {
-        style.spacing.interact_size.y = style.spacing.interact_size.y.max(44.0);
-        style.spacing.interact_size.x = style.spacing.interact_size.x.max(44.0);
-        style.spacing.button_padding = vec2(12.0, 9.0);
-    });
+    for theme in [Theme::Light, Theme::Dark] {
+        ctx.style_mut_of(theme, |style| {
+            style.spacing.interact_size.y = style.spacing.interact_size.y.max(44.0);
+            style.spacing.interact_size.x = style.spacing.interact_size.x.max(44.0);
+            style.spacing.button_padding = vec2(12.0, 9.0);
+        });
+    }
 }
