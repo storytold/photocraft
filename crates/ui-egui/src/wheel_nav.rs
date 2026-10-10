@@ -4,7 +4,9 @@
 //! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch, applied the frame it arrives.
 //! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
 //!   ⌥/Alt + wheel scrolls.
-//! - A trackpad pinch zooms around the pointer.
+//! - A trackpad pinch zooms around the pointer, unless Preferences › Enhanced Controls ›
+//!   Zoom with Trackpad Pinch is off (then a pinch does nothing, and Windows' Ctrl + wheel
+//!   fractions scroll sideways like the wheel, because the fold below is skipped).
 //!
 //! [`configure`] makes egui fold ⌘/Ctrl + wheel into a sideways scroll as it does ⇧ + wheel, so
 //! only a real pinch (egui's `Event::Zoom`, or a touch screen) reaches `zoom_delta`. macOS and
@@ -51,13 +53,15 @@ pub struct Input {
     pub alt: bool,
     /// Preferences › General › Zoom with Scroll Wheel.
     pub zoom_with_wheel: bool,
+    /// Preferences › Enhanced Controls › Zoom with Trackpad Pinch.
+    pub pinch_zooms: bool,
     /// Points per wheel notch (egui's `line_scroll_speed`).
     pub notch: f32,
 }
 
 /// The view change for one frame of wheel input, if any.
 pub fn classify(i: Input) -> Option<Wheel> {
-    if i.zoom_delta.is_finite() && i.zoom_delta > 0.0 && i.zoom_delta != 1.0 {
+    if i.pinch_zooms && i.zoom_delta.is_finite() && i.zoom_delta > 0.0 && i.zoom_delta != 1.0 {
         return Some(Wheel::Zoom(i.zoom_delta));
     }
     // One notch (`notch` points) is one ×1.1 step.
@@ -134,7 +138,7 @@ fn alt_id() -> Id {
 
 /// Read this frame's wheel input. Call it every frame (hovered or not) so the Alt state of the
 /// gesture follows the latest wheel event.
-pub fn read(ctx: &Context, zoom_with_wheel: bool) -> Option<Wheel> {
+pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool) -> Option<Wheel> {
     let notch = ctx.options(|o| o.input_options.line_scroll_speed);
     let (scroll, zoom_delta, latest, wheel, page) = ctx.input(|i| {
         let latest = i.events.iter().rev().find_map(|e| match e {
@@ -171,7 +175,7 @@ pub fn read(ctx: &Context, zoom_with_wheel: bool) -> Option<Wheel> {
                 }
         },
     );
-    classify(Input { scroll, raw, zoom_delta, alt, zoom_with_wheel, notch })
+    classify(Input { scroll, raw, zoom_delta, alt, zoom_with_wheel, pinch_zooms, notch })
 }
 
 #[cfg(test)]
@@ -181,7 +185,7 @@ mod tests {
     use super::*;
 
     fn input(scroll: Vec2, alt: bool) -> Input {
-        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, zoom_with_wheel: false, notch: 40.0 }
+        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, zoom_with_wheel: false, pinch_zooms: true, notch: 40.0 }
     }
 
     fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
@@ -204,7 +208,7 @@ mod tests {
             if legacy {
                 fold_legacy_pinch(&ctx, &mut raw);
             }
-            let mut out = ctx.run_ui(raw, |ui| match read(ui.ctx(), zoom_with_wheel) {
+            let mut out = ctx.run_ui(raw, |ui| match read(ui.ctx(), zoom_with_wheel, true) {
                 Some(Wheel::Pan(d)) => pan += d,
                 Some(Wheel::Zoom(f)) => zoom *= f,
                 None => {}
@@ -255,6 +259,44 @@ mod tests {
         // The pinch wins over Alt.
         let i = Input { zoom_delta: 0.8, ..input(Vec2::new(0.0, 40.0), true) };
         assert_eq!(classify(i), Some(Wheel::Zoom(0.8)));
+    }
+
+    /// Preferences › Enhanced Controls › Zoom with Trackpad Pinch off: the pinch is ignored, and
+    /// a scroll in the same frame pans as it would without a pinch.
+    #[test]
+    fn the_pinch_preference_switches_pinch_zooming() {
+        let i = Input { zoom_delta: 1.2, pinch_zooms: false, ..input(Vec2::ZERO, false) };
+        assert_eq!(classify(i), None);
+        let i = Input { zoom_delta: 1.2, pinch_zooms: false, ..input(Vec2::new(0.0, 12.0), false) };
+        assert_eq!(classify(i), Some(Wheel::Pan(Vec2::new(0.0, 12.0))));
+        // On (the default) the pinch still zooms.
+        let i = Input { zoom_delta: 1.2, pinch_zooms: true, ..input(Vec2::ZERO, false) };
+        assert_eq!(classify(i), Some(Wheel::Zoom(1.2)));
+    }
+
+    /// The Windows pinch fold follows the preference too: off, the Ctrl + wheel fractions stay
+    /// wheel events (which egui folds into a sideways scroll).
+    #[test]
+    fn the_windows_pinch_fold_follows_the_preference() {
+        use eframe::App as _;
+        if !cfg!(target_os = "windows") {
+            return;
+        }
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = Context::default();
+        let event = || Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 0.25),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers { ctrl: true, command: true, ..Modifiers::NONE },
+        };
+        let mut raw = RawInput { time: Some(1.0), events: vec![event()], ..Default::default() };
+        app.raw_input_hook(&ctx, &mut raw);
+        assert!(matches!(raw.events[0], Event::Zoom(_)), "the fraction is a pinch: {:?}", raw.events[0]);
+        app.run("prefs.set", serde_json::json!({"path": "enhancedControls.zoomWithTrackpadPinch", "value": false})).unwrap();
+        let mut raw = RawInput { time: Some(2.0), events: vec![event()], ..Default::default() };
+        app.raw_input_hook(&ctx, &mut raw);
+        assert!(matches!(raw.events[0], Event::MouseWheel { .. }), "off: it stays a wheel event: {:?}", raw.events[0]);
     }
 
     #[test]
@@ -326,7 +368,8 @@ mod tests {
             for alt in [false, true] {
                 for notch in [0.0, -1.0, f32::NAN, 40.0] {
                     for zd in [f32::NAN, 0.0, -1.0, f32::INFINITY, 1.0] {
-                        let i = Input { scroll: Vec2::new(0.0, s), raw: Vec2::new(0.0, s), zoom_delta: zd, alt, zoom_with_wheel: !alt, notch };
+                        let i =
+                            Input { scroll: Vec2::new(0.0, s), raw: Vec2::new(0.0, s), zoom_delta: zd, alt, zoom_with_wheel: !alt, pinch_zooms: true, notch };
                         if let Some(Wheel::Zoom(f)) = classify(i) {
                             assert!(f.is_finite() && f > 0.0, "{f} from {i:?}");
                         }

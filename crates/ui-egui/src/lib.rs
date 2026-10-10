@@ -1296,8 +1296,9 @@ impl eframe::App for PhotocraftApp {
             menu.raw_input(raw_input);
         }
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
-        // Windows sends a touchpad pinch as Ctrl + wheel; make it a pinch again (wheel_nav.rs).
-        if cfg!(target_os = "windows") {
+        // Windows sends a touchpad pinch as Ctrl + wheel; make it a pinch again (wheel_nav.rs) —
+        // unless the pinch preference is off, leaving those fractions to scroll sideways.
+        if cfg!(target_os = "windows") && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
         raw_input.events.extend(self.take_synthetic_step());
