@@ -36,6 +36,11 @@
 	New from Clipboard	クリップボードから新規作成
 	Open…	開く…
 	Open As…	形式を指定して開く…
+	Open EXR Parts…	EXRパートを開く…
+	Add beauty precomp from the AOVs	AOVからビューティーをプリコンポーズして追加
+	Both	両方
+	Left	左
+	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
 	Close	閉じる
@@ -85,6 +90,8 @@
 	Import	読み込み
 	Browse…	参照…
 	Reveal in Finder	Finder で表示
+	Show in Explorer	エクスプローラーで表示
+	Show in Folder	フォルダーで表示
 	File Info…	ファイル情報…
 	Print…	プリント…
 	Print One Copy	1 部プリント
@@ -813,7 +820,6 @@
 	Blending Options	描画オプション
 	Blue	青
 	Blue, Red, Yellow	青、赤、黄
-	Both	両方
 	Both Axes	両方の軸
 	Bottom	下
 	Brightness	明るさ
@@ -1132,7 +1138,6 @@
 	Leading	行送り
 	Leading (set to the font size × auto-leading when Auto)	行送り(自動のときはフォントサイズ × 自動行送り)
 	Leave as is (don't color manage)	そのまま(カラーマネジメントしない)
-	Left	左
 	Left align text	左揃え
 	Length:	長さ:
 	Level	レベル
@@ -1341,7 +1346,6 @@
 	Restore All	すべて復元
 	Restore Defaults	既定に戻す
 	Restrictive (Web)	制限(Web)
-	Right	右
 	Right align text	右揃え
 	Rigid	剛体
 	Rotate:	回転:
@@ -2203,6 +2207,7 @@ cameraRaw	Color	カラー
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	カラーピッカー（文字色）
+	Color Picker ({name})	カラーピッカー（{name}）
 	Color Picker (Fill Color)	カラーピッカー（塗りつぶしカラー）
 	Fill color	塗りつぶしカラー
 	Color Picker (Stroke Color)	カラーピッカー（線のカラー）
@@ -3427,3 +3432,7 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Next Document	次のドキュメント
+	Previous Document	前のドキュメント
+	W x H x Resolution	幅 x 高さ x 解像度
+	Front Image	前面の画像

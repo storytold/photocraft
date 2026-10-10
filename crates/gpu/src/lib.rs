@@ -170,6 +170,9 @@ struct Resident {
     format: PixelFormat,
     tiles: HashMap<TileCoord, Arc<Tile>>,
     default_nonzero: bool,
+    /// Bit pattern of the surface's default pixel when the texture was filled. Tiles the surface
+    /// doesn't store hold it, so a changed default (Invert, Fill) makes the texture stale.
+    default_bits: Vec<u32>,
     doc: DocId,
     last_used: u64,
     /// Cell visit that last used it (least recently used pages are evicted first).
@@ -1243,7 +1246,12 @@ impl Compositor {
         let format = surface.format();
         let kind = TexKind::for_surface(key.1, format);
         let cmyk = if format.mode == photocraft_color::ColorMode::Cmyk { self.cmyk } else { 0 };
-        let stale = self.residents.get(&key).is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk);
+        let default_pixel = surface.default_pixel();
+        let default_bits: Vec<u32> = default_pixel.iter().map(|v| v.to_bits()).collect();
+        let stale = self
+            .residents
+            .get(&key)
+            .is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk || r.default_bits != default_bits);
         if stale {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("pc_compose_layer"),
@@ -1256,8 +1264,9 @@ impl Compositor {
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
-            let default_nonzero = surface.default_pixel().iter().any(|v| *v != 0.0);
-            let mut r = Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, doc, last_used: 0, stamp: 0, cmyk };
+            let default_nonzero = default_pixel.iter().any(|v| *v != 0.0);
+            let mut r =
+                Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, default_bits, doc, last_used: 0, stamp: 0, cmyk };
             // A new texture starts zeroed: write the tiles that are present, and the default pixel
             // where they are missing if it isn't zero. Coordinates sharing a tile (a solid fill,
             // the default) take one upload and GPU copies (#1774).
@@ -1651,7 +1660,7 @@ fn op_words(p: &plan::Pass<'_>, tex: Option<[i32; 4]>, mask: Option<[i32; 4]>, m
         F(p.opacity),
         F(density),
         F(mdefault),
-        F(0.0),
+        F(p.fill),
         I(to[0]),
         I(to[1]),
         I(ts[0]),

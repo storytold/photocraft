@@ -572,7 +572,7 @@ fn content_aware_scale(s: &mut Session, p: &Value) -> Result<Value> {
         move |s, out| {
             s.edit(label, |doc, _| {
                 let surf = writable_surface(doc, id)?;
-                crate::pixels::clear_surface(surf, region, None);
+                crate::pixels::try_clear_surface(surf, region, None)?;
                 surf.write_region(dst, &out);
                 surf.prune();
                 Ok(())

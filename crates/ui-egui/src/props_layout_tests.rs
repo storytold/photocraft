@@ -263,3 +263,49 @@ fn layers_opacity_and_fill_share_one_right_column() {
         assert!((ol.right() - fl.right()).abs() < 0.5, "{theme}: Opacity label ends at {}, Fill label at {}", ol.right(), fl.right());
     }
 }
+
+#[test]
+fn properties_distribute_buttons_move_selected_layers_and_undo_in_both_axes() {
+    use photocraft_doc::LayerId;
+    for horizontal in [true, false] {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 300, "height": 300, "background": "transparent"})).unwrap();
+        let mut ids = Vec::new();
+        for (i, at) in [10, 40, 160].into_iter().enumerate() {
+            let id = s.execute("layer.new.layer", json!({"name": format!("Block {i}")})).unwrap()["layer"].as_u64().unwrap();
+            let (x, y) = if horizontal { (at, 10) } else { (10, at) };
+            s.execute("select.rect", json!({"x": x, "y": y, "width": 10, "height": 10})).unwrap();
+            s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+            s.execute("select.deselect", json!({})).unwrap();
+            ids.push(id);
+        }
+        for (i, id) in ids.iter().copied().enumerate() {
+            s.execute("layer.select", json!({"layer": id, "mode": if i == 0 { "replace" } else { "add" }})).unwrap();
+        }
+        let mut h = harness(s, 1.0, 320.0);
+        let button = if horizontal { "Horizontally" } else { "Vertically" };
+        // An enabled Properties button invokes the existing command (not a UI-only gesture).
+        let before = {
+            let st = h.state().session.active().unwrap();
+            let b = st.doc.layer(LayerId(ids[1])).unwrap().surface().unwrap().content_bounds();
+            if horizontal { b.x0 } else { b.y0 }
+        };
+        let history = h.state().session.active().unwrap().history.entries().len();
+        h.get_by_label(button).click();
+        h.run_steps(4);
+        let after = {
+            let st = h.state().session.active().unwrap();
+            let b = st.doc.layer(LayerId(ids[1])).unwrap().surface().unwrap().content_bounds();
+            if horizontal { b.x0 } else { b.y0 }
+        };
+        assert_ne!(after, before, "{button} moved the middle layer");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), history + 1);
+        h.state_mut().session.undo();
+        let restored = {
+            let st = h.state().session.active().unwrap();
+            let b = st.doc.layer(LayerId(ids[1])).unwrap().surface().unwrap().content_bounds();
+            if horizontal { b.x0 } else { b.y0 }
+        };
+        assert_eq!(restored, before, "{button}: undo restores its location");
+    }
+}
