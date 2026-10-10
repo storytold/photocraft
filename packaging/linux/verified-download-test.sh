@@ -20,12 +20,33 @@ expected="$(sha256 "$source_asset")"
 # Offline preseed: a valid 0644 cache must not try the unavailable URL and must become runnable.
 cp "$source_asset" "$cache"
 chmod 644 "$cache"
-download_verified "file://$TMP/unavailable" "$cache" "$expected" || fail "offline cache was not reused"
+download_verified "file://$TMP/unavailable" "$cache" "$expected" true || fail "offline cache was not reused"
 [ -x "$cache" ] || fail "valid preseed did not become executable"
+
+# If a valid but non-executable cache cannot be chmod'd, fail here rather than at invocation.
+chmod 644 "$cache"
+chmod() { return 1; }
+if download_verified "file://$TMP/unavailable" "$cache" "$expected" true >/dev/null 2>&1; then fail "unfixable cache was accepted"; fi
+unset -f chmod
+chmod 755 "$cache"
+
+# A verified, executable cache can be owned by another user; do not try to chmod it again.
+chmod() { fail "chmod called for an already executable cache"; }
+download_verified "file://$TMP/unavailable" "$cache" "$expected" true || fail "executable cache was not reused"
+unset -f chmod
+
+# The type2 runtime is read as data; a valid 0644 preseed must remain usable as-is.
+runtime="$TMP/runtime"
+cp "$source_asset" "$runtime"
+chmod 644 "$runtime"
+chmod() { fail "chmod called for a readable runtime cache"; }
+download_verified "file://$TMP/unavailable" "$runtime" "$expected" || fail "readable runtime was not reused"
+unset -f chmod
+[ ! -x "$runtime" ] || fail "runtime was needlessly made executable"
 
 # A corrupt cache is replaced only by bytes with the pinned digest.
 printf 'corrupt' >"$cache"
-download_verified "file://$source_asset" "$cache" "$expected" || fail "corrupt cache was not replaced"
+download_verified "file://$source_asset" "$cache" "$expected" true || fail "corrupt cache was not replaced"
 cmp -s "$source_asset" "$cache" || fail "replacement differs from verified asset"
 [ -x "$cache" ] || fail "replacement is not executable"
 

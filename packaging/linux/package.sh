@@ -132,7 +132,7 @@ if has appimage; then
   else
     download_verified \
       "https://github.com/AppImage/appimagetool/releases/download/$TOOL_VERSION/appimagetool-$ARCH.AppImage" \
-      "$TOOL" "$TOOL_SHA256"
+      "$TOOL" "$TOOL_SHA256" true
   fi
   RUNTIME="$CARGO_TARGET_DIR/type2-runtime-$RUNTIME_VERSION-$ARCH"
   download_verified \
