@@ -26,19 +26,22 @@ macro_rules! bundled_font {
 
 // The font files are embedded once, here. The UI (`ui-egui` theme) uses these same statics:
 // a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the wasm.
-// They are stored deflated by build.rs (0.73 MB instead of 1.5 MB: the web build's 24 MiB size
+// They are stored deflated by build.rs (0.98 MB instead of 2.1 MB: the web build's 24 MiB size
 // gate, packaging/web/package.sh) and inflated on first use, once per process.
 pub static INTER_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Regular.ttf")));
 pub static INTER_MEDIUM: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Medium.ttf")));
 pub static INTER_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-SemiBold.ttf")));
 pub static JETBRAINS_MONO_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("JetBrainsMono-Regular.ttf")));
+/// The display face for app wordmarks (Archivo, as on getartcraft.com and in the launcher).
+pub static ARCHIVO_DISPLAY: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Archivo-Variable.ttf")));
 
 /// Fonts shipped with Photocraft (OFL; licences in `assets/fonts`).
-pub static BUNDLED: [(&str, &LazyLock<Vec<u8>>); 4] = [
+pub static BUNDLED: [(&str, &LazyLock<Vec<u8>>); 5] = [
     ("Inter-Regular.ttf", &INTER_REGULAR),
     ("Inter-Medium.ttf", &INTER_MEDIUM),
     ("Inter-SemiBold.ttf", &INTER_SEMIBOLD),
     ("JetBrainsMono-Regular.ttf", &JETBRAINS_MONO_REGULAR),
+    ("Archivo-Variable.ttf", &ARCHIVO_DISPLAY),
 ];
 
 /// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.

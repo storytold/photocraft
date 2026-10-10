@@ -48,7 +48,7 @@ fn deflate_bundled_fonts() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("fonts");
     let result = (|| -> std::io::Result<()> {
         std::fs::create_dir_all(&out)?;
-        for name in ["Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf", "JetBrainsMono-Regular.ttf"] {
+        for name in ["Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf", "JetBrainsMono-Regular.ttf", "Archivo-Variable.ttf"] {
             let path = src.join(name);
             println!("cargo::rerun-if-changed={}", path.display());
             let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());

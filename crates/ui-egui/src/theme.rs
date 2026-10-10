@@ -12,7 +12,8 @@
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
+use egui::epaint::text::VariationCoords;
+use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak, Stroke, TextStyle, Visuals};
 use photocraft_engine::prefs::UiFontSize;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -562,6 +563,22 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
+    // Archivo at 620 weight and 118 % width: the display face for app wordmarks, as on
+    // getartcraft.com and in the launcher (its `theme::display`). The variable font is
+    // pinned to those coordinates; the UI-size rescale below keeps them.
+    let archivo = photocraft_text::fonts::ARCHIVO_DISPLAY.as_slice();
+    if !archivo.is_empty() {
+        let tweak = FontTweak {
+            coords: VariationCoords::new([(*b"wght", 620.0), (*b"wdth", 118.0)]),
+            ..Default::default()
+        };
+        fonts.font_data.insert("Archivo-Display".to_owned(), Arc::new(FontData::from_owned(archivo.to_vec()).tweak(tweak)));
+        let mut stack = vec!["Archivo-Display".to_owned()];
+        stack.extend(fallback.iter().cloned());
+        fonts.families.insert(FontFamily::Name("display".into()), stack);
+    } else {
+        log::error!("bundled font Archivo-Display is unavailable; using the default UI font");
+    }
     let size = ui_font_size(ctx);
     for (name, data) in &mut fonts.font_data {
         size_ui_font(ctx, name, Arc::make_mut(data));
@@ -669,6 +686,10 @@ pub fn medium(size: f32) -> FontId {
 }
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
+}
+/// Archivo 620 at 118 % width: the display face for app wordmarks.
+pub fn display(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("display".into()))
 }
 pub fn mono(size: f32) -> FontId {
     FontId::monospace(size)

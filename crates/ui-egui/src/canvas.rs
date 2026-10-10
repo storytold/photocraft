@@ -2142,14 +2142,27 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
-                let title = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(38.0), t.text);
-                let by = ui.painter().layout_no_wrap(tl!("open source").into(), egui::FontId::proportional(13.0), t.text_faint);
-                let total = title.size().x + by.size().x + 10.0;
+                // The app wordmark as the site and the launcher set it: Archivo, with "Craft"
+                // in the accent colour.
+                let size = 38.0;
+                let mut job = egui::text::LayoutJob::default();
+                let format = |color| egui::TextFormat {
+                    font_id: crate::theme::display(size),
+                    color,
+                    extra_letter_spacing: -0.03 * size,
+                    ..Default::default()
+                };
+                job.append("Photo", 0.0, format(t.text));
+                job.append("Craft", 0.0, format(t.accent));
+                let title = ui.painter().layout_job(job);
+                let mark = (title.size().y * 1.35).min(72.0).max(40.0);
+                let gap = 12.0;
+                let total = mark + gap + title.size().x;
                 ui.add_space(((card.width() - total) / 2.0).max(0.0));
-                let (r, _) = ui.allocate_exact_size(title.size(), Sense::hover());
-                ui.painter().galley(r.min, title, t.text);
-                let (r2, _) = ui.allocate_exact_size(egui::vec2(by.size().x + 10.0, r.height()), Sense::hover());
-                ui.painter().galley(egui::pos2(r2.left() + 10.0, r.bottom() - by.size().y - 8.0), by, t.text_faint);
+                let (r, _) = ui.allocate_exact_size(egui::vec2(total, title.size().y), Sense::hover());
+                let mark_y = r.min.y + (title.size().y - mark) / 2.0;
+                crate::brand::paint_mark(ui, Rect::from_min_size(egui::pos2(r.min.x, mark_y), egui::vec2(mark, mark)));
+                ui.painter().galley(egui::pos2(r.min.x + mark + gap, r.min.y), title, t.text);
             });
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tl!("Create a new document or open an existing file.")).color(t.text_dim).size(14.0));
