@@ -54,6 +54,8 @@ pub struct TransformPreview {
     pub doc: Arc<Document>,
     pub texture: crate::transform_tex::PreviewTextures,
     pub opacity: f32,
+    /// The layers stacked over the moving one, drawn over its pixels ([`Above`]).
+    above: Option<Above>,
     gesture: Option<Gesture>,
     /// Warp-mode drag: (control point, pointer start, mesh points at the start).
     warp_drag: Option<(usize, [f64; 2], Vec<[f64; 2]>)>,
@@ -82,6 +84,10 @@ struct Follow {
     /// The moving layer is hidden in `doc` (nothing was lifted out of it).
     hidden: bool,
 }
+
+/// Photoshop's alert when Free Transform (⌘T, Edit › Transform, the Move tool's transform controls)
+/// starts on a layer locked in place, by its own lock or a group's.
+pub const LOCKED: &str = "Could not complete the Free Transform command because the layer is locked.";
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
 /// just beyond it, outside the box, a drag rotates.
@@ -158,6 +164,11 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     let id = st.active_layer.ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;
+    if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
+        // Photoshop refuses before the box opens rather than when it is committed (#2585).
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
+        return Err(LOCKED.into());
+    }
     if matches!(layer.content, LayerContent::Adjustment(_)) && layer.mask.is_none() {
         return Err("Adjustment layers have nothing to transform".into());
     }
@@ -182,6 +193,9 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     // egui reports the renderer's limit in the app; offscreen harnesses only through the device.
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
+    // The layers covering the moving pixels draw over them instead of under them.
+    let above = Above::new(ctx, format!("transform-{session}-above"), &doc, id, max_side);
+    above.hide_in(&mut pd.layers);
     let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side);
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
@@ -189,6 +203,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
+        above: Some(above),
         follow: Some(Follow { revision, hidden: lifted.is_none() }),
         gesture: None,
         warp_drag: None,
@@ -326,6 +341,7 @@ fn begin_lone(
         doc: Arc::new(pd),
         texture,
         opacity: 0.6,
+        above: None,
         follow: None,
         gesture: None,
         warp_drag: None,
@@ -382,6 +398,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         steps: Steps::default(),
         tool: app.ui.tool,
         path: Some(path),
+        above: None,
         follow: None,
     });
     app.ui.transform = Some(TransformSession {
@@ -452,6 +469,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         doc: Arc::new(pd),
         texture,
         opacity: 1.0,
+        above: None,
         follow: None,
         gesture: None,
         warp_drag: None,
@@ -592,6 +610,158 @@ fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<c
     linked_pixel.map(|m| PreviewMask { surface: m.surface.clone(), density: m.density })
 }
 
+/// The layers covering the moving one ([`covering`]), composited on their own and drawn over its
+/// preview, so the layer keeps its place in the stack while the box is open (#2439): they cover
+/// it, as in Photoshop, instead of the moving pixels covering the whole document. The canvas
+/// under the box leaves them out ([`Above::hide_in`]). Built when the session starts and again
+/// when an edit changes the document; the box itself moves without re-compositing.
+struct Above {
+    ctx: egui::Context,
+    name: String,
+    max_side: usize,
+    /// The covering layers (whole layers or groups, at any depth).
+    ids: Vec<LayerId>,
+    /// Their composite and the canvas area it covers; `None` when nothing visible covers the layer.
+    shown: Option<(crate::transform_tex::PreviewTextures, photocraft_geom::Rect)>,
+}
+
+impl Above {
+    fn new(ctx: &egui::Context, name: String, doc: &Document, id: LayerId, max_side: usize) -> Self {
+        let mut a = Self { ctx: ctx.clone(), name, max_side, ids: Vec::new(), shown: None };
+        a.rebuild(doc, id);
+        a
+    }
+
+    /// Composite what covers layer `id` of `doc` (the live document) again.
+    fn rebuild(&mut self, doc: &Document, id: LayerId) {
+        self.ids.clear();
+        covering(&doc.layers, id, &mut self.ids);
+        let mut up = doc.clone();
+        show_only(&mut up.layers, &self.ids);
+        let canvas = up.bounds();
+        let rect = up
+            .layers
+            .iter()
+            .filter(|l| l.visible)
+            .fold(photocraft_geom::Rect::EMPTY, |r, l| r.union(&photocraft_compose::composite_bounds(l, canvas).unwrap_or(canvas)))
+            .intersect(&canvas);
+        self.shown = (!rect.is_empty()).then(|| {
+            let (image, uv) = composite_image(&up, rect, self.max_side);
+            (crate::transform_tex::PreviewTextures::new(&self.ctx, self.name.clone(), image, uv), rect)
+        });
+    }
+
+    /// Leave the covering layers out of `layers` (the document under the box).
+    fn hide_in(&self, layers: &mut [photocraft_doc::Layer]) {
+        for l in layers.iter_mut() {
+            if self.ids.contains(&l.id) {
+                l.visible = false;
+            } else if let LayerContent::Group(g) = &mut l.content {
+                self.hide_in(&mut g.children);
+            }
+        }
+    }
+
+    /// Draw the composite over the moving pixels.
+    fn draw(&self, painter: &egui::Painter, xf: &ViewXform) {
+        let Some((texture, r)) = &self.shown else { return };
+        let (tex, uv) = texture.pick(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, false);
+        let mut mesh = egui::Mesh::with_texture(tex);
+        let corners = [(r.x0, r.y0, 0.0, 0.0), (r.x1, r.y0, uv[0], 0.0), (r.x1, r.y1, uv[0], uv[1]), (r.x0, r.y1, 0.0, uv[1])];
+        for (x, y, u, v) in corners {
+            mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u, v), color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(mesh);
+    }
+}
+
+/// `rect` of `doc`'s composite as premultiplied texels: full resolution when it fits in
+/// `max_side`, composited in bands (no full-size float copy), else area-averaged down to fit.
+fn composite_image(doc: &Document, rect: photocraft_geom::Rect, max_side: usize) -> (egui::ColorImage, [f32; 2]) {
+    let (w, h) = (rect.width() as usize, rect.height() as usize);
+    let to_color = |p: &[u8; 4]| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]);
+    if w.max(h) <= max_side.max(1) {
+        let mut px = Vec::with_capacity(w * h);
+        let _ = photocraft_compose::render_bands(doc, rect, 0, |band| {
+            px.extend(band.to_rgba8().pixels.as_chunks::<4>().0.iter().map(to_color));
+            Ok::<(), ()>(())
+        });
+        px.resize(w * h, Color32::TRANSPARENT);
+        return (egui::ColorImage::new([w, h], px), [1.0, 1.0]);
+    }
+    let k = w.max(h).div_ceil(max_side.max(1));
+    let (tw, th) = (w.div_ceil(k).max(1), h.div_ceil(k).max(1));
+    let buf = photocraft_compose::render_reduced_rect(doc, rect, tw as u32, th as u32);
+    let px: Vec<Color32> = buf.to_rgba8().pixels.as_chunks::<4>().0.iter().map(to_color).collect();
+    let [bw, bh] = [buf.rect.width() as usize, buf.rect.height() as usize];
+    if px.len() != bw * bh || bw == 0 || bh == 0 {
+        return (egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]);
+    }
+    (egui::ColorImage::new([bw, bh], px), [1.0, 1.0])
+}
+
+/// A layer that composites over anything the same as over transparency, so it can be drawn over
+/// the moving pixels on its own: a Normal layer that isn't an adjustment, or a Normal or Pass
+/// Through group of such layers (hidden layers count, they draw nothing). Adjustment layers and
+/// the other blend modes depend on what is under them.
+fn plain(l: &photocraft_doc::Layer) -> bool {
+    use photocraft_color::BlendMode;
+    !l.visible
+        || match &l.content {
+            LayerContent::Adjustment(_) => false,
+            LayerContent::Group(g) => matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough) && g.children.iter().all(plain),
+            _ => l.blend == BlendMode::Normal,
+        }
+}
+
+/// The layers over `id` in `layers` (bottom to top, groups holding `id` searched too) that cover
+/// it in the preview: from the top down, while they are [`plain`]. The first layer that isn't
+/// stops the search, so it and everything under it stay in the document under the box as before
+/// (an adjustment there keeps applying to the layers under it). A clipping group goes as a whole,
+/// and the layers clipped to `id` (or to the group holding it) stay with it.
+fn covering(layers: &[photocraft_doc::Layer], id: LayerId, out: &mut Vec<LayerId>) {
+    let mut end = layers.len();
+    while end > 0 {
+        // The clipping group ending at `end`: its base and the layers clipped to it.
+        let mut start = end - 1;
+        while start > 0 && layers.get(start).is_some_and(|l| l.clipped) {
+            start -= 1;
+        }
+        let unit = layers.get(start..end).unwrap_or_default();
+        if unit.iter().any(|l| contains(l, id)) {
+            // A group holding `id` with nothing clipped to it: go on inside it.
+            if let [g] = unit
+                && g.id != id
+                && let LayerContent::Group(group) = &g.content
+                && matches!(g.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
+            {
+                covering(&group.children, id, out);
+            }
+            return;
+        }
+        if !unit.iter().all(plain) {
+            return;
+        }
+        out.extend(unit.iter().map(|l| l.id));
+        end = start;
+    }
+}
+
+/// Hide everything in `layers` but the `keep` layers and the groups holding them.
+fn show_only(layers: &mut [photocraft_doc::Layer], keep: &[LayerId]) {
+    for l in layers.iter_mut() {
+        if keep.contains(&l.id) {
+            continue;
+        }
+        match &mut l.content {
+            LayerContent::Group(g) if g.children.iter().any(|c| keep.iter().any(|k| contains(c, *k))) => show_only(&mut g.children, keep),
+            _ => l.visible = false,
+        }
+    }
+}
+
 fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
     l.id == id || matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)))
 }
@@ -712,6 +882,10 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
     if let Some(l) = pd.layer_mut(id) {
         l.content = moving.content.clone();
         l.visible = l.visible && !follow.hidden;
+    }
+    if let Some(a) = pv.above.as_mut() {
+        a.rebuild(&st.doc, id);
+        a.hide_in(&mut pd.layers);
     }
     pv.opacity = if live.visible { live.opacity * live.fill_opacity } else { 0.0 };
     follow.revision = st.revision;
@@ -1395,6 +1569,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
         painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
     }
+    if let Some(a) = &pv.above {
+        a.draw(painter, xf);
+    }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
         crate::vector_ui::draw_outline(
@@ -1534,6 +1711,9 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
         }
     }
     painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
+    if let Some(a) = &pv.above {
+        a.draw(painter, xf);
+    }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let line = Stroke::new(1.0, accent);
     let thin = Stroke::new(0.75, accent.gamma_multiply(0.7));
@@ -2770,6 +2950,92 @@ mod tests {
             })
             .unwrap();
         app
+    }
+
+    /// #2439: a layer under others keeps its place in the stack while the box is open. The
+    /// canvas under the box shows only the layers below it; the ones over it are composited on
+    /// their own and drawn over the moving pixels.
+    #[test]
+    fn free_transform_keeps_the_layer_under_the_layers_over_it() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let red = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(16, 16, 40, 40), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        let blue = app.session.active().unwrap().active_layer.unwrap();
+        let bg = app.session.active().unwrap().doc.layers[0].id;
+        app.session.execute("layer.select", json!({"layer": red.0})).unwrap();
+        let ctx = gpu_ctx();
+        begin(&mut app, &ctx).unwrap();
+        let pv = app.transform_preview.as_ref().unwrap();
+        assert!(pv.doc.layer(bg).unwrap().visible, "the layers below show under the box");
+        assert!(!pv.doc.layer(blue).unwrap().visible, "the layer over it is drawn over the box instead");
+        let (texture, rect) = pv.above.as_ref().and_then(|a| a.shown.as_ref()).expect("something covers the layer");
+        assert_eq!(*rect, photocraft_geom::Rect::new(16, 16, 40, 40));
+        assert_eq!(texture.size(), [24, 24]);
+        cancel(&mut app);
+
+        // The top layer: nothing to draw over it.
+        app.session.execute("layer.select", json!({"layer": blue.0})).unwrap();
+        begin(&mut app, &ctx).unwrap();
+        let pv = app.transform_preview.as_ref().unwrap();
+        assert!(pv.above.as_ref().is_some_and(|a| a.shown.is_none()));
+        assert!(pv.doc.layer(red).unwrap().visible && pv.doc.layer(bg).unwrap().visible);
+        cancel(&mut app);
+    }
+
+    #[test]
+    fn plain_layers_from_the_top_cover_the_moving_one() {
+        use photocraft_color::BlendMode;
+        use photocraft_doc::Layer;
+        let px = |name: &str| Layer::raster(name, photocraft_color::PixelFormat::RGBA8);
+        let covers = |layers: &[Layer], id: LayerId| {
+            let mut out = Vec::new();
+            covering(layers, id, &mut out);
+            out
+        };
+        // In a group: the group's layers over it, then the ones over the group; never the layers
+        // clipped to it.
+        let (below, target, mut clip, inner_top, top) = (px("below"), px("target"), px("clip"), px("inner top"), px("top"));
+        clip.clipped = true;
+        let (t, c, inner, tp) = (target.id, clip.id, inner_top.id, top.id);
+        let mut layers = vec![below, Layer::group("group", vec![target, clip, inner_top]), top];
+        assert_eq!(covers(&layers, t), [tp, inner]);
+        assert_eq!(covers(&layers, c), [tp, inner], "a clipped layer: covered by what is over its clipping group");
+
+        // Under the box, the covering layers leave the document; over it, they alone show.
+        let above = Above { ctx: egui::Context::default(), name: String::new(), max_side: 64, ids: vec![tp, inner], shown: None };
+        let mut under = layers.clone();
+        above.hide_in(&mut under);
+        let vis = |ls: &[Layer]| [ls[0].visible, ls[1].visible, ls[2].visible];
+        assert_eq!(vis(&under), [true, true, false]);
+        let mut over = layers.clone();
+        show_only(&mut over, &above.ids);
+        assert_eq!(vis(&over), [false, true, true]);
+        let inside: Vec<bool> = match &over[1].content {
+            LayerContent::Group(g) => g.children.iter().map(|l| l.visible).collect(),
+            _ => Vec::new(),
+        };
+        assert_eq!(inside, [false, false, true]);
+
+        // A layer that blends with what is under it stops the search: it and everything under it
+        // stay in the document under the box.
+        layers[2].blend = BlendMode::Multiply;
+        assert!(covers(&layers, t).is_empty());
+        layers[2].blend = BlendMode::Normal;
+        let mut multiply = px("multiply");
+        multiply.blend = BlendMode::Multiply;
+        layers.insert(2, multiply);
+        assert_eq!(covers(&layers, t), [tp]);
+        // A group that isn't Normal or Pass Through keeps what is inside it.
+        layers[1].blend = BlendMode::Screen;
+        layers.remove(2);
+        assert_eq!(covers(&layers, t), [tp]);
+        assert_eq!(covers(&layers, LayerId::fresh()), [tp], "not in the stack: down to the first layer that isn't plain");
     }
 
     /// A context that reports a real GPU's texture limit (the default reports 2048).

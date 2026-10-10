@@ -7,6 +7,35 @@
 # Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
 # Product names and technology names retain their spelling.
 
+# PDF import, export and Smart Object painting.
+	Drop an image, PSD or PDF anywhere to open it.	이미지, PSD 또는 PDF를 아무 곳에나 놓아 여세요.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	각 아트보드가 PDF 페이지 하나가 됩니다. 레이어는 병합되며 투명도는 유지됩니다.
+	Export All Tabs to PDF…	모든 탭을 PDF로 내보내기…
+	Open PDF pages	PDF 페이지 열기
+	{count} pages • Each selected page opens in its own tab	{count}페이지 • 선택한 각 페이지가 별도 탭에서 열립니다
+	Click to select pages. Shift-click selects a range.	클릭하여 선택합니다. Shift-클릭으로 범위를 선택합니다.
+	Page {number}	페이지 {number}
+	Page {number} — {width} × {height} in	페이지 {number} — {width} × {height}인치
+	Loading preview…	미리 보기 로드 중…
+	Resolution (ppi)	해상도 (ppi)
+	Preview page: {width} × {height} pixels	미리 보기 페이지: {width} × {height}픽셀
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	페이지는 8비트 RGB 이미지로 열립니다. PDF 텍스트와 벡터 개체는 래스터화됩니다.
+	Open all {count} pages	전체 {count}페이지 열기
+	Open selected ({count})	선택한 페이지 열기 ({count})
+	{count} tabs will be combined in left-to-right tab order.	탭 {count}개를 왼쪽에서 오른쪽 순서로 합칩니다.
+	Current edits are included. Each page keeps its size and resolution.	현재 편집 내용이 포함됩니다. 각 페이지의 크기와 해상도는 유지됩니다.
+	Close exported tabs after successful export	내보내기 성공 후 내보낸 탭 닫기
+	Canceled or failed exports leave every tab open.	내보내기를 취소하거나 실패하면 모든 탭이 열린 상태로 유지됩니다.
+	PDF saves the visible pages with flattened layers.	PDF는 보이는 페이지의 레이어를 병합하여 저장합니다.
+	Thumbnail size	썸네일 크기
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-클릭으로 페이지를 추가하고 Shift-클릭으로 범위를 선택합니다.
+	Place PDF pages as smart objects	PDF 페이지를 스마트 오브젝트로 배치
+	{count} pages • Each selected page becomes a smart object layer	{count}페이지 • 선택한 각 페이지가 스마트 오브젝트 레이어가 됩니다
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	스마트 오브젝트에는 이 해상도로 래스터화된 페이지가 포함됩니다. PDF 텍스트와 벡터는 래스터화된 상태로 유지됩니다.
+	Place all {count} pages	모든 {count}페이지 배치
+	Place selected ({count})	선택 항목 배치 ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	스마트 오브젝트에는 직접 그릴 수 없습니다. 레이어를 수동으로 래스터화하거나 새 픽셀 레이어에 그리세요.
+
 	File	파일
 	Edit	편집
 	Image	이미지
@@ -1605,6 +1634,7 @@
 	Mobile	모바일
 	Move Tool	이동 도구
 	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
+	Could not complete the Free Transform command because the layer is locked.	레이어가 잠겨 있어 자유 변형 명령을 완료할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -2990,38 +3020,13 @@ fontWeight	Italic	기울임
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
 
-	Drop an image, PSD or PDF anywhere to open it.	이미지, PSD 또는 PDF를 아무 곳에나 놓아 여세요.
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	각 아트보드가 PDF 페이지 하나가 됩니다. 레이어는 병합되며 투명도는 유지됩니다.
-	Export All Tabs to PDF…	모든 탭을 PDF로 내보내기…
 
-	Open PDF pages	PDF 페이지 열기
-	{count} pages • Each selected page opens in its own tab	{count}페이지 • 선택한 각 페이지가 별도 탭에서 열립니다
-	Click to select pages. Shift-click selects a range.	클릭하여 선택합니다. Shift-클릭으로 범위를 선택합니다.
-	Page {number}	페이지 {number}
-	Page {number} — {width} × {height} in	페이지 {number} — {width} × {height}인치
-	Loading preview…	미리 보기 로드 중…
-	Resolution (ppi)	해상도 (ppi)
-	Preview page: {width} × {height} pixels	미리 보기 페이지: {width} × {height}픽셀
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	페이지는 8비트 RGB 이미지로 열립니다. PDF 텍스트와 벡터 개체는 래스터화됩니다.
-	Open all {count} pages	전체 {count}페이지 열기
-	Open selected ({count})	선택한 페이지 열기 ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	탭 {count}개를 왼쪽에서 오른쪽 순서로 합칩니다.
-	Current edits are included. Each page keeps its size and resolution.	현재 편집 내용이 포함됩니다. 각 페이지의 크기와 해상도는 유지됩니다.
-	Close exported tabs after successful export	내보내기 성공 후 내보낸 탭 닫기
-	Canceled or failed exports leave every tab open.	내보내기를 취소하거나 실패하면 모든 탭이 열린 상태로 유지됩니다.
-	PDF saves the visible pages with flattened layers.	PDF는 보이는 페이지의 레이어를 병합하여 저장합니다.
 
-	Thumbnail size	썸네일 크기
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-클릭으로 페이지를 추가하고 Shift-클릭으로 범위를 선택합니다.
 
-	Place PDF pages as smart objects	PDF 페이지를 스마트 오브젝트로 배치
-	{count} pages • Each selected page becomes a smart object layer	{count}페이지 • 선택한 각 페이지가 스마트 오브젝트 레이어가 됩니다
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	스마트 오브젝트에는 이 해상도로 래스터화된 페이지가 포함됩니다. PDF 텍스트와 벡터는 래스터화된 상태로 유지됩니다.
-	Place all {count} pages	모든 {count}페이지 배치
-	Place selected ({count})	선택 항목 배치 ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	스마트 오브젝트에는 직접 그릴 수 없습니다. 레이어를 수동으로 래스터화하거나 새 픽셀 레이어에 그리세요.
+	Use Classic Mode	클래식 모드 사용
+	Auto Center Preview	미리 보기 자동 가운데 맞춤
 	Next Document	다음 문서
 	Previous Document	이전 문서
 	W x H x Resolution	폭 x 높이 x 해상도

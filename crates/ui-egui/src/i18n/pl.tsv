@@ -18,6 +18,35 @@
 # Conventions: menus are nouns (Plik, Edycja, Obraz ...), commands are infinitives (Otwórz…,
 # Zapisz jako…), sentence case as in the English source. Quotes: „…”.
 
+# PDF import, export and Smart Object painting.
+	Drop an image, PSD or PDF anywhere to open it.	Upuść obraz, PSD lub PDF w dowolnym miejscu, aby go otworzyć.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Każdy obszar roboczy staje się stroną PDF. Warstwy są spłaszczane; przezroczystość zostaje zachowana.
+	Export All Tabs to PDF…	Eksportuj wszystkie karty do PDF…
+	Open PDF pages	Otwórz strony PDF
+	{count} pages • Each selected page opens in its own tab	{count} stron • Każda wybrana strona otwiera się w osobnej karcie
+	Click to select pages. Shift-click selects a range.	Kliknij, aby wybrać. Shift-klik wybiera zakres.
+	Page {number}	Strona {number}
+	Page {number} — {width} × {height} in	Strona {number} — {width} × {height} cali
+	Loading preview…	Wczytywanie podglądu…
+	Resolution (ppi)	Rozdzielczość (ppi)
+	Preview page: {width} × {height} pixels	Strona podglądu: {width} × {height} pikseli
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Strony otwierają się jako 8-bitowe obrazy RGB. Tekst i obiekty wektorowe PDF są rasteryzowane.
+	Open all {count} pages	Otwórz wszystkie strony ({count})
+	Open selected ({count})	Otwórz wybrane ({count})
+	{count} tabs will be combined in left-to-right tab order.	{count} kart zostanie połączonych w kolejności od lewej do prawej.
+	Current edits are included. Each page keeps its size and resolution.	Bieżące zmiany są uwzględniane. Każda strona zachowuje rozmiar i rozdzielczość.
+	Close exported tabs after successful export	Zamknij wyeksportowane karty po udanym eksporcie
+	Canceled or failed exports leave every tab open.	Anulowany lub nieudany eksport pozostawia wszystkie karty otwarte.
+	PDF saves the visible pages with flattened layers.	PDF zapisuje widoczne strony ze spłaszczonymi warstwami.
+	Thumbnail size	Rozmiar miniatur
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik dodaje strony. Shift-klik wybiera zakres.
+	Place PDF pages as smart objects	Umieść strony PDF jako obiekty inteligentne
+	{count} pages • Each selected page becomes a smart object layer	{count} stron • Każda wybrana strona staje się warstwą obiektu inteligentnego
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Obiekty inteligentne zawierają zrasteryzowane strony w tej rozdzielczości. Tekst i wektory PDF pozostają zrasteryzowane.
+	Place all {count} pages	Umieść wszystkie strony ({count})
+	Place selected ({count})	Umieść wybrane ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Nie można malować bezpośrednio na obiektach inteligentnych. Zrasteryzuj warstwę ręcznie lub maluj na nowej warstwie pikseli.
+
 	File	Plik
 	Edit	Edycja
 	Image	Obraz
@@ -1628,6 +1657,7 @@
 	Mobile	Urządzenia mobilne
 	Move Tool	Narzędzie Przesunięcie
 	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
+	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -3432,38 +3462,13 @@ cameraRaw	Roughness	Chropowatość
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
 
-	Drop an image, PSD or PDF anywhere to open it.	Upuść obraz, PSD lub PDF w dowolnym miejscu, aby go otworzyć.
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Każdy obszar roboczy staje się stroną PDF. Warstwy są spłaszczane; przezroczystość zostaje zachowana.
-	Export All Tabs to PDF…	Eksportuj wszystkie karty do PDF…
 
-	Open PDF pages	Otwórz strony PDF
-	{count} pages • Each selected page opens in its own tab	{count} stron • Każda wybrana strona otwiera się w osobnej karcie
-	Click to select pages. Shift-click selects a range.	Kliknij, aby wybrać. Shift-klik wybiera zakres.
-	Page {number}	Strona {number}
-	Page {number} — {width} × {height} in	Strona {number} — {width} × {height} cali
-	Loading preview…	Wczytywanie podglądu…
-	Resolution (ppi)	Rozdzielczość (ppi)
-	Preview page: {width} × {height} pixels	Strona podglądu: {width} × {height} pikseli
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Strony otwierają się jako 8-bitowe obrazy RGB. Tekst i obiekty wektorowe PDF są rasteryzowane.
-	Open all {count} pages	Otwórz wszystkie strony ({count})
-	Open selected ({count})	Otwórz wybrane ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	{count} kart zostanie połączonych w kolejności od lewej do prawej.
-	Current edits are included. Each page keeps its size and resolution.	Bieżące zmiany są uwzględniane. Każda strona zachowuje rozmiar i rozdzielczość.
-	Close exported tabs after successful export	Zamknij wyeksportowane karty po udanym eksporcie
-	Canceled or failed exports leave every tab open.	Anulowany lub nieudany eksport pozostawia wszystkie karty otwarte.
-	PDF saves the visible pages with flattened layers.	PDF zapisuje widoczne strony ze spłaszczonymi warstwami.
 
-	Thumbnail size	Rozmiar miniatur
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik dodaje strony. Shift-klik wybiera zakres.
 
-	Place PDF pages as smart objects	Umieść strony PDF jako obiekty inteligentne
-	{count} pages • Each selected page becomes a smart object layer	{count} stron • Każda wybrana strona staje się warstwą obiektu inteligentnego
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Obiekty inteligentne zawierają zrasteryzowane strony w tej rozdzielczości. Tekst i wektory PDF pozostają zrasteryzowane.
-	Place all {count} pages	Umieść wszystkie strony ({count})
-	Place selected ({count})	Umieść wybrane ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Nie można malować bezpośrednio na obiektach inteligentnych. Zrasteryzuj warstwę ręcznie lub maluj na nowej warstwie pikseli.
+	Use Classic Mode	Użyj trybu klasycznego
+	Auto Center Preview	Automatycznie wyśrodkuj podgląd
 	Next Document	Następny dokument
 	Previous Document	Poprzedni dokument
 	W x H x Resolution	Szer. x Wys. x Rozdzielczość

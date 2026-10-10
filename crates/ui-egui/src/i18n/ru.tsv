@@ -18,6 +18,35 @@
 # the Russian typographic equivalent, with the space the source carries.
 
 # Menus
+# PDF import, export and Smart Object painting.
+	Drop an image, PSD or PDF anywhere to open it.	Перетащите изображение, PSD или PDF в любое место окна, чтобы открыть.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Каждая монтажная область становится страницей PDF. Слои объединяются; прозрачность сохраняется.
+	Export All Tabs to PDF…	Экспортировать все вкладки в PDF…
+	Open PDF pages	Открыть страницы PDF
+	{count} pages • Each selected page opens in its own tab	{count} страниц • Каждая выбранная страница откроется в отдельной вкладке
+	Click to select pages. Shift-click selects a range.	Щёлкните для выбора. Shift-щелчок выбирает диапазон.
+	Page {number}	Страница {number}
+	Page {number} — {width} × {height} in	Страница {number} — {width} × {height} дюймов
+	Loading preview…	Загрузка предпросмотра…
+	Resolution (ppi)	Разрешение (ppi)
+	Preview page: {width} × {height} pixels	Страница предпросмотра: {width} × {height} пикселей
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Страницы открываются как 8-битные изображения RGB. Текст и векторные объекты PDF растрируются.
+	Open all {count} pages	Открыть все страницы ({count})
+	Open selected ({count})	Открыть выбранные ({count})
+	{count} tabs will be combined in left-to-right tab order.	{count} вкладок будут объединены в порядке слева направо.
+	Current edits are included. Each page keeps its size and resolution.	Текущие изменения включаются. Каждая страница сохраняет размер и разрешение.
+	Close exported tabs after successful export	Закрыть экспортированные вкладки после успешного экспорта
+	Canceled or failed exports leave every tab open.	При отмене или ошибке экспорта все вкладки остаются открытыми.
+	PDF saves the visible pages with flattened layers.	PDF сохраняет видимые страницы со сведёнными слоями.
+	Thumbnail size	Размер миниатюр
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-щелчок добавляет страницы. Shift-щелчок выбирает диапазон.
+	Place PDF pages as smart objects	Поместить страницы PDF как смарт-объекты
+	{count} pages • Each selected page becomes a smart object layer	{count} страниц • Каждая выбранная страница становится слоем смарт-объекта
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-объекты содержат растрированные страницы в этом разрешении. Текст и векторы PDF остаются растрированными.
+	Place all {count} pages	Поместить все страницы ({count})
+	Place selected ({count})	Поместить выбранные ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Нельзя рисовать непосредственно на смарт-объектах. Растрируйте слой вручную или рисуйте на новом пиксельном слое.
+
 	File	Файл
 	Edit	Редактирование
 	Image	Изображение
@@ -1511,6 +1540,7 @@
 	{name} Properties	Свойства: {name}
 	Move Tool	Перемещение
 	Could not use the move tool because the layer is locked.	Не удалось использовать инструмент «Перемещение», потому что слой заблокирован.
+	Could not complete the Free Transform command because the layer is locked.	Не удалось выполнить команду «Свободное трансформирование», потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
 	Brush Tool	Кисть
@@ -2696,38 +2726,13 @@ fontWeight	Italic	Курсив
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
 
-	Drop an image, PSD or PDF anywhere to open it.	Перетащите изображение, PSD или PDF в любое место окна, чтобы открыть.
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Каждая монтажная область становится страницей PDF. Слои объединяются; прозрачность сохраняется.
-	Export All Tabs to PDF…	Экспортировать все вкладки в PDF…
 
-	Open PDF pages	Открыть страницы PDF
-	{count} pages • Each selected page opens in its own tab	{count} страниц • Каждая выбранная страница откроется в отдельной вкладке
-	Click to select pages. Shift-click selects a range.	Щёлкните для выбора. Shift-щелчок выбирает диапазон.
-	Page {number}	Страница {number}
-	Page {number} — {width} × {height} in	Страница {number} — {width} × {height} дюймов
-	Loading preview…	Загрузка предпросмотра…
-	Resolution (ppi)	Разрешение (ppi)
-	Preview page: {width} × {height} pixels	Страница предпросмотра: {width} × {height} пикселей
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Страницы открываются как 8-битные изображения RGB. Текст и векторные объекты PDF растрируются.
-	Open all {count} pages	Открыть все страницы ({count})
-	Open selected ({count})	Открыть выбранные ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	{count} вкладок будут объединены в порядке слева направо.
-	Current edits are included. Each page keeps its size and resolution.	Текущие изменения включаются. Каждая страница сохраняет размер и разрешение.
-	Close exported tabs after successful export	Закрыть экспортированные вкладки после успешного экспорта
-	Canceled or failed exports leave every tab open.	При отмене или ошибке экспорта все вкладки остаются открытыми.
-	PDF saves the visible pages with flattened layers.	PDF сохраняет видимые страницы со сведёнными слоями.
 
-	Thumbnail size	Размер миниатюр
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-щелчок добавляет страницы. Shift-щелчок выбирает диапазон.
 
-	Place PDF pages as smart objects	Поместить страницы PDF как смарт-объекты
-	{count} pages • Each selected page becomes a smart object layer	{count} страниц • Каждая выбранная страница становится слоем смарт-объекта
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-объекты содержат растрированные страницы в этом разрешении. Текст и векторы PDF остаются растрированными.
-	Place all {count} pages	Поместить все страницы ({count})
-	Place selected ({count})	Поместить выбранные ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Нельзя рисовать непосредственно на смарт-объектах. Растрируйте слой вручную или рисуйте на новом пиксельном слое.
+	Use Classic Mode	Использовать классический режим
+	Auto Center Preview	Автоматически центрировать просмотр
 	Next Document	Следующий документ
 	Previous Document	Предыдущий документ
 	W x H x Resolution	Ш x В x Разрешение

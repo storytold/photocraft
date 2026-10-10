@@ -11,6 +11,35 @@
 # Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
+# PDF import, export and Smart Object painting.
+	Drop an image, PSD or PDF anywhere to open it.	将图像、PSD 或 PDF 拖放到任意位置即可打开。
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	每个画板成为一页 PDF。图层将合并，透明度会保留。
+	Export All Tabs to PDF…	将所有标签页导出为 PDF…
+	Open PDF pages	打开 PDF 页面
+	{count} pages • Each selected page opens in its own tab	{count} 页 • 每个选中的页面将在独立标签页中打开
+	Click to select pages. Shift-click selects a range.	单击选择页面。按住 Shift 单击可选择范围。
+	Page {number}	第 {number} 页
+	Page {number} — {width} × {height} in	第 {number} 页 — {width} × {height} 英寸
+	Loading preview…	正在加载预览…
+	Resolution (ppi)	分辨率 (ppi)
+	Preview page: {width} × {height} pixels	预览页面：{width} × {height} 像素
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	页面将作为 8 位 RGB 图像打开。PDF 文本和矢量对象将栅格化。
+	Open all {count} pages	打开全部 {count} 页
+	Open selected ({count})	打开所选页面 ({count})
+	{count} tabs will be combined in left-to-right tab order.	将按从左到右的顺序合并 {count} 个标签页。
+	Current edits are included. Each page keeps its size and resolution.	包含当前编辑内容。每页保留其尺寸和分辨率。
+	Close exported tabs after successful export	成功导出后关闭已导出的标签页
+	Canceled or failed exports leave every tab open.	取消或失败的导出会保留所有标签页。
+	PDF saves the visible pages with flattened layers.	PDF 将可见页面以拼合图层的方式保存。
+	Thumbnail size	缩略图大小
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-单击添加页面。Shift-单击选择范围。
+	Place PDF pages as smart objects	将 PDF 页面置入为智能对象
+	{count} pages • Each selected page becomes a smart object layer	{count} 页 • 每个选中的页面成为一个智能对象图层
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	智能对象包含按此分辨率栅格化的页面。PDF 文本和矢量仍保持栅格化。
+	Place all {count} pages	置入全部 {count} 页
+	Place selected ({count})	置入选中页面 ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	无法直接在智能对象上绘画。请手动栅格化图层，或在新的像素图层上绘画。
+
 	File	文件
 	Edit	编辑
 	Image	图像
@@ -1644,6 +1673,7 @@
 	Mobile	移动设备
 	Move Tool	移动工具
 	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
+	Could not complete the Free Transform command because the layer is locked.	无法完成“自由变换”命令，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -2420,38 +2450,13 @@ fontWeight	Italic	斜体
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
 
-	Drop an image, PSD or PDF anywhere to open it.	将图像、PSD 或 PDF 拖放到任意位置即可打开。
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	每个画板成为一页 PDF。图层将合并，透明度会保留。
-	Export All Tabs to PDF…	将所有标签页导出为 PDF…
 
-	Open PDF pages	打开 PDF 页面
-	{count} pages • Each selected page opens in its own tab	{count} 页 • 每个选中的页面将在独立标签页中打开
-	Click to select pages. Shift-click selects a range.	单击选择页面。按住 Shift 单击可选择范围。
-	Page {number}	第 {number} 页
-	Page {number} — {width} × {height} in	第 {number} 页 — {width} × {height} 英寸
-	Loading preview…	正在加载预览…
-	Resolution (ppi)	分辨率 (ppi)
-	Preview page: {width} × {height} pixels	预览页面：{width} × {height} 像素
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	页面将作为 8 位 RGB 图像打开。PDF 文本和矢量对象将栅格化。
-	Open all {count} pages	打开全部 {count} 页
-	Open selected ({count})	打开所选页面 ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	将按从左到右的顺序合并 {count} 个标签页。
-	Current edits are included. Each page keeps its size and resolution.	包含当前编辑内容。每页保留其尺寸和分辨率。
-	Close exported tabs after successful export	成功导出后关闭已导出的标签页
-	Canceled or failed exports leave every tab open.	取消或失败的导出会保留所有标签页。
-	PDF saves the visible pages with flattened layers.	PDF 将可见页面以拼合图层的方式保存。
 
-	Thumbnail size	缩略图大小
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-单击添加页面。Shift-单击选择范围。
 
-	Place PDF pages as smart objects	将 PDF 页面置入为智能对象
-	{count} pages • Each selected page becomes a smart object layer	{count} 页 • 每个选中的页面成为一个智能对象图层
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	智能对象包含按此分辨率栅格化的页面。PDF 文本和矢量仍保持栅格化。
-	Place all {count} pages	置入全部 {count} 页
-	Place selected ({count})	置入选中页面 ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	无法直接在智能对象上绘画。请手动栅格化图层，或在新的像素图层上绘画。
+	Use Classic Mode	使用经典模式
+	Auto Center Preview	自动居中预览
 	Next Document	下一个文档
 	Previous Document	上一个文档
 	W x H x Resolution	宽 x 高 x 分辨率

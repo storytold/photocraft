@@ -2,6 +2,35 @@
 # Columns separated by TAB: context, English source, Greek translation.
 # Original translations based on general Greek graphics/computing terminology.
 # Covers every source label the i18n coverage check lists.
+# PDF import, export and Smart Object painting.
+	Drop an image, PSD or PDF anywhere to open it.	Σύρετε μια εικόνα, PSD ή PDF εδώ για να το ανοίξετε.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Κάθε πίνακας γραφικών γίνεται μία σελίδα PDF. Τα επίπεδα συγχωνεύονται· η διαφάνεια διατηρείται.
+	Export All Tabs to PDF…	Εξαγωγή όλων των καρτελών σε PDF…
+	Open PDF pages	Άνοιγμα σελίδων PDF
+	{count} pages • Each selected page opens in its own tab	{count} σελίδες • Κάθε επιλεγμένη σελίδα ανοίγει σε ξεχωριστή καρτέλα
+	Click to select pages. Shift-click selects a range.	Κλικ για επιλογή. Shift-κλικ επιλέγει εύρος.
+	Page {number}	Σελίδα {number}
+	Page {number} — {width} × {height} in	Σελίδα {number} — {width} × {height} ίντσες
+	Loading preview…	Φόρτωση προεπισκόπησης…
+	Resolution (ppi)	Ανάλυση (ppi)
+	Preview page: {width} × {height} pixels	Σελίδα προεπισκόπησης: {width} × {height} εικονοστοιχεία
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Οι σελίδες ανοίγουν ως εικόνες RGB 8 bit. Το κείμενο και τα διανυσματικά αντικείμενα PDF ραστεροποιούνται.
+	Open all {count} pages	Άνοιγμα όλων των σελίδων ({count})
+	Open selected ({count})	Άνοιγμα επιλεγμένων ({count})
+	{count} tabs will be combined in left-to-right tab order.	{count} καρτέλες θα συνδυαστούν με τη σειρά τους από αριστερά προς τα δεξιά.
+	Current edits are included. Each page keeps its size and resolution.	Περιλαμβάνονται οι τρέχουσες αλλαγές. Κάθε σελίδα διατηρεί το μέγεθος και την ανάλυσή της.
+	Close exported tabs after successful export	Κλείσιμο εξαγόμενων καρτελών μετά από επιτυχή εξαγωγή
+	Canceled or failed exports leave every tab open.	Οι ακυρωμένες ή αποτυχημένες εξαγωγές αφήνουν όλες τις καρτέλες ανοιχτές.
+	PDF saves the visible pages with flattened layers.	Το PDF αποθηκεύει τις ορατές σελίδες με συγχωνευμένα επίπεδα.
+	Thumbnail size	Μέγεθος μικρογραφίας
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-κλικ προσθέτει σελίδες. Shift-κλικ επιλέγει εύρος.
+	Place PDF pages as smart objects	Εισαγωγή σελίδων PDF ως έξυπνων αντικειμένων
+	{count} pages • Each selected page becomes a smart object layer	{count} σελίδες • Κάθε επιλεγμένη σελίδα γίνεται επίπεδο έξυπνου αντικειμένου
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Τα έξυπνα αντικείμενα περιέχουν ραστεροποιημένες σελίδες σε αυτή την ανάλυση. Το κείμενο και τα διανύσματα PDF παραμένουν ραστεροποιημένα.
+	Place all {count} pages	Εισαγωγή και των {count} σελίδων
+	Place selected ({count})	Εισαγωγή επιλεγμένων ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Τα έξυπνα αντικείμενα δεν μπορούν να ζωγραφιστούν απευθείας. Ραστεροποιήστε το επίπεδο χειροκίνητα ή ζωγραφίστε σε νέο επίπεδο εικονοστοιχείων.
+
 	File	Αρχείο
 	Edit	Επεξεργασία
 	Image	Εικόνα
@@ -3227,6 +3256,7 @@ cameraRaw	Yellow	Κίτρινο
 	Magic Wand Tool	Μαγικό ραβδί (Magic Wand Tool)
 	Move Tool	Μετακίνηση (Move Tool)
 	Could not use the move tool because the layer is locked.	Δεν ήταν δυνατή η χρήση του εργαλείου Μετακίνηση, επειδή το επίπεδο είναι κλειδωμένο.
+	Could not complete the Free Transform command because the layer is locked.	Δεν ήταν δυνατή η ολοκλήρωση της εντολής Ελεύθερος μετασχηματισμός, επειδή το επίπεδο είναι κλειδωμένο.
 	Note Tool	Σημείωση (Note Tool)
 	Object Selection Tool	Επιλογή αντικειμένου (Object Selection Tool)
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
@@ -3520,38 +3550,13 @@ fontWeight	Thin	Πολύ λεπτά
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
 
-	Drop an image, PSD or PDF anywhere to open it.	Σύρετε μια εικόνα, PSD ή PDF εδώ για να το ανοίξετε.
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Κάθε πίνακας γραφικών γίνεται μία σελίδα PDF. Τα επίπεδα συγχωνεύονται· η διαφάνεια διατηρείται.
-	Export All Tabs to PDF…	Εξαγωγή όλων των καρτελών σε PDF…
 
-	Open PDF pages	Άνοιγμα σελίδων PDF
-	{count} pages • Each selected page opens in its own tab	{count} σελίδες • Κάθε επιλεγμένη σελίδα ανοίγει σε ξεχωριστή καρτέλα
-	Click to select pages. Shift-click selects a range.	Κλικ για επιλογή. Shift-κλικ επιλέγει εύρος.
-	Page {number}	Σελίδα {number}
-	Page {number} — {width} × {height} in	Σελίδα {number} — {width} × {height} ίντσες
-	Loading preview…	Φόρτωση προεπισκόπησης…
-	Resolution (ppi)	Ανάλυση (ppi)
-	Preview page: {width} × {height} pixels	Σελίδα προεπισκόπησης: {width} × {height} εικονοστοιχεία
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Οι σελίδες ανοίγουν ως εικόνες RGB 8 bit. Το κείμενο και τα διανυσματικά αντικείμενα PDF ραστεροποιούνται.
-	Open all {count} pages	Άνοιγμα όλων των σελίδων ({count})
-	Open selected ({count})	Άνοιγμα επιλεγμένων ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	{count} καρτέλες θα συνδυαστούν με τη σειρά τους από αριστερά προς τα δεξιά.
-	Current edits are included. Each page keeps its size and resolution.	Περιλαμβάνονται οι τρέχουσες αλλαγές. Κάθε σελίδα διατηρεί το μέγεθος και την ανάλυσή της.
-	Close exported tabs after successful export	Κλείσιμο εξαγόμενων καρτελών μετά από επιτυχή εξαγωγή
-	Canceled or failed exports leave every tab open.	Οι ακυρωμένες ή αποτυχημένες εξαγωγές αφήνουν όλες τις καρτέλες ανοιχτές.
-	PDF saves the visible pages with flattened layers.	Το PDF αποθηκεύει τις ορατές σελίδες με συγχωνευμένα επίπεδα.
 
-	Thumbnail size	Μέγεθος μικρογραφίας
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-κλικ προσθέτει σελίδες. Shift-κλικ επιλέγει εύρος.
 
-	Place PDF pages as smart objects	Εισαγωγή σελίδων PDF ως έξυπνων αντικειμένων
-	{count} pages • Each selected page becomes a smart object layer	{count} σελίδες • Κάθε επιλεγμένη σελίδα γίνεται επίπεδο έξυπνου αντικειμένου
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Τα έξυπνα αντικείμενα περιέχουν ραστεροποιημένες σελίδες σε αυτή την ανάλυση. Το κείμενο και τα διανύσματα PDF παραμένουν ραστεροποιημένα.
-	Place all {count} pages	Εισαγωγή και των {count} σελίδων
-	Place selected ({count})	Εισαγωγή επιλεγμένων ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Τα έξυπνα αντικείμενα δεν μπορούν να ζωγραφιστούν απευθείας. Ραστεροποιήστε το επίπεδο χειροκίνητα ή ζωγραφίστε σε νέο επίπεδο εικονοστοιχείων.
+	Use Classic Mode	Χρήση κλασικής λειτουργίας
+	Auto Center Preview	Αυτόματο κεντράρισμα προεπισκόπησης
 	Next Document	Επόμενο έγγραφο
 	Previous Document	Προηγούμενο έγγραφο
 	W x H x Resolution	Π x Υ x Ανάλυση

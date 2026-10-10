@@ -9,6 +9,35 @@
 # Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
 
 # Menus
+# PDF import, export and Smart Object painting.
+	Drop an image, PSD or PDF anywhere to open it.	Перетягніть зображення, PSD або PDF будь-куди, щоб відкрити його.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Кожна монтажна область стає сторінкою PDF. Шари об’єднуються; прозорість зберігається.
+	Export All Tabs to PDF…	Експортувати всі вкладки в PDF…
+	Open PDF pages	Відкрити сторінки PDF
+	{count} pages • Each selected page opens in its own tab	{count} сторінок • Кожна вибрана сторінка відкриється в окремій вкладці
+	Click to select pages. Shift-click selects a range.	Клацніть для вибору. Shift-клацання вибирає діапазон.
+	Page {number}	Сторінка {number}
+	Page {number} — {width} × {height} in	Сторінка {number} — {width} × {height} дюймів
+	Loading preview…	Завантаження попереднього перегляду…
+	Resolution (ppi)	Роздільність (ppi)
+	Preview page: {width} × {height} pixels	Сторінка перегляду: {width} × {height} пікселів
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Сторінки відкриваються як 8-бітні зображення RGB. Текст і векторні об’єкти PDF растеризуються.
+	Open all {count} pages	Відкрити всі сторінки ({count})
+	Open selected ({count})	Відкрити вибрані ({count})
+	{count} tabs will be combined in left-to-right tab order.	{count} вкладок буде об’єднано в порядку зліва направо.
+	Current edits are included. Each page keeps its size and resolution.	Поточні зміни враховуються. Кожна сторінка зберігає розмір і роздільність.
+	Close exported tabs after successful export	Закрити експортовані вкладки після успішного експорту
+	Canceled or failed exports leave every tab open.	У разі скасування або помилки експорту всі вкладки залишаються відкритими.
+	PDF saves the visible pages with flattened layers.	PDF зберігає видимі сторінки зі зведеними шарами.
+	Thumbnail size	Розмір мініатюр
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-клацання додає сторінки. Shift-клацання вибирає діапазон.
+	Place PDF pages as smart objects	Розмістити сторінки PDF як смарт-об’єкти
+	{count} pages • Each selected page becomes a smart object layer	{count} сторінок • Кожна вибрана сторінка стає шаром смарт-об’єкта
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-об’єкти містять растрові сторінки з цією роздільністю. Текст і вектори PDF залишаються растровими.
+	Place all {count} pages	Розмістити всі сторінки ({count})
+	Place selected ({count})	Розмістити вибрані ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Не можна малювати безпосередньо на смарт-об’єктах. Раструйте шар вручну або малюйте на новому піксельному шарі.
+
 	File	Файл
 	Edit	Редагування
 	Image	Зображення
@@ -1494,6 +1523,7 @@
 	{name} Properties	Властивості: {name}
 	Move Tool	Інструмент «Переміщення»
 	Could not use the move tool because the layer is locked.	Не вдалося використати інструмент «Переміщення», бо шар заблоковано.
+	Could not complete the Free Transform command because the layer is locked.	Не вдалося виконати команду «Вільна трансформація», бо шар заблоковано.
 	Rectangular Marquee Tool	Інструмент «Прямокутне виділення»
 	Elliptical Marquee Tool	Інструмент «Еліптичне виділення»
 	Brush Tool	Інструмент «Пензель»
@@ -3519,38 +3549,13 @@ cameraRaw	Masking	Маскування
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
 
-	Drop an image, PSD or PDF anywhere to open it.	Перетягніть зображення, PSD або PDF будь-куди, щоб відкрити його.
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Кожна монтажна область стає сторінкою PDF. Шари об’єднуються; прозорість зберігається.
-	Export All Tabs to PDF…	Експортувати всі вкладки в PDF…
 
-	Open PDF pages	Відкрити сторінки PDF
-	{count} pages • Each selected page opens in its own tab	{count} сторінок • Кожна вибрана сторінка відкриється в окремій вкладці
-	Click to select pages. Shift-click selects a range.	Клацніть для вибору. Shift-клацання вибирає діапазон.
-	Page {number}	Сторінка {number}
-	Page {number} — {width} × {height} in	Сторінка {number} — {width} × {height} дюймів
-	Loading preview…	Завантаження попереднього перегляду…
-	Resolution (ppi)	Роздільність (ppi)
-	Preview page: {width} × {height} pixels	Сторінка перегляду: {width} × {height} пікселів
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Сторінки відкриваються як 8-бітні зображення RGB. Текст і векторні об’єкти PDF растеризуються.
-	Open all {count} pages	Відкрити всі сторінки ({count})
-	Open selected ({count})	Відкрити вибрані ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	{count} вкладок буде об’єднано в порядку зліва направо.
-	Current edits are included. Each page keeps its size and resolution.	Поточні зміни враховуються. Кожна сторінка зберігає розмір і роздільність.
-	Close exported tabs after successful export	Закрити експортовані вкладки після успішного експорту
-	Canceled or failed exports leave every tab open.	У разі скасування або помилки експорту всі вкладки залишаються відкритими.
-	PDF saves the visible pages with flattened layers.	PDF зберігає видимі сторінки зі зведеними шарами.
 
-	Thumbnail size	Розмір мініатюр
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-клацання додає сторінки. Shift-клацання вибирає діапазон.
 
-	Place PDF pages as smart objects	Розмістити сторінки PDF як смарт-об’єкти
-	{count} pages • Each selected page becomes a smart object layer	{count} сторінок • Кожна вибрана сторінка стає шаром смарт-об’єкта
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-об’єкти містять растрові сторінки з цією роздільністю. Текст і вектори PDF залишаються растровими.
-	Place all {count} pages	Розмістити всі сторінки ({count})
-	Place selected ({count})	Розмістити вибрані ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Не можна малювати безпосередньо на смарт-об’єктах. Раструйте шар вручну або малюйте на новому піксельному шарі.
+	Use Classic Mode	Використовувати класичний режим
+	Auto Center Preview	Автоматично центрувати перегляд
 	Next Document	Наступний документ
 	Previous Document	Попередній документ
 	W x H x Resolution	Ш x В x Роздільна здатність

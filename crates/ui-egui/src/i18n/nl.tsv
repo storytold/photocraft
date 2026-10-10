@@ -8,6 +8,35 @@
 # stay as they are; the trailing "…" of dialog commands is kept. UI text addresses the user
 # informally ("je") and uses sentence case.
 
+# PDF import, export and Smart Object painting.
+	Export All Tabs to PDF…	Alle tabbladen naar PDF exporteren…
+	Drop an image, PSD or PDF anywhere to open it.	Sleep een afbeelding, PSD of PDF ergens naartoe om deze te openen.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Elk tekengebied wordt één PDF-pagina. Lagen worden samengevoegd; transparantie blijft behouden.
+	Open PDF pages	PDF-pagina’s openen
+	{count} pages • Each selected page opens in its own tab	{count} pagina’s • Elke geselecteerde pagina opent in een eigen tabblad
+	Click to select pages. Shift-click selects a range.	Klik om te selecteren. Shift-klik selecteert een bereik.
+	Page {number}	Pagina {number}
+	Page {number} — {width} × {height} in	Pagina {number} — {width} × {height} inch
+	Loading preview…	Voorbeeld laden…
+	Resolution (ppi)	Resolutie (ppi)
+	Preview page: {width} × {height} pixels	Voorbeeldpagina: {width} × {height} pixels
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Pagina’s openen als RGB-afbeeldingen van 8 bits. PDF-tekst en vectorobjecten worden gerasterd.
+	Open all {count} pages	Alle {count} pagina’s openen
+	Open selected ({count})	Selectie openen ({count})
+	{count} tabs will be combined in left-to-right tab order.	{count} tabbladen worden samengevoegd in hun volgorde van links naar rechts.
+	Current edits are included. Each page keeps its size and resolution.	Huidige wijzigingen worden opgenomen. Elke pagina behoudt haar formaat en resolutie.
+	Close exported tabs after successful export	Geëxporteerde tabbladen sluiten na succesvolle export
+	Canceled or failed exports leave every tab open.	Bij geannuleerde of mislukte exports blijven alle tabbladen open.
+	PDF saves the visible pages with flattened layers.	PDF slaat zichtbare pagina's op met samengevoegde lagen.
+	Thumbnail size	Miniatuurgrootte
+	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik voegt pagina's toe. Shift-klik selecteert een bereik.
+	Place PDF pages as smart objects	PDF-pagina’s als slimme objecten plaatsen
+	{count} pages • Each selected page becomes a smart object layer	{count} pagina’s • Elke geselecteerde pagina wordt een slimme-objectlaag
+	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Slimme objecten bevatten gerasterde pagina’s op deze resolutie. PDF-tekst en vectoren blijven gerasterd.
+	Place all {count} pages	Alle {count} pagina’s plaatsen
+	Place selected ({count})	Selectie plaatsen ({count})
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Slimme objecten kunnen niet rechtstreeks worden beschilderd. Raster de laag handmatig of schilder op een nieuwe pixellaag.
+
 	File	Bestand
 	Edit	Bewerken
 	Image	Afbeelding
@@ -1618,6 +1647,7 @@
 	Mobile	Mobiel
 	Move Tool	Verplaatsgereedschap
 	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
+	Could not complete the Free Transform command because the layer is locked.	Kan de opdracht Vrije transformatie niet voltooien omdat de laag is vergrendeld.
 	Multiply	Vermenigvuldigen
 	My Brushes	Mijn penselen
 	Neutrals	Neutrale tinten
@@ -3591,38 +3621,13 @@ cameraRaw	Whites	Witten
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
 
-	Export All Tabs to PDF…	Alle tabbladen naar PDF exporteren…
-	Drop an image, PSD or PDF anywhere to open it.	Sleep een afbeelding, PSD of PDF ergens naartoe om deze te openen.
-	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Elk tekengebied wordt één PDF-pagina. Lagen worden samengevoegd; transparantie blijft behouden.
 
-	Open PDF pages	PDF-pagina’s openen
-	{count} pages • Each selected page opens in its own tab	{count} pagina’s • Elke geselecteerde pagina opent in een eigen tabblad
-	Click to select pages. Shift-click selects a range.	Klik om te selecteren. Shift-klik selecteert een bereik.
-	Page {number}	Pagina {number}
-	Page {number} — {width} × {height} in	Pagina {number} — {width} × {height} inch
-	Loading preview…	Voorbeeld laden…
-	Resolution (ppi)	Resolutie (ppi)
-	Preview page: {width} × {height} pixels	Voorbeeldpagina: {width} × {height} pixels
-	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Pagina’s openen als RGB-afbeeldingen van 8 bits. PDF-tekst en vectorobjecten worden gerasterd.
-	Open all {count} pages	Alle {count} pagina’s openen
-	Open selected ({count})	Selectie openen ({count})
 
-	{count} tabs will be combined in left-to-right tab order.	{count} tabbladen worden samengevoegd in hun volgorde van links naar rechts.
-	Current edits are included. Each page keeps its size and resolution.	Huidige wijzigingen worden opgenomen. Elke pagina behoudt haar formaat en resolutie.
-	Close exported tabs after successful export	Geëxporteerde tabbladen sluiten na succesvolle export
-	Canceled or failed exports leave every tab open.	Bij geannuleerde of mislukte exports blijven alle tabbladen open.
-	PDF saves the visible pages with flattened layers.	PDF slaat zichtbare pagina's op met samengevoegde lagen.
 
-	Thumbnail size	Miniatuurgrootte
-	Ctrl/Cmd-click adds pages. Shift-click selects a range.	Ctrl/Cmd-klik voegt pagina's toe. Shift-klik selecteert een bereik.
 
-	Place PDF pages as smart objects	PDF-pagina’s als slimme objecten plaatsen
-	{count} pages • Each selected page becomes a smart object layer	{count} pagina’s • Elke geselecteerde pagina wordt een slimme-objectlaag
-	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Slimme objecten bevatten gerasterde pagina’s op deze resolutie. PDF-tekst en vectoren blijven gerasterd.
-	Place all {count} pages	Alle {count} pagina’s plaatsen
-	Place selected ({count})	Selectie plaatsen ({count})
 
-	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Slimme objecten kunnen niet rechtstreeks worden beschilderd. Raster de laag handmatig of schilder op een nieuwe pixellaag.
+	Use Classic Mode	Klassieke modus gebruiken
+	Auto Center Preview	Voorvertoning automatisch centreren
 	Next Document	Volgend document
 	Previous Document	Vorig document
 	W x H x Resolution	B x H x Resolutie
