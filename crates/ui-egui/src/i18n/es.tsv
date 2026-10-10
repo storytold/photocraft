@@ -2424,3 +2424,9 @@ fontWeight	Italic	Cursiva
 	XOR	XOR
 	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
 	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Suelte una imagen, PSD o PDF en cualquier lugar para abrirlo.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Cada mesa de trabajo se convierte en una página PDF. Las capas se acoplan; se conserva la transparencia.
+
+	Export All Tabs to PDF…	Exportar todas las pestañas a PDF…

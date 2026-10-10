@@ -3467,3 +3467,9 @@ fontWeight	Thin	Πολύ λεπτά
 	XOR	XOR
 	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
 	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Σύρετε μια εικόνα, PSD ή PDF εδώ για να το ανοίξετε.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Κάθε πίνακας γραφικών γίνεται μία σελίδα PDF. Τα επίπεδα συγχωνεύονται· η διαφάνεια διατηρείται.
+
+	Export All Tabs to PDF…	Εξαγωγή όλων των καρτελών σε PDF…

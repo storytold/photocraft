@@ -11,7 +11,7 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 5] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA")];
+const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("pdf", "PDF")];
 
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -27,6 +27,18 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("__w".into(), json!(st.doc.size.width));
     f.insert("__h".into(), json!(st.doc.size.height));
     Ok(app.ui.open_dialog(DialogKind::Command, f))
+}
+
+/// Combined PDF export has a fixed format and full-size pages.
+pub fn open_all_pdf(app: &mut PhotocraftApp) -> Result<u64, String> {
+    let id = open(app)?;
+    if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
+        d.fields.insert("__all_pdf".into(), json!(true));
+        d.fields.insert("__label".into(), json!("Export All Tabs to PDF"));
+        d.fields.insert("format".into(), json!("pdf"));
+        d.fields.insert("closeAfter".into(), json!(false));
+    }
+    Ok(id)
 }
 
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
@@ -89,7 +101,7 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
             .map_err(|e| e.to_string())?;
     }
     let fmt = s_fmt(f);
-    if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
+    if fmt != "pdf" && (!f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg") {
         s.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
     s.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
@@ -151,6 +163,23 @@ fn estimate(app: &PhotocraftApp, doc: &Document, f: &Map<String, Value>) -> Opti
 
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
+    if f.get("__all_pdf").and_then(Value::as_bool) == Some(true) {
+        ui.set_width(460.0);
+        ui.label(format!("{} tabs will be combined in left-to-right tab order.", app.session.documents().len()));
+        ui.label("Current edits are included. Each page keeps its size and resolution.");
+        egui::ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
+            for (i, st) in app.session.documents().iter().enumerate() {
+                ui.label(format!("{}. {}", i + 1, st.doc.name));
+            }
+        });
+        ui.add_space(10.0);
+        let mut close = f.get("closeAfter").and_then(Value::as_bool).unwrap_or(false);
+        crate::widgets::checkbox(ui, &mut close, "Close exported tabs after successful export");
+        f.insert("closeAfter".into(), json!(close));
+        ui.label("Canceled or failed exports leave every tab open.");
+        ui.label(egui::RichText::new("PDF saves the visible pages with flattened layers.").color(t.text_dim));
+        return;
+    }
     let Some(doc) = app.session.active().map(|s| s.doc.clone()) else { return };
     ui.horizontal_top(|ui| {
         // Left: settings.
@@ -176,7 +205,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
                 f.insert("quality".into(), json!(q.round()));
             }
-            if fmt != "jpg" {
+            if fmt == "pdf" {
+                ui.label(
+                    egui::RichText::new(tl!("Each artboard becomes one PDF page. Layers are flattened; transparency is preserved."))
+                        .color(t.text_dim)
+                        .size(11.5),
+                );
+            }
+            if fmt != "jpg" && fmt != "pdf" {
                 let mut tr = f.get("transparency").and_then(Value::as_bool).unwrap_or(true);
                 crate::widgets::checkbox(ui, &mut tr, tl!("Transparency"));
                 f.insert("transparency".into(), json!(tr));
@@ -244,6 +280,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 /// Export with the dialog's settings: choose a path, render, encode, write.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if f.get("__all_pdf").and_then(Value::as_bool) == Some(true) {
+        let snapshot = photocraft_engine::pdf_export_cmds::Snapshot::capture(&app.session).map_err(|e| e.to_string())?;
+        let close = f.get("closeAfter").and_then(Value::as_bool).unwrap_or(false);
+        return app.pick_save("Combined-pages.pdf", move |app, path| {
+            let write = app.services.write.as_mut().ok_or("no writer configured")?;
+            let result = snapshot.write(&mut app.session, &path, close, |path, bytes| write(path, bytes)).map_err(|e| e.to_string())?;
+            app.ui.status = format!("Exported {} tabs to {path}; closed {} tabs", result["tabs"], result["closed"]);
+            app.ui.status_error = false;
+            Ok(result)
+        });
+    }
     let doc = source_document(app, f)?;
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     let ext = s_fmt(f);

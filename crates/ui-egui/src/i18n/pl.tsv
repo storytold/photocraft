@@ -3379,3 +3379,9 @@ cameraRaw	Roughness	Chropowatość
 	XOR	XOR
 	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
 	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Upuść obraz, PSD lub PDF w dowolnym miejscu, aby go otworzyć.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Każdy obszar roboczy staje się stroną PDF. Warstwy są spłaszczane; przezroczystość zostaje zachowana.
+
+	Export All Tabs to PDF…	Eksportuj wszystkie karty do PDF…

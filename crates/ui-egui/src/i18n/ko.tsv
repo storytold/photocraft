@@ -2935,3 +2935,9 @@ fontWeight	Italic	기울임
 	XOR	XOR
 	Color Burn (Paint.NET)	색상 번 (Paint.NET)
 	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	이미지, PSD 또는 PDF를 아무 곳에나 놓아 여세요.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	각 아트보드가 PDF 페이지 하나가 됩니다. 레이어는 병합되며 투명도는 유지됩니다.
+
+	Export All Tabs to PDF…	모든 탭을 PDF로 내보내기…

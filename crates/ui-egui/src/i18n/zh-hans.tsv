@@ -2364,3 +2364,9 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
 	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	将图像、PSD 或 PDF 拖放到任意位置即可打开。
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	每个画板成为一页 PDF。图层将合并，透明度会保留。
+
+	Export All Tabs to PDF…	将所有标签页导出为 PDF…

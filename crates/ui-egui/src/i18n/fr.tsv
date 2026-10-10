@@ -2777,3 +2777,9 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Déposez une image, un PSD ou un PDF n’importe où pour l’ouvrir.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Chaque plan de travail devient une page PDF. Les calques sont aplatis ; la transparence est conservée.
+
+	Export All Tabs to PDF…	Exporter tous les onglets en PDF…

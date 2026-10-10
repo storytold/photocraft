@@ -444,51 +444,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-/// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
-/// Pages are sized so the image prints at its resolution.
-pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
-    let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
-        out.extend_from_slice(body);
-        out.extend_from_slice(b"\nendobj\n");
-    };
-    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image.
-    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
-    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
-    obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
-    for (i, (w, h, dpi, jpeg)) in pages.iter().enumerate() {
-        let k = 72.0 / f64::from(dpi.max(1.0));
-        let (pw, ph) = (f64::from(*w) * k, f64::from(*h) * k);
-        let (contents, image) = (4 + i * 3, 5 + i * 3);
-        obj(
-            &mut out,
-            format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.3} {ph:.3}] /Resources << /XObject << /Im0 {image} 0 R >> >> /Contents {contents} 0 R >>"
-            )
-            .as_bytes(),
-        );
-        let stream = format!("q {pw:.3} 0 0 {ph:.3} 0 0 cm /Im0 Do Q");
-        obj(&mut out, format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).as_bytes());
-        let mut img = format!(
-            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
-            jpeg.len()
-        )
-        .into_bytes();
-        img.extend_from_slice(jpeg);
-        img.extend_from_slice(b"\nendstream");
-        obj(&mut out, &img);
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
-    for o in &offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
-    out
-}
+pub use photocraft_io::pdf_writer::raster_pdf;
 
 /// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {

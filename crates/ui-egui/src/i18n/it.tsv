@@ -2426,3 +2426,9 @@ fontWeight	Italic	Corsivo
 	XOR	XOR
 	Color Burn (Paint.NET)	Colore brucia (Paint.NET)
 	Color Dodge (Paint.NET)	Colore scherma (Paint.NET)
+
+	Drop an image, PSD or PDF anywhere to open it.	Trascina un’immagine, PSD o PDF ovunque per aprirlo.
+
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Ogni tavola da disegno diventa una pagina PDF. I livelli vengono uniti; la trasparenza viene mantenuta.
+
+	Export All Tabs to PDF…	Esporta tutte le schede in PDF…
