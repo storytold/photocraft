@@ -407,8 +407,9 @@ keeps the dialog open for correction. Nothing else writes document history.
 command line) of a camera raw developed from its sensor data shows this dialog first, titled
 "Camera Raw (name)", with **Open** and **Cancel**, as Photoshop opens raws in Adobe Camera Raw.
 `ui.inspect.cameraRaw.openingRaw` is then `{name, path}`. Commit (Open) re-develops the raw when
-Temperature, Tint or Exposure changed (as-shot white-balance gains and develop exposure on the
-sensor data; without an as-shot white balance, or without the file's bytes, they stay RGB
+Temperature, Tint, Exposure, Shadows or Highlights changed (as-shot white-balance gains, develop
+exposure, and Shadows / Highlights in linear light before the camera's tone curve, as Camera Raw
+does for raw files; without an as-shot white balance, or without the file's bytes, they stay RGB
 adjustments), applies the remaining settings as one `filter.cameraRaw` step and leaves the
 document unmodified; its result is `{document, redeveloped, filter?}`. Cancel closes the
 document. `app.open` and other automation opens never show the dialog. The preference
