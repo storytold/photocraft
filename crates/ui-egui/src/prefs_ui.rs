@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use egui::{Color32, RichText, Sense, vec2};
 use photocraft_doc::DocId;
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 #[cfg(test)]
 use photocraft_engine::prefs::Theme;
-use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS};
 use photocraft_engine::snap::{SnapLine, SnapTargets};
 use serde_json::{Map, Value, json};
@@ -1187,7 +1187,14 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
     ui.horizontal_top(|ui| {
         ui.set_min_width(width * 2.0 + 10.0);
         ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            theme_card(ui, "Light Theme", light_active, &mut light, &[("studioLight", ThemeKind::StudioLight), ("classic", ThemeKind::Classic), ("adwaita", ThemeKind::Adwaita)], width);
+            theme_card(
+                ui,
+                "Light Theme",
+                light_active,
+                &mut light,
+                &[("studioLight", ThemeKind::StudioLight), ("classic", ThemeKind::Classic), ("adwaita", ThemeKind::Adwaita)],
+                width,
+            );
         });
         ui.add_space(10.0);
         ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
