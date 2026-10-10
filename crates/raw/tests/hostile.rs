@@ -77,10 +77,17 @@ fn samples() -> Vec<Vec<u8>> {
 fn exercise(b: &[u8]) {
     let _ = identify(b);
     let _ = embedded_preview(b);
+    let _ = embedded_previews(b);
     let opts = DevelopOptions { limits: Limits { max_alloc: 64 << 20, ..Limits::default() }, ..Default::default() };
     if let Ok(s) = decode(b, &opts.limits) {
         for m in [Demosaic::Bilinear, Demosaic::Ahd] {
             let _ = develop_sensor(&s, &DevelopOptions { demosaic: m, ..opts.clone() });
+        }
+        // A colour fit against a gradient of the crop's (capped) shape, then a develop with it.
+        let (w, h) = (s.crop.width.min(256), s.crop.height.min(256));
+        let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
+        if let Ok(look) = fit_look(&s, &opts, &Reference { width: w as u32, height: h as u32, rgb: &rgb }) {
+            let _ = develop_sensor(&s, &DevelopOptions { camera_look: Some(look), ..opts.clone() });
         }
     }
 }
