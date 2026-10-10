@@ -2738,6 +2738,16 @@ fontWeight	Italic	Itálico
 	Cycle Orientation	Alternar orientação
 	Set the overlay options for the Crop tool	Definir as opções de sobreposição da ferramenta Corte demarcado
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	O Alt-clique foi para o desktop, que move janelas com Alt-arrastar. Mude a tecla de mover janelas dele para Super ou trave o Alt em Janela › Teclas modificadoras.
+	Auto Hide Notifications	Ocultar notificações automaticamente
+	Notification Duration (seconds)	Duração da notificação (segundos)
+	Appearance Mode	Modo de aparência
+	Dark Theme	Tema escuro
+	Light Theme	Tema claro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Próximo modo de aparência
+	Sync with system	Sincronizar com o sistema
+	Active	Ativo
 	Color Picker (Solid Color)	Seletor de Cores (Cor sólida)
 	Straighten the image by drawing a line on it	Endireitar a imagem desenhando uma linha sobre ela
 	Set additional Crop options	Definir opções adicionais de corte

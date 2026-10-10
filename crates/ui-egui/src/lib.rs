@@ -68,6 +68,7 @@ pub mod fill_ui;
 pub mod filter_dialog;
 #[cfg(not(target_arch = "wasm32"))]
 mod filter_preview_worker;
+mod font_preview;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
@@ -227,6 +228,8 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
+/// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
+pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
 pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
 /// Poll successful or failed background writes: (document id, revision, result).
@@ -300,6 +303,7 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -405,6 +409,10 @@ pub struct PhotocraftApp {
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
+    /// The pointer rested on the notice stack last frame. Used to give a fresh auto-hide delay in
+    /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
+    /// (#2022); set by `notices::show`.
+    pub(crate) notices_hovered: bool,
     /// Apply theme on first frame.
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
@@ -571,6 +579,7 @@ impl PhotocraftApp {
             input_waiters: Vec::new(),
             live_adjust: None,
             frame: 0,
+            notices_hovered: false,
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
@@ -1266,7 +1275,7 @@ impl eframe::App for PhotocraftApp {
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
-        if chrome {
+        if chrome && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
         if chrome && self.ui.panels.options_bar {
@@ -1281,8 +1290,8 @@ impl eframe::App for PhotocraftApp {
         if chrome && self.ui.panels.dock {
             panels::right_dock(self, ui);
         }
-        let t = theme::Tokens::get(&ctx);
-        let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+        let backdrop =
+            if chrome { prefs_ui::pasteboard_color(self).unwrap_or_else(|| canvas::document_tokens(self, &ctx).canvas) } else { egui::Color32::BLACK };
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
             canvas::document_area(self, ui);
         });
@@ -1414,15 +1423,17 @@ impl PhotocraftApp {
     }
 
     pub fn set_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
-        self.ui.theme = kind;
-        theme::apply(ctx, kind);
-        self.prefs_rt.resolved_theme = Some(theme::Tokens::get(ctx).kind);
-        self.checker = None;
+        if let Err(e) = self.run("prefs.set", serde_json::json!({"path": "interface.theme", "value": kind.id()})) {
+            self.ui.status = e;
+        } else {
+            self.apply_theme(ctx, kind);
+        }
     }
 
-    /// The active palette, distinct from the saved System choice.
-    pub(crate) fn resolved_theme(&self) -> theme::ThemeKind {
-        if self.ui.theme == theme::ThemeKind::System { self.prefs_rt.resolved_theme.unwrap_or_else(|| self.ui.theme.resolved(None)) } else { self.ui.theme }
+    pub(crate) fn apply_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
+        self.ui.theme = kind;
+        theme::apply(ctx, kind);
+        self.checker = None;
     }
 
     /// Cached 64px thumbnail of a pixel-ish layer, laid out in document space.

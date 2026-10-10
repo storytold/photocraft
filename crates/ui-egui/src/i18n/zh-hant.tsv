@@ -2286,6 +2286,16 @@ fontWeight	Italic	斜體
 	Cycle Orientation	循環切換方向
 	Set the overlay options for the Crop tool	設定裁切工具的覆蓋選項
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 按一下被桌面環境攔截了，它用 Alt 拖曳來移動視窗。請把桌面的視窗移動鍵改為 Super，或在 視窗 › 輔助鍵 中鎖定 Alt。
+	Auto Hide Notifications	自動隱藏通知
+	Notification Duration (seconds)	通知持續時間（秒）
+	Appearance Mode	外觀模式
+	Dark Theme	深色主題
+	Light Theme	淺色主題
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	下一個外觀模式
+	Sync with system	與系統同步
+	Active	目前使用
 	Color Picker (Solid Color)	檢色器（純色）
 	Straighten the image by drawing a line on it	在影像上繪製一條線以拉直影像
 	Set additional Crop options	設定其他裁切選項

@@ -814,7 +814,7 @@ mod tests {
         assert!(!file.children.contains(&Node::Standard(Standard::CloseWindow)), "⌘W stays File › Close");
     }
 
-    /// Themes and Next Theme move from Window to the app menu's Appearance, checked by the theme.
+    /// Themes and the appearance-mode cycle move from Window to the app menu's Appearance.
     #[test]
     fn themes_move_to_the_app_menus_appearance() {
         let mut a = app(false);
@@ -828,18 +828,21 @@ mod tests {
         assert_eq!(themes.last().map(String::as_str), Some("window.theme.toggle"));
         assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.classic".to_string()));
         assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
-        assert_eq!(l.bar.find("window.theme.system").unwrap().checked, Some(false));
-        assert_eq!(l.bar.find("window.theme.system").unwrap().label, "System");
         assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
-        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Theme");
+        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Appearance Mode");
+        assert_eq!(l.bar.find("window.theme.system").unwrap().label, "Sync with system");
+        assert_eq!(l.bar.find("window.theme.system").unwrap().checked, Some(false));
         let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
         assert!(!window.iter().any(|id| id.starts_with("window.theme.") || id == "[Theme]"), "{window:?}");
-        a.ui.theme = crate::theme::ThemeKind::System;
-        let system = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
-        assert_eq!(system.bar.find("window.theme.system").unwrap().checked, Some(true));
-        assert_eq!(system.bar.find("window.theme.classic").unwrap().checked, Some(false));
-        assert_eq!(system.bar.find("window.theme.studioLight").unwrap().checked, Some(false));
-        assert_eq!(system.bar.find("window.theme.proMedium").unwrap().checked, Some(false));
+        a.session.prefs.edit(|p| p.interface.appearance_mode = photocraft_engine::prefs::AppearanceMode::Auto);
+        for palette in [crate::theme::ThemeKind::Classic, crate::theme::ThemeKind::ProMedium] {
+            a.ui.theme = palette;
+            let automatic = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+            assert_eq!(automatic.bar.find("window.theme.system").unwrap().checked, Some(true));
+            for kind in crate::theme::ThemeKind::ALL {
+                assert_eq!(automatic.bar.find(&format!("window.theme.{}", kind.id())).unwrap().checked, Some(false));
+            }
+        }
     }
 
     /// Language follows Settings in the app menu: Auto and every UI language in its own name,

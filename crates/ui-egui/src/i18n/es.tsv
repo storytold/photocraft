@@ -2377,6 +2377,16 @@ fontWeight	Italic	Cursiva
 	Cycle Orientation	Alternar orientación
 	Set the overlay options for the Crop tool	Definir las opciones de superposición de la herramienta Recortar
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	El Alt+clic lo recibió el escritorio, que mueve ventanas con Alt+arrastrar. Cambia su tecla para mover ventanas a Super o bloquea Alt en Ventana › Teclas modificadoras.
+	Auto Hide Notifications	Ocultar notificaciones automáticamente
+	Notification Duration (seconds)	Duración de la notificación (segundos)
+	Appearance Mode	Modo de apariencia
+	Dark Theme	Tema oscuro
+	Light Theme	Tema claro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Siguiente modo de apariencia
+	Sync with system	Sincronizar con el sistema
+	Active	Activo
 	Color Picker (Solid Color)	Selector de color (color uniforme)
 	Straighten the image by drawing a line on it	Enderezar la imagen dibujando una línea en ella
 	Set additional Crop options	Definir opciones de recorte adicionales

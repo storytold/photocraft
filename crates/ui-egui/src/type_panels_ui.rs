@@ -495,26 +495,11 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
 
 /// Searchable family combo box.
 fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
-    let mut changed = false;
-    let search_id = egui::Id::new(("family-search", salt));
-    let shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
-    egui::ComboBox::from_id_salt(salt).selected_text(shown.clone()).width(140.0).height(360.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
-        let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(180.0));
-        if !r.has_focus() && q.is_empty() {
-            r.request_focus();
-        }
-        ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
-        let ql = q.to_lowercase();
-        for f in crate::type_tool::families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
-            if ui.selectable_label(*f == shown, f).clicked() {
-                *current = f.clone();
-                photocraft_text::served::request(f);
-                changed = true;
-                ui.data_mut(|d| d.remove::<String>(search_id));
-            }
-        }
-    });
+    let mut shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
+    let changed = crate::type_tool::family_picker_in(ui, salt, &mut shown, 140.0, &crate::type_tool::families());
+    if changed {
+        *current = shown;
+    }
     changed
 }
 

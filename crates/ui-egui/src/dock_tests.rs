@@ -461,7 +461,7 @@ fn panel_tab_context_menu_closes_one_tab_or_its_group() {
 }
 
 fn is_pro(theme: ThemeKind) -> bool {
-    matches!(theme.resolved(None), ThemeKind::Pro | ThemeKind::ProMedium)
+    matches!(theme, ThemeKind::Pro | ThemeKind::ProMedium)
 }
 
 /// Full app at `size` (1× scale) on a document with `n` layers named "Row 00", "Row 01", …

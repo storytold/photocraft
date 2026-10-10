@@ -2730,6 +2730,16 @@ fontWeight	Italic	Italique
 	Cycle Orientation	Changer d’orientation
 	Set the overlay options for the Crop tool	Définir les options de superposition de l’outil Recadrage
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-clic a été intercepté par le bureau, qui déplace les fenêtres avec Alt-glisser. Réglez sa touche de déplacement des fenêtres sur Super, ou verrouillez Alt dans Fenêtre › Touches de modification.
+	Auto Hide Notifications	Masquer automatiquement les notifications
+	Notification Duration (seconds)	Durée de la notification (secondes)
+	Appearance Mode	Mode d’apparence
+	Dark Theme	Thème sombre
+	Light Theme	Thème clair
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Mode d’apparence suivant
+	Sync with system	Synchroniser avec le système
+	Active	Actif
 	Color Picker (Solid Color)	Sélecteur de couleurs (couleur unie)
 	Straighten the image by drawing a line on it	Redresser l’image en traçant une ligne dessus
 	Set additional Crop options	Définir d’autres options de recadrage

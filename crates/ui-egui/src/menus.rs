@@ -63,7 +63,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
     ("window.toggle.options", "Options", &["Window"], None),
-    ("window.theme.toggle", "Next Theme", &["Window"], None),
+    ("window.theme.toggle", "Next Appearance Mode", &["Window"], None),
     ("window.theme.pro", "Pro Theme", &["Window", "Theme"], None),
     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
@@ -72,7 +72,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.solarizedDark", "Solarized Dark Theme", &["Window", "Theme"], None),
     ("window.theme.adwaita", "Adwaita Light Theme", &["Window", "Theme"], None),
     ("window.theme.adwaitaDark", "Adwaita Dark Theme", &["Window", "Theme"], None),
-    ("window.theme.system", "System", &["Window", "Theme"], None),
+    ("window.theme.system", "Sync with system", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
     ("help.website", "PhotoCraft Website", &["Help"], None),
@@ -305,8 +305,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"window": wid}))
         }
         "window.theme.toggle" => {
-            let next = app.ui.theme.next();
-            app.set_theme(ctx, next);
+            crate::prefs_ui::cycle_appearance(app, ctx);
+            Ok(Value::Null)
+        }
+        "window.theme.system" => {
+            app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"}))?;
+            crate::prefs_ui::sync_appearance(app, ctx);
             Ok(Value::Null)
         }
         "window.theme.pro"
@@ -316,8 +320,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         | "window.theme.classic"
         | "window.theme.solarizedDark"
         | "window.theme.adwaita"
-        | "window.theme.adwaitaDark"
-        | "window.theme.system" => {
+        | "window.theme.adwaitaDark" => {
             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, k);
             Ok(Value::Null)
@@ -614,7 +617,8 @@ const MODE_CHECKS: [&str; 11] = ["rgb", "grayscale", "cmyk", "lab", "multichanne
 fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     use photocraft_doc::{ColorMode, SampleType};
     if let Some(name) = id.strip_prefix("window.theme.").filter(|n| *n != "toggle") {
-        return Some(crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme));
+        let auto = app.session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto;
+        return Some(if name == "system" { auto } else { !auto && crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme) });
     }
     if let Some(c) = crate::view_cmds::checked(app, id) {
         return Some(c);
@@ -1268,6 +1272,37 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
+        use photocraft_engine::prefs::{AppearanceMode, DarkTheme, LightTheme};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
+        app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
+        invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+        assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
+        assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
+        assert_eq!(app.ui.theme, crate::theme::ThemeKind::Classic);
+        for appearance in [egui::Theme::Dark, egui::Theme::Light] {
+            app.services.system_theme = Some(Box::new(move |_| Some(appearance)));
+            crate::prefs_ui::tick(&mut app, &ctx);
+            let items = menu_items(&app);
+            let item = items.iter().find(|i| i.id == "window.theme.system").unwrap();
+            assert_eq!(item.label, "Sync with system");
+            assert_eq!(item.path, ["Window", "Theme"]);
+            assert!(item.enabled);
+            assert_eq!(item.checked, Some(true));
+            for kind in crate::theme::ThemeKind::ALL {
+                assert_eq!(checked(&app, &format!("window.theme.{}", kind.id())), Some(false));
+            }
+        }
+        invoke(&mut app, &ctx, "window.theme.studio", json!({})).unwrap();
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Dark);
+        assert_eq!(checked(&app, "window.theme.system"), Some(false));
+        assert_eq!(checked(&app, "window.theme.studio"), Some(true));
+    }
 
     #[test]
     fn submenu_header_is_disabled_when_every_item_is() {

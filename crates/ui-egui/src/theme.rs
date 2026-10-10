@@ -1,6 +1,6 @@
 //! Design system: themes, colour tokens, radii, typography.
 //!
-//! - **Studio** (default): near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
+//! - **Studio**: near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
 //!   accent. Modelled on the look of modern pro editors (such as Photoshop 2025).
 //! - **Studio Light**: the same system on light surfaces.
 //! - **Classic**: a deliberately Windows-2000-era look (grey bevels, square corners, navy selection)
@@ -34,12 +34,10 @@ pub enum ThemeKind {
     /// Solarized Dark (Ethan Schoonover's palette): the base03 background, base02 panels and
     /// base0 body text, with the Solarized blue accent.
     SolarizedDark,
-    /// Follow the OS appearance without replacing the saved choice.
-    System,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 9] = [
+    pub const ALL: [ThemeKind; 8] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
         ThemeKind::Studio,
@@ -48,7 +46,6 @@ impl ThemeKind {
         ThemeKind::SolarizedDark,
         ThemeKind::Adwaita,
         ThemeKind::AdwaitaDark,
-        ThemeKind::System,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -60,7 +57,6 @@ impl ThemeKind {
             ThemeKind::Adwaita => "Adwaita (Light)",
             ThemeKind::AdwaitaDark => "Adwaita (Dark)",
             ThemeKind::SolarizedDark => "Solarized Dark",
-            ThemeKind::System => "System",
         }
     }
     /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
@@ -75,18 +71,8 @@ impl ThemeKind {
             ThemeKind::Adwaita => "adwaita",
             ThemeKind::AdwaitaDark => "adwaitaDark",
             ThemeKind::SolarizedDark => "solarizedDark",
-            ThemeKind::System => "system",
         }
     }
-    /// System uses Studio Light for Light, and Pro Medium for Dark or unknown appearance.
-    pub fn resolved(self, appearance: Option<egui::Theme>) -> Self {
-        match (self, appearance) {
-            (Self::System, Some(egui::Theme::Light)) => Self::StudioLight,
-            (Self::System, _) => Self::ProMedium,
-            _ => self,
-        }
-    }
-
     pub fn next(self) -> Self {
         let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
@@ -101,7 +87,6 @@ impl ThemeKind {
             "adwaita" | "adwaitalight" | "gnome" | "gnomelight" => Some(ThemeKind::Adwaita),
             "adwaitadark" | "gnomedark" => Some(ThemeKind::AdwaitaDark),
             "solarizeddark" | "solarized" => Some(ThemeKind::SolarizedDark),
-            "system" => Some(ThemeKind::System),
             _ => None,
         }
     }
@@ -173,7 +158,6 @@ impl Tokens {
 
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
-            ThemeKind::System => Self::for_kind(kind.resolved(None)),
             // Sampled from Photoshop 2026's default brightness (raw display values).
             ThemeKind::ProMedium => Tokens {
                 kind,
@@ -681,16 +665,10 @@ pub fn mono(size: f32) -> FontId {
 
 /// Apply a theme to egui's global style and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
-    // An integration or restored egui state can pin its own theme. Keep native window
-    // appearance at SystemDefault so macOS continues sending appearance changes.
+    // Keep native windows at SystemDefault so macOS continues reporting OS appearance changes,
+    // including when an integration or restored egui state pinned its own theme preference.
     ctx.set_theme(egui::ThemePreference::System);
-    let mut t = Tokens::for_kind(kind.resolved(ctx.system_theme()));
-    if kind == ThemeKind::System {
-        // Appearance changes affect interface chrome only, not the image surround.
-        let canvas = Tokens::for_kind(ThemeKind::ProMedium);
-        t.canvas = canvas.canvas;
-        t.canvas_dot = canvas.canvas_dot;
-    }
+    let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
@@ -756,9 +734,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
         s.spacing.tooltip_width = 280.0;
     });
-    // egui follows the OS by choosing its light/dark style branch. Both must contain the
-    // PhotoCraft palette, including for manual themes that stay fixed when the OS changes.
-    // Keep ThemePreference::System so native windows continue reporting appearance changes.
+    // egui selects its style branch using OS appearance, independently of PhotoCraft's fixed
+    // Dark/Light mode or platform appearance service. Both branches need the selected palette.
     let style = ctx.global_style();
     ctx.set_style_of(egui::Theme::Light, Arc::clone(&style));
     ctx.set_style_of(egui::Theme::Dark, style);
@@ -868,7 +845,6 @@ mod tests {
     #[test]
     fn theme_names_parse() {
         assert_eq!(ThemeKind::from_name("Classic"), Some(ThemeKind::Classic));
-        assert_eq!(ThemeKind::from_name("System"), Some(ThemeKind::System));
         assert_eq!(ThemeKind::from_name("studio (light)"), Some(ThemeKind::StudioLight));
         assert_eq!(ThemeKind::from_name("dark"), Some(ThemeKind::Pro));
         assert_eq!(ThemeKind::from_name("studio"), Some(ThemeKind::Studio));
@@ -883,23 +859,29 @@ mod tests {
     }
 
     #[test]
-    fn theme_cycle_includes_manual_choices_and_system_without_changing_the_default() {
-        assert_eq!(ThemeKind::default(), ThemeKind::ProMedium);
-        let mut current = ThemeKind::ALL[0];
+    fn every_palette_keeps_complete_egui_styles_when_the_os_changes() {
         for kind in ThemeKind::ALL {
-            assert_eq!(current, kind);
-            assert_eq!(ThemeKind::from_name(kind.id()), Some(kind));
-            if kind != ThemeKind::System {
-                for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
-                    assert_eq!(kind.resolved(appearance), kind);
-                }
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput { system_theme: Some(egui::Theme::Dark), ..Default::default() }, |ui| apply(ui.ctx(), kind)).textures_delta.clear();
+            let expected = ctx.global_style();
+            for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+                ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |_| {}).textures_delta.clear();
+                assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
+                assert_eq!(ctx.global_style(), expected, "{kind:?} changed with {appearance:?}");
+                assert_eq!(ctx.style_of(egui::Theme::Light), expected);
+                assert_eq!(ctx.style_of(egui::Theme::Dark), expected);
             }
-            current = current.next();
         }
-        assert_eq!(current, ThemeKind::ALL[0]);
-        assert_eq!(ThemeKind::System.resolved(Some(egui::Theme::Light)), ThemeKind::StudioLight);
-        assert_eq!(ThemeKind::System.resolved(Some(egui::Theme::Dark)), ThemeKind::ProMedium);
-        assert_eq!(ThemeKind::System.resolved(None), ThemeKind::ProMedium);
+    }
+
+    #[test]
+    fn applying_a_palette_clears_a_pinned_native_appearance_preference() {
+        for pinned in [egui::Theme::Light, egui::Theme::Dark] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(pinned);
+            apply(&ctx, ThemeKind::ProMedium);
+            assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+        }
     }
 
     #[test]

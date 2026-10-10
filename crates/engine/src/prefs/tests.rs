@@ -23,21 +23,43 @@ fn defaults_match_photoshop() {
 }
 
 #[test]
-fn system_theme_round_trips_without_changing_default_or_accepting_unknown_choices() {
+fn appearance_defaults_and_legacy_theme_migrate() {
+    let p = Preferences::default();
+    // New users keep Photoshop's default; following the system is opt-in.
+    assert_eq!(p.interface.appearance_mode, AppearanceMode::Dark);
+    assert_eq!(p.interface.dark_theme, DarkTheme::ProMedium);
+    assert_eq!(p.interface.light_theme, LightTheme::StudioLight);
+    for (theme, mode, dark, light) in
+        [("pro", AppearanceMode::Dark, DarkTheme::Pro, LightTheme::StudioLight), ("classic", AppearanceMode::Light, DarkTheme::ProMedium, LightTheme::Classic)]
+    {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"theme": theme}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.appearance_mode, mode);
+        assert_eq!(s.prefs().interface.dark_theme, dark);
+        assert_eq!(s.prefs().interface.light_theme, light);
+    }
+}
+
+#[test]
+fn appearance_choices_validate_and_legacy_theme_still_selects() {
     let mut s = Session::new();
-    assert_eq!(s.prefs().interface.theme, Theme::ProMedium);
-    assert!(choices("interface.theme").unwrap().contains(&"system"));
-    s.execute("prefs.set", json!({"path": "interface.theme", "value": "system"})).unwrap();
-    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("system"));
+    s.execute("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": "studio", "interface.lightTheme": "classic"}}))
+        .unwrap();
+    assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Auto);
+    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Studio);
+    assert_eq!(s.prefs().interface.light_theme, LightTheme::Classic);
     let mut restarted = Session::new();
     restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
-    assert_eq!(restarted.prefs().interface.theme, Theme::System);
-    let saved = s.prefs_value();
-    assert!(s.execute("prefs.set", json!({"path": "interface.theme", "value": "unknownAppearance"})).is_err());
-    assert_eq!(s.prefs().interface.theme, Theme::System);
-    assert_eq!(s.prefs_value(), saved);
-    s.execute("prefs.reset", json!({"path": "interface.theme"})).unwrap();
-    assert_eq!(s.prefs().interface.theme, Theme::ProMedium);
+    assert_eq!(restarted.prefs().interface, s.prefs().interface);
+    assert!(s.execute("prefs.set", json!({"path": "interface.darkTheme", "value": "classic"})).is_err());
+    s.execute("prefs.set", json!({"path": "interface.theme", "value": "pro"})).unwrap();
+    assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Dark);
+    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
+    assert_eq!(s.prefs().interface.light_theme, LightTheme::Classic);
+    s.execute("prefs.set", json!({"path": "interface", "value": {"theme": "studioLight"}})).unwrap();
+    assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
+    assert_eq!(s.prefs().interface.light_theme, LightTheme::StudioLight);
+    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
 }
 
 #[test]
@@ -380,6 +402,36 @@ fn gpu_backend_round_trips_and_validates() {
     for n in GpuBackend::NAMES {
         assert_eq!(GpuBackend::parse(n).map(GpuBackend::name), Some(*n));
     }
+}
+
+/// #2022: notices auto-hide after a user-set delay by default; both settings round-trip.
+#[test]
+fn notification_autohide_preferences() {
+    let p = Preferences::default();
+    assert!(p.interface.notification_auto_hide);
+    assert_eq!(p.interface.notification_duration_seconds, 6);
+    assert_eq!(range("interface.notificationDurationSeconds"), Some((1.0, 120.0)));
+
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path": "interface.notificationAutoHide", "value": false})).unwrap();
+    s.execute("prefs.set", json!({"path": "interface.notificationDurationSeconds", "value": 30})).unwrap();
+    assert!(!s.prefs().interface.notification_auto_hide);
+    assert_eq!(s.prefs().interface.notification_duration_seconds, 30);
+    // Out-of-range and wrong-typed values are rejected and change nothing.
+    for bad in [json!(0), json!(121), json!("soon")] {
+        assert!(s.execute("prefs.set", json!({"path": "interface.notificationDurationSeconds", "value": bad})).is_err());
+    }
+    assert_eq!(s.prefs().interface.notification_duration_seconds, 30);
+
+    let mut t = Session::new();
+    t.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert!(!t.prefs().interface.notification_auto_hide);
+    assert_eq!(t.prefs().interface.notification_duration_seconds, 30);
+    // Older files without the settings keep the defaults.
+    let mut u = Session::new();
+    u.load_prefs_json(r#"{"interface": {"theme": "studio"}}"#).unwrap();
+    assert!(u.prefs().interface.notification_auto_hide);
+    assert_eq!(u.prefs().interface.notification_duration_seconds, 6);
 }
 
 #[test]

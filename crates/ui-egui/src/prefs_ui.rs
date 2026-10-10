@@ -12,7 +12,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use egui::{Color32, RichText, Sense, vec2};
 use photocraft_doc::DocId;
 use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
-use photocraft_engine::prefs::{self, SECTIONS, Theme};
+#[cfg(test)]
+use photocraft_engine::prefs::Theme;
+use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS};
 use photocraft_engine::snap::{SnapLine, SnapTargets};
 use serde_json::{Map, Value, json};
 
@@ -29,9 +31,6 @@ pub struct Runtime {
     /// This instance's preferences as of `saved_rev`: the base of the three-way merge on save.
     saved_value: Option<Value>,
     save_retry: SaveRetry,
-    theme_pref: Option<Theme>,
-    /// Concrete palette applied for the selected theme, never persisted.
-    pub(crate) resolved_theme: Option<ThemeKind>,
     next_autosave_ms: f64,
     /// Last revision whose recovery file was actually written successfully.
     autosaved: HashMap<DocId, u64>,
@@ -80,32 +79,47 @@ pub fn pasteboard_color(app: &PhotocraftApp) -> Option<Color32> {
     })
 }
 
-fn theme_kind(t: Theme) -> ThemeKind {
-    match t {
-        Theme::Pro => ThemeKind::Pro,
-        Theme::ProMedium => ThemeKind::ProMedium,
-        Theme::Studio => ThemeKind::Studio,
-        Theme::StudioLight => ThemeKind::StudioLight,
-        Theme::Classic => ThemeKind::Classic,
-        Theme::Adwaita => ThemeKind::Adwaita,
-        Theme::AdwaitaDark => ThemeKind::AdwaitaDark,
-        Theme::SolarizedDark => ThemeKind::SolarizedDark,
-        Theme::System => ThemeKind::System,
+fn selected_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> ThemeKind {
+    let light = match interface.appearance_mode {
+        AppearanceMode::Light => true,
+        AppearanceMode::Dark => false,
+        AppearanceMode::Auto => system == Some(egui::Theme::Light),
+    };
+    if light {
+        match interface.light_theme {
+            LightTheme::StudioLight => ThemeKind::StudioLight,
+            LightTheme::Classic => ThemeKind::Classic,
+            LightTheme::Adwaita => ThemeKind::Adwaita,
+        }
+    } else {
+        match interface.dark_theme {
+            DarkTheme::Pro => ThemeKind::Pro,
+            DarkTheme::ProMedium => ThemeKind::ProMedium,
+            DarkTheme::Studio => ThemeKind::Studio,
+            DarkTheme::SolarizedDark => ThemeKind::SolarizedDark,
+            DarkTheme::AdwaitaDark => ThemeKind::AdwaitaDark,
+        }
     }
 }
 
-fn theme_pref(k: ThemeKind) -> Theme {
-    match k {
-        ThemeKind::Pro => Theme::Pro,
-        ThemeKind::ProMedium => Theme::ProMedium,
-        ThemeKind::Studio => Theme::Studio,
-        ThemeKind::StudioLight => Theme::StudioLight,
-        ThemeKind::Classic => Theme::Classic,
-        ThemeKind::Adwaita => Theme::Adwaita,
-        ThemeKind::AdwaitaDark => Theme::AdwaitaDark,
-        ThemeKind::SolarizedDark => Theme::SolarizedDark,
-        ThemeKind::System => Theme::System,
+pub(crate) fn cycle_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let next = match app.session.prefs().interface.appearance_mode {
+        AppearanceMode::Auto => AppearanceMode::Light,
+        AppearanceMode::Light => AppearanceMode::Dark,
+        AppearanceMode::Dark => AppearanceMode::Auto,
+    };
+    if let Err(e) = app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": next.name()})) {
+        app.ui.status = e;
+        return;
     }
+    let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
+    if app.ui.theme != selected {
+        app.apply_theme(ctx, selected);
+    }
+}
+
+fn system_theme(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui::Theme> {
+    app.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
 }
 
 // ------------------------------------------------------------------ lifecycle
@@ -284,6 +298,17 @@ fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Resolve the saved appearance mode without changing it or either theme slot.
+pub(crate) fn sync_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // A restored or embedding-supplied pin must not suppress native appearance events.
+    ctx.set_theme(egui::ThemePreference::System);
+    // The native service also covers Wayland sessions where winit has no system theme.
+    let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
+    if app.ui.theme != selected {
+        app.apply_theme(ctx, selected);
+    }
+}
+
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.prefs_rt.loaded {
@@ -291,23 +316,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     recovery(app);
     sync_display_scale(app, ctx);
-    // Interface theme: a preference change applies to the UI; a theme picked from the Window
-    // menu is stored as the preference.
-    let pref = app.session.prefs().interface.theme;
-    if app.prefs_rt.theme_pref != Some(pref) {
-        app.prefs_rt.theme_pref = Some(pref);
-        if app.ui.theme != theme_kind(pref) {
-            app.set_theme(ctx, theme_kind(pref));
-        }
-    } else if theme_pref(app.ui.theme) != pref {
-        let t = theme_pref(app.ui.theme);
-        app.session.prefs.edit(|p| p.interface.theme = t);
-        app.prefs_rt.theme_pref = Some(t);
-    }
-    // OS changes resolve the selected choice again without editing the preferences revision.
-    if app.prefs_rt.resolved_theme != Some(app.ui.theme.resolved(ctx.system_theme())) {
-        app.set_theme(ctx, app.ui.theme);
-    }
+    sync_appearance(app, ctx);
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
     presets_store(app);
     sync_tooltips(app, ctx);
@@ -873,7 +882,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             f.insert("__gpuInfo".into(), json!(app.perf.gpu_info.lines()));
-            prefs_body(ui, f);
+            let system = system_theme(app, ui.ctx());
+            prefs_body(ui, f, system);
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -884,12 +894,25 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 }
 
 fn humanize(key: &str) -> String {
+    match key {
+        "appearanceMode" => return "Appearance Mode".into(),
+        "darkTheme" => return "Dark Theme".into(),
+        "lightTheme" => return "Light Theme".into(),
+        _ => {}
+    }
     // These controls appear only for WebP, so reuse the existing translated labels.
     if key == "webpLossless" {
         return "Lossless".into();
     }
     if key == "webpQuality" {
         return "Quality".into();
+    }
+    // The auto-hide notice settings read best with their own labels (Interface › Notification, #2022).
+    if key == "notificationAutoHide" {
+        return "Auto Hide Notifications".into();
+    }
+    if key == "notificationDurationSeconds" {
+        return "Notification Duration (seconds)".into();
     }
     let mut s = String::new();
     for (i, ch) in key.chars().enumerate() {
@@ -947,7 +970,7 @@ fn color_of(s: &str) -> Color32 {
 }
 
 /// Preferences: section list on the left, the section's settings on the right.
-fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -999,7 +1022,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
-                    section_fields(ui, &section, obj, &order, lang);
+                    section_fields(ui, &section, obj, &order, lang, system);
                     if section == "performance" {
                         gpu_status_rows(ui, f.get("__gpuInfo"), obj);
                     }
@@ -1086,10 +1109,130 @@ fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
     }
 }
 
+fn theme_preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
+    let p = Tokens::for_kind(kind);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 108.0), Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, p.dock);
+    let bar = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 16.0));
+    painter.rect_filled(bar, 0.0, p.chrome);
+    for (x, w) in [(8.0, 18.0), (31.0, 13.0), (49.0, 16.0), (70.0, 12.0)] {
+        painter.rect_filled(egui::Rect::from_min_size(bar.min + vec2(x, 6.0), vec2(w, 3.0)), 1.0, p.text_dim);
+    }
+    let tools = egui::Rect::from_min_max(bar.left_bottom(), egui::pos2(rect.left() + 23.0, rect.bottom()));
+    painter.rect_filled(tools, 0.0, p.chrome);
+    for y in [24.0, 39.0, 54.0, 69.0, 84.0] {
+        // The first tool is the active one.
+        let color = if y == 24.0 { p.accent } else { p.icon };
+        painter.rect_filled(egui::Rect::from_min_size(rect.min + vec2(7.0, y), vec2(9.0, 9.0)), 2.0, color);
+    }
+    let dock = egui::Rect::from_min_max(egui::pos2(rect.right() - 75.0, bar.bottom()), rect.max);
+    painter.rect_filled(dock, 0.0, p.dock);
+    painter.rect_filled(egui::Rect::from_min_size(dock.min, vec2(dock.width(), 12.0)), 0.0, p.tab_strip);
+    painter.rect_filled(egui::Rect::from_min_size(dock.min + vec2(6.0, 4.0), vec2(31.0, 3.0)), 1.0, p.text_dim);
+    for y in [36.0, 55.0, 74.0] {
+        let row = egui::Rect::from_min_size(rect.min + vec2(rect.width() - 71.0, y), vec2(67.0, 16.0));
+        // The middle row is the selected layer.
+        let selected = y == 55.0;
+        painter.rect_filled(row, 1.0, if selected { p.accent } else { p.card });
+        painter.rect_filled(egui::Rect::from_min_size(row.min + vec2(4.0, 3.0), vec2(13.0, 10.0)), 1.0, p.canvas);
+        let label = if selected { egui::Color32::from_white_alpha(210) } else { p.text_dim };
+        painter.rect_filled(egui::Rect::from_min_size(row.min + vec2(22.0, 6.0), vec2(35.0, 3.0)), 1.0, label);
+    }
+    let canvas = egui::Rect::from_min_max(egui::pos2(tools.right(), bar.bottom()), egui::pos2(dock.left(), rect.bottom()));
+    painter.rect_filled(canvas, 0.0, p.canvas);
+    let art = canvas.shrink2(vec2(15.0, 13.0));
+    painter.rect_filled(art, 0.0, p.card);
+    painter.rect_stroke(art, 0.0, egui::Stroke::new(1.0, p.card_border), egui::StrokeKind::Inside);
+}
+
+fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, options: &[(&str, ThemeKind)], width: f32) {
+    let Some((_, first_kind)) = options.first() else { return };
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::new()
+        .fill(t.card)
+        .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.card_border }))
+        .corner_radius(t.radius)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            ui.set_width(width - 20.0);
+            // Room for the longer list (five dark themes), so both cards line up.
+            ui.set_min_height(298.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tl!(title)).strong().color(t.text));
+                if active {
+                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+                }
+            });
+            ui.add_space(5.0);
+            let preview = options.iter().find(|(id, _)| *id == selected.as_str()).map_or(*first_kind, |(_, kind)| *kind);
+            theme_preview(ui, preview, width - 20.0);
+            ui.add_space(6.0);
+            for (id, _) in options {
+                let label = choice_label(id);
+                ui.radio_value(selected, (*id).to_string(), tl!(&label));
+            }
+        });
+}
+
+fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Option<egui::Theme>) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(tl!("Appearance")).strong().color(t.text));
+    let mut mode = obj.get("appearanceMode").and_then(Value::as_str).unwrap_or("auto").to_string();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
+        let choices: [(String, &str); 3] = [("auto".into(), tl!("Sync with system")), ("dark".into(), tl!("Dark")), ("light".into(), tl!("Light"))];
+        let pairs: Vec<(String, &str)> = choices.iter().map(|(id, label)| (id.clone(), *label)).collect();
+        crate::widgets::dropdown(ui, "appearance-mode", &mut mode, &pairs, 190.0);
+    });
+    obj.insert("appearanceMode".into(), json!(mode));
+    ui.add_space(8.0);
+    let light_active = mode == "light" || (mode == "auto" && system == Some(egui::Theme::Light));
+    let width = ((ui.available_width() - 10.0) / 2.0).max(190.0);
+    let mut light = obj.get("lightTheme").and_then(Value::as_str).unwrap_or("studioLight").to_string();
+    let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
+    ui.horizontal_top(|ui| {
+        ui.set_min_width(width * 2.0 + 10.0);
+        ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            theme_card(
+                ui,
+                "Light Theme",
+                light_active,
+                &mut light,
+                &[("studioLight", ThemeKind::StudioLight), ("classic", ThemeKind::Classic), ("adwaita", ThemeKind::Adwaita)],
+                width,
+            );
+        });
+        ui.add_space(10.0);
+        ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            theme_card(
+                ui,
+                "Dark Theme",
+                !light_active,
+                &mut dark,
+                &[
+                    ("proMedium", ThemeKind::ProMedium),
+                    ("pro", ThemeKind::Pro),
+                    ("studio", ThemeKind::Studio),
+                    ("solarizedDark", ThemeKind::SolarizedDark),
+                    ("adwaitaDark", ThemeKind::AdwaitaDark),
+                ],
+                width,
+            );
+        });
+    });
+    obj.insert("lightTheme".into(), json!(light));
+    obj.insert("darkTheme".into(), json!(dark));
+    ui.add_space(12.0);
+}
+
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
 /// number fields with the preference's range, text fields.
-fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang) {
+fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
+    if section == "interface" {
+        appearance_rows(ui, obj, system);
+    }
     if section == "performance" {
         rendering_mode_row(ui, obj);
     }
@@ -1100,7 +1243,8 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
             let path = format!("{section}.{k}");
             // Settings nothing reads yet stay out of the dialog (issue #204); their stored values
             // pass through untouched.
-            if prefs::is_hidden(&path)
+            if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme"))
+                || prefs::is_hidden(&path)
                 || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
                 || (section == "export" && !export_field_visible(obj, &k))
             {
@@ -1648,6 +1792,236 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn appearance_resolves_both_saved_themes_and_follows_system() {
+        let mut interface = prefs::Interface { appearance_mode: AppearanceMode::Auto, ..prefs::Interface::default() };
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::ProMedium);
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::StudioLight);
+        interface.dark_theme = DarkTheme::Studio;
+        interface.light_theme = LightTheme::Classic;
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::Studio);
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::Classic);
+        interface.appearance_mode = AppearanceMode::Dark;
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::Studio);
+        interface.appearance_mode = AppearanceMode::Light;
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::Classic);
+    }
+
+    #[test]
+    fn auto_uses_native_system_theme_when_egui_does_not_report_one() {
+        let (mut app, _) = app_with_store();
+        app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
+        app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
+        app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert_eq!(app.ui.theme, ThemeKind::StudioLight);
+    }
+
+    #[test]
+    fn appearance_button_cycles_modes_without_losing_theme_choices() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
+        for (mode, visible) in
+            [(AppearanceMode::Auto, ThemeKind::Studio), (AppearanceMode::Light, ThemeKind::Classic), (AppearanceMode::Dark, ThemeKind::Studio)]
+        {
+            cycle_appearance(&mut app, &ctx);
+            assert_eq!(app.session.prefs().interface.appearance_mode, mode);
+            assert_eq!(app.ui.theme, visible);
+            assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
+            assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
+        }
+    }
+
+    fn appearance_frame(app: &mut PhotocraftApp, ctx: &egui::Context, appearance: Option<egui::Theme>) {
+        ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |ui| tick(app, ui.ctx())).textures_delta.clear();
+    }
+
+    fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
+        let t = Tokens::get(ctx);
+        assert_eq!(t.kind, kind);
+        for style in [ctx.global_style(), ctx.style_of(egui::Theme::Light), ctx.style_of(egui::Theme::Dark)] {
+            assert_eq!(style.visuals.panel_fill, t.chrome);
+            assert_eq!(style.visuals.window_fill, t.card);
+            assert_eq!(style.visuals.override_text_color, Some(t.text));
+            assert_eq!(style.visuals.widgets.inactive.bg_fill, t.field);
+            assert_eq!(style.visuals.dark_mode, t.dark());
+            assert_eq!(style.text_styles[&egui::TextStyle::Body].size, if t.pro { 12.0 } else { 12.5 });
+        }
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+    }
+
+    #[test]
+    fn auto_appearance_follows_live_changes_without_saving_resolved_palettes() {
+        for (dark, light) in [(ThemeKind::ProMedium, ThemeKind::StudioLight), (ThemeKind::SolarizedDark, ThemeKind::Adwaita)] {
+            let (mut app, store) = app_with_store();
+            let ctx = egui::Context::default();
+            PhotocraftApp::setup_context(&ctx, Default::default());
+            app.run("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": dark.id(), "interface.lightTheme": light.id()}}))
+                .unwrap();
+            appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+            let revision = app.session.prefs.rev();
+            let interface = app.session.prefs().interface.clone();
+            let saved = store.lock().unwrap().clone().unwrap();
+            assert_eq!(stored(&store)["interface"]["appearanceMode"], "auto");
+            let gpu_style = canvas_style(&app);
+            for (appearance, expected) in [(Some(egui::Theme::Light), light), (Some(egui::Theme::Dark), dark), (Some(egui::Theme::Light), light), (None, dark)]
+            {
+                appearance_frame(&mut app, &ctx, appearance);
+                assert_palette(&ctx, expected);
+                assert_eq!(app.ui.theme, expected);
+                assert_eq!(app.session.prefs().interface, interface);
+                assert_eq!(app.session.prefs.rev(), revision);
+                assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+                assert_eq!(canvas_style(&app), gpu_style);
+                assert_eq!(pasteboard_color(&app), None);
+            }
+            // A fresh launch resolves its saved Auto choice against the new OS input.
+            for (appearance, expected) in [(Some(egui::Theme::Light), light), (Some(egui::Theme::Dark), dark), (None, dark)] {
+                let (mut restarted, store) = app_with_saved(Some(saved.clone()));
+                let fresh = egui::Context::default();
+                PhotocraftApp::setup_context(&fresh, Default::default());
+                appearance_frame(&mut restarted, &fresh, appearance);
+                assert_palette(&fresh, expected);
+                assert_eq!(restarted.ui.theme, expected);
+                assert_eq!(restarted.session.prefs().interface, interface);
+                assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+            }
+            app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": "#123456"}})).unwrap();
+            for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+                appearance_frame(&mut app, &ctx, appearance);
+                assert_eq!(pasteboard_color(&app), Some(Color32::from_rgb(0x12, 0x34, 0x56)));
+                assert_eq!(canvas_style(&app), gpu_style);
+            }
+        }
+    }
+
+    #[test]
+    fn manual_theme_tokens_and_global_styles_stay_fixed_across_os_changes() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        for kind in ThemeKind::ALL {
+            app.run("prefs.set", json!({"path": "interface.theme", "value": kind.id()})).unwrap();
+            appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+            let interface = app.session.prefs().interface.clone();
+            let revision = app.session.prefs.rev();
+            let saved = store.lock().unwrap().clone().unwrap();
+            assert_eq!(interface.appearance_mode, if Tokens::for_kind(kind).dark() { AppearanceMode::Dark } else { AppearanceMode::Light });
+            for appearance in [Some(egui::Theme::Dark), Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+                appearance_frame(&mut app, &ctx, appearance);
+                assert_palette(&ctx, kind);
+                assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
+                assert_eq!(app.ui.theme, kind);
+                assert_eq!(app.session.prefs().interface, interface);
+                assert_eq!(app.session.prefs.rev(), revision);
+                assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+            }
+        }
+    }
+
+    #[test]
+    fn auto_appearance_replaces_a_restored_egui_dark_pin() {
+        let (mut app, _) = app_with_saved(Some(json!({"interface": {"appearanceMode": "auto"}}).to_string()));
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::ThemePreference::Dark);
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::Dark);
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_palette(&ctx, ThemeKind::StudioLight);
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+        // A restored pin must also clear when the concrete PhotoCraft palette stays the same.
+        ctx.set_theme(egui::ThemePreference::Dark);
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+        assert_palette(&ctx, ThemeKind::StudioLight);
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        assert_palette(&ctx, ThemeKind::ProMedium);
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+    }
+
+    #[test]
+    fn system_theme_menu_choice_stays_checked_as_the_appearance_changes() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        app.run("prefs.set", json!({"values": {"interface.darkTheme": "solarizedDark", "interface.lightTheme": "adwaita"}})).unwrap();
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        crate::menus::invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        let interface = app.session.prefs().interface.clone();
+        let saved = store.lock().unwrap().clone().unwrap();
+        let revision = app.session.prefs.rev();
+        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
+            appearance_frame(&mut app, &ctx, appearance);
+            let items = crate::menus::menu_items(&app);
+            let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
+            assert_eq!(item("window.theme.system").checked, Some(true));
+            assert!(item("window.theme.system").enabled);
+            assert_eq!(item("window.theme.system").path, ["Window", "Theme"]);
+            for kind in ThemeKind::ALL {
+                assert_eq!(item(&format!("window.theme.{}", kind.id())).checked, Some(false));
+            }
+            assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+            assert_eq!(app.session.prefs().interface, interface);
+            assert_eq!(app.session.prefs.rev(), revision);
+            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+        }
+        crate::menus::invoke(&mut app, &ctx, "window.theme.solarizedDark", json!({})).unwrap();
+        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
+            appearance_frame(&mut app, &ctx, appearance);
+            assert_palette(&ctx, ThemeKind::SolarizedDark);
+            let items = crate::menus::menu_items(&app);
+            let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
+            assert_eq!(item("window.theme.solarizedDark").checked, Some(true));
+            assert_eq!(item("window.theme.system").checked, Some(false));
+            assert_eq!(stored(&store)["interface"]["appearanceMode"], "dark");
+            assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Adwaita);
+        }
+    }
+
+    #[test]
+    fn preferences_interface_offers_and_applies_sync_with_system() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en", "interface.darkTheme": "solarizedDark", "interface.lightTheme": "adwaita"}}))
+            .unwrap();
+        let interface = app.session.prefs().interface.clone();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.input_mut().system_theme = Some(egui::Theme::Light);
+        h.run_steps(4);
+        for label in ["Adwaita", "Adwaita dark", "Solarized dark"] {
+            assert!(h.query_by_label(label).is_some(), "missing theme choice {label}");
+        }
+        h.get_by_value("Dark").click();
+        h.run_steps(2);
+        h.get_by_label("Sync with system").click();
+        h.run_steps(2);
+        h.get_by_label("Apply").click();
+        h.run_steps(4);
+        assert_eq!(h.state().session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+        assert_eq!(h.state().session.prefs().interface.dark_theme, interface.dark_theme);
+        assert_eq!(h.state().session.prefs().interface.light_theme, interface.light_theme);
+        assert_eq!(h.state().session.prefs().interface.theme, interface.theme);
+        assert_palette(&h.ctx, ThemeKind::Adwaita);
+        assert_eq!(stored(&store)["interface"]["appearanceMode"], "auto");
+        let saved = store.lock().unwrap().clone().unwrap();
+        let (mut restarted, reloaded) = app_with_saved(Some(saved.clone()));
+        let fresh = egui::Context::default();
+        PhotocraftApp::setup_context(&fresh, Default::default());
+        appearance_frame(&mut restarted, &fresh, Some(egui::Theme::Dark));
+        assert_palette(&fresh, ThemeKind::SolarizedDark);
+        assert_eq!(restarted.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+        assert_eq!(restarted.session.prefs().interface.dark_theme, interface.dark_theme);
+        assert_eq!(restarted.session.prefs().interface.light_theme, interface.light_theme);
+        assert_eq!(restarted.session.prefs().interface.theme, interface.theme);
+        assert_eq!(reloaded.lock().unwrap().as_ref(), Some(&saved));
+    }
+
     /// Every generated preference label, section title and choice label has an entry in each
     /// language that claims complete menus (Japanese, Traditional Chinese, ...).
     #[test]
@@ -1824,146 +2198,6 @@ mod tests {
         }
         assert_eq!(display_scale(Auto, None, None), 1.0);
         assert_eq!(display_scale(Auto, Some(f32::NAN), Some(vec2(f32::INFINITY, 2160.0))), 1.0);
-    }
-
-    fn appearance_frame(app: &mut PhotocraftApp, ctx: &egui::Context, appearance: Option<egui::Theme>) {
-        ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |ui| tick(app, ui.ctx())).textures_delta.clear();
-    }
-
-    fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
-        let t = Tokens::get(ctx);
-        assert_eq!(t.kind, kind);
-        for style in [ctx.global_style(), ctx.style_of(egui::Theme::Light), ctx.style_of(egui::Theme::Dark)] {
-            assert_eq!(style.visuals.panel_fill, t.chrome);
-            assert_eq!(style.visuals.window_fill, t.card);
-            assert_eq!(style.visuals.override_text_color, Some(t.text));
-            assert_eq!(style.visuals.widgets.inactive.bg_fill, t.field);
-            assert_eq!(style.visuals.dark_mode, t.dark());
-            assert_eq!(style.text_styles[&egui::TextStyle::Body].size, if t.pro { 12.0 } else { 12.5 });
-        }
-        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
-    }
-
-    #[test]
-    fn system_theme_follows_live_appearance_without_saving_resolved_palettes() {
-        let (mut app, store) = app_with_store();
-        let ctx = egui::Context::default();
-        appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
-        app.run("prefs.set", json!({"values": {"interface.theme": "system"}})).unwrap();
-        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
-        let revision = app.session.prefs.rev();
-        let saved = store.lock().unwrap().clone().unwrap();
-        assert_eq!(stored(&store)["interface"]["theme"], "system");
-        let canvas = Tokens::for_kind(ThemeKind::ProMedium);
-        let gpu_style = canvas_style(&app);
-        for (appearance, expected) in [
-            (Some(egui::Theme::Light), ThemeKind::StudioLight),
-            (Some(egui::Theme::Dark), ThemeKind::ProMedium),
-            (Some(egui::Theme::Light), ThemeKind::StudioLight),
-            (None, ThemeKind::ProMedium),
-        ] {
-            appearance_frame(&mut app, &ctx, appearance);
-            assert_palette(&ctx, expected);
-            assert_eq!(app.ui.theme, ThemeKind::System);
-            assert_eq!(app.resolved_theme(), expected);
-            assert_eq!(app.session.prefs().interface.theme, Theme::System);
-            assert_eq!(app.session.prefs.rev(), revision);
-            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
-            assert_eq!(Tokens::get(&ctx).canvas, canvas.canvas);
-            assert_eq!(Tokens::get(&ctx).canvas_dot, canvas.canvas_dot);
-            assert_eq!(canvas_style(&app), gpu_style);
-            assert_eq!(pasteboard_color(&app), None);
-        }
-        // Launch resolves System against the fresh OS input, not the last displayed palette.
-        for (appearance, expected) in
-            [(Some(egui::Theme::Light), ThemeKind::StudioLight), (Some(egui::Theme::Dark), ThemeKind::ProMedium), (None, ThemeKind::ProMedium)]
-        {
-            let (mut restarted, store) = app_with_saved(Some(saved.clone()));
-            let fresh = egui::Context::default();
-            appearance_frame(&mut restarted, &fresh, appearance);
-            assert_palette(&fresh, expected);
-            assert_eq!(restarted.ui.theme, ThemeKind::System);
-            assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
-        }
-        app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": "#123456"}})).unwrap();
-        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
-            appearance_frame(&mut app, &ctx, appearance);
-            assert_eq!(pasteboard_color(&app), Some(Color32::from_rgb(0x12, 0x34, 0x56)));
-            assert_eq!(canvas_style(&app), gpu_style);
-        }
-    }
-
-    #[test]
-    fn manual_theme_tokens_and_global_styles_stay_fixed_across_os_changes() {
-        let (mut app, _) = app_with_store();
-        let ctx = egui::Context::default();
-        appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
-        for kind in ThemeKind::ALL.into_iter().filter(|k| *k != ThemeKind::System) {
-            app.run("prefs.set", json!({"values": {"interface.theme": kind.id()}})).unwrap();
-            for appearance in [Some(egui::Theme::Dark), Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
-                appearance_frame(&mut app, &ctx, appearance);
-                assert_palette(&ctx, kind);
-                assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
-                assert_eq!(app.ui.theme, kind);
-                assert_eq!(app.session.prefs_value()["interface"]["theme"], kind.id());
-            }
-        }
-    }
-
-    #[test]
-    fn system_theme_menu_choice_stays_checked_as_the_appearance_changes() {
-        let (mut app, store) = app_with_store();
-        let ctx = egui::Context::default();
-        appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
-        crate::menus::invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
-        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
-            appearance_frame(&mut app, &ctx, appearance);
-            let items = crate::menus::menu_items(&app);
-            let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
-            assert_eq!(item("window.theme.system").checked, Some(true));
-            assert!(item("window.theme.system").enabled);
-            assert_eq!(item("window.theme.system").path, ["Window", "Theme"]);
-            for kind in ThemeKind::ALL.into_iter().filter(|k| *k != ThemeKind::System) {
-                assert_eq!(item(&format!("window.theme.{}", kind.id())).checked, Some(false));
-            }
-            assert_eq!(stored(&store)["interface"]["theme"], "system");
-        }
-        crate::menus::invoke(&mut app, &ctx, "window.theme.solarizedDark", json!({})).unwrap();
-        for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark)] {
-            appearance_frame(&mut app, &ctx, appearance);
-            assert_palette(&ctx, ThemeKind::SolarizedDark);
-            let items = crate::menus::menu_items(&app);
-            let item = |id: &str| items.iter().find(|i| i.id == id).unwrap();
-            assert_eq!(item("window.theme.solarizedDark").checked, Some(true));
-            assert_eq!(item("window.theme.system").checked, Some(false));
-            assert_eq!(stored(&store)["interface"]["theme"], "solarizedDark");
-        }
-    }
-
-    #[test]
-    fn preferences_interface_offers_and_applies_system_theme() {
-        use egui_kittest::{Harness, kittest::Queryable};
-        let (mut app, store) = app_with_store();
-        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
-        open_preferences(&mut app, "interface");
-        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            app
-        });
-        h.input_mut().system_theme = Some(egui::Theme::Light);
-        h.run_steps(4);
-        h.get_by_value("Pro medium").click();
-        h.run_steps(2);
-        for label in ["Adwaita", "Adwaita dark", "Solarized dark", "System"] {
-            assert!(h.query_by_label(label).is_some(), "missing theme choice {label}");
-        }
-        h.get_by_label("System").click();
-        h.run_steps(2);
-        h.get_by_label("Apply").click();
-        h.run_steps(4);
-        assert_eq!(h.state().ui.theme, ThemeKind::System);
-        assert_palette(&h.ctx, ThemeKind::StudioLight);
-        assert_eq!(stored(&store)["interface"]["theme"], "system");
     }
 
     #[test]
@@ -2198,7 +2432,8 @@ mod tests {
         assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
 
         let values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap();
-        values["interface"]["theme"] = json!("studioLight");
+        values["interface"]["appearanceMode"] = json!("light");
+        values["interface"]["lightTheme"] = json!("studioLight");
         values["interface"]["uiFontSize"] = json!("large");
         values["performance"]["historyStates"] = json!(12);
         h.run_steps(2);
@@ -2216,7 +2451,8 @@ mod tests {
         assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
         let saved: Value = serde_json::from_str(store.lock().unwrap().as_ref().unwrap()).unwrap();
         assert_eq!(saved["performance"]["historyStates"], 12);
-        assert_eq!(saved["interface"]["theme"], "studioLight");
+        assert_eq!(saved["interface"]["appearanceMode"], "light");
+        assert_eq!(saved["interface"]["lightTheme"], "studioLight");
         assert_eq!(saved["interface"]["uiFontSize"], "large");
 
         // Repeated Apply starts from the validated values, not the dialog's original snapshot.
@@ -2288,7 +2524,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
         let mut h =
-            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en")), obj);
+            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None), obj);
         h.run_steps(4);
         assert!(h.query_by_label("Applies at next launch.").is_none());
         h.get_by_label("Show tooltips").click();

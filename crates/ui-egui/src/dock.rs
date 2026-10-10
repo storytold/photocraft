@@ -328,7 +328,7 @@ impl DockLayout {
 pub fn reveal(app: &mut PhotocraftApp, g: Group) {
     *g.shown_mut(&mut app.ui.panels) = true;
     let selected = *g.tab_mut(&mut app.ui.dock_tabs);
-    let pro = matches!(app.resolved_theme(), crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+    let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
     app.ui.dock.show_tab(g, selected, pro);
     app.ui.dock.set_collapsed(g, false);
 }
