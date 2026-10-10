@@ -402,6 +402,7 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let key = step_key(s, "pasteInto");
     params["coalesce"] = json!(key);
     params["target"] = json!("pixels");
+    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let r = s.execute("edit.paste", params)?;
     let id = layer_param(s, &Value::Null)?;
     s.execute("layer.layerMask.revealAll", json!({"layer": id.0, "coalesce": key}))?;
@@ -413,6 +414,8 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     });
     s.coalesce_request = None;
     r2?;
+    // Only where the masked paste draws needs recompositing (#2901).
+    crate::layer_multi_cmds::note_insert(s, &before);
     Ok(r)
 }
 

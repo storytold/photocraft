@@ -187,6 +187,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     let moved = shifted(&clip.surface, dx, dy);
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
     let surf = if moved.format() == target { moved } else { moved.convert(target) };
+    let before = d.doc.clone();
     let id = s.edit("Paste", |doc, active| {
         let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
         *crate::pixels_mut(&mut l)? = surf;
@@ -195,6 +196,8 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
         doc.selection = None;
         Ok(id)
     })?;
+    // Only where the pasted pixels land needs recompositing, not the whole document (#2901).
+    crate::layer_multi_cmds::note_insert(s, &before);
     Ok(json!({"layer": id.0, "offset": [dx, dy]}))
 }
 
@@ -835,6 +838,47 @@ mod tests {
         let mut px = [[0.0f32; 4]; 1];
         pasted.read_rgba_into(Rect::new(cx, cy, cx + 1, cy + 1), &mut px);
         assert!(px[0][0] > 0.9 && px[0][1] < 0.1 && px[0][2] < 0.1, "pasted content is red: {:?}", px[0]);
+    }
+
+    /// #2901 (P10/P11): Paste, Paste in Place and Paste Into recomposite only where the pasted
+    /// layer draws, not the whole document; nothing outside that changes, and undo brings back
+    /// exactly the old pixels.
+    #[test]
+    fn paste_damages_only_the_pasted_layer() {
+        let render = |s: &Session| photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds());
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 60, "height": 50, "depth": depth, "background": "white"})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 8})).unwrap();
+            s.execute("edit.fill", json!({"color": "#3366cc"})).unwrap();
+            s.execute("edit.copy", json!({})).unwrap();
+            // Half transparent, so an opaque copy pasted in place over it shows.
+            s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+            for (id, p) in [
+                ("edit.paste", json!({"center": [40, 30]})),
+                ("edit.pasteSpecial.pasteInPlace", json!({})),
+                ("edit.pasteSpecial.pasteInto", json!({"center": [40, 30]})),
+            ] {
+                s.execute("select.rect", json!({"x": 36, "y": 27, "width": 6, "height": 4})).unwrap();
+                let shown = render(&s);
+                s.execute(id, p).unwrap();
+                let st = s.active().unwrap();
+                let area = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+                let damage = st.last_damage.unwrap_or_else(|| panic!("{depth}-bit {id}: bounded damage"));
+                assert!(!damage.is_empty() && damage.intersect(&area) == damage, "{depth}-bit {id}: {damage:?} within {area:?}");
+                let now = render(&s);
+                assert_ne!(now, shown, "{depth}-bit {id}: the paste shows");
+                let w = shown.rect.width() as usize;
+                for (i, (a, b)) in shown.px.iter().zip(&now.px).enumerate() {
+                    if !damage.contains((i % w) as i32, (i / w) as i32) {
+                        assert_eq!(a, b, "{depth}-bit {id}: pixel {i} outside the damage changed");
+                    }
+                }
+                s.execute("edit.undo", json!({})).unwrap();
+                assert_eq!(render(&s), shown, "{depth}-bit {id}: undo");
+            }
+        }
     }
 
     /// #1035: a `depth`-bit document with a blue-grey square copied from layer `src` (at
