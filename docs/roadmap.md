@@ -61,7 +61,7 @@ Releases: 0.1.0 (2026-10-02), 0.2.0 (2026-10-05, first signed and notarized), 0.
 Ranked; each item links to its gap entry. Pick from the top unless an issue is assigned to you.
 
 2026-10-10: the additional-export follow-up adds 11 symmetric baseline legacy/asset codecs,
-layered OpenRaster and raster SVG/SVGZ/PDF delivery: 28 default Save As groups and 29 Export As
+raster SVG/SVGZ/PDF delivery, with existing layered OpenRaster in the shared chooser: 28 default Save As groups and 29 Export As
 groups. Tests cover 264 new codec layout/depth conversions, baseline ORA layers/groups at 8/16-bit,
 and rendered PDF outputs. Historical codec variants, JXL/JP2/HEIF encoding, vector PDF/SVG,
 PDF import and animation remain open; see [format catalog and limits](export-formats.md).

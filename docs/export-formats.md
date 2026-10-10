@@ -113,11 +113,12 @@ animation rendering and GIMP's frame exports require separate timing/codec work.
 
 1. Make existing encoders discoverable everywhere: one capability-derived catalog, macOS format
    chooser, BMP and other missing native filters, separate PSB, and the full raster Export As list.
-2. Baseline OpenRaster now round-trips PNG layers/groups, order, names, opacity, visibility and
-   8/16-bit pixels. The upstream PR uses main's OpenRaster implementation; grayscale is saved as RGB, and ICC/EXIF/XMP/text are discarded with warnings. The older fork retains the standalone ORA port. ZIP/XML reads, decoded layers and nesting are bounded.
-   Masks, text, shapes and effects are baked; advanced blending, clipping, adjustments and artboards
-   trigger a warned composite fallback. Imported mixed colour models/profiles are rejected rather
-   than silently misinterpreted. Zip64 input and non-PNG layer sources remain unsupported.
+2. OpenRaster exports PNG layers/groups, order, names, opacity, visibility and 8/16-bit pixels.
+   The upstream PR uses main's implementation: grayscale is saved as RGB; unsupported styles,
+   clipping, masks, adjustment layers and metadata produce explicit warnings. The merged preview
+   retains the rendered composition, while individual layers may lose unsupported features.
+   The older fork retains the bounded standalone ORA port, with baking and warned composite
+   fallbacks for unsupported backdrop features. Both implementations bound decoded data and nesting.
 3. Raster PDF and SVG/SVGZ delivery exports now work. PDF preserves image ICC, grayscale/RGB,
    8/16-bit samples, soft-mask transparency and physical dimensions from document DPI. It is
    Export As-only because PDF import is still absent. SVG wraps an embedded PNG; no editable vector
