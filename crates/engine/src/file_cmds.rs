@@ -770,7 +770,7 @@ impl OutputClaims {
     }
 }
 
-fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
+fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
@@ -780,9 +780,22 @@ fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
     let inputs = batch_inputs(p, cmd)?;
     let output = str_param(p, "output", cmd)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
+    // Steps that call another action play it from the caller's actions; the playback stack comes
+    // along so an action that batches itself is caught as a recursive call.
+    let actions = crate::actions_cmds::ActionState {
+        list: s.actions.list.clone(),
+        playing: s.actions.playing,
+        playback_stack: s.actions.playback_stack.clone(),
+        ..Default::default()
+    };
     let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
+        scratch.actions = actions.clone();
         for (id, params) in &steps {
-            scratch.execute(id, params.clone())?;
+            let r = scratch.execute(id, params.clone())?;
+            // A failed step inside a called action makes this file an error, not a saved result.
+            if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
+                return Err(EngineError::Other(error));
+            }
         }
         Ok(())
     });

@@ -107,7 +107,14 @@ fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
         match s.execute(id, params.clone()) {
-            Ok(r) => results.push(json!({"command": id, "result": r})),
+            // A called action reports a failed step inside an `Ok`; it stops the script too.
+            Ok(r) => match crate::actions_cmds::nested_failure(id, &r) {
+                Some(error) => {
+                    results.push(json!({"command": id, "result": r, "error": error}));
+                    break;
+                }
+                None => results.push(json!({"command": id, "result": r})),
+            },
             Err(e) => {
                 results.push(json!({"command": id, "error": e.to_string()}));
                 break;

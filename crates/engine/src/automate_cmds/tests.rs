@@ -162,3 +162,32 @@ fn contact_sheet_places_thumbnails_with_captions() {
         assert_eq!(d.layers.len(), 1);
     }
 }
+
+#[test]
+fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("nested-failure");
+    images(&dir, 1, 8, 4);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.actions.list.push(Action { name: "Rotate".into(), steps: vec![("image.imageRotation.90cw".into(), json!({}))] });
+    s.actions.list.push(Action { name: "Bad".into(), steps: vec![("layer.delete".into(), json!({"layer": 999_999}))] });
+    // A script stops at the failed call and reports it.
+    let r = s.execute("file.scripts.browse", json!({"steps": [["actions.play", {"action": "Bad"}], ["image.imageRotation.90cw", {}]]})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(r["results"].as_array().unwrap().len(), 1);
+    // Batch plays called actions, and a failure inside one is a file error, not a saved result.
+    let batch = |s: &mut Session, action: &str| {
+        let p = json!({"steps": [["actions.play", {"action": action}]], "input": dir.clone(), "output": format!("{dir}/{action}"), "format": "png"});
+        s.execute("file.automate.batch", p).unwrap()
+    };
+    let r = batch(&mut s, "Rotate");
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let r = batch(&mut s, "Bad");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("no such layer"), "{r}");
+    // An action that batches itself stops as a recursive call instead of overflowing the stack.
+    let inner = json!({"steps": [["actions.play", {"action": "Loop"}]], "input": dir.clone(), "output": format!("{dir}/inner"), "format": "png"});
+    s.actions.list.push(Action { name: "Loop".into(), steps: vec![("file.automate.batch".into(), inner)] });
+    batch(&mut s, "Loop");
+}
