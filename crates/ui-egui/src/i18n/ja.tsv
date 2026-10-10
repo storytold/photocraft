@@ -3450,3 +3450,20 @@ fontWeight	Italic	斜体
 	Front Image	前面の画像
 	Search settings…	設定を検索…
 	No matching settings	一致する設定はありません
+
+# Guide layout dialog
+	Rows	行
+	Number	数
+	Top:	上:
+	Left:	左:
+	Bottom:	下:
+	Right:	右:
+	Target:	対象:
+	Selected Artboards	選択したアートボード
+	Center Columns	列を中央に配置
+	Clear Existing Guides	既存のガイドを削除
+	Invalid guide layout	ガイドレイアウトが無効です
+	Leave empty for automatic size	自動サイズにするには空欄にします
+	5 Columns, 3 Rows	5列、3行
+	8 Columns	8列
+	12 Columns	12列

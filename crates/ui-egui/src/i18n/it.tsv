@@ -2500,3 +2500,22 @@ fontWeight	Italic	Corsivo
 	Front Image	Immagine in primo piano
 	Search settings…	Cerca impostazioni…
 	No matching settings	Nessuna impostazione corrispondente
+
+# Guide layout dialog
+	Columns	Colonne
+	Rows	Righe
+	Number	Numero
+	Margin	Margine
+	Top:	Alto:
+	Left:	Sinistra:
+	Bottom:	Basso:
+	Right:	Destra:
+	Target:	Destinazione:
+	Selected Artboards	Tavole da disegno selezionate
+	Center Columns	Centra colonne
+	Clear Existing Guides	Elimina guide esistenti
+	Invalid guide layout	Layout delle guide non valido
+	Leave empty for automatic size	Lasciare vuoto per la dimensione automatica
+	5 Columns, 3 Rows	5 colonne, 3 righe
+	8 Columns	8 colonne
+	12 Columns	12 colonne

@@ -420,7 +420,9 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         ui.memory_mut(|m| m.request_focus(id));
     }
     // Tab in a dialog goes from one of these to the next (field_tab.rs).
-    crate::field_tab::register(&ctx, id);
+    if ui.is_enabled() {
+        crate::field_tab::register(&ctx, id);
+    }
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));

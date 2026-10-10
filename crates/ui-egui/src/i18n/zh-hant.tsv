@@ -2408,3 +2408,22 @@ fontWeight	Italic	斜體
 	Front Image	前面的影像
 	Search settings…	搜尋設定…
 	No matching settings	沒有符合的設定
+
+# Guide layout dialog
+	Columns	欄
+	Rows	列
+	Number	數量
+	Margin	邊界
+	Top:	上:
+	Left:	左:
+	Bottom:	下:
+	Right:	右:
+	Target:	目標:
+	Selected Artboards	選取的工作區域
+	Center Columns	欄置中
+	Clear Existing Guides	清除現有參考線
+	Invalid guide layout	參考線版面配置無效
+	Leave empty for automatic size	留白以自動設定大小
+	5 Columns, 3 Rows	5欄，3列
+	8 Columns	8欄
+	12 Columns	12欄

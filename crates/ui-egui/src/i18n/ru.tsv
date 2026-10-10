@@ -2715,3 +2715,21 @@ fontWeight	Italic	Курсив
 	Swaps height and width	Меняет местами высоту и ширину
 	Search settings…	Поиск настроек…
 	No matching settings	Нет подходящих настроек
+
+# Guide layout dialog
+	Rows	Строки
+	Number	Количество
+	Margin	Поля
+	Top:	Сверху:
+	Left:	Слева:
+	Bottom:	Снизу:
+	Right:	Справа:
+	Target:	Цель:
+	Selected Artboards	Выбранные монтажные области
+	Center Columns	Центрировать столбцы
+	Clear Existing Guides	Удалить существующие направляющие
+	Invalid guide layout	Недопустимый макет направляющих
+	Leave empty for automatic size	Оставьте пустым для автоматического размера
+	5 Columns, 3 Rows	5 столбцов, 3 строки
+	8 Columns	8 столбцов
+	12 Columns	12 столбцов

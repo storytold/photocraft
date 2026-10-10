@@ -143,11 +143,25 @@ pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, d
     }
 }
 
+pub(crate) fn parse_guide_color(value: &str) -> Option<Color32> {
+    let value = value.strip_prefix('#')?;
+    if value.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(value.get(0..2)?, 16).ok()?;
+    let g = u8::from_str_radix(value.get(2..4)?, 16).ok()?;
+    let b = u8::from_str_radix(value.get(4..6)?, 16).ok()?;
+    Some(Color32::from_rgb(r, g, b))
+}
+
 pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let clip = painter.clip_rect();
     let drag = app.guide_drag;
     let g = &app.session.prefs().guides_grid_and_slices;
-    let (guide, style) = (pref_color(&g.guide_color, Color32::from_rgb(74, 255, 255)), g.guide_style);
+    let preview = crate::guide_layout_ui::preview(app, doc);
+    let guides = preview.as_ref().map(|(guides, _)| guides).unwrap_or(&doc.guides);
+    let (guide, style) =
+        (preview.as_ref().map(|(_, color)| *color).unwrap_or_else(|| pref_color(&g.guide_color, Color32::from_rgb(74, 255, 255))), g.guide_style);
     let line = |vertical: bool, pos: f64, color: Color32| {
         if vertical {
             let x = xf.to_screen(pos as f32, 0.0).x;
@@ -157,8 +171,8 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
             styled_line(painter, pos2(clip.left(), y), pos2(clip.right(), y), Stroke::new(1.0, color), style);
         }
     };
-    if app.ui.extras.guides {
-        for (vertical, list) in [(true, &doc.guides.vertical), (false, &doc.guides.horizontal)] {
+    if app.ui.extras.guides || preview.is_some() {
+        for (vertical, list) in [(true, &guides.vertical), (false, &guides.horizontal)] {
             for (i, p) in list.iter().enumerate() {
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {
                     continue;

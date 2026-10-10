@@ -77,6 +77,7 @@ pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
 pub mod gradient_ui;
+pub mod guide_layout_ui;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
