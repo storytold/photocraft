@@ -13,6 +13,11 @@ use crate::state::Tool;
 /// A 400 × 300 document with a 100 × 60 red rectangle on its own layer at (100, 100), the Move
 /// tool active, at 100 %.
 fn harness() -> Harness<'static, PhotocraftApp> {
+    harness_tool(Tool::Move)
+}
+
+/// The same document with a chosen tool selected (e.g. Hand, #2302).
+fn harness_tool(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -21,7 +26,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     app.run("select.deselect", json!({})).unwrap();
     app.sync_views();
     app.ui.extras.rulers = false;
-    app.ui.tool = Tool::Move;
+    app.ui.tool = tool;
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
@@ -204,6 +209,43 @@ fn a_press_just_off_a_corner_scales_rather_than_rotates() {
         let r = quad(&h);
         assert!((r[0][1] - r[1][1]).abs() > 1.0, "via controls {via_controls}: rotated: {r:?}");
     }
+}
+
+/// With the Hand tool selected, a Free Transform drag resizes the box rather than panning the view
+/// away: the open box owns the pointer (#2302).
+#[test]
+fn the_hand_tool_does_not_steal_a_free_transform_drag() {
+    let mut h = harness_tool(Tool::Hand);
+    begin(&mut h);
+    let q0 = quad(&h);
+    let center0 = h.state().ui.views[0].center;
+    drag(&mut h, q0[2], [300.0, 220.0]);
+    let q1 = quad(&h);
+    assert!(!close(q1, q0), "the drag scaled the box, not the view: {q1:?}");
+    assert_eq!(h.state().ui.views[0].center, center0, "the Hand did not pan");
+    key(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(h.state().ui.transform.is_none(), "the transform committed");
+    assert!(width(&h) > 150, "the committed resize applied: {}", width(&h));
+}
+
+/// Holding Space (the temporary Hand, #249) still pans the view while a Free Transform box is open,
+/// rather than resizing it (#2302 review): only the selected Hand yields to the box.
+#[test]
+fn holding_space_still_pans_while_transforming() {
+    let mut h = harness();
+    begin(&mut h);
+    let q0 = quad(&h);
+    let center0 = h.state().ui.views[0].center;
+    let space = |h: &mut Harness<'static, PhotocraftApp>, down: bool| {
+        h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: down, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    };
+    space(&mut h, true);
+    drag(&mut h, q0[2], [300.0, 220.0]);
+    space(&mut h, false);
+    h.run_steps(2);
+    assert!(close(quad(&h), q0), "the space-drag did not touch the box: {:?}", quad(&h));
+    assert_ne!(h.state().ui.views[0].center, center0, "the view panned instead");
 }
 
 /// A transform started by dragging a Move-tool control: that first drag is undoable too.

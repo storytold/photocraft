@@ -530,6 +530,7 @@ fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
         Tool::VerticalType,
         Tool::Crop,
         Tool::PathSelection,
+        Tool::DirectSelection,
         Tool::Move,
         Tool::RectMarquee,
         Tool::EllipseMarquee,

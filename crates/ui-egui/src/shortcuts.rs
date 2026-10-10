@@ -242,6 +242,9 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 }
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
+    // it back later (#2608).
+    app.ui.remember_group_tool();
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
@@ -412,7 +415,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
-    // group's current tool.
+    // group's current tool. From another group, the key picks the group's last-used tool.
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     for t in Tool::ALL {
         let Some(k) = Key::from_name(&t.key().to_string()) else { continue };
@@ -422,7 +425,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                None => group[0],
+                None => app.ui.group_tool(t.key()).unwrap_or(group[0]),
             };
             return;
         }
@@ -434,6 +437,40 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_key_brings_back_the_groups_last_used_tool() {
+        use crate::state::Tool;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        let press = |app: &mut PhotocraftApp, key, modifiers| {
+            let raw = egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            };
+            ctx.begin_pass(raw);
+            handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+        // Polygonal Lasso picked from the toolbar flyout, then the Brush (#2608).
+        app.ui.tool = Tool::PolygonLasso;
+        press(&mut app, Key::B, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::Brush);
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::PolygonLasso);
+        // Within the group, L still cycles; leaving and coming back keeps the new pick.
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+        press(&mut app, Key::M, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::RectMarquee);
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+        // Use Shift Key for Tool Switch: the plain key also returns to the last-used tool.
+        app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+        press(&mut app, Key::B, Modifiers::NONE);
+        press(&mut app, Key::L, Modifiers::NONE);
+        assert_eq!(app.ui.tool, Tool::MagneticLasso);
+    }
 
     #[test]
     fn pen_command_z_and_backspace_retract_points_before_document_undo() {

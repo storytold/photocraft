@@ -39,6 +39,12 @@ approximated or left out, each with a warning; damaged or unknown files fall bac
 preview. Affinity writing is not implemented: no Affinity installation was available to check
 written files, so `.af` export stays unsupported.
 
+2026-10-10: current `.af` artboard properties (`phrp`/`aprp`) are recognized alongside the
+legacy flag, including converted curve boards. Synthetic two-board regressions check separate
+bounds, overflow clipping, `.pcraft`/PSD board and pixel round trips, and moving one board with its
+children through undo/redo. Nested boards remain masked groups; rotated/curved board outlines
+still import at their bounding rectangle.
+
 2026-10-09: `corpus/affinity/` now has 39 pinned documents and 21 PNGs (20 rendered references and
 one bitmap-fill texture): the prior 21 public documents plus 18 CC0 samples for #1606. The new
 samples compare against their exported PNGs;
@@ -91,6 +97,13 @@ some form. "A professional could switch for daily work": roughly **25–35%**. T
 Confidence: moderate — the next users of 0.2.x will move these numbers either way.
 
 ### By dimension
+
+2026-10-10: Native CMYK solid and gradient fills share depth-quantized samples between
+rendering and PSD export. The uncached 16-bit CMYK gradient now round-trips with zero
+rendered error; psd-tools round trips rise from 307 to 308. Mixed and Photoshop round
+trips remain 169 and 258; rendering oracle counts remain 146, 237 and 133.
+Exact 8-bit CMYK row reuse reduces 1 MP conversion-read time by 77% for smooth ramps,
+33% with dithering and 10% for random colours (M4 Max, release optimization level 3).
 
 2026-10-10: [Shape stroke controls](shape-strokes.md) expose existing Solid/Dashed/Dotted,
 custom dash/gap, offset, caps, joins, alignment, miter-limit and opacity capabilities in

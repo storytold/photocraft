@@ -169,8 +169,10 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
     } else if tool == Tool::Crop
         && let Some(rect) = app.ui.crop_rect.filter(|r| crate::crop_ui::angle(app) == 0.0 && crate::crop_ui::hit(*r, p, tol) == crate::crop_ui::Hit::Inside)
     {
-        // Moving the crop frame snaps its edges, like the Move tool's layer bounds.
-        Some((Gesture::Move { rect }, Vec::new()))
+        // Inside the untouched default frame draws a new crop: snap its corner, not the old
+        // canvas-sized frame's bounds. An edited frame still moves and snaps its edges.
+        let gesture = if app.crop.default_frame { Gesture::Point } else { Gesture::Move { rect } };
+        Some((gesture, Vec::new()))
     } else if tool == Tool::Crop
         && (crate::crop_ui::turns_at(app, p)
             || app.ui.crop_rect.is_some_and(|r| crate::crop_ui::hit_turned(r, crate::crop_ui::angle(app), p, tol) == crate::crop_ui::Hit::Inside))
@@ -348,6 +350,34 @@ mod tests {
     fn mover_bounds(app: &PhotocraftApp) -> photocraft_geom::Rect {
         let st = app.session.active().unwrap();
         st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
+    }
+
+    #[test]
+    fn drawing_a_new_crop_snaps_its_corner_not_the_default_frame() {
+        for (snap, end) in [(false, [300.0, 220.0]), (true, [294.0, 217.0])] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 640, "height": 480, "background": "white"})).unwrap();
+            app.run("shape.create", json!({"kind": "rect", "rect": [100, 80, 200, 140], "fill": "#d59b40"})).unwrap();
+            app.sync_views();
+            app.ppp = 2.0;
+            app.ui.views[0].zoom = 1.0;
+            app.ui.views[0].fit_pending = false;
+            app.ui.tool = Tool::Crop;
+            app.ui.extras.snap = snap;
+            app.ui.view.show.smart_guides = true;
+            crate::crop_ui::ensure_frame(&mut app);
+            let view = app.ui.views[0].clone();
+            let history = app.session.active().unwrap().history.past_len();
+            let m = egui::Modifiers::NONE;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 80.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, m);
+            // Smart Guides must not snap the old canvas-sized frame as if it were moving.
+            // With View Snap on, the new corner still snaps to the nearby shape's edges.
+            assert_eq!(app.ui.crop_rect, Some([100.0, 80.0, 300.0, 220.0]), "View Snap: {snap}");
+            assert_eq!(app.ui.views[0], view);
+            assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        }
     }
 
     #[test]

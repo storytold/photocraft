@@ -149,6 +149,12 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     // With no document open there is nothing to fit.
                                     let _ = app.run("view.fitOnScreen", json!({}));
                                 }
+                                // Double-clicking the Zoom tool zooms to 100% (Photoshop).
+                                if resp.double_clicked() && tool == Tool::Zoom {
+                                    app.ui.tool = tool;
+                                    // With no document open there is nothing to zoom.
+                                    let _ = app.run("view.actualPixels", json!({}));
+                                }
                                 // Right-click or long-press opens the flyout (Photoshop).
                                 let held_for =
                                     resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
@@ -1289,6 +1295,36 @@ fn label(ui: &mut egui::Ui, s: &str) {
     ui.label(RichText::new(s).color(t.text_dim));
 }
 
+/// Photoshop's scrubby Opacity/Fill labels: drag horizontally to change the percentage without
+/// hitting the small number field. The unique drag ID coalesces every frame into one undo step.
+fn scrub_pct_label(ui: &mut egui::Ui, text: &str, percent: &mut f32) -> widgets::PopupFieldResponse {
+    let t = Tokens::get(ui.ctx());
+    let resp =
+        ui.add(egui::Label::new(RichText::new(text).color(t.text_dim)).sense(Sense::click_and_drag())).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    let key = resp.id.with("percent-label-drag");
+    if resp.drag_started() {
+        let stamp = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(key, (*percent, stamp)));
+    }
+    let mut out = widgets::PopupFieldResponse::default();
+    if resp.dragged()
+        && let Some((start, stamp)) = ui.data(|d| d.get_temp::<(f32, u64)>(key))
+        && let (Some(origin), Some(pos)) = (ui.input(|i| i.pointer.press_origin()), resp.interact_pointer_pos())
+    {
+        // Match DragValue's 0.5 percentage-point per screen point; do not jump on press.
+        let next = (start + (pos.x - origin.x) * 0.5).clamp(0.0, 100.0);
+        if next.is_finite() && next != *percent {
+            *percent = next;
+            out.changed = true;
+            out.drag = Some(stamp);
+        }
+    }
+    if resp.drag_stopped() {
+        ui.data_mut(|d| d.remove::<(f32, u64)>(key));
+    }
+    out
+}
+
 /// Width of `s` as [`label`] draws it (body text).
 fn body_text_width(ui: &egui::Ui, s: &str) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
@@ -1765,11 +1801,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 crate::blend_preview::hover(app, l.id, hovered.filter(|_| chosen.is_empty()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut o = l.opacity * 100.0;
-                    let r = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
-                    if r.changed {
-                        actions.push(pct_action(l, "opacity", o, r.drag));
+                    let field = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
+                    let scrub = scrub_pct_label(ui, opacity_label, &mut o);
+                    if field.changed || scrub.changed {
+                        actions.push(pct_action(l, "opacity", o, scrub.drag.or(field.drag)));
                     }
-                    label(ui, opacity_label);
                 });
             });
         });
@@ -1814,11 +1850,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.add_enabled_ui(!bg, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut f = l.fill_opacity * 100.0;
-                    let r = widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
-                    if r.changed {
-                        actions.push(pct_action(l, "fill", f, r.drag));
+                    let field = widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
+                    let scrub = scrub_pct_label(ui, fill_label, &mut f);
+                    if field.changed || scrub.changed {
+                        actions.push(pct_action(l, "fill", f, scrub.drag.or(field.drag)));
                     }
-                    label(ui, fill_label);
                 })
             });
         });
@@ -1933,7 +1969,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
         let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));
         if group.clicked() {
-            actions.push(("layer.new.group".into(), json!({})));
+            // Like Photoshop a plain click adds an empty group; Shift-click groups the selected
+            // layers, the same as Layer › Group Layers (#2561).
+            let shift = ui.input(|i| i.modifiers.shift);
+            let cmd = if shift && active_layer.is_some() { "layer.groupLayers" } else { "layer.new.group" };
+            actions.push((cmd.into(), json!({})));
         }
         actions.extend(footer_drop(ui, &group, footer_drag, "layer.groupLayers"));
         let adj = footer_menu_button(ui, "adjustment-layer", 26.0, tl!("Create new fill or adjustment layer"));
@@ -3898,14 +3938,18 @@ mod toolbar_tests {
         }
     }
 
-    /// The Hand tool's toolbar button: tool buttons have no label, so find it by slot order.
-    fn hand_button(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Pos2 {
+    /// A tool's toolbar button: tool buttons have no label, so find it by slot order.
+    fn tool_button(h: &egui_kittest::Harness<'_, PhotocraftApp>, tool: Tool) -> egui::Pos2 {
         let size = egui::Vec2::splat(if Tokens::get(&h.ctx).pro { 30.0 } else { 36.0 });
         let buttons: Vec<Rect> = h.ctx.viewport(|v| {
             v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).map(|w| w.rect).collect()
         });
-        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Hand)).unwrap();
+        let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&tool)).unwrap();
         buttons[index].center()
+    }
+
+    fn hand_button(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Pos2 {
+        tool_button(h, Tool::Hand)
     }
 
     fn toolbar_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
@@ -3954,6 +3998,41 @@ mod toolbar_tests {
         click(&mut h, p);
         click(&mut h, p);
         assert_eq!(h.state().ui.tool, Tool::Hand);
+        assert!(h.state().session.active().is_none());
+    }
+
+    /// Double-clicking the Zoom tool zooms to 100% (Photoshop); a single click only picks the tool.
+    #[test]
+    fn double_clicking_the_zoom_tool_zooms_to_actual_pixels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.views[0].fit_pending = true;
+        app.ui.views[0].zoom = 0.25;
+        let mut h = toolbar_harness(app);
+        let p = tool_button(&h, Tool::Zoom);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+        assert_eq!(h.state().ui.views[0].zoom, 0.25, "a single click doesn't zoom");
+        // Past the double-click window, so the next two clicks are a fresh double-click.
+        h.run_steps(40);
+        click(&mut h, p);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+        assert_eq!(h.state().ui.views[0].zoom, 1.0, "a double-click zooms to 100%");
+        assert!(!h.state().ui.views[0].fit_pending, "100% replaces a pending fit");
+    }
+
+    /// With no document open the double-click still picks the tool and doesn't panic.
+    #[test]
+    fn double_clicking_the_zoom_tool_without_a_document_is_harmless() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.tool = Tool::Move;
+        let mut h = toolbar_harness(app);
+        let p = tool_button(&h, Tool::Zoom);
+        click(&mut h, p);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
         assert!(h.state().session.active().is_none());
     }
 }
