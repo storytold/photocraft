@@ -383,7 +383,21 @@ fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
     Some(q)
 }
 
+/// `p`, with the Channels panel's targeted alpha channel or Quick Mask as its `"target"` when it
+/// names neither a target nor a layer (#2835).
+fn with_panel_target(s: &Session, p: &Value) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    if p.get("target").is_none()
+        && p.get("layer").is_none()
+        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
+    {
+        m.extend(t);
+    }
+    p
+}
+
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
+    let p = &with_panel_target(s, p);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = match p.get("layer").and_then(Value::as_u64) {
         Some(v) => Some(LayerId(v)),
@@ -742,6 +756,36 @@ mod tests {
         let ch = &st.doc.channels[0].surface;
         assert!(ch.sample_channel(55, 65, 0) > 0.99 && ch.sample_channel(15, 15, 0) < 0.01);
         assert_eq!(active_bounds(&s), Rect::new(10, 10, 30, 20), "layer untouched");
+    }
+
+    /// The Channels panel targets an alpha channel: Edit › Transform › Flip Horizontal and a
+    /// 50% `edit.transform` (no `target` param) work on the channel, not the layer (BUG-207-4).
+    #[test]
+    fn transforms_follow_the_targeted_alpha_channel() {
+        let mut s = session();
+        s.execute("channel.new", json!({})).unwrap();
+        s.edit("paint channel", |doc, _| {
+            let ch = &mut doc.channels[0].surface;
+            ch.fill_rect(Rect::new(10, 10, 20, 20), &[1.0]);
+            ch.fill_rect(Rect::new(10, 10, 12, 20), &[0.5]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("channel.target", json!({"channel": 0})).unwrap();
+        let layer = |s: &Session| crate::active_layer_of(s).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 100, 100));
+        let (pixels, past) = (layer(&s), s.active().unwrap().history.past_len());
+        s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
+        // 8-bit channel: 0.5 is stored as 128/255.
+        let ch = |s: &Session, x, y| (s.active().unwrap().doc.channels[0].surface.sample_channel(x, y, 0) * 10.0).round() / 10.0;
+        assert_eq!((ch(&s, 19, 15), ch(&s, 10, 15)), (0.5, 1.0), "the channel flips within its frame");
+        assert!(layer(&s) == pixels, "the layer is untouched");
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one undo step");
+        s.execute("edit.transform", json!({"matrix": [0.5, 0, 0, 0.5, 0, 0], "interpolation": "nearest"})).unwrap();
+        assert_eq!((ch(&s, 7, 7), ch(&s, 15, 15)), (1.0, 0.0), "the channel scales to 50%");
+        assert!(layer(&s) == pixels, "the layer is untouched");
+        s.undo();
+        s.undo();
+        assert_eq!((ch(&s, 10, 15), ch(&s, 19, 15)), (0.5, 1.0));
     }
 
     #[test]

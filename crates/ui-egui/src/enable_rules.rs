@@ -116,6 +116,11 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
         return false;
     }
+    // So does a targeted alpha channel or the Quick Mask: it transforms instead of the layer (#2835).
+    let target = crate::canvas::paint_target(app);
+    if transform && (target.is_object() || target == "quickMask") {
+        return false;
+    }
     // Only these commands depend on the selection; skip walking the layers for the rest.
     if selection_targets(id).is_some() {
         return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
@@ -162,6 +167,12 @@ mod tests {
         // A selection makes Free Transform available on the Background.
         s.execute("select.all", json!({})).unwrap();
         assert!(!off(&s, "edit.freeTransform"));
+        // So does a targeted alpha channel, which transforms instead of the Background (#2835).
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.new", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel": 0})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(!disabled(&app, "edit.freeTransform") && !disabled(&app, "edit.transform.flipHorizontal"));
     }
 
     /// With several layers selected, Rasterize is judged by the whole selection, not by the layer
