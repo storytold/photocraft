@@ -1284,3 +1284,72 @@ fn document_inspect_and_activate_invalid_index() {
     let err_act = s.execute("document.activate", json!({"document": 9})).unwrap_err();
     assert_eq!(err_act.to_string(), "no document at index 9");
 }
+
+#[test]
+fn delete_layer_selects_neighbour_and_undo_restores_layer() {
+    for deleted_index in 0..3 {
+        let mut s = session_with_doc();
+        let ids = ["bottom", "middle", "top"].map(|name| LayerId(s.execute("layer.new.layer", json!({"name":name})).unwrap()["layer"].as_u64().unwrap()));
+        if deleted_index == 0 {
+            let background = s.active().unwrap().doc.layers[0].id;
+            s.execute("layer.delete", json!({"layer":background.0})).unwrap();
+        }
+        s.execute("layer.select", json!({"layer":ids[deleted_index].0})).unwrap();
+        s.execute("layer.delete", json!({})).unwrap();
+        let neighbour = if deleted_index == 0 { ids[1] } else { ids[deleted_index - 1] };
+        assert_eq!(s.active().unwrap().active_layer, Some(neighbour));
+        assert_eq!(s.active().unwrap().selected_layers, vec![neighbour]);
+        assert!(s.active().unwrap().doc.layer(ids[deleted_index]).is_none());
+        s.undo();
+        assert!(s.active().unwrap().doc.layer(ids[deleted_index]).is_some());
+        assert!(s.active().unwrap().active_layer.is_some_and(|id| s.active().unwrap().doc.layer(id).is_some()));
+        s.redo();
+        assert_eq!(s.active().unwrap().active_layer, Some(neighbour));
+    }
+}
+
+#[test]
+fn delete_multiple_layers_selects_next_survivor() {
+    let mut s = session_with_doc();
+    let ids = ["bottom", "middle", "top"].map(|name| LayerId(s.execute("layer.new.layer", json!({"name":name})).unwrap()["layer"].as_u64().unwrap()));
+    s.execute("layer.select", json!({"layer":ids[1].0})).unwrap();
+    s.execute("layer.select", json!({"layer":ids[2].0,"mode":"add"})).unwrap();
+    s.execute("layer.delete", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(ids[0]));
+    assert!(s.active().unwrap().doc.layer(ids[1]).is_none());
+    assert!(s.active().unwrap().doc.layer(ids[2]).is_none());
+    s.undo();
+    assert_eq!(s.active().unwrap().active_layer, Some(ids[2]));
+}
+
+#[test]
+fn delete_layer_neighbours_follow_group_row_order() {
+    let mut s = session_with_doc();
+    let background = s.active().unwrap().active_layer.unwrap();
+    let lower = LayerId(s.execute("layer.new.layer", json!({"name":"Below group"})).unwrap()["layer"].as_u64().unwrap());
+    let child = LayerId(s.execute("layer.new.layer", json!({"name":"Child"})).unwrap()["layer"].as_u64().unwrap());
+    let group = LayerId(s.execute("layer.groupLayers", json!({"name":"Group"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer":child.0})).unwrap();
+    s.execute("layer.delete", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(lower), "the next row below a group's final child is outside the group");
+    s.undo();
+    s.execute("layer.delete", json!({"layer":background.0})).unwrap();
+    s.execute("layer.setExpanded", json!({"layer":group.0,"expanded":false})).unwrap();
+    s.execute("layer.select", json!({"layer":lower.0})).unwrap();
+    s.execute("layer.delete", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(group), "fallback above uses the collapsed group header, not its hidden child");
+}
+
+#[test]
+fn delete_layer_preserves_an_unaffected_active_layer_and_last_layer_guard() {
+    let mut s = session_with_doc();
+    let background = s.active().unwrap().active_layer.unwrap();
+    let other = LayerId(s.execute("layer.new.layer", json!({"name":"Other"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.delete", json!({"layer":background.0})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(other));
+    let before = s.active().unwrap().history.past_len();
+    assert!(s.execute("layer.delete", json!({})).is_err());
+    assert_eq!(s.active().unwrap().doc.layer_count(), 1);
+    assert_eq!(s.active().unwrap().active_layer, Some(other));
+    assert_eq!(s.active().unwrap().history.past_len(), before);
+}
