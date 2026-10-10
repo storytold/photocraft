@@ -185,7 +185,7 @@ id = "FILE-216-5"
 target = "Save-path tests: layered TIFF, PDF, SVG, ACO/ASE, .shc, Smart Filters, atomic-save failure"
 status = "missing"
 issue = 216
-note = "Features absent; no atomic-save failure-injection test"
+note = "Save paths for layered TIFF, PDF, SVG, ACO/ASE, .shc and Smart Filters are absent. Atomic-save failure injection is covered: format/src/atomic/tests.rs write_failure_halfway_keeps_original and rename_failure_keeps_original (see BUG-203-6)"
 
 [[item]]
 id = "FILE-216-6"
