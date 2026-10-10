@@ -1193,11 +1193,12 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
 
 /// Duplicate Layer with several layers selected: each copy goes above its original and the
 /// copies become the selection. Artboard copies go beside their boards unless `in_place`
-/// ([`crate::artboard_cmds::place_copy`]).
-pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
+/// ([`crate::artboard_cmds::place_copy`]). `label` names the history step (Layer via Copy reuses
+/// this path, #2777).
+pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Result<Value> {
     let sel = selected(s);
     let old_active = s.active().and_then(|d| d.active_layer);
-    let (copies, active) = s.edit("Duplicate Layers", |doc, active| {
+    let (copies, active) = s.edit(label, |doc, active| {
         let mut copies = Vec::new();
         let mut new_active = None;
         for id in top_level(doc, &sel) {
@@ -1219,7 +1220,7 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
     })?;
     let out = copies.iter().map(|l| l.0).collect::<Vec<_>>();
     reselect(s, copies, active);
-    Ok(json!({"layers": out}))
+    Ok(json!({"layers": out, "layer": active.map(|l| l.0)}))
 }
 
 /// Show/hide every selected layer in one step.

@@ -253,6 +253,10 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = active_id(s)?;
     let has_sel = d.doc.selection.is_some();
+    if !has_sel && !cut && crate::layer_multi_cmds::multi(s, &Value::Null) {
+        // No selection, several layers selected: copy every one of them (Photoshop, #2777).
+        return crate::layer_multi_cmds::duplicate_selected(s, true, "Layer Via Copy");
+    }
     if !has_sel && !cut {
         // No selection: Layer via Copy duplicates the whole layer (Photoshop).
         let nid = s.edit("Layer Via Copy", |doc, active| {
@@ -1047,6 +1051,34 @@ mod tests {
             assert_eq!(st.doc.layers.len(), layers, "{cmd}: undo removes the layer");
             assert!(st.doc.selection.is_some(), "{cmd}: and restores the selection");
         }
+    }
+
+    /// #2777: with several layers selected and no pixel selection, Layer via Copy (Cmd+J) copies
+    /// every selected layer in one step, each copy above its original and the copies selected.
+    /// With a pixel selection it still copies the active layer's selected pixels only.
+    #[test]
+    fn layer_via_copy_duplicates_every_selected_layer() {
+        let mut s = session();
+        let a = s.active().unwrap().active_layer.unwrap();
+        let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b.0, "mode": "toggle"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("layer.new.layerViaCopy", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let ids: Vec<LayerId> = st.doc.layers.iter().map(|l| l.id).collect();
+        assert_eq!(ids.len(), 5, "background, a, a copy, b, b copy");
+        assert_eq!((ids[1], ids[3]), (a, b), "each copy sits above its original");
+        let mut selected = st.selected_layers();
+        selected.sort_by_key(|l| l.0);
+        assert_eq!(selected, vec![ids[2], ids[4]], "the copies become the selection");
+        assert_eq!(st.history.past_len(), steps + 1, "one undo step");
+        assert!(s.undo());
+        s.execute("layer.select", json!({"layer": b.0})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0, "mode": "toggle"})).unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layerViaCopy", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers.len(), 4, "a pixel selection copies one layer's pixels");
     }
 
     fn active_content(s: &Session) -> LayerContent {
