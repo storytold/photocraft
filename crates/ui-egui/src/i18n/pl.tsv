@@ -592,6 +592,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -1304,6 +1308,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Nagraj ● sekwencję edycji, a następnie odtwórz ▶ ją na dowolnym dokumencie.
 	Red	Czerwony
 	Redefine style by current selection	Zdefiniuj styl ponownie na podstawie bieżącego zaznaczenia
+	Refine	Dopracuj
 	Reflected Gradient	Gradient odbity
 	Registration Marks	Znaczniki pasowania
 	Regular	Zwykła

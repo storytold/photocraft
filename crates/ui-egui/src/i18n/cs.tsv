@@ -598,6 +598,10 @@
 	100%	100 %
 	200%	200 %
 	75%	75 %
+	80%	80 %
+	85%	85 %
+	90%	90 %
+	95%	95 %
 	125%	125 %
 	150%	150 %
 	175%	175 %
@@ -1319,6 +1323,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Zaznamenejte ● posloupnost úprav a pak ji přehrajte ▶ na libovolném dokumentu.
 	Red	Červená
 	Redefine style by current selection	Předefinovat styl podle aktuálního výběru
+	Refine	Upřesnit
 	Reflected Gradient	Zrcadlený přechod
 	Registration Marks	Soutiskové značky
 	Regular	Obyčejné

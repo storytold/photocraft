@@ -590,6 +590,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -1304,6 +1308,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Graba ● una secuencia de ediciones y reprodúcela ▶ en cualquier documento.
 	Red	Rojo
 	Redefine style by current selection	Redefinir el estilo con la selección actual
+	Refine	Refinar
 	Reflected Gradient	Degradado reflejado
 	Registration Marks	Marcas de registro
 	Regular	Normal
@@ -2480,6 +2485,18 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+
+# Add Noise, Reduce Noise and Smart Sharpen dialog controls (Filter > Noise, Filter > Sharpen).
+	Distribution	Distribución
+	Uniform	Uniforme
+	Gaussian	Gaussiana
+	Monochromatic	Monocromático
+	Seed	Semilla
+	Strength	Intensidad
+	Reduce Color Noise	Reducir ruido de color
+	Remove Jpeg Artifact	Quitar artefactos JPEG
+	Sharpen Details	Enfocar detalles
+	Reduce Noise	Reducir ruido
 	Use Classic Mode	Usar modo clásico
 	Auto Center Preview	Centrar previsualización automáticamente
 	Next Document	Documento siguiente

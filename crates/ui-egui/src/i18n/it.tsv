@@ -588,6 +588,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -1303,6 +1307,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Registra ● una sequenza di modifiche, poi riproduci ▶ su qualsiasi documento.
 	Red	Rosso
 	Redefine style by current selection	Ridefinisci stile con selezione corrente
+	Refine	Rifinisci
 	Reflected Gradient	Sfumatura riflessa
 	Registration Marks	Crocini di registro
 	Regular	Normale

@@ -2789,6 +2789,7 @@
 	Reduce Noise	Μείωση θορύβου
 	Reduce Noise…	Μείωση θορύβου…
 	Reflected	Ανακλώμενο
+	Refine	Βελτίωση
 	Reflected Gradient	Ανακλώμενη διαβάθμιση
 	Registration Marks	Σημάδια συμπτώσεως
 	Regular	Κανονικό
@@ -3347,6 +3348,10 @@ cameraRaw	Yellow	Κίτρινο
 	300%	300%
 	50% Gray	50% γκρι
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	Adobe	Adobe
 	Adobe rgb	Adobe RGB
 	Android 1080p	Android 1080p

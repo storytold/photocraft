@@ -371,6 +371,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -2642,6 +2646,7 @@ fontWeight	Italic	Курсивний
 	Prevent auto-nesting in and out of Artboards and Frames	Запобігати автоматичному вкладенню в монтажні області та кадри або виходу з них
 	Quick Actions	Швидкі дії
 	Radial Gradient	Радіальний градієнт
+	Refine	Уточнення
 	Reflected Gradient	Відбитий градієнт
 	Reset to defaults	Скинути до типових значень
 	Search commands	Пошук команд

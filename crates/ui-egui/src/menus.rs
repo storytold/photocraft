@@ -1921,7 +1921,7 @@ mod reveal_label_tests {
             _ => "Im Ordner anzeigen",
         };
         assert_eq!(translated_menu_label(de, reveal[0]), expected);
-        // The menu catalogue (and docs/parity.md) keeps Photoshop's macOS name.
+        // The menu catalogue (and docs/parity-checklist.md) keeps Photoshop's macOS name.
         assert!(crate::menu_catalog::CATALOG.iter().any(|(_, label, _, i)| *i == id && *label == "Reveal in Finder"));
     }
 }

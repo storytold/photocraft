@@ -142,7 +142,8 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     let px = num(f, key);
     let mut v = to_unit(px, &unit, orig, res) as f32;
     let range = if unit == "px" { -300000.0..=300000.0 } else { -30000.0..=30000.0 };
-    let changed = crate::widgets::value_field(ui, &mut v, range, "", 90.0).changed();
+    // Each unit keeps its own precision: whole pixels, 3 places for inches, 2 for cm/mm/picas (#2434).
+    let changed = crate::widgets::value_field_prec(ui, &mut v, range, "", 90.0, crate::widgets::unit_decimals(&unit)).changed();
     if changed {
         let px = from_unit(v as f64, &unit, orig, res);
         f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));

@@ -168,6 +168,7 @@ mod type_transform;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod warp_preview;
 pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;

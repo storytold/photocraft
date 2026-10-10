@@ -1297,6 +1297,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Neem ● een reeks bewerkingen op en speel deze ▶ af op elk document.
 	Red	Rood
 	Redefine style by current selection	Stijl opnieuw definiëren op basis van huidige selectie
+	Refine	Verfijnen
 	Reflected Gradient	Gespiegeld verloop
 	Registration Marks	Pastekens
 	Regular	Normaal
@@ -2175,6 +2176,10 @@
 	Show Vectorscope	Vectorscoop tonen
 	Tone Histogram	Toonhistogram
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
