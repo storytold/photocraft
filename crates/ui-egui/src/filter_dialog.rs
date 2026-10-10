@@ -158,6 +158,33 @@ fn is_pixel_param(key: &str) -> bool {
     )
 }
 
+/// Filters whose features have a fixed size in document pixels that no dialog parameter scales:
+/// per-pixel noise and dots (Diffuse, Mezzotint, Fibers), fixed wavelengths and brush widths
+/// (Ripple, Oil Paint) and pixel-sized geometry (Flame's length, width and interval). On a
+/// reduced proxy those features come out k times too large, so these preview at full resolution:
+/// what the preview shows is what OK applies, as in Photoshop (#2063).
+const FULL_RESOLUTION_PREVIEW: &[&str] =
+    &["filter.distort.ripple", "filter.stylize.diffuse", "filter.stylize.oilPaint", "filter.render.flame", "filter.render.fibers", "filter.pixelate.mezzotint"];
+
+/// Proxy factor for a live preview of `command` with `params`, given the document's reduced factor
+/// `k`: 1 for [`FULL_RESOLUTION_PREVIEW`] filters, otherwise the largest factor up to `k` at which
+/// no pixel-sized parameter, divided by it, drops below the command's minimum. A clamped value
+/// would change the feature size: Pointillize's 5 px cells at k = 4 became the 3 px minimum, i.e.
+/// 12 px cells in the preview (#2063).
+pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
+    if k <= 1 || FULL_RESOLUTION_PREVIEW.contains(&command) {
+        return 1;
+    }
+    let Some(spec) = photocraft_engine::commands::find(command) else { return k };
+    parse_spec(spec.params).into_iter().fold(k, |k, p| match p.kind {
+        Kind::Range { min, .. } if min > 0.0 && is_pixel_param(&p.key) => match params.get(&p.key).and_then(Value::as_f64) {
+            Some(v) if v.is_finite() => k.min((v / f64::from(min)).floor().clamp(1.0, f64::from(k)) as u32),
+            _ => k,
+        },
+        _ => k,
+    })
+}
+
 /// Commands outside `filter.*` that get the schema dialog *with* live preview.
 pub const PREVIEWED: &[&str] = &[
     "image.adjustments.selectiveColor",
@@ -893,5 +920,88 @@ mod tests {
         app.ui.dialog_mut(id).unwrap().fields.insert("black".into(), json!(40.0));
         crate::dialogs::confirm(&mut app, id).unwrap();
         assert_eq!(app.session.journal.last().map(|j| j.0.as_str()), Some("image.adjustments.selectiveColor"));
+    }
+
+    /// A filtered test image with structure at every scale (low-frequency waves plus a ramp).
+    fn waves(n: u32) -> Document {
+        let mut doc = Document::with_background(
+            "w",
+            photocraft_doc::Size::new(n, n),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U8,
+            photocraft_doc::Color::WHITE,
+        );
+        let s = doc.layers[0].surface_mut().unwrap();
+        for y in 0..n as i32 {
+            for x in 0..n as i32 {
+                let v = 0.5 + 0.4 * (x as f32 / 23.0).sin() * (y as f32 / 31.0).cos();
+                s.fill_rect(photocraft_geom::Rect::new(x, y, x + 1, y + 1), &[v, 1.0 - v, x as f32 / n as f32, 1.0]);
+            }
+        }
+        doc
+    }
+
+    /// Mean absolute RGB difference of two documents, compared at 1/4 scale.
+    fn diff_at_quarter(a: &Document, b: &Document) -> f32 {
+        let quarter = |d: &Document| photocraft_compose::flatten(&crate::proxy::proxy_document(d, (d.size.width / 64).max(1)));
+        let (a, b) = (quarter(a), quarter(b));
+        assert_eq!(a.px.len(), b.px.len());
+        a.px.iter().zip(&b.px).map(|(p, q)| (0..3).map(|c| (p[c] - q[c]).abs()).sum::<f32>() / 3.0).sum::<f32>() / a.px.len() as f32
+    }
+
+    /// #2063: Ripple, Diffuse, Oil Paint, Flame, Fibers and Mezzotint drew their features in
+    /// proxy pixels, so a 1/4 preview showed them 4x larger than OK applied them. Their preview
+    /// now runs at full resolution and matches the applied result.
+    #[test]
+    fn fixed_size_filters_preview_at_the_scale_they_apply() {
+        let doc = waves(256);
+        let bg = doc.layers[0].id;
+        for (cmd, p) in [
+            ("filter.distort.ripple", json!({"amount": 300.0, "size": "large"})),
+            ("filter.stylize.diffuse", json!({"mode": "normal"})),
+            ("filter.stylize.oilPaint", json!({})),
+            ("filter.render.flame", json!({})),
+            ("filter.render.fibers", json!({})),
+            ("filter.pixelate.mezzotint", json!({"type": "mediumDots"})),
+        ] {
+            let applied = preview_document(&doc, Some(bg), cmd, &p, 1).unwrap();
+            let old = preview_document(&doc, Some(bg), cmd, &p, 4).unwrap();
+            assert!(diff_at_quarter(&applied, &old) > 0.005, "{cmd}: a 1/4 proxy differs from the result");
+            let k = preview_factor(cmd, &p, 4);
+            assert_eq!(k, 1, "{cmd}");
+            let shown = preview_document(&doc, Some(bg), cmd, &p, k).unwrap();
+            assert!(diff_at_quarter(&applied, &shown) < 1e-4, "{cmd}: the preview is what OK applies");
+        }
+    }
+
+    /// #2063: a pixel-sized parameter divided by the proxy factor was clamped to the command's
+    /// minimum (Pointillize's 5 px cells became 3 px proxy cells = 12 px), so the preview factor
+    /// drops until every pixel-sized value fits its range.
+    #[test]
+    fn proxy_previews_never_clamp_pixel_sized_params() {
+        let pointillize = |c: f64| preview_factor("filter.pixelate.pointillize", &json!({"cellSize": c}), 4);
+        assert_eq!((pointillize(5.0), pointillize(7.0), pointillize(12.0), pointillize(300.0)), (1, 2, 4, 4));
+        assert_eq!(preview_factor("filter.pixelate.crystallize", &json!({"cellSize": 10.0}), 4), 3);
+        assert_eq!(preview_factor("filter.pixelate.colorHalftone", &json!({"maxRadius": 8.0}), 4), 2);
+        assert_eq!(preview_factor("filter.blur.gaussianBlur", &json!({"radius": 8.0}), 4), 4, "unclamped filters keep the proxy");
+        // Hostile params never panic and leave the factor alone; a full-size document stays at 1.
+        assert_eq!(preview_factor("filter.pixelate.pointillize", &json!({"cellSize": "x"}), 4), 4);
+        assert_eq!(preview_factor("filter.pixelate.pointillize", &json!(null), 4), 4);
+        assert_eq!(preview_factor("no.such.command", &json!({"cellSize": 1.0}), 4), 4);
+        assert_eq!(preview_factor("filter.pixelate.pointillize", &json!({"cellSize": 5.0}), 0), 1);
+        // Every previewed command, at each pixel-sized param's minimum, default and in between.
+        let previewed = photocraft_engine::command_specs().iter().filter(|c| has_dialog(c.id) && (c.id.starts_with("filter.") || PREVIEWED.contains(&c.id)));
+        for c in previewed {
+            for p in parse_spec(c.params) {
+                let Kind::Range { min, default, .. } = p.kind else { continue };
+                if min <= 0.0 || !is_pixel_param(&p.key) {
+                    continue;
+                }
+                for v in [f64::from(min), f64::from(default), f64::from(min) * 2.5] {
+                    let k = preview_factor(c.id, &json!({ p.key.clone(): v }), 4);
+                    assert!(v / f64::from(k) >= f64::from(min) - 1e-9, "{} {}={v}: k={k} clamps to {min}", c.id, p.key);
+                }
+            }
+        }
     }
 }

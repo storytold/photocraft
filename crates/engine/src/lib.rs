@@ -49,6 +49,7 @@ pub mod history_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
+pub mod kys;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
 pub mod layer_mask_props_cmds;

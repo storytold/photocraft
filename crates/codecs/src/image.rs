@@ -277,6 +277,55 @@ pub(crate) fn base_channel_name(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
 
+/// One Cryptomatte layer of an EXR file (Cryptomatte specification 1.2): per-pixel object or
+/// material IDs with coverage, as written by Arnold, V-Ray, Redshift, Mantra/Karma or Cycles.
+/// Header facts plus the parsed manifest; the samples come from
+/// [`crate::decode_cryptomatte`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CryptomatteLayer {
+    /// The part (see [`crate::exr_info`]) the channels and attributes live in.
+    pub part: usize,
+    /// The `cryptomatte/<key>/name` attribute, e.g. `CryptoAsset` or `crypto_asset`.
+    pub name: String,
+    /// The 7-hex-digit metadata key of the layer.
+    pub key: String,
+    /// The `conversion` attribute, when recorded (canonically `uint32_to_float32`).
+    pub conversion: Option<String>,
+    /// The manifest: object names with their ID values. A sidecar manifest file is only
+    /// recorded in [`Self::sidecar_manifest`] and not read here (the codec is I/O free).
+    pub manifest: Vec<(f32, String)>,
+    /// The `manif_file` sidecar attribute, when the manifest is not embedded.
+    pub sidecar_manifest: Option<String>,
+    /// The stream channel bases in file order, e.g. `["crypto_asset00", "crypto_asset01"]`;
+    /// each holds an ID (`.red`) and a coverage (`.green`) channel.
+    pub channels: Vec<String>,
+}
+
+impl CryptomatteLayer {
+    /// The manifest name for an ID value, when the manifest lists it.
+    pub fn name_of(&self, id: f32) -> Option<&str> {
+        self.manifest.iter().find(|(i, _)| *i == id).map(|(_, n)| n.as_str())
+    }
+}
+
+/// Decoded Cryptomatte samples: per pixel the (ID, coverage) pairs with coverage above zero,
+/// sorted by descending coverage. The IDs are the float values as stored (compared by value,
+/// never by bit pattern, like the reference readers).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CryptomatteBuffer {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<Vec<(f32, f32)>>,
+}
+
+impl CryptomatteBuffer {
+    /// The pairs of one pixel; empty for a pixel covered by nothing.
+    pub fn at(&self, x: u32, y: u32) -> &[(f32, f32)] {
+        let i = y as usize * self.width as usize + x as usize;
+        self.pixels.get(i).map_or(&[], |v| v)
+    }
+}
+
 /// A single flat raster image.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {

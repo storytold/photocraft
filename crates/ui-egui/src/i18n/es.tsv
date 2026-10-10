@@ -1324,6 +1324,11 @@
 	{n} commands are not in PhotoCraft.	{n} comandos no existen en PhotoCraft.
 	Keyboard shortcuts imported	Atajos de teclado importados
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Tu conjunto de atajos de teclado {set} se usa aquí: {n} atajos difieren de los predeterminados. Edición › Atajos de teclado los muestra; Restablecer todo a valores predeterminados lo deshace.
+	Import keyboard shortcuts?	¿Importar atajos de teclado?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft encontró en este equipo tu conjunto de atajos de teclado {set} de otro editor de imágenes: {n} de sus atajos difieren de los de PhotoCraft. ¿Importarlo?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Edición › Atajos de teclado › Restablecer todo a valores predeterminados deshace una importación.
+	Don't Import	No importar
+	The keyboard shortcut set was not imported: {error}	No se importó el conjunto de atajos de teclado: {error}
 	Reset Section	Restablecer sección
 	Reset Transform	Restablecer transformación
 	Reset to defaults	Restablecer a los valores predeterminados
@@ -2005,8 +2010,9 @@
 	Brush Preset Options	Opciones de preajustes de pincel
 	Group name	Nombre del grupo
 	Brush name	Nombre del pincel
-	Grid view	Vista de cuadrícula
-	List view	Vista de lista
+	Brush Name	Nombre del pincel
+	Brush Stroke	Trazo de pincel
+	Brush Tip	Punta del pincel
 	Off: the speed of the pointer sets the spacing	Desactivado: la velocidad del puntero establece el espaciado
 	Tilt Scale	Escala de inclinación
 	Brush Projection	Proyección del pincel
@@ -2443,6 +2449,27 @@ fontWeight	Italic	Cursiva
 	XOR	XOR
 	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
 	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+	Stroke Options	Opciones de trazo
+	Solid	Continuo
+	Dashed	Discontinuo
+	Dotted	Punteado
+	Alignment	Alineación
+	Caps	Extremos
+	Butt / Flat	Plano
+	Corners	Esquinas
+	Miter	Inglete
+	Round	Redondo
+	Bevel	Bisel
+	Miter limit	Límite de inglete
+	Dashed line	Línea discontinua
+	Dash	Guion
+	Gap	Espacio
+	Dash / gap lengths × stroke width	Longitudes de guion / espacio × anchura del trazo
+	Add pair	Añadir par
+	Remove pair	Quitar par
+	Dash offset	Desplazamiento de guiones
+	Open paths use centered strokes	Los trazados abiertos usan trazos centrados
+	Use finite lengths and a positive pattern total	Usa longitudes finitas y un total de patrón positivo
 	No subject found — try Object Selection or the Lasso	No se encontró ningún sujeto — pruebe Selección de objeto o el Lazo
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado

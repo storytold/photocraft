@@ -1491,8 +1491,8 @@
 	Delete Brush	Διαγραφή πινέλου
 	Group name	Όνομα ομάδας
 	Brush name	Όνομα πινέλου
-	Grid view	Προβολή πλέγματος
-	List view	Προβολή λίστας
+	Brush Name	Όνομα πινέλου
+	Brush Stroke	Πινελιά
 	Off: the speed of the pointer sets the spacing	Ανενεργό: η ταχύτητα του δείκτη καθορίζει την απόσταση
 	Tilt Scale	Κλίμακα κλίσης
 	Brush Projection	Προβολή πινέλου
@@ -2818,6 +2818,11 @@
 	{n} commands are not in PhotoCraft.	{n} εντολές δεν υπάρχουν στο PhotoCraft.
 	Keyboard shortcuts imported	Οι συντομεύσεις πληκτρολογίου εισήχθησαν
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Το σετ συντομεύσεων πληκτρολογίου {set} χρησιμοποιείται εδώ: {n} συντομεύσεις διαφέρουν από τις προεπιλογές. Το Επεξεργασία › Συντομεύσεις πληκτρολογίου τις δείχνει· η Επαναφορά όλων στις προεπιλογές το αναιρεί.
+	Import keyboard shortcuts?	Εισαγωγή συντομεύσεων πληκτρολογίου;
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	Το PhotoCraft βρήκε σε αυτόν τον υπολογιστή το σετ συντομεύσεων πληκτρολογίου {set} από άλλο πρόγραμμα επεξεργασίας εικόνας: {n} συντομεύσεις του διαφέρουν από του PhotoCraft. Να γίνει εισαγωγή;
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Το Επεξεργασία › Συντομεύσεις πληκτρολογίου › Επαναφορά όλων στις προεπιλογές αναιρεί μια εισαγωγή.
+	Don't Import	Χωρίς εισαγωγή
+	The keyboard shortcut set was not imported: {error}	Το σετ συντομεύσεων πληκτρολογίου δεν εισήχθη: {error}
 	Reset GPU Backend	Επαναφορά συστήματος απόδοσης GPU
 	Reset Section	Επαναφορά ενότητας
 	Reset Transform	Επαναφορά μετασχηματισμού
@@ -3486,6 +3491,25 @@ fontWeight	Thin	Πολύ λεπτά
 	XOR	XOR
 	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
 	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+	Stroke Options	Επιλογές περιγράμματος
+	Solid	Συνεχές
+	Dashed	Διακεκομμένο
+	Dotted	Με τελείες
+	Caps	Άκρα
+	Butt / Flat	Επίπεδο
+	Miter	Οξεία
+	Round	Στρογγυλή
+	Bevel	Λοξή
+	Miter limit	Όριο οξείας γωνίας
+	Dashed line	Διακεκομμένη γραμμή
+	Dash	Παύλα
+	Gap	Κενό
+	Dash / gap lengths × stroke width	Μήκη παύλας / κενού × πλάτος περιγράμματος
+	Add pair	Προσθήκη ζεύγους
+	Remove pair	Αφαίρεση ζεύγους
+	Dash offset	Μετατόπιση παύλας
+	Open paths use centered strokes	Οι ανοικτές διαδρομές χρησιμοποιούν κεντραρισμένα περιγράμματα
+	Use finite lengths and a positive pattern total	Χρησιμοποιήστε πεπερασμένα μήκη και θετικό άθροισμα μοτίβου
 	No subject found — try Object Selection or the Lasso	Δεν βρέθηκε θέμα — δοκιμάστε την Επιλογή αντικειμένου ή το Λάσο
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο

@@ -92,6 +92,12 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: [Shape stroke controls](shape-strokes.md) expose existing Solid/Dashed/Dotted,
+custom dash/gap, offset, caps, joins, alignment, miter-limit and opacity capabilities in
+Shape/Pen options and Properties. Properties stages a cached canvas preview before one
+undoable edit. Gradient fill controls from #1053 remain open; the Line tool still draws a
+filled bar. This extends UI reachability and does not claim Photoshop-authored stroke parity.
+
 | Dimension | Measured / evidence (2026-10-05) | Grade | Notes |
 |---|---|---|---|
 | Menu wiring | 626/626 menu items dispatch a command (`parity.md`) | high but shallow | Says nothing about behaviour. |
@@ -160,6 +166,19 @@ Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filt
 undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
 acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
 unchanged.
+
+2026-10-10: Select and Mask's Shift Edge now computes the exact octagonal footprint
+with a square window extreme plus a dyadically built Manhattan ball. On a c7i.4xlarge
+(16 vCPUs), full tiled CPU refinement at radius 64 / Shift Edge +100% takes
+3.019 s -> 0.762 s at 24 MP (3.96x),
+3.706 s -> 0.921 s at 36 MP (4.02x).
+Three alternating paired release runs include guide sampling, guided filtering,
+boundary distances, quantization and assembly. Every output mask matches exactly.
+The dense fractional 24 MP radius-64 dilation kernel improves 36.00x;
+circular soft-mask kernels improve 20.76-172.16x at 24-36 MP, radii 4-64.
+Bounded halo tiles reduce the large-mask workspace allocation bound from 192/288 MB
+to about 115/163 MB, including output and 16 workers' scratch, excluding the source.
+See [method and results](octagonal-mask-performance.md).
 
 ### Where we're going (priority order)
 
