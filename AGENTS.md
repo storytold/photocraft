@@ -11,8 +11,12 @@ PhotoCraft is an open-source, native, Photoshop-comparable image editor written 
 | `docs/contributing.md` | Rules: clean-room, tests, layering, style, commits; the "add a command" checklist |
 | `docs/control-protocol.md` | JSON control channel: how agents drive and screenshot the running app |
 | `docs/ui-design.md` | Design tokens, themes, widgets, and how to match Photoshop's look |
-| `docs/roadmap.md` | Honest parity assessment (where we're lacking, where we're going), milestones, **current focus** |
-| `docs/parity.md` | Generated list of every Photoshop menu item, live or missing |
+| `ROADMAP.md` | One-page summary: stage, the two parity numbers, every dimension, languages, what's next |
+| `docs/target-app-parity.md` | The authoritative parity assessment against Photoshop 2026: numbers, weights, evidence, hours |
+| `docs/gaps.md` | Every known shortfall, ranked: the work list to pick from |
+| `docs/roadmap.md` | Milestones, **current focus**, what's next with estimates |
+| `docs/ui-parity.md`, `docs/brush-parity.md`, `docs/context-menu-parity.md`, `docs/file-format-parity.md`, `docs/hardware-parity.md`, `docs/localization-parity.md` | Per-dimension parity checklists |
+| `docs/parity-checklist.md` | Generated list of every Photoshop menu item, live or missing |
 | `docs/scorecard.md` | Generated scorecard: performance budgets and numbers, corpus floors, per-area checklists (tools, files, UI, type, automation, reliability, distribution), settings that do nothing |
 | `crates/<name>/README.md` (where present) | Public API of that crate |
 | [photocraft-corpus](https://github.com/storytold/photocraft-corpus) + `docs/development.md` › Test corpora | Real-file test oracles (our Photoshop-authored PSDs); with psd-tools, ag-psd and PngSuite fetched into `corpus/` by `cargo xtask corpus --all` at the pins in `xtask/src/corpus_pins.rs` |
@@ -70,15 +74,16 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 
 Priorities: important infrastructure first, then low-hanging parity, then the long tail.
 
-0. **Read `docs/roadmap.md` → "Honest parity assessment" first.** It says, dimension by dimension,
-   where PhotoCraft is lacking and the priority order of where we're going. `docs/parity.md`
-   (menu wiring) is not a measure of behaviour. When your work moves a measured number (PSD oracle,
-   round trips, workflow tests, performance), update that section with the dated figure.
+0. **Read `ROADMAP.md`, then `docs/gaps.md`.** `docs/target-app-parity.md` says, dimension by
+   dimension, where PhotoCraft is lacking; `docs/gaps.md` ranks the work. `docs/parity-checklist.md`
+   (menu wiring) is not a measure of behaviour. When your work moves a number or closes a gap,
+   update the parity doc and gap entry it belongs to, with the date, and bump their status line
+   and revision history (craftrules `standards/progress-docs.md`).
 1. **Check `docs/scorecard.md`** before picking work: each area's `missing` and `partial` rows,
    the performance scenarios that are over budget or not measurable yet, and the count of
    settings that do nothing. Its numbers are measured; prefer them to estimates.
 2. `docs/roadmap.md` → **Current focus**.
-3. `cargo xtask parity` → `docs/parity.md` lists every missing menu item, grouped by menu. Low-hanging fruit is usually a missing command whose algorithm already exists in `algo`, `paint`, `vector` or `text`.
+3. `cargo xtask parity` → `docs/parity-checklist.md` lists every missing menu item, grouped by menu. Low-hanging fruit is usually a missing command whose algorithm already exists in `algo`, `paint`, `vector` or `text`.
 4. `log/devlog.md` → the "Still open" bullets of recent entries.
 
 When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower it).
@@ -90,7 +95,7 @@ cargo test -p <crates you touched>
 cargo clippy -p <crates> --all-targets -- -D warnings
 cargo xtask layers
 cargo xtask wasm            # if you touched L0–L6
-cargo xtask parity          # if you added commands; commit the regenerated docs/parity.md
+cargo xtask parity          # if you added commands; commit the regenerated docs/parity-checklist.md
 cargo test -p photocraft-engine --test panic_hunt -- --ignored   # if you added/changed commands: no panic on adversarial input (Rule 9)
 cargo xtask scorecard       # if you moved a number: flip the checklist row in scorecard/*.toml, raise a
                             # corpus floor, fix a dead preference, or meet a budget (then set enforce = true
@@ -117,7 +122,8 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 
 
 - `docs/roadmap.md`: milestones M0–M12, status and the current focus.
-- `docs/parity.md`: generated Photoshop menu coverage.
+- `ROADMAP.md`, `docs/target-app-parity.md`, `docs/gaps.md` and the `docs/*-parity.md` checklists: where we stand against Photoshop.
+- `docs/parity-checklist.md`: generated Photoshop menu coverage.
 - `docs/scorecard.md`: generated scorecard (sources: `scorecard/*.toml`, `perf/budgets.toml`, `perf/baseline.json`, corpus floors, prefs audit).
 - `docs/releasing.md`: cutting a release (`cargo xtask version`, the `release` branch), signing secrets, packaging scripts in `packaging/`.
 - `../craftrules/release/playbook.md`: how every storytold app builds signed release binaries (the canonical recipe; `docs/release-playbook.md` just points there); `docs/releasing.md` is PhotoCraft's specifics.

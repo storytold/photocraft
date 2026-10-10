@@ -220,11 +220,11 @@ Unread: `general.color_picker`, `general.beep_when_done`, `general.resize_image_
 
 ## Automation
 
-Menu wiring (`docs/parity.md`): 628 of 628 menu items live (100.0%). This counts dispatch, not behaviour.
+Menu wiring (`docs/parity-checklist.md`): 628 of 628 menu items live (100.0%). This counts dispatch, not behaviour.
 
 | Id | Target | Status | Issue | Note |
 |---|---|---|---|---|
-| AUTO-1 | Every menu item dispatches a command id (UI, CLI, control channel and MCP share them) | done |  | docs/parity.md: all menu items live; menus.rs is_live |
+| AUTO-1 | Every menu item dispatches a command id (UI, CLI, control channel and MCP share them) | done |  | docs/parity-checklist.md: all menu items live; menus.rs is_live |
 | AUTO-219-1 | Record actions in a document-independent form (implicit layer, merged type keystrokes) | missing | [#219](https://github.com/storytold/photocraft/issues/219) | actions.rs:47 copies raw journal entries with explicit layer ids |
 | AUTO-219-2 | Actions panel: step and dialog toggles, reorder, delete a step, Stop, sets, .atn import | missing | [#219](https://github.com/storytold/photocraft/issues/219) | Panel deletes whole actions only (actions.rs:146) |
 | AUTO-219-3 | actions.record/stop/play/list commands for agents and the CLI | done | [#219](https://github.com/storytold/photocraft/issues/219) | actions.list/get/record/stop/play/delete in actions_cmds.rs; the panel, CLI and MCP share them. Nested steps pass the session authorize hook. |
