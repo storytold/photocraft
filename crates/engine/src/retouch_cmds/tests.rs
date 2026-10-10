@@ -1431,12 +1431,12 @@ fn remove_open_strokes_and_the_selection_limit_what_changes() {
 }
 
 #[test]
-fn remove_on_an_empty_layer_is_refused_without_a_history_step() {
+fn remove_on_an_empty_layer_is_a_no_op_without_a_history_step() {
     let mut s = square_session(8, "rgb");
     s.execute("layer.new.layer", json!({})).unwrap();
     let past = s.active().unwrap().history.past_len();
-    let err = s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16})).unwrap_err().to_string();
-    assert!(err.contains("nothing to remove on this layer"), "{err}");
+    let v = s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16})).unwrap();
+    assert_eq!(v, json!({"changed": false}));
     assert_eq!(s.active().unwrap().history.past_len(), past);
     // With Sample All Layers on, the image below is there to remove from.
     s.execute("paint.remove", json!({"points": [[38, 30], [54, 30]], "size": 16, "sampleAllLayers": true})).unwrap();

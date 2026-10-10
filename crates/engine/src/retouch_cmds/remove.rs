@@ -104,8 +104,9 @@ fn hole(plan: &Plan, sel: Option<&Surface>) -> Vec<bool> {
     m
 }
 
-/// The filled window and the hole it fills, computed on `doc` (a snapshot).
-fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::JobCtx, label: &str) -> Result<(Region, Vec<bool>)> {
+/// The filled window and the hole it fills, computed on `doc` (a snapshot). `None` when the
+/// layer's own window is fully transparent: nothing to remove and nothing to fill from.
+fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::JobCtx, label: &str) -> Result<Option<(Region, Vec<bool>)>> {
     let hole = hole(plan, doc.selection.as_ref());
     if !hole.iter().any(|m| *m) {
         return Err(bad(CMD, "the stroke doesn't cover anything that can change (check the selection)"));
@@ -121,9 +122,9 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
         let img = if plan.all_layers { composite_region(doc, None, SampleLayers::All, win, fmt) } else { Region::read(surf, win) };
         (img, fmt)
     };
-    // Nothing to remove, and nothing to fill from, on a fully transparent window of the layer itself.
+    // A no-op without the fill or a history step, as the other retouch tools on an empty layer.
     if !plan.all_layers && alpha_index(&fmt).is_some_and(|a| img.data.chunks_exact(img.ch).all(|px| px.get(a).is_none_or(|v| *v <= 0.0))) {
-        return Err(bad(CMD, "nothing to remove on this layer (turn on Sample All Layers to remove from the image below)"));
+        return Ok(None);
     }
     let (w, h) = (win.width() as usize, win.height() as usize);
     let mut data = ctx
@@ -131,7 +132,7 @@ fn run_remove(doc: &mut Document, plan: &Plan, p: &Value, ctx: &crate::jobs::Job
         .map_err(|_| EngineError::Cancelled)?;
     // The fill's seam blending can step slightly past the storable range.
     clamp_samples(&fmt, &mut data);
-    Ok((Region { rect: win, ch: img.ch, data }, hole))
+    Ok(Some((Region { rect: win, ch: img.ch, data }, hole)))
 }
 
 pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -153,7 +154,8 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
                 run_remove(&mut work, &plan, &p, ctx, label)
             }
         },
-        move |s, (out, hole)| {
+        move |s, filled| {
+            let Some((out, hole)) = filled else { return Ok(json!({"changed": false})) };
             let damage = s.edit(label, |doc, _| replace(doc, Target { id, all_layers: false }, &p, &out, &hole))?;
             if let Some(st) = s.active_mut() {
                 st.last_damage = Some(damage);
