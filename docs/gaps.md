@@ -24,7 +24,7 @@ what an agent can't finish alone.
 | G3 | User-reported bug backlog | stability, UI | blocks beta | 250–400 h | [target-app-parity](target-app-parity.md) |
 | G4 | Brush feel | UI / painting | high | 100–180 h | [brush-parity](brush-parity.md) |
 | G5 | Transform, handles and modifiers | UI | high | 60–110 h | [ui-parity](ui-parity.md) |
-| G6 | Missing tools (15) | features | high | 60–100 h | [ui-parity](ui-parity.md#tools) |
+| G6 | Missing tools (14) | features | high | 60–100 h | [ui-parity](ui-parity.md#tools) |
 | G7 | Workspaces shown as parameter dialogs | features | high | 80–140 h | [target-app-parity](target-app-parity.md#feature-areas) |
 | G8 | Type depth | features | high | 120–200 h | [target-app-parity](target-app-parity.md#feature-areas) |
 | G9 | Panels, preferences and workspace | UI | medium-high | 150–250 h | [ui-parity](ui-parity.md#panels-and-workspace) |
@@ -54,7 +54,7 @@ what an agent can't finish alone.
   scripted check there) is the only real oracle.
 
 ### G6. Missing tools
-- **Missing (15 of 68):** Artboard, Single Row Marquee, Single Column Marquee, Perspective Crop,
+- **Missing (14 of 68):** Single Row Marquee, Single Column Marquee, Perspective Crop,
   Frame, Color Sampler (#1046), Color Replacement (engine command exists), Art History Brush,
   Freeform Pen and Curvature Pen (#1054), Add Anchor Point, Delete Anchor Point, Convert Point
   (only as Pen + ⌥), Horizontal Type Mask, Vertical Type Mask.

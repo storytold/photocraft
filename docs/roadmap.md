@@ -70,7 +70,7 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
 4. **Brush and transform feel** ([G4](gaps.md#g4-brush-feel), [G5](gaps.md#g5-transform-handles-and-modifiers)):
    [`brush-parity.md`](brush-parity.md) and [`ui-parity.md`](ui-parity.md) rows marked partial
    or missing. 150–250 h.
-5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): 15 of Photoshop's 68. 60–100 h.
+5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): 14 of Photoshop's 68. 60–100 h.
 
 ## What's next, with estimates
 

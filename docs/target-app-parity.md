@@ -61,7 +61,7 @@ architecture and the PSD writer are the serial parts.
 | Component | Weight | Ours / Photoshop | % | Kind |
 |---|---:|---|---:|---|
 | Menu commands | 30% | 628 / 628 catalog items dispatch a live command | 100% | measured (`cargo xtask parity`) |
-| Toolbox tools | 15% | 53 / 68 (Photoshop's 67 `.kys` tools plus Remove, Triangle, Curvature Pen; minus legacy Rounded Rectangle and Targeted Adjustment) | 78% | measured (`Tool` enum in `ui-egui/src/state.rs`, `TOOL_SECTIONS` in `panels.rs`) |
+| Toolbox tools | 15% | 54 / 68 (Photoshop's 67 `.kys` tools plus Remove, Triangle, Curvature Pen; minus legacy Rounded Rectangle and Targeted Adjustment) | 79% | measured (`Tool` enum in `ui-egui/src/state.rs`, `TOOL_SECTIONS` in `panels.rs`) |
 | Panels | 10% | 30 / 35 Window-menu panels | 86% | measured (`view_cmds.rs`, panel modules) |
 | Filters and adjustments | 10% | every Filter and Image › Adjustments item live; Filter Gallery 47 looks | 100% | measured (menu catalog) |
 | File formats (usage-weighted) | 15% | 13 of 31 Photoshop formats supported in Photoshop's directions, 4 partial; the common ones (PSD/PSB, TIFF, JPEG, PNG, WebP) all present | ~80% (48% by count) | measured list, estimated weights ([file-format-parity.md](file-format-parity.md)) |
@@ -75,7 +75,7 @@ Weights reflect what a working Photoshop user depends on (photographers, retouch
 
 | Dimension | Weight | % ready | Remaining (agent-h) | Evidence | Detail |
 |---|---:|---:|---:|---|---|
-| Features in depth (tools, layers, selections, type, filters, transforms) | 25% | 55% | 600–1,000 | Scorecard checklists: Tools 20 done / 15 partial / 6 missing, Type 0 / 3 / 6, Automation 3 / 2 / 6. 15 tools missing; Select and Mask, Vanishing Point and Content-Aware Fill are parameter dialogs, not workspaces; type on a path, manual kerning, RTL paragraphs missing | [gaps.md](gaps.md) |
+| Features in depth (tools, layers, selections, type, filters, transforms) | 25% | 55% | 600–1,000 | Scorecard checklists: Tools 20 done / 15 partial / 6 missing, Type 0 / 3 / 6, Automation 3 / 2 / 6. 14 tools missing; Select and Mask, Vanishing Point and Content-Aware Fill are parameter dialogs, not workspaces; type on a path, manual kerning, RTL paragraphs missing | [gaps.md](gaps.md) |
 | UI / UX fidelity and feel | 15% | 40% | 350–600 | ~150 open UI issues; Workspace checklist 5 / 7 / 11; 46 of 149 preferences do nothing; no floating panel groups, thin Color panel, no transform context menu, brush lag and pressure jumps reported | [ui-parity.md](ui-parity.md), [brush-parity.md](brush-parity.md) |
 | File formats and fidelity | 15% | 60% | 300–500 | PSD oracle on Photoshop-authored files 133/256 (52%); io corpus 146/170 (86%); psd-tools 236/309 (76%); round trips ~100% of corpus; but users report Photoshop refusing our files (#1281, #2469; a text-layer case, #2374, was fixed 2026-10-10); no Photoshop PDF, EPS, JPEG 2000, JPEG XL, AVIF read, CR3 | [file-format-parity.md](file-format-parity.md) |
 | Performance | 10% | 25% | 200–350 | 3 of 25 budgeted scenarios meet budget (baseline 2026-10-05); 150-layer nudge crashes the GPU path (P12); layer move on 15000×10000 16-bit 2.7 s p50; users report brush and cursor lag (#2619, #2566, #1994) | [scorecard.md](scorecard.md#performance) |

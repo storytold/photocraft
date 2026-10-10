@@ -93,6 +93,7 @@ fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
 pub fn tool_icon(t: Tool) -> &'static str {
     match t {
         Tool::Move => "move",
+        Tool::Artboard => "artboard",
         Tool::RectMarquee => "square-dashed",
         Tool::EllipseMarquee => "circle-dashed",
         Tool::Brush => "brush",
