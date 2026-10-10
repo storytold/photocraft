@@ -42,6 +42,8 @@
 	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
+	Remove from Recent	Usuń z ostatnich plików
+	Remove {name} from Recent	Usuń {name} z ostatnich plików
 	Close	Zamknij
 	Minimize	Minimalizuj
 	Maximize	Maksymalizuj
@@ -592,6 +594,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%

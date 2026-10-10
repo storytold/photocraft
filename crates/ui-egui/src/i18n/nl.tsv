@@ -35,6 +35,8 @@
 	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Remove from Recent	Verwijderen uit recente bestanden
+	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
 	Minimize	Minimaliseren
 	Maximize	Maximaliseren
@@ -2176,6 +2178,10 @@
 	Show Vectorscope	Vectorscoop tonen
 	Tone Histogram	Toonhistogram
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%

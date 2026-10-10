@@ -39,6 +39,8 @@
 	Right	右
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
+	Remove from Recent	从最近文件中移除
+	Remove {name} from Recent	从最近文件中移除 {name}
 	Close	关闭
 	Minimize	最小化
 	Maximize	最大化
@@ -594,6 +596,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%

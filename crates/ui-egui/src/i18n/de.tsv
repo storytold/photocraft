@@ -43,6 +43,8 @@
 	Right	Rechts
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
+	Remove from Recent	Aus zuletzt geöffneten Dateien entfernen
+	Remove {name} from Recent	{name} aus zuletzt geöffneten Dateien entfernen
 	Close	Schließen
 	Minimize	Minimieren
 	Maximize	Maximieren
@@ -2190,6 +2192,10 @@
 	Show Vectorscope	Vektorskop anzeigen
 	Tone Histogram	Tonwerthistogramm
 	75%	75 %
+	80%	80 %
+	85%	85 %
+	90%	90 %
+	95%	95 %
 	125%	125 %
 	150%	150 %
 	175%	175 %
