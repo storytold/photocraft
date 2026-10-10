@@ -42,6 +42,8 @@ mod monitor_profile;
 mod photoshop_settings;
 mod screen_color;
 mod services;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod single_instance;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod tablet;
@@ -157,6 +159,7 @@ fn main() -> eframe::Result {
     let mut unreadable_paths: Vec<String> = Vec::new();
     let mut safe_gpu = false;
     let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
+    let mut new_instance = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
         match a.to_str() {
@@ -177,6 +180,7 @@ fn main() -> eframe::Result {
             Some("--automation-write-root") => automation_write_root = args.next().map(std::path::PathBuf::from),
             Some("--safe-gpu") => safe_gpu = true,
             Some("--in-window-menus") => in_window_menus = true,
+            Some("--new-instance") => new_instance = true,
             Some("--version") => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
@@ -197,6 +201,32 @@ fn main() -> eframe::Result {
         }
         std::process::exit(code);
     }
+
+    // Linux/BSD: hand the files to a window that's already open, as Open With from a file manager
+    // expects (#1540); otherwise become the instance later launches hand theirs to.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let single_instance = {
+        let socket =
+            single_instance::socket_path(std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).as_deref(), services::config_dir().as_deref());
+        let forward = single_instance::should_forward(new_instance, std::env::var_os("PHOTOCRAFT_NEW_INSTANCE"), control_port.is_some());
+        match socket {
+            // Paths that aren't valid Unicode are reported by this launch's own window instead.
+            Some(socket) if forward && unreadable_paths.is_empty() => {
+                let paths: Vec<std::path::PathBuf> = files.iter().map(|f| std::path::absolute(f).unwrap_or_else(|_| std::path::PathBuf::from(f))).collect();
+                if single_instance::forward(&socket, &paths) == single_instance::Forward::Delivered {
+                    return Ok(());
+                }
+                single_instance::listen(&socket)
+            }
+            _ => None,
+        }
+    };
+    // Only the inbox goes into the app: eframe drops the creator closure once the app exists, and
+    // the server (whose drop removes the socket) has to live until the event loop returns.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let instance_inbox = single_instance.as_ref().map(|s| s.inbox.clone());
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let _ = new_instance;
 
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // and usage errors leave no file behind. Records logged until now are written to it first.
@@ -460,6 +490,11 @@ fn main() -> eframe::Result {
             }
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
+            // Files later launches hand over (#1540) arrive like macOS's Apple events.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if let Some(inbox) = &instance_inbox {
+                app.services.os_events = Some(inbox.connect(&cc.egui_ctx));
+            }
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
@@ -502,6 +537,9 @@ fn main() -> eframe::Result {
         if let Some(s) = sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
             s.finish();
         }
+        // Stop listening first, or the relaunch would hand its files to this exiting process.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        drop(single_instance);
         if let Ok(exe) = std::env::current_exe() {
             let launched = std::process::Command::new(exe)
                 .args(std::env::args_os().skip(1))
