@@ -92,6 +92,28 @@ fn revert_reloads_as_one_undoable_step() {
 }
 
 #[test]
+fn injected_import_failure_does_not_open_a_document() {
+    let mut s = session(8, 8, 8);
+    let before = s.documents().len();
+    crate::allocation::fail_next_for_test();
+    let result = open_bytes_as(&mut s, "image.png", b"not decoded", None, None);
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for importing document")));
+    assert_eq!(s.documents().len(), before);
+}
+
+#[test]
+fn injected_save_failure_does_not_modify_the_destination() {
+    let dir = tmp("allocation-save");
+    let path = join(&dir, "existing.psd");
+    std::fs::write(&path, b"previous file").unwrap();
+    let s = session(8, 8, 8);
+    crate::allocation::fail_next_for_test();
+    let result = save_doc(doc(&s), &path, None);
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for saving document")));
+    assert_eq!(std::fs::read(path).unwrap(), b"previous file");
+}
+
+#[test]
 fn save_a_copy_keeps_path_and_dirty_state() {
     let dir = tmp("copy");
     let mut s = session(20, 10, 16);
@@ -543,7 +565,7 @@ fn guide_layouts() {
 
 #[test]
 fn only_layered_files_save_in_place() {
-    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd"] {
+    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd", "a.ora", "dir/A.ORA"] {
         assert!(saves_in_place(path), "{path}");
     }
     // Flat formats, no extension, a dotted folder with an extensionless file, a dot file.

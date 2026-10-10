@@ -32,6 +32,11 @@
 	New from Clipboard	Nuovo dagli appunti
 	Open…	Apri…
 	Open As…	Apri come…
+	Open EXR Parts…	Apri parti EXR…
+	Add beauty precomp from the AOVs	Aggiungi la precomposizione della bellezza dagli AOV
+	Both	Entrambe
+	Left	Sinistra
+	Right	Destra
 	Open Recent	Apri recenti
 	Clear Recent Files	Cancella file recenti
 	Close	Chiudi
@@ -81,6 +86,8 @@
 	Import	Importa
 	Browse…	Sfoglia…
 	Reveal in Finder	Mostra nel Finder
+	Show in Explorer	Mostra in Esplora file
+	Show in Folder	Mostra nella cartella
 	File Info…	Info file…
 	Print…	Stampa…
 	Print One Copy	Stampa una copia
@@ -806,7 +813,6 @@
 	Blending Options	Opzioni di fusione
 	Blue	Blu
 	Blue, Red, Yellow	Blu, rosso, giallo
-	Both	Entrambi
 	Both Axes	Entrambi gli assi
 	Bottom	In basso
 	Brightness	Luminosità
@@ -1126,7 +1132,6 @@
 	Leading	Interlinea
 	Leading (set to the font size × auto-leading when Auto)	Interlinea (impostata a dimensione font × interlinea auto quando Auto)
 	Leave as is (don't color manage)	Lascia com'è (non gestire colore)
-	Left	Sinistra
 	Left align text	Allinea testo a sinistra
 	Length:	Lunghezza:
 	Level	Livello
@@ -1336,7 +1341,6 @@
 	Restore All	Ripristina tutto
 	Restore Defaults	Ripristina predefiniti
 	Restrictive (Web)	Restrittivo (web)
-	Right	Destra
 	Right align text	Allinea testo a destra
 	Rigid	Rigido
 	Rotate:	Rotazione:
@@ -2297,6 +2301,7 @@ cameraRaw	Amount	Quantità
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selettore colore (Colore del testo)
+	Color Picker ({name})	Selettore colore ({name})
 	Color Picker (Fill Color)	Selettore colore (Colore di riempimento)
 	Fill color	Colore di riempimento
 	Color Picker (Stroke Color)	Selettore colore (Colore della traccia)
@@ -2476,3 +2481,7 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+	Next Document	Documento successivo
+	Previous Document	Documento precedente
+	W x H x Resolution	L x A x Risoluzione
+	Front Image	Immagine in primo piano

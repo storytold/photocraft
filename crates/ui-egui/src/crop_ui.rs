@@ -190,8 +190,12 @@ fn size_ok(r: [f64; 4]) -> bool {
     r[2] - r[0] >= MIN_FRAME && r[3] - r[1] >= MIN_FRAME
 }
 
-/// The options-bar ratio preset as width / height.
+/// The options-bar ratio preset as width / height (W : H in W x H x Resolution mode).
 fn preset_ratio(app: &PhotocraftApp) -> Option<f64> {
+    if app.ui.tool_options.crop_ratio == crate::crop_size::WHR {
+        let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+        return crate::crop_size::ratio(&app.ui.tool_options, dpi);
+    }
     let size = app.session.active().map_or((1.0, 1.0), |s| (s.doc.size.width as f64, s.doc.size.height as f64));
     crate::chrome_ui::crop_ratio(&app.ui.tool_options.crop_ratio, size.0, size.1).map(|(w, h)| w / h).filter(|k| k.is_finite() && *k > 0.0)
 }
@@ -480,7 +484,10 @@ pub fn swapped_ratio(key: &str, doc_w: f64, doc_h: f64) -> Option<String> {
 pub fn swap_orientation(app: &mut PhotocraftApp) -> bool {
     let Some(r) = app.ui.crop_rect.filter(|_| takes_keys(app)) else { return false };
     let size = app.session.active().map_or((0.0, 0.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
-    if let Some(k) = swapped_ratio(&app.ui.tool_options.crop_ratio, size.0, size.1) {
+    // W x H x Resolution swaps W and H instead of a ratio.
+    if !crate::crop_size::swap(&mut app.ui.tool_options)
+        && let Some(k) = swapped_ratio(&app.ui.tool_options.crop_ratio, size.0, size.1)
+    {
         app.ui.tool_options.crop_ratio = k;
     }
     keyed(app, swapped(r));
@@ -1193,6 +1200,7 @@ mod tests {
             "file.new",
             "file.open",
             "file.openAs",
+            "file.openExrParts",
             "file.closeAll",
             "file.revert",
             "file.export.exportAs",

@@ -33,6 +33,11 @@
 	Open…	Відкрити…
 	Open	Відкрити
 	Open As…	Відкрити як…
+	Open EXR Parts…	Відкрити частини EXR…
+	Add beauty precomp from the AOVs	Додати попередню композицію краси з AOV
+	Both	Обидва
+	Left	Лівий
+	Right	Правий
 	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Close	Закрити
@@ -1058,8 +1063,6 @@
 	Single Word Justification	Вирівнювання одного слова по ширині
 	Alignment	Вирівнювання
 	Indent First	Відступ першого рядка
-	Left	Ліворуч
-	Right	Праворуч
 	Center	По центру
 	Justify	По ширині
 
@@ -1596,6 +1599,8 @@
 	Open a document to select a colour range.	Відкрийте документ, щоб виділити колірний діапазон.
 	Saved	Збережено
 	Reveal in Finder	Показати у Finder
+	Show in Explorer	Показати у Провіднику
+	Show in Folder	Показати в теці
 	Before (Y)	До (Y)
 	After (X)	Після (X)
 	Original	Оригінал
@@ -1910,7 +1915,6 @@
 	Bilinear	Білінійна
 	Black, White	Чорний, білий
 	Blue, Red, Yellow	Синій, червоний, жовтий
-	Both	Обидва
 	Bottom	Низ
 	Brightness Jitter	Коливання яскравості
 	Brush Reconstruct Options	Параметри пензля реконструкції
@@ -2474,6 +2478,7 @@ cameraRaw	Roughness	Шорсткість
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Вибір кольору (колір тексту)
+	Color Picker ({name})	Вибір кольору ({name})
 	Color Picker (Fill Color)	Вибір кольору (колір заливки)
 	Fill color	Колір заливки
 	Color Picker (Stroke Color)	Вибір кольору (колір обведення)
@@ -3513,3 +3518,7 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+	Next Document	Наступний документ
+	Previous Document	Попередній документ
+	W x H x Resolution	Ш x В x Роздільна здатність
+	Front Image	Зображення переднього плану
