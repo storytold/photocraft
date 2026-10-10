@@ -84,6 +84,7 @@ mod tests {
     fn system_preferences_are_negotiated_in_order() {
         for (tags, expected) in [
             (vec!["ja-JP", "en-US"], "ja"),
+            (vec!["fa-IR", "en-US"], "fa"),
             (vec!["fr-CA", "en-US"], "fr"),
             (vec!["uk-UA", "en-US"], "uk"),
             (vec!["sv-SE", "uk_UA.UTF-8", "ru-RU"], "uk"),
