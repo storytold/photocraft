@@ -505,6 +505,19 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
     }
 }
 
+/// A pen tap (a drag still at its one press point when released) paints its dab at the highest
+/// pressure the pen reached during the contact, not just the first sample's (#1798). A mouse is
+/// unchanged at full pressure.
+fn tap_at_peak_pressure(app: &mut PhotocraftApp) {
+    if app.stylus.sample().is_none() {
+        return;
+    }
+    let peak = f64::from(app.stylus.tap_pressure());
+    if let Some(p) = app.drag.as_mut().filter(|d| d.points.len() == 1).and_then(|d| d.points.first_mut()) {
+        p[2] = p[2].max(peak);
+    }
+}
+
 /// While a stroke is held still, its point repeats this often (in ms) so time-based brush
 /// features (airbrush build-up, smoothing catch-up) keep going, as when the pen moves.
 const HOLD_REPEAT_MS: f64 = 16.0;
@@ -2778,6 +2791,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p {
+                tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
             }
         }
@@ -2789,6 +2803,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if let Some(d) = p
                 && app.drag.is_some()
             {
+                tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
             }
         }
@@ -2822,6 +2837,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     // If this tool was not handled on pointer-down, fall back to a
                     // click-sized gesture while preserving pen pressure (mouse stays at 1).
                     tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                    tap_at_peak_pressure(app);
                     tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
                 }
             }
