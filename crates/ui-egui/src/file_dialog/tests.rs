@@ -144,7 +144,8 @@ fn layered_save_respects_explicit_jpeg_choices() {
     answer(&open, Some(FileDialogAnswer::SaveTo("/exports/chosen.JPEG".into())));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(*written.borrow(), ["/exports/chosen.jpeg"]);
-    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/exports/chosen.jpeg"));
+    // The JPEG can't hold the layers, so it is a copy and the document keeps its file (#2550).
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/My image.JPEG"));
     // Explicit command paths carry the same choice and bypass the picker.
     for command in ["file.save", "file.saveAs"] {
         let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
@@ -183,6 +184,18 @@ fn filtered_picker_requests_only_the_given_extensions() {
         open.borrow().first().map(|(r, _)| r),
         Some(FileDialogRequest::Open { multiple: false, extensions: Some(exts), .. })
             if exts.iter().map(String::as_str).collect::<Vec<_>>() == ["cube", "3dl", "look"]
+    ));
+}
+
+#[test]
+fn scripts_browse_lists_only_script_files() {
+    let (mut app, open, _) = app();
+    menus::invoke(&mut app, &egui::Context::default(), "file.scripts.browse", json!({})).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(matches!(
+        open.borrow().first().map(|(r, _)| r),
+        Some(FileDialogRequest::Open { multiple: false, extensions: Some(exts), .. })
+            if exts.iter().map(String::as_str).collect::<Vec<_>>() == ["psjs", "ccjs", "jsx", "js", "jsxbin", "json", "txt"]
     ));
 }
 
@@ -277,6 +290,84 @@ fn save_and_export_dialogs_start_beside_the_document() {
         answer(&open, None);
         app.poll_file_dialog(&ctx, None);
     }
+}
+
+/// The path `pick_save` suggests for `name` in `dir` on this platform: it joins with `Path::join`,
+/// which uses `\` on Windows, so the expected values must be built the same way (#2745).
+fn joined(dir: &str, name: &str) -> String {
+    std::path::Path::new(dir).join(name).to_string_lossy().into_owned()
+}
+
+/// #1826: after the user navigates a save or export dialog elsewhere, the document's next dialog
+/// starts there. Save As of a saved document still suggests its own path; other documents and
+/// closed documents are unaffected.
+#[test]
+fn save_dialogs_remember_where_each_document_was_last_saved() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let first = app.session.active().unwrap().doc.id;
+    app.session.active_mut().unwrap().path = Some("/proj/original.psd".into());
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    // An export starts beside the document; the user saves it under /renders instead.
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/proj", "result.png"));
+    answer(&open, Some(FileDialogAnswer::SaveTo("/renders/result.png".into())));
+    app.poll_file_dialog(&ctx, None);
+    // The next export starts in /renders; Save As still offers the document's own path.
+    app.pick_save("again.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/renders", "again.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), "/proj/original.psd");
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // A cancelled dialog and an explicit directory change nothing.
+    app.pick_save("/elsewhere/x.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), "/elsewhere/x.png");
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    app.pick_save("third.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/renders", "third.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // Another document has its own memory: untitled, it starts wherever the shell defaults.
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let second = app.session.active().unwrap().doc.id;
+    assert_ne!(first, second);
+    app.pick_save("fresh.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), "fresh.png");
+    answer(&open, Some(FileDialogAnswer::SaveTo("/other/fresh.png".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.save_dirs.get(&second).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/other"));
+    assert_eq!(app.save_dirs.get(&first).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/renders"));
+    // The folder is remembered for the document the dialog was asked for, not the active one.
+    app.session.set_active(0);
+    app.pick_save("swap.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/renders", "swap.png"));
+    app.session.set_active(1);
+    answer(&open, Some(FileDialogAnswer::SaveTo("/moved/swap.png".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.save_dirs.get(&first).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/moved"));
+    assert_eq!(app.save_dirs.get(&second).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/other"));
+    // Closing a document forgets its folder at the next dialog.
+    app.run("file.close", json!({"document": 1})).unwrap();
+    app.pick_save("last.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/moved", "last.png"));
+    assert!(!app.save_dirs.contains_key(&second));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
 }
 
 #[test]
@@ -404,4 +495,94 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
     answer(&open, Some(FileDialogAnswer::SaveTo("/pics/a.psd".into())));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.documents().len(), 1);
+}
+
+/// The app with a painted layer converted to a smart object and a duplicate instance of it.
+fn smart_app() -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>, [u64; 2]) {
+    let (mut app, open, written) = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    let a = app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let b = app.run("layer.duplicate", json!({"layer": a})).unwrap()["layer"].as_u64().unwrap();
+    app.session.select_layer(photocraft_doc::LayerId(a)).unwrap();
+    (app, open, written, [a, b])
+}
+
+fn smart_source(app: &PhotocraftApp, id: u64) -> photocraft_doc::SmartSource {
+    match &app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+        photocraft_doc::LayerContent::Smart(sm) => sm.source.clone(),
+        other => panic!("not a smart object: {}", other.kind_name()),
+    }
+}
+
+#[test]
+fn replace_contents_picks_a_file_for_every_instance() {
+    let (mut app, open, _, ids) = smart_app();
+    let ctx = egui::Context::default();
+    let before = ids.map(|id| smart_source(&app, id));
+    // Cancelling changes nothing.
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: false, .. }, _)]));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(ids.map(|id| smart_source(&app, id)), before);
+    // A picked file (by contents, as on the web) replaces the contents of both instances.
+    let png = photocraft_io::export(&app.session.active().unwrap().doc, "png", &Default::default()).unwrap().bytes;
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("art.png".into(), png)));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    for id in ids {
+        assert!(matches!(smart_source(&app, id), photocraft_doc::SmartSource::Embedded { ref file_name, .. } if file_name == "art.png"));
+    }
+    // A file that isn't an image is an error, and the contents stay.
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("notes.png".into(), b"not an image".to_vec())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(app.ui.status_error);
+    assert!(matches!(smart_source(&app, ids[1]), photocraft_doc::SmartSource::Embedded { ref file_name, .. } if file_name == "art.png"));
+}
+
+#[test]
+fn export_contents_suggests_the_contents_file_name() {
+    let (mut app, open, written, _) = smart_app();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.exportContents", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "Layer 1.pcraft"),
+        "{:?}",
+        open.borrow().first().map(|(r, _)| r.clone())
+    );
+    answer(&open, Some(FileDialogAnswer::SaveTo("/out/contents.pcraft".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/out/contents.pcraft"]);
+}
+
+#[test]
+fn convert_to_linked_asks_where_to_write_the_contents() {
+    let (mut app, open, _, ids) = smart_app();
+    let ctx = egui::Context::default();
+    let dir = std::env::temp_dir().join(format!("pcraft-convert-linked-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("linked.pcraft").to_string_lossy().into_owned();
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.convertToLinked", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { .. }, _)]));
+    answer(&open, Some(FileDialogAnswer::SaveTo(path.clone())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(std::fs::metadata(&path).is_ok_and(|m| m.len() > 0));
+    std::fs::remove_dir_all(&dir).ok();
+    for id in ids {
+        assert_eq!(smart_source(&app, id), photocraft_doc::SmartSource::Linked { path: path.clone() });
+    }
 }

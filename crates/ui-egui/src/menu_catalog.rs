@@ -7,6 +7,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File"], "New…", Some("Cmd+N"), "file.new"),
     (&["File"], "Open…", Some("Cmd+O"), "file.open"),
     (&["File"], "Open As…", Some("Cmd+Alt+Shift+O"), "file.openAs"),
+    (&["File"], "Open EXR Parts…", None, "file.openExrParts"),
     (&["File"], "---", None, "---"),
     (&["File"], "Close", Some("Cmd+W"), "file.close"),
     (&["File"], "Close All", Some("Cmd+Alt+W"), "file.closeAll"),

@@ -171,6 +171,9 @@ pub struct Pass<'a> {
     pub d: Option<Slot>,
     pub mode: BlendMode,
     pub opacity: f32,
+    /// The layer's Fill where it isn't folded into `opacity`: the final blend of a plain layer
+    /// (`Kernel::Blend`), so the special eight can apply it inside the blend. 1 elsewhere.
+    pub fill: f32,
     /// Layer pixels (raster / text / shape / smart cache / fill cache).
     pub tex: Option<TexUse<'a>>,
     /// Colour outside `tex` (the surface's default pixel), the solid fill colour, or the effect
@@ -232,6 +235,7 @@ impl<'a> Pass<'a> {
             d: None,
             mode: BlendMode::Normal,
             opacity: 1.0,
+            fill: 1.0,
             tex: None,
             color: [0.0; 4],
             mask: None,
@@ -362,7 +366,8 @@ pub const F_FIRST: u32 = 2048;
 pub const F_CHANNELS: u32 = 4096;
 /// Lab document: Normal blending mixes in CIELAB (`psblend::LAB_MIX`).
 pub const F_LAB: u32 = 65536;
-/// 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1 (`psblend::HDR`).
+/// 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1, and the non-separable
+/// modes clip only below 0 (`psblend::HDR`).
 pub const F_HDR: u32 = 262144;
 /// `Lerp`: A rounded to `p0.x` steps per unit (adjustment results on integer documents).
 pub const F_QUANT: u32 = 32768;
@@ -670,7 +675,8 @@ impl<'a> Planner<'a> {
             p.a = Some(backdrop);
             p.b = Some(content);
             p.mode = layer.blend;
-            p.opacity = opacity;
+            p.opacity = layer.opacity;
+            p.fill = layer.fill_opacity;
             return Ok(self.emit(p));
         }
 
@@ -703,7 +709,8 @@ impl<'a> Planner<'a> {
         p.a = Some(if clip.is_some() { self.retain(backdrop) } else { backdrop });
         p.b = Some(content);
         p.mode = layer.blend;
-        p.opacity = opacity;
+        p.opacity = layer.opacity;
+        p.fill = layer.fill_opacity;
         p.flags = gamma_flag(layer);
         p.extra[3] = photocraft_compose::text_gamma(layer);
         p.clip = clip;
@@ -821,6 +828,10 @@ impl<'a> Planner<'a> {
     }
 
     fn fill(&self, p: &mut Pass<'a>, f: &Fill, frame: photocraft_geom::Rect) -> Result<(), Unsupported> {
+        // The RGB shader cannot interpolate or dither native ink channels.
+        if self.cx.mode == photocraft_color::ColorMode::Cmyk && !matches!(f, Fill::Pattern { .. }) {
+            return Err(Unsupported("native CMYK fill (composited on the CPU)".into()));
+        }
         match f {
             Fill::Solid(c) => {
                 let rgb = c.to_rgb();
@@ -835,8 +846,11 @@ impl<'a> Planner<'a> {
                 p.params[0] = [angle, scale, if *reverse { 1.0 } else { 0.0 }, style_index(*style)];
                 let c = frame;
                 p.params[1] = [c.x0 as f32, c.y0 as f32, c.width() as f32, c.height() as f32];
-                // p2.xy: centre offset; p2.w: dither (the shared position hash, see the shader).
-                p.params[2] = [offset.0, offset.1, 0.0, if *dither { 1.0 } else { 0.0 }];
+                // p2.xy: centre offset; p2.z: the depth's levels a dithered pixel is rounded to
+                // (0: float, compose::gradient_fill::render_quantized); p2.w: dither (the shared
+                // position hash, see the shader).
+                let quantum = photocraft_compose::adjustment_quantum(self.cx.depth).unwrap_or(0.0);
+                p.params[2] = [offset.0, offset.1, quantum, if *dither { 1.0 } else { 0.0 }];
                 let ramp = photocraft_compose::gradient_fill::Ramp::new(f);
                 let mut rows = vec![[0.0f32; 4096]; 4];
                 for k in 0..4096 {
@@ -1505,7 +1519,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         Adjustment::BrightnessContrast { brightness, contrast, legacy: true } => {
             let c = contrast.clamp(-100.0, 99.0);
             let k = if c >= 0.0 { 1.0 / (1.0 - c / 100.0) } else { 1.0 + c / 100.0 };
-            p[0] = [brightness / 255.0, k, 0.0, 0.0];
+            // Brightness before contrast when it is raised, after it when lowered (compose::adjust).
+            let (pre, post) = if c >= 0.0 { (brightness / 255.0, 0.0) } else { (0.0, brightness / 255.0) };
+            p[0] = [pre, k, photocraft_compose::adjust::LEGACY_PIVOT, post];
             (4, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {
@@ -1681,6 +1697,26 @@ mod tests {
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
 
+    #[test]
+    fn native_cmyk_fills_fall_back_only_without_a_valid_cache() {
+        use photocraft_doc::{FillCache, GradientStyle};
+        for depth in photocraft_color::SampleType::ALL {
+            for fill in [Fill::Solid(Color::WHITE), Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false)] {
+                let mut doc = Document::new("CMYK", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Cmyk, depth);
+                doc.layers.push(Layer::new("Fill", LayerContent::Fill(fill.clone())));
+                assert!(plan(&doc).unwrap_err().0.contains("native CMYK fill"));
+                doc.layers[0].visible = false;
+                assert!(plan(&doc).is_ok());
+                doc.layers[0].visible = true;
+                doc.layers[0].fill_cache = Some(FillCache { fill, surface: photocraft_raster::Surface::new(doc.pixel_format()) });
+                assert!(plan(&doc).is_ok());
+                doc.layers[0].fill_cache.as_mut().unwrap().fill = Fill::Solid(Color::TRANSPARENT);
+                assert!(plan(&doc).is_err());
+                doc.mode = photocraft_color::ColorMode::Rgb;
+                assert!(plan(&doc).is_ok());
+            }
+        }
+    }
     #[test]
     fn outer_glow_plan_knocks_out_see_through_fill() {
         use photocraft_doc::{Contour, FxCommon, GlowSource, GlowTechnique};

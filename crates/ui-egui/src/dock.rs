@@ -3,8 +3,9 @@
 //! A group's height never follows its content: content taller than the group scrolls inside
 //! it. The last expanded group (Layers by default) fills what the others leave. Drag the gap
 //! between two groups to resize them, double-click a tab (or use the panel menu) to collapse a
-//! group to its tab strip, and drag a tab strip to move the group up or down the column
-//! (unless Window › Workspace › Lock Workspace is on).
+//! group to its tab strip, drag a tab strip (outside its tabs, or a tab dragged off the strip) to
+//! move the group up or down the column, and drag a tab along its strip to reorder the group's
+//! tabs (#2272); Window › Workspace › Lock Workspace stops all three moves.
 //!
 //! The layout is [`DockLayout`] in `UiState::dock` (serialisable, drivable with `ui.set`), saved
 //! with Window › Workspace › New Workspace…, reset by Reset Workspace, and remembered across
@@ -168,6 +169,23 @@ pub struct DockLayout {
     /// Names of tabs hidden by Close (not positions: Color/Swatches swap with the theme).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub hidden_tabs: BTreeMap<Group, Vec<String>>,
+    /// Tab order per group, left to right, by name like `hidden_tabs` (#2272). A group missing
+    /// here keeps its default order; unknown names are ignored and tabs missing from a list
+    /// follow it in their default order. Anything unreadable falls back to the defaults.
+    #[serde(rename = "tabOrder", alias = "tab_order", deserialize_with = "lenient_tab_order")]
+    pub tab_order: BTreeMap<Group, Vec<String>>,
+}
+
+/// Read `tabOrder` keeping what makes sense: unknown groups, non-list values and non-string names
+/// are dropped instead of failing the whole saved layout.
+fn lenient_tab_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<Group, Vec<String>>, D::Error> {
+    let v = Value::deserialize(d)?;
+    let mut out = BTreeMap::new();
+    for (k, names) in v.as_object().into_iter().flatten() {
+        let (Some(g), Some(names)) = (Group::from_key(k), names.as_array()) else { continue };
+        out.insert(g, names.iter().filter_map(Value::as_str).take(16).map(str::to_owned).collect());
+    }
+    Ok(out)
 }
 
 /// Gap between groups; it is also the splitter's grab area.
@@ -176,10 +194,49 @@ pub const GAP: f32 = 6.0;
 const MAX_HEIGHT: f32 = 4000.0;
 
 impl DockLayout {
-    /// Visible tabs, retaining their original indices for commands and panel bodies.
+    /// Every tab of `group` in the user's order (#2272), with its original index (the one
+    /// `dockTabs`, commands and panel bodies use).
+    pub fn ordered_tabs(&self, group: Group, pro: bool) -> Vec<(usize, &'static str)> {
+        let all: Vec<(usize, &'static str)> = group.tabs(pro).iter().copied().enumerate().collect();
+        let mut out: Vec<(usize, &'static str)> = Vec::with_capacity(all.len());
+        for name in self.tab_order.get(&group).into_iter().flatten() {
+            if let Some(&tab) = all.iter().find(|(_, n)| *n == name.as_str())
+                && !out.contains(&tab)
+            {
+                out.push(tab);
+            }
+        }
+        for tab in all {
+            if !out.contains(&tab) {
+                out.push(tab);
+            }
+        }
+        out
+    }
+
+    /// Visible tabs in display order, retaining their original indices for commands and panel
+    /// bodies.
     pub fn visible_tabs(&self, group: Group, pro: bool) -> Vec<(usize, &'static str)> {
         let hidden = self.hidden_tabs.get(&group);
-        group.tabs(pro).iter().copied().enumerate().filter(|(_, name)| !hidden.is_some_and(|xs| xs.iter().any(|x| x.as_str() == *name))).collect()
+        self.ordered_tabs(group, pro).into_iter().filter(|(_, name)| !hidden.is_some_and(|xs| xs.iter().any(|x| x.as_str() == *name))).collect()
+    }
+
+    /// Move tab `tab` (an original index) of `group` so it is drawn just before tab `before`
+    /// (or last when `None` or not a tab of the group). The default order is stored as no entry.
+    pub fn move_tab(&mut self, group: Group, tab: usize, before: Option<usize>, pro: bool) {
+        if before == Some(tab) {
+            return;
+        }
+        let mut order = self.ordered_tabs(group, pro);
+        let Some(at) = order.iter().position(|(i, _)| *i == tab) else { return };
+        let moved = order.remove(at);
+        let to = before.and_then(|b| order.iter().position(|(i, _)| *i == b)).unwrap_or(order.len());
+        order.insert(to, moved);
+        if order.iter().map(|(i, _)| *i).eq(0..order.len()) {
+            self.tab_order.remove(&group);
+        } else {
+            self.tab_order.insert(group, order.into_iter().map(|(_, n)| n.to_owned()).collect());
+        }
     }
 
     /// Hide one tab; it can be reopened through Window › Panel.
@@ -354,6 +411,7 @@ enum Action {
     Close(Group),
     CloseTab(Group, usize),
     Move(Group, Option<Group>),
+    MoveTab(Group, usize, Option<usize>),
 }
 
 /// Rects of the groups drawn last frame (screen points), for tests and automation.
@@ -412,13 +470,17 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         let indices: Vec<usize> = visible.iter().map(|(i, _)| *i).collect();
         let tabs: Vec<&str> = visible.iter().map(|(_, name)| *name).collect();
         let mut sel = indices.iter().position(|i| *i == before).unwrap_or(0);
-        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, |ui, shown_tab| {
+        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, !locked, |ui, shown_tab| {
             let Some(&tab) = indices.get(shown_tab) else { return };
             let inner = ui.available_height().max(0.0);
             if g.scrolls_itself(tab) {
                 ui.set_min_height(inner);
                 body(app, ui, g, tab);
             } else {
+                // The pro Color field stretches to the group's height instead of a fixed 120 pt.
+                if t.pro && g == Group::Color && tab == 0 {
+                    ui.data_mut(|d| d.insert_temp(crate::panels::color_field_fill_id(), inner));
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("dock-scroll", g.key(), tab))
                     .max_height(inner)
@@ -451,12 +513,20 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if resp.strip.double_clicked() || resp.tab_double_clicked || (collapsed && resp.tab_clicked) {
             actions.push(Action::ToggleCollapse(g));
         }
-        if !locked && resp.strip.dragged() {
+        // The strip uses visible indices; reorder in original ones.
+        if !locked
+            && let Some((from, before)) = resp.tab_reorder
+            && let Some(&tab) = indices.get(from)
+        {
+            actions.push(Action::MoveTab(g, tab, before.and_then(|b| indices.get(b).copied())));
+        }
+        // A tab dragged off its strip moves the whole group, as the strip itself does.
+        if !locked && (resp.strip.dragged() || resp.tab_dragging_out) {
             dragging = Some(g);
         }
         if !locked
-            && resp.strip.drag_stopped()
-            && let Some(p) = ui.ctx().pointer_interact_pos()
+            && (resp.strip.drag_stopped() || resp.tab_dropped_out)
+            && let Some(p) = ui.ctx().pointer_interact_pos().or_else(|| ui.ctx().pointer_latest_pos())
         {
             actions.push(Action::Move(g, drop_before(&order, &rects, g, p.y)));
         }
@@ -464,6 +534,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         egui::Popup::menu(&resp.menu).show(|ui| {
+            crate::widgets::style_spectrum_popup_menu(ui);
             ui.set_min_width(170.0);
             if tabs.get(sel) == Some(&"Layers") {
                 crate::layer_row_ui::panel_menu(app, ui);
@@ -492,7 +563,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.close();
             }
         });
-        // Splitter in the gap below this group: resizes it against the next expanded group.
+        // Splitter in the gap below this group: resizes it, pushing the neighbouring groups.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
             let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
             let sresp = ui.interact(gap, ui.id().with(("dock-splitter", g.key())), Sense::drag());
@@ -527,18 +598,21 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             }
             Action::Close(g) => *g.shown_mut(&mut app.ui.panels) = false,
             Action::CloseTab(g, tab) => {
+                let shown_before = app.ui.dock.visible_tabs(g, t.pro);
                 app.ui.dock.hide_tab(g, tab, t.pro);
                 let remaining = app.ui.dock.visible_tabs(g, t.pro);
                 if remaining.is_empty() {
                     *g.shown_mut(&mut app.ui.panels) = false;
                 } else if *g.tab_mut(&mut app.ui.dock_tabs) == tab {
-                    // Prefer the next tab, or the previous one when closing the last.
-                    let next = remaining.iter().find(|(i, _)| *i > tab).or_else(|| remaining.last());
+                    // Prefer the next tab on the strip, or the previous one when closing the last.
+                    let at = shown_before.iter().position(|(i, _)| *i == tab).unwrap_or(0);
+                    let next = shown_before.iter().skip(at + 1).find(|x| remaining.contains(x)).or_else(|| remaining.last());
                     if let Some(&(next, _)) = next {
                         *g.tab_mut(&mut app.ui.dock_tabs) = next;
                     }
                 }
             }
+            Action::MoveTab(g, tab, before) => app.ui.dock.move_tab(g, tab, before, t.pro),
             Action::Move(g, before) => {
                 if before != Some(g) {
                     app.ui.dock.move_group(g, before);
@@ -574,16 +648,24 @@ fn drop_before(order: &[Group], rects: &[(Group, Rect)], dragged: Group, y: f32)
     }
 }
 
-/// Splitter `i` (below group `i`) dragged by `dy`: group `i` grows or shrinks against the next
-/// expanded group (or the filler, which absorbs the difference).
+/// Splitter `i` (below group `i`) dragged by `dy`. Like Photoshop, the groups on the side the
+/// splitter moves into shrink in turn, nearest first, each down to its minimum (#2573), and the
+/// group on the other side grows by what they gave. The filler absorbs its share implicitly,
+/// so the column height stays the same.
 fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) {
     if !dy.is_finite() || dy == 0.0 {
         return;
     }
-    let Some(&(g, h)) = heights.get(i) else { return };
-    let filler = heights.iter().rposition(|(g, _)| !layout.is_collapsed(*g));
-    let Some(j) = heights.iter().enumerate().skip(i + 1).find(|(_, (n, _))| !layout.is_collapsed(*n)).map(|(j, _)| j) else { return };
-    let Some(&(n, nh)) = heights.get(j) else { return };
+    let expanded = |k: &usize| heights.get(*k).is_some_and(|(g, _)| !layout.is_collapsed(*g));
+    let filler = (0..heights.len()).rev().find(expanded);
+    let Some(j) = (i + 1..heights.len()).find(expanded) else { return };
+    if !expanded(&i) {
+        return;
+    }
+    // Dragging down grows group `i` at the expense of the groups below; dragging up grows the
+    // next expanded group at the expense of `i` and the groups above it.
+    let (grow, shrink): (usize, Vec<usize>) =
+        if dy > 0.0 { (i, (j..heights.len()).filter(expanded).collect()) } else { (j, (0..=i).rev().filter(expanded).collect()) };
     // The first drag pins the other groups at the heights they show, so groups still at their
     // defaults (which give way to the filler) don't shift while this one is resized.
     for (k, (o, oh)) in heights.iter().enumerate() {
@@ -591,10 +673,22 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
             layout.heights.entry(*o).or_insert(*oh);
         }
     }
-    let new_h = (h + dy).clamp(g.min_height(), (h + nh - n.min_height()).max(g.min_height()));
-    layout.heights.insert(g, new_h);
-    if Some(j) != filler {
-        layout.heights.insert(n, (nh - (new_h - h)).max(n.min_height()));
+    let mut left = dy.abs();
+    for k in shrink {
+        if left <= 0.0 {
+            break;
+        }
+        let Some(&(o, oh)) = heights.get(k) else { continue };
+        let give = (oh - o.min_height()).max(0.0).min(left);
+        left -= give;
+        if Some(k) != filler {
+            layout.heights.insert(o, oh - give);
+        }
+    }
+    if let Some(&(o, oh)) = heights.get(grow)
+        && Some(grow) != filler
+    {
+        layout.heights.insert(o, oh + (dy.abs() - left));
     }
 }
 
@@ -631,7 +725,10 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// (a workspace or `panelLayout`). Missing or invalid dock parts are left alone; old
 /// layouts without Timeline visibility restore it closed.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
-    if let Some(p) = v.get("panels").and_then(|p| serde_json::from_value(p.clone()).ok()) {
+    if let Some(mut p) = v.get("panels").and_then(|p| serde_json::from_value::<Panels>(p.clone()).ok()) {
+        // The embedding host owns these flags, including for layouts that serialize them.
+        p.menu_bar = app.ui.panels.menu_bar;
+        p.rail = app.ui.panels.rail;
         app.ui.panels = p;
     }
     if let Some(t) = v.get("dockTabs").and_then(|t| serde_json::from_value(t.clone()).ok()) {

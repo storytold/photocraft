@@ -23,4 +23,4 @@
 4. **Respect the context:** active selection (feathered), layer vs mask target, locks, the colour model and depth.
 5. **Tests** in the module: behaviour, undo/redo, disabled states, bad params, several depths.
 6. **Dialog** (if it has parameters): filters and adjustments get schema-driven dialogs with live preview (`ui-egui/src/filter_dialog.rs`, `dialogs.rs`).
-7. Run `cargo xtask parity` and commit the updated `docs/parity.md`.
+7. Run `cargo xtask parity` and commit the updated `docs/parity-checklist.md`.

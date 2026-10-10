@@ -84,6 +84,10 @@ pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], 
 
 /// [`quick_select`] with explicit model constants.
 pub fn quick_select_with(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, t: &Tuning) -> Option<Region> {
+    quick_select_using::<true>(sampler, canvas, points, size, t)
+}
+
+pub(super) fn quick_select_using<const OPTIMIZED: bool>(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, t: &Tuning) -> Option<Region> {
     if points.is_empty() || canvas.is_empty() {
         return None;
     }
@@ -120,7 +124,7 @@ pub fn quick_select_with(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f3
         // them is the best over the whole canvas too (outside the window it could only add cost).
         // One that reaches a side inside the canvas is recomputed in a larger window.
         let inner = [window.x0 > canvas.x0, window.y0 > canvas.y0, window.x1 < canvas.x1, window.y1 < canvas.y1];
-        let low = select_working(&img, &seeds, rw, t);
+        let low = select_working_using::<OPTIMIZED>(&img, &seeds, rw, t);
         let touches = |side: usize| match side {
             0 => (0..lh).any(|y| low[y * lw]),
             1 => (0..lw).any(|x| low[x]),
@@ -139,6 +143,10 @@ pub fn quick_select_with(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f3
 /// The model at working resolution: `seeds` (the brush footprint, `radius` working pixels) are
 /// selected; returns the selection.
 pub fn select_working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
+    select_working_using::<true>(img, seeds, radius, t)
+}
+
+fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
     let (w, h) = (img.w, img.h);
     let d = crate::selection::edt(seeds, w, h);
     let grow = (t.grow + t.grow_frac * radius).max(0.0);
@@ -146,7 +154,7 @@ pub fn select_working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -
     let fixed: Vec<u8> = d.iter().map(|d| if *d <= grow { HARD_FG } else { FREE }).collect();
     let (floor, sigma, k) = (t.floor, t.sigma.max(1e-4), t.k);
     let weight = move |d2: f32| floor + 1.0 / (1.0 + (d2.sqrt() / sigma).powf(k));
-    cut_levels(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024))
+    cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024))
 }
 
 /// Band half-width (pixels) re-cut at each finer level.
@@ -156,11 +164,11 @@ const BAND: f32 = 3.0;
 /// problem (colours averaged, pixel costs summed, cut weights doubled since a coarse side spans two
 /// fine ones) gives a boundary, and the full-size cut is redone only within `BAND` of it. Seeds
 /// stay foreground.
-fn cut_levels(img: &RgbImage, fixed: &[u8], cost_fg: &[f32], weight: &dyn Fn(f32) -> f32, scale: f32, direct_px: usize) -> Vec<bool> {
+fn cut_levels<const OPTIMIZED: bool>(img: &RgbImage, fixed: &[u8], cost_fg: &[f32], weight: &dyn Fn(f32) -> f32, scale: f32, direct_px: usize) -> Vec<bool> {
     let (w, h) = (img.w, img.h);
     let zeros = vec![0.0f32; w * h];
     if w * h <= direct_px || w < 8 || h < 8 {
-        return super::grid_cut_with(img, cost_fg, &zeros, fixed, |d2| scale * weight(d2));
+        return super::grid_cut_weighted::<OPTIMIZED>(img, cost_fg, &zeros, fixed, |d2| scale * weight(d2));
     }
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     let coarse_img = img.downsample(2);
@@ -175,7 +183,7 @@ fn cut_levels(img: &RgbImage, fixed: &[u8], cost_fg: &[f32], weight: &dyn Fn(f32
             }
         }
     }
-    let coarse = cut_levels(&coarse_img, &cfix, &ccost, weight, scale * 2.0, direct_px);
+    let coarse = cut_levels::<OPTIMIZED>(&coarse_img, &cfix, &ccost, weight, scale * 2.0, direct_px);
     let proj: Vec<bool> = (0..w * h).map(|i| coarse[(i / w / 2) * cw + (i % w) / 2]).collect();
     // Band: within BAND of the projected boundary.
     let edge: Vec<bool> = (0..w * h)
@@ -202,7 +210,7 @@ fn cut_levels(img: &RgbImage, fixed: &[u8], cost_fg: &[f32], weight: &dyn Fn(f32
             }
         })
         .collect();
-    super::grid_cut_with(img, cost_fg, &zeros, &banded, |d2| scale * weight(d2))
+    super::grid_cut_weighted::<OPTIMIZED>(img, cost_fg, &zeros, &banded, |d2| scale * weight(d2))
 }
 
 /// Pixels within `radius` (working pixels) of the polyline `pts`, plus each point's own pixel.

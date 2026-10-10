@@ -368,6 +368,9 @@ fn urat(v: f64) -> (u32, u32) {
 pub enum DngStorage {
     /// One strip per `rows` rows, uncompressed at `bits` per sample (8, 12, 16…).
     Strips { rows: usize },
+    /// Adobe DNG compression 34892: baseline JPEG tiles, 8-bit luma at tile size (the reader
+    /// decodes and widens to 16 bits). Quality 60 leaves visible-but-mild artifacts.
+    LossyJpegTiles { width: usize, height: usize },
     /// Adobe DNG compression 8: zlib streams with the TIFF predictor (1 = none, 2 = horizontal
     /// differencing) applied before compressing.
     DeflateStrips { rows: usize, predictor: u16 },
@@ -559,6 +562,39 @@ impl DngSpec {
                 raw.push((278, Val::Long(vec![rows as u32])));
                 raw.push((273, Val::Blobs(offs)));
                 raw.push((279, Val::Long(lens)));
+            }
+            DngStorage::LossyJpegTiles { width: tw, height: th } => {
+                let mut offs = Vec::new();
+                let mut lens = Vec::new();
+                let s = self.samples;
+                for ty in (0..self.height).step_by(th) {
+                    for tx in (0..self.width).step_by(tw) {
+                        // Edge tiles are padded by repeating the last row / column. A 3-sample
+                        // (LinearRaw) spec writes RGB tiles, a CFA spec gray ones.
+                        let mut tile = vec![0u8; tw * th * s];
+                        for y in 0..th {
+                            for x in 0..tw {
+                                let sy = (ty + y).min(self.height - 1);
+                                let sx = (tx + x).min(self.width - 1);
+                                for c in 0..s {
+                                    tile[(y * tw + x) * s + c] = (self.data[(sy * self.width + sx) * s + c] >> 8) as u8;
+                                }
+                            }
+                        }
+                        let colour = if s == 3 { image::ExtendedColorType::Rgb8 } else { image::ExtendedColorType::L8 };
+                        let mut j = Vec::new();
+                        let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 60);
+                        use image::ImageEncoder as _;
+                        enc.write_image(&tile, tw as u32, th as u32, colour).expect("jpeg tile");
+                        lens.push(j.len() as u32);
+                        offs.push(t.blob(j));
+                    }
+                }
+                raw.push((259, Val::Short(vec![34892])));
+                raw.push((322, Val::Long(vec![tw as u32])));
+                raw.push((323, Val::Long(vec![th as u32])));
+                raw.push((324, Val::Blobs(offs)));
+                raw.push((325, Val::Long(lens)));
             }
             DngStorage::Lj92Strips { rows } => {
                 let mut offs = Vec::new();

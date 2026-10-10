@@ -2,11 +2,14 @@
 //! Selection show while dragging: the union of the brush's round footprint along the drag.
 //!
 //! It is a coverage mask in document space, stamped segment by segment as the pointer moves and
-//! drawn as one texture over the document. It used to be an egui polyline as wide as the brush:
+//! drawn as one texture over the document. The Spot Healing Brush's trail is instead the coverage
+//! of the brush's own dabs ([`Trail::feed_dabs`]): hardness, pressure and shape dynamics show as
+//! they heal (#2364). It used to be an egui polyline as wide as the brush:
 //! egui tessellates a polyline whose width is much larger than its steps (any zoomed-in drag)
 //! into hard pie wedges fanning out across the canvas (#189), and translucent overlaps doubled up.
 
 use egui::{Color32, ColorImage, Rect, TextureHandle, TextureOptions, pos2};
+use photocraft_paint::{BrushSettings, StrokePoint, StrokeRenderer};
 
 /// Longest side of the mask, in mask pixels (big documents are stamped at a reduced scale).
 const MAX_SIDE: u32 = 1024;
@@ -26,13 +29,22 @@ pub struct Trail {
     /// Mask pixels changed since the last upload (x0, y0, x1, y1), if any.
     dirty: Option<[usize; 4]>,
     tex: Option<TextureHandle>,
+    /// The stroke's dabs, when the trail shows their coverage ([`Self::feed_dabs`]).
+    dabs: Option<Dabs>,
+}
+
+/// The brush stroke behind a [`Trail::feed_dabs`] trail.
+struct Dabs {
+    renderer: StrokeRenderer,
+    /// Document pixels the last "finish now" tail (a lone first dab, smoothing catch-up) covered.
+    tail: photocraft_geom::Rect,
 }
 
 impl Trail {
     pub fn new(doc: [u32; 2]) -> Self {
         let k = doc[0].max(doc[1]).div_ceil(MAX_SIDE).max(1);
         let (w, h) = (doc[0].div_ceil(k).max(1) as usize, doc[1].div_ceil(k).max(1) as usize);
-        Self { doc, k: k as f32, w, h, cov: vec![0; w * h], fed: 0, dirty: None, tex: None }
+        Self { doc, k: k as f32, w, h, cov: vec![0; w * h], fed: 0, dirty: None, tex: None, dabs: None }
     }
 
     /// Coverage at a mask pixel (tests).
@@ -60,6 +72,63 @@ impl Trail {
             self.capsule(a, b, r);
         }
         self.fed = points.len();
+    }
+
+    /// Show the coverage the brush's own dabs leave along the drag, as the stroke commit renders
+    /// it (`photocraft_paint::retouch::stroke_coverage`): soft edges for a soft brush, the size and
+    /// shape each dab takes from pen pressure and dynamics. `brush` is asked for once, on the first
+    /// call. What finishing the stroke now would add (the press's lone first dab) shows too.
+    pub fn feed_dabs(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        if self.dabs.is_some() && self.fed >= points.len() {
+            return;
+        }
+        let mut dabs = self.dabs.take().unwrap_or_else(|| Dabs { renderer: StrokeRenderer::new(&brush(), None, 1.0), tail: photocraft_geom::Rect::EMPTY });
+        let new: Vec<StrokePoint> = points
+            .get(self.fed..)
+            .unwrap_or(&[])
+            .iter()
+            .filter(|p| p.iter().all(|v| v.is_finite()) && p[0].abs() < 1e7 && p[1].abs() < 1e7)
+            .map(|p| StrokePoint::new(p[0], p[1], p[2] as f32))
+            .collect();
+        self.fed = points.len();
+        dabs.renderer.push(&new);
+        let mut changed = dabs.renderer.take_dirty_rect().union(&dabs.tail);
+        let tail = dabs.renderer.tail_preview().map(|mut t| (t.take_dirty_rect(), t));
+        dabs.tail = tail.as_ref().map_or(photocraft_geom::Rect::EMPTY, |(r, _)| *r);
+        changed = changed.union(&dabs.tail);
+        let tail = tail.map(|(_, t)| t);
+        let renderer = &dabs.renderer;
+        self.restamp(changed, |x, y| renderer.coverage_at(x, y).max(tail.as_ref().map_or(0.0, |t| t.coverage_at(x, y))));
+        self.dabs = Some(dabs);
+    }
+
+    /// Recompute the mask pixels over the document rectangle `r` from `cov` (document pixel →
+    /// coverage 0..=1), sampled at each mask pixel's centre.
+    fn restamp(&mut self, r: photocraft_geom::Rect, cov: impl Fn(i32, i32) -> f32) {
+        if r.is_empty() {
+            return;
+        }
+        let k = f64::from(self.k);
+        let x0 = (f64::from(r.x0) / k).floor().max(0.0) as usize;
+        let y0 = (f64::from(r.y0) / k).floor().max(0.0) as usize;
+        let x1 = (f64::from(r.x1) / k).ceil().clamp(0.0, self.w as f64) as usize;
+        let y1 = (f64::from(r.y1) / k).ceil().clamp(0.0, self.h as f64) as usize;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        for y in y0..y1 {
+            let dy = ((y as f64 + 0.5) * k).floor() as i32;
+            for x in x0..x1 {
+                let dx = ((x as f64 + 0.5) * k).floor() as i32;
+                let c = cov(dx, dy);
+                let c = if c.is_finite() { (c.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
+                if let Some(v) = self.cov.get_mut(y * self.w + x) {
+                    *v = c;
+                }
+            }
+        }
+        let d = self.dirty.get_or_insert([x0, y0, x1, y1]);
+        *d = [d[0].min(x0), d[1].min(y0), d[2].max(x1), d[3].max(y1)];
     }
 
     fn capsule(&mut self, a: [f64; 2], b: [f64; 2], r: f64) {

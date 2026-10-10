@@ -309,7 +309,7 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
 fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -> Result<Surface>) -> Result<Surface> {
     match sel {
         Some(sel) => {
-            let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel);
+            let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel)?;
             let moved = f(&lifted)?;
             crate::transform_cmds::composite_over(&mut rest, &moved);
             rest.prune();

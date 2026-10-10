@@ -153,7 +153,7 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
             if let Some(surf) = l.surface_mut() {
                 *surf = match doc_sel {
                     Some(sel) => {
-                        let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel);
+                        let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel)?;
                         let moved = warp_mesh_surface(&lifted, rect, &map, interp);
                         crate::transform_cmds::composite_over(&mut rest, &moved);
                         rest.prune();
@@ -164,7 +164,7 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
                         let fmt = surf.format();
                         let warped = warp_mesh_surface(surf, rect, &map, interp);
                         let mut rest = surf.convert(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
-                        crate::pixels::clear_surface(&mut rest, rect, None);
+                        crate::pixels::try_clear_surface(&mut rest, rect, None)?;
                         crate::transform_cmds::composite_over(&mut rest, &warped);
                         rest.prune();
                         rest

@@ -53,7 +53,7 @@ id = "BUG-204-1"
 target = "Interface prefs (UI scale, font size, channels in colour, sliders, tooltips) wired or hidden"
 status = "done"
 issue = 204
-note = "prefs_ui.rs tick reads ui_scale (sync_display_scale), ui_font_size (theme::set_ui_font_size) and show_tooltips (sync_tooltips); show_channels_in_color is wired in channel_thumbs; dynamic_color_sliders is in prefs::HIDDEN_UNTIL_IMPLEMENTED"
+note = "prefs_ui.rs tick reads ui_scale (sync_display_scale), ui_font_size (theme::set_ui_font_size) and show_tooltips (sync_tooltips); show_channels_in_color is wired in channel_thumbs and the canvas channel view (#2385); dynamic_color_sliders is in prefs::HIDDEN_UNTIL_IMPLEMENTED"
 
 [[item]]
 id = "BUG-204-2"

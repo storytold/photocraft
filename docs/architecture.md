@@ -1,6 +1,35 @@
-# Photocraft Architecture
+# PhotoCraft architecture
 
-Status: draft v1 (2026-09-30). This plan does not assume a final UI toolkit. The candidates are discussed in [`rust-framework-options.md`](rust-framework-options.md).
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (current-state summary added; the design plan below is kept, with its deviations listed) · **Target:** Adobe Photoshop 2026
+
+## Current state (2026-10-10)
+
+What exists on `main` today. The numbered sections below are the original design plan of
+2026-09-30; where the code differs, this summary wins.
+
+- **Workspace:** 25 library crates under `crates/`, 3 apps (`photocraft` desktop, `photocraft-cli`,
+  `photocraft-web`), `xtask`, an example plug-in and 5 fuzz crates; ~393,000 lines of Rust in
+  ~1,020 files; ~5,460 `#[test]` functions (ui-egui 1,677, engine 1,237, algo 408, io 377,
+  codecs 325, psd 263). Crate map and layers: [`AGENTS.md`](../AGENTS.md) §2 and
+  `xtask/src/layers.rs` (enforced by `cargo xtask layers`).
+- **UI toolkit:** decided: egui/eframe on wgpu (no webview, no JavaScript). The same Rust builds
+  to WebAssembly for the browser (trunk + wasm-bindgen).
+- **Engine:** ~700 commands registered in `crates/engine` (`CommandSpec` in `commands.rs`); the
+  UI, CLI, JSON control channel and MCP server all dispatch by command id. 628 Photoshop menu items
+  map to them (`crates/ui-egui/src/menu_catalog.rs`).
+- **Rendering:** CPU compositor (`compose`, the oracle) and wgpu compositor (`gpu`, ≤ 1/255 of the
+  CPU); colour through our own ICC engine (`cms`), display transform folded into a GPU 3D LUT.
+- **Files:** own PSD/PSB crate (`psd`), flat codecs (`codecs`), camera raw (`raw`), HEIF (`heif`),
+  Affinity (`affinity`), document mapping (`io`), native `.pcraft` (`format`, atomic saves).
+  Coverage: [`file-format-parity.md`](file-format-parity.md).
+- **Not built (yet) from the plan:** the `ml` crate (no ML runtime; see gap G15), plug-in ABI v2.
+- **Deviations from the plan below:** `photocraft-tablet` is the one crate allowed `unsafe`
+  (AppKit pen events); `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
+  is superseded by [`roadmap.md`](roadmap.md).
+
+---
+
+# Design plan (2026-09-30)
 
 This plan sets out:
 - the Cargo workspace,
@@ -529,7 +558,7 @@ Versions get pinned when we scaffold, using the numbers in `rust-framework-optio
 
 ## 15. Phased roadmap
 
-Each phase ends with a demoable build and green CI on all targets. Phases 8–10 (colour/print pro, photographer/designer pro, frontier) and the per-feature phase assignments are in [`photoshop-parity.md`](photoshop-parity.md).
+Each phase ends with a demoable build and green CI on all targets. Phases 8–10 (colour/print pro, photographer/designer pro, frontier) and the per-feature phase assignments are in [`target-app-parity.md`](target-app-parity.md).
 
 | Phase | Scope | Done when |
 |---|---|---|
@@ -552,3 +581,10 @@ Each phase ends with a demoable build and green CI on all targets. Phases 8–10
 4. **PSD crate.** Build our own, or adopt or fork `ag-psd`/`psd`. Decide after the week-1 spike.
 5. **Default working depth and blending.** 8-bit + gamma-space blending matches Photoshop. 16-bit/float + linear is the modern default. The proposal is to follow Photoshop by default and make the other a per-document option.
 6. **Scope of Photoshop plugin compatibility.** Decided: no native `.8BF` hosting; a sandboxed WebAssembly plug-in API instead (see [`plugins.md`](plugins.md)).
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-10 | minor | Current-state summary and deviations from the plan; status line; broken link to `photoshop-parity.md` repointed to `target-app-parity.md` |
+| 2026-09-30 | major | Design plan v1 |
