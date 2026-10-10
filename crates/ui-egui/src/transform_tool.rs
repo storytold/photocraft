@@ -1018,12 +1018,10 @@ pub(crate) struct Gesture {
 }
 
 /// A click outside the box accepts the transform; a drag outside still rotates it.
-/// Keep the rotation-cursor band near corners interactive rather than treating it as an
-/// acceptance click. Use screen-sized tolerance so tiny pointer jitter still counts as a click.
-fn accepts_outside_click(t: &TransformSession, g: Gesture, end: [f64; 2], tol: f64) -> bool {
-    g.hit == Hit::Outside
-        && !near_rotate_corner(t, g.start, tol)
-        && (end[0] - g.start[0]).hypot(end[1] - g.start[1]) <= 2.0 * tol / HANDLE_PX
+/// Decide on release, so the rotation zone keeps working for drags. The screen-sized
+/// click tolerance absorbs pointer jitter without accepting a real rotation gesture.
+fn accepts_outside_click(g: Gesture, end: [f64; 2], tol: f64) -> bool {
+    g.hit == Hit::Outside && (end[0] - g.start[0]).hypot(end[1] - g.start[1]) <= 2.0 * tol / HANDLE_PX
 }
 
 /// Pointer input while transforming. Returns false when no transform is active.
@@ -1057,9 +1055,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 pv.gesture = None;
             }
             // Clicking an empty spot commits instead of silently arming rotation (#2851).
-            // A dragged gesture, a near-corner rotation click, and Option-click to move the
-            // pivot keep their existing behavior.
-            if matches!(ev, ToolEvent::Up { .. }) && g.is_some_and(|g| accepts_outside_click(&t, g, [x, y], tol)) {
+            // Dragging the rotation zone and Option-clicking to move the pivot
+            // keep their existing behavior.
+            if matches!(ev, ToolEvent::Up { .. }) && g.is_some_and(|g| accepts_outside_click(g, [x, y], tol)) {
                 commit(app);
                 return true;
             }
@@ -2250,14 +2248,16 @@ mod tests {
     }
 
     #[test]
-    fn outer_click_does_not_steal_rotation_handles_or_option_pivot() {
+    fn a_click_near_rotation_handles_accepts_but_drags_and_option_pivot_do_not() {
         let t = session();
         let tol = 12.0;
         let near = Gesture { hit: Hit::Outside, start: [-18.0, -18.0], quad0: t.quad, pivot0: t.pivot };
-        assert!(!accepts_outside_click(&t, near, near.start, tol), "corner rotation zone remains interactive");
+        assert!(accepts_outside_click(near, near.start, tol), "a click in the rotation zone accepts; a drag still rotates");
         let far = Gesture { start: [500.0, 500.0], ..near };
-        assert!(accepts_outside_click(&t, far, far.start, tol));
-        assert!(!accepts_outside_click(&t, far, [512.0, 500.0], tol), "drag does not commit");
+        assert!(accepts_outside_click(far, far.start, tol));
+        assert!(!accepts_outside_click(far, [512.0, 500.0], tol), "drag does not commit");
+        let handle = Gesture { hit: Hit::Corner(0), ..near };
+        assert!(!accepts_outside_click(handle, handle.start, tol), "resize handles stay interactive");
 
         let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
         begin(&mut app, &egui::Context::default()).unwrap();
