@@ -58,7 +58,7 @@ echo "==> PhotoCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: 
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif,jxl "${args[@]}")
 fi
 
 rm -rf "$WORK"

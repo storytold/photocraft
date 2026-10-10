@@ -169,7 +169,8 @@ what an agent can't finish alone.
 
 ### G10. Missing and partial file formats
 - **Missing:** JPEG Options dialog (FILE-215-19), Photoshop PDF read and write and multi-page PDF
-  (FILE-215-10, #2541), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
+  (FILE-215-10, #2541), AVIF read (#463) and default-build AVIF write, JPEG XL write (read landed
+  2026-10-10, #2789), JPEG 2000 (#1047),
   DPX/Cineon (#1049), DICOM, EPS/DCS, PCX, Pixar, IFF, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
   Raw; layered TIFF extra alpha channels (FILE-215-7); spot plates (FILE-215-17); .atn, .asl,
   .shc, .csh presets (FILE-215-15); TGA/PNG alpha channels on open (#2225); C2PA (#1050).
@@ -211,5 +212,6 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | G10: JPEG XL read landed (#2789); JPEG XL write stays listed |
 | 2026-10-10 | minor | Checked against the alpha gate (no alpha blockers); #2374 marked closed |
 | 2026-10-10 | major | First version, from the full re-measure against Photoshop 2026 27.11.0 and the open issues |

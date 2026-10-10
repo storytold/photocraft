@@ -46,6 +46,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
+| JPEG XL | with feature `jxl` | **no** | U8, U16 (9–32-bit decodes to U16), F16, F32 | Gray, GrayA, RGB, RGBA | yes | yes (embedded, or built from the enum encoding) | yes (`Exif` box) | yes (`xml ` box) | no | no | n/a | `jxl-oxide` |
 
 "Native" means the data is stored and read back without conversion. Anything else is converted by
 the encode plan, and `fidelity_warnings` reports the conversion when it loses information:
@@ -76,6 +77,20 @@ the same.
   decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
   4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
+* **JPEG XL (read-only, feature `jxl`).** Decoding lives in the optional `photocraft-jxl` crate
+  behind the non-default `jxl` feature (official builds enable it). Without it, JPEG XL is still
+  detected and decoding returns `CodecError::Unsupported` ("JPEG XL support isn't included in this
+  build"). `jxl-oxide` (pure Rust) decodes bare codestreams and the container, Modular and VarDCT,
+  lossless and lossy, integer samples of any depth (up to 8 bits as U8, 9 to 32 as U16 scaled to
+  the full range) and 16/32-bit floats (F16/F32, HDR values above 1 kept), gray and RGB with
+  straight alpha (associated alpha is divided out), spot colours rendered in, and losslessly
+  recompressed JPEGs. The header's orientation is applied and EXIF/XMP Orientation rewritten to 1
+  (`keep_orientation` turns the pixels back as coded). The ICC profile is the embedded one, or one
+  built from the header's colour encoding when it is not plain sRGB. Animations decode to their
+  first frame with `DecodeWarning::MoreFrames`. CMYK files return `Unsupported`. Writing needs an
+  encoder and the only complete one, libjxl, is C++, so JPEG XL is listed in
+  `ASYMMETRIC_EXCEPTIONS`. Fixtures: `tests/fixtures/jxl/` (written by `scripts/jxl_fixtures.py`
+  with libjxl's `cjxl`), checked sample for sample in `tests/jxl.rs`.
 * **AVIF.** Encoding uses `ravif`, which is pure Rust. Decoding
   needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated
   behind the non-default `avif` feature. In a default build it is neither readable nor writable,

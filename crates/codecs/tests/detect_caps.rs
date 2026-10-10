@@ -84,6 +84,20 @@ fn heif_is_detected_always_and_readable_only_with_the_feature() {
 }
 
 #[test]
+fn jxl_is_detected_always_and_readable_only_with_the_feature() {
+    for header in [&[0xFF, 0x0A, 0x30, 0x54][..], b"\0\0\0\x0cJXL \r\n\x87\n\0\0\0\x14ftypjxl "] {
+        assert_eq!(detect(header), Some(Format::Jxl));
+        // Either way a bare header is an error, never a panic.
+        assert!(decode_as(Format::Jxl, header).is_err());
+    }
+    assert_eq!(from_extension("IMG_0001.JXL"), Some(Format::Jxl));
+    assert_eq!(caps(Format::Jxl).read, cfg!(feature = "jxl"));
+    assert!(!caps(Format::Jxl).write);
+    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Jxl));
+    assert_eq!(detect(b"\0\0\0\x0cJXL \r\n\x87\x0b"), None, "a wrong signature box is not JPEG XL");
+}
+
+#[test]
 fn detect_heif_brands() {
     assert_eq!(detect(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some(Format::Heif));
     assert_eq!(detect(b"\0\0\0\x18ftypmif1\0\0\0\0mif1heic"), Some(Format::Heif), "generic major brand");

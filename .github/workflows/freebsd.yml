@@ -50,8 +50,8 @@ jobs:
             # The checkout is synced in under another owner; let tests that call git read it.
             git config --global --add safe.directory "*"
             rustc --version
-            CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked --features heif
-            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked --features heif --exclude photocraft-ui-egui
+            CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked --features heif,jxl
+            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked --features heif,jxl --exclude photocraft-ui-egui
             CARGO_PROFILE_DEV_DEBUG=0 cargo test -p photocraft-ui-egui --locked --lib
             CARGO_PROFILE_DEV_DEBUG=0 cargo test -p photocraft-ui-egui --locked --doc
             # The VM's software Vulkan driver crashes (SIGSEGV) when several tests set up a GPU

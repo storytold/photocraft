@@ -4290,6 +4290,7 @@ dependencies = [
  "image-webp",
  "jpeg-encoder",
  "photocraft-heif",
+ "photocraft-jxl",
  "png 0.18.1",
  "proptest",
  "rayon",
@@ -4444,6 +4445,13 @@ dependencies = [
  "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "photocraft-jxl"
+version = "0.6.0"
+dependencies = [
+ "jxl-oxide",
 ]
 
 [[package]]

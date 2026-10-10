@@ -77,7 +77,7 @@ Weights reflect what a working Photoshop user depends on (photographers, retouch
 |---|---:|---:|---:|---|---|
 | Features in depth (tools, layers, selections, type, filters, transforms) | 25% | 55% | 600–1,000 | Scorecard checklists: Tools 20 done / 15 partial / 6 missing, Type 0 / 3 / 6, Automation 3 / 2 / 6. 15 tools missing; Select and Mask, Vanishing Point and Content-Aware Fill are parameter dialogs, not workspaces; type on a path, manual kerning, RTL paragraphs missing | [gaps.md](gaps.md) |
 | UI / UX fidelity and feel | 15% | 40% | 350–600 | ~150 open UI issues; Workspace checklist 5 / 7 / 11; 46 of 149 preferences do nothing; no floating panel groups, thin Color panel, no transform context menu, brush lag and pressure jumps reported | [ui-parity.md](ui-parity.md), [brush-parity.md](brush-parity.md) |
-| File formats and fidelity | 15% | 60% | 300–500 | PSD oracle on Photoshop-authored files 133/256 (52%); io corpus 146/170 (86%); psd-tools 236/309 (76%); round trips ~100% of corpus; but users report Photoshop refusing our files (#1281, #2469; a text-layer case, #2374, was fixed 2026-10-10); no Photoshop PDF, EPS, JPEG 2000, JPEG XL, AVIF read, CR3 | [file-format-parity.md](file-format-parity.md) |
+| File formats and fidelity | 15% | 60% | 300–500 | PSD oracle on Photoshop-authored files 133/256 (52%); io corpus 146/170 (86%); psd-tools 236/309 (76%); round trips ~100% of corpus; but users report Photoshop refusing our files (#1281, #2469; a text-layer case, #2374, was fixed 2026-10-10); no Photoshop PDF, EPS, JPEG 2000, JPEG XL write, AVIF read, CR3 | [file-format-parity.md](file-format-parity.md) |
 | Performance | 10% | 25% | 200–350 | 3 of 25 budgeted scenarios meet budget (baseline 2026-10-05); 150-layer nudge crashes the GPU path (P12); layer move on 15000×10000 16-bit 2.7 s p50; users report brush and cursor lag (#2619, #2566, #1994) | [scorecard.md](scorecard.md#performance) |
 | Stability | 10% | 45% | 150–250 | Never-crash lints on 28/28 crates, `panic_hunt` in the gate, atomic saves; but field reports of freezes (#2518 Type tool 60 s on macOS), GPU panics (#2020, #1215), no-GPU start failures (#2519, #2412) | [gaps.md](gaps.md) |
 | Hardware | 5% | 50% | 80–150 | GPU compositor (wgpu), pen pressure on all desktops but tilt/rotation not on Windows, Wayland pen broken (#2622), no HDR/EDR output, monitor profile auto-detected on macOS only | [hardware-parity.md](hardware-parity.md) |
@@ -212,7 +212,7 @@ than the work already done.
 
 | Milestone | Scope | Opus 5.5 agent-hours |
 |---|---|---:|
-| **Beta** (~75% ready, PSD reliable) | PSD fidelity and Photoshop re-open check, the performance budgets, the user bug backlog, the 15 missing tools, Select and Mask / Content-Aware Fill workspaces, type depth, UI feel (brush, transform, panels), JPEG/PDF/AVIF/JXL formats, Hindi/Arabic/Vietnamese and RTL | **1,100–1,800** |
+| **Beta** (~75% ready, PSD reliable) | PSD fidelity and Photoshop re-open check, the performance budgets, the user bug backlog, the 15 missing tools, Select and Mask / Content-Aware Fill workspaces, type depth, UI feel (brush, transform, panels), JPEG/PDF/AVIF formats, JXL write, Hindi/Arabic/Vietnamese and RTL | **1,100–1,800** |
 | **Full parity** | the above plus the AI tier, plug-in/scripting ecosystem, video depth, long-tail fidelity | **2,300–4,100** |
 
 **Parallelism.** About 80% parallelizes: areas are independent crates and command modules, and
@@ -527,6 +527,7 @@ See [method and results](octagonal-mask-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | File formats: JPEG XL read landed (#2789); only JPEG XL write stays in the missing lists |
 | 2026-10-10 | minor | Readiness-by-audience table: percent and hours for full, mainstream and essentials; full number confirmed as the additive weighted sum over dimensions (46%, reported ~45%) |
 | 2026-10-10 | minor | Added mainstream-practitioner (~43%) and essentials-user (~61%) numbers with written weights and discounts; full ready-for-real-work rechecked against its written weights (46%, reported ~45%), unchanged |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate in `roadmap.md`: passes |
