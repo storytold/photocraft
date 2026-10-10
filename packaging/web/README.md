@@ -184,6 +184,54 @@ fetches them with `fetch()`, so a Content Security Policy needs them allowed by 
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+### Driving the embedded app (#1614)
+
+A page can hand the app a document and take the edited one back.
+
+**Same origin:** `window.photocraft` in the app's page.
+
+```js
+photocraft.info()                       // {app: "0.6.0", format: 1}: app and .pcraft format versions
+photocraft.isDirty()                    // unsaved changes in an open document?
+await photocraft.open(bytes, "a.psd")   // ArrayBuffer, typed array or Blob → {warnings} once open
+await photocraft.save("psd")            // the active document as a Uint8Array (default "pcraft")
+await photocraft.request("ui.inspect")  // a control-channel method (docs/control-protocol.md)
+window.addEventListener("photocraft-dirty", e => e.detail)   // true / false as it changes
+```
+
+**Cross-origin iframe:** add the embedding page's origin to the app's URL,
+`…/photocraft/?embed=https://admin.example.com`. The app then takes the same calls over
+`postMessage` from that origin only, and posts only to it:
+
+```js
+frame.contentWindow.postMessage({photocraft: 1, method: "open", name: "a.psd", data: buffer}, appOrigin, [buffer]);
+frame.contentWindow.postMessage({photocraft: 2, method: "save", format: "psd"}, appOrigin);
+// replies: {photocraft: 2, ok: true, result: ArrayBuffer (transferred)} or {photocraft: 2, ok: false, error}
+// isDirty, info, and request ({request: "ui.inspect", params}) work the same way
+```
+
+It posts `{photocraft: "ready", info}` once it is up, and `{photocraft: "dirty", dirty}` when
+that changes. `open` replies once the document is open (`{warnings}`), or with the error File ›
+Open would show. A save the page takes counts as a save: a PSD, PSB or `.pcraft` leaves the
+document clean, as File › Save does. `request` isn't offered over `postMessage`.
+
+`?embed=` decides who may talk to the app and hear from it, not who may embed it: any site can
+iframe the app and name itself there. To keep other sites from embedding your copy at all, send a
+`frame-ancestors` CSP from the app's host that lists the pages allowed to embed it.
+
+**Photopea-compatible mode:** a page written for Photopea's iframe
+(https://www.photopea.com/api/) can point it at PhotoCraft instead. A JSON config in the URL
+hash, `…/photocraft/#{"files":["https://…/a.psd"],"server":{"url":"https://…/save","formats":["psd"]}}`,
+opens `files` at start (fetched without cookies, as Photopea does), and File › Save of a document
+in one of `formats` POSTs it to `server.url` in Photopea's body (a 2000-byte JSON header
+`{"source","versions":[{"format","start","size"}]}` padded with spaces, then the file) instead of
+downloading it. The parent window gets the same strings as from Photopea: `"done"` once the files
+are open, then for a save `"saving"` and the text of an `app.echoToOE("…")` in the server's JSON
+`script` reply, else `"saved"` or `"error"`. PhotoCraft adds `"loading:<name>"` and
+`"open-error:<name>"`. These go to any origin, as Photopea's do, unless `?embed=` names one. The
+app counts a document saved once it hands it over; if the upload then fails it says so in the app
+and the page asks before it is left, until a save gets through.
+
 ## Renderer selection and fallback flags
 
 PhotoCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to

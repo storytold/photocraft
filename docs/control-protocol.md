@@ -8,6 +8,8 @@ See [Shape stroke options](shape-strokes.md) for limits, preview and persistence
 
 The desktop app listens on `127.0.0.1:<port>` (loopback only). Start it with a token file so the credential is not exposed in the process command line:
 
+In the web build the same methods are `window.photocraft.request(method, params)` for the app's own page (no token: the page already runs the app); an embedding page gets document calls only (`packaging/web/README.md` › Driving the embedded app).
+
 ```sh
 photocraft --control 7878 --control-token-file /private/path/photocraft-control.token \
   --automation-read-root /work/project --automation-write-root /work/project
