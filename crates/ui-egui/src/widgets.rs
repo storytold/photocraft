@@ -1263,7 +1263,7 @@ mod tests {
     fn value_field_digits_sit_one_point_above_centre() {
         let mut h = Harness::new_ui_state(
             |ui, s: &mut (f32, egui::Rect)| {
-                s.1 = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "px", 80.0, 0.0).1;
+                s.1 = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "px", 80.0, 0.0, None).1;
             },
             (50.0, egui::Rect::NOTHING),
         );
