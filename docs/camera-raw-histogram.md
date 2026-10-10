@@ -25,6 +25,20 @@ keyboard nudges and deletion, at most 16 points. Camera Raw commits one `filter.
 OK; scope interaction never edits the document. Double-clicking a Camera Raw smart filter reopens
 this dialog with its stored settings and the pixels below it; OK updates that filter in place.
 
+The **Auto** button above the settings estimates the eight Light/Presence sliders (exposure,
+contrast, highlights, shadows, whites, blacks, vibrance and saturation). It leaves white balance
+and other settings unchanged. Estimates are bounded, protect the bright tail, ignore invisible
+pixels, and use selection/filter-mask coverage. They replace the sliders rather than stacking
+another pixel edit; confirm to commit, or cancel to discard. The engine query is
+`cameraRaw.autoSettings`; control-channel usage is described in [control-protocol.md](control-protocol.md).
+
+Camera Raw's before/after textures and full-resolution crops are ICC-converted from the
+document profile to the configured monitor profile, including soft proofing. Analysis and
+filter pixels remain in document space; display conversion is not baked into the image or
+its sliders. This matters for RAW's ProPhoto-compatible output: displaying those numbers as
+sRGB made midtones too dark. Linear RGB documents are converted from their actual linear
+profile, not the main canvas's pre-encoded texture profile.
+
 ## PSD Smart Filters
 
 Camera Raw is read and written as a live PSD Smart Filter (`Adobe Camera Raw Filter`, filter id

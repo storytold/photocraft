@@ -76,7 +76,7 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 | Colour management | Colour-managed canvas (document → monitor), embedded CMYK profiles, linear EXR/HDR, 16-bit float canvas | medium-high | Monitor profile follows only at launch. |
 | Performance | 14k+ px on the GPU at ~⅓ the memory; adjustment preview 285 ms → 4–9 ms; font-size edits 297 ms → 4.6 ms; 2026-10-07: 30 MP TIFF open (banded, parallel strip/tile decode) Deflate 345 → 32 ms, LZW 428 → 43 ms, BigTIFF and every IFD readable | medium-high on rasters | Complex layout documents still laggy (#125/#128); >16384 px GPU tiling in progress (#49). |
 | Stability | Never-crash lint series, crash guard, `panic_hunt` fuzzing in the gate | medium-high | No field crash data yet. |
-| Camera RAW | DNG, CR2, Sony ARW (lossless + compressed), Nikon NEF (lossless + lossy compressed), RW2, uncompressed ORF | medium | CR3, RAF, Nikon "lossy after split" and calibrated colour for non-DNG cameras still open (#50). |
+| Camera RAW | DNG, CR2, Sony ARW (lossless + compressed), Nikon NEF (lossless + lossy compressed), RW2, uncompressed ORF | medium | CR3, RAF and Nikon "lossy after split" still open (#50). Native import includes 55 licensed camera calibrations; optional user DCP looks are model/policy validated. |
 | AI / generative | none | ~0% | Deferred by decision (#41). |
 | Ecosystem | Sandboxed WebAssembly plug-ins instead of .8BF; no ExtendScript/UXP/.atn; no Adobe Fonts/Libraries/cloud docs | low | By design for 8BF; scripting compatibility open. |
 | Platforms | macOS (notarized), Windows, Linux (AppImage/deb/rpm/Flatpak bundle), web | medium-high | Flathub later (#173); Windows signing material pending. |
@@ -100,6 +100,14 @@ Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filt
 undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
 acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
 unchanged.
+
+2026-10-10: native RAW import includes 55 explicitly CC0/public-domain DCP calibrations
+with per-file source/hash/license provenance. No Adobe installation is required or scanned.
+User profiles remain optional, with model and ProfileEmbedPolicy validation. Calibration,
+HueSatMap, exposure offsets, LookTable and tone curves are supported; bundled calibration does
+not reproduce factory Picture Control/JPEG looks. Missing calibration is explicitly reported.
+HDR, four-plane legacy profiles and ProfileGainTableMap remain unsupported. No JPEG fitting
+is used. Existing format corpus floors are unchanged. See [camera-profiles.md](camera-profiles.md).
 
 ### Where we're going (priority order)
 

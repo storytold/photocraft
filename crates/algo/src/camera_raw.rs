@@ -29,6 +29,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod auto;
+
 /// Most points a Camera Raw point curve accepts from commands and the control channel.
 pub const MAX_CURVE_POINTS: usize = 16;
 

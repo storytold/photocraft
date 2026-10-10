@@ -10,12 +10,14 @@
 use std::time::Instant;
 
 use photocraft_raw::{Demosaic, DevelopOptions, decode, develop_sensor, dump_structure, embedded_preview, identify};
+use std::io::Read;
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut dump = false;
     let mut ppm: Option<String> = None;
     let mut png: Option<String> = None;
+    let mut profile_path: Option<String> = None;
     let mut opts = DevelopOptions::default();
     let mut files = Vec::new();
     while let Some(a) = args.next() {
@@ -23,6 +25,7 @@ fn main() {
             "--dump" => dump = true,
             "--ppm" => ppm = args.next(),
             "--png" => png = args.next(),
+            "--profile" => profile_path = args.next(),
             "--demosaic" => opts.demosaic = args.next().and_then(|s| Demosaic::from_id(&s)).unwrap_or_default(),
             "--write-synthetic" => {
                 // `--write-synthetic DIR`: write 24 MP synthetic DNG (uncompressed, LJ92 tiles) and CR2 files.
@@ -119,7 +122,27 @@ fn main() {
             sensor.orientation,
             sensor.baseline_exposure
         );
-        let dev = match develop_sensor(&sensor, &opts) {
+        let profile = match profile_path
+            .as_ref()
+            .map(|p| {
+                std::fs::File::open(p).map_err(|e| e.to_string()).and_then(|file| {
+                    let mut bytes = Vec::new();
+                    file.take(32 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                    photocraft_raw::CameraProfile::from_dcp(&bytes).map_err(|e| e.to_string())
+                })
+            })
+            .transpose()
+        {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("profile: {e}");
+                return;
+            }
+        };
+        if let Some(settings) = photocraft_raw::camera_settings(&bytes) {
+            println!("   camera settings: {settings:?}");
+        }
+        let dev = match photocraft_raw::develop_sensor_profile(&sensor, &opts, profile.as_ref()) {
             Ok(d) => d,
             Err(e) => {
                 println!("   develop: {e}");

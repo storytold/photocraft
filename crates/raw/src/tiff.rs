@@ -130,6 +130,17 @@ pub(crate) struct Tiff<'a> {
 }
 
 impl<'a> Tiff<'a> {
+    /// Standalone DCP header, kept separate from raw image identification.
+    pub(crate) fn camera_profile(data: &'a [u8]) -> Option<Self> {
+        let le = match data.get(..4)? {
+            b"IIRC" => true,
+            b"MMCR" => false,
+            _ => return None,
+        };
+        let mut t = Self { data, le, first_ifd: 0 };
+        t.first_ifd = t.u32_at(4)? as usize;
+        Some(t)
+    }
     /// Parses the 8-byte header. Accepts the TIFF magics and the TIFF-like
     /// variants used by camera raws (ORF `IIRO`/`IIRS`/`MMOR`, RW2 `IIU\0`).
     pub fn new(data: &'a [u8]) -> Option<Self> {

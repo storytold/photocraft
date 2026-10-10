@@ -3726,6 +3726,7 @@ name = "photocraft-io"
 version = "0.5.0"
 dependencies = [
  "blake3",
+ "flate2",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",

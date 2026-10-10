@@ -79,6 +79,14 @@ white-balanced camera channels are treated as linear sRGB primaries (colours are
 less saturated than a calibrated profile; converting to DNG gives calibrated colour). No tone
 curve is applied: the result is a scene-referred rendering, flatter than a camera JPEG.
 
+`CameraProfile::from_dcp` and `develop_sensor_profile` apply an external, model-matched
+profile's calibration matrices, HSV/Look tables and tone curve. The native `photocraft-io`
+importer includes 55 explicitly licensed independent calibrations and accepts optional user DCPs.
+Adobe directories are not scanned; ProfileEmbedPolicy is enforced for non-DNG inputs. No JPEG
+fitting is used. See [camera profiles](../../docs/camera-profiles.md) for selection
+and limits. `camera_settings` reads Nikon Picture Control metadata without turning Auto/n/a
+codes into invented slider values. `rawinfo --profile /path/to/profile.dcp` tests an explicit profile.
+
 ## Tools
 
 `cargo run --release -p photocraft-raw --example rawinfo -- [--dump] [--demosaic ahd] [--png DIR] FILE...`

@@ -183,7 +183,7 @@ fn lerp_mat(a: &Mat3, b: &Mat3, g: f64) -> Mat3 {
 impl ColorInfo {
     /// Weight of the first calibration at temperature `t` (inverse-temperature
     /// interpolation, DNG spec chapter 6).
-    fn weight(&self, t: f64) -> f64 {
+    pub(crate) fn weight(&self, t: f64) -> f64 {
         match self.calibrations.as_slice() {
             [a, b] if (a.temperature - b.temperature).abs() > 1.0 => {
                 let (t1, t2) = (a.temperature, b.temperature);

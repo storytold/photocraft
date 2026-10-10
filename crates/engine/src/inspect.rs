@@ -27,6 +27,7 @@ pub fn document(d: &DocState) -> Value {
     let selected = d.selected_layers();
     json!({
         "name": doc.name,
+        "rawProfile": photocraft_io::raw::profile_info(doc),
         "width": doc.size.width,
         "height": doc.size.height,
         "mode": format!("{:?}", doc.mode),

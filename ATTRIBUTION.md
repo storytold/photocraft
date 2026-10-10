@@ -10,6 +10,7 @@ next to them.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `assets/camera-profiles/profiles/*.dcp.gz` | 55 camera calibration profiles | RawTherapee profile contributors; original notices preserved per file | [Pinned sources and hashes](assets/camera-profiles/manifest.json) | Per file: [CC0-1.0](assets/camera-profiles/LICENSE-CC0.txt) or [public-domain declaration](assets/camera-profiles/LICENSE-public-domain.txt); [coverage](assets/camera-profiles/README.md) |
 | `crates/ui-egui/src/i18n/de.tsv` | German UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
 | `crates/ui-egui/src/i18n/it.tsv` | Italian UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
 | `crates/ui-egui/src/i18n/ko.tsv` | Korean UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |

@@ -22,6 +22,11 @@ use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::widgets;
 
+#[path = "camera_raw_auto_ui.rs"]
+mod auto;
+#[path = "camera_raw_color_ui.rs"]
+pub(crate) mod color;
+
 const PROXY_SIDE: usize = 900;
 const PANEL_W: f32 = 330.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
@@ -52,6 +57,8 @@ pub struct CameraRawDialog {
     pub(crate) processed: Vec<[f32; 4]>,
     pub(crate) lab_transform: std::sync::Arc<photocraft_cms::Transform>,
     pub(crate) scope_transform: std::sync::Arc<photocraft_cms::Transform>,
+    display_transform: std::sync::Arc<photocraft_cms::Transform>,
+    display_signature: u64,
     pub(crate) scope: super::camera_raw_scope_ui::ScopeView,
     pub(crate) after_histogram: RgbHistogram,
     pub(crate) preview_revision: u64,
@@ -76,7 +83,7 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
-        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path})));
+        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "profile":r.profile})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
@@ -116,11 +123,6 @@ impl CameraRawDialog {
         non_defaults(&self.params)
     }
 
-    fn image(px: &[[f32; 4]], w: usize, h: usize) -> egui::ColorImage {
-        let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        egui::ColorImage::new([w, h], px.iter().map(|q| Color32::from_rgba_unmultiplied(enc(q[0]), enc(q[1]), enc(q[2]), enc(q[3]))).collect())
-    }
-
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
         let t0 = crate::gpu_canvas::now_ms();
         let mut px = self.proxy.clone();
@@ -137,13 +139,14 @@ impl CameraRawDialog {
         let histogram_start = crate::gpu_canvas::now_ms();
         self.after_histogram = RgbHistogram::from_rgba(&px);
         self.histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
-        let img = Self::image(&px, self.pw, self.ph);
+        let img = color::image(&px, self.pw, self.ph, &self.display_transform);
         match &mut self.tex {
             Some(t) => t.set(img, egui::TextureOptions::LINEAR),
             None => self.tex = Some(ctx.load_texture("camera-raw-after", img, egui::TextureOptions::LINEAR)),
         }
         if self.before_tex.is_none() {
-            self.before_tex = Some(ctx.load_texture("camera-raw-before", Self::image(&self.proxy, self.pw, self.ph), egui::TextureOptions::LINEAR));
+            self.before_tex =
+                Some(ctx.load_texture("camera-raw-before", color::image(&self.proxy, self.pw, self.ph, &self.display_transform), egui::TextureOptions::LINEAR));
         }
         self.processed = px;
         self.scope.cache = None;
@@ -176,6 +179,7 @@ pub struct RawOpen {
     pub path: Option<String>,
     /// The file, when it was opened from bytes (no path to read it again from).
     pub bytes: Option<std::sync::Arc<Vec<u8>>>,
+    pub profile: Option<Value>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -198,6 +202,7 @@ pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>
             name: name.to_string(),
             path: path.map(str::to_string),
             bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
+            profile: photocraft_io::raw::profile_info(&st.doc),
         });
     }
 }
@@ -523,6 +528,8 @@ fn open_pixels(
     let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
     let lab_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
     let scope_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::Srgb.profile(), Default::default()).map_err(|e| e.to_string())?;
+    let display_transform = color::transform(&app.session, &st.doc)?;
+    let display_signature = app.session.color.display_signature(&st.doc);
     if let Some(saved) = app.session.prefs().dialogs.get("filter.cameraRaw.scope")
         && saved.get("samplers").and_then(Value::as_array).is_none_or(|a| a.len() <= MAX_SAMPLERS)
         && let Ok(view) = serde_json::from_value(saved.clone())
@@ -547,6 +554,8 @@ fn open_pixels(
         processed: Vec::new(),
         lab_transform,
         scope_transform,
+        display_transform: display_transform.clone(),
+        display_signature,
         scope: Default::default(),
         after_histogram: RgbHistogram::default(),
         preview_revision: 0,
@@ -568,6 +577,7 @@ fn open_pixels(
                 Coverage::Mask(mask) => super::camera_raw_detail_ui::Coverage::Mask(mask),
                 Coverage::None => super::camera_raw_detail_ui::Coverage::None,
             },
+            display_transform,
         ),
         viewport: None,
         float,
@@ -618,8 +628,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" => {}
-            "before" | "commit" | "cancel" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" => return Some(Err(format!("Camera Raw {key} must be a boolean"))),
+            "before" | "commit" | "cancel" | "auto" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "auto" => return Some(Err(format!("Camera Raw {key} must be a boolean"))),
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
         }
     }
@@ -681,6 +691,12 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         },
         None => None,
     };
+    if ui.get("auto").and_then(Value::as_bool) == Some(true) {
+        next_params = match auto::settings(app, &next_params) {
+            Ok(params) => params,
+            Err(e) => return Some(Err(e)),
+        };
+    }
     let d = app.camera_raw.as_mut()?;
     if let Some(view) = navigation {
         app.ui.camera_raw_preview = view;
@@ -835,6 +851,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+    if let Some(d) = app.camera_raw.as_mut()
+        && let Some(st) = app.session.active()
+    {
+        let signature = app.session.color.display_signature(&st.doc);
+        if signature != d.display_signature
+            && let Ok(transform) = color::transform(&app.session, &st.doc)
+        {
+            d.display_signature = signature;
+            d.display_transform = transform.clone();
+            d.detail.set_display_transform(transform);
+            d.before_tex = None;
+            d.dirty = true;
+        }
+    }
     let Some(d) = app.camera_raw.as_ref() else { return };
     // Where the platform has no extra windows (the web build), draw over the main window.
     if ctx.embed_viewports() {
@@ -948,6 +978,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
         super::camera_raw_scope_ui::header(&mut props, d, scope);
+        if let Some(profile) = d.raw_open.as_ref().and_then(|r| r.profile.as_ref()).and_then(|p| p.get("profile")).and_then(Value::as_str) {
+            props.label(format!("{}: {profile}", tl!("Profile")));
+        }
+        if widgets::secondary_button(&mut props, tl!("Auto"), 64.0).clicked() {
+            action = Some("auto");
+        }
         d.scope.alt_tone = None;
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
@@ -1085,6 +1121,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         action = Some("cancel");
     }
     match action {
+        Some("auto") => {
+            if let Some(Err(e)) = menu_update(app, ctx, &json!({"auto": true, "before": false})) {
+                app.ui.status = e;
+            }
+        }
         Some("ok") => {
             if let Err(e) = commit(app) {
                 app.ui.status = e;
@@ -1362,6 +1403,8 @@ mod tests {
         app.open_bytes("c.dng", &dng).unwrap();
         assert!(app.pending_raw_open.is_none());
         // A non-raw never queues the dialog; a closed document is an error, not a panic.
-        assert!(open_raw(&mut app, &ctx, RawOpen { document: photocraft_doc::DocId(u64::MAX), name: "x".into(), path: None, bytes: None }).is_err());
+        assert!(
+            open_raw(&mut app, &ctx, RawOpen { document: photocraft_doc::DocId(u64::MAX), name: "x".into(), path: None, bytes: None, profile: None }).is_err()
+        );
     }
 }

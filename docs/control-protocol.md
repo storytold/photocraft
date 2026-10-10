@@ -321,14 +321,36 @@ viewports, so the dialog is drawn over the main window and appears in the image.
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
-then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `commit` and
+then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `auto`, `before`, `scope`, `view`, `commit` and
 `cancel`. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
-opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
+opened). Unknown `ui` or settings properties, non-boolean `auto` / `before` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,
 `pointCurveGreen`, `pointCurveBlue`) are empty or 2–16 finite points in 0–255 with inputs at
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
+
+`ui: {"auto": true}` estimates exposure, contrast, highlights, shadows, whites, blacks,
+vibrance and saturation from the original preview, weighted by alpha and selection/filter-mask
+coverage. It updates those sliders and the preview without committing. Temperature, tint and
+all other controls stay unchanged. Repeating Auto with the same source and white balance gives
+the same settings. A combined `set` is staged first, then Auto replaces its eight controls;
+`commit: true` can apply the result in the same request. Auto is a conservative SDR estimate,
+not Adobe's Auto algorithm or a guarantee that every scene should be middle grey.
+
+The read-only engine command `cameraRaw.autoSettings` exposes the same estimator to CLI/MCP:
+`{"layer": id?, "temperature": 0, "tint": 0}` samples the active pixel layer (or the specified
+layer), returning `{"settings": {...}}`. An editor can instead supply up to 16384 straight RGBA
+`samples`, with alpha multiplied by coverage, for example when editing a smart filter's input.
+Apply the returned settings with `filter.cameraRaw` to commit them; the query itself never edits
+the document. Samples use the existing Camera Raw filter's document-encoded RGB working domain.
+
+Native RAW import selects a user-supplied or bundled model-matched DCP when available (55 bundled
+model identifiers, no Adobe installation needed). `raw.profiles`
+accepts `{"model":"Nikon", "refresh":false}` (omit model for all cameras).
+`document.inspect.rawProfile` and `cameraRaw.openingRaw.profile` identify the applied
+calibration/look, provenance and Picture Control limitations. See [camera profiles](camera-profiles.md);
+profile availability does not imply RAW decoder support.
 
 **Opening a raw file.** An interactive open (File › Open, Open Recent, drag and drop, the
 command line) of a camera raw developed from its sensor data shows this dialog first, titled

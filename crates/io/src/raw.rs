@@ -11,6 +11,24 @@ use photocraft_raw::{DevelopOptions, Limits, RawError, WhiteBalance};
 use crate::flat::image_to_document;
 use crate::{ImportResult, IoError};
 
+#[path = "raw_profiles.rs"]
+mod profiles;
+
+/// Applied bundled/user camera profile and recorded Picture Control (not the profile assets).
+pub fn profile_info(doc: &photocraft_doc::Document) -> Option<serde_json::Value> {
+    profiles::report(doc)
+}
+
+/// External DCP header inventory, independent of the RAW decoder's format support.
+pub fn available_profiles(refresh: bool) -> Vec<serde_json::Value> {
+    profiles::available(refresh)
+}
+
+fn selected_profile(sensor: &photocraft_raw::Sensor, bytes: &[u8]) -> Result<Option<profiles::Loaded>, IoError> {
+    let settings = photocraft_raw::camera_settings(bytes);
+    profiles::load(sensor, settings.as_ref()).map_err(|e| IoError::Raw(RawError::Malformed(format!("camera profile could not be applied: {e}"))))
+}
+
 /// `true` if `bytes` are a camera raw file `photocraft-raw` recognises.
 pub fn is_raw(bytes: &[u8]) -> bool {
     photocraft_raw::is_raw(bytes)
@@ -66,14 +84,15 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         }
         None => false,
     };
-    let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    let profile = selected_profile(&sensor, bytes)?;
+    let dev = photocraft_raw::develop_sensor_profile(&sensor, &opts, profile.as_ref().map(|p| p.profile.as_ref())).map_err(IoError::Raw)?;
     let wb = if wb_applied {
         format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
     } else {
         "estimated white balance".into()
     };
     let summary = format!("developed in Camera Raw (exposure {:+.2} EV, {wb})", tuning.exposure);
-    Ok((developed_document(name, format, dev, &summary)?, wb_applied))
+    Ok((developed_document(name, format, dev, &summary, profile.as_ref())?, wb_applied))
 }
 
 /// "Canon" + "Canon EOS 80D" and "NIKON CORPORATION" + "NIKON D3200" read as the model alone:
@@ -96,7 +115,13 @@ fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
 }
 
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.
-fn developed_document(name: &str, format: &str, dev: photocraft_raw::Developed, summary: &str) -> Result<ImportResult, IoError> {
+fn developed_document(
+    name: &str,
+    format: &str,
+    dev: photocraft_raw::Developed,
+    summary: &str,
+    profile: Option<&profiles::Loaded>,
+) -> Result<ImportResult, IoError> {
     let img = Image::from_u16(dev.width, dev.height, ChannelLayout::Rgb, &dev.rgb)?;
     let mut r = image_to_document(name, &img)?;
     r.document.icc_profile = Some(Arc::new(photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes().to_vec()));
@@ -106,7 +131,13 @@ fn developed_document(name: &str, format: &str, dev: photocraft_raw::Developed, 
         if camera.is_empty() { String::new() } else { format!(" from {camera}") },
         photocraft_raw::OUTPUT_SPACE
     ));
-    r.warnings.extend(dev.warnings);
+    r.warnings.extend(dev.warnings.into_iter().filter(|w| !w.starts_with("camera profile: ")));
+    if let Some(profile) = profile {
+        profiles::record(&mut r.document, profile);
+        if let Some(notes) = profile.report.get("limitations").and_then(serde_json::Value::as_array) {
+            r.warnings.extend(notes.iter().filter_map(|v| v.as_str().map(str::to_string)));
+        }
+    }
     Ok(r)
 }
 
@@ -122,10 +153,12 @@ pub const DEVELOPED_NOTE: &str = "developed with default settings";
 /// Develops a raw file with explicit settings.
 pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Result<ImportResult, IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
-    match photocraft_raw::develop(bytes, opts) {
-        Ok(dev) => {
+    match photocraft_raw::decode(bytes, &opts.limits) {
+        Ok(sensor) => {
+            let profile = selected_profile(&sensor, bytes)?;
+            let dev = photocraft_raw::develop_sensor_profile(&sensor, opts, profile.as_ref().map(|p| p.profile.as_ref()))?;
             let summary = format!("{DEVELOPED_NOTE} ({} demosaic, as-shot white balance)", opts.demosaic.id());
-            developed_document(name, format, dev, &summary)
+            developed_document(name, format, dev, &summary, profile.as_ref())
         }
         Err(RawError::Unsupported(reason)) => match photocraft_raw::embedded_preview(bytes) {
             Some(p) => {
