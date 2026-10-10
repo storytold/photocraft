@@ -1306,7 +1306,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             lock_layers
         ),
-        spec!("layer.renameLayer", "Rename Layer", &["Layer"], None, r##"{"layer":id?,"name":str}"##, has_layer, rename_layer),
+        spec!("layer.renameLayer", "Rename Layer", &["Layer"], Some("F2"), r##"{"layer":id?,"name":str}"##, has_layer, rename_layer),
     ]
 }
 
