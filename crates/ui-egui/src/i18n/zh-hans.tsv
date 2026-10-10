@@ -953,6 +953,17 @@
 	Delete current channel	删除当前通道
 	Delete current state	删除当前状态
 	Delete effect layer	删除效果图层
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	删除图层“{name}”？
+	Delete {count} layers? {names}	删除 {count} 个图层？{names}
+	Delete layer?	删除图层？
+	The document is closed	文档已关闭
+	The document or selected layers changed. Please request deletion again.	文档或所选图层已更改。请重新请求删除。
+	Missing delete command	缺少删除命令
+	Invalid delete command	无效的删除命令
+	Layer deleted, but confirmation preference could not be saved: {error}	图层已删除，但无法保存确认设置：{error}
+
 	Delete layer	删除图层
 	Delete layer comp	删除图层复合
 	Delete note	删除注释
@@ -1622,6 +1633,7 @@
 	Millimeters	毫米
 	Mobile	移动设备
 	Move Tool	移动工具
+	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -1666,6 +1678,7 @@
 	Quick Selection Tool	快速选择工具
 	Radial	径向
 	Rasterize Layer	栅格化图层
+	Rasterize Layers	栅格化图层
 	Ratio	比例
 	Recent	最近使用
 	Rectangle Tool	矩形工具
@@ -2312,6 +2325,9 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
+
+	Rasterize svg groups deeper than	栅格化超过此深度的 SVG 组
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	设为 0 可关闭此阈值；嵌套超过 100 层的 SVG 组始终会被栅格化。
 	Rule of Thirds	三等分
 	Triangle	三角形
 	Golden Ratio	黄金比例
@@ -2352,6 +2368,8 @@ fontWeight	Italic	斜体
 	Create Ellipse	创建椭圆
 	Create Triangle	创建三角形
 	Create Polygon	创建多边形
+	Pressure curve	压感曲线
+	Click to add a point, right-click to remove	单击添加点，右键单击删除点
 	Some brush presets could not be loaded	部分画笔预设无法加载
 	Retry saving presets	重试保存预设
 	Brush preset changes are not saved: {error}	画笔预设的更改未保存：{error}
@@ -2364,3 +2382,7 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
 	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)
+	No subject found — try Object Selection or the Lasso	未找到主体 — 请尝试对象选择工具或套索工具
+	Quick Selection found nothing there	快速选择在该处未找到任何内容
+	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
+	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形

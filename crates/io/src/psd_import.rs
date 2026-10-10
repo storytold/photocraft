@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{AlphaChannel, Document, Effects, FillCache, Group, Layer, LayerContent, LayerMask, ShapeLayer, SmartObject, SmartSource, TextLayer};
+use photocraft_doc::{
+    AlphaChannel, Document, Effects, FillCache, Group, Layer, LayerContent, LayerMask, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_psd::layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK};
 use photocraft_psd::resources::ids;
@@ -55,6 +57,8 @@ pub(crate) struct Ctx<'a> {
     pub txt2: Option<photocraft_text::engine_data::Value>,
     /// Smart-filter caches from the global `FEid`/`FXid` blocks (filter masks, by placed id).
     pub filter_effects: Vec<photocraft_psd::filter_effects::FilterEffectsItem>,
+    /// Placed layers naming the same source share editable contents, not their placement.
+    pub smart_contents: std::collections::HashMap<String, SmartContentsId>,
     /// Cancellation and progress for background opens (checked per layer record).
     pub ctl: photocraft_raster::Interrupt<'a>,
     /// Layer records decoded so far, out of `total` (progress).
@@ -317,6 +321,8 @@ impl Ctx<'_> {
             LayerContent::Text(t)
         } else if let Some(k) = smart_key {
             let (id, transform) = rec.block(k).map(|b| blocks::parse_smart(k, &b.data)).unwrap_or_default();
+            let contents_id =
+                if id.is_empty() { SmartContentsId::fresh() } else { *self.smart_contents.entry(id.clone()).or_insert_with(SmartContentsId::fresh) };
             // Smart filters (`filterFX` in the placed-layer data) and their mask (`FEid`).
             let placed = rec.block(b"SoLd").or_else(|| rec.block(b"SoLE")).and_then(|b| crate::smart_map::parse_sold(&b.data));
             let stack = placed.as_ref().and_then(|p| p.stack.clone()).unwrap_or_default();
@@ -325,6 +331,7 @@ impl Ctx<'_> {
                 _ => None,
             };
             LayerContent::Smart(SmartObject {
+                contents_id,
                 source: SmartSource::Linked { path: id },
                 transform,
                 smart_filters: stack.filters,
@@ -623,6 +630,7 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
         dpi: doc.resolution_dpi,
         txt2: file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)),
         filter_effects: Vec::new(),
+        smart_contents: Default::default(),
         ctl: *ctl,
         done: 0,
         total: file.layers().len(),

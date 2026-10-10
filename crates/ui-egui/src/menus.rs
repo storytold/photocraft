@@ -798,6 +798,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     crate::plugin_ui::insert_menu_items(app, &mut items);
+    if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
+        && let Some(item) = items.iter_mut().find(|i| i.id == "layer.layerMask.enabled")
+    {
+        item.label = crate::layer_menu_ui::mask_toggle_label(mask.enabled).into();
+    }
     // The File quick-export command uses the format selected in Export Preferences.
     // On the web it intentionally downloads PNG until the quick-export service supports
     // the other formats; the Layer quick-export command also always produces PNG.
@@ -1689,7 +1694,9 @@ mod open_recent_tests {
         use photocraft_color::{ColorMode, SampleType};
         use photocraft_geom::Size;
         let services = crate::Services {
-            import: Some(Box::new(|_n: &str, _b: &[u8]| Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))),
+            import: Some(Box::new(|_n: &str, _b: &[u8], _depth: usize| {
+                Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+            })),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);

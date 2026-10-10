@@ -397,7 +397,8 @@ mod tests {
                     assert!(c1[0] < c0[0] - 10.0, "{c0:?} -> {c1:?}");
                 } else {
                     assert!((len - (r.width() - THICKNESS)).abs() < 1.0, "the thumb fills the track: {len}");
-                    assert_eq!(c1, c0, "Overscroll off keeps a fitting image centred");
+                    // Within float error: the fit zoom is not a round number for every canvas height.
+                    assert!((c1[0] - c0[0]).abs() < 0.01 && (c1[1] - c0[1]).abs() < 0.01, "Overscroll off keeps a fitting image centred: {c0:?} -> {c1:?}");
                 }
             }
         }

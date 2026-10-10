@@ -527,11 +527,19 @@ pub fn preview_document_with(
     if k > 1
         && let Some(o) = p.as_object_mut()
     {
+        let spec = photocraft_engine::commands::find(command).map(|c| parse_spec(c.params)).unwrap_or_default();
         for (key, v) in o.iter_mut() {
             if is_pixel_param(key)
                 && let Some(x) = v.as_f64()
             {
-                *v = json!((x / k as f64).max(if key == "cellSize" { 1.0 } else { 0.1 }));
+                // Match the engine's minimum after scaling (e.g. Box Blur 1, Mosaic 2).
+                // Previously its tolerant decoder clamped these; new calls validate first.
+                let minimum = spec.iter().find(|p| p.key == key.as_str()).and_then(|p| match &p.kind {
+                    Kind::Range { min, .. } => Some(f64::from(*min)),
+                    _ => None,
+                });
+                let floor = minimum.unwrap_or(0.0).max(if key == "cellSize" { 1.0 } else { 0.1 });
+                *v = json!((x / k as f64).max(floor));
             }
         }
     }
@@ -730,6 +738,42 @@ mod tests {
         let p = out.layers[0].surface().unwrap().pixel(32, 32);
         assert!(p[0] > 0.2 && p[0] < 0.8, "edge blurred: {p:?}");
         assert_eq!(label("wavelengthMin"), "Wavelength Min");
+    }
+
+    #[test]
+    fn core_filter_previews_keep_minimum_settings_after_downsampling() {
+        use photocraft_doc::{Color, ColorMode, SampleType, Size};
+        use photocraft_geom::Rect;
+
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = Document::with_background("preview", Size::new(32, 32), ColorMode::Rgb, depth, Color::WHITE);
+            let layer = doc.layers[0].id;
+            doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 16, 32), &[0.0, 0.0, 0.0, 1.0]);
+            for (suffix, params) in [
+                ("blur.boxBlur", json!({"radius":1})),
+                ("blur.motionBlur", json!({"distance":1})),
+                ("blur.surfaceBlur", json!({"radius":1})),
+                ("noise.median", json!({"radius":1})),
+                ("noise.dustAndScratches", json!({"radius":1})),
+                ("pixelate.mosaic", json!({"cellSize":2})),
+                ("stylize.emboss", json!({"height":1})),
+                ("other.minimum", json!({"radius":0.2})),
+                ("other.maximum", json!({"radius":0.2})),
+                ("distort.wave", json!({"wavelengthMin":1,"wavelengthMax":2,"amplitudeMin":1,"amplitudeMax":1})),
+            ] {
+                let command = format!("filter.{suffix}");
+                for k in [2, 4] {
+                    let proxy = crate::proxy::proxy_document(&doc, k);
+                    let expected = preview_document(&proxy, Some(layer), &command, &params, 1).unwrap();
+                    let out = preview_document(&doc, Some(layer), &command, &params, k).unwrap_or_else(|| panic!("{command}: {depth:?}, proxy factor {k}"));
+                    assert_eq!(
+                        out.layers[0].surface().unwrap().read_region(proxy.bounds()),
+                        expected.layers[0].surface().unwrap().read_region(proxy.bounds()),
+                        "{command}: {depth:?}, proxy factor {k}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

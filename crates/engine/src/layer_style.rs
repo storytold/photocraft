@@ -697,16 +697,15 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Clear Layer Style",
             menu: &["Layer", "Layer Style"],
             shortcut: None,
-            params: r##"{"layer":id}"##,
+            params: r##"{"layer":id? (no layer: every selected layer that has a style)}"##,
             enabled: has_layer,
             run: |s, p| {
-                let id = match p.get("layer").and_then(Value::as_u64) {
-                    Some(id) => photocraft_doc::LayerId(id),
-                    None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into()))?,
-                };
+                let ids = crate::extra_cmds::style_targets(s, p, |l| !l.effects.items.is_empty())?;
                 s.edit("Clear Layer Style", |doc, _| {
-                    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-                    l.effects = photocraft_doc::Effects { enabled: true, ..Default::default() };
+                    for id in ids {
+                        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                        l.effects = photocraft_doc::Effects { enabled: true, ..Default::default() };
+                    }
                     Ok(())
                 })?;
                 Ok(Value::Null)
