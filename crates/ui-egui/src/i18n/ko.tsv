@@ -26,6 +26,8 @@
 	Open As…	형식을 지정하여 열기…
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
+	Remove from Recent	최근 항목에서 제거
+	Remove {name} from Recent	최근 항목에서 {name} 제거
 	Close	닫기
 	Minimize	최소화
 	Maximize	최대화

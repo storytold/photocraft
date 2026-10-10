@@ -42,6 +42,8 @@
 	Open As…	開啟為…
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
+	Remove from Recent	從最近檔案中移除
+	Remove {name} from Recent	從最近檔案中移除 {name}
 	Close	關閉
 	Minimize	最小化
 	Maximize	最大化
