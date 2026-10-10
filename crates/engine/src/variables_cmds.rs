@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use photocraft_algo::resample::{Resample, resize_surface, translate_surface};
+use photocraft_doc::text::{ParagraphRun, TextRun};
 use photocraft_doc::variables::Value as VarValue;
 use photocraft_doc::{DataSet, DataValue, Document, LayerContent, LayerId, PixelAlign, PixelMethod, VarKind, VariableDef, Variables};
 use serde_json::{Value, json};
@@ -168,9 +169,15 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                 if let Some(l) = doc.layer_mut(def.layer)
                     && let LayerContent::Text(t) = &mut l.content
                 {
+                    // As in Photoshop, the new text takes the style of the first character it
+                    // replaces (and its paragraph's settings): clearing the runs fell back to the
+                    // summary style and lost weight, italic, tracking, caps… (#2742).
+                    let style = t.char_runs().into_iter().next().map(|r| r.style).unwrap_or_default();
+                    let para = t.paragraph_runs().into_iter().next().map(|r| r.style).unwrap_or_default();
                     t.text = text.clone();
-                    t.runs.clear(); // re-flow as one run from the summary style
-                    t.paragraphs.clear();
+                    t.runs = vec![TextRun { len: t.text.len(), style }];
+                    t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: para }];
+                    t.sync_summary();
                     // The compositor draws a type layer from its cache: clearing it left the
                     // layer blank until some other edit re-rendered it (#990).
                     crate::type_cmds::refresh(&snapshot, t);
