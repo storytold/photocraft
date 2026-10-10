@@ -66,11 +66,17 @@ impl Tile {
     }
 
     fn filled(format: &PixelFormat, pixel: &[u8]) -> Self {
-        let n = (TILE_SIZE * TILE_SIZE) as usize;
-        let mut data = vec![0u8; n * format.bytes_per_pixel()];
+        let row_len = TILE_SIZE as usize * format.bytes_per_pixel();
+        let mut data = vec![0u8; row_len * TILE_SIZE as usize];
         if pixel.iter().any(|&b| b != 0) {
-            for px in data.chunks_exact_mut(pixel.len()) {
-                px.copy_from_slice(pixel);
+            // One prebuilt row copied per tile row: 256 bulk copies instead of one
+            // copy_from_slice per pixel.
+            let mut row = Vec::with_capacity(row_len);
+            for _ in 0..TILE_SIZE {
+                row.extend_from_slice(pixel);
+            }
+            for out in data.chunks_mut(row_len) {
+                out.copy_from_slice(&row);
             }
         }
         Tile { data: data.into_boxed_slice() }
@@ -683,24 +689,81 @@ impl Surface {
         let bpp = self.format.bytes_per_pixel();
         let moved = content.translate(dx, dy);
         let targets: std::collections::BTreeSet<TileCoord> = sources().flat_map(|(c, _)| c.rect().translate(dx, dy).intersect(&moved).tiles()).collect();
+        // One row of the default pixel, so the regions a shift vacates fill with bulk copies.
+        let default_row: Vec<u8> = if self.default_pixel.iter().any(|&b| b != 0) {
+            let mut row = Vec::with_capacity(TILE_SIZE as usize * bpp);
+            for _ in 0..TILE_SIZE {
+                row.extend_from_slice(&self.default_pixel);
+            }
+            row
+        } else {
+            Vec::new()
+        };
         for dc in targets {
-            let mut tile = Tile::filled(&self.format, &self.default_pixel);
-            let dr = dc.rect();
-            let sr = dr.translate(dx.saturating_neg(), dy.saturating_neg());
-            for sc in sr.intersect(&content).tiles() {
-                let Some(st) = self.tiles.get(&sc) else { continue };
-                let part = sc.rect().intersect(&sr);
-                let span = part.width() as usize * bpp;
-                // Offsets inside the tiles (the target's computed wide: an offset near the i32
-                // limits saturates `translate`, and such rows are skipped rather than misplaced).
-                let at = |x: i64, y: i64| usize::try_from(y * i64::from(TILE_SIZE) + x).ok().map(|i| i * bpp);
-                for y in part.y0..part.y1 {
-                    let src = at(i64::from(part.x0 - sc.tx * TILE_SIZE), i64::from(y - sc.ty * TILE_SIZE));
-                    let dst = at(i64::from(part.x0) + i64::from(dx) - i64::from(dr.x0), i64::from(y) + i64::from(dy) - i64::from(dr.y0));
-                    let (Some(src), Some(dst)) = (src, dst) else { continue };
-                    if let (Some(d), Some(s)) = (tile.data.get_mut(dst..dst + span), st.data.get(src..src + span)) {
-                        d.copy_from_slice(s);
+            let mut tile = Tile { data: vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * bpp].into_boxed_slice() };
+            let (tx0, ty0) = (i64::from(dc.tx) * i64::from(TILE_SIZE), i64::from(dc.ty) * i64::from(TILE_SIZE));
+            let row_len = TILE_SIZE as usize * bpp;
+            // Per stored row: copy the source span that falls inside the content in as few
+            // memcpys as the tile grid allows, and fill the vacated edges from the default
+            // row — no whole-tile pre-fill, which rewrote nearly every byte twice.
+            for local_y in 0..i64::from(TILE_SIZE) {
+                let y = ty0 + local_y;
+                let Some(row) = tile.data.get_mut(local_y as usize * row_len..(local_y as usize + 1) * row_len) else { continue };
+                let in_content_y = y - i64::from(dy) >= i64::from(content.y0) && y - i64::from(dy) < i64::from(content.y1);
+                // The row's target columns whose SOURCE lies inside the content are copied
+                // (the copy loop crosses source tiles as needed); the rest stays default —
+                // exactly the pixels the shift vacated.
+                let cx0 = (i64::from(content.x0) + i64::from(dx)).max(tx0);
+                let cx1 = (i64::from(content.x1) + i64::from(dx)).min(tx0 + i64::from(TILE_SIZE));
+                if !in_content_y || cx1 <= cx0 {
+                    if !default_row.is_empty() {
+                        row.copy_from_slice(&default_row);
                     }
+                    continue;
+                }
+                let left = (cx0.max(tx0) - tx0) as usize * bpp;
+                let copied_end = (cx1.min(tx0 + i64::from(TILE_SIZE)) - tx0) as usize * bpp;
+                if !default_row.is_empty() {
+                    if left > 0 {
+                        row[..left].copy_from_slice(&default_row[..left]);
+                    }
+                    if copied_end < row_len {
+                        row[copied_end..].copy_from_slice(&default_row[copied_end..]);
+                    }
+                }
+                let mut x = cx0.max(tx0);
+                let x_end = cx1.min(tx0 + i64::from(TILE_SIZE));
+                // Rows run over the same one or two source tiles: cache the last lookup.
+                let mut cached: Option<(i64, i64, &std::sync::Arc<Tile>)> = None;
+                while x < x_end {
+                    // The source document position this target column reads, and the source
+                    // tile it lives in (the shift crosses source tiles as x runs).
+                    let (sx, sy) = (x - i64::from(dx), y - i64::from(dy));
+                    let (tx, ty) = (sx.div_euclid(i64::from(TILE_SIZE)), sy.div_euclid(i64::from(TILE_SIZE)));
+                    let st = match cached.take() {
+                        Some((ctx, cty, t)) if ctx == tx && cty == ty => {
+                            cached = Some((ctx, cty, t));
+                            t
+                        }
+                        _ => match self.tiles.get(&TileCoord::new(tx as i32, ty as i32)) {
+                            Some(t) => {
+                                cached = Some((tx, ty, t));
+                                t
+                            }
+                            None => {
+                                x = ((tx + 1) * i64::from(TILE_SIZE) + i64::from(dx)).max(x + 1);
+                                continue;
+                            }
+                        },
+                    };
+                    let span_end = (((tx + 1) * i64::from(TILE_SIZE) + i64::from(dx)).min(x_end)).max(x + 1);
+                    let span = (span_end - x) as usize * bpp;
+                    let src = ((sy - ty * i64::from(TILE_SIZE)) * row_len as i64 + (sx - tx * i64::from(TILE_SIZE)) * bpp as i64) as usize;
+                    let dst = (x - tx0) as usize * bpp;
+                    if let (Some(d), Some(sr)) = (row.get_mut(dst..dst + span), st.data.get(src..src + span)) {
+                        d.copy_from_slice(sr);
+                    }
+                    x = span_end;
                 }
             }
             out.tiles.insert(dc, Arc::new(tile));

@@ -270,6 +270,10 @@ fn upsert(raw: &mut Vec<([u8; 4], Vec<u8>)>, key: &[u8; 4], data: Vec<u8>, befor
     }
 }
 
+fn h_of(r: photocraft_geom::Rect) -> usize {
+    r.height() as usize
+}
+
 fn psd_mode(m: ColorMode) -> PsdMode {
     match m {
         ColorMode::Grayscale => PsdMode::Grayscale,
@@ -307,18 +311,28 @@ impl Ex {
         (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0)).collect()
     }
 
-    fn pixel_channels(&mut self, s: &Surface, name: &str) -> (PsdRect, Vec<ChannelData>) {
+    fn pixel_channels(&self, s: &Surface, name: &str) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
+        let mut warnings = Vec::new();
         let s = if s.format() != self.fmt {
-            self.warnings.push(format!("layer \"{name}\": pixels converted from {:?} to {:?}", s.format(), self.fmt));
+            warnings.push(format!("layer \"{name}\": pixels converted from {:?} to {:?}", s.format(), self.fmt));
             s.convert(self.fmt)
         } else {
             s.clone()
         };
         let r = s.content_bounds();
         if r.is_empty() {
-            return (PsdRect::default(), self.empty_channels());
+            return (PsdRect::default(), self.empty_channels(), warnings);
         }
-        let mut bytes = s.to_interleaved(r);
+        // The interleaved gather is the sequential pass for full-canvas layers, so it runs
+        // in row bands on all cores and the band results concatenate in order.
+        let row_len = r.width() as usize;
+        let bands = crate::pixels::bands(h_of(r));
+        let parts =
+            crate::pixels::par_map(bands, |rows| s.to_interleaved(photocraft_geom::Rect::new(r.x0, r.y0 + rows.start as i32, r.x1, r.y0 + rows.end as i32)));
+        let mut bytes = Vec::with_capacity(row_len * h_of(r) * s.format().bytes_per_pixel());
+        for part in parts {
+            bytes.extend_from_slice(&part);
+        }
         if self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16 {
             crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, false);
         }
@@ -331,7 +345,7 @@ impl Ex {
         let order: Vec<(i16, &Vec<u8>)> =
             std::iter::once((-1, &planes[self.cc])).chain(planes.iter().take(self.cc).enumerate().map(|(c, p)| (c as i16, p))).collect();
         let ch = crate::pixels::par_map(order, |(id, plane)| self.encode(id, plane, w, h));
-        (to_psd_rect(r), ch)
+        (to_psd_rect(r), ch, warnings)
     }
 
     fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> (MaskData, Option<ChannelData>) {
@@ -378,10 +392,11 @@ impl Ex {
 
     fn record(&mut self, l: &Layer, extra: Vec<TaggedBlock>, pixels: Option<&Surface>) -> LayerRecord {
         let id = self.layer_id(l);
-        let (rect, mut channels) = match pixels {
+        let (rect, mut channels, warnings) = match pixels {
             Some(s) => self.pixel_channels(s, &l.name),
-            None => (PsdRect::default(), self.empty_channels()),
+            None => (PsdRect::default(), self.empty_channels(), Vec::new()),
         };
+        self.warnings.extend(warnings);
         let mut mask = MaskData::None;
         // Vector mask density/feather live in the mask parameters, with or without a user mask.
         let vector = l.vector_mask.as_ref().map(|vm| (vm.density, vm.feather));
