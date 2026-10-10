@@ -546,6 +546,106 @@ pub fn read_file_info(xmp: Option<&str>) -> Value {
     Value::Object(m)
 }
 
+/// File Info's read-only Camera Data, as (result key, English label) in display order.
+pub const CAMERA_FIELDS: [(&str, &str); 9] = [
+    ("make", "Make"),
+    ("model", "Model"),
+    ("dateTaken", "Date Taken"),
+    ("exposure", "Exposure"),
+    ("fNumber", "F-Stop"),
+    ("iso", "ISO Speed"),
+    ("focalLength", "Focal Length"),
+    ("focalLength35mm", "Focal Length (35 mm)"),
+    ("lens", "Lens"),
+];
+
+/// `v` with at most `decimals` decimals and no trailing zeros (33.10 → "33.1", 8.0 → "8").
+fn short_num(v: f64, decimals: usize) -> String {
+    let s = format!("{v:.decimals$}");
+    if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
+}
+
+/// Exposure time as cameras print it: "1/250 s" for fractions of a second, "0.4 s" or "2 s"
+/// when the reciprocal isn't a whole number or the exposure is a second or longer.
+fn exposure_text(t: f64) -> Option<String> {
+    if !(t.is_finite() && t > 0.0) {
+        return None;
+    }
+    let r = 1.0 / t;
+    if t < 1.0 && (r - r.round()).abs() <= r * 0.01 {
+        return Some(format!("1/{} s", r.round()));
+    }
+    Some(format!("{} s", short_num(t, if t < 1.0 { 2 } else { 1 })))
+}
+
+/// EXIF (`2024:02:17 12:40:19`) or XMP (`2024-02-17T12:40:19.00+01:00`) dates as
+/// `2024-02-17 12:40:19`; anything else is shown as stored.
+fn date_text(s: &str) -> String {
+    let b = s.trim().as_bytes();
+    let digits = |r: &[usize]| r.iter().all(|&i| b.get(i).is_some_and(u8::is_ascii_digit));
+    let sep = |i: usize, set: &[u8]| b.get(i).is_some_and(|c| set.contains(c));
+    let ch = |i: usize| b.get(i).map_or('0', |&c| c as char);
+    let part = |r: std::ops::Range<usize>| r.map(ch).collect::<String>();
+    if !(digits(&[0, 1, 2, 3, 5, 6, 8, 9]) && sep(4, b":-") && sep(7, b":-")) {
+        return s.trim().to_string();
+    }
+    let date = format!("{}-{}-{}", part(0..4), part(5..7), part(8..10));
+    if digits(&[11, 12, 14, 15, 17, 18]) && sep(10, b" T") && sep(13, b":") && sep(16, b":") { format!("{date} {}", part(11..19)) } else { date }
+}
+
+/// A single XMP value: the first `rdf:li` of a container, element text or attribute.
+fn xmp_value(x: &str, prop: &str) -> Option<String> {
+    let v = match find_element(x, prop) {
+        Some((_, _, inner)) => li_values(inner).into_iter().next(),
+        None => find_attr(x, prop).map(|(_, _, v)| xml_unescape(v)),
+    }?;
+    let v = v.trim().to_string();
+    (!v.is_empty()).then_some(v)
+}
+
+/// An XMP number: a rational "331/10" or a decimal.
+fn xmp_number(x: &str, prop: &str) -> Option<f64> {
+    let v = xmp_value(x, prop)?;
+    let n = match v.split_once('/') {
+        Some((a, b)) => {
+            let (a, b) = (a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?);
+            (b != 0.0).then(|| a / b)?
+        }
+        None => v.parse::<f64>().ok()?,
+    };
+    n.is_finite().then_some(n)
+}
+
+/// File Info's read-only Camera Data (keys of [`CAMERA_FIELDS`], present ones only), formatted
+/// for display. Read from the EXIF block (JPEG APP1, PSD resource 1058, …); properties it lacks
+/// fall back to the XMP `tiff:`/`exif:`/`aux:` copies (files without an EXIF block).
+pub fn camera_data(exif: Option<&[u8]>, xmp: Option<&str>) -> Value {
+    let e = exif.map(photocraft_algo::exif::read).unwrap_or_default();
+    let x = xmp.unwrap_or("");
+    let text = |v: Option<String>, props: &[&str]| v.or_else(|| props.iter().find_map(|p| xmp_value(x, p)));
+    let num =
+        |v: Option<f64>, props: &[&str]| v.filter(|v| v.is_finite() && *v > 0.0).or_else(|| props.iter().find_map(|p| xmp_number(x, p))).filter(|v| *v > 0.0);
+    let values = [
+        text(e.make, &["tiff:Make"]),
+        text(e.model, &["tiff:Model"]),
+        text(e.date_taken, &["exif:DateTimeOriginal"]).map(|d| date_text(&d)),
+        num(e.exposure_time, &["exif:ExposureTime"]).and_then(exposure_text),
+        num(e.f_number, &["exif:FNumber"]).map(|n| format!("f/{}", short_num(n, 1))),
+        num(e.iso, &["exif:ISOSpeedRatings", "exifEX:PhotographicSensitivity"]).map(|n| format!("ISO {}", n.round())),
+        num(e.focal_length, &["exif:FocalLength"]).map(|f| format!("{} mm", short_num(f, 1))),
+        num(e.focal_length_35mm, &["exif:FocalLengthIn35mmFilm"]).map(|f| format!("{} mm", short_num(f, 1))),
+        text(e.lens, &["exifEX:LensModel", "aux:Lens"]),
+    ];
+    let mut m = serde_json::Map::new();
+    for ((key, _), v) in CAMERA_FIELDS.into_iter().zip(values) {
+        // Hostile files can carry megabytes of "lens name"; the dialog shows a line.
+        if let Some(v) = v.map(|v| v.chars().take(200).collect::<String>()).filter(|v| !v.is_empty()) {
+            m.insert(key.into(), json!(v));
+        }
+    }
+    Value::Object(m)
+}
+
 /// Rewrites only changed File Info fields of an XMP packet (creating one when there is none),
 /// keeping the other properties verbatim. Edited properties move into their own
 /// `rdf:Description` (several descriptions per packet are valid XMP).
@@ -621,7 +721,11 @@ fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(read_file_info(d.doc.metadata.xmp.as_deref()))
+    let mut info = read_file_info(d.doc.metadata.xmp.as_deref());
+    if let Value::Object(m) = &mut info {
+        m.insert("camera".into(), camera_data(d.doc.metadata.exif.as_deref().map(Vec::as_slice), d.doc.metadata.xmp.as_deref()));
+    }
+    Ok(info)
 }
 
 // ---------- Automate ----------
@@ -1286,7 +1390,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "File Info…",
             &["File"],
             Some("Cmd+Alt+Shift+I"),
-            r##"{"title":str?,"author":str?,"authorTitle":str?,"description":str?,"keywords":[str]|"a; b"?,"copyright":str?,"copyrightStatus":"unknown|copyrighted|publicDomain"?,"copyrightUrl":str?} (no keys: read)"##,
+            r##"{"title":str?,"author":str?,"authorTitle":str?,"description":str?,"keywords":[str]|"a; b"?,"copyright":str?,"copyrightStatus":"unknown|copyrighted|publicDomain"?,"copyrightUrl":str?} (no keys: read; the result also has read-only "camera":{"make","model","dateTaken","exposure","fNumber","iso","focalLength","focalLength35mm","lens"}, present keys only)"##,
             has_doc,
             file_info
         ),

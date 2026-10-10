@@ -114,6 +114,44 @@ fn fill_dialog_and_contour_choices_have_translations_and_draw_in_the_selected_la
 }
 
 #[test]
+fn file_info_camera_data_has_translations_and_draws_read_only() {
+    for language in Lang::all().filter(|language| language.complete_menus()) {
+        assert!(has(language, "Camera Data"), "{}: untranslated Camera Data", language.code());
+        for (_, label) in photocraft_engine::file_cmds::CAMERA_FIELDS {
+            assert!(language.catalog().contextual("cameraData", label).is_some(), "{}: untranslated cameraData {label}", language.code());
+        }
+    }
+    with_language(Lang::EN, || {
+        let mut h = harness();
+        let exif = photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
+            make: Some("SONY".into()),
+            exposure_time: Some(1.0 / 250.0),
+            f_number: Some(8.0),
+            ..Default::default()
+        });
+        h.state_mut()
+            .session
+            .edit("exif", |doc, _| {
+                doc.metadata.exif = Some(std::sync::Arc::new(exif));
+                Ok(())
+            })
+            .expect("exif");
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "de"})).expect("language");
+        let ctx = h.ctx.clone();
+        let dialog = crate::menus::invoke(h.state_mut(), &ctx, "file.fileInfo", json!({})).expect("file info")["dialog"].as_u64().expect("dialog id");
+        assert_eq!(h.state_mut().ui.dialog_mut(dialog).expect("open").fields["__camera"]["exposure"], "1/250 s");
+        h.run_steps(4);
+        let text = drawn_text(&h);
+        for want in ["Kameradaten", "Hersteller", "SONY", "Belichtungszeit", "1/250 s", "Blende", "f/8"] {
+            assert!(text.iter().any(|text| text == want), "missing {want}: {text:?}");
+        }
+        // Read-only: confirming submits only the editable fields.
+        crate::dialogs::confirm(h.state_mut(), dialog).expect("confirm");
+        assert_eq!(h.state_mut().run("file.fileInfo", json!({})).expect("info")["camera"]["make"], "SONY");
+    });
+}
+
+#[test]
 fn cjk_font_order_follows_the_selected_language() {
     use photocraft_text::cjk::CjkScript;
     for (code, script) in [("zh-hans", CjkScript::SimplifiedChinese), ("ja", CjkScript::Japanese), ("ko", CjkScript::Korean)] {
