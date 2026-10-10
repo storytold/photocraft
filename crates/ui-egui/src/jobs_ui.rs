@@ -330,6 +330,14 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) {
 }
 
 fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
+    // Preferences ▸ General ▸ Beep When Done (off by default): a finished operation beeps, like
+    // Photoshop's cue. Cancelling is the user's own action and stays silent.
+    if matches!(e.outcome, JobOutcome::Done(_))
+        && app.session.prefs().general.beep_when_done
+        && let Some(beep) = app.services.beep
+    {
+        beep();
+    }
     // Control requests waiting on this job.
     let reply = match &e.outcome {
         JobOutcome::Done(v) => json!({"ok": true, "result": v}),

@@ -345,6 +345,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
+        beep: Some(platform_beep),
         clipboard_set_image: Some({
             let clip = clip.clone();
             Box::new(move |w: u32, h: u32, px: &[u8]| {
@@ -388,6 +389,21 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         preset_store: None,
         is_wayland: false,
         ..recovery_services(recovery_dir())
+    }
+}
+
+/// Preferences ▸ General ▸ Beep When Done: the platform's default information beep.
+fn platform_beep() {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = winsafe::MessageBeep(winsafe::co::MBP::OK);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // No beep API among this app's other platforms' dependencies: write the terminal bell
+        // (audible when launched from a terminal, which is the same cue macOS terminals use).
+        use std::io::Write as _;
+        let _ = std::io::stdout().write_all(b"\x07").and_then(|()| std::io::stdout().flush());
     }
 }
 

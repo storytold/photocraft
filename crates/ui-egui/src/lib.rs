@@ -305,6 +305,9 @@ pub struct Services {
     pub encode_png: Option<EncodePngFn>,
     /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.
     pub open_url: Option<OpenUrlFn>,
+    /// Preferences ▸ General ▸ Beep When Done: the platform's default beep, played when a
+    /// background job finishes successfully. `None` in the web build (and in tests).
+    pub beep: Option<fn()>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame.
     pub inbox: Option<Inbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.

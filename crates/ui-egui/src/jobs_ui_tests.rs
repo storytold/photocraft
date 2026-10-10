@@ -3,7 +3,7 @@
 //! dialog, and Esc / Cancel leave the document unchanged.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use egui::vec2;
@@ -15,13 +15,18 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 fn app_harness() -> Harness<'static, PhotocraftApp> {
+    app_harness_with(crate::Services::default())
+}
+
+/// [`app_harness`] over the given services (the beep test records the hook's calls).
+fn app_harness_with(services: crate::Services) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 320, "height": 240})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.execute("edit.fill", json!({"color": "#3366cc"})).unwrap();
-        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let mut app = PhotocraftApp::new(s, services);
         app.background_jobs = true;
         app
     });
@@ -522,4 +527,27 @@ fn a_cancelled_save_still_counts_until_its_worker_returns() {
     release.store(true, Ordering::Relaxed);
     step_until(&mut h, |a| !a.saving());
     assert!(!h.state().jobs.close_after_saves, "the held close is repeated once the worker returns");
+}
+
+/// Preferences ▸ General ▸ Beep When Done (off by default): a finished background job beeps
+/// once through the services hook; with the preference off it stays silent.
+#[test]
+fn a_finished_job_beeps_when_the_preference_is_on() {
+    static BEEPS: AtomicUsize = AtomicUsize::new(0);
+    fn count_beep() {
+        BEEPS.fetch_add(1, Ordering::Relaxed);
+    }
+    BEEPS.store(0, Ordering::Relaxed);
+    let mut h = app_harness_with(crate::Services { beep: Some(count_beep), ..Default::default() });
+    // Off by default: the first job finishes without a beep.
+    let gate = Arc::new(AtomicBool::new(true));
+    let _ = slow_job(h.state_mut(), &gate);
+    frames_for(&mut h, 800);
+    assert_eq!(BEEPS.load(Ordering::Relaxed), 0, "silent by default");
+    // On: the next finished job beeps once.
+    h.state_mut().run("prefs.set", json!({"path": "general.beepWhenDone", "value": true})).unwrap();
+    let gate = Arc::new(AtomicBool::new(true));
+    let _ = slow_job(h.state_mut(), &gate);
+    frames_for(&mut h, 800);
+    assert_eq!(BEEPS.load(Ordering::Relaxed), 1, "one beep for the finished job");
 }
