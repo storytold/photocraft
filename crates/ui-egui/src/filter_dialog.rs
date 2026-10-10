@@ -557,19 +557,25 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
                 let rgb = set.or(default).unwrap_or([0.0; 3]);
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let mut bytes = rgb.map(q);
-                let mut changed = false;
+                let bytes = rgb.map(q);
+                let name = label(&p.key);
+                let mut clicked = false;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.label(egui::RichText::new(&name).color(t.text_dim));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        changed = crate::widgets::color_edit_button_srgb(ui, &mut bytes).changed();
+                        // PhotoCraft's Color Picker, as everywhere else (#2144).
+                        clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
                         ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
                     });
                 });
-                if changed {
-                    f.insert(p.key, json!(crate::color_picker_ui::hex(bytes.map(|b| f32::from(b) / 255.0))));
-                } else if set.is_none() && default.is_some() {
-                    f.insert(p.key, json!(crate::color_picker_ui::hex(rgb)));
+                if set.is_none() && default.is_some() {
+                    f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(rgb)));
+                }
+                if clicked {
+                    if !f.contains_key(&p.key) {
+                        f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(rgb)));
+                    }
+                    crate::color_picker_ui::request_field(f, &p.key, &crate::color_picker_ui::title_for(&name));
                 }
             }
             Kind::Int { default } => {

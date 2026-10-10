@@ -128,7 +128,7 @@ pub struct Drag {
     pub reposition: bool,
     /// A marquee or lasso drag that started inside the selection moves it instead of drawing:
     /// `Some(false)` moves the outline, `Some(true)` moves the floating piece (`select.float`), as
-    /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels`).
+    /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels_with`).
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
 }
@@ -2098,7 +2098,9 @@ const HOME_RECENT: usize = 6;
 /// Height of one Home-screen recent-file row.
 const HOME_RECENT_ROW: f32 = 30.0;
 
-/// The Home screen's "Recent" list: file name, its folder on the right, click to open.
+/// The Home screen's "Recent" list: file name, its folder on the right, click to open. The
+/// hovered row shows a × that takes it off the list, and right-click offers Remove from Recent
+/// and Clear Recent Files (#2691).
 fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let width = 380.0;
@@ -2109,27 +2111,60 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     });
     ui.add_space(4.0);
     let mut open = None;
+    let mut remove = None;
+    let mut clear = false;
     for path in recent {
         let name = crate::file_open::display_name(path);
         let folder = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
         let (row, resp) = ui.allocate_exact_size(egui::vec2(width, HOME_RECENT_ROW), Sense::click());
-        if resp.hovered() {
+        // The × sits on top of the row, so the row counts as hovered while the pointer is on it.
+        let hovered = ui.rect_contains_pointer(row);
+        if hovered {
             ui.painter().rect_filled(row, t.radius_sm, t.hover);
         }
+        let close = Rect::from_center_size(egui::pos2(row.right() - 16.0, row.center().y), egui::vec2(22.0, 22.0));
+        let right = if hovered { close.left() - 4.0 } else { row.right() - 10.0 };
         let icon = Rect::from_center_size(egui::pos2(row.left() + 16.0, row.center().y), egui::vec2(16.0, 16.0));
         crate::icons::paint(ui, icon, "file", 14.0, t.text_dim);
         let x = row.left() + 32.0;
         let name_g = crate::tab_strip::elided(ui, &name, egui::FontId::proportional(12.5), t.text, 170.0);
         let name_w = name_g.size().x;
         ui.painter().galley(egui::pos2(x, row.center().y - name_g.size().y / 2.0), name_g, t.text);
-        let folder_max = (row.right() - 10.0 - (x + name_w + 14.0)).max(0.0);
+        let folder_max = (right - (x + name_w + 14.0)).max(0.0);
         if folder_max > 20.0 && !folder.is_empty() {
             let fg = crate::tab_strip::elided(ui, &folder, egui::FontId::proportional(11.5), t.text_faint, folder_max);
-            ui.painter().galley(egui::pos2(row.right() - 10.0 - fg.size().x, row.center().y - fg.size().y / 2.0), fg, t.text_faint);
+            ui.painter().galley(egui::pos2(right - fg.size().x, row.center().y - fg.size().y / 2.0), fg, t.text_faint);
         }
-        if resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        let resp = resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if hovered {
+            let x = ui.interact(close, resp.id.with("remove"), Sense::click());
+            let label = crate::i18n::fmt(tl!("Remove {name} from Recent"), &[("name", &name)]);
+            x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            let color = crate::icons::button_chrome(ui, close, false, x.hovered());
+            crate::icons::paint(ui, close, "x", 12.0, color);
+            if x.on_hover_text(tl!("Remove from Recent")).clicked() {
+                remove = Some(path.clone());
+            }
+        }
+        if resp.clicked() && remove.is_none() {
             open = Some(path.clone());
         }
+        resp.context_menu(|ui| {
+            if ui.button(tl!("Remove from Recent")).clicked() {
+                remove = Some(path.clone());
+                ui.close();
+            }
+            if ui.button(tl!("Clear Recent Files")).clicked() {
+                clear = true;
+                ui.close();
+            }
+        });
+    }
+    if clear {
+        app.clear_recent();
+    } else if let Some(path) = remove {
+        app.remove_recent(&path);
     }
     if let Some(path) = open
         && let Err(e) = app.open_path(&path)
@@ -2183,6 +2218,11 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    // The camera as the app holds it before this frame's input. The canvas works on its own copy
+    // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
+    // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
+    // undone by that write-back.
+    let camera = if primary { app.ui.views.get(idx).map(|v| (v.center, v.rotation)) } else { None };
     // `View::zoom` is device pixels per document pixel; this canvas's geometry is in its own
     // viewport's egui points. A document window can sit on another display with a different
     // scale, so only the primary canvas records `app.ppp` for the frame's shared helpers
@@ -2608,7 +2648,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
         }
         // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
-        // Skew, Distort, Perspective).
+        // Skew, Distort, Perspective, Warp).
         let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
         if response.secondary_clicked()
             && transforming
@@ -2622,7 +2662,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Tool::PolygonLasso => polygon_retract(app),
                 _ => false,
             };
-        if tool == Tool::Lasso {
+        // The Lasso reads its own presses and drops the moves of a drag it didn't start, so an
+        // open Free Transform box takes the usual drag path instead (#2153).
+        if tool == Tool::Lasso && !transform_owns_pointer {
             crate::lasso_ui::canvas_input(app, &ctx, &xf, &response);
             (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
         }
@@ -2875,13 +2917,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
         crate::slice_ui::draw_overlay(app, &painter, &xf);
         // Tool cursors (Photoshop-style).
-        let guide_hover = response.hover_pos().filter(|_| tool == Tool::Move).and_then(|p| {
+        let guide_hover = response.hover_pos().and_then(|p| {
             let d = xf.to_doc(p);
-            crate::rulers::guide_at(app, d[0], d[1])
+            if tool == Tool::Move {
+                return crate::rulers::guide_at(app, d[0], d[1]);
+            }
+            command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
         });
         if let Some((vertical, _)) = guide_hover {
             ui.ctx().set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
-        } else if let Some(c) = response.hover_pos().and_then(|p| crate::transform_tool::cursor(app, xf.to_doc(p), ui.input(|i| i.modifiers.alt))) {
+        } else if let Some(c) =
+            response.hover_pos().and_then(|p| crate::transform_tool::cursor(app, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command)))
+        {
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
             let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
@@ -3054,6 +3101,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     crate::rotate_view::overlay(app, &ctx, &painter, &xf, &mut view, &response);
     if primary {
+        // The camera the tools set this frame wins over the copy's.
+        if let (Some((center, rotation)), Some(now)) = (camera, app.ui.views.get(idx)) {
+            if now.center != center {
+                view.center = now.center;
+                ctx.request_repaint();
+            }
+            if now.rotation != rotation {
+                view.rotation = now.rotation;
+                ctx.request_repaint();
+            }
+        }
         app.ui.views[idx] = view.clone();
     }
     view
@@ -3341,11 +3399,26 @@ fn draw_beyond_canvas(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
     let square = app.session.prefs().transparency_and_gamut.square();
     let checker_id = square.map(|_| checker(app, &ctx));
     let around = ring(c.extent.union(&fr), doc.bounds());
+    // A turned view (Rotate View, or the Crop tool's default mode turning the image behind its
+    // box) draws each band as its turned quad: its screen bounding box would stretch the band's
+    // texture and spread the checkerboard past the band.
+    let turned = xf.rotation != 0.0;
+    let checker_uv = |p: Pos2, sq: f32| ((p - canvas.min) / (2.0 * sq)).to_pos2();
     for &b in &around {
+        if turned {
+            let q = doc_quad(xf, b);
+            match square.zip(checker_id) {
+                Some((sq, id)) => textured_quad(painter, id, q, q.map(|p| checker_uv(p, sq))),
+                None => {
+                    painter.add(egui::Shape::convex_polygon(q.to_vec(), Color32::WHITE, Stroke::NONE));
+                }
+            }
+            continue;
+        }
         let r = under_canvas(xf.doc_rect(b), canvas);
         match square.zip(checker_id) {
             Some((sq, id)) => {
-                let uv = Rect::from_min_max(((r.min - canvas.min) / (2.0 * sq)).to_pos2(), ((r.max - canvas.min) / (2.0 * sq)).to_pos2());
+                let uv = Rect::from_min_max(checker_uv(r.min, sq), checker_uv(r.max, sq));
                 painter.image(id, r, uv, Color32::WHITE);
             }
             None => {
@@ -3356,6 +3429,12 @@ fn draw_beyond_canvas(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
     for (b, t, tex) in &c.bands {
         let part = |a: i32, o: i32, len: u32| (i64::from(a) - i64::from(o)) as f32 / len.max(1) as f32;
         let (mut u0, mut u1) = (part(b.x0, t.x0, t.width()), part(b.x1, t.x0, t.width()));
+        if turned {
+            // The quad's corners are the band's own (flip included), so no swap.
+            let (v0, v1) = (part(b.y0, t.y0, t.height()), part(b.y1, t.y0, t.height()));
+            textured_quad(painter, tex.id(), doc_quad(xf, *b), [pos2(u0, v0), pos2(u1, v0), pos2(u1, v1), pos2(u0, v1)]);
+            continue;
+        }
         if xf.flip {
             (u0, u1) = (u1, u0);
         }
@@ -3366,6 +3445,26 @@ fn draw_beyond_canvas(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
         painter.image(tex.id(), e, Rect::from_min_max(at(e.min), at(e.max)), Color32::WHITE);
     }
     !around.is_empty()
+}
+
+/// Document rect `b`'s corners on screen, clockwise from its top-left (a parallelogram in a turned
+/// view).
+fn doc_quad(xf: &ViewXform, b: DRect) -> [Pos2; 4] {
+    [(b.x0, b.y0), (b.x1, b.y0), (b.x1, b.y1), (b.x0, b.y1)].map(|(x, y)| xf.to_screen(x as f32, y as f32))
+}
+
+/// Texture `tex` drawn over the quad `q`, `uv` at its corners.
+fn textured_quad(painter: &egui::Painter, tex: egui::TextureId, q: [Pos2; 4], uv: [Pos2; 4]) {
+    if !q.iter().chain(uv.iter()).all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return;
+    }
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (pos, uv) in q.into_iter().zip(uv) {
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Overlays that persist between gestures: polygonal or magnetic lasso in progress, pending crop box.
@@ -3688,10 +3787,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     // A press anywhere but on the floating piece (or with ⇧ / ⌥, to draw) drops it first; the
-    // Move tool drags it from anywhere.
+    // Move tool (⌘ with a painting tool too, `event_tool`) drags it from anywhere.
     if let ToolEvent::Down { x, y, .. } = raw
         && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some())
-        && !crate::move_ui::moves_selected_pixels(app)
+        && !crate::move_ui::moves_selected_pixels_with(app, event_tool(app, mods))
         && selection_drag_kind(app, app.ui.tool, [x, y], mods) != Some(true)
     {
         let _ = app.run("select.drop", json!({}));
@@ -3744,6 +3843,14 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::gradient_ui::pointer(app, ev, mods) {
         return;
     }
+    // ⌘ with a selection tool over a guide takes the guide (#2690); the guide drag below moves it.
+    if let ToolEvent::Down { x, y, .. } = raw
+        && let Some((vertical, i)) = command_guide_at(app, app.active_tool(), [x, y], mods)
+    {
+        app.guide_drag = Some(crate::rulers::GuideDrag { vertical, index: Some(i), pos: if vertical { x } else { y } });
+        crate::snap_ui::begin_guide(app, [x, y]);
+        return;
+    }
     if crate::lasso_ui::pointer(app, ev, mods) {
         return;
     }
@@ -3751,14 +3858,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::magnetic_lasso_ui::pointer(app, ev, mods) {
         return;
     }
-    // ⌘ held is the Move tool (`hold_keys::cmd_moves`). The canvas resolves the held key before
-    // the event (`tool_override`); automation and tests send the modifier with the event.
-    let tool = match app.active_tool() {
-        t if app.tool_override.is_none() && mods.command && crate::hold_keys::cmd_moves(t) && app.ui.transform.is_none() && app.ui.text_edit.is_none() => {
-            Tool::Move
-        }
-        t => t,
-    };
+    let tool = event_tool(app, mods);
     if tool == Tool::Eyedropper {
         match ev {
             ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => {
@@ -3796,10 +3896,15 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
             // (not when the selected pixels move: those are the active layer's).
-            if !crate::move_ui::moves_selected_pixels(app) && app.ui.tool_options.move_auto_select != mods.command {
+            if !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.command {
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
+                let before = app.session.active().map(|st| st.selected_layers());
                 let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                // Snapping (and the drag's box) started before the pick: point it at what moves.
+                if app.session.active().map(|st| st.selected_layers()) != before {
+                    crate::snap_ui::retarget_move(app, [x, y], mods);
+                }
             }
             // A locked layer: no drag, and Photoshop's message once the pointer moves (`move_lock`).
             if crate::move_lock::blocked(app, tool, [x, y], mods) {
@@ -3808,7 +3913,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
-            if crate::move_ui::moves_selected_pixels(app) {
+            if crate::move_ui::moves_selected_pixels_with(app, tool) {
                 if crate::move_ui::float_selected(app, mods.alt, 0.0, 0.0) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
@@ -4053,6 +4158,18 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
 }
 
+/// The tool a pointer event with `mods` goes to: ⌘ held is the Move tool (`hold_keys::cmd_moves`).
+/// The canvas resolves the held key before the event (`tool_override`); automation and tests send
+/// the modifier with the event.
+pub(crate) fn event_tool(app: &PhotocraftApp, mods: egui::Modifiers) -> Tool {
+    match app.active_tool() {
+        t if app.tool_override.is_none() && mods.command && crate::hold_keys::cmd_moves(t) && app.ui.transform.is_none() && app.ui.text_edit.is_none() => {
+            Tool::Move
+        }
+        t => t,
+    }
+}
+
 /// Does a ⌘ (⌘⌥) press with selection tool `tool` at `p` move the whole layer (a duplicate with
 /// ⌥), as the Move tool would? Outside the selection or without one; inside it, ⌘ drags the
 /// selected pixels instead (`selection_drag_kind`).
@@ -4060,6 +4177,15 @@ pub(crate) fn command_moves_layer(app: &PhotocraftApp, tool: Tool, p: [f64; 2], 
     let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     selection_tool && mods.command && !mods.shift && !floating && app.ui.polygon.is_empty() && !inside_selection(app, p)
+}
+
+/// The guide a ⌘ press with selection tool `tool` at `p` drags (vertical?, index), as the Move
+/// tool's press would (#2690): ⌘ is the Move tool, and a guide under the pointer comes before the
+/// layer or the selected pixels. Not while a polygon or lasso outline is being drawn.
+pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<(bool, usize)> {
+    let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
+    let idle = app.ui.polygon.is_empty() && !crate::lasso_ui::active(app) && app.ui.transform.is_none();
+    (selection_tool && mods.command && idle).then(|| crate::rulers::guide_at(app, p[0], p[1])).flatten()
 }
 
 /// Photoshop's cursor over a selection: what a press (or the drag under way) would do.
@@ -4080,7 +4206,7 @@ pub enum SelCursor {
 
 /// The cursor at document point `p` with `tool` in effect and `mods` held (`None`: not over a
 /// selection the press would move). The Move tool moves the selected pixels from anywhere
-/// (`move_ui::moves_selected_pixels`); a selection tool from inside the selection, or on the
+/// (`move_ui::moves_selected_pixels_with`); a selection tool from inside the selection, or on the
 /// floating piece (`selection_drag_kind`).
 pub fn selection_cursor(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<SelCursor> {
     if let Some(d) = &app.drag {
@@ -4346,6 +4472,8 @@ pub fn commit_crop(app: &mut PhotocraftApp) {
     // Never another document's frame (#1918).
     crate::crop_ui::cancel_stale(app);
     let Some(r) = app.ui.crop_rect.take() else { return };
+    // The crop's default mode leaves the view upright (`crop_mode`).
+    crate::crop_mode::upright(app);
     // The untouched default frame around the whole canvas crops nothing (Photoshop's ↵ on it does
     // nothing); one framing the selection's bounds crops to them (#1789).
     if std::mem::take(&mut app.crop.default_frame) {
@@ -4943,6 +5071,55 @@ mod tests {
         let hint = start_screen_drop_hint(&wayland);
         assert!(!hint.contains("Drop"), "{hint}");
         assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
+    }
+
+    /// The Home screen's × takes a file off Recent without opening it, and its right-click menu
+    /// removes one entry or clears the list; the preferences keep the change (#2691).
+    #[test]
+    fn home_recent_entries_can_be_removed() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for name in ["c.tif", "b.psd", "a.png"] {
+            app.push_recent(&format!("/tmp/photocraft-2691/{name}"));
+        }
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 760.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.state_mut().1 = true;
+        h.run_steps(3);
+        let listed = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| {
+            let app = &h.state().0;
+            assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "stored in the preferences");
+            app.ui.recent_files.iter().map(|p| crate::file_open::display_name(p)).collect::<Vec<_>>()
+        };
+        assert_eq!(listed(&h), ["a.png", "b.psd", "c.tif"]);
+        assert!(h.query_by_label("Remove b.psd from Recent").is_none(), "the × shows on the hovered row only");
+
+        h.get_by_label("b.psd").hover();
+        h.run_steps(2);
+        h.get_by_label("Remove b.psd from Recent").click();
+        h.run_steps(2);
+        assert_eq!(listed(&h), ["a.png", "c.tif"]);
+        assert!(h.state().0.session.documents().is_empty(), "the file was not opened");
+
+        h.get_by_label("c.tif").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Remove from Recent").click();
+        h.run_steps(2);
+        assert_eq!(listed(&h), ["a.png"]);
+
+        h.get_by_label("a.png").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Clear Recent Files").click();
+        h.run_steps(2);
+        assert!(listed(&h).is_empty());
+        assert!(h.state().0.session.documents().is_empty());
     }
 
     #[test]
@@ -5760,6 +5937,46 @@ mod transform_controls_tests {
         assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
         let t = app.ui.transform.as_ref().expect("control press starts Free Transform");
         assert_eq!(t.rect, [20.0, 30.0, 100.0, 70.0]);
+    }
+
+    /// #2585: Free Transform on a position-locked layer is refused before the box opens, with
+    /// Photoshop's alert, from ⌘T and from the Move tool's transform controls alike. It used to
+    /// open, preview every drag and fail only at commit.
+    #[test]
+    fn free_transform_on_a_locked_layer_is_refused_up_front() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+        app.session
+            .edit("lock", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().locks.position = true;
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        let errors = |app: &PhotocraftApp| -> Vec<String> {
+            app.ui
+                .dialogs
+                .iter()
+                .filter(|d| d.kind == crate::state::DialogKind::Error)
+                .filter_map(|d| d.fields.get("message")?.as_str().map(String::from))
+                .collect()
+        };
+        let ctx = egui::Context::default();
+        // ⌘T.
+        let r = crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({}));
+        assert_eq!(r, Err(crate::transform_tool::LOCKED.to_string()));
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "no box opened");
+        assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
+        app.ui.dialogs.clear();
+        // The Move tool's transform controls.
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_show_transform = true;
+        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+        let r = transform_controls_rect(&app, &xf).unwrap();
+        assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+        assert!(app.ui.transform.is_none());
+        assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
     }
 
     #[test]

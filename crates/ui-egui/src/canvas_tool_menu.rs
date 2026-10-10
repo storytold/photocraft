@@ -37,6 +37,7 @@ pub const TRANSFORM_MENU: &[Row] = &[
     Some(("Skew", "edit.transform.skew")),
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
+    Some(("Warp", "edit.transform.warp")),
 ];
 
 /// Photoshop's pasteboard menu (right-click outside the image): the pasteboard colour, the choice
@@ -162,13 +163,14 @@ pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> b
 }
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
-/// Scale and Rotate are Free Transform's mode, so only Free Transform shows it checked.
-fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+/// Scale and Rotate are Free Transform's mode, so only Free Transform shows it checked. Warp is
+/// not a box mode (it is its own session), and `for_command` would read it as Free.
+pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
     if menu.pasteboard {
         return pasteboard_choice(command) == Some(app.session.prefs().interface.canvas_color);
     }
     menu.transform
-        && !matches!(command, "edit.transform.scale" | "edit.transform.rotate")
+        && matches!(command, "edit.freeTransform" | "edit.transform.skew" | "edit.transform.distort" | "edit.transform.perspective")
         && app.ui.transform.as_ref().is_some_and(|t| t.mode == crate::state::TransformMode::for_command(command))
 }
 
@@ -235,6 +237,10 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
     if menu.pasteboard {
         return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
+    }
+    // Warp needs a layer or selection box: a lone mask, channel or path keeps the plain box.
+    if menu.transform && command == "edit.transform.warp" {
+        return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none() && t.path.is_none());
     }
     if menu.transform || menu.tool != Tool::Pen {
         return crate::menus::is_enabled(app, command);

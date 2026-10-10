@@ -140,9 +140,13 @@ impl Focus {
 
     /// May `sc` fire with this focus? A focused widget keeps its navigation keys (arrows, ↩,
     /// Space, Esc…, plus ⌫ / Delete when it claimed them); a text field keeps everything but ⌘ shortcuts (minus its own editing
-    /// ones: select all, clipboard, undo) and the function keys.
+    /// ones: select all, clipboard, undo) and the function keys. Ctrl+Tab and Ctrl+Shift+Tab switch
+    /// documents whatever has focus, as in Photoshop: no widget or text field edits with them (#2340).
     pub fn allows(self, sc: &KeyboardShortcut) -> bool {
         let k = sc.logical_key;
+        if k == Key::Tab && sc.modifiers.ctrl {
+            return true;
+        }
         let function = matches!(
             k,
             Key::F1

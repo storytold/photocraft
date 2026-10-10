@@ -104,3 +104,23 @@ fn hovering_the_layers_panel_blend_list_previews_and_a_click_commits() {
     assert_eq!(steps(h.state()), undo + 1, "choosing records one step");
     assert_eq!(previewed(&mut h), None);
 }
+
+#[test]
+fn moving_between_modes_keeps_a_preview_across_the_gaps_between_them() {
+    // #2553: the pointer between two rows used to hover neither, flashing the document back.
+    let (s, _) = session();
+    let mut h = harness(s);
+    let dropdown = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).unwrap();
+    click(&mut h, dropdown.center());
+    let (dissolve, darken) = (h.get_by_label("Dissolve").rect(), h.get_by_label("Darken").rect());
+    assert!(darken.top() > dissolve.bottom(), "the rows have a gap between them");
+    let multiply = h.get_by_label("Multiply").rect().center();
+    let mut y = dissolve.center().y;
+    while y <= multiply.y {
+        h.hover_at(Pos2::new(multiply.x, y));
+        h.run_steps(1);
+        assert!(previewed(&mut h).is_some(), "a mode previews at y = {y}");
+        y += 0.5;
+    }
+    assert_eq!(previewed(&mut h), Some(BlendMode::Multiply));
+}

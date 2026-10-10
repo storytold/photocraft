@@ -43,6 +43,8 @@
 	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
+	Remove from Recent	最近使ったファイルから削除
+	Remove {name} from Recent	{name} を最近使ったファイルから削除
 	Close	閉じる
 	Minimize	最小化
 	Maximize	最大化
@@ -594,6 +596,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -1313,6 +1319,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	一連の編集を記録 ● し、任意のドキュメントで再生 ▶ できます。
 	Red	赤
 	Redefine style by current selection	現在の選択でスタイルを再定義
+	Refine	調整
 	Reflected Gradient	反射形グラデーション
 	Registration Marks	見当合わせマーク
 	Regular	レギュラー
@@ -1639,6 +1646,7 @@
 	Mobile	モバイル
 	Move Tool	移動ツール
 	Could not use the move tool because the layer is locked.	レイヤーがロックされているため、移動ツールを使用できません。
+	Could not complete the Free Transform command because the layer is locked.	レイヤーがロックされているため、自由変形コマンドを完了できません。
 	Multiply	乗算
 	My Brushes	マイブラシ
 	Neutrals	中間色系
@@ -2210,6 +2218,7 @@ cameraRaw	Color	カラー
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	カラーピッカー（文字色）
+	Color Picker ({name})	カラーピッカー（{name}）
 	Color Picker (Fill Color)	カラーピッカー（塗りつぶしカラー）
 	Fill color	塗りつぶしカラー
 	Color Picker (Stroke Color)	カラーピッカー（線のカラー）
@@ -3434,5 +3443,9 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Use Classic Mode	クラシックモードを使用
+	Auto Center Preview	プレビューを自動的に中央に配置
+	Next Document	次のドキュメント
+	Previous Document	前のドキュメント
 	W x H x Resolution	幅 x 高さ x 解像度
 	Front Image	前面の画像

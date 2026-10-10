@@ -207,6 +207,18 @@ impl PsdFile {
         self.resources.iter().find(|r| r.id == id)
     }
 
+    /// The global `Lr16` / `Lr32` / `Layr` block that should have held the layers but could not
+    /// be parsed, with the parse error. [`Self::from_bytes`] keeps such a block verbatim in
+    /// [`Self::global_blocks`] and leaves [`Self::layer_info`] `None`, so the file reads as
+    /// flattened; this tells a reader that its layers were lost rather than absent.
+    pub fn unreadable_layer_block(&self) -> Option<(&TaggedBlock, PsdError)> {
+        if self.layer_info.is_some() {
+            return None;
+        }
+        let block = self.global_blocks.iter().find(|b| matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr"))?;
+        LayerInfo::read_body(&block.data, self.header.version).err().map(|e| (block, e))
+    }
+
     /// First global block with the given key.
     pub fn global_block(&self, key: &[u8; 4]) -> Option<&TaggedBlock> {
         self.global_blocks.iter().find(|b| &b.key == key)

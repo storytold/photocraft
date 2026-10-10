@@ -422,8 +422,19 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
             ui.add_space(4.0);
             let mut name = get_s(f, "name", tl!("Untitled-1"));
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).changed() {
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0)));
+            if r.changed() {
                 f.insert("name".into(), json!(name));
+            }
+            crate::field_tab::register(ui.ctx(), r.id);
+            // Photoshop opens the dialog with the name selected, so typing replaces it and Tab goes
+            // straight on to Width. (`__focused` marks that this instance has had its turn.)
+            if !f.contains_key("__focused") {
+                f.insert("__focused".into(), json!(true));
+                crate::field_tab::focus(ui.ctx(), r.id);
+            }
+            if r.gained_focus() {
+                crate::field_tab::select_all(ui.ctx(), r.id, &name);
             }
             ui.add_space(8.0);
             let ppi = get_f(f, "resolution", 72.0);
@@ -431,7 +442,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
                 let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
-                if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
+                if widgets::value_field_prec(ui, &mut w, 0.01..=300_000.0, "", 110.0, widgets::unit_decimals(&unit)).changed() {
                     set_size(f, "width", w, &unit, ppi);
                 }
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
@@ -443,7 +454,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
                 let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
-                if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
+                if widgets::value_field_prec(ui, &mut h, 0.01..=300_000.0, "", 110.0, widgets::unit_decimals(&unit)).changed() {
                     set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);

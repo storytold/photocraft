@@ -647,6 +647,71 @@ pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: Lay
     new.prune();
 }
 
+/// The colour channel Clear is limited to: the Channels panel targets a single one.
+pub(crate) fn targeted_color(s: &Session) -> Option<usize> {
+    match s.active()?.channel_view.target {
+        ChannelTarget::Color(k) => Some(k),
+        _ => None,
+    }
+}
+
+/// Clear (Delete) with colour channel `k` of layer `id` targeted (#2720): fill the selected area
+/// (or the canvas) of that channel only with the background colour's value for it, as Photoshop
+/// does. A channel has no transparency of its own, so the other channels and the layer's alpha
+/// stay; partly selected pixels blend.
+pub(crate) fn clear_color_channel(doc: &mut Document, id: LayerId, k: usize, background: [f32; 4]) -> Result<()> {
+    let canvas = doc.bounds();
+    let sel = doc.selection.clone();
+    let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+    let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+    let fmt = surf.format();
+    let n = fmt.channels();
+    // The background colour in the layer's colour model, so `k` picks the right component.
+    let Some(v) = from_rgba(&fmt, [background[0], background[1], background[2], 1.0]).get(k).copied().filter(|_| k < n) else {
+        return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
+    };
+    if area.is_empty() {
+        return Ok(());
+    }
+    let cover = sel.map(|m| (m.read_region(area), m.format().channels().max(1)));
+    let mut px = surf.read_region(area);
+    for (i, p) in px.chunks_exact_mut(n).enumerate() {
+        let w = cover.as_ref().map_or(1.0, |(m, mk)| m.get(i * mk).copied().unwrap_or(0.0));
+        if let Some(c) = p.get_mut(k) {
+            *c += (v - *c) * w.clamp(0.0, 1.0);
+        }
+    }
+    surf.write_region(area, &px);
+    surf.prune();
+    Ok(())
+}
+
+/// The alpha channel or Quick Mask the Channels panel targets, as `"target"` params: Clear
+/// (Delete) fills it instead of the layer (#2734).
+pub(crate) fn targeted_channel(s: &Session) -> Option<Value> {
+    let st = s.active()?;
+    let t = match st.channel_view.target {
+        ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        _ => return None,
+    };
+    Some(json!({ "target": t }))
+}
+
+/// Clear (Delete) with an alpha channel or the Quick Mask targeted (`target` from
+/// [`targeted_channel`]): fill the selected area (or the canvas) of it with the background colour,
+/// as gray, as Photoshop does. Partly selected pixels blend.
+pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32; 4]) -> Result<()> {
+    let canvas = doc.bounds();
+    let sel = doc.selection.clone();
+    let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+    if area.is_empty() {
+        return Ok(());
+    }
+    let (surf, _) = target_surface(doc, None, target)?;
+    crate::fill_cmds::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
+}
+
 /// The active document targets an alpha channel or is in Quick Mask mode, so pixel commands
 /// work without a pixel layer.
 pub(crate) fn edits_channel(s: &Session) -> bool {

@@ -851,7 +851,8 @@ fn empty_in(layer: &Layer, rect: Rect) -> bool {
         // Effects reach at most `margin` beyond the layer's pixels (when it is transparent
         // outside them): render tiles away from a small text layer skip it entirely.
         let canvas = Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4);
-        return transparent_outside(layer) && layer_bounds(layer, canvas).inflate(effects::margin(layer)).intersect(&rect).is_empty();
+        let bounds = shapeless_stroke_bounds(layer).unwrap_or_else(|| layer_bounds(layer, canvas));
+        return transparent_outside(layer) && bounds.inflate(effects::margin(layer)).intersect(&rect).is_empty();
     }
     match &layer.content {
         LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => match layer.surface() {
@@ -859,6 +860,47 @@ fn empty_in(layer: &Layer, rect: Rect) -> bool {
             None => true,
         },
         _ => false,
+    }
+}
+
+/// For the narrow `tsly=0` case where only local stroke effects are enabled, the effects cannot
+/// contribute outside the stroke reach from the layer's pixels. Other `tsly=0` effects can cover
+/// the full layer, and advanced blending can change the backdrop independently of those pixels.
+fn shapeless_stroke_bounds(layer: &Layer) -> Option<Rect> {
+    use photocraft_doc::Knockout;
+
+    if layer.advanced.transparency_shapes
+        || layer.advanced.knockout != Knockout::None
+        || layer.advanced.blend_interior
+        || layer.clipped
+        || !layer.blend_if.is_default()
+        || layer.mask.as_ref().is_some_and(|m| m.enabled)
+        || layer.vector_mask.as_ref().is_some_and(|m| m.enabled)
+        || !transparent_outside(layer)
+        || !effects::maps_are_local(layer)
+    {
+        return None;
+    }
+
+    if !layer.effects.enabled
+        || !layer.effects.items.iter().any(|e| e.enabled())
+        || layer.effects.items.iter().any(|e| e.enabled() && !matches!(e, photocraft_doc::Effect::Stroke(_)))
+    {
+        return None;
+    }
+
+    match &layer.content {
+        LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => {
+            let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
+            // A filled shape's effects follow its outline, also where its fill is transparent (as
+            // in `layer_bounds`).
+            Some(match effect_outline(layer).and_then(|_| paint_bounds(layer)) {
+                Some(p) if !b.is_empty() => b.union(&p),
+                Some(p) => p,
+                None => b,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -1114,7 +1156,10 @@ fn composite_artboard(layer: &Layer, ab: &photocraft_doc::Artboard, clipped: &[L
 
 fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
     let rect = backdrop.rect;
-    if empty_in(layer, rect) {
+    // A TSL-off stroke base that is transparent here can still have visible clipped siblings;
+    // keep the full clipping path for it instead of the stroke-bounds shortcut. Other bases keep
+    // the usual skip (their clipped layers vanish with them).
+    if (clipped.is_empty() || shapeless_stroke_bounds(layer).is_none()) && empty_in(layer, rect) {
         return;
     }
     let opacity = layer.opacity * layer.fill_opacity;

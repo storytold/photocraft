@@ -38,6 +38,8 @@
 	Right	Kanan
 	Open Recent	Terakhir Dibuka
 	Clear Recent Files	Hapus Daftar Berkas Terakhir
+	Remove from Recent	Hapus dari Daftar Terakhir
+	Remove {name} from Recent	Hapus {name} dari Daftar Terakhir
 	Close	Tutup
 	Minimize	Minimalkan
 	Maximize	Maksimalkan
@@ -575,6 +577,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -1286,6 +1292,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Rekam ● urutan pengeditan, lalu putar ▶ di dokumen apa saja.
 	Red	Merah
 	Redefine style by current selection	Definisikan ulang gaya dengan seleksi saat ini
+	Refine	Perhalus
 	Reflected Gradient	Gradien Pantulan
 	Registration Marks	Tanda Registrasi
 	Regular	Reguler
@@ -1608,6 +1615,7 @@
 	Mobile	Seluler
 	Move Tool	Alat Pindah
 	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
+	Could not complete the Free Transform command because the layer is locked.	Tidak dapat menyelesaikan perintah Transformasi Bebas karena layer terkunci.
 	Multiply	Multiply
 	My Brushes	Kuas Saya
 	Neutrals	Netral
@@ -2644,6 +2652,7 @@ cameraRaw	Blending	Pembauran
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Pemilih Warna (Warna Teks)
+	Color Picker ({name})	Pemilih Warna ({name})
 	Color Picker (Fill Color)	Pemilih Warna (Warna Isian)
 	Fill color	Warna isian
 	Color Picker (Stroke Color)	Pemilih Warna (Warna Stroke)
@@ -2820,5 +2829,9 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+	Use Classic Mode	Gunakan Mode Klasik
+	Auto Center Preview	Pusatkan Pratinjau Otomatis
+	Next Document	Dokumen Berikutnya
+	Previous Document	Dokumen Sebelumnya
 	W x H x Resolution	L x T x Resolusi
 	Front Image	Gambar Depan

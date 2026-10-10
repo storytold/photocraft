@@ -47,6 +47,8 @@
 	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
+	Remove from Recent	Odebrat z nedávných
+	Remove {name} from Recent	Odebrat {name} z nedávných
 	Close	Zavřít
 	Minimize	Minimalizovat
 	Maximize	Maximalizovat
@@ -598,6 +600,10 @@
 	100%	100 %
 	200%	200 %
 	75%	75 %
+	80%	80 %
+	85%	85 %
+	90%	90 %
+	95%	95 %
 	125%	125 %
 	150%	150 %
 	175%	175 %
@@ -1323,6 +1329,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Zaznamenejte ● posloupnost úprav a pak ji přehrajte ▶ na libovolném dokumentu.
 	Red	Červená
 	Redefine style by current selection	Předefinovat styl podle aktuálního výběru
+	Refine	Upřesnit
 	Reflected Gradient	Zrcadlený přechod
 	Registration Marks	Soutiskové značky
 	Regular	Obyčejné
@@ -1651,6 +1658,7 @@
 	Mobile	Mobilní zařízení
 	Move Tool	Nástroj přesun
 	Could not use the move tool because the layer is locked.	Nástroj Přesun nelze použít, protože vrstva je zamčená.
+	Could not complete the Free Transform command because the layer is locked.	Příkaz Volná transformace nelze dokončit, protože vrstva je zamčená.
 	Multiply	Násobit
 	My Brushes	Moje štětce
 	Neutrals	Neutrální
@@ -2232,6 +2240,7 @@ cameraRaw	Color	Barvy
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Výběr barvy (Barva textu)
+	Color Picker ({name})	Výběr barvy ({name})
 	Color Picker (Fill Color)	Výběr barvy (Barva výplně)
 	Fill color	Barva výplně
 	Color Picker (Stroke Color)	Výběr barvy (Barva tahu)
@@ -2414,5 +2423,9 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+	Use Classic Mode	Použít klasický režim
+	Auto Center Preview	Automaticky vystředit náhled
+	Next Document	Další dokument
+	Previous Document	Předchozí dokument
 	W x H x Resolution	Š x V x Rozlišení
 	Front Image	Přední obraz

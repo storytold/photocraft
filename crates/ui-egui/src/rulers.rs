@@ -429,6 +429,40 @@ mod tests {
         assert_eq!(guide_at(&app, 0.0, 0.0), None);
     }
 
+    /// ⌘ is the Move tool with any tool, so a ⌘-drag over a guide moves the guide, never the layer
+    /// (#2690); with Lock Guides a ⌘-drag with a marquee moves the layer as before.
+    #[test]
+    fn command_drag_over_a_guide_moves_the_guide_with_any_tool() {
+        use crate::canvas::{ToolEvent, tool_event};
+        use crate::state::Tool;
+        for (tool, locked) in [(Tool::Brush, false), (Tool::RectMarquee, false), (Tool::Lasso, false), (Tool::MagicWand, false), (Tool::RectMarquee, true)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
+            app.sync_views();
+            app.ui.tool = tool;
+            app.ui.extras.lock_guides = locked;
+            let layer = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("paint", |doc, _| {
+                    doc.layer_mut(layer).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+            app.run("view.newGuide", json!({"orientation": "vertical", "position": 50})).unwrap();
+            let cmd = egui::Modifiers::COMMAND;
+            tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, cmd);
+            tool_event(&mut app, ToolEvent::Move { x: 65.0, y: 40.0, pressure: 1.0 }, cmd);
+            tool_event(&mut app, ToolEvent::Up { x: 65.0, y: 40.0 }, cmd);
+            let doc = &app.session.active().unwrap().doc;
+            let moved = doc.layer(layer).unwrap().surface().unwrap().rgba(12, 12)[3] == 0.0;
+            if locked {
+                assert_eq!((doc.guides.vertical.clone(), moved), (vec![50.0], true), "{tool:?}, guides locked: the layer moves");
+            } else {
+                assert_eq!((doc.guides.vertical.clone(), moved), (vec![65.0], false), "{tool:?}: the guide moves, the layer stays");
+            }
+        }
+    }
+
     #[test]
     fn ruler_range_is_normalised_when_flipped() {
         // #1814: with View > Flip Horizontal, `to_doc` negates x, so the raw
