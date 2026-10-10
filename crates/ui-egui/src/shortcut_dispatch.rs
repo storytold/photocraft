@@ -197,6 +197,10 @@ fn key_owner(app: &PhotocraftApp, ctx: &egui::Context) -> (bool, usize, bool, bo
     (crate::menu_nav::is_open(ctx), app.ui.dialogs.len(), app.discard.is_some(), distort, app.ui.text_edit.is_some())
 }
 
+/// Keys whose shortcuts follow the key's position, as in Photoshop: ⇧⌘. is ⇧⌘> on a US layout,
+/// but types `:` on Nordic and German ones, so its character would never match.
+const POSITIONAL: [Key; 2] = [Key::Period, Key::Comma];
+
 /// Dispatch this frame's shortcut presses in the order they arrived (⌘Z then ⌘S undoes, then
 /// saves the undone state; #440), consuming each. A press matching several bindings goes to the
 /// first in table order (⇧⌘Z before ⌘Z). Stops after a shortcut that hands the keyboard to
@@ -212,8 +216,11 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
     let table: Vec<(String, KeyboardShortcut)> =
         bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
     let command = |e: &egui::Event| match e {
-        egui::Event::Key { key, pressed: true, modifiers, .. } => {
-            table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers)).map(|(id, _)| (id.clone(), *key == Key::Tab))
+        egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+            let by_position = physical_key
+                .filter(|p| POSITIONAL.contains(p))
+                .and_then(|p| table.iter().find(|(_, sc)| sc.logical_key == p && key_matches(sc, p, *modifiers)));
+            by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab))
         }
         _ => None,
     };

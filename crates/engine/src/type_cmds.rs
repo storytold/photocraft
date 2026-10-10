@@ -790,7 +790,50 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             },
         },
+        size_key("type.increaseSize", "Increase Type Size", "Cmd+Shift+.", |s, p| step_size(s, p, true, 2.0)),
+        size_key("type.decreaseSize", "Decrease Type Size", "Cmd+Shift+,", |s, p| step_size(s, p, false, 2.0)),
+        size_key("type.increaseSizeMore", "Increase Type Size by 10", "Cmd+Alt+Shift+.", |s, p| step_size(s, p, true, 10.0)),
+        size_key("type.decreaseSizeMore", "Decrease Type Size by 10", "Cmd+Alt+Shift+,", |s, p| step_size(s, p, false, 10.0)),
     ]
+}
+
+fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    match st.active_layer.and_then(|id| st.doc.layer(id)) {
+        Some(l) if matches!(l.content, LayerContent::Text(_)) => Ok(()),
+        _ => Err("the active layer is not a type layer".into()),
+    }
+}
+
+/// Photoshop's ⇧⌘> / ⇧⌘< (⌥ for bigger steps). On a US keyboard > and < share the . and , keys.
+fn size_key(id: &'static str, label: &'static str, shortcut: &'static str, run: fn(&mut Session, &Value) -> Result<Value>) -> CommandSpec {
+    CommandSpec {
+        id,
+        label,
+        menu: &[],
+        shortcut: Some(shortcut),
+        params: r##"{"layer":id?,"range":[startChar,endChar]? (default all),"by":pt? (as the layer appears)}"##,
+        enabled: has_type_layer,
+        journal: true,
+        run,
+    }
+}
+
+/// Grows or shrinks every character in the range by `by` points as the layer appears, so mixed
+/// sizes keep their differences and a scaled layer steps in the points its size field shows.
+fn step_size(s: &mut Session, p: &Value, up: bool, default_by: f32) -> Result<Value> {
+    let id = layer_id(s, p)?;
+    let by = f32p(p, "by").filter(|v| v.is_finite()).unwrap_or(default_by).abs().min(TYPE_SIZE_MAX_PT as f32);
+    with_text_layer(s, p, "Change Type Size", |t, _, _| {
+        let m = t.transform.m;
+        let scale = (m[0] * m[3] - m[1] * m[2]).abs().sqrt() as f32;
+        let scale = if scale.is_finite() && scale > 1e-3 { scale } else { 1.0 };
+        let delta = if up { by } else { -by } / scale;
+        let (a, b) = range_param(&t.text, p);
+        style_range(t, a, b, &|st| st.size_pt = (st.size_pt + delta).clamp(TYPE_SIZE_MIN_PT as f32, TYPE_SIZE_MAX_PT as f32));
+        Ok(())
+    })?;
+    info(s, &json!({ "layer": id.0 }))
 }
 
 #[cfg(test)]
@@ -927,6 +970,42 @@ mod tests {
         assert_eq!(layer_name_of(&s, id), "Title");
         assert!(s.undo());
         assert_eq!(layer_name_of(&s, id), "Type Layer");
+    }
+
+    #[test]
+    fn size_keys_step_each_run_and_respect_layer_scale() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hello world", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [6, 11], "size": 20})).unwrap();
+        s.execute("type.increaseSize", json!({})).unwrap();
+        let sizes = |s: &Session| text_layer(s, id).char_runs().iter().map(|r| r.style.size_pt).collect::<Vec<_>>();
+        assert_eq!(sizes(&s), vec![14.0, 22.0], "every run grows by 2 pt");
+        s.execute("type.decreaseSizeMore", json!({"range": [0, 5]})).unwrap();
+        assert_eq!(sizes(&s)[0], 4.0, "only the range, by 10 pt");
+        for _ in 0..2 {
+            s.execute("type.decreaseSize", json!({"range": [0, 5]})).unwrap();
+        }
+        assert_eq!(sizes(&s)[0], TYPE_SIZE_MIN_PT as f32, "never below the smallest size");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(sizes(&s)[0], 2.0, "one undo step per press");
+
+        let scaled = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Big", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.edit", json!({"layer": scaled, "transform": [2.0, 0.0, 0.0, 2.0, 0.0, 80.0]})).unwrap();
+        s.execute("type.increaseSize", json!({"layer": scaled})).unwrap();
+        assert_eq!(text_layer(&s, scaled).char_runs()[0].style.size_pt, 13.0, "a 200% layer shows 24 pt and steps to 26 pt");
+    }
+
+    #[test]
+    fn size_keys_need_a_type_layer() {
+        let mut s = session();
+        assert!(s.execute("type.increaseSize", json!({})).is_err());
+        let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hi", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.increaseSize", json!({"by": "big"})).unwrap();
+        s.execute("type.increaseSize", json!({"by": -3})).unwrap();
+        s.execute("type.decreaseSize", json!({"by": 1e30, "range": [9, 0]})).unwrap();
+        assert_eq!(text_layer(&s, id).char_runs()[0].style.size_pt, TYPE_SIZE_MIN_PT as f32, "bad steps fall back or clamp, never panic");
+        assert_eq!(crate::commands::find("type.increaseSize").and_then(|c| c.shortcut), Some("Cmd+Shift+."));
+        assert_eq!(crate::commands::find("type.decreaseSize").and_then(|c| c.shortcut), Some("Cmd+Shift+,"));
     }
 
     #[test]

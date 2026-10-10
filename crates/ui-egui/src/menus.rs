@@ -352,6 +352,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "layer.layerStyle.blendingOptions" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::layer_style::open(app, Some(crate::layer_style::BLENDING)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
         }
+        // ⇧⌘> / ⇧⌘<: the selected characters while typing, else the whole type layer.
+        "type.increaseSize" | "type.decreaseSize" | "type.increaseSizeMore" | "type.decreaseSizeMore" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let p = crate::type_tool::with_target(app, json!({})).ok_or("the active layer is not a type layer")?;
+            app.run(id, p)
+        }
         "type.editText" => {
             crate::type_tool::edit_active(app)?;
             if let Some(focus) = ctx.memory(|m| m.focused()) {
