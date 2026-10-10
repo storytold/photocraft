@@ -34,19 +34,48 @@ pub fn transform_params(layer: u64, b: [i32; 4], w: Option<f32>, h: Option<f32>,
 }
 
 /// A number field that reports a value once committed (drag released, Enter, focus lost).
-fn field(ui: &mut egui::Ui, id: &str, label: &str, current: f32, width: f32) -> Option<f32> {
+fn field(ui: &mut egui::Ui, id: &str, label: &str, current: f32, width: f32, u: LenUnit, extent: f64) -> Option<f32> {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(LABEL_W, 22.0), Sense::hover());
     ui.painter().text(pos2(r.right() - 2.0, r.center().y), egui::Align2::RIGHT_CENTER, tl!(label), egui::FontId::proportional(12.0), t.text_dim);
     let key = egui::Id::new(("layer-props-field", id));
-    let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(current);
-    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, "px", width);
+    let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
+    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width);
     if resp.dragged() || resp.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
     }
     ui.data_mut(|d| d.remove::<f32>(key));
-    (resp.drag_stopped() || resp.lost_focus() || resp.changed()).then_some(v).filter(|v| (*v - current).abs() >= 0.5)
+    if !(resp.drag_stopped() || resp.lost_focus() || resp.changed()) {
+        return None;
+    }
+    let px = u.px(v, extent) as f32;
+    ((px - current).abs() >= 0.5).then_some(px)
+}
+
+/// Lengths in the Units & Rulers unit, as Photoshop's Properties panel shows them (cm when the
+/// rulers are in centimeters): document px ↔ that unit at the document's resolution.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LenUnit {
+    pub unit: photocraft_engine::prefs::Unit,
+    pub dpi: f64,
+    pub ppi: f64,
+}
+
+impl LenUnit {
+    pub(crate) fn of(app: &PhotocraftApp) -> Self {
+        let ur = &app.session.prefs().units_and_rulers;
+        let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+        LenUnit { unit: ur.rulers, dpi, ppi: ur.point_size.per_inch() }
+    }
+    /// `px` shown in the unit (`extent` is 100% for percent).
+    pub(crate) fn shown(&self, px: f64, extent: f64) -> f32 {
+        self.unit.from_px(px, self.dpi, extent, self.ppi) as f32
+    }
+    /// A value typed in the unit, in document px.
+    pub(crate) fn px(&self, v: f32, extent: f64) -> f64 {
+        self.unit.to_px(f64::from(v), self.dpi, extent, self.ppi)
+    }
 }
 
 /// Align glyph: a reference line and two bars (Photoshop's align icons).
@@ -99,6 +128,8 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut run: Vec<(String, Value)> = Vec::new();
     if let Some(s) = layer.surface() {
         let b = app.cached_bounds(layer.id.0, s);
+        let u = LenUnit::of(app);
+        let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
         if section(ui, "transform", tl!("Transform")) {
             let link_key = egui::Id::new("layer-props-link");
             let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
@@ -107,24 +138,24 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", "W", b.width() as f32, w) {
+                if let Some(v) = field(ui, "w", "W", b.width() as f32, w, u, dw) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked).map(|p| ("edit.transform".to_string(), p)));
                 }
                 if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
-                if let Some(v) = field(ui, "h", "H", b.height() as f32, w) {
+                if let Some(v) = field(ui, "h", "H", b.height() as f32, w, u, dh) {
                     run.extend(transform_params(layer.id.0, bb, None, Some(v), linked).map(|p| ("edit.transform".to_string(), p)));
                 }
             });
             ui.add_space(ROW_GAP);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", "X", b.x0 as f32, w) {
+                if let Some(v) = field(ui, "x", "X", b.x0 as f32, w, u, dw) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - b.x0 as f32).round() as i32, "dy": 0})));
                 }
                 ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", "Y", b.y0 as f32, w) {
+                if let Some(v) = field(ui, "y", "Y", b.y0 as f32, w, u, dh) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - b.y0 as f32).round() as i32})));
                 }
             });
@@ -182,6 +213,20 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transform_fields_show_and_take_the_ruler_unit() {
+        use photocraft_engine::prefs::Unit;
+        // 72 dpi: 1644 px = 58 cm; typing 60 cm sets 1700.8 px
+        let u = LenUnit { unit: Unit::Centimeters, dpi: 72.0, ppi: 72.0 };
+        assert!((u.shown(1644.0, 1.0) - 58.0).abs() < 0.01);
+        assert!((u.px(60.0, 1.0) - 1700.787).abs() < 0.01);
+        let px = LenUnit { unit: Unit::Pixels, dpi: 150.0, ppi: 72.0 };
+        assert_eq!(px.shown(170.0, 1.0), 170.0);
+        assert_eq!(px.px(170.0, 1.0), 170.0);
+        let pc = LenUnit { unit: Unit::Percent, dpi: 72.0, ppi: 72.0 };
+        assert_eq!(pc.shown(822.0, 1644.0), 50.0);
+    }
 
     #[test]
     fn width_edit_scales_from_the_top_left() {
