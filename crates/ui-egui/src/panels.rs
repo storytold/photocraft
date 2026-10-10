@@ -1391,12 +1391,19 @@ fn hint(ui: &mut egui::Ui, s: &str) {
 
 // ----------------------------------------------------------------------------- status bar
 
+/// The status bar's height and the height of the controls in it (zoom field, Fit), which leaves
+/// them an even margin above and below inside the bar (#2823).
+pub fn status_bar_heights(t: &Tokens) -> (f32, f32) {
+    if t.pro { (24.0, 18.0) } else { (30.0, 22.0) }
+}
+
 pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status_bar")
-        .exact_size(if t.pro { 24.0 } else { 30.0 })
+        .exact_size(status_bar_heights(&t).0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
+            let control_h = status_bar_heights(&t).1;
             ui.horizontal_centered(|ui| {
                 if t.pro {
                     crate::chrome_ui::status_bar_pro(app, ui);
@@ -1408,7 +1415,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let (w, h, mode, bits, layers) =
                         (st.doc.size.width, st.doc.size.height, crate::canvas::mode_label(&st.doc), st.doc.depth.bits(), st.doc.layer_count());
                     let mut pct = app.ui.views[i].zoom * 100.0;
-                    if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 78.0).changed() {
+                    if widgets::compact_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 78.0, control_h).changed() {
                         app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
                         app.ui.views[i].fit_pending = false;
                     }
@@ -1429,7 +1436,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if app.session.active().is_some()
                         && !t.pro
-                        && widgets::secondary_button(ui, tl!("Fit"), 0.0).clicked()
+                        && widgets::compact_button(ui, tl!("Fit"), control_h).clicked()
                         && let Some(i) = app.session.active_index()
                     {
                         app.ui.views[i].fit_pending = true;
