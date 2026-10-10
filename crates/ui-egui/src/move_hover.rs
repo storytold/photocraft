@@ -34,7 +34,7 @@ pub(crate) fn target(app: &mut PhotocraftApp, at: Option<[f64; 2]>, command: boo
         || app.guide_drag.is_some()
         || app.ui.transform.is_some()
         || app.ui.tool_options.move_auto_select == command
-        || crate::move_ui::moves_selected_pixels(app)
+        || crate::move_ui::moves_selected_pixels_with(app, Tool::Move)
     {
         return None;
     }
