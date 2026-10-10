@@ -1969,6 +1969,7 @@
 	Create Warped Text	Créer un texte déformé
 	Rasterize Smart Object	Rastériser l'objet intelligent
 	Rasterize Fill Content	Rastériser le contenu du remplissage
+	Rasterize Layer Style	Rastériser le style de calque
 	Unlock: picking a preset replaces these settings	Déverrouiller : choisir un préréglage remplace ces paramètres
 	Lock: keep these settings when picking another preset	Verrouiller : conserver ces paramètres en choisissant un autre préréglage
 	Diameter:	Diamètre :

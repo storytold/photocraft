@@ -1964,6 +1964,7 @@
 	Create Warped Text	뒤틀린 텍스트 만들기
 	Rasterize Smart Object	스마트 오브젝트 래스터화
 	Rasterize Fill Content	칠 내용 래스터화
+	Rasterize Layer Style	레이어 스타일 래스터화
 	Unlock: picking a preset replaces these settings	잠금 해제: 사전 설정 선택 시 이 설정 대체
 	Lock: keep these settings when picking another preset	잠금: 다른 사전 설정 선택 시 이 설정 유지
 	Diameter:	직경:

@@ -2061,6 +2061,7 @@ cameraRaw	Blending	混合
 	Create Warped Text	创建变形文字
 	Rasterize Smart Object	栅格化智能对象
 	Rasterize Fill Content	栅格化填充内容
+	Rasterize Layer Style	栅格化图层样式
 	Unlock: picking a preset replaces these settings	解锁：选择预设时替换这些设置
 	Lock: keep these settings when picking another preset	锁定：选择其他预设时保留这些设置
 	Diameter:	直径：

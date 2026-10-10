@@ -85,6 +85,10 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
             _ => v.push(Some(("Rasterize Layer", "layer.rasterize.layer"))),
         }
     }
+    // Photoshop offers it under Rasterize Layer for a layer with a style (it bakes the effects).
+    if multi || !l.effects.items.is_empty() {
+        v.push(Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")));
+    }
     v.push(None);
     // A selection has no single mask to toggle, apply or delete, so its menu offers Add Layer Mask only.
     if let Some(mask) = l.mask.as_ref().filter(|_| !multi) {
