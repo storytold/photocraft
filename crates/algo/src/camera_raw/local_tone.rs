@@ -23,8 +23,14 @@
 use super::{Encoding, luma};
 use crate::photo_util::par_rows;
 
-/// Reference values of the fast filter.
-const REFS: usize = 12;
+/// Spacing of the fast filter's reference values in stops. Its remapping changes within about
+/// half a stop, and coefficients interpolated across wider gaps show as contour lines on smooth
+/// gradients (12 references over a whole raw's range left visible steps; at an eighth of a stop a
+/// ramp's slope varies by under a third, as the remapping itself makes it).
+const REF_STEP: f32 = 0.125;
+/// The filter runs on a copy at most this many pixels across; the change it makes is brought back
+/// to full size by a guided upsampling, so a preview and the full image agree.
+const WORK_SIDE: usize = 1600;
 /// Knots of the strength curves over the surroundings' place in the image range (0 … 1).
 const KNOTS: usize = 5;
 
@@ -135,13 +141,17 @@ fn gaussian(p: Plane, n: usize) -> Vec<Plane> {
 fn llf(u: &Plane, remap: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
     let n = depth(u.w, u.h);
     let g = gaussian(Plane { w: u.w, h: u.h, v: u.v.clone() }, n);
-    let (lo, hi) = u.v.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
+    // References span the image's tones; the deepest 0.1 % (noise down to the floor) share the
+    // lowest reference instead of stretching the spacing.
+    let hi = u.v.iter().fold(f32::NEG_INFINITY, |a, &v| a.max(v));
+    let lo = quantile(&u.v, 0.001).min(hi);
     if hi - lo <= 1e-6 || (hi - lo).is_nan() {
         return Plane { w: u.w, h: u.h, v: u.v.clone() };
     }
-    let step = (hi - lo) / (REFS - 1) as f32;
+    let refs = (((hi - lo) / REF_STEP).ceil() as usize + 1).clamp(2, 96);
+    let step = (hi - lo) / (refs - 1) as f32;
     let mut lap: Vec<Vec<f32>> = g[..n - 1].iter().map(|p| vec![0.0; p.v.len()]).collect();
-    for k in 0..REFS {
+    for k in 0..refs {
         let r = lo + step * k as f32;
         let mut m = Plane { w: u.w, h: u.h, v: u.v.clone() };
         par_rows(&mut m.v, u.w, 1, |_, row| {
@@ -156,7 +166,7 @@ fn llf(u: &Plane, remap: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
             par_rows(&mut lap[l], lw, 1, |y, row| {
                 for (x, o) in row.iter_mut().enumerate() {
                     let i = y * lw + x;
-                    let wgt = (1.0 - (gl[i] - r).abs() / step).max(0.0);
+                    let wgt = (1.0 - (gl[i].clamp(lo, hi) - r).abs() / step).max(0.0);
                     if wgt > 0.0 {
                         *o += wgt * (fine[i] - coarse.v[i]);
                     }
@@ -246,22 +256,79 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highl
     }
     const FLOOR: f32 = 1.0 / 65536.0;
     let u = Plane { w, h, v: px.iter().map(|q| (luma([0, 1, 2].map(|c| enc.decode(q[c]))).max(0.0) + FLOOR).log2()).collect() };
-    let mut o = Plane { w, h, v: u.v.clone() };
+    // The filter on a copy at most WORK_SIDE across (box-averaged in log).
+    let f = w.max(h).div_ceil(WORK_SIDE).max(1);
+    let small = if f == 1 { Plane { w, h, v: u.v.clone() } } else { shrink(&u, f) };
+    let mut o = Plane { w: small.w, h: small.h, v: small.v.clone() };
     if highlights != 0.0 {
         o = highlights_pass(&o, highlights.clamp(-100.0, 100.0) / 100.0, &HIGHLIGHTS);
     }
     if shadows != 0.0 {
         o = shadows_pass(&o, shadows.clamp(-100.0, 100.0) / 100.0);
     }
+    // The change in log luminance, at full size.
+    let change: Vec<f32> = if f == 1 {
+        o.v.iter().zip(&u.v).map(|(a, b)| a - b).collect()
+    } else {
+        let d: Vec<f32> = o.v.iter().zip(&small.v).map(|(a, b)| a - b).collect();
+        guided_upsample(&small, &d, &u)
+    };
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let i = y * w + x;
-            let gain = (o.v[i] - u.v[i]).exp2();
+            let gain = change[y * w + x].exp2();
             for c in 0..3 {
                 q[c] = enc.encode(enc.decode(q[c]) * gain);
             }
         }
     });
+}
+
+/// `u` averaged over `f × f` blocks.
+fn shrink(u: &Plane, f: usize) -> Plane {
+    let (sw, sh) = (u.w.div_ceil(f), u.h.div_ceil(f));
+    let mut v = vec![0.0f32; sw * sh];
+    par_rows(&mut v, sw, 1, |y, row| {
+        for (x, o) in row.iter_mut().enumerate() {
+            let (x0, y0) = (x * f, y * f);
+            let (x1, y1) = ((x0 + f).min(u.w), (y0 + f).min(u.h));
+            let mut s = 0.0f64;
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    s += f64::from(u.v[yy * u.w + xx]);
+                }
+            }
+            *o = (s / ((x1 - x0) * (y1 - y0)) as f64) as f32;
+        }
+    });
+    Plane { w: sw, h: sh, v }
+}
+
+/// The change `d` computed on `small` brought to the size of `full`, following its edges: a local
+/// linear model of the change against the log luminance (the guided filter of K. He, J. Sun,
+/// *Fast Guided Filter*, 2015), fitted on the small copy and evaluated on the full one.
+fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
+    let (sw, sh) = (small.w, small.h);
+    let r = 2;
+    let eps = 0.01;
+    let mean = |v: &[f32]| super::box_mean(v, sw, sh, r);
+    let ud: Vec<f32> = small.v.iter().zip(d).map(|(a, b)| a * b).collect();
+    let uu: Vec<f32> = small.v.iter().map(|a| a * a).collect();
+    let (mu, md, mud, muu) = (mean(&small.v), mean(d), mean(&ud), mean(&uu));
+    let a: Vec<f32> = (0..sw * sh).map(|i| (mud[i] - mu[i] * md[i]) / (muu[i] - mu[i] * mu[i] + eps)).collect();
+    let b: Vec<f32> = (0..sw * sh).map(|i| md[i] - a[i] * mu[i]).collect();
+    let (ma, mb) = (mean(&a), mean(&b));
+    let (fx, fy) = (sw as f32 / full.w as f32, sh as f32 / full.h as f32);
+    let mut out = vec![0.0f32; full.w * full.h];
+    par_rows(&mut out, full.w, 1, |y, row| {
+        let sy = (y as f32 + 0.5) * fy - 0.5;
+        for (x, o) in row.iter_mut().enumerate() {
+            let sx = (x as f32 + 0.5) * fx - 0.5;
+            let av = crate::photo_util::bilinear(&ma, sw, sh, 1, 0, sx, sy);
+            let bv = crate::photo_util::bilinear(&mb, sw, sh, 1, 0, sx, sy);
+            *o = av * full.v[y * full.w + x] + bv;
+        }
+    });
+    out
 }
 
 #[cfg(test)]
@@ -325,6 +392,27 @@ mod tests {
         apply(&mut px, w, h, 0.0, -100.0, SRGB);
         assert!(px[96 * w + 96][0] < 0.75, "{}", px[96 * w + 96][0]);
         assert!((px[5 * w + 5][0] - 0.2).abs() < 0.01, "{}", px[5 * w + 5][0]);
+    }
+
+    #[test]
+    fn smooth_gradients_stay_smooth() {
+        // A soft ramp over eight stops, as in an out-of-focus background. Coefficients interpolated
+        // between references too far apart drew contour lines across such ramps (Shadows +100 on
+        // a D4 raw): the output must rise steadily, without ripples.
+        let (w, h) = (640, 48);
+        let mut px = grey(w, h, |x, _| crate::photo_util::linear_to_srgb((x as f32 / (w - 1) as f32 * 8.0 - 9.0).exp2()));
+        for (s, hl) in [(100.0, 0.0), (0.0, -100.0), (-100.0, 100.0)] {
+            let mut p = px.clone();
+            apply(&mut p, w, h, s, hl, SRGB);
+            let row: Vec<f32> = (0..w).map(|x| crate::photo_util::srgb_to_linear(p[24 * w + x][0]).max(1e-6).log2()).collect();
+            let steps: Vec<f32> = row.windows(2).map(|d| d[1] - d[0]).collect();
+            assert!(steps.iter().all(|d| *d > 0.0), "{s} {hl}: the ramp reverses");
+            let jumps: Vec<f32> = steps.windows(2).map(|d| (d[1] - d[0]).abs()).collect();
+            let ripple = jumps[16..jumps.len() - 16].iter().fold(0.0f32, |a, b| a.max(*b));
+            // The ramp rises 0.0125 stops per pixel; its slope may change by a third at most.
+            assert!(ripple < 0.004, "{s} {hl}: slope jumps by {ripple} stops per pixel");
+        }
+        px.clear();
     }
 
     #[test]
