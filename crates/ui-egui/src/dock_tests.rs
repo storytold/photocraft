@@ -820,3 +820,40 @@ fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
     v.as_object_mut().unwrap().remove("dock");
     assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
 }
+
+/// #2726: the Navigator sizes its own preview to the group (no outer scroll area, so no scroll
+/// fade over the thumbnail), keeping the document's aspect, with the zoom controls below it.
+#[test]
+fn navigator_preview_fills_its_group_and_keeps_aspect() {
+    assert!(Group::Navigator.scrolls_itself(0), "the Navigator tab lays itself out");
+    assert!(!Group::Navigator.scrolls_itself(1) && !Group::Navigator.scrolls_itself(2), "Histogram and Info still scroll");
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let mut sizes = Vec::new();
+        for tall in [150.0, 260.0, 420.0] {
+            let mut h = Harness::builder().with_size(vec2(1200.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, theme);
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.ui.theme = theme;
+                app.ui.panels.navigator = true;
+                app.ui.dock.heights.insert(Group::Navigator, tall);
+                app.run("file.new", json!({"width": 200, "height": 300})).unwrap();
+                app.sync_views();
+                app
+            });
+            h.run_steps(8);
+            let group = rect_of(&h, Group::Navigator);
+            let preview = crate::panels::last_navigator_preview(&h.ctx).unwrap_or_else(|| panic!("{theme:?} {tall}: no preview drawn"));
+            assert!((group.height() - tall).abs() < 1.0, "{theme:?}: group {group:?}");
+            assert!(group.contains_rect(preview), "{theme:?} {tall}: preview {preview:?} outside {group:?}");
+            assert!((preview.width() / preview.height() - 2.0 / 3.0).abs() < 0.02, "{theme:?} {tall}: aspect {preview:?}");
+            // The zoom controls stay inside the group, below the preview.
+            let controls = crate::panels::last_navigator_controls(&h.ctx).unwrap_or_else(|| panic!("{theme:?} {tall}: no controls"));
+            assert!(controls.top() >= preview.bottom() && controls.bottom() <= group.bottom() + 0.5, "{theme:?} {tall}: {controls:?} {preview:?} {group:?}");
+            sizes.push(preview);
+        }
+        // A portrait document grows with every extra point of height the group gets.
+        for pair in sizes.windows(2) {
+            assert!(pair[1].height() > pair[0].height() + 80.0, "{theme:?}: {sizes:?}");
+        }
+    }
+}

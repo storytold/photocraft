@@ -110,9 +110,10 @@ impl Group {
         }
     }
 
-    /// Tabs that lay out their own scrolling list and footer (they fill the group).
+    /// Tabs that lay out their own scrolling list and footer, or size themselves to the group
+    /// (the Navigator's preview grows with it, as in Photoshop: #2726).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0) | (Group::History, 0))
+        matches!((self, tab), (Group::Layers, 0) | (Group::History, 0) | (Group::Navigator, 0))
     }
 
     fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
@@ -423,6 +424,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 if t.pro && g == Group::Color && tab == 0 {
                     ui.data_mut(|d| d.insert_temp(crate::panels::color_field_fill_id(), inner));
                 }
+                // No scroll fade: it darkens real colours, swatches and previews at the edge
+                // (#2726); the scroll bar already shows there is more.
+                ui.spacing_mut().scroll.fade.strength = 0.0;
                 egui::ScrollArea::vertical()
                     .id_salt(("dock-scroll", g.key(), tab))
                     .max_height(inner)
