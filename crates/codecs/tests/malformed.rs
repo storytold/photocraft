@@ -13,7 +13,8 @@ fn samples() -> Vec<(Format, Vec<u8>)> {
     let mut v = Vec::new();
     for f in rw_formats() {
         for (l, s) in [(ChannelLayout::Rgba, SampleType::U8), (ChannelLayout::Gray, SampleType::U16), (ChannelLayout::Rgb, SampleType::F32)] {
-            let mut img = synth(19, 13, l, s, 11, 0.3);
+            let (w, h) = if f == Format::Icns { (16, 16) } else { (19, 13) };
+            let mut img = synth(w, h, l, s, 11, 0.3);
             img.icc = Some(sample_icc(300));
             img.meta.exif = Some(sample_exif());
             img.meta.xmp = Some(SAMPLE_XMP.into());

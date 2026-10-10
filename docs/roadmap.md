@@ -47,6 +47,12 @@ Clouds, hearts, cogs, callouts, arrows, double stars, tears, crescents, diamonds
 now import as parametric shapes; the special-shapes sample measures 5.68/255 against its PNG. The
 remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 
+2026-10-10: the additional-export follow-up adds 11 symmetric baseline legacy/asset codecs,
+layered OpenRaster and raster SVG/SVGZ/PDF delivery: 28 default Save As groups and 29 Export As
+groups. Tests cover 264 new codec layout/depth conversions, baseline ORA layers/groups at 8/16-bit,
+and rendered PDF outputs. Historical codec variants, JXL/JP2/HEIF encoding, vector PDF/SVG,
+PDF import and animation remain open; see [format catalog and limits](export-formats.md).
+
 ## Honest parity assessment (2026-10-05)
 
 This is the reference answer to "how close are we to Photoshop parity, really". Agents: read it

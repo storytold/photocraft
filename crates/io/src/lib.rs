@@ -40,11 +40,13 @@ mod flat;
 mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
+mod openraster;
 pub mod pattern_map;
 mod pdn;
 pub mod pixels;
 mod psd_export;
 mod psd_import;
+mod raster_documents;
 pub mod raw;
 pub mod slices_map;
 pub mod smart_map;
@@ -205,6 +207,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
     }
+    if has_extension(name, "ora") || openraster::is_openraster(bytes) {
+        return openraster::import(name, bytes);
+    }
     if is_psd(bytes) {
         let file = PsdFile::from_bytes(bytes)?;
         // Nesting past the document model's cap could never be saved (.pcraft refuses it) and
@@ -258,6 +263,12 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
+    if matches!(ext.as_str(), "svg" | "svgz" | "pdf") {
+        return raster_documents::export(doc, &ext, opts);
+    }
+    if ext == "ora" {
+        return openraster::export(doc, opts);
+    }
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
     }

@@ -13,8 +13,17 @@ pub fn document_formats() -> Vec<SaveFormat> {
         SaveFormat { name: "PSD Document", extensions: &["psd"] },
         SaveFormat { name: "Large Document (PSB)", extensions: &["psb"] },
         SaveFormat { name: "PhotoCraft", extensions: &["pcraft"] },
+        SaveFormat { name: "OpenRaster", extensions: &["ora"] },
+        SaveFormat { name: "SVG (embedded image)", extensions: &["svg", "svgz"] },
     ];
     formats.extend(photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().write).map(|f| SaveFormat { name: f.name(), extensions: f.extensions() }));
+    formats
+}
+
+/// Delivery formats include the writable document catalog plus export-only PDF.
+pub fn export_formats() -> Vec<SaveFormat> {
+    let mut formats = document_formats();
+    formats.push(SaveFormat { name: "PDF (raster page)", extensions: &["pdf"] });
     formats
 }
 
@@ -60,7 +69,7 @@ pub(crate) fn show_choice(ctx: &egui::Context, format: &mut String) -> Option<Op
             );
         });
         ui.add_space(8.0);
-        if !matches!(format.as_str(), "pcraft" | "psd" | "psb" | "tif" | "tiff") {
+        if !matches!(format.as_str(), "pcraft" | "psd" | "psb" | "ora" | "tif" | "tiff") {
             ui.label(tl!("This format saves a flattened image. Use Save a Copy to keep your editable document."));
             if format.as_str() == "pnm" {
                 ui.label(tl!("Netpbm chooses the subtype from the image depth and channels."));
@@ -101,7 +110,7 @@ mod tests {
     fn every_offered_format_encodes_and_reopens_at_multiple_depths() {
         for depth in [8, 16, 32] {
             let mut session = photocraft_engine::Session::new();
-            session.execute("file.new", serde_json::json!({"width": 4, "height": 4, "depth": depth})).unwrap();
+            session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "depth": depth})).unwrap();
             let doc = &session.active().unwrap().doc;
             for format in document_formats() {
                 let name = format!("test.{}", format.extensions.first().unwrap());

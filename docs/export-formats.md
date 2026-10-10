@@ -21,14 +21,14 @@ image mode/depth, platform, application version and installed plug-ins change th
 - **PhotoCraft:** Save As changes the working path; Save a Copy leaves the original path and
   saved revision alone. Flat formats flatten the output and existing fidelity warnings report
   conversions/losses. macOS now chooses the format in the editor before its native destination
-  sheet; Windows/Linux use their native file-type list. Export As uses the same writable document/raster catalog, including PhotoCraft, PSD and PSB.
+  sheet; Windows/Linux use their native file-type list. Export As includes every writable Save As choice, including PhotoCraft, PSD, PSB and OpenRaster, plus export-only raster PDF. The default build has 28 Save As groups and 29 Export As groups.
 
 ## Full image/document and asset union
 
 `Yes` means documented saving/export support or a registered export procedure; `Optional` means
 build/plug-in dependent; `Import` is deliberately excluded from export coverage; `—` means not
 found in the inspected sources. Krita/GIMP source snapshots are development registries, not proof
-that every released binary ships each plug-in. The PhotoCraft column describes this first change.
+that every released binary ships each plug-in. The PhotoCraft column includes the additional-export follow-up.
 
 | Format / common extensions | Photoshop | Krita | GIMP | PhotoCraft |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@ that every released binary ships each plug-in. The PhotoCraft column describes t
 | Krita document `.kra` | — | Yes | — | Future |
 | Krita archive `.krz` | — | Yes | — | Future |
 | GIMP document `.xcf` (also compressed) | — | — | Native save | Future |
-| OpenRaster `.ora` | — | Yes | Yes | Future layered interchange |
+| OpenRaster `.ora` | — | Yes | Yes | Baseline PNG layers/groups; 8/16-bit, with baking/fallback warnings |
 | PNG `.png` | Yes | Yes | Yes | Flat export |
 | APNG `.apng` | — | — | Import in inspected PNG plug-in | Recognized alias; single frame only |
 | JPEG `.jpg .jpeg .jpe .jfif` | Yes | Yes | Yes | Flat export |
@@ -58,12 +58,12 @@ that every released binary ships each plug-in. The PhotoCraft column describes t
 | JPEG XL `.jxl` | — | Optional | Optional | Future |
 | JPEG 2000 `.jp2 .j2k .j2c .jpc` | Yes | Import | Optional | Future |
 | JPEG 2000 in HEIF `.hej2` | — | — | Optional | Future |
-| PDF `.pdf` | Yes | Import | Yes | Future |
+| PDF `.pdf` | Yes | Import | Yes | Single raster page in Export As; transparency, ICC and 8/16-bit; import pending |
 | PostScript `.ps` | — | — | Yes | Future |
 | Encapsulated PostScript `.eps` | Yes | — | Yes | Future |
 | Photoshop DCS 1.0 / 2.0 `.eps` and companion files | Yes | — | — | Future print separation |
-| SVG `.svg` | Separate paths workflow | Vector-layer export only | Yes (development registry) | Import only; future document export |
-| PCX `.pcx .pcc` | Yes | — | Yes | Future |
+| SVG `.svg` | Separate paths workflow | Vector-layer export only | Yes (development registry) | Raster document export (embedded PNG); SVG/SVGZ import and export |
+| PCX `.pcx .pcc` | Yes | — | Yes | RGB8 export; RGB/palette PCX import |
 | IFF / ILBM `.iff .lbm` | Yes | — | Import in inspected plug-in | Future |
 | Pixar `.pxr` | Yes | — | — | Future |
 | Scitex CT `.sct` | Yes | — | — | Future |
@@ -71,28 +71,28 @@ that every released binary ships each plug-in. The PhotoCraft column describes t
 | DPX `.dpx` | Video / image sequence | — | Export procedure declared; version dependent | Future |
 | Photoshop Raw `.raw` | Yes | — | Raw data `.data .raw` | Future; requires explicit layout parameters |
 | DICOM `.dcm .dicom` | Listed by Adobe; saving is document dependent | — | Yes | Future |
-| Wireless bitmap `.wbmp` | Save for Web | — | Import in inspected plug-in | Existing Save for Web output; separate from general encoder registry |
-| X bitmap `.xbm` | — | Yes | Yes | Future |
-| X pixmap `.xpm` | — | Yes | Yes | Future |
+| Wireless bitmap `.wbmp` | Save for Web | — | Import in inspected plug-in | Type-0 monochrome read/write; threshold at 50% |
+| X bitmap `.xbm` | — | Yes | Yes | Byte-packed monochrome read/write; threshold at 50% |
+| X pixmap `.xpm` | — | Yes | Yes | RGB palette + one-bit transparency read/write |
 | X window dump `.xwd` | — | — | Yes | Future |
 | Xcursor (X11 cursor files) | — | — | Yes | Future |
-| Windows cursor `.cur` | — | — | Yes | Future |
+| Windows cursor `.cur` | — | — | Yes | Single 32-bit bitmap cursor, ≤256 × 256, hotspot (0,0) |
 | Windows animated cursor `.ani` | — | — | Yes | Future |
-| macOS icon `.icns` | — | — | Yes | Future |
+| macOS icon `.icns` | — | — | Yes | Single PNG representation; square 16/32/64/128/256/512/1024 |
 | DirectDraw Surface `.dds` | Optional third-party plug-in | — | Yes | Future |
 | FITS `.fit .fits` | — | — | Yes | Future |
 | Autodesk animation `.fli .flc` | — | — | Yes | Future animation workflow |
 | Multiple-image network graphics `.mng` | — | — | Yes | Future animation workflow |
-| SGI `.sgi .rgb .rgba .bw` | — | — | Yes | Future |
-| Sun raster `.ras .sun .im1 .im8 .im24 .im32 .rs` | — | — | Yes | Future |
+| SGI `.sgi .rgb .rgba .bw` | — | — | Yes | 8/16-bit planar export; verbatim and RLE import |
+| Sun raster `.ras .sun .im1 .im8 .im24 .im32 .rs` | — | — | Yes | RGB24 uncompressed export; uncompressed 8/24-bit import |
 | Alias PIX `.pix .matte .mask .alpha .als` | — | — | Yes | Future |
-| Farbfeld `.ff` | — | — | Yes | Future |
+| Farbfeld `.ff` | — | — | Yes | RGBA16 read/write, big-endian storage |
 | KiSS CEL `.cel` | — | — | Yes | Future |
 | PlayStation TIM `.tim` | — | — | Yes | Future |
 | PaintShop Pro `.psp .tub` | — | — | Yes | Future |
-| GIMP brush `.gbr` | — | Yes | Yes | Future asset export |
+| GIMP brush `.gbr` | — | Yes | Yes | RGBA8 version-2 brush read/write; default spacing 25% |
 | GIMP animated brush `.gih` | — | Yes | Yes | Future asset export |
-| GIMP pattern `.pat` | — | — | Yes | Future asset export; distinct from Adobe PAT |
+| GIMP pattern `.pat` | — | — | Yes | Gray/GrayA/RGB/RGBA8 pattern read/write; distinct from Adobe PAT |
 | Krita brush preset `.kpp` | — | Yes (PNG filter) | — | Future asset export |
 | Animation CSV `.csv` + images | — | Yes | — | Future animation interchange |
 | Height map `.r8 .r16 .r32` | — | Yes | — | Future |
@@ -113,10 +113,15 @@ animation rendering and GIMP's frame exports require separate timing/codec work.
 
 1. Make existing encoders discoverable everywhere: one capability-derived catalog, macOS format
    chooser, BMP and other missing native filters, separate PSB, and the full raster Export As list.
-2. Add OpenRaster first for layered exchange with both Krita and GIMP; require real multilayer
-   round trips, explicit unsupported-feature warnings and bounded ZIP/XML reads.
-3. Add PDF and SVG document export; distinguish raster pages/embedded images from vector-preserving
-   output and test ICC, transparency, dimensions and font handling.
+2. Baseline OpenRaster now round-trips PNG layers/groups, order, names, opacity, visibility and
+   Gray/RGB 8/16-bit. ZIP/XML reads, decoded layers, nesting, coordinates and output size are bounded.
+   Masks, text, shapes and effects are baked; advanced blending, clipping, adjustments and artboards
+   trigger a warned composite fallback. Imported mixed colour models/profiles are rejected rather
+   than silently misinterpreted. Zip64 input and non-PNG layer sources remain unsupported.
+3. Raster PDF and SVG/SVGZ delivery exports now work. PDF preserves image ICC, grayscale/RGB,
+   8/16-bit samples, soft-mask transparency and physical dimensions from document DPI. It is
+   Export As-only because PDF import is still absent. SVG wraps an embedded PNG; no editable vector
+   or font preservation is claimed. Multi-page/vector PDF, SVG path export and PDF import remain open.
 4. Evaluate pure-Rust JXL, JPEG2000 and HEIF encoders, then legacy/asset formats by concrete workflow.
 5. Add explicit Netpbm subtype selection and animation/frame export. Current Netpbm chooses P5/P6/P7
    or PFM from pixels, not the typed suffix; GIF/WebP/APNG aliases do not imply animation support.
@@ -142,3 +147,38 @@ animation rendering and GIMP's frame exports require separate timing/codec work.
 - rfd 0.17.2 macOS `panel_ffi.rs::add_filters` joins filter extensions into one AppKit allowed-type
   array; it does not install a format dropdown. The editor chooser uses safe Rust/egui and retains
   the asynchronous, parented native destination sheet.
+
+## Additional-export implementation and limits
+
+The eleven new standalone codecs are PCX, SGI, Sun Raster, Farbfeld, WBMP, XBM, XPM, CUR, ICNS,
+GBR and GIMP PAT. Each declares supported layouts/depths and participates in the existing depth,
+alpha, ICC and metadata warning pipeline. No native codec library or new unsafe code is required.
+Decode support covers the emitted baseline plus the variants listed above, not every historical
+variant. XPM supports RGB hex colours and a small basic named-colour set; X10 short-packed XBM,
+compressed Sun Raster, palettized low-bit PCX and non-PNG ICNS representations remain unsupported.
+ICNS rejects unsuitable dimensions instead of silently resizing; CUR stores one image and uses
+an explicit default hotspot. XPM and monochrome formats lose transparency/colour precision as warned.
+
+Tests cover all 11 × 6 layouts × 4 sample types (264 conversions), odd-width rows, SGI RLE,
+handwritten XBM/XPM, truncations, random input, allocation budgets and icon size errors. The existing
+malformed-input and limits suites exercise all registered codecs. OpenRaster tests cover nesting,
+negative offsets, metadata/order/visibility, depth, fallback composites, XML entities and ZIP errors.
+SVG/SVGZ reopen tests and PDF xref/page/depth/ICC/soft-mask checks cover the delivery containers.
+Independent local readers: Pillow verified PCX/SGI/Sun/XBM/CUR/ICNS/GBR/PAT pixels; Poppler rendered
+RGB and grayscale PDF outputs at 8/16/32-bit source depths with correct dimensions and colours.
+This is not native Photoshop/Krita/GIMP acceptance testing.
+
+Public format specifications used for clean-room implementation:
+
+- [ZSoft PCX technical reference](https://files.mpoli.fi/unpacked/software/programm/c/pcx.zip/doc.txt).
+- [SGI/Paul Haeberli specification](https://ftp.zx.net.nz/pub/archive/ftp.sgi.com/graphics/grafica/sgiimage.html).
+- [SunOS rasterfile manual](https://www.cs.cmu.edu/~maxwell/misc/vascHelpPages/sunRasterFormat.html).
+- [Farbfeld specification](https://git.suckless.org/farbfeld/file/FORMAT.html).
+- [WAP WBMP Type 0 specification](https://wapforum.org/what/technical/SPEC-WAESpec-19990524.pdf).
+- [X.Org XPM specification](https://www.x.org/docs/XPM/xpm.pdf).
+- [GIMP brush](https://developer.gimp.org/core/standards/gbr/) and
+  [pattern](https://developer.gimp.org/core/standards/pat/) specifications.
+- [OpenRaster file layout](https://www.openraster.org/baseline/file-layout-spec.html) and
+  [layer stack](https://www.openraster.org/baseline/layer-stack-spec.html).
+- [SVG image element](https://www.w3.org/TR/SVG11/struct.html) and
+  [Adobe PDF reference](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.6.pdf).

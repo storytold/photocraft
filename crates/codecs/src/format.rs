@@ -5,6 +5,17 @@ use crate::image::{ChannelLayout, SampleType};
 /// Supported (or known) raster file formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Format {
+    Pcx,
+    Sgi,
+    SunRaster,
+    Farbfeld,
+    Wbmp,
+    Xbm,
+    Xpm,
+    Cur,
+    Icns,
+    Gbr,
+    GimpPat,
     Png,
     Jpeg,
     Tiff,
@@ -76,7 +87,18 @@ const ALL_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::C
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 14] = [
+    pub const ALL: [Format; 25] = [
+        Format::Pcx,
+        Format::Sgi,
+        Format::SunRaster,
+        Format::Farbfeld,
+        Format::Wbmp,
+        Format::Xbm,
+        Format::Xpm,
+        Format::Cur,
+        Format::Icns,
+        Format::Gbr,
+        Format::GimpPat,
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
@@ -105,6 +127,17 @@ impl Format {
 
     pub fn name(self) -> &'static str {
         match self {
+            Format::Pcx => "PCX",
+            Format::Sgi => "SGI",
+            Format::SunRaster => "Sun Raster",
+            Format::Farbfeld => "Farbfeld",
+            Format::Wbmp => "Wireless Bitmap",
+            Format::Xbm => "X Bitmap",
+            Format::Xpm => "X Pixmap",
+            Format::Cur => "Windows Cursor",
+            Format::Icns => "macOS Icon",
+            Format::Gbr => "GIMP Brush",
+            Format::GimpPat => "GIMP Pattern",
             Format::Png => "PNG",
             Format::Jpeg => "JPEG",
             Format::Tiff => "TIFF",
@@ -126,6 +159,17 @@ impl Format {
     /// the preferred extension for writing.
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
+            Format::Pcx => &["pcx", "pcc"],
+            Format::Sgi => &["sgi", "rgb", "rgba", "bw"],
+            Format::SunRaster => &["ras", "sun", "im1", "im8", "im24", "im32", "rs"],
+            Format::Farbfeld => &["ff"],
+            Format::Wbmp => &["wbmp"],
+            Format::Xbm => &["xbm"],
+            Format::Xpm => &["xpm"],
+            Format::Cur => &["cur"],
+            Format::Icns => &["icns"],
+            Format::Gbr => &["gbr"],
+            Format::GimpPat => &["pat"],
             Format::Png => &["png", "apng"],
             Format::Jpeg => &["jpg", "jpeg", "jpe", "jfif"],
             Format::Tiff => &["tif", "tiff"],
@@ -145,6 +189,17 @@ impl Format {
 
     pub fn mime_type(self) -> &'static str {
         match self {
+            Format::Pcx => "image/x-pcx",
+            Format::Sgi => "image/sgi",
+            Format::SunRaster => "image/x-sun-raster",
+            Format::Farbfeld => "image/farbfeld",
+            Format::Wbmp => "image/vnd.wap.wbmp",
+            Format::Xbm => "image/x-xbitmap",
+            Format::Xpm => "image/x-xpixmap",
+            Format::Cur => "image/x-icon",
+            Format::Icns => "image/icns",
+            Format::Gbr => "image/x-gimp-gbr",
+            Format::GimpPat => "image/x-gimp-pat",
             Format::Png => "image/png",
             Format::Jpeg => "image/jpeg",
             Format::Tiff => "image/tiff",
@@ -167,7 +222,10 @@ impl Format {
         match self {
             Format::Jpeg | Format::Gif => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
-            Format::Ico => Some((256, 256)),
+            Format::Ico | Format::Cur => Some((256, 256)),
+            Format::Sgi => Some((65535, 65535)),
+            Format::Pcx => Some((65534, 65535)),
+            Format::Icns => Some((1024, 1024)),
             _ => None,
         }
     }
@@ -190,6 +248,13 @@ pub fn caps(format: Format) -> FormatCaps {
         lossy: false,
     };
     match format {
+        Format::Pcx => FormatCaps { layouts: &[L::Rgb], alpha: false, ..base },
+        Format::Sgi => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, ..base },
+        Format::SunRaster => FormatCaps { layouts: &[L::Rgb], alpha: false, ..base },
+        Format::Farbfeld => FormatCaps { depths: &[S::U16], layouts: &[L::Rgba], ..base },
+        Format::Wbmp | Format::Xbm => FormatCaps { layouts: &[L::Gray], alpha: false, lossy: true, ..base },
+        Format::Xpm | Format::Cur | Format::Icns | Format::Gbr => FormatCaps { layouts: &[L::Rgba], ..base },
+        Format::GimpPat => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Png => {
             FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, exif: true, xmp: true, dpi: true, text: true, animation: true, ..base }
         }
@@ -255,6 +320,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.len() >= 3 && b[0] == b'P' && matches!(b[1], b'1'..=b'7' | b'F' | b'f') && b[2].is_ascii_whitespace() {
         return Some(Format::Pnm);
+    }
+    if let Some(f) = crate::codecs::legacy::detect(b) {
+        return Some(f);
     }
     if looks_like_tga(b) {
         return Some(Format::Tga);

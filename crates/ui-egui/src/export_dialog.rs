@@ -159,7 +159,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
                 let mut fmt = s_fmt(f);
                 let opts: Vec<(String, &str)> =
-                    crate::save_formats::document_formats().into_iter().filter_map(|f| f.extensions.first().map(|ext| (ext.to_string(), f.name))).collect();
+                    crate::save_formats::export_formats().into_iter().filter_map(|f| f.extensions.first().map(|ext| (ext.to_string(), f.name))).collect();
                 if crate::widgets::dropdown(ui, "export-format", &mut fmt, &opts, 130.0) {
                     set_format_defaults(f, &fmt, &app.session.prefs().export);
                 }
@@ -328,12 +328,12 @@ mod tests {
                 ..Default::default()
             };
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-            app.run("file.new", json!({"width":4,"height":4,"depth":depth})).unwrap();
+            app.run("file.new", json!({"width":16,"height":16,"depth":depth})).unwrap();
             app.run("layer.new.layer", json!({"name":"Ink"})).unwrap();
             app.session.active_mut().unwrap().path = Some("working.pcraft".into());
             let before = app.session.active().unwrap().doc.clone();
             let saved = app.session.active().unwrap().saved_revision;
-            for format in crate::save_formats::document_formats() {
+            for format in crate::save_formats::export_formats() {
                 let ext = *format.extensions.first().unwrap();
                 let dialog = open(&mut app).unwrap();
                 app.ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!(ext));
@@ -350,16 +350,23 @@ mod tests {
                         continue;
                     }
                 }
+                if ext == "pdf" {
+                    assert!(bytes.starts_with(b"%PDF-1.6"));
+                    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("working.pcraft"));
+                    assert_eq!(app.session.active().unwrap().saved_revision, saved);
+                    assert_eq!(app.session.active().unwrap().doc, before);
+                    continue;
+                }
                 let imported = photocraft_io::import(path, bytes).unwrap();
                 assert_eq!(imported.document.size, before.size, "{ext}, {depth}");
-                if matches!(ext, "pcraft" | "psd" | "psb") {
+                if matches!(ext, "pcraft" | "psd" | "psb" | "ora") {
                     assert_eq!(imported.document.layers.len(), 2, "{ext}, {depth}");
                 }
                 assert_eq!(app.session.active().unwrap().path.as_deref(), Some("working.pcraft"));
                 assert_eq!(app.session.active().unwrap().saved_revision, saved);
                 assert_eq!(app.session.active().unwrap().doc, before);
             }
-            assert_eq!(writes.borrow().len(), crate::save_formats::document_formats().len());
+            assert_eq!(writes.borrow().len(), crate::save_formats::export_formats().len());
         }
     }
 
