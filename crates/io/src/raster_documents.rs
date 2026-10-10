@@ -120,11 +120,14 @@ pub(crate) fn import_wrapper(name: &str, bytes: &[u8]) -> Result<Option<crate::I
     let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
         inflated = {
             let mut out = Vec::new();
-            flate2::read::MultiGzDecoder::new(bytes).take(MAX + 1).read_to_end(&mut out).map_err(error)?;
+            flate2::read::MultiGzDecoder::new(bytes)
+                .take(MAX + 1)
+                .read_to_end(&mut out)
+                .map_err(|e| IoError::Svg(format!("the compressed SVG could not be inflated: {e}")))?;
             out
         };
         if inflated.len() as u64 > MAX {
-            return Err(error("SVGZ exceeds decompression budget"));
+            return Err(IoError::Svg(format!("the compressed SVG inflates past {} MB", MAX >> 20)));
         }
         inflated.as_slice()
     } else {
