@@ -130,6 +130,7 @@ pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
+pub mod save_formats;
 pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
@@ -286,6 +287,8 @@ pub struct Services {
     pub export: Option<ExportFn>,
     /// Show an Open or Save dialog without waiting for it (see `file_dialog`).
     pub file_dialog: Option<FileDialogFn>,
+    /// Show a format chooser for document saves when the native panel lacks one (macOS).
+    pub choose_save_format: bool,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
     /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
@@ -1047,7 +1050,7 @@ impl PhotocraftApp {
             }
         };
         let doc = st.doc.id;
-        self.pick_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path)))
+        self.pick_document_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path)))
     }
 
     /// [`Self::save_as`] once the path is known.
@@ -1402,6 +1405,7 @@ impl eframe::App for PhotocraftApp {
             }
         }
         // Menus and buttons in this frame may have asked for a file dialog.
+        self.show_save_format(&ctx);
         self.poll_file_dialog(&ctx, Some(frame));
     }
 }

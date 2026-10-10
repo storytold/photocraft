@@ -3402,3 +3402,8 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+
+# Save format chooser
+	Continue	Kontynuuj
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	Ten format zapisuje spłaszczony obraz. Użyj polecenia Zapisz kopię, aby zachować dokument do dalszej edycji.
+	Netpbm chooses the subtype from the image depth and channels.	Netpbm wybiera podtyp na podstawie głębi bitowej i kanałów obrazu.

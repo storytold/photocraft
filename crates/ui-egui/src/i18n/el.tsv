@@ -3490,3 +3490,7 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+
+# Save format chooser
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	Αυτή η μορφή αποθηκεύει μια ισοπεδωμένη εικόνα. Χρησιμοποιήστε Αποθήκευση αντιγράφου για να διατηρήσετε το επεξεργάσιμο έγγραφο.
+	Netpbm chooses the subtype from the image depth and channels.	Το Netpbm επιλέγει τον υποτύπο από το βάθος bit και τα κανάλια της εικόνας.

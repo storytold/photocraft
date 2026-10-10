@@ -11,8 +11,6 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 5] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA")];
-
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
     let mut f = Map::new();
@@ -160,7 +158,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
                 let mut fmt = s_fmt(f);
-                let opts: Vec<(String, &str)> = FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+                let opts: Vec<(String, &str)> =
+                    crate::save_formats::document_formats().into_iter().filter_map(|f| f.extensions.first().map(|ext| (ext.to_string(), f.name))).collect();
                 if crate::widgets::dropdown(ui, "export-format", &mut fmt, &opts, 130.0) {
                     set_format_defaults(f, &fmt, &app.session.prefs().export);
                 }
@@ -299,6 +298,70 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_save_format_exports_through_the_dialog_without_changing_the_working_file() {
+        use std::{cell::RefCell, rc::Rc};
+        for depth in [8, 16, 32] {
+            let writes = Rc::new(RefCell::new(Vec::<(String, Vec<u8>)>::new()));
+            let out = writes.clone();
+            let services = crate::Services {
+                file_dialog: Some(Box::new(|request, _, reply| {
+                    let answer = match request {
+                        crate::FileDialogRequest::Save { suggested } => Some(crate::FileDialogAnswer::SaveTo(suggested)),
+                        _ => None,
+                    };
+                    reply.send(answer);
+                })),
+                export: Some(Box::new(|doc, name, settings| {
+                    let mut options = photocraft_io::ExportOptions::default();
+                    if let Some(q) = settings.jpeg_quality {
+                        options.encode.jpeg_quality = q;
+                    }
+                    options.encode.webp_lossless = settings.webp_lossless;
+                    photocraft_io::export(doc, name, &options).map(|out| (out.bytes, out.warnings)).map_err(|e| e.to_string())
+                })),
+                write: Some(Box::new(move |path, bytes| {
+                    out.borrow_mut().push((path.to_string(), bytes.to_vec()));
+                    Ok(())
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            app.run("file.new", json!({"width":4,"height":4,"depth":depth})).unwrap();
+            app.run("layer.new.layer", json!({"name":"Ink"})).unwrap();
+            app.session.active_mut().unwrap().path = Some("working.pcraft".into());
+            let before = app.session.active().unwrap().doc.clone();
+            let saved = app.session.active().unwrap().saved_revision;
+            for format in crate::save_formats::document_formats() {
+                let ext = *format.extensions.first().unwrap();
+                let dialog = open(&mut app).unwrap();
+                app.ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!(ext));
+                let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
+                confirm(&mut app, &fields).unwrap();
+                app.poll_file_dialog(&egui::Context::default(), None);
+                app.ui.dialogs.retain(|d| d.id != dialog);
+                let written = writes.borrow();
+                let (path, bytes) = written.last().unwrap();
+                assert!(path.ends_with(&format!(".{ext}")), "{path}");
+                if let Some(codec) = photocraft_codecs::from_extension(ext) {
+                    assert_eq!(photocraft_codecs::detect(bytes), Some(codec), "{ext}, {depth}");
+                    if !codec.caps().read {
+                        continue;
+                    }
+                }
+                let imported = photocraft_io::import(path, bytes).unwrap();
+                assert_eq!(imported.document.size, before.size, "{ext}, {depth}");
+                if matches!(ext, "pcraft" | "psd" | "psb") {
+                    assert_eq!(imported.document.layers.len(), 2, "{ext}, {depth}");
+                }
+                assert_eq!(app.session.active().unwrap().path.as_deref(), Some("working.pcraft"));
+                assert_eq!(app.session.active().unwrap().saved_revision, saved);
+                assert_eq!(app.session.active().unwrap().doc, before);
+            }
+            assert_eq!(writes.borrow().len(), crate::save_formats::document_formats().len());
+        }
+    }
 
     #[test]
     fn export_document_scales_height_when_rounded_width_is_unchanged() {

@@ -2418,3 +2418,8 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+
+# Save format chooser
+	Continue	Weiter
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	Dieses Format speichert ein reduziertes Bild. Verwenden Sie Kopie speichern, um Ihr bearbeitbares Dokument zu behalten.
+	Netpbm chooses the subtype from the image depth and channels.	Netpbm wählt den Untertyp anhand der Farbtiefe und der Bildkanäle.

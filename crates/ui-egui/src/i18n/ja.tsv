@@ -3403,3 +3403,8 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+
+# Save format chooser
+	Continue	続行
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	この形式では統合された画像を保存します。編集可能なドキュメントを保持するには「コピーを保存」を使用してください。
+	Netpbm chooses the subtype from the image depth and channels.	Netpbm は画像のビット深度とチャンネルに応じてサブタイプを選択します。

@@ -2665,3 +2665,8 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+
+# Save format chooser
+	Continue	Продолжить
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	Этот формат сохраняет сведённое изображение. Используйте «Сохранить копию», чтобы сохранить редактируемый документ.
+	Netpbm chooses the subtype from the image depth and channels.	Netpbm выбирает подтип по глубине цвета и каналам изображения.

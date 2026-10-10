@@ -1047,7 +1047,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
     let suggested = format!("{stem} copy.psd");
     // The copy is of the document as it was when asked.
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_document_save(&suggested, move |app, path| {
         let export = app.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&doc, &path, &crate::ExportSettings::default())?;
         let write = app.services.write.as_mut().ok_or("no writer configured")?;

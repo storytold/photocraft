@@ -67,6 +67,7 @@ type Then = Box<dyn FnOnce(&mut PhotocraftApp, Option<FileDialogAnswer>) -> Resu
 pub(crate) struct Pending {
     /// Not shown yet: it is shown at the end of the frame, which has the window to parent it to.
     request: Option<FileDialogRequest>,
+    format: Option<String>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
     then: Then,
 }
@@ -100,7 +101,7 @@ impl PhotocraftApp {
             FileDialogRequest::Save { .. } => "save",
         };
         let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then });
+        self.file_dialog = Some(Pending { request: Some(request), format: None, answer: None, then });
         Ok(json!({ "fileDialog": kind }))
     }
 
@@ -119,6 +120,58 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => then(app, Self::lowercased_extension(app, path)),
             _ => Err(UNEXPECTED.into()),
         })
+    }
+
+    /// Document Save As/Save a Copy, with a visible format choice on macOS.
+    pub(crate) fn pick_document_save(
+        &mut self,
+        suggested: &str,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let result = self.pick_save(suggested, then)?;
+        if self.services.choose_save_format
+            && let Some(p) = self.file_dialog.as_mut()
+        {
+            p.format = Some(std::path::Path::new(suggested).extension().and_then(|e| e.to_str()).unwrap_or("psd").to_ascii_lowercase());
+        }
+        Ok(result)
+    }
+
+    /// Inspect the pending format choice for agents.
+    pub fn save_format_choice(&self) -> Option<&str> {
+        self.file_dialog.as_ref()?.format.as_deref()
+    }
+
+    /// Continue to the native destination panel with a validated format, or cancel the save.
+    pub fn choose_save_format(&mut self, extension: Option<&str>) -> Result<Value, String> {
+        let p = self.file_dialog.as_mut().filter(|p| p.format.is_some()).ok_or("no save format chooser is open")?;
+        if let Some(extension) = extension {
+            let extension = extension.to_ascii_lowercase();
+            if !crate::save_formats::document_formats().iter().any(|f| f.extensions.contains(&extension.as_str())) {
+                return Err("unsupported save format".into());
+            }
+            let Some(FileDialogRequest::Save { suggested }) = p.request.as_mut() else { return Err("no pending save request".into()) };
+            *suggested = std::path::Path::new(suggested).with_extension(extension).to_string_lossy().into_owned();
+            p.format = None;
+            Ok(json!({"fileDialog": "save"}))
+        } else {
+            self.file_dialog = None;
+            Ok(json!({"cancelled": true}))
+        }
+    }
+
+    pub(crate) fn show_save_format(&mut self, ctx: &egui::Context) {
+        let Some(mut format) = self.save_format_choice().map(str::to_string) else { return };
+        let choice = crate::save_formats::show_choice(ctx, &mut format);
+        if let Some(p) = self.file_dialog.as_mut() {
+            p.format = Some(format);
+        }
+        if let Some(choice) = choice
+            && let Err(error) = self.choose_save_format(choice.as_deref())
+        {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        }
     }
 
     /// `X.PSD` → `X.psd`, only the extension: the stem and the folders keep the user's spelling.
@@ -214,6 +267,9 @@ impl PhotocraftApp {
     /// Called every frame: shows a queued dialog with `parent` (the window) as its parent, and
     /// continues the action that asked once the answer is in. Its errors go to the status bar.
     pub fn poll_file_dialog(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
+        if self.save_format_choice().is_some() {
+            return;
+        }
         let Some(p) = self.file_dialog.as_mut() else { return };
         if let Some(request) = p.request.take() {
             let (tx, rx) = mpsc::channel();

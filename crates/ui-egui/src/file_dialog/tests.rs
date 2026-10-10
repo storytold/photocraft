@@ -405,3 +405,67 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.documents().len(), 1);
 }
+
+#[test]
+fn format_choice_defers_native_panel_validates_and_keeps_destination_folder() {
+    let (mut app, open, written) = app();
+    app.services.choose_save_format = true;
+    app.session.active_mut().unwrap().path = Some("/pics/layers.pcraft".into());
+    app.save_as(None).unwrap();
+    assert_eq!(app.save_format_choice(), Some("pcraft"));
+    assert!(open.borrow().is_empty());
+    assert!(app.choose_save_format(Some("heic")).is_err());
+    assert!(app.choose_save_format(Some("nonsense")).is_err());
+    assert_eq!(app.save_format_choice(), Some("pcraft"));
+    app.choose_save_format(Some("BMP")).unwrap();
+    let ctx = egui::Context::default();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/layers.bmp"));
+    answer(&open, Some(FileDialogAnswer::SaveTo("/pics/layers.bmp".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/pics/layers.bmp"]);
+}
+
+#[test]
+fn cancel_format_choice_never_opens_panel_or_writes() {
+    let (mut app, open, written) = app();
+    app.services.choose_save_format = true;
+    app.save_as(None).unwrap();
+    app.choose_save_format(None).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(!app.file_dialog_open());
+    assert!(open.borrow().is_empty());
+    assert!(written.borrow().is_empty());
+}
+
+#[test]
+fn copy_format_choice_preserves_working_document_path_and_dirty_revision() {
+    let (mut app, open, written) = app();
+    app.services.choose_save_format = true;
+    app.session.active_mut().unwrap().path = Some("working.pcraft".into());
+    let before = app.session.active().unwrap().saved_revision;
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
+    app.choose_save_format(Some("bmp")).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo("copy.bmp".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["copy.bmp"]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("working.pcraft"));
+    assert_eq!(app.session.active().unwrap().saved_revision, before);
+}
+
+#[test]
+fn save_format_control_rejects_bad_params_without_cancelling_the_choice() {
+    let (mut app, _, _) = app();
+    app.services.choose_save_format = true;
+    app.save_as(None).unwrap();
+    for params in [json!({}), json!({"format":5}), json!({"format":"heic"}), json!({"format":"nonsense"})] {
+        let (request, _) = crate::control::ControlRequest::new("ui.saveFormat.confirm", params);
+        let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &egui::Context::default(), &request) else {
+            panic!("expected an immediate reply")
+        };
+        assert_eq!(reply["ok"], false);
+        assert_eq!(app.save_format_choice(), Some("psd"));
+    }
+}

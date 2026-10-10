@@ -495,3 +495,16 @@ Missing actions, recursive calls and nesting beyond 16 levels fail visibly; a ch
 the parent before its next step. Every nested command retains the normal automation permission check.
 Existing recordings containing expanded commands remain unchanged; remove those steps and record
 the named call again if desired.
+
+## Save format chooser
+
+On macOS, Save As and Save a Copy show an editor format chooser before the native destination
+sheet. The native panel does not offer a file-type dropdown. Control clients can use:
+
+- `ui.saveFormat.inspect`: `selected` extension (null when closed) and the current build's writable
+  format names/extensions.
+- `ui.saveFormat.confirm {format: "bmp"}`: validate the format, replace the suggested suffix and
+  continue to the native destination sheet. Unsupported/import-only formats leave the chooser open.
+- `ui.saveFormat.cancel`: close the chooser without opening a destination sheet or writing.
+
+These methods choose a format only; the existing authorized save commands handle file writes.

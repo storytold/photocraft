@@ -3562,3 +3562,7 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+
+# Save format chooser
+	This format saves a flattened image. Use Save a Copy to keep your editable document.	Dit formaat slaat een samengevoegde afbeelding op. Gebruik Een kopie opslaan om uw bewerkbare document te behouden.
+	Netpbm chooses the subtype from the image depth and channels.	Netpbm kiest het subtype op basis van de bitdiepte en kanalen van de afbeelding.
