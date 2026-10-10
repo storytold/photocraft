@@ -156,7 +156,7 @@ fn first_frame_renders() {
 #[test]
 fn blend_modes() {
     let Some(mut g) = gpu() else { return };
-    for mode in BlendMode::LAYER_MODES {
+    for mode in BlendMode::layer_modes() {
         let mut d = base_doc(64, 48);
         let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
         l.blend = mode;
@@ -168,6 +168,25 @@ fn blend_modes() {
         d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
         check(&mut g, &d, &format!("{mode:?} opaque"));
     }
+}
+
+#[test]
+fn xor_rounding_on_half_float_targets() {
+    let Some((_adapter, device, queue, _lock)) = any_device() else { return };
+    let Ok(mut comp) = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba16Float) else { return };
+    let mut doc = Document::new("XOR rounding", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+    for (value, opacity, blend) in [(127, 1.0, BlendMode::Normal), (128, 127.0 / 255.0, BlendMode::Normal), (64, 1.0, BlendMode::Xor)] {
+        let mut layer = Layer::raster("pixel", PixelFormat::RGBA8);
+        let channel = value as f32 / 255.0;
+        layer.surface_mut().unwrap().fill_rect(doc.bounds(), &[channel, channel, channel, 1.0]);
+        layer.opacity = opacity;
+        layer.blend = blend;
+        doc.layers.push(layer);
+    }
+    let cpu = photocraft_compose::flatten(&doc);
+    assert!((cpu.px[0][0] - 63.0 / 255.0).abs() < 1e-6);
+    let gpu = render_to_vec(&mut comp, &device, &queue, &doc, doc.bounds()).unwrap();
+    assert!(worst_diff(&cpu.px, &gpu).0 <= TOL, "CPU {:?}, GPU {:?}", cpu.px[0], gpu[0]);
 }
 
 fn hue_ranges() -> [HueRange; 6] {
@@ -648,7 +667,7 @@ fn small_layers_composite_over_their_bounds() {
         l
     };
     let mut d = base_doc(200, 150);
-    for (i, mode) in BlendMode::LAYER_MODES.into_iter().enumerate() {
+    for (i, mode) in BlendMode::layer_modes().enumerate() {
         let i = i as i32;
         d.layers.push(small(100 + i as u32, (i * 29) % 190 - 8, (i * 37) % 140 - 5, mode));
     }
@@ -682,7 +701,7 @@ fn small_layers_composite_over_their_bounds() {
     check(&mut g, &d, "small layers");
     // The same over several compositor chunks.
     let mut big = base_doc(1500, 1200);
-    for (i, mode) in BlendMode::LAYER_MODES.into_iter().enumerate() {
+    for (i, mode) in BlendMode::layer_modes().enumerate() {
         let i = i as i32;
         big.layers.push(small(400 + i as u32, 1010 + (i % 4) * 5, 1010 + (i / 4) * 5, mode));
     }
@@ -1385,7 +1404,7 @@ fn blend_mode_extremes() {
     let Some(mut g) = gpu() else { return };
     let vals = [0.0f32, 1.0, 0.5];
     for depth in [SampleType::U8, SampleType::U16] {
-        for mode in BlendMode::LAYER_MODES {
+        for mode in BlendMode::layer_modes() {
             let mut d = Document::new("x", Size::new(9, 9), ColorMode::Rgb, depth);
             let fmt = d.pixel_format();
             let mut bg = Layer::raster("bg", fmt);

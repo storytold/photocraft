@@ -5,7 +5,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use photocraft_doc::{DocId, LayerContent, LayerId, TextLayer};
-pub use photocraft_text::served::{ServedFont, add_families, parse_manifest, take_requests};
+pub use photocraft_text::served::{ServedFont, add_families, add_fonts, parse_manifest, request_for_languages, take_requests};
 
 use crate::PhotocraftApp;
 
@@ -13,7 +13,8 @@ use crate::PhotocraftApp;
 static PENDING: Mutex<Vec<(DocId, LayerId)>> = Mutex::new(Vec::new());
 
 /// Registers delivered font files (`(family, bytes)`, the family as the manifest lists it) and
-/// re-renders the type layers that use those families and show our own layout. A PSD layer still
+/// re-renders the type layers that use those families, or whose text falls back to them (a script
+/// fallback, e.g. Arabic set in Inter), and show our own layout. A PSD layer still
 /// showing Photoshop's pixels (not edited yet) keeps them, as it does when its font is installed
 /// from the start. Call it every frame: it also retries the layers of a document that was busy.
 pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
@@ -25,7 +26,7 @@ pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
         for st in app.session.documents() {
             for (_, _, l) in st.doc.walk() {
                 if let LayerContent::Text(t) = &l.content
-                    && uses_family(t, &families)
+                    && redraws_for(t, &families)
                     && crate::type_tool::shows_own_layout(&st.doc, t)
                     && !layers.contains(&(st.doc.id, l.id))
                 {
@@ -45,6 +46,12 @@ pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
         let busy = app.session.refresh_type_layers(&layers);
         PENDING.lock().unwrap_or_else(PoisonError::into_inner).extend(busy);
     }
+}
+
+/// Should the layer be redrawn when `families` arrive: it uses one of them, or its text is in a
+/// script one of them is the served fallback for?
+fn redraws_for(t: &TextLayer, families: &[String]) -> bool {
+    uses_family(t, families) || families.iter().any(|f| photocraft_text::served::falls_back_to(&t.text, f))
 }
 
 /// Does the layer use one of `families`, by name or through the PostScript name a PSD gave?
@@ -70,5 +77,16 @@ mod tests {
             style: photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Lato-Bold".into()), ..Default::default() },
         }];
         assert!(uses_family(&psd, &["Lato".into()]));
+    }
+
+    #[test]
+    fn a_layer_in_a_script_redraws_when_that_scripts_fallback_arrives() {
+        // Thai: other tests use other scripts (the served catalog is process-wide).
+        let thai = "Served Test Thai";
+        photocraft_text::served::add_fonts(&parse_manifest(&format!("{thai} | Regular | fonts/t/T.ttf | Thai\n")).0);
+        let layer = |text: &str| TextLayer { text: text.into(), font_family: "Inter".into(), ..Default::default() };
+        assert!(redraws_for(&layer("สวัสดี"), &[thai.into()]), "Thai text set in Inter falls back to it");
+        assert!(!redraws_for(&layer("hello"), &[thai.into()]));
+        assert!(redraws_for(&layer("hello"), &["Inter".into()]), "and a layer still redraws for its own family");
     }
 }

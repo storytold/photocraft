@@ -175,6 +175,82 @@ fn csv_import_preserves_unicode_headers_names_and_text() {
 }
 
 #[test]
+fn csv_multiline_values_apply_persist_and_export_as_two_data_sets() {
+    for (ending, suffix) in [("\n", "lf"), ("\r\n", "crlf")] {
+        let (mut s, _photo, badge, title) = session();
+        s.execute(
+            "image.variables.define",
+            json!({"defs": [
+                {"name": "showBadge", "layer": badge.0, "type": "visibility"},
+                {"name": "headline", "layer": title.0, "type": "textReplacement"},
+            ]}),
+        )
+        .unwrap();
+        let first = format!("Café, \"quoted\"{ending}{ending}日本語 👩‍🎨");
+        let second = format!("Fin{ending}e\u{301}");
+        let dir = tmp(&format!("multiline-{suffix}"));
+        let csv = format!("{dir}/sets.csv");
+        // Blank physical lines inside a quoted field are data; blank records between rows are
+        // ignored. The last quoted field ends at EOF, without a final record terminator.
+        std::fs::write(&csv, format!("DataSet,showBadge,headline{ending}one,true,\"{}\"{ending}{ending}two,false,\"{second}\"", first.replace('"', "\"\"")))
+            .unwrap();
+        let result = s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap();
+        assert_eq!(result["imported"], 2, "{suffix}");
+        let rows = s.execute("variables.list", json!({})).unwrap();
+        assert_eq!(rows["dataSets"][0]["values"][1]["value"], first);
+        assert_eq!(rows["dataSets"][1]["values"][1]["value"], second);
+        for (name, text, visible) in [("one", &first, true), ("two", &second, false)] {
+            s.execute("image.applyDataSet", json!({"name": name})).unwrap();
+            assert_eq!(text_of(&s, title), *text);
+            assert_eq!(doc(&s).layer(badge).unwrap().visible, visible);
+        }
+
+        let native = format!("{dir}/multiline.pcraft");
+        crate::file_cmds::save_doc(doc(&s), &native, None).unwrap();
+        let mut reopened = Session::new();
+        crate::file_cmds::open_bytes_as(&mut reopened, "multiline.pcraft", &std::fs::read(&native).unwrap(), None, Some(native)).unwrap();
+        assert_eq!(doc(&reopened).variables, doc(&s).variables);
+        assert_eq!(text_of(&reopened, title), second);
+        reopened.execute("image.applyDataSet", json!({"name": "one"})).unwrap();
+        assert_eq!(text_of(&reopened, title), first);
+        let before_export = doc(&reopened).clone();
+        let out = reopened.execute("file.export.dataSetsAsFiles", json!({"dir": format!("{dir}/out"), "format": "png"})).unwrap();
+        assert_eq!(out["count"], 2);
+        let files = out["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        let images: Vec<_> = files
+            .iter()
+            .map(|path| {
+                let path = path.as_str().unwrap();
+                photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document
+            })
+            .collect();
+        assert!(images.iter().all(|image| image.size == doc(&reopened).size));
+        assert_ne!(images[0].layers[0].surface(), images[1].layers[0].surface(), "the exported rows have different content");
+        assert_eq!(*doc(&reopened), before_export, "export keeps the live document unchanged");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn csv_multiline_default_names_count_logical_nonblank_records() {
+    let dir = tmp("multiline-default-names");
+    let csv = format!("{dir}/sets.csv");
+    for (header, first, second) in [("headline", "\"first\n\nline\"", "\"\""), ("DataSet,headline", ",\"first\n\nline\"", ",\"\"")] {
+        let (mut s, _, _, title) = session();
+        s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
+        std::fs::write(&csv, format!("\n \t\n{header}\n\n{first}\n \n{second}")).unwrap();
+        assert_eq!(s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap()["imported"], 2);
+        let rows = s.execute("variables.list", json!({})).unwrap();
+        assert_eq!(rows["dataSets"][0]["name"], "Data Set 1");
+        assert_eq!(rows["dataSets"][1]["name"], "Data Set 2");
+        assert_eq!(rows["dataSets"][0]["values"][0]["value"], "first\n\nline");
+        assert_eq!(rows["dataSets"][1]["values"][0]["value"], "", "a quoted empty field is a record");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn csv_import_preserves_unicode_pixel_paths() {
     let (mut s, photo, _badge, _title) = session();
     let dir = tmp("unicode-pixels");

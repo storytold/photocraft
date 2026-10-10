@@ -655,7 +655,11 @@
 	Pro Medium Gray Theme	Tema Pro Abu-abu Sedang
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio Terang
+	Adwaita Light Theme	Tema Adwaita Terang
+	Adwaita Dark Theme	Tema Adwaita Gelap
 	Classic Theme	Tema Klasik
+	Solarized dark	Solarized gelap
+	Solarized Dark Theme	Tema Solarized Gelap
 	Next Theme	Tema Berikutnya
 	Actions	Action
 	Brush Settings	Pengaturan Kuas
@@ -928,6 +932,17 @@
 	Delete current channel	Hapus channel saat ini
 	Delete current state	Hapus kondisi saat ini
 	Delete effect layer	Hapus layer efek
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Hapus layer ‘{name}’?
+	Delete {count} layers? {names}	Hapus {count} layer? {names}
+	Delete layer?	Hapus layer?
+	The document is closed	Dokumen sudah ditutup
+	The document or selected layers changed. Please request deletion again.	Dokumen atau layer yang dipilih telah berubah. Minta penghapusan lagi.
+	Missing delete command	Perintah hapus tidak tersedia
+	Invalid delete command	Perintah hapus tidak valid
+	Layer deleted, but confirmation preference could not be saved: {error}	Layer dihapus, tetapi preferensi konfirmasi tidak dapat disimpan: {error}
+
 	Delete layer	Hapus layer
 	Delete layer comp	Hapus layer comp
 	Delete note	Hapus catatan
@@ -1281,6 +1296,12 @@
 	Rename…	Ganti Nama…
 	Resample	Resample
 	Reset All to Defaults	Reset Semua ke Default
+	Import Shortcuts…	Impor Pintasan…
+	Load a keyboard shortcut set saved as .kys	Muat set pintasan keyboard yang disimpan sebagai .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} pintasan diimpor dari {file}. Klik OK untuk menyimpannya.
+	{n} commands are not in PhotoCraft.	{n} perintah tidak ada di PhotoCraft.
+	Keyboard shortcuts imported	Pintasan keyboard diimpor
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Set pintasan keyboard Anda {set} dipakai di sini: {n} pintasan berbeda dari bawaan. Edit › Pintasan Keyboard menampilkannya; Setel Ulang Semua ke Bawaan membatalkannya.
 	Reset Section	Reset Bagian
 	Reset Transform	Reset Transformasi
 	Reset to defaults	Reset ke default
@@ -1573,6 +1594,7 @@
 	Millimeters	Milimeter
 	Mobile	Seluler
 	Move Tool	Alat Pindah
+	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
 	Multiply	Multiply
 	My Brushes	Kuas Saya
 	Neutrals	Netral
@@ -1617,6 +1639,7 @@
 	Quick Selection Tool	Alat Quick Selection
 	Radial	Radial
 	Rasterize Layer	Rasterisasi Layer
+	Rasterize Layers	Rasterisasi Layer
 	Ratio	Rasio
 	Recent	Terbaru
 	Rectangle Tool	Alat Rectangle
@@ -1837,6 +1860,8 @@
 	Standard	Standar
 	Studio	Studio
 	Studio light	Studio terang
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita gelap
 	Subdivisions	Subdivisi
 	System	Sistem
 	Text engine	Mesin teks
@@ -1886,6 +1911,7 @@
 	Collapse group  ({key}-click: all groups)	Ciutkan grup  ({key}-klik: semua grup)
 	Create new brush from the current settings	Buat kuas baru dari pengaturan saat ini
 	Create new brush from these settings	Buat kuas baru dari pengaturan ini
+	Update the current brush with these settings	Perbarui kuas saat ini dengan pengaturan ini
 	Delete brush	Hapus kuas
 	Drag the arrow to set the angle, the dots to set the roundness	Seret panah untuk mengatur sudut, titik untuk mengatur kebulatan
 	Expand	Bentangkan
@@ -1960,7 +1986,13 @@
 	Align with layer	Sejajarkan dengan layer
 	Reset Alignment	Reset Penyelarasan
 	Centre the gradient (offset 0, 0)	Tengahkan gradien (offset 0, 0)
-	The current gradient (pick one in Window › Gradients)	Gradien saat ini (pilih di Jendela › Gradien)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor Gradien
+	Gradient picker	Pemilih gradien
+	Save As Preset	Simpan sebagai Preset
+	The gradient the Gradient tool paints with	Gradien yang digambar oleh alat Gradien
+	Adds the current gradient to the Gradients panel	Menambahkan gradien saat ini ke panel Gradien
+	Gradient stops	Titik gradien
 	Select a type layer to edit its character and paragraph settings.	Pilih layer teks untuk mengedit pengaturan karakter dan paragrafnya.
 	Text color	Warna teks
 	Type Options	Opsi Teks
@@ -2694,6 +2726,9 @@ fontWeight	Italic	Miring
 	Color to Alpha…	Warna ke Alpha…
 	Transparency Threshold	Ambang transparansi
 	Opacity Threshold	Ambang opasitas
+
+	Rasterize svg groups deeper than	Rasterisasi grup SVG yang lebih dalam dari ini
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 menonaktifkan ambang ini; grup SVG yang bersarang lebih dari 100 tingkat selalu dirasterisasi.
 	Rule of Thirds	Aturan Sepertiga
 	Triangle	Segitiga
 	Golden Ratio	Rasio Emas
@@ -2705,6 +2740,20 @@ fontWeight	Italic	Miring
 	Cycle Orientation	Ganti Orientasi
 	Set the overlay options for the Crop tool	Atur opsi overlay untuk alat Crop
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-klik diambil oleh desktop, yang memindahkan jendela dengan Alt-seret. Atur tombol pemindah jendelanya ke Super, atau kunci Alt di Jendela › Tombol Pengubah.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Pemilih Warna (Warna Gaya Lapisan)
+	Auto Hide Notifications	Sembunyikan notifikasi secara otomatis
+	Notification Duration (seconds)	Durasi notifikasi (detik)
+	Appearance Mode	Mode tampilan
+	Dark Theme	Tema gelap
+	Light Theme	Tema terang
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Mode tampilan berikutnya
+	Sync with system	Sinkronkan dengan sistem
+	Active	Aktif
+	Color Picker (Solid Color)	Pemilih Warna (Warna Solid)
 	Straighten the image by drawing a line on it	Luruskan gambar dengan menggambar garis di atasnya
 	Set additional Crop options	Atur opsi Crop tambahan
 	Show Cropped Area	Tampilkan Area yang Di-crop
@@ -2720,3 +2769,21 @@ fontWeight	Italic	Miring
 	Create Ellipse	Buat Elips
 	Create Triangle	Buat Segitiga
 	Create Polygon	Buat Poligon
+	Pressure curve	Kurva tekanan
+	Click to add a point, right-click to remove	Klik untuk menambah titik, klik kanan untuk menghapusnya
+	Some brush presets could not be loaded	Beberapa preset kuas tidak dapat dimuat
+	Retry saving presets	Coba simpan preset lagi
+	Brush preset changes are not saved: {error}	Perubahan preset kuas belum disimpan: {error}
+	Keep this tab open to retain your brushes.	Biarkan tab ini terbuka untuk mempertahankan kuas Anda.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Penyimpanan browser tidak tersedia; kuas hanya berlaku untuk sesi ini. Biarkan tab ini terbuka untuk mempertahankannya.
+	Saving brush presets… Keep this tab open until saving finishes.	Menyimpan preset kuas… Biarkan tab ini terbuka sampai penyimpanan selesai.
+	Reflect	Pantul
+	Glow	Pendar
+	Negation	Negasi
+	XOR	XOR
+	Color Burn (Paint.NET)	Color Burn (Paint.NET)
+	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Subjek tidak ditemukan — coba Seleksi Objek atau Laso
+	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
+	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
+	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek

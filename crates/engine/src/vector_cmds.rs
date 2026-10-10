@@ -1453,7 +1453,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.vectorMask.linked", "Link Vector Mask", [], r##"{"layer":id?,"linked":bool? (default: toggle)}"##, has_layer, |s, p| toggle_vector_mask(
             s, p, "linked"
         )),
-        spec!("layer.rasterize.shape", "Rasterize Shape", [], r##"{"layer":id?}"##, has_layer, shape_rasterize),
+        // Without `layer`, every selected shape layer (the shared Rasterize logic calls back here with one).
+        spec!("layer.rasterize.shape", "Rasterize Shape", [], r##"{"layer":id?}"##, has_layer, |s, p| {
+            if p.get("layer").is_some() { shape_rasterize(s, p) } else { crate::extra_cmds::rasterize(s, p, Some("shape")) }
+        }),
         spec!(
             "layer.combineShapes.unite",
             "Unite Shapes",

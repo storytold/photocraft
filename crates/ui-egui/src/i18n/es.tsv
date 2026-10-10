@@ -670,7 +670,11 @@
 	Pro Medium Gray Theme	Tema Pro (gris medio)
 	Studio Theme	Tema Estudio
 	Studio Light Theme	Tema Estudio (claro)
+	Adwaita Light Theme	Tema Adwaita (claro)
+	Adwaita Dark Theme	Tema Adwaita (oscuro)
 	Classic Theme	Tema Clásico
+	Solarized dark	Solarized oscuro
+	Solarized Dark Theme	Tema Solarized oscuro
 	Next Theme	Tema siguiente
 	Actions	Acciones
 	Brush Settings	Ajustes del pincel
@@ -944,6 +948,17 @@
 	Delete current channel	Eliminar el canal actual
 	Delete current state	Eliminar el estado actual
 	Delete effect layer	Eliminar capa de efecto
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	¿Eliminar la capa «{name}»?
+	Delete {count} layers? {names}	¿Eliminar {count} capas? {names}
+	Delete layer?	¿Eliminar capa?
+	The document is closed	El documento está cerrado
+	The document or selected layers changed. Please request deletion again.	El documento o las capas seleccionadas han cambiado. Solicita la eliminación de nuevo.
+	Missing delete command	Falta el comando de eliminación
+	Invalid delete command	Comando de eliminación no válido
+	Layer deleted, but confirmation preference could not be saved: {error}	La capa se eliminó, pero no se pudo guardar la preferencia de confirmación: {error}
+
 	Delete layer	Eliminar capa
 	Delete layer comp	Eliminar composición de capa
 	Delete note	Eliminar nota
@@ -1303,6 +1318,12 @@
 	Rename…	Cambiar nombre…
 	Resample	Remuestrear
 	Reset All to Defaults	Restablecer todo a los valores predeterminados
+	Import Shortcuts…	Importar atajos…
+	Load a keyboard shortcut set saved as .kys	Cargar un conjunto de atajos de teclado guardado como .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Se importaron {n} atajos de {file}. Haz clic en OK para conservarlos.
+	{n} commands are not in PhotoCraft.	{n} comandos no existen en PhotoCraft.
+	Keyboard shortcuts imported	Atajos de teclado importados
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Tu conjunto de atajos de teclado {set} se usa aquí: {n} atajos difieren de los predeterminados. Edición › Atajos de teclado los muestra; Restablecer todo a valores predeterminados lo deshace.
 	Reset Section	Restablecer sección
 	Reset Transform	Restablecer transformación
 	Reset to defaults	Restablecer a los valores predeterminados
@@ -1600,6 +1621,7 @@
 	Millimeters	Milímetros
 	Mobile	Móvil
 	Move Tool	Herramienta Mover
+	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros
@@ -1644,6 +1666,7 @@
 	Quick Selection Tool	Herramienta Selección rápida
 	Radial	Radial
 	Rasterize Layer	Rasterizar capa
+	Rasterize Layers	Rasterizar capas
 	Ratio	Relación
 	Recent	Reciente
 	Rectangle Tool	Herramienta Rectángulo
@@ -1872,6 +1895,8 @@
 	Standard	Estándar
 	Studio	Estudio
 	Studio light	Estudio (claro)
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita (oscuro)
 	Subdivisions	Subdivisiones
 	System	Sistema
 	Text engine	Motor de texto
@@ -1923,6 +1948,7 @@
 	Collapse group  ({key}-click: all groups)	Contraer grupo  ({key}-clic: todos los grupos)
 	Create new brush from the current settings	Crear un pincel nuevo con los ajustes actuales
 	Create new brush from these settings	Crear un pincel nuevo con estos ajustes
+	Update the current brush with these settings	Actualizar el pincel actual con estos ajustes
 	Delete brush	Eliminar pincel
 	Drag the arrow to set the angle, the dots to set the roundness	Arrastre la flecha para fijar el ángulo y los puntos para fijar la redondez
 	Expand	Expandir
@@ -2000,7 +2026,13 @@
 	Align with layer	Alinear con la capa
 	Reset Alignment	Restablecer la alineación
 	Centre the gradient (offset 0, 0)	Centrar el degradado (desplazamiento 0, 0)
-	The current gradient (pick one in Window › Gradients)	El degradado actual (elija uno en Ventana › Degradados)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor de degradados
+	Gradient picker	Selector de degradados
+	Save As Preset	Guardar como preajuste
+	The gradient the Gradient tool paints with	El degradado con el que pinta la herramienta Degradado
+	Adds the current gradient to the Gradients panel	Añade el degradado actual al panel Degradados
+	Gradient stops	Paradas de degradado
 	Select a type layer to edit its character and paragraph settings.	Seleccione una capa de texto para editar sus ajustes de carácter y párrafo.
 	Text color	Color del texto
 	Type Options	Opciones de texto
@@ -2354,6 +2386,9 @@ fontWeight	Italic	Cursiva
 	Color to Alpha…	Color a alfa…
 	Transparency Threshold	Umbral de transparencia
 	Opacity Threshold	Umbral de opacidad
+
+	Rasterize svg groups deeper than	Rasterizar grupos SVG con mayor profundidad
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desactiva este umbral; los grupos SVG anidados a más de 100 niveles siempre se rasterizan.
 	Rule of Thirds	Regla de los tercios
 	Triangle	Triángulo
 	Golden Ratio	Proporción áurea
@@ -2365,6 +2400,20 @@ fontWeight	Italic	Cursiva
 	Cycle Orientation	Alternar orientación
 	Set the overlay options for the Crop tool	Definir las opciones de superposición de la herramienta Recortar
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	El Alt+clic lo recibió el escritorio, que mueve ventanas con Alt+arrastrar. Cambia su tecla para mover ventanas a Super o bloquea Alt en Ventana › Teclas modificadoras.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Selector de color (color del estilo de capa)
+	Auto Hide Notifications	Ocultar notificaciones automáticamente
+	Notification Duration (seconds)	Duración de la notificación (segundos)
+	Appearance Mode	Modo de apariencia
+	Dark Theme	Tema oscuro
+	Light Theme	Tema claro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Siguiente modo de apariencia
+	Sync with system	Sincronizar con el sistema
+	Active	Activo
+	Color Picker (Solid Color)	Selector de color (color uniforme)
 	Straighten the image by drawing a line on it	Enderezar la imagen dibujando una línea en ella
 	Set additional Crop options	Definir opciones de recorte adicionales
 	Show Cropped Area	Mostrar área recortada
@@ -2380,3 +2429,21 @@ fontWeight	Italic	Cursiva
 	Create Ellipse	Crear elipse
 	Create Triangle	Crear triángulo
 	Create Polygon	Crear polígono
+	Pressure curve	Curva de presión
+	Click to add a point, right-click to remove	Haz clic para añadir un punto; clic derecho para quitarlo
+	Some brush presets could not be loaded	No se pudieron cargar algunos ajustes preestablecidos de pincel
+	Retry saving presets	Reintentar guardar los ajustes preestablecidos
+	Brush preset changes are not saved: {error}	Los cambios en los ajustes preestablecidos de pincel no se han guardado: {error}
+	Keep this tab open to retain your brushes.	Mantén esta pestaña abierta para conservar tus pinceles.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	El almacenamiento del navegador no está disponible; los pinceles solo duran esta sesión. Mantén esta pestaña abierta para conservarlos.
+	Saving brush presets… Keep this tab open until saving finishes.	Guardando ajustes preestablecidos de pincel… Mantén esta pestaña abierta hasta que termine.
+	Reflect	Reflejar
+	Glow	Resplandor
+	Negation	Negación
+	XOR	XOR
+	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
+	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+	No subject found — try Object Selection or the Lasso	No se encontró ningún sujeto — pruebe Selección de objeto o el Lazo
+	Quick Selection found nothing there	Selección rápida no encontró nada ahí
+	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
+	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto

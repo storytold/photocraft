@@ -112,8 +112,12 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let pr = s.tools.presets.get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
     if pr.name != new {
+        let was_current = s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&pr.name));
         pr.name = new.clone();
         pr.builtin = false;
+        if was_current {
+            s.tools.current_preset = Some(new.clone());
+        }
         s.brush_presets_changed();
     }
     Ok(json!({ "name": new }))
@@ -318,6 +322,9 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     let (g, f) = target_folder(s, p, cmd)?;
     let before = s.tools.presets.len();
     s.tools.presets.retain(|x| !in_folder(x, &g, &f));
+    if s.tools.current_preset.as_ref().is_some_and(|c| !s.tools.presets.iter().any(|x| x.name.eq_ignore_ascii_case(c))) {
+        s.tools.current_preset = None;
+    }
     s.brush_presets_changed();
     Ok(json!({ "deleted": before - s.tools.presets.len(), "count": s.tools.presets.len() }))
 }

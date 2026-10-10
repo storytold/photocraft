@@ -637,16 +637,35 @@ fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) ->
     Ok(true)
 }
 
-fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) -> Result<Value> {
-    let id = layer_param(s, p)?;
+/// Layer › Rasterize › Layer / Type / Shape / Fill Content / Smart Object. With a `layer` param,
+/// just that layer. Otherwise, as in Photoshop ("select the layer or layers you'd like to
+/// rasterize"), every selected layer the command applies to, in one history step.
+pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) -> Result<Value> {
+    let ids = match p.get("layer") {
+        Some(_) => vec![layer_param(s, p)?],
+        None => match crate::layer_multi_cmds::selected(s) {
+            sel if sel.is_empty() => vec![layer_param(s, p)?],
+            sel => sel,
+        },
+    };
+    let many = ids.len() > 1;
     let key = step_key(s, "rasterize");
-    if !rasterize_one(s, id, only, &key)? {
-        return Err(EngineError::Other(match only {
-            Some(k) => format!("the layer is not a {k} layer"),
-            None => "the layer has nothing to rasterize".into(),
-        }));
+    let mut done = Vec::new();
+    for id in ids {
+        if rasterize_one(s, id, only, &key)? {
+            done.push(id.0);
+        }
     }
-    Ok(json!({"layer": id.0}))
+    let Some(&first) = done.first() else {
+        return Err(EngineError::Other(match (only, many) {
+            (Some(k), false) => format!("the layer is not a {k} layer"),
+            (Some(k), true) => format!("none of the selected layers is a {k} layer"),
+            (None, false) => "the layer has nothing to rasterize".into(),
+            (None, true) => "none of the selected layers has anything to rasterize".into(),
+        }));
+    };
+    let active = s.active().and_then(|d| d.active_layer).map(|id| id.0).filter(|id| done.contains(id));
+    Ok(json!({"layer": active.unwrap_or(first), "layers": done}))
 }
 
 fn rasterize_all(s: &mut Session) -> Result<Value> {

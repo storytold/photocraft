@@ -311,7 +311,8 @@ fn blur_reduces_local_variance_and_sharpen_increases_it() {
         let v0 = var(&s, 10);
         s.execute("paint.sharpen", json!({"points": [[5, 15], [25, 15]], "size": 20, "hardness": 100, "strength": 100, "protectDetail": false})).unwrap();
         assert!(var(&s, 10) > v0 * 1.5, "depth {depth}: {v0} → {}", var(&s, 10));
-        s.execute("paint.sharpen", json!({"points": [[35, 15], [55, 15]], "size": 20, "hardness": 100, "strength": 100})).unwrap();
+        // Pinned at 25%: Protect Detail clamps per dab, so denser dabs creep past the range.
+        s.execute("paint.sharpen", json!({"points": [[35, 15], [55, 15]], "size": 20, "hardness": 100, "strength": 100, "spacing": 25})).unwrap();
         let hi = (10..20).flat_map(|y| (40..50).map(move |x| (x, y))).map(|(x, y)| rgba(&s, x, y)[0]).fold(0.0, f32::max);
         assert!(hi <= 0.55 + tol(depth), "protect detail: {hi}");
     }
@@ -331,6 +332,32 @@ fn smudge_moves_colour_along_the_stroke() {
         s.execute("paint.smudge", json!({"points": [[80, 25], [95, 25]], "size": 6, "hardness": 100, "fingerPainting": true})).unwrap();
         assert!(rgba(&s, 81, 25)[0] < 0.7, "finger painting lays down the foreground colour");
     }
+}
+
+#[test]
+fn smudge_uses_the_brush_settings_spacing() {
+    // #2140: the Brush Settings spacing (the session brush) drives Smudge dabs when the stroke
+    // has no `spacing` param, as it drives the Brush.
+    let run = |spacing: f32, p: Value| {
+        let mut s = session(100, 30, 8, "rgb");
+        paint_layer(&mut s, |x, _| if x < 30 { [1.0, 0.0, 0.0, 1.0] } else { [1.0, 1.0, 1.0, 1.0] });
+        s.tools.brush.spacing = spacing;
+        let mut p = p;
+        p["points"] = json!([[20, 15], [90, 15]]);
+        s.execute("paint.smudge", p).unwrap();
+        (30..95).map(|x| rgba(&s, x, 15)[1]).collect::<Vec<_>>()
+    };
+    let base = json!({"size": 12, "hardness": 100, "strength": 80});
+    let dense = run(0.01, base.clone());
+    let sparse = run(10.0, base.clone());
+    // 1000% of 12 px puts the next dab 120 px away: only the first dab, behind the edge, lands.
+    assert!(sparse.iter().all(|g| *g > 0.99), "1000% spacing: nothing dragged past the edge");
+    assert!(dense.first().is_some_and(|g| *g < 0.6), "1% spacing: red dragged right ({:?})", dense.first());
+    assert_ne!(dense, run(0.25, base.clone()), "1% and 25% differ");
+    // An explicit `spacing` param still wins over the Brush Settings value.
+    let mut explicit = base;
+    explicit["spacing"] = json!(1000);
+    assert_eq!(run(0.01, explicit), sparse);
 }
 
 #[test]

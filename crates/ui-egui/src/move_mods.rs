@@ -113,7 +113,7 @@ fn fold_history(app: &mut PhotocraftApp, from: usize) {
 /// Rewrites a Move-tool pointer event for the held modifiers: ⇧ locks it to an axis, and the
 /// first real movement of an ⌥-drag duplicates the layers being moved. Other tools pass through.
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
-    if app.ui.tool != Tool::Move || app.ui.transform.is_some() {
+    if app.active_tool() != Tool::Move || app.ui.transform.is_some() {
         app.move_mods = MoveDrag::default();
         return ev;
     }

@@ -93,6 +93,118 @@ fn foreground_to_transparent_paints_alpha() {
     assert!((mid - 0.5).abs() < 0.05, "{mid}");
 }
 
+/// `gradient.presets.stop` edits the Gradient tool's current gradient in place (the stops the
+/// Gradient Editor window shows): a new stop takes the colour under it, a "foreground" stop stays
+/// live, opacity stops materialize on first edit, and the tool paints with the edited gradient.
+#[test]
+fn preset_stop_edits_the_current_gradient() {
+    let mut s = session(8);
+    // A new stop mid-way samples the ramp there (black → white: mid gray).
+    let v = s.execute("gradient.presets.stop", json!({"action": "add", "location": 0.5})).unwrap();
+    let stops = v["current"]["stops"].as_array().unwrap();
+    assert_eq!(stops.len(), 3, "{v}");
+    assert_eq!(stops[1], json!([0.5, "#808080"]), "sorted by location, the ramp colour at 0.5");
+    // Recolour it and repaint: the tool gradient changed (mid of the stroke is the new colour).
+    s.execute("gradient.presets.stop", json!({"action": "color", "index": 1, "color": "#ff0000"})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    let px = layer_px(&s, 32, 10);
+    assert!(px[0] > 0.9 && px[1] < 0.1, "{px:?}");
+    // A "foreground" stop stays live: repaint after changing the foreground picks it up.
+    s.execute("gradient.presets.stop", json!({"action": "color", "index": 0, "color": "foreground"})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": "#0000ff"})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    let px = layer_px(&s, 0, 10);
+    assert!(px[2] > 0.9 && px[0] < 0.1, "{px:?}");
+    // Opacity stops materialize the two opaque ends on first edit.
+    let v = s.execute("gradient.presets.stop", json!({"action": "add", "kind": "opacity", "location": 0.5, "opacity": 40})).unwrap();
+    assert_eq!(v["current"]["transparency"], json!([[0.0, 100.0], [0.5, 40.0], [1.0, 100.0]]), "{v}");
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    // Paint on a fresh layer: the background already holds opaque paint to composite onto.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    let mid = layer_px(&s, 32, 10)[3];
+    assert!((mid - 0.4).abs() < 0.05, "{mid}");
+    // Guard rails: in-range indexes, known actions, two stops minimum, no midpoints.
+    assert!(s.execute("gradient.presets.stop", json!({"action": "move", "index": 99, "location": 0.5})).is_err());
+    assert!(s.execute("gradient.presets.stop", json!({"action": "explode"})).is_err());
+    assert!(s.execute("gradient.presets.stop", json!({"action": "delete", "index": 0})).is_ok());
+    assert!(s.execute("gradient.presets.stop", json!({"action": "delete", "index": 0})).is_err(), "a gradient keeps at least 2 colour stops");
+    assert!(s.execute("gradient.presets.stop", json!({"action": "midpoint", "index": 0, "location": 0.4})).is_err());
+}
+
+/// A many-stop gradient survives editor gymnastics: five adds build a seven-stop ramp, a stop
+/// dragged past its neighbour keeps the list sorted, the paint follows the edited stops, and
+/// trimming back down ends at a plain two-stop gradient.
+#[test]
+fn preset_stop_survives_a_complex_many_stop_ramp() {
+    let mut s = session(8);
+    s.execute("gradient.presets.select", json!({"stops": [[0.0, "#000000"], [1.0, "#ffffff"]]})).unwrap();
+    for (i, c) in ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff"].iter().enumerate() {
+        let t = (i + 1) as f64 / 6.0;
+        s.execute("gradient.presets.stop", json!({"action": "add", "location": t, "color": c})).unwrap();
+    }
+    let v = s.execute("gradient.presets.list", json!({})).unwrap();
+    assert_eq!(v["current"]["stops"].as_array().unwrap().len(), 7, "{v}");
+    // Drag the yellow stop (index 4, at 4/6) past the magenta one (at 5/6).
+    s.execute("gradient.presets.stop", json!({"action": "move", "index": 4, "location": 0.95})).unwrap();
+    let stops = s.execute("gradient.presets.list", json!({})).unwrap()["current"]["stops"].as_array().unwrap().clone();
+    let locs: Vec<f64> = stops.iter().map(|s| s[0].as_f64().unwrap()).collect();
+    let mut in_order = locs.clone();
+    in_order.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(locs, in_order, "stops stay sorted after a crossing move: {stops:?}");
+    assert_eq!(stops[6], json!([1.0, "#ffffff"]));
+    // The paint follows: near the moved stop the stroke is the stop's yellow.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    let px = layer_px(&s, 60, 10);
+    assert!(px[0] > 0.95 && px[1] > 0.95 && px[2] < 0.3, "{px:?}");
+    // Trim everything back down to the two end stops.
+    for _ in 0..5 {
+        s.execute("gradient.presets.stop", json!({"action": "delete", "index": 1})).unwrap();
+    }
+    let stops = s.execute("gradient.presets.list", json!({})).unwrap()["current"]["stops"].as_array().unwrap().clone();
+    assert_eq!(stops, json!([[0.0, "#000000"], [1.0, "#ffffff"]]).as_array().unwrap().clone(), "{stops:?}");
+}
+
+/// An opacity hole paints where it is put, follows a move, and once the gradient is fully
+/// opaque again the stored opacity stops normalize away (no pinned 100 % ends).
+#[test]
+fn preset_stop_opacity_hole_moves_and_normalizes() {
+    let mut s = session(8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("gradient.presets.stop", json!({"action": "add", "kind": "opacity", "location": 0.5, "opacity": 0})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    assert!(layer_px(&s, 0, 5)[3] > 0.95);
+    assert!(layer_px(&s, 32, 5)[3] < 0.05);
+    assert!(layer_px(&s, 63, 5)[3] > 0.95);
+    // The hole follows the moved stop (index 1 is the 0 % stop between the opaque ends).
+    s.execute("gradient.presets.stop", json!({"action": "move", "kind": "opacity", "index": 1, "location": 0.25})).unwrap();
+    // Paint on fresh layers: painting over earlier strokes would composite their alpha.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    assert!(layer_px(&s, 20, 5)[3] < 0.15, "{:?}", layer_px(&s, 20, 5));
+    let far = layer_px(&s, 48, 5)[3];
+    assert!(far > 0.55 && far < 0.85, "{far}");
+    // Deleting it returns the gradient to fully opaque, stored as no opacity stops at all.
+    s.execute("gradient.presets.stop", json!({"action": "delete", "kind": "opacity", "index": 1})).unwrap();
+    let v = s.execute("gradient.presets.list", json!({})).unwrap();
+    assert_eq!(v["current"]["transparency"], json!([]), "{v}");
+}
+
+/// The edited current gradient saves as a preset, and re-selecting it paints the same pixels.
+#[test]
+fn edited_preset_saves_and_roundtrips() {
+    let mut s = session(8);
+    s.execute("gradient.presets.stop", json!({"action": "add", "location": 0.5, "color": "#ff0000"})).unwrap();
+    s.execute("gradient.presets.new", json!({"name": "My Gradient"})).unwrap();
+    s.execute("gradient.presets.select", json!({"preset": "Red 01"})).unwrap();
+    s.execute("gradient.presets.select", json!({"preset": "My Gradient"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [63, 0]})).unwrap();
+    let px = layer_px(&s, 32, 10);
+    assert!(px[0] > 0.9 && px[1] < 0.1, "{px:?}");
+}
+
 /// Issue #465: explicit `transparency` stops apply with `colors`, a `gradient` preset, explicit
 /// `stops` and the current gradient alike.
 #[test]
