@@ -732,7 +732,10 @@ impl PhotocraftApp {
         }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
-        if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
+        if matches!(
+            id,
+            "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside" | "file.newFromClipboard"
+        ) {
             if !clip_read {
                 self.import_os_clipboard();
             }
@@ -1694,15 +1697,18 @@ impl PhotocraftApp {
             return;
         }
         let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else { return };
-        let b = clip.bounds;
-        if b.is_empty() {
-            return;
-        }
-        let mut px = vec![[0u8; 4]; b.width() as usize * b.height() as usize];
-        clip.surface.read_rgba8_into(b, &mut px);
-        let bytes: Vec<u8> = px.into_iter().flatten().collect();
-        if set(b.width(), b.height(), &bytes).is_ok() {
-            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+        // A failed mirror must not leave the signature of an older copy attached to this one.
+        self.os_clip_sig = None;
+        let bitmap = clip.bitmap().map_err(|e| e.to_string());
+        match bitmap.and_then(|(w, h, bytes)| {
+            set(w, h, &bytes)?;
+            Ok(clip_signature(w, h, &bytes))
+        }) {
+            Ok(sig) => self.os_clip_sig = Some(sig),
+            Err(error) => {
+                log::warn!("Copied internally, but could not export the OS clipboard: {error}");
+                crate::notices::post(self, "Clipboard", vec![format!("Copied internally, but could not export the system clipboard: {error}")], true, None);
+            }
         }
     }
 
@@ -1733,7 +1739,7 @@ impl PhotocraftApp {
     /// it is dropped rather than pasted.
     pub(crate) fn import_os_clipboard(&mut self) -> bool {
         let Some(get) = self.services.clipboard_get_image.as_mut() else { return false };
-        let image = get().filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+        let image = get().filter(|(w, h, bytes)| photocraft_engine::edit_cmds::Clip::bitmap_len(*w, *h) == Some(bytes.len()));
         let Some((w, h, bytes)) = image else {
             if self.os_clip_sig.take().is_some() {
                 self.session.clipboard = None;
@@ -1748,7 +1754,7 @@ impl PhotocraftApp {
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
-        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r });
+        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip::pixels(surface, r));
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         true
@@ -1757,6 +1763,9 @@ impl PhotocraftApp {
 
 #[cfg(test)]
 mod input_tests;
+
+#[cfg(test)]
+mod mask_clipboard_tests;
 
 #[cfg(test)]
 mod pencil_tests;

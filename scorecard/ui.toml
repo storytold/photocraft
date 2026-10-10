@@ -162,6 +162,6 @@ note = "Only layer.mergeVisible (edit_cmds.rs:416)"
 [[item]]
 id = "UI-217-23"
 target = "Layer clipboard: copy/paste whole layers (masks, styles, type) between documents"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only copy/paste layer style (extra_cmds.rs:592)"
+note = "edit.copy without a pixel selection snapshots selected layers; paste keeps masks, styles and content with fresh IDs, CMS/depth conversion and one undo step. Engine clipboard_tests and ui-egui mask_clipboard_tests cover masked Copy/Paste, geometry, COW, channels and native bitmap replacement. Rich data is local to one app session."

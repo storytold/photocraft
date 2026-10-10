@@ -150,6 +150,17 @@ undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
 acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
 unchanged.
 
+2026-10-10: whole-layer clipboard Copy/Paste preserves editable raster and vector masks,
+styles, groups, smart objects and type without a pixel selection. Mask/channel and selected-pixel
+copies stay separate from layer copies; Copy Merged remains flattened. Synthetic engine tests
+cover 8/16/32-bit mask data and metadata, COW independence, undo/redo and transfers into
+RGB/Gray/CMYK/Lab documents. The native bridge exports an sRGB bitmap and retains rich data
+only within the same session; cross-process layered clipboard interchange and vector-path
+clipboard editing remain unsupported. This does not change PSD corpus floors or establish a
+Photoshop pixel oracle for clipboard workflows. Thirteen engine regressions and five UI/native
+bridge tests pass; Windows Ctrl+C/Ctrl+V also retains a fully hidden mask. See
+[clipboard evidence and limits](clipboard.md).
+
 ### Where we're going (priority order)
 
 1. **Ship the fixes:** cut 0.2.1 once the current batch lands, so users validate them.
