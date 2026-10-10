@@ -95,6 +95,7 @@ fn text_name_still_renames_and_mask_double_click_does_not_edit_text() {
     let mut s = session();
     let id = s.execute("type.create", json!({"text": "Hello", "name": "Title"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("prefs.set", json!({"values": {"tools.doubleClickLayerMaskLaunchesSelectAndMask": false}})).unwrap();
     let mut h = harness(s, 1.0);
     let at = row(&h, id).name.unwrap().center();
     double_click(&mut h, at);
@@ -107,6 +108,21 @@ fn text_name_still_renames_and_mask_double_click_does_not_edit_text() {
     double_click(&mut h, at);
     assert!(h.state().ui.text_edit.is_none());
     assert!(h.state().ui.dialogs.is_empty());
+}
+
+#[test]
+fn mask_double_click_launches_select_and_mask_with_preference() {
+    let mut s = session();
+    let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("prefs.set", json!({"values": {"tools.doubleClickLayerMaskLaunchesSelectAndMask": true}})).unwrap();
+    let mut h = harness(s, 1.0);
+    let masks = crate::mask_thumbs_ui::recorded(&h.ctx, id).unwrap().0;
+    let at = masks.iter().find(|(kind, _)| *kind == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
+    double_click(&mut h, at);
+    assert!(h.state().ui.mask_target);
+    let dialog = h.state().ui.dialogs.last().expect("select and mask dialog should be opened");
+    assert_eq!(dialog.fields.get("__command").and_then(|v| v.as_str()), Some("select.refineEdge"));
 }
 
 #[test]

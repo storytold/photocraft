@@ -37,6 +37,8 @@ base64 = "0.22"
 # Edit › Keyboard Shortcuts › Import Photoshop Shortcuts… reads Photoshop's `.kys` XML
 # (already in the tree through egui_extras → resvg → usvg).
 roxmltree = "0.20"
+# Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
+flate2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
@@ -53,5 +55,7 @@ photocraft-testkit = { workspace = true }
 photocraft-psd = { workspace = true }
 
 [build-dependencies]
+# Deflates the translation catalogs (build.rs); already linked at run time to inflate them.
+flate2 = { workspace = true }
 serde_json = { workspace = true }
 toml = "1"

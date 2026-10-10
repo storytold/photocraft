@@ -948,6 +948,17 @@
 	Delete current channel	Eliminar el canal actual
 	Delete current state	Eliminar el estado actual
 	Delete effect layer	Eliminar capa de efecto
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	¿Eliminar la capa «{name}»?
+	Delete {count} layers? {names}	¿Eliminar {count} capas? {names}
+	Delete layer?	¿Eliminar capa?
+	The document is closed	El documento está cerrado
+	The document or selected layers changed. Please request deletion again.	El documento o las capas seleccionadas han cambiado. Solicita la eliminación de nuevo.
+	Missing delete command	Falta el comando de eliminación
+	Invalid delete command	Comando de eliminación no válido
+	Layer deleted, but confirmation preference could not be saved: {error}	La capa se eliminó, pero no se pudo guardar la preferencia de confirmación: {error}
+
 	Delete layer	Eliminar capa
 	Delete layer comp	Eliminar composición de capa
 	Delete note	Eliminar nota
@@ -1609,6 +1620,7 @@
 	Millimeters	Milímetros
 	Mobile	Móvil
 	Move Tool	Herramienta Mover
+	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros
@@ -2424,3 +2436,7 @@ fontWeight	Italic	Cursiva
 	XOR	XOR
 	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
 	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+	No subject found — try Object Selection or the Lasso	No se encontró ningún sujeto — pruebe Selección de objeto o el Lazo
+	Quick Selection found nothing there	Selección rápida no encontró nada ahí
+	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
+	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto

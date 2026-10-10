@@ -57,6 +57,39 @@ pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f
     });
 }
 
+/// A small icon beside the OS arrow pointer at `p` (Photoshop's cursor badges: scissors for
+/// cutting the selected pixels). Below-right of the arrow, white with a dark outline. The caller
+/// keeps the arrow (`CursorIcon::Default`).
+pub fn cursor_badge(ctx: &egui::Context, name: &str, p: egui::Pos2) {
+    badge(ctx, name, p, false);
+}
+
+/// Photoshop's duplicate badge: a second, dark arrowhead behind a white one.
+pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
+    badge(ctx, "mouse-pointer-2", p, true);
+}
+
+fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
+    const SIZE: f32 = 12.0;
+    let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
+    let area = egui::Area::new(egui::Id::new("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    area.show(ctx, |ui| {
+        let outline = image(name, SIZE, Color32::from_black_alpha(220));
+        let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
+        if doubled {
+            let behind = rect.translate(egui::vec2(4.0, 4.0));
+            for (dx, dy) in halo {
+                image(name, SIZE, Color32::WHITE).paint_at(ui, behind.translate(egui::vec2(dx, dy)));
+            }
+            image(name, SIZE, Color32::BLACK).paint_at(ui, behind);
+        }
+        for (dx, dy) in halo {
+            outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
+        }
+        image(name, SIZE, Color32::WHITE).paint_at(ui, rect);
+    });
+}
+
 pub fn tool_icon(t: Tool) -> &'static str {
     match t {
         Tool::Move => "move",
