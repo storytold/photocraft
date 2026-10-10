@@ -15,6 +15,7 @@
 //!   layer; unsupported raw variants fall back to the embedded JPEG preview.
 //! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
 //!   layers through the PSD path and are written back the same way; see `tiff_layers`.
+//! * Paint.NET PDN3 documents open as editable bitmap layers (import only).
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
@@ -40,6 +41,7 @@ mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
 pub mod pattern_map;
+mod pdn;
 pub mod pixels;
 mod psd_export;
 mod psd_import;
@@ -64,6 +66,9 @@ pub use psd_import::{psd_to_document, psd_to_document_with};
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// Paint.NET document decode failure.
+    #[error("PDN: {0}")]
+    Pdn(String),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -97,7 +102,7 @@ pub struct ImportResult {
     pub document: Document,
     /// Human-readable notes about anything approximated or dropped.
     pub warnings: Vec<String>,
-    /// Save must not write back to the source (an Affinity document: PhotoCraft can't write it).
+    /// Save must not write back to an import-only source, such as Affinity or Paint.NET.
     pub source_read_only: bool,
     /// Only a stand-in picture of the file (an Affinity document whose native data couldn't be
     /// read): Open shows it with its warning; Place and other auxiliary imports refuse it.
@@ -166,20 +171,36 @@ pub fn is_psd(bytes: &[u8]) -> bool {
 /// Imports a file. PSD/PSB, Affinity containers and camera raws are detected by magic; everything
 /// else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_with(name, bytes, &photocraft_raster::Interrupt::NONE)
+    import_with_svg_group_depth(name, bytes, photocraft_doc::MAX_GROUP_DEPTH)
 }
 
 /// [`import`] for a background open: checks `ctl` between stages (and per layer for PSD/PSB) and
 /// reports progress. A cancelled import fails with [`IoError::Cancelled`].
 pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    import_with_svg_group_depth_and_interrupt(name, bytes, photocraft_doc::MAX_GROUP_DEPTH, ctl)
+}
+
+/// Imports a file with a configurable SVG editability threshold. SVG groups deeper than this are
+/// rasterised during conversion; the XML parser safety cap and document nesting limit stay fixed.
+pub fn import_with_svg_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
+    import_with_svg_group_depth_and_interrupt(name, bytes, max_group_depth, &photocraft_raster::Interrupt::NONE)
+}
+
+/// [`import_with`] with the SVG editable-group threshold selected by the user.
+pub fn import_with_svg_group_depth_and_interrupt(
+    name: &str,
+    bytes: &[u8],
+    max_group_depth: usize,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let r = import_stages(name, bytes, ctl)?;
+    let r = import_stages(name, bytes, ctl, max_group_depth)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
 }
 
-fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, max_group_depth: usize) -> Result<ImportResult, IoError> {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
@@ -201,13 +222,28 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
     }
+    if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
+        return pdn::import(name, bytes, ctl);
+    }
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
     }
-    if has_extension(name, "svg") || has_extension(name, "svgz") || svg::is_svg(bytes) {
-        return svg::import_svg(name, bytes);
+    if is_svg_input(name, bytes) {
+        return svg::import_svg_with_group_depth(name, bytes, max_group_depth);
     }
     flat::import_flat(name, bytes)
+}
+
+/// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
+/// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
+/// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
+fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
+    // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
+    // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
+    // suffix (for example, a WebP downloaded as Firefox_logo.svg).
+    svg::is_svg(bytes)
+        || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none())
+        || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
 }
 
 fn extension(name_or_ext: &str) -> String {
@@ -222,6 +258,9 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
+    if ext == "pdn" {
+        return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
+    }
     if affinity::EXTENSIONS.contains(&ext.as_str()) {
         return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
     }
@@ -286,4 +325,18 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
     let l = doc.layers.first().ok_or_else(|| IoError::Unsupported("no merged image".into()))?;
     let s = l.surface().ok_or_else(|| IoError::Unsupported("no merged image".into()))?;
     Ok(photocraft_compose::surface_to_buffer(s, doc.bounds()).px)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_svg_input;
+
+    #[test]
+    fn svg_extension_does_not_override_another_format_signature() {
+        let webp_header = b"RIFF\x04\0\0\0WEBP";
+        assert!(!is_svg_input("Firefox_logo,_2019.svg", webp_header));
+        assert!(is_svg_input("drawing.svg", b"<?xml version=\"1.0\"?><svg/>"));
+        assert!(is_svg_input("drawing.svgz", &[0x1f, 0x8b, 0, 0]));
+        assert!(!is_svg_input("drawing.svgz", webp_header));
+    }
 }
