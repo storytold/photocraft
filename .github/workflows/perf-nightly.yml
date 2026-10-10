@@ -1,26 +1,29 @@
 name: Perf (nightly)
 
 # The performance scorecard (#221): `cargo xtask perf` every night and on demand, on three
-# GitHub-hosted runners (macOS Apple silicon/Metal, Linux x86-64, Windows x86-64), each a
-# separate matrix entry. Baselines are per machine class (OS, CPU model, GPU), one file each in
-# perf/baselines/: hosted runners rotate CPU models, so each CPU gets its own baseline.
-# On pull requests it runs only when the perf setup itself changes (the paths below). An entry fails when a bench fails or a
-# scenario's p50 regresses more than 15 % against its baseline from the same machine class (other
-# classes are never compared). Budgets in perf/budgets.toml were set on a faster developer machine,
-# so here they are reported, not enforced (--advisory-budgets). Hosted Linux/Windows runners
-# have no hardware GPU (only software ones, llvmpipe/WARP, which take seconds per refresh and
-# would measure themselves), so they run the CPU canvas (--cpu; GPU-only benches read "not run"
-# there). macOS measures the GPU canvas.
+# GitHub-hosted runners (macOS Apple silicon/Metal, Linux x86-64, Windows x86-64), each a separate
+# matrix entry. Baselines are per machine class (OS, CPU model, GPU), one file each in
+# perf/baselines/: hosted runners rotate CPU models, so each CPU gets its own baseline. On pull
+# requests it runs only when the perf setup itself changes (the paths below). An entry fails when a
+# bench fails or a scenario's p50 regresses more than 25 % against its baseline from the same
+# machine class (other classes are never compared), in the run and in one retry; regressions on a
+# slowed-down machine (its CPU canary over 20 % slower than the baseline's) are reported, not
+# failed. Shared VMs catch notable regressions only: accurate numbers need a local run or a
+# dedicated runner. Budgets in perf/budgets.toml were set on a faster developer machine, so here
+# they are reported, not enforced (--advisory-budgets). Hosted Linux/Windows runners have no
+# hardware GPU (only software ones, llvmpipe/WARP, which take seconds per refresh and would measure
+# themselves), so they run the CPU canvas (--cpu; GPU-only benches read "not run" there). macOS
+# measures the GPU canvas.
 #
-# A run on a CPU without a baseline yet records one if every bench ran (regression check
-# skipped that run) and uploads it as the `perf-baseline-<os>` artifact: commit it to
-# perf/baselines/ in a PR. To re-record an existing one, run this workflow by hand with
-# "update_baseline".
+# A run on a CPU without a baseline for its mode yet records one, if every bench ran and the CPU
+# canary held steady (regression check skipped that run), and uploads it as the `perf-baseline-<os>`
+# artifact: commit it to perf/baselines/ in a PR. To re-record an existing one, run this workflow by
+# hand with "update_baseline".
 
 on:
   schedule:
     - cron: "23 3 * * *"
-  # Only PRs that change the perf setup: a full run takes 30-60 min per OS.
+  # Only PRs that change the perf setup: a full run takes ~18-24 min per OS.
   pull_request:
     paths:
       - "perf/**"
@@ -87,12 +90,19 @@ jobs:
           UPDATE: ${{ inputs.update_baseline }}
           EXTRA: ${{ matrix.extra }}
         run: |
-          args=(--baseline "perf/baselines/{class}.json" --advisory-budgets)
+          # Shared VMs are noisy: CI flags regressions over 25 % (15 % is the local default).
+          args=(--baseline "perf/baselines/{class}.json" --advisory-budgets --threshold 25)
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline); fi
           # shellcheck disable=SC2206 # EXTRA is a list of flags
           args+=($EXTRA)
-          cargo xtask perf "${args[@]}"
+          # One retry (same binaries) before a failure counts: a noisy neighbour rarely hits twice.
+          cargo xtask perf "${args[@]}" || {
+            echo "::warning::perf failed; retrying once to rule out a noisy runner"
+            # Drop any baseline the failed run wrote, so the retry isn't compared against it.
+            git checkout -q -- perf/baselines && git clean -qf -- perf/baselines
+            cargo xtask perf --skip-build "${args[@]}"
+          }
 
       - name: Job summary
         if: always()
