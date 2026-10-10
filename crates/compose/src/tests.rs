@@ -1532,12 +1532,21 @@ fn float_tone_adjustments_preserve_negative_and_untouched_channels() {
 
 #[test]
 fn float_exposure_stops_round_trip_without_losing_highlights() {
-    let input = [4.0, 2.0, 0.5, 0.75];
+    let input = [4.0, -2.0, 0.5, 0.75];
     let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), input);
     for exposure in [1.0, -1.0] {
         adjust::apply_depth(&Adjustment::Exposure { exposure, offset: 0.0, gamma: 1.0 }, &mut b, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
     }
     assert_eq!(b.px[0], input);
+}
+
+#[test]
+fn float_exposure_preserves_signed_gamma_and_offset() {
+    let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), [-0.5, 0.0, 4.0, 0.75]);
+    adjust::apply_depth(&Adjustment::Exposure { exposure: 1.0, offset: -0.25, gamma: 2.0 }, &mut b, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+    for (got, want) in b.px[0].iter().zip([-1.25_f32.sqrt(), -0.5, 7.75_f32.sqrt(), 0.75]) {
+        assert!((got - want).abs() < 1e-6, "{:?}", b.px[0]);
+    }
 }
 
 #[test]

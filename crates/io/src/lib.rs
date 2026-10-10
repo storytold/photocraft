@@ -306,8 +306,10 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// with the document pixel model and un-matted from white (Photoshop mattes
 /// the merged image of transparent documents). Used as the compositing oracle.
 pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
-    let img = file.composite_rgba8().ok();
     let h = &file.header;
+    // The RGBA8 preview clips signed/HDR values. Decode float merged images at their
+    // original depth through the model path below; they are the rendering oracle.
+    let img = if h.depth == 32 { None } else { file.composite_rgba8().ok() };
     // CMYK goes through the colour-managed model conversion (the PSD crate's RGBA preview is a
     // naive, profile-free conversion).
     if let (Some(img), false) = (img, matches!(h.color_mode, photocraft_psd::ColorMode::Lab | photocraft_psd::ColorMode::Cmyk)) {

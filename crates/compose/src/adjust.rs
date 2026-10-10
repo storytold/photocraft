@@ -117,10 +117,15 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
             let hdr = depth == Some(SampleType::F32);
             map_rgb(buf, |c| {
                 c.map(|v| {
+                    if hdr {
+                        // Float documents store linear samples. Photoshop's 32-bit merged
+                        // Exposure oracle also retains negative results with signed gamma.
+                        let lin = v * m + offset;
+                        return if g == 1.0 { lin } else { lin.signum() * lin.abs().powf(1.0 / g) };
+                    }
                     let lin = (transfer.decode(v) * m + offset).max(0.0);
                     let lin = if g == 1.0 { lin } else { lin.powf(1.0 / g) };
-                    let encoded = transfer.encode(lin);
-                    if hdr { encoded } else { encoded.clamp(0.0, 1.0) }
+                    transfer.encode(lin).clamp(0.0, 1.0)
                 })
             })
         }

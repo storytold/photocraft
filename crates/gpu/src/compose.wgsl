@@ -508,10 +508,13 @@ fn selective_color(c: vec3<f32>, relative: bool) -> vec3<f32> {
 // Exposure on one channel (p = exposure scale, offset, gamma, transfer gamma). Per channel, not a
 // loop over `c[i]`: FXC aborts on that inside `adjust`'s switch.
 fn exposure(v: f32, p: vec4<f32>) -> f32 {
+    if ((op.flags & F_HDR) != 0u) {
+        let lin = v * p.x + p.y;
+        if (p.z == 1.0) { return lin; }
+        return sign(lin) * pow(abs(lin), 1.0 / p.z);
+    }
     let lin = pow(max(t_decode(v, p.w) * p.x + p.y, 0.0), 1.0 / p.z);
-    let encoded = t_encode(lin, p.w);
-    if ((op.flags & F_HDR) != 0u) { return encoded; }
-    return clamp(encoded, 0.0, 1.0);
+    return clamp(t_encode(lin, p.w), 0.0, 1.0);
 }
 
 // Mirrors compose::adjust::levels_float; coefficients are master, R, G, B in LUT row 0.

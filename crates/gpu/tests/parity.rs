@@ -37,6 +37,7 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
     for adj in [
         Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: 1.0 },
         Adjustment::Exposure { exposure: 1.0, offset: 0.1, gamma: 1.3 },
+        Adjustment::Exposure { exposure: 0.8, offset: -0.02, gamma: 1.2 },
         Adjustment::Levels { master: Default::default(), per_channel: Default::default(), space: Default::default(), black: Default::default() },
         Adjustment::Levels {
             master: channel.clone(),
