@@ -195,6 +195,26 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
         });
     }
     if typing {
+        // When the type tool (a custom text editor) is active but no egui::TextEdit has focus,
+        // egui-winit and the macOS native menu send ⌘C/⌘X/⌘V as key presses, not as clipboard
+        // events. Convert them so the type tool's Event::Copy/Cut/Paste handler sees them.
+        // ⌘V becomes a RequestPaste (the text arrives next frame as Event::Paste).
+        if !ctx.text_edit_focused() {
+            let mut out = Vec::with_capacity(raw.events.len());
+            for e in raw.events.drain(..) {
+                let e = match e {
+                    egui::Event::Key { key: Key::C, pressed: true, modifiers: m, .. } if m.command => egui::Event::Copy,
+                    egui::Event::Key { key: Key::X, pressed: true, modifiers: m, .. } if m.command => egui::Event::Cut,
+                    egui::Event::Key { key: Key::V, pressed: true, modifiers: m, .. } if m.command => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                        continue;
+                    }
+                    e => e,
+                };
+                out.push(e);
+            }
+            raw.events = out;
+        }
         return;
     }
     let seen = egui::Id::new("pc-paste-key-seen");
