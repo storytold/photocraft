@@ -26,7 +26,13 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample});
+    let mut p = json!({
+        "aligned": o.clone_aligned,
+        "sampleLayer": o.clone_sample,
+        // The options bar's Opacity and Flow, as the Brush's (#2237).
+        "opacity": o.clone_opacity,
+        "flow": o.clone_flow,
+    });
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
     // the aligned pairing and applies the slot's scale/rotation/flip.
     let slot = app.session.presets.clone.active().source.is_some();
@@ -313,6 +319,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             pattern_stamp_options(app, ui);
         }
         Tool::Healing | Tool::CloneStamp => {
+            pct(ui, tl!("Opacity:"), &mut o.clone_opacity);
+            pct(ui, tl!("Flow:"), &mut o.clone_flow);
+            crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
             opt(ui, tl!("Sample:"));
             let opts = [
@@ -472,6 +481,33 @@ mod tests {
             assert!(app.ui.status_error, "{tool:?}");
             let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
             assert!(app.ui.status.starts_with(want), "{tool:?}: {}", app.ui.status);
+        }
+    }
+
+    #[test]
+    fn clone_stamp_and_healing_pass_the_options_bar_opacity_and_flow() {
+        // #2237: the options bar's Opacity and Flow reach the stroke (the engine applies both).
+        let mut app = app();
+        // An opaque red patch at the top to clone from.
+        app.run("paint.pencil", json!({"points": [[10, 10], [40, 10]], "size": 12, "color": "#ff0000"})).unwrap();
+        app.ui.tool_options.clone_sample = "all".into();
+        app.ui.clone_source = Some([25.0, 10.0]);
+        app.ui.tool_options.clone_opacity = 50.0;
+        app.ui.tool_options.clone_flow = 100.0;
+        for tool in [Tool::CloneStamp, Tool::Healing] {
+            app.ui.tool = tool;
+            assert!(finish_stroke(&mut app, tool, &[[25.0, 40.0, 1.0], [35.0, 40.0, 1.0]], egui::Modifiers::NONE));
+            assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
+            let (id, params) = app.session.journal.last().expect("the stroke was journaled");
+            assert_eq!(id, if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" });
+            assert_eq!(params["opacity"].as_f64(), Some(50.0), "{tool:?} opacity");
+            assert_eq!(params["flow"].as_f64(), Some(100.0), "{tool:?} flow");
+            if tool == Tool::CloneStamp {
+                // The pixels: opacity 50 blends the red patch half-way over the white background
+                // (at 100 the green/blue channels would be 0).
+                let px = active(&app).surface().unwrap().rgba(25, 40);
+                assert!(px[0] > 0.9 && (px[1] - 0.5).abs() < 0.05, "opacity 50 → half-strength clone: {px:?}");
+            }
         }
     }
 

@@ -460,6 +460,10 @@ pub struct ToolOptions {
     pub type_align: String,
     /// Clone Stamp / Healing Brush.
     pub clone_aligned: bool,
+    /// Clone Stamp / Healing Brush stroke opacity %, 1..100 (Photoshop's options bar, #2237).
+    pub clone_opacity: f32,
+    /// Clone Stamp / Healing Brush flow %, 1..100.
+    pub clone_flow: f32,
     /// Pattern Stamp: lock the tile origin in document space across strokes.
     pub pattern_stamp_aligned: bool,
     /// Pattern Stamp: jitter each dab's phase (seeded, replayable).
@@ -626,6 +630,8 @@ impl Default for ToolOptions {
             type_aa: "sharp".into(),
             type_align: "left".into(),
             clone_aligned: true,
+            clone_opacity: 100.0,
+            clone_flow: 100.0,
             pattern_stamp_aligned: true,
             pattern_stamp_impressionist: false,
             pattern_stamp_scale: 100.0,
