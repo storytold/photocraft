@@ -642,6 +642,7 @@ impl Compositor {
         }
         self.page = page;
         self.chunk = CHUNK.min(page);
+        self.prefix.set_step(self.chunk);
         self.pool.clear();
         self.residents.clear();
         self.fx.clear();
@@ -1208,10 +1209,9 @@ impl Compositor {
         for (ci, c) in chunks.iter().enumerate() {
             let mut resume = 0;
             if let Some(cp) = checkpoint
-                && let Some(cached) = self.prefix.chunk(*c)
                 && let Some((dst, _)) = self.pool.get(cp.slot as usize)
+                && self.prefix.copy_out(encoder, *c, dst)
             {
-                prefix::copy(encoder, &cached.texture, dst, *c);
                 resume = cp.pass_end;
                 stats.prefix_hits = stats.prefix_hits.saturating_add(1);
                 stats.prefix_passes_skipped = stats.prefix_passes_skipped.saturating_add(resume);

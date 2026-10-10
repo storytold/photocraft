@@ -232,6 +232,47 @@ fn root_checkpoints_keep_clipping_groups_and_adjustments_whole() {
     }
 }
 
+/// Many disjoint partial damages (a brush stroke paints a new rectangle every frame) must
+/// admit whole grid chunks, not one entry per exact damage rectangle: a second series of
+/// strokes inside the same chunks leaves the cache bytes unchanged, a full-canvas refresh
+/// still finds its chunks, and a top-layer edit afterwards reuses them (#1169 review).
+#[test]
+fn disjoint_partial_damages_admit_whole_chunks_not_damage_rects() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = base_doc(600, 300);
+    doc.layers.push(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2));
+    doc.layers.push(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2));
+    check(&mut g, &doc, "warm");
+    let strokes = |g: &mut Gpu, doc: &Document, pass: i32| {
+        for i in 0..24u32 {
+            let x = 40 + ((i + pass as u32 * 13) % 8) * 60;
+            let y = 30 + (i / 8) * 60;
+            diff_rect(g, doc, Rect::new(x as i32, y as i32, x as i32 + 40, y as i32 + 30), "stroke").unwrap();
+        }
+    };
+    for pass in 0..2 {
+        doc.layers[2].opacity = 0.3 + pass as f32 * 0.1;
+        strokes(&mut g, &doc, pass);
+    }
+    // The same grid chunks hold every stroke: no entry-per-rectangle growth between passes.
+    let bytes = g.comp.composite_cache_bytes();
+    assert!(bytes > 0);
+    for pass in 2..4 {
+        doc.layers[2].opacity = 0.3 + pass as f32 * 0.1;
+        strokes(&mut g, &doc, pass);
+    }
+    assert_eq!(g.comp.composite_cache_bytes(), bytes, "partial damages must not add entries");
+    // A full-canvas render still populates the whole chunks, and the top edit afterwards hits.
+    check(&mut g, &doc, "full refresh after strokes");
+    doc.layers[2].opacity = 0.6;
+    let stats = diff_rect(&mut g, &doc, doc.bounds(), "top edit after strokes").unwrap();
+    assert!(stats.prefix_hits > 0, "{stats:?}");
+    // A repeated partial rectangle keeps hitting its whole chunk.
+    let at = Rect::new(40, 30, 80, 60);
+    let stats = diff_rect(&mut g, &doc, at, "same partial rectangle").unwrap();
+    assert!(stats.prefix_hits > 0, "{stats:?}");
+}
+
 #[test]
 fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     let Some(mut g) = gpu() else { return };
@@ -239,9 +280,14 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     doc.layers.push(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2));
     doc.layers.push(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2));
     check(&mut g, &doc, "full prefix");
+    // A partial rectangle inside an already-covered whole chunk is served as a sub-rect copy —
+    // after a full render every in-bounds rectangle is covered, which is the point of whole
+    // chunk admission. Outside the document nothing renders and nothing is admitted.
     let region = Rect::new(10, 10, 50, 45);
     doc.layers[2].opacity = 0.4;
-    assert_eq!(diff_rect(&mut g, &doc, region, "new partial rectangle").unwrap().prefix_hits, 0);
+    assert!(diff_rect(&mut g, &doc, region, "partial rectangle in a covered chunk").unwrap().prefix_hits > 0);
+    let outside = Rect::new(10, 310, 50, 345);
+    assert_eq!(diff_rect(&mut g, &doc, outside, "outside the document").unwrap().prefix_hits, 0);
     doc.layers[2].opacity = 0.7;
     assert!(diff_rect(&mut g, &doc, region, "same partial rectangle").unwrap().prefix_hits > 0);
     doc.layers[0].surface_mut().unwrap().write_pixel(550, 270, &[1.0, 0.0, 1.0, 0.9]);

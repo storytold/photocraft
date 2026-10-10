@@ -45,7 +45,10 @@ fn composite_reuse_reports_held_bytes_and_honors_the_canvas_override() {
     g.set_composite_cache_budget(512 << 20);
     assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
     let bpp = if photocraft_gpu::Compositor::preferred_acc_format(&rs.adapter) == eframe::wgpu::TextureFormat::Rgba32Float { 16 } else { 8 };
-    assert_eq!(g.compositor_bytes().unwrap().1 as u64, d.size.area() * bpp);
+    // The cache holds whole chunk-aligned cells, not the document's exact rectangle.
+    let cell = u64::from(photocraft_gpu::CHUNK);
+    let cells = u64::from(d.size.width).div_ceil(cell) * cell * u64::from(d.size.height).div_ceil(cell) * cell;
+    assert_eq!(g.compositor_bytes().unwrap().1 as u64, cells * bpp);
     d.layers[1].opacity = 0.4;
     assert!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits > 0);
     g.set_composite_cache_budget(0);
