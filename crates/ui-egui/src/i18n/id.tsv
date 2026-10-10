@@ -2835,6 +2835,7 @@ fontWeight	Italic	Miring
 # Generative Fill and Generative AI Settings (#41)
 	API key	Kunci API
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Jelaskan apa yang akan dibuat di dalam seleksi, atau biarkan kosong untuk melanjutkan gambar di dalamnya.
+	Fill the selection from a prompt	Isi seleksi berdasarkan deskripsi
 	Generative AI	AI generatif
 	Generative AI Settings…	Pengaturan AI generatif…
 	Generative AI needs the desktop app.	AI generatif memerlukan aplikasi desktop.
@@ -2849,6 +2850,7 @@ fontWeight	Italic	Miring
 	Provider	Penyedia
 	Remove Key	Hapus kunci
 	Saved (paste to replace)	Tersimpan (tempel untuk mengganti)
+	Set up Generative Fill with your own API key	Siapkan isian generatif dengan kunci API Anda sendiri
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	Area yang dipilih, gambar di sekitarnya, dan deskripsi dikirim ke {name} ({model}).
 	What is sent, and to whom	Apa yang dikirim, dan ke mana
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Kunci Anda disimpan di {store}, tidak pernah di file pengaturan PhotoCraft.

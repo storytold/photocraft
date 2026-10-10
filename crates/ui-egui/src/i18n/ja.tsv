@@ -3449,6 +3449,7 @@ fontWeight	Italic	斜体
 # Generative Fill and Generative AI Settings (#41)
 	API key	API キー
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	選択範囲に生成する内容を入力してください。空のままにすると、周囲の画像を選択範囲の中へ続けます。
+	Fill the selection from a prompt	説明文から選択範囲を塗りつぶす
 	Generative AI	生成 AI
 	Generative AI Settings…	生成 AI の設定…
 	Generative AI needs the desktop app.	生成 AI はデスクトップアプリでのみ使えます。
@@ -3463,6 +3464,7 @@ fontWeight	Italic	斜体
 	Provider	プロバイダー
 	Remove Key	キーを削除
 	Saved (paste to replace)	保存済み（貼り付けると置き換え）
+	Set up Generative Fill with your own API key	ご自身の API キーで生成塗りつぶしを設定
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	選択範囲、その周囲の画像、説明文が {name}（{model}）に送信されます。
 	What is sent, and to whom	送信される内容と送信先
 	Your key is kept in {store}, never in PhotoCraft's settings files.	キーは {store} に保管され、PhotoCraft の設定ファイルには保存されません。

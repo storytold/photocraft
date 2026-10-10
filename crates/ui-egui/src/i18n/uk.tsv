@@ -3536,6 +3536,7 @@ cameraRaw	Masking	Маскування
 # Generative Fill and Generative AI Settings (#41)
 	API key	Ключ API
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Опишіть, що створити у виділеній області, або залиште поле порожнім, щоб зображення продовжилося крізь неї.
+	Fill the selection from a prompt	Заповнити виділення за описом
 	Generative AI	Генеративний ШІ
 	Generative AI Settings…	Налаштування генеративного ШІ…
 	Generative AI needs the desktop app.	Генеративний ШІ доступний лише в настільному застосунку.
@@ -3550,6 +3551,7 @@ cameraRaw	Masking	Маскування
 	Provider	Постачальник
 	Remove Key	Видалити ключ
 	Saved (paste to replace)	Збережено (вставте новий, щоб замінити)
+	Set up Generative Fill with your own API key	Налаштувати генеративну заливку з власним ключем API
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	Виділена область, зображення навколо неї та опис надсилаються до {name} ({model}).
 	What is sent, and to whom	Що надсилається і кому
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Ваш ключ зберігається в {store} і ніколи не потрапляє до файлів налаштувань PhotoCraft.

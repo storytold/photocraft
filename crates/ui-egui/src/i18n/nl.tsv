@@ -3608,6 +3608,7 @@ cameraRaw	Whites	Witten
 # Generative Fill and Generative AI Settings (#41)
 	API key	API-sleutel
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Beschrijf wat er in de selectie moet komen, of laat leeg om de afbeelding erdoorheen voort te zetten.
+	Fill the selection from a prompt	De selectie vullen op basis van een beschrijving
 	Generative AI	Generatieve AI
 	Generative AI Settings…	Instellingen voor generatieve AI…
 	Generative AI needs the desktop app.	Generatieve AI werkt alleen in de desktop-app.
@@ -3622,6 +3623,7 @@ cameraRaw	Whites	Witten
 	Provider	Aanbieder
 	Remove Key	Sleutel verwijderen
 	Saved (paste to replace)	Bewaard (plak om te vervangen)
+	Set up Generative Fill with your own API key	Generatief vullen instellen met uw eigen API-sleutel
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	Het geselecteerde gebied, de omringende afbeelding en de beschrijving worden naar {name} ({model}) gestuurd.
 	What is sent, and to whom	Wat er wordt verstuurd, en naar wie
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Uw sleutel wordt bewaard in {store}, nooit in de instellingenbestanden van PhotoCraft.

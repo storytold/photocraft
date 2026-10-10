@@ -2438,6 +2438,7 @@ fontWeight	Italic	斜体
 # Generative Fill and Generative AI Settings (#41)
 	API key	API 密钥
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	描述要在选区中生成的内容，留空则让周围的图像在选区中自然延续。
+	Fill the selection from a prompt	根据描述填充选区
 	Generative AI	生成式 AI
 	Generative AI Settings…	生成式 AI 设置…
 	Generative AI needs the desktop app.	生成式 AI 需要桌面版应用。
@@ -2452,6 +2453,7 @@ fontWeight	Italic	斜体
 	Provider	服务提供方
 	Remove Key	移除密钥
 	Saved (paste to replace)	已保存（粘贴即可替换）
+	Set up Generative Fill with your own API key	用你自己的 API 密钥设置生成式填充
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	选中的区域、其周围的图像和描述会发送给 {name}（{model}）。
 	What is sent, and to whom	发送什么，发送给谁
 	Your key is kept in {store}, never in PhotoCraft's settings files.	你的密钥保存在 {store}，不会写入 PhotoCraft 的设置文件。

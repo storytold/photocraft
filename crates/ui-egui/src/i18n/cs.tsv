@@ -2430,6 +2430,7 @@ fontWeight	Italic	Kurzíva
 # Generative Fill and Generative AI Settings (#41)
 	API key	Klíč API
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Popište, co se má ve výběru vytvořit, nebo nechte prázdné a obraz bude výběrem plynule pokračovat.
+	Fill the selection from a prompt	Vyplnit výběr podle popisu
 	Generative AI	Generativní AI
 	Generative AI Settings…	Nastavení generativní AI…
 	Generative AI needs the desktop app.	Generativní AI vyžaduje desktopovou aplikaci.
@@ -2444,6 +2445,7 @@ fontWeight	Italic	Kurzíva
 	Provider	Poskytovatel
 	Remove Key	Odebrat klíč
 	Saved (paste to replace)	Uložen (vložením nahradíte)
+	Set up Generative Fill with your own API key	Nastavit generativní výplň s vlastním klíčem API
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	Vybraná oblast, obraz kolem ní a popis se odešlou do {name} ({model}).
 	What is sent, and to whom	Co se odesílá a komu
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Váš klíč je uložen v {store}, nikdy v souborech nastavení PhotoCraftu.

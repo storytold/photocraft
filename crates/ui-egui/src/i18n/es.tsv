@@ -2509,6 +2509,7 @@ fontWeight	Italic	Cursiva
 # Generative Fill and Generative AI Settings (#41)
 	API key	Clave de API
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Describe lo que se generará en la selección, o déjalo vacío para continuar la imagen a través de ella.
+	Fill the selection from a prompt	Rellenar la selección a partir de una descripción
 	Generative AI	IA generativa
 	Generative AI Settings…	Ajustes de IA generativa…
 	Generative AI needs the desktop app.	La IA generativa necesita la aplicación de escritorio.
@@ -2523,6 +2524,7 @@ fontWeight	Italic	Cursiva
 	Provider	Proveedor
 	Remove Key	Quitar clave
 	Saved (paste to replace)	Guardada (pega otra para sustituirla)
+	Set up Generative Fill with your own API key	Configurar el relleno generativo con tu propia clave de API
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	El área seleccionada, la imagen que la rodea y la descripción se envían a {name} ({model}).
 	What is sent, and to whom	Qué se envía y a quién
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Tu clave se guarda en {store}, nunca en los archivos de ajustes de PhotoCraft.

@@ -184,4 +184,13 @@ fn the_dialogs_render() {
     if let (Some(dir), Ok(img)) = (&dir, h.render()) {
         img.save(std::path::Path::new(dir).join("genai-prompt.png")).unwrap();
     }
+    // The options bar of a selection tool: the button sits after Select and Mask….
+    let prompt = h.state().ui.dialogs[0].id;
+    crate::dialogs::cancel(h.state_mut(), prompt).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::RectMarquee;
+    h.run_steps(6);
+    h.get_by_label("Generative Fill…");
+    if let (Some(dir), Ok(img)) = (&dir, h.render()) {
+        img.save(std::path::Path::new(dir).join("genai-options-bar.png")).unwrap();
+    }
 }

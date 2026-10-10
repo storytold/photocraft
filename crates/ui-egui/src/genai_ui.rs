@@ -263,6 +263,27 @@ pub fn cancelled(app: &mut PhotocraftApp) {
     app.genai.key_input.clear();
 }
 
+/// The Generative Fill button (and its settings arrow) for the selection tools' options bar,
+/// next to Select and Mask…. The button needs a selection; with no provider set up it opens the
+/// settings instead.
+pub fn options_bar_button(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.services.genai.is_none() {
+        return;
+    }
+    let ready = app.session.image_provider().is_some();
+    let can_fill = !ready || app.session.is_enabled(FILL);
+    ui.spacing_mut().item_spacing.x = 2.0;
+    let tip = if ready { tl!("Fill the selection from a prompt") } else { tl!("Set up Generative Fill with your own API key") };
+    let clicked = ui.add_enabled_ui(can_fill, |ui| crate::widgets::secondary_button(ui, tl!("Generative Fill…"), 0.0).on_hover_text(tip)).inner.clicked();
+    if clicked {
+        let _ = crate::menus::invoke(app, &ui.ctx().clone(), FILL, json!({}));
+    }
+    if crate::icons::button(ui, "chevron-down", 22.0, false, tl!("Generative AI Settings…")).clicked() {
+        open_settings(app);
+    }
+    ui.spacing_mut().item_spacing.x = 8.0;
+}
+
 /// Preferences › Integrations: where Generative AI is set up.
 pub fn prefs_rows(app: &PhotocraftApp, ui: &mut egui::Ui) -> bool {
     let t = crate::theme::Tokens::get(ui.ctx());

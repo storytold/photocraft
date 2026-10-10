@@ -3538,6 +3538,7 @@ fontWeight	Thin	Πολύ λεπτά
 # Generative Fill and Generative AI Settings (#41)
 	API key	Κλειδί API
 	Describe what to generate in the selection, or leave it empty to continue the image through it.	Περιγράψτε τι θα δημιουργηθεί στην επιλογή ή αφήστε το κενό για να συνεχιστεί η εικόνα μέσα της.
+	Fill the selection from a prompt	Γέμισμα της επιλογής από περιγραφή
 	Generative AI	Παραγωγική ΤΝ
 	Generative AI Settings…	Ρυθμίσεις παραγωγικής ΤΝ…
 	Generative AI needs the desktop app.	Η παραγωγική ΤΝ χρειάζεται την εφαρμογή υπολογιστή.
@@ -3552,6 +3553,7 @@ fontWeight	Thin	Πολύ λεπτά
 	Provider	Πάροχος
 	Remove Key	Αφαίρεση κλειδιού
 	Saved (paste to replace)	Αποθηκευμένο (επικολλήστε για αντικατάσταση)
+	Set up Generative Fill with your own API key	Ρύθμιση παραγωγικού γεμίσματος με το δικό σας κλειδί API
 	The selected area, the image around it and the prompt are sent to {name} ({model}).	Η επιλεγμένη περιοχή, η εικόνα γύρω της και η περιγραφή αποστέλλονται στο {name} ({model}).
 	What is sent, and to whom	Τι αποστέλλεται και σε ποιον
 	Your key is kept in {store}, never in PhotoCraft's settings files.	Το κλειδί σας φυλάσσεται στη {store}, ποτέ στα αρχεία ρυθμίσεων του PhotoCraft.

@@ -7,9 +7,10 @@ the maintainers asked for in issue #41.
 
 ## Using it
 
-1. Edit › Preferences › AI Integrations… › Generative AI Settings…. Pick a provider and model, paste an API key, and read what is
+1. Edit › Preferences › AI Integrations… › Generative AI Settings… (or the ▾ next to the selection
+   tools' Generative Fill… button). Pick a provider and model, paste an API key, and read what is
    sent before pressing OK.
-2. Make a selection, then Edit › Generative Fill…. Describe what to
+2. Make a selection, then Edit › Generative Fill… (or the options bar button). Describe what to
    put there, or leave the prompt empty to continue the surrounding image through it (anything
    that runs into the selection carries on and partly covered objects are completed).
 3. The result lands as a new layer named after the prompt, masked by the selection, as
@@ -58,7 +59,7 @@ explicit opt-in for automation can come later.
 |---|---|
 | `crates/genai` | `ImageProvider` (generate, edit with mask, variations; capabilities; output shape), `HttpTransport` (the network seam), `ApiKey`, and the Gemini backend. No network code: it builds for wasm and its tests use a fake transport. |
 | `crates/engine/src/genai_cmds.rs` | `edit.generativeFill`: context area, pixel interchange (after #730's approach), the job, the masked layer. `Session::set_image_provider` installs a provider. |
-| `crates/ui-egui/src/genai_ui.rs` | Generative AI Settings, the prompt dialog, `restore` at launch. |
+| `crates/ui-egui/src/genai_ui.rs` | Generative AI Settings, the prompt dialog, the options bar button, `restore` at launch. |
 | `apps/photocraft/src/genai.rs` | The desktop `GenAiServices`: credential store (`keyring`) and HTTPS transport (`ureq` + rustls). |
 
 ### Adding a provider
