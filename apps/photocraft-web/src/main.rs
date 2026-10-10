@@ -23,6 +23,10 @@ mod preset_bridge;
 mod indexed_presets;
 
 #[cfg(target_arch = "wasm32")]
+mod embed;
+#[cfg(any(target_arch = "wasm32", test))]
+mod embed_protocol;
+#[cfg(target_arch = "wasm32")]
 mod web;
 
 #[cfg(target_arch = "wasm32")]

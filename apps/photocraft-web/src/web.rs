@@ -53,6 +53,9 @@ pub fn start() {
             return;
         };
         let q = query();
+        // The Photopea-compatible config in the URL hash (crate::embed).
+        let photopea = crate::embed::photopea_config();
+        let embed_query = q.clone();
         let force_cpu = q.contains("cpu");
         let mut options = eframe::WebOptions::default();
         photocraft_ui_egui::gpu_canvas::use_adapter_limits(&mut options.wgpu_options.wgpu_setup);
@@ -83,7 +86,11 @@ pub fn start() {
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone()));
+                    let control = crate::embed::install(&embed_query, cc.egui_ctx.clone());
+                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), photopea.clone())).with_control(control);
+                    if let Some(config) = &photopea {
+                        crate::embed::open_config_files(config);
+                    }
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -246,7 +253,7 @@ impl WebShell {
                 wake.request_repaint();
             });
         }
-        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved(), Ordering::Relaxed);
+        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved() || crate::embed::upload_unconfirmed(), Ordering::Relaxed);
     }
 
     /// Fetches the served families asked for (picked in a font menu, or needed by a layout) and
@@ -301,6 +308,7 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic(ctx, frame);
+        crate::embed::process(&mut self.app);
         self.save_presets(ctx);
     }
 
@@ -333,7 +341,7 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox) -> Services {
+fn services(inbox: Inbox, photopea: Option<crate::embed_protocol::PhotopeaConfig>) -> Services {
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
@@ -373,7 +381,11 @@ fn services(inbox: Inbox) -> Services {
                 reply.send(Some(FileDialogAnswer::SaveTo(name)));
             }
         })),
-        write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
+        // Embedded in Photopea's way with a save server: documents in its formats go there.
+        write: Some(Box::new(move |path: &str, bytes: &[u8]| match &photopea {
+            Some(config) if config.saves(path) => crate::embed::upload(config, path, bytes),
+            _ => download(path, bytes),
+        })),
         encode_png: Some(Box::new(|w, h, rgba| {
             let img = Image::from_u8(w, h, ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
             photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())
