@@ -1,0 +1,26 @@
+[package]
+name = "photocraft-winprint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows printing: printer list, the driver's Print Settings dialog, page geometry and GDI printing with ICM off"
+
+# An isolated `unsafe` helper crate like photocraft-tablet (craftrules never-crash, AGENTS.md):
+# Windows printing needs Win32 calls. Only `src/windows.rs` allows `unsafe`; every block has a
+# `SAFETY:` comment. Elsewhere every function returns `Unsupported`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+# Already in Cargo.lock (winit/wgpu pull it in); pinned exactly: review the diff before bumping.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
+    "Win32_Storage_Xps",
+    "Win32_UI_ColorSystem",
+] }

@@ -75,6 +75,7 @@ pub mod prefs;
 pub mod preset_import_cmds;
 pub mod preset_store;
 pub mod presets;
+pub mod installed_profiles;
 pub mod print_cmds;
 pub mod proof_sim;
 pub mod redeye_cmds;

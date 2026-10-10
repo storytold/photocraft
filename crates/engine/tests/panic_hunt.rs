@@ -47,6 +47,15 @@ fn no_command_panics_or_hangs_on_adversarial_params() {
     let mut bad: Vec<String> = Vec::new();
     for spec in command_specs() {
         for p in &params {
+            // Print and Print One Copy reach real printers (lp, or the Windows driver): fuzz them
+            // as dry runs so the hunt never prints a page.
+            let mut p = p.clone();
+            if spec.id.starts_with("file.print")
+                && let Some(o) = p.as_object_mut()
+            {
+                o.insert("dryRun".into(), json!(true));
+            }
+            let p = &p;
             if let Err(why) = run_guarded(spec.id, p) {
                 bad.push(format!("{} [{why}] <- {p}", spec.id));
                 break;

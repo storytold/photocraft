@@ -94,6 +94,95 @@ fn photocraft_manages_colors_converts_to_the_printer_profile() {
     let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
 }
 
+/// The inflated page content stream (object 4).
+fn pdf_content(pdf: &[u8]) -> String {
+    let i = find(pdf, b"4 0 obj\n", 0);
+    let len_at = find(pdf, b"/Length ", i) + 8;
+    let len: usize = String::from_utf8_lossy(&pdf[len_at..len_at + 12]).split_whitespace().next().unwrap().parse().unwrap();
+    let start = find(pdf, b"stream\n", i) + 7;
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut flate2::read::ZlibDecoder::new(&pdf[start..start + len]), &mut out).unwrap();
+    out
+}
+
+#[test]
+fn emulsion_down_mirrors_the_whole_page() {
+    let mut s = session("rgb", 8);
+    let plain = s.execute("file.print", json!({"dryRun": true, "paper": "a4", "center": false, "left": 1.0, "top": 1.0, "labels": true})).unwrap();
+    let mirrored =
+        s.execute("file.print", json!({"dryRun": true, "paper": "a4", "center": false, "left": 1.0, "top": 1.0, "labels": true, "emulsionDown": true})).unwrap();
+    assert_eq!(plain["emulsionDown"], false);
+    assert_eq!(mirrored["emulsionDown"], true);
+    // Same layout; only the page is flipped.
+    assert_eq!(plain["imageRect"], mirrored["imageRect"]);
+    let (p, m) = (std::fs::read(plain["pdf"].as_str().unwrap()).unwrap(), std::fs::read(mirrored["pdf"].as_str().unwrap()).unwrap());
+    let (pc, mc) = (pdf_content(&p), pdf_content(&m));
+    assert!(!pc.contains("-1 0 0 1"));
+    // The flip wraps the image and the label, after the white paper, and is closed again.
+    let flip = mc.find("q -1 0 0 1 595.28 0 cm").expect("mirror transform");
+    assert!(flip > mc.find("re f Q").unwrap() && flip < mc.find("/Im0 Do").unwrap() && flip < mc.find("Tj").unwrap());
+    assert_eq!(mc.matches("q ").count() + mc.matches("q\n").count(), mc.matches("Q\n").count(), "balanced q/Q: {mc}");
+    // The pixels themselves are not touched (the transform mirrors them).
+    assert_eq!(pdf_image(&p).3, pdf_image(&m).3);
+    // Print One Copy keeps it.
+    let again = s.execute("file.printOneCopy", json!({"dryRun": true})).unwrap();
+    assert_eq!(again["emulsionDown"], true);
+    for r in [plain, mirrored, again] {
+        let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
+    }
+}
+
+fn page_of(channels: usize, data: Vec<u8>, emulsion_down: bool) -> PrintPage {
+    PrintPage {
+        paper: (600.0, 800.0),
+        image: PrintImage { width: 2, height: 1, channels, data, icc: None },
+        rect: (100.0, 200.0, 144.0, 72.0),
+        marks: Marks::default(),
+        description: None,
+        label: None,
+        emulsion_down,
+    }
+}
+
+#[test]
+fn windows_print_image_is_rgb_mirrored_for_emulsion_down() {
+    assert_eq!(page_rgb(&page_of(3, vec![1, 2, 3, 4, 5, 6], false)).unwrap(), [1, 2, 3, 4, 5, 6]);
+    assert_eq!(page_rgb(&page_of(3, vec![1, 2, 3, 4, 5, 6], true)).unwrap(), [4, 5, 6, 1, 2, 3]);
+    assert_eq!(page_rgb(&page_of(1, vec![7, 9], true)).unwrap(), [9, 9, 9, 7, 7, 7]);
+    assert!(page_rgb(&page_of(4, vec![0; 8], false)).is_err(), "CMYK can't go to a GDI printer");
+    assert!(page_rgb(&page_of(3, vec![0; 5], false)).is_err(), "short data");
+    // GDI's origin is the sheet's top-left; Emulsion Down moves the box to the mirrored side.
+    assert_eq!(page_rect_top_left(&page_of(3, vec![0; 6], false)), (100.0, 528.0, 144.0, 72.0));
+    assert_eq!(page_rect_top_left(&page_of(3, vec![0; 6], true)), (356.0, 528.0, 144.0, 72.0));
+}
+
+#[test]
+fn printer_commands_answer_without_a_document_and_reject_bad_settings() {
+    let mut s = Session::new();
+    let r = s.execute("file.print.printers", json!({})).unwrap();
+    assert_eq!(r["supported"], cfg!(windows));
+    assert!(r["printers"].is_array());
+    assert!(s.execute("file.print.page", json!({"printer": "Anything", "printerSettings": "zz"})).is_err());
+    let mut s = session("rgb", 8);
+    assert!(s.execute("file.print", json!({"printer": "Anything", "printerSettings": "0102", "send": true})).is_err());
+}
+
+#[test]
+fn printer_profile_can_be_an_installed_icc_file() {
+    let dir = tmp("icc");
+    let icc = format!("{dir}/My Paper.icc");
+    std::fs::write(&icc, photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes().as_slice()).unwrap();
+    let mut s = session("rgb", 16);
+    let r = s.execute("file.print", json!({"dryRun": true, "colorHandling": "photocraftManages", "printerProfile": icc, "emulsionDown": true})).unwrap();
+    assert_eq!(r["color"]["printerProfile"], json!(icc));
+    let (_, _, cs, data) = pdf_image(&std::fs::read(r["pdf"].as_str().unwrap()).unwrap());
+    assert_eq!(cs, "[/ICCBased 7 0 R]");
+    assert_eq!(data.len(), 300 * 150 * 4);
+    assert!(s.execute("file.print", json!({"dryRun": true, "colorHandling": "photocraftManages", "printerProfile": format!("{dir}/missing.icc")})).is_err());
+    let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn print_one_copy_repeats_the_last_settings() {
     let mut s = session("rgb", 8);
