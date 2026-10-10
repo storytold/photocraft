@@ -568,6 +568,12 @@ fn translate(bar: &mut MenuBar, lang: Lang) {
     }
 }
 
+pub fn localized_bar(items: &[MenuItem], lang: Lang) -> MenuBar {
+    let mut bar = from_items(&crate::menus::TOP_MENUS, items);
+    translate(&mut bar, lang);
+    bar
+}
+
 /// PhotoCraft's menus as a Mac menu bar, in the UI language; `language` is the
 /// `interface.language` preference (`auto` or a code), checked in the app menu's Language.
 pub fn photocraft_layout(items: &[MenuItem], lang: Lang, language: &str) -> Layout {

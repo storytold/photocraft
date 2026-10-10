@@ -37,6 +37,8 @@ mod mac_window;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(any(target_os = "linux", test))]
 mod linux_libs;
+#[cfg(any(target_os = "linux", test))]
+mod linux_global_menu;
 mod logging;
 mod monitor_profile;
 mod photoshop_settings;
@@ -447,6 +449,10 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            #[cfg(target_os = "linux")]
+            if !in_window_menus {
+                app.services.native_menu = linux_global_menu::install(&cc.egui_ctx, &app);
+            }           
             // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
             // precise crosshair for painting tools while it is toggled on (#1758).
             app.services.caps_lock = caps_lock::service(cc);
