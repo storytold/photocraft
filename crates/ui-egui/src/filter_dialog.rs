@@ -200,6 +200,7 @@ pub const PREVIEWED: &[&str] = &[
     "layer.matting.defringe",
     "layer.matting.colorDecontaminate",
     "layer.layerStyle.scaleEffects",
+    "type.warpText",
 ];
 
 pub fn has_dialog(command: &str) -> bool {
@@ -221,7 +222,6 @@ pub fn has_dialog(command: &str) -> bool {
                 | "layer.layerStyle.globalLight"
                 | "image.mode.colorTable"
                 | "edit.definePattern"
-                | "type.warpText"
         ))
         && photocraft_engine::commands::find(command).is_some_and(|c| !parse_spec(c.params).is_empty())
 }
@@ -569,7 +569,10 @@ pub fn preview_document_with(
     k: u32,
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
-    let proxy = crate::proxy::proxy_document(doc, k);
+    // Warp Text renders the type again from the layer model (font size, position), which a
+    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
+    let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
+    let proxy = crate::proxy::proxy_document(doc, run_k);
     let mut s = photocraft_engine::Session::new();
     s.set_inline_job_ctx(cancel.cloned());
     s.add_document(proxy, None);
@@ -577,7 +580,7 @@ pub fn preview_document_with(
         s.select_layer(id).ok()?;
     }
     let mut p = params.clone();
-    if k > 1
+    if run_k > 1
         && let Some(o) = p.as_object_mut()
     {
         let spec = photocraft_engine::commands::find(command).map(|c| parse_spec(c.params)).unwrap_or_default();
@@ -592,12 +595,12 @@ pub fn preview_document_with(
                     _ => None,
                 });
                 let floor = minimum.unwrap_or(0.0).max(if key == "cellSize" { 1.0 } else { 0.1 });
-                *v = json!((x / k as f64).max(floor));
+                *v = json!((x / run_k as f64).max(floor));
             }
         }
     }
     s.execute(command, p).ok()?;
-    s.active().map(|d| (*d.doc).clone())
+    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
 }
 
 /// Cached preview state on the app.
@@ -998,6 +1001,29 @@ mod tests {
             let shown = preview_document(&doc, Some(bg), cmd, &p, k).unwrap();
             assert!(diff_at_quarter(&applied, &shown) < 1e-4, "{cmd}: the preview is what OK applies");
         }
+    }
+
+    /// #218: Warp Text renders the type again from the layer model, which a reduced proxy doesn't
+    /// scale: the preview showed the text k times too large. It is the full-size result, reduced.
+    #[test]
+    fn warp_text_preview_matches_the_full_size_result_on_a_reduced_proxy() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 4000, "height": 3000})).unwrap();
+        s.execute("type.create", json!({"x": 300, "y": 1600, "text": "Warp", "size": 400})).unwrap();
+        let st = s.active().unwrap();
+        let (doc, layer) = ((*st.doc).clone(), st.active_layer.unwrap());
+        let p = json!({"style": "arc", "bend": 40.0});
+        let k = preview_factor("type.warpText", &p, crate::proxy::preview_factor(&doc, true));
+        assert!(k > 1, "the preview runs on a reduced proxy");
+        let cache = |d: &Document| match &d.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => t.cache.clone().unwrap(),
+            _ => panic!("a type layer"),
+        };
+        let full = crate::proxy::proxy_document(&preview_document(&doc, Some(layer), "type.warpText", &p, 1).unwrap(), k);
+        let shown = preview_document(&doc, Some(layer), "type.warpText", &p, k).unwrap();
+        assert_eq!(shown.size, full.size);
+        assert_eq!(cache(&shown).content_bounds(), cache(&full).content_bounds());
+        assert_eq!(photocraft_compose::flatten(&shown).px, photocraft_compose::flatten(&full).px);
     }
 
     /// #2063: a pixel-sized parameter divided by the proxy factor was clamped to the command's

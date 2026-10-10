@@ -1,8 +1,11 @@
 //! #218: Type › Warp Text… opens with the type layer's current warp (it always started at Arc)
 //! and previews the warp live on the canvas.
 
-use photocraft_doc::LayerContent;
+use egui::vec2;
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use photocraft_doc::text::TextWarp;
+use photocraft_doc::{Document, LayerContent};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -21,10 +24,44 @@ fn flag() -> Value {
 
 fn warp(app: &PhotocraftApp) -> Option<TextWarp> {
     let st = app.session.active().unwrap();
-    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+    warp_of(&st.doc, st.active_layer.unwrap())
+}
+
+fn warp_of(doc: &Document, id: photocraft_doc::LayerId) -> Option<TextWarp> {
+    match &doc.layer(id).unwrap().content {
         LayerContent::Text(t) => t.warp.clone(),
-        _ => panic!("the active layer is a type layer"),
+        _ => panic!("the layer is a type layer"),
     }
+}
+
+fn steps(app: &PhotocraftApp) -> usize {
+    app.session.active().unwrap().history.entries().len()
+}
+
+/// The open dialogs drawn over `app`, as the window shows them.
+fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+        |ui, app| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    h
+}
+
+/// Set dialog values as the sliders and dropdowns would, and compute the canvas preview as a
+/// frame of the canvas does.
+fn edit_and_preview(h: &mut Harness<'_, PhotocraftApp>, id: u64, values: Value) {
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    for (k, v) in values.as_object().unwrap() {
+        f.insert(k.clone(), v.clone());
+    }
+    h.run_steps(2);
+    crate::canvas::ensure_filter_preview(h.state_mut(), 0, &egui::Context::default());
 }
 
 /// Open Warp Text from the Type menu and return the dialog with its fields.
@@ -95,4 +132,64 @@ fn an_unknown_warp_style_opens_at_none_with_the_layers_values() {
     st.doc = std::sync::Arc::new(doc);
     let (_, fields) = open(&mut app);
     assert_eq!(shown(&fields), ("none", 12.0, -5.0, 7.0, "vertical"));
+}
+
+#[test]
+fn warp_text_dialog_previews_the_warp_without_editing_the_document() {
+    let mut app = app_with_type();
+    let (id, fields) = open(&mut app);
+    assert_eq!(fields.get("__preview"), Some(&json!(true)));
+    let (revision, original) = {
+        let st = app.session.active().unwrap();
+        (st.revision, st.doc.clone())
+    };
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let mut h = harness(app);
+    assert!(h.query_by_label("Preview").is_some(), "the dialog offers Preview");
+    edit_and_preview(&mut h, id, json!({"style": "arc", "bend": 40.0}));
+    let app = h.state();
+    let shown = app.filter_preview.as_ref().and_then(|p| p.result.clone()).expect("a preview");
+    assert_eq!(warp_of(&shown, layer).map(|w| (w.style, w.value)), Some(("warpArc".to_string(), 40.0)));
+    assert_ne!(photocraft_compose::flatten(&shown).px, photocraft_compose::flatten(&original).px, "the preview shows the warp");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.revision, revision);
+    assert_eq!(warp(app), None, "the document is not edited");
+}
+
+#[test]
+fn cancelling_warp_text_leaves_the_document_and_history_untouched() {
+    let mut app = app_with_type();
+    app.run("type.warpText", flag()).unwrap();
+    let (before, history) = (warp(&app), steps(&app));
+    let revision = app.session.active().unwrap().revision;
+    let (id, _) = open(&mut app);
+    let mut h = harness(app);
+    edit_and_preview(&mut h, id, json!({"style": "wave", "bend": 70.0}));
+    assert!(h.state().filter_preview.as_ref().is_some_and(|p| p.result.is_some()), "the preview is on screen");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let app = h.state();
+    assert!(app.ui.dialogs.is_empty());
+    assert!(app.filter_preview.is_none(), "the preview is gone");
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!((warp(app), steps(app)), (before, history));
+}
+
+#[test]
+fn confirming_warp_text_is_one_undoable_step() {
+    let mut app = app_with_type();
+    app.run("type.warpText", flag()).unwrap();
+    let (before, history) = (warp(&app), steps(&app));
+    let (id, _) = open(&mut app);
+    let mut h = harness(app);
+    edit_and_preview(&mut h, id, json!({"style": "fish", "bend": 25.0, "orientation": "horizontal"}));
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let app = h.state_mut();
+    assert!(app.ui.dialogs.is_empty());
+    assert_eq!(warp(app).map(|w| (w.style, w.value, w.horizontal)), Some(("warpFish".to_string(), 25.0, true)));
+    assert_eq!(steps(app), history + 1);
+    assert_eq!(app.session.active().unwrap().history.entries().last().map(|e| e.to_string()), Some("Warp Text".to_string()));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(warp(app), before);
 }
