@@ -142,3 +142,35 @@ fn a_user_shortcut_wins_over_a_default_it_was_not_moved_from() {
     let bound: Vec<String> = crate::shortcut_dispatch::bindings(&app).into_iter().filter(|(_, sc)| *sc == f7).map(|(id, _)| id).collect();
     assert_eq!(bound, ["select.modify.feather"]);
 }
+
+#[test]
+fn backspace_and_delete_can_be_assigned_as_shortcuts() {
+    let (mut h, id) = dialog(1.0, "edit.search", "search…");
+    let current = crate::shortcuts::pretty("Cmd+K");
+    h.get_by_label(&current).click();
+    h.run_steps(2);
+    key(&mut h, Key::Backspace, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(&mut h, Key::Backspace, false, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Backspace"));
+    assert_eq!(field(&h, id, "capture"), json!(false));
+    let message = field(&h, id, "message");
+    assert!(!message.as_str().unwrap().contains("removed"), "message: {message}");
+
+    // Delete can also be captured as a binding.
+    h.get_by_label(&crate::shortcuts::pretty("Backspace")).click();
+    h.run_steps(2);
+    key(&mut h, Key::Delete, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(&mut h, Key::Delete, false, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Delete"));
+    assert_eq!(field(&h, id, "capture"), json!(false));
+
+    // Confirm dialog and check the binding was applied.
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.prefs().shortcut("edit.search", None), Some("Delete"));
+}
+

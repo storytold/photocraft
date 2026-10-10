@@ -1361,7 +1361,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
 }
 
 /// Keyboard Shortcuts and Menus: a searchable list of commands by menu with editable shortcuts
-/// (click a shortcut, press keys; ⌫ removes it), menu visibility and colours, toolbar tools.
+/// (click a shortcut, press keys; "Delete Shortcut" removes it), menu visibility and colours, toolbar tools.
 fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mut tab = f.get("tab").and_then(Value::as_u64).unwrap_or(0);
@@ -1422,10 +1422,6 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
             });
             if key == egui::Key::Escape {
                 capture = false;
-            } else if matches!(key, egui::Key::Backspace | egui::Key::Delete) && m.is_none() {
-                overrides.insert(selected.clone(), String::new());
-                capture = false;
-                message = tl!("Shortcut removed.").into();
             } else if let Some(sc) = shortcut_text(key, m) {
                 let clash: Vec<String> = items
                     .iter()

@@ -2209,6 +2209,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let xf = ViewXform { rect, zoom: point_zoom, center: view.center, flip, rotation: view.rotation };
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    if response.clicked() || response.drag_started() {
+        if let Some(focus) = ui.ctx().memory(|m| m.focused()) {
+            ui.ctx().memory_mut(|m| m.surrender_focus(focus));
+        }
+    }
     let painter = ui.painter_at(rect);
 
     match crate::prefs_ui::pasteboard_color(app) {

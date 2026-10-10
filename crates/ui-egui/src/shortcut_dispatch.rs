@@ -230,7 +230,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             // panels instead, #1313): the shortcut took it, so cancel that move.
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         }
-        let id = delete_key_command(app, id);
+        let id = delete_key_command(app, focus, id);
         let owner = key_owner(app, ctx);
         dispatch(app, ctx, &id);
         ran = true;
@@ -244,15 +244,16 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
 /// Clear's key (Delete / Backspace) with nothing selected deletes the selected layers, of any
 /// kind, as in Photoshop (#1077): Edit › Clear only clears pixel layers, so on an adjustment, fill,
 /// type or shape layer the key did nothing. A selection, a targeted layer mask, a single channel
-/// or Quick Mask keeps Clear.
-fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
+/// or Quick Mask keeps Clear. When a panel widget (such as a layer in the Layers panel) has focus,
+/// Delete / Backspace deletes the layer even if a canvas selection exists (#1621).
+fn delete_key_command(app: &PhotocraftApp, focus: Focus, id: String) -> String {
     if id != "edit.clear" {
         return id;
     }
     let Some(st) = app.session.active() else { return id };
     let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
     let mask = app.ui.mask_target && st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
-    if st.doc.selection.is_some() || !composite || mask {
+    if (st.doc.selection.is_some() && focus != Focus::Widget) || !composite || mask {
         return id;
     }
     "layer.delete".into()

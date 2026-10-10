@@ -2288,6 +2288,7 @@ fn layer_row(
     } else if let Some(cmd) = mask_toggle {
         actions.push(cmd);
     } else if resp.clicked() && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+        resp.request_focus();
         let mode = select_mode(ui.input(|i| i.modifiers));
         actions.push(("layer.select".into(), json!({"layer": l.id.0, "mode": mode})));
         // A thumbnail explicitly selects content or a mask. Selecting an adjustment/fill row

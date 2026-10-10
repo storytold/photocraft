@@ -45,7 +45,7 @@ pub fn pretty(s: &str) -> String {
             ("Shift", true) => "⇧".to_string(),
             ("Alt", true) => "⌥".to_string(),
             ("Enter", true) => "↩".to_string(),
-            ("Delete", true) => "⌫".to_string(),
+            ("Delete", true) | ("Backspace", true) => "⌫".to_string(),
             (other, _) => other.to_string(),
         })
         .collect::<Vec<_>>()
