@@ -935,21 +935,58 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     match id {
         "edit.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
         "edit.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
-        "edit.toggleLastState" => Some(false),
+        "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
+        // Rotate and Flip turn the box (not while warping, where the mesh is the box).
+        _ if box_preset(id).is_some() => Some(t.warp.is_none()),
+        // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
+        "edit.transform.distort" | "edit.transform.perspective" if moves_type(app, t) => Some(false),
         _ => None,
     }
 }
 
+/// Does the box move an editable type layer (not its selection outline, a lone mask or a path)?
+fn moves_type(app: &PhotocraftApp, t: &TransformSession) -> bool {
+    !t.selection
+        && t.target.is_none()
+        && t.path.is_none()
+        && app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
+}
+
+/// Edit › Transform's Rotate and Flip presets while a box is open: what they do to the box, as
+/// `(kx, ky, angle)`: a scale along the box's own axes, then a rotation (radians, clockwise on
+/// screen), both about the reference point.
+fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    Some(match id {
+        "edit.transform.rotate180" => (1.0, 1.0, PI),
+        "edit.transform.rotate90Cw" => (1.0, 1.0, FRAC_PI_2),
+        "edit.transform.rotate90Ccw" => (1.0, 1.0, -FRAC_PI_2),
+        "edit.transform.flipHorizontal" => (-1.0, 1.0, 0.0),
+        "edit.transform.flipVertical" => (1.0, -1.0, 0.0),
+        _ => return None,
+    })
+}
+
 /// While transforming, the box owns the history for every caller (menus, shortcuts, the control
 /// channel, MCP): Undo and Redo step through it, and Toggle Last State, which would change the
-/// document under the box, is refused. `None` for other commands or when not transforming.
+/// document under the box, is refused. Edit › Transform's Rotate and Flip turn the box itself, as
+/// in Photoshop, instead of the layer under it; committing stays with ↩ and the options bar.
+/// `None` for other commands or when not transforming.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
-    app.ui.transform.as_ref()?;
+    let warping = app.ui.transform.as_ref()?.warp.is_some();
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
-        "edit.toggleLastState" => Some(Err("Commit or cancel the transform first".into())),
-        _ => None,
+        "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(Err("Commit or cancel the transform first".into())),
+        _ => {
+            let (kx, ky, angle) = box_preset(id)?;
+            if warping {
+                return Some(Err("Commit or cancel the transform first".into()));
+            }
+            scale_about_pivot(app, kx, ky);
+            rotate_about_pivot(app, angle);
+            Some(Ok(json!({"transform": app.ui.transform})))
+        }
     }
 }
 
