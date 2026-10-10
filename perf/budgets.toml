@@ -351,7 +351,7 @@ issue = 211
 bench = "perf_scenarios"
 row = "Select Subject 24 MP (repeat)"
 budget_ms = 100
-enforce = false  # over budget in the 2026-10-05 baseline
+enforce = false  # #2865: met (repeats answer from the last mask, 7-10 ms p95, was 270-370 ms); enforce once the baseline is refreshed
 
 [[scenario]]
 id = "P30"
