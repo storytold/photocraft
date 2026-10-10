@@ -177,6 +177,30 @@ fn layer_rename_layer_from_the_menu_commits_an_open_rename() {
     assert_eq!(name(&h, b), "From menu");
 }
 
+/// #2366: F2 renames the active layer in place, from the keyboard (the canvas or the Layers
+/// panel); a second F2 while the field is open leaves it alone.
+#[test]
+fn f2_renames_the_active_layer() {
+    let (mut h, [a, _, c]) = harness(1.0);
+    assert_eq!(renaming(&h.ctx), None);
+    key(&mut h, Key::F2);
+    assert_eq!(renaming(&h.ctx), Some(c), "F2 starts renaming the active layer");
+    assert!(field_shown(&h, c));
+    type_text(&mut h, "Top");
+    key(&mut h, Key::Enter);
+    assert_eq!(name(&h, c), "Top");
+    assert_eq!(renaming(&h.ctx), None);
+    // F2 during a rename (the double-click made that layer active) keeps the field and its text.
+    start(&mut h, a);
+    type_text(&mut h, "Kept");
+    key(&mut h, Key::F2);
+    assert_eq!(renaming(&h.ctx), Some(a));
+    assert_eq!(name(&h, a), "Alpha", "not committed by a second F2");
+    key(&mut h, Key::Enter);
+    assert_eq!(name(&h, a), "Kept");
+    assert_eq!(renaming(&h.ctx), None);
+}
+
 #[test]
 fn a_rename_ends_when_its_layer_goes_away() {
     let (mut h, [a, ..]) = harness(1.0);
