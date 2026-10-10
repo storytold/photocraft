@@ -103,9 +103,9 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `document.presets.save` | `{"name":"Product square","settings":{"width":1600,"height":1600,"background":"transparent"}}`: save a snapshot; names are trimmed, 1–255 characters, and ASCII case-insensitive duplicates are rejected |
 | `document.presets.get` | `{"name":"Product square"}` → `{preset,params}`: fetch settings; pass `params` to `file.new` to create a document, optionally adding a document `name` |
 | `document.presets.delete` | `{"name":"Product square"}`: delete the named saved configuration |
-| `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","line","inside"}` |
-| `type.caret` | `{"layer":id?,"index":char}`: caret segment in document pixels, `{"index","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
-| `type.navigate` | `{"layer":id?,"index":char,"move":"wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `x` keeps the column across line moves. Result `{"index"}` |
+| `type.hitTest` | `{"layer":id?,"x":px,"y":px}`: character under a document point. No `layer` picks the topmost visible type layer there. Result `{"layer","index","upstream","line","inside"}`; `upstream` is the side clicked where an Arabic and a Latin run meet |
+| `type.caret` | `{"layer":id?,"index":char,"upstream":bool?}`: caret segment in document pixels, `{"index","upstream","line","segment":[[x,y],[x,y]]}` (rotated and vertical type included) |
+| `type.navigate` | `{"layer":id?,"index":char,"upstream":bool?,"move":"left\|right\|wordLeft\|wordRight\|wordPrev\|wordNext\|linePrev\|lineNext\|lineStart\|lineEnd\|start\|end","x":px?}`: neighbouring caret. `left`/`right`/`wordLeft`/`wordRight` move visually like the Type tool's arrows. `x` keeps the column across line moves. Result `{"index","upstream"}` |
 | `actions.list` | `{}` → `{actions:[{name, steps}], recording}` (the name being recorded, or null) |
 | `actions.get` | `{"action": name or index}` → `{name, steps:[[id, params], …]}`, the shape `file.automate.batch` and droplets take |
 | `actions.record` | `{"name":"Red"}` starts a new action (default name `Action N`). `{"action": name or index}` appends to one that exists |

@@ -7,6 +7,7 @@
 use photocraft_doc::{Affine, Document, LayerContent, LayerId};
 use photocraft_geom::{Point, Rect};
 use photocraft_text::TextLayout;
+use photocraft_text::navigate::{self as nav, Caret, Dir, Unit};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -32,6 +33,14 @@ fn opt_f64(p: &Value, key: &str, cmd: &str) -> Result<Option<f64>> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(_) => req_f64(p, key, cmd).map(Some),
+    }
+}
+
+/// `key` when present: true or false.
+fn opt_bool(p: &Value, key: &str, cmd: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be true or false"))),
     }
 }
 
@@ -115,8 +124,9 @@ fn topmost(doc: &Document, x: f64, y: f64) -> Option<Frame> {
 /// Line-space column for a document x. Translate and scale keep that x as the same column on
 /// every line; when a rotation makes document x independent of the column, the caret's own
 /// column is kept (there is nothing to solve for).
-fn column(layout: &TextLayout, aff: Affine, text: &str, index: usize, doc_x: Option<f64>) -> f32 {
-    let (x, top, bottom) = layout.caret(photocraft_text::byte_index(text, index));
+fn column(layout: &TextLayout, aff: Affine, text: &str, caret: Caret, doc_x: Option<f64>) -> f32 {
+    let g = nav::caret_geometry(layout, text, caret);
+    let (x, top, bottom) = (g.x, g.top, g.bottom);
     let Some(doc_x) = doc_x else { return x };
     let y = f64::from(top + bottom) * 0.5;
     let [a, _, c, _, e, _] = aff.m;
@@ -142,23 +152,26 @@ fn hit_test(s: &Session, p: &Value) -> Result<Value> {
         _ => topmost(&doc, x, y).ok_or_else(|| bad(CMD, "no type layer under the point"))?,
     };
     let (tx, ty) = to_text(frame.transform, x, y);
-    let (index, line) = photocraft_text::hit_char(&frame.layout, &frame.text, tx, ty);
-    Ok(json!({ "layer": frame.id.0, "index": index, "line": line, "inside": frame.contains(x, y) }))
+    let c = nav::hit(&frame.layout, &frame.text, tx, ty);
+    let index = photocraft_text::char_index(&frame.text, c.byte);
+    let line = photocraft_text::line_index(&frame.layout, c.byte);
+    Ok(json!({ "layer": frame.id.0, "index": index, "upstream": c.upstream, "line": line, "inside": frame.contains(x, y) }))
 }
 
 fn caret(s: &Session, p: &Value) -> Result<Value> {
     const CMD: &str = "type.caret";
     let index = req_index(p, "index", CMD)?;
+    let upstream = opt_bool(p, "upstream", CMD)?.unwrap_or(false);
     let id = resolve_layer(s, p, CMD)?;
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let frame = frame(&doc, id, CMD)?;
     check_index(&frame.text, index, CMD)?;
     let byte = photocraft_text::byte_index(&frame.text, index);
-    let seg = frame.layout.caret_segment(byte);
+    let seg = nav::caret_segment(&frame.layout, &frame.text, Caret::new(byte, upstream));
     let p0 = doc_point(frame.transform, seg[0].0, seg[0].1, CMD)?;
     let p1 = doc_point(frame.transform, seg[1].0, seg[1].1, CMD)?;
     let line = photocraft_text::line_index(&frame.layout, byte);
-    Ok(json!({ "index": index, "line": line, "segment": [p0, p1] }))
+    Ok(json!({ "index": index, "upstream": upstream, "line": line, "segment": [p0, p1] }))
 }
 
 fn navigate(s: &Session, p: &Value) -> Result<Value> {
@@ -166,27 +179,38 @@ fn navigate(s: &Session, p: &Value) -> Result<Value> {
     let index = req_index(p, "index", CMD)?;
     let mov = p.get("move").and_then(Value::as_str).ok_or_else(|| bad(CMD, "missing `move`"))?;
     let doc_x = opt_f64(p, "x", CMD)?;
+    let upstream = opt_bool(p, "upstream", CMD)?.unwrap_or(false);
     let id = resolve_layer(s, p, CMD)?;
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let frame = frame(&doc, id, CMD)?;
     check_index(&frame.text, index, CMD)?;
-    let next = match mov {
-        "wordPrev" => photocraft_text::word_boundary(&frame.text, index, false),
-        "wordNext" => photocraft_text::word_boundary(&frame.text, index, true),
+    let (l, t) = (&frame.layout, frame.text.as_str());
+    let from = Caret::new(photocraft_text::byte_index(t, index), upstream);
+    let at = |ci: usize| Caret::new(photocraft_text::byte_index(t, ci), false);
+    let to = match mov {
+        "left" => nav::step(l, t, from, Dir::Left, Unit::Grapheme),
+        "right" => nav::step(l, t, from, Dir::Right, Unit::Grapheme),
+        "wordLeft" => nav::step(l, t, from, Dir::Left, Unit::Word),
+        "wordRight" => nav::step(l, t, from, Dir::Right, Unit::Word),
+        "wordPrev" => at(photocraft_text::word_boundary(t, index, false)),
+        "wordNext" => at(photocraft_text::word_boundary(t, index, true)),
         "linePrev" | "lineNext" => {
             let dir = if mov == "linePrev" { -1 } else { 1 };
-            let x = column(&frame.layout, frame.transform, &frame.text, index, doc_x);
-            photocraft_text::line_step(&frame.layout, &frame.text, index, x, dir)
+            let x = column(l, frame.transform, t, from, doc_x);
+            nav::adjacent_line(l, t, from, x, dir)
         }
-        "lineStart" => photocraft_text::line_edge(&frame.layout, &frame.text, index, false),
-        "lineEnd" => photocraft_text::line_edge(&frame.layout, &frame.text, index, true),
-        "start" => 0,
-        "end" => frame.text.chars().count(),
+        "lineStart" => nav::home_end(l, t, from, false),
+        "lineEnd" => nav::home_end(l, t, from, true),
+        "start" => at(0),
+        "end" => Caret::new(t.len(), false),
         other => {
-            return Err(bad(CMD, format!("move {other:?} must be wordPrev, wordNext, linePrev, lineNext, lineStart, lineEnd, start or end")));
+            return Err(bad(
+                CMD,
+                format!("move {other:?} must be left, right, wordLeft, wordRight, wordPrev, wordNext, linePrev, lineNext, lineStart, lineEnd, start or end"),
+            ));
         }
     };
-    Ok(json!({ "index": next }))
+    Ok(json!({ "index": photocraft_text::char_index(t, to.byte), "upstream": to.upstream }))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -196,7 +220,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Hit-Test Type",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?, "x":px, "y":px} → {"layer","index":char,"line","inside":bool}. No layer: the topmost visible type layer whose laid-out text or rendered pixels contain the point (same order as the Type tool); a miss is an error. With a layer, index is the nearest caret even when inside is false"##,
+            params: r##"{"layer":id?, "x":px, "y":px} → {"layer","index":char,"upstream":bool,"line","inside":bool}. upstream: the caret sits after the character before index (where an Arabic and a Latin run meet, the side clicked). No layer: the topmost visible type layer whose laid-out text or rendered pixels contain the point (same order as the Type tool); a miss is an error. With a layer, index is the nearest caret even when inside is false"##,
             enabled: has_doc,
             journal: false,
             run: |s, p| hit_test(s, p),
@@ -206,7 +230,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Type Caret",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?, "index":char (0..=length; empty text is 0)} → {"index","line","segment":[[x,y],[x,y]]} caret segment in document pixels, for rotated and vertical type too"##,
+            params: r##"{"layer":id?, "index":char (0..=length; empty text is 0), "upstream":bool?=false (the caret after the previous character; where directions meet one index has two carets)} → {"index","upstream","line","segment":[[x,y],[x,y]]} caret segment in document pixels, for rotated and vertical type too"##,
             enabled: has_doc,
             journal: false,
             run: |s, p| caret(s, p),
@@ -216,7 +240,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Navigate Type",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?, "index":char, "move":"wordPrev|wordNext|linePrev|lineNext|lineStart|lineEnd|start|end", "x":px?} → {"index"}. Words are alphanumeric runs. x is the document x to keep across linePrev/lineNext (a caret segment's x); omitted uses the caret's own column. Empty text returns index 0"##,
+            params: r##"{"layer":id?, "index":char, "upstream":bool?=false (the caret's side, from type.hitTest/type.caret/this command), "move":"left|right|wordLeft|wordRight|wordPrev|wordNext|linePrev|lineNext|lineStart|lineEnd|start|end", "x":px?} → {"index","upstream"}. left/right/wordLeft/wordRight move visually like the Type tool's arrows: across mixed Arabic/Latin runs, to the neighbouring line or paragraph at a line's edge, never into an overflowing box's hidden lines; vertical type moves along the text (right = forward). wordPrev/wordNext are logical alphanumeric runs. x is the document x to keep across linePrev/lineNext (a caret segment's x); omitted uses the caret's own column. Empty text returns index 0"##,
             enabled: has_doc,
             journal: false,
             run: |s, p| navigate(s, p),
@@ -400,7 +424,7 @@ mod tests {
         let y = (c["segment"][0][1].as_f64().unwrap() + c["segment"][1][1].as_f64().unwrap()) / 2.0;
         let hit = s.execute("type.hitTest", json!({"layer": empty, "x": x, "y": y})).unwrap();
         assert_eq!(u(&hit, "index"), 0);
-        for mov in ["wordNext", "wordPrev", "lineNext", "linePrev", "lineStart", "lineEnd", "start", "end"] {
+        for mov in ["left", "right", "wordLeft", "wordRight", "wordNext", "wordPrev", "lineNext", "linePrev", "lineStart", "lineEnd", "start", "end"] {
             assert_eq!(go(&mut s, empty, 0, mov, None), 0, "{mov}");
         }
     }
@@ -430,7 +454,9 @@ mod tests {
         bad(&mut s, "type.caret", json!({"layer": id, "index": 99}));
         bad(&mut s, "type.caret", json!({"layer": pixel, "index": 0}));
         bad(&mut s, "type.navigate", json!({"layer": id, "index": 0}));
-        bad(&mut s, "type.navigate", json!({"layer": id, "index": 0, "move": "left"}));
+        bad(&mut s, "type.navigate", json!({"layer": id, "index": 0, "move": "sideways"}));
+        bad(&mut s, "type.navigate", json!({"layer": id, "index": 0, "move": "left", "upstream": "yes"}));
+        bad(&mut s, "type.caret", json!({"layer": id, "index": 0, "upstream": 1}));
         bad(&mut s, "type.navigate", json!({"layer": id, "index": 9, "move": "end"}));
         bad(&mut s, "type.navigate", json!({"layer": id, "index": 0, "move": "lineNext", "x": "no"}));
         bad(&mut s, "type.navigate", json!({"layer": pixel, "index": 0, "move": "start"}));
@@ -439,5 +465,38 @@ mod tests {
         let far = s.execute("type.hitTest", json!({"layer": id, "x": 390, "y": 290})).unwrap();
         assert_eq!(far["inside"], false);
         assert!(u(&far, "index") <= 2);
+    }
+
+    /// Spec 5.1.9: agents move the caret like the Type tool, and see its side.
+    #[test]
+    fn left_and_right_move_visually_and_carry_upstream() {
+        let mut s = session();
+        let id = create(&mut s, json!({"x": 20, "y": 60, "text": "ab مرحبا", "size": 24, "align": "left"}));
+        let mv = |s: &mut Session, index: usize, upstream: bool, m: &str| {
+            let r = s.execute("type.navigate", json!({"layer": id, "index": index, "upstream": upstream, "move": m})).unwrap();
+            (u(&r, "index") as usize, r["upstream"].as_bool().unwrap())
+        };
+        assert_eq!(mv(&mut s, 2, false, "right"), (3, true), "after the space, at the Arabic run's left edge");
+        assert_eq!(mv(&mut s, 3, true, "right"), (7, false), "into the run from its left: before its last letter");
+        assert_eq!(mv(&mut s, 7, false, "left"), (8, true));
+        assert_eq!(mv(&mut s, 8, true, "left"), (2, false));
+        assert_eq!(mv(&mut s, 3, false, "right"), (3, false), "the right edge of the first paragraph");
+        let (w, _) = mv(&mut s, 0, false, "wordRight");
+        assert!(w > 0 && w <= 8, "{w}");
+        // Index 3 has two caret segments; hit-testing next to each returns its side.
+        let seg = |s: &mut Session, upstream: bool| {
+            let c = s.execute("type.caret", json!({"layer": id, "index": 3, "upstream": upstream})).unwrap();
+            assert_eq!(c["upstream"], upstream);
+            (c["segment"][0][0].as_f64().unwrap(), (c["segment"][0][1].as_f64().unwrap() + c["segment"][1][1].as_f64().unwrap()) / 2.0)
+        };
+        let (xu, y) = seg(&mut s, true);
+        let (xd, _) = seg(&mut s, false);
+        assert!((xu - xd).abs() > 5.0, "{xu} vs {xd}");
+        let side = |s: &mut Session, x: f64| {
+            let h = s.execute("type.hitTest", json!({"layer": id, "x": x, "y": y})).unwrap();
+            (u(&h, "index"), h["upstream"].as_bool().unwrap())
+        };
+        assert_eq!(side(&mut s, xu - 1.0), (3, true));
+        assert_eq!(side(&mut s, xd - 1.0), (3, false));
     }
 }
