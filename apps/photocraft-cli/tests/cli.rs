@@ -598,7 +598,7 @@ fn control_port_env_switches_modes_with_a_notice_and_flags_win() {
     // `serve` with the variable never exits: spawn, read its stderr, then kill it.
     let mut child = bin().args(["serve"]).env("PHOTOCRAFT_CONTROL_PORT", &port).stderr(Stdio::piped()).stdin(Stdio::null()).spawn().unwrap();
     let mut err = String::new();
-    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !err.contains("serving on TCP instead of stdio") && std::time::Instant::now() < deadline {
         let mut buf = [0u8; 4096];
         let n = child.stderr.as_mut().unwrap().read(&mut buf).unwrap_or(0);
@@ -619,7 +619,7 @@ fn control_port_env_switches_modes_with_a_notice_and_flags_win() {
     let mut child =
         bin().args(["serve", "--port", &port]).env("PHOTOCRAFT_CONTROL_PORT", "not-a-port").stderr(Stdio::piped()).stdin(Stdio::null()).spawn().unwrap();
     let mut err = String::new();
-    let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !err.contains("serving on") && std::time::Instant::now() < deadline {
         let mut buf = [0u8; 4096];
         let n = child.stderr.as_mut().unwrap().read(&mut buf).unwrap_or(0);
