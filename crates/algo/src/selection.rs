@@ -710,8 +710,10 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
 }
 
 mod distance;
+mod marquee;
 
 pub use distance::edt;
+pub use marquee::{combine_surfaces, ellipse_surface};
 
 /// Grows the selection by `r` pixels.
 pub fn expand(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
