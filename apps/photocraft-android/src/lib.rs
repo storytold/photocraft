@@ -67,7 +67,19 @@ fn android_main(android_app: AndroidApp) {
         photocraft_ui_egui::android_touch::configure_touch_ui(&cc.egui_ctx);
         if let Some(state) = cc.wgpu_render_state.clone() {
             app.perf.gpu_info.set_adapter(&state.adapter.get_info());
-            app.set_wgpu(state);
+            // Diagnostic workaround: the Android Vulkan compositor may terminate
+            // the Activity when a new document exceeds 128 pixels on either axis.
+            // Keep Vulkan for egui, but render document pixels on the tested CPU
+            // path until we can identify the offending GPU operation.
+            //
+            // To compare the original behavior, build with
+            // PHOTOCRAFT_ANDROID_GPU_CANVAS=1 in the Rust build environment.
+            if option_env!("PHOTOCRAFT_ANDROID_GPU_CANVAS") == Some("1") {
+                log::info!("Android document canvas: GPU (diagnostic override)");
+                app.set_wgpu(state);
+            } else {
+                log::warn!("Android document canvas: CPU diagnostic fallback; egui still uses Vulkan");
+            }
         } else {
             log::warn!("No wgpu render state: PhotoCraft uses the CPU canvas");
         }
