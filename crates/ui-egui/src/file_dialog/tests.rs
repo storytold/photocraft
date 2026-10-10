@@ -292,12 +292,6 @@ fn save_and_export_dialogs_start_beside_the_document() {
     }
 }
 
-/// The path `pick_save` suggests for `name` in `dir` on this platform: it joins with `Path::join`,
-/// which uses `\` on Windows, so the expected values must be built the same way (#2745).
-fn joined(dir: &str, name: &str) -> String {
-    std::path::Path::new(dir).join(name).to_string_lossy().into_owned()
-}
-
 /// #1826: after the user navigates a save or export dialog elsewhere, the document's next dialog
 /// starts there. Save As of a saved document still suggests its own path; other documents and
 /// closed documents are unaffected.
