@@ -6,7 +6,7 @@ use egui_kittest::Harness;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform, pencil_cursor_rect, tool_event};
+use crate::canvas::{ToolEvent, ViewXform, pencil_cursor_rect, pencil_tip_is_round, tool_event};
 use crate::state::Tool;
 
 fn app() -> PhotocraftApp {
@@ -135,6 +135,45 @@ fn square_cursor_sits_on_the_pixel_grid() {
     }
     // Hostile numbers don't panic.
     let _ = pencil_cursor_rect(&xf, [f64::NAN, f64::INFINITY], f32::NAN, f32::NAN);
+}
+
+#[test]
+fn the_cursor_is_round_exactly_when_the_pencil_dab_is() {
+    // #2662: one dab per size; the cursor is the square only while the dab fills its corners.
+    let mut app = app();
+    for n in 1..=12u32 {
+        let (x, y) = (8.0 + f64::from((n - 1) % 6) * 18.0 + 0.3, 15.0 + f64::from((n - 1) / 6) * 30.0 + 0.6);
+        app.run("paint.pencil", json!({"points": [[x, y]], "size": n})).unwrap();
+        let [x0, y0, ..] = photocraft_engine::paint::grid_square(x, y, n as f32);
+        let corner = rgba(&app, x0 as i32, y0 as i32)[3] == 1.0;
+        assert_eq!(pencil_tip_is_round(n as f32), !corner, "{n} px");
+    }
+    assert!(pencil_tip_is_round(9.0) && !pencil_tip_is_round(3.0));
+    assert!(!pencil_tip_is_round(f32::NAN));
+}
+
+#[test]
+fn the_eraser_in_pencil_mode_erases_aliased_pixels() {
+    // #2662: an opaque layer, then a soft Eraser in Pencil mode erases with hard edges.
+    let mut app = app();
+    app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+    app.ui.tool = Tool::Eraser;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"size": 15, "hardness": 0.0, "smoothing": {"amount": 0.0}}})).unwrap();
+    app.ui.tool_options.eraser_mode = "pencil".into();
+    drag(&mut app, &[(10.0, 40.0), (60.3, 25.7), (110.0, 40.0)], Modifiers::NONE);
+    let (id, p) = last(&app);
+    assert_eq!((id.as_str(), &p["erase"]), ("paint.pencil", &json!(true)));
+    let s = layer(&app).surface().unwrap().clone();
+    let mut erased = 0;
+    for y in 0..80 {
+        for x in 0..120 {
+            let a = s.rgba(x, y)[3];
+            assert!(a == 0.0 || a == 1.0, "partial alpha {a} at ({x},{y})");
+            erased += usize::from(a == 0.0);
+        }
+    }
+    assert!(erased > 500, "{erased}");
 }
 
 #[test]

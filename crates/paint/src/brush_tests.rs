@@ -1098,3 +1098,15 @@ fn the_tip_falls_off_from_the_hard_core_to_zero_at_the_edge() {
     assert!(v.windows(2).all(|w| w[1] <= w[0]), "{v:?}");
     assert!((tip_falloff(5.0, 10.0, 0.0) - 0.75f32.powi(4)).abs() < 1e-6);
 }
+
+#[test]
+fn half_coverage_radius_is_the_tips_50_percent_contour() {
+    use crate::{half_coverage_radius, tip_falloff};
+    // The Normal Brush Tip cursor ring (#2744): where the soft falloff crosses 50 %.
+    for h in [0.0, 0.25, 0.5, 0.75, 0.99] {
+        let d = half_coverage_radius(10.5, h);
+        assert!((tip_falloff(d, 10.5, h) - 0.5).abs() < 1e-3, "hardness {h}: ring at {d}");
+    }
+    assert_eq!(half_coverage_radius(10.5, 1.0), 10.5);
+    assert!(half_coverage_radius(10.5, f32::NAN).is_finite());
+}

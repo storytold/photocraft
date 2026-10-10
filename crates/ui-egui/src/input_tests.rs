@@ -651,3 +651,45 @@ fn esc_ends_a_pen_path_and_keeps_it() {
     assert_eq!(path.subpaths[0].knots.len(), 3);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
 }
+
+/// Esc with no active operation deselects (#2674), like ⌘D.
+#[test]
+fn escape_deselects_when_nothing_else_needs_cancelling() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.run_steps(1);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some());
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "Esc deselects");
+    assert!(!h.state().ui.status_error, "no error: {}", h.state().ui.status);
+    // With nothing selected, Esc stays untouched (no history step, no error).
+    let steps = h.state().session.active().unwrap().history.entries().len();
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "no Deselect step");
+}
+
+/// The dialog owns Esc: it cancels the dialog and the selection stays.
+#[test]
+fn escape_with_a_dialog_open_cancels_the_dialog_not_the_selection() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    open_dialog(&mut h);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.dialogs.is_empty(), "Esc cancelled the dialog");
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the selection stays");
+}
+
+/// The command palette owns Esc: it closes the palette and the selection stays.
+#[test]
+fn escape_with_the_palette_open_does_not_deselect() {
+    let mut h = harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().ui.palette_open = true;
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the palette");
+}

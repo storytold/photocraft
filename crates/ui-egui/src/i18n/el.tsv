@@ -25,6 +25,8 @@
 	Right	Δεξιά
 	Open Recent	Πρόσφατα αρχεία
 	Clear Recent Files	Εκκαθάριση πρόσφατων αρχείων
+	Remove from Recent	Αφαίρεση από τα πρόσφατα
+	Remove {name} from Recent	Αφαίρεση του {name} από τα πρόσφατα
 	Close	Κλείσιμο
 	Minimize	Ελαχιστοποίηση
 	Maximize	Μεγιστοποίηση
@@ -3348,12 +3350,17 @@ cameraRaw	Yellow	Κίτρινο
 	300%	300%
 	50% Gray	50% γκρι
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	Adobe	Adobe
 	Adobe rgb	Adobe RGB
 	Android 1080p	Android 1080p
 	Apple Watch 45mm	Apple Watch 45mm
 	Black Matte	Μαύρο ματ
 	Brush	Πινέλο
+	Pencil	Μολύβι
 	Color…	Χρώμα…
 	Cone (Inverted)	Κώνος (αντεστραμμένος)
 	Could not open	Δεν ήταν δυνατό το άνοιγμα
@@ -3440,6 +3447,7 @@ fontWeight	Thin	Πολύ λεπτά
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
+	PhotoCraft — Screen Color Picker	PhotoCraft — Επιλογή χρώματος οθόνης
 
 	Rasterize svg groups deeper than	Ραστεροποίηση ομάδων SVG πέρα από αυτό το βάθος
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	Το 0 απενεργοποιεί αυτό το όριο· ομάδες SVG με ένθεση βαθύτερη από 100 επίπεδα ραστεροποιούνται πάντα.
