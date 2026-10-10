@@ -121,7 +121,8 @@ animation rendering and GIMP's frame exports require separate timing/codec work.
    fallbacks for unsupported backdrop features. Both implementations bound decoded data and nesting.
 3. Raster PDF and SVG/SVGZ delivery exports now work. PDF preserves image ICC, grayscale/RGB,
    8/16-bit samples, soft-mask transparency and physical dimensions from document DPI. It is
-   Export As-only because PDF import is still absent. SVG wraps an embedded PNG; no editable vector
+   Export As-only because PDF import is still absent. SVG/PDF raster preflight caps its RGBA16
+   representation at 256 MiB; SVG XML is capped at 128 MiB. SVG wraps an embedded PNG; no editable vector
    or font preservation is claimed. Multi-page/vector PDF, SVG path export and PDF import remain open.
 4. Evaluate pure-Rust JXL, JPEG2000 and HEIF encoders, then legacy/asset formats by concrete workflow.
 5. Add explicit Netpbm subtype selection and animation/frame export. Current Netpbm chooses P5/P6/P7
