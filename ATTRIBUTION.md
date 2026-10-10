@@ -77,6 +77,12 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
+## Committed test fixtures (not shipped)
+
+| Path | What | Author | Source | License |
+|---|---|---|---|---|
+| `crates/io/tests/fixtures/xcf/` (28 files, 220 KB) | GIMP XCF reader fixtures: 40×30 procedural layers written by GIMP 3.2.6 through `scripts/xcf_fixtures.py`, each with GIMP's merged rendering as a PNG | PhotoCraft contributors | this repository | MIT OR Apache-2.0 |
+
 ## Test data (not committed, not shipped)
 
 `corpus/` is gitignored and no test fixtures are committed to the repository.
