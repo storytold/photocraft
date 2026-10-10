@@ -2,12 +2,12 @@
 //! A new integration test goes into `tests/it/<name>.rs` plus a `mod <name>;` line here,
 //! not into a new top-level `tests/*.rs` file (each of those links a binary of its own).
 
-mod common;
-
 mod camera_raw;
+mod common;
 mod decode_warnings;
 mod deep_exr;
 mod detect_caps;
+mod exr_cryptomatte;
 mod exr_multipart;
 mod fidelity;
 mod heif;
