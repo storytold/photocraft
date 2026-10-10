@@ -221,8 +221,9 @@ impl Rasterizer {
             for (o, a) in row_out.iter_mut().zip(st.acc.iter()) {
                 sum += *a;
                 // Opposite boundaries don't cancel exactly in f32, leaving ~1e-7 just past a
-                // shape's right edge; that residue would count as content (#2537). Snap it to 0.
-                *o = if sum < RESIDUE { 0.0 } else { sum.min(1.0) };
+                // shape's right edge; that residue would count as content (#2537). Snap it (and
+                // a NaN) to 0.
+                *o = if sum >= RESIDUE { sum.min(1.0) } else { 0.0 };
             }
         }
     }
