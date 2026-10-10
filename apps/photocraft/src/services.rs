@@ -460,7 +460,6 @@ mod tests {
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
 
-    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn every_readable_codec_is_discoverable_in_the_native_open_panel() {
         let filters = open_filters();
@@ -472,6 +471,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn open_filters_cover_uppercase_and_mixed_case_extensions() {
         // Matches `text` against a glob of literals and `[..]` classes, as the portal would after `*.`.
