@@ -485,6 +485,10 @@ pub struct BrushSettings {
     pub flip_y: bool,
     /// Pencil: no anti-aliasing (coverage is 0 or 1).
     pub aliased: bool,
+    /// With `aliased`, a square tip: every pixel of the dab's whole-pixel square
+    /// ([`crate::grid_square`]), whatever its angle or roundness. The Eraser's Block mode.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub square: bool,
     // --- dynamics sections ---
     pub shape_dynamics: ShapeDynamics,
     pub scattering: Scattering,
@@ -533,6 +537,7 @@ impl Default for BrushSettings {
             flip_x: false,
             flip_y: false,
             aliased: false,
+            square: false,
             shape_dynamics: ShapeDynamics::default(),
             scattering: Scattering::default(),
             texture: Texture::default(),

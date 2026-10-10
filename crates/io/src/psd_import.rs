@@ -608,6 +608,15 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     for b in &file.global_blocks {
         doc.metadata.psd_global_blocks.push((b.signature, b.key, Arc::new(b.data.clone())));
     }
+    // A 16/32-bit file whose layer block can't be parsed would otherwise open as a flattened
+    // file without a word (#2700). The raw block is kept, but a PSD save writes the document's
+    // own layers in its place (see `psd_export`).
+    if let Some((b, e)) = file.unreadable_layer_block() {
+        warnings.push(format!(
+            "the layers ({} block) could not be read ({e}); only the merged image was opened. Saving as PSD replaces the unreadable layer data",
+            b.key_str()
+        ));
+    }
     doc.patterns = crate::pattern_map::from_global_blocks(&doc);
     // Notes (`Anno`) and the measurement scale (resource 1074); raw data stays for verbatim export.
     doc.notes = crate::annotations_map::notes_from_blocks(&doc);

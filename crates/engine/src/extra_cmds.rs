@@ -390,6 +390,10 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     if let Some(c) = p.get("center") {
         params["center"] = c.clone();
     }
+    // A targeted colour channel (#2307): the paste goes into it, only where `limit` allows.
+    if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+        return crate::channel_clip::paste(s, &params, k, false, Some(&limit), label);
+    }
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         // A targeted mask or channel (#1035): the paste goes into it, only where `limit` allows.
         params["target"] = p.get("target").cloned().unwrap_or_default();
