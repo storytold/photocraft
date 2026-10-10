@@ -165,4 +165,6 @@ mod rtl_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod typography_tests;
+#[cfg(test)]
 mod vertical_tests;

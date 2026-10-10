@@ -27,6 +27,9 @@ use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
 
+mod digits;
+mod kashida_justify;
+
 /// Photoshop synthesizes small caps for faces without an OpenType `smcp` table. Keep the same
 /// readable hierarchy for every font instead of silently rendering lowercase text unchanged.
 const SYNTHETIC_SMALL_CAPS_SCALE: f32 = 0.7;
@@ -417,6 +420,7 @@ pub(crate) const FORCED_LINE_BREAK: char = '\u{3}';
 pub(crate) struct Layouter {
     lcx: LayoutContext<RunBrush>,
     optical: crate::optical::Cache,
+    kashida_probes: kashida_justify::ProbeCache,
 }
 
 /// A cluster of a line in visual order, for kerning.
@@ -434,11 +438,13 @@ struct KernSlot {
     blank: bool,
     /// Vertical type, upright glyph (its outline doesn't run along the column).
     upright: bool,
+    /// The cluster is one ASCII digit shown with another digit's glyph.
+    digit: Option<digits::DigitSwap>,
 }
 
 impl Layouter {
     pub fn new() -> Self {
-        Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default() }
+        Self { lcx: LayoutContext::new(), optical: crate::optical::Cache::default(), kashida_probes: kashida_justify::ProbeCache::default() }
     }
 
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
@@ -629,11 +635,15 @@ impl Layouter {
             let (line_origin, line_len) = if vertical { (box_rect.1, box_rect.3) } else { (box_rect.0, box_rect.2) };
             let avail = if is_box { Some((line_len - indent_start - indent_end).max(1.0)) } else { None };
             layout.break_all_lines(avail);
+            let kashida_para = is_box && ps.kashida && kashida_justify::ENABLED && !vertical && ps.align.is_justified();
+            let kashida_cands = if kashida_para { kashida_justify::candidates(&ptext, &words, &pgraphemes) } else { Vec::new() };
             let alignment = if is_box {
                 match ps.align {
                     TextAlign::Left => Alignment::Left,
                     TextAlign::Center => Alignment::Center,
                     TextAlign::Right => Alignment::Right,
+                    // Kashida lines are justified below, so parley must not spread the gaps.
+                    _ if kashida_para => Alignment::Start,
                     _ => Alignment::Justify,
                 }
             } else {
@@ -713,10 +723,21 @@ impl Layouter {
                         continue;
                     }
                     line_runs.push(run.index());
+                    let digit_font = if vertical { None } else { digits::DigitFont::new(run.font(), run.normalized_coords(), run.font_size()) };
                     for c in run.visual_clusters() {
                         let mut gl = c.glyphs();
                         let first = gl.next().map(|g| g.id);
                         let last = gl.last().map(|g| g.id).or(first);
+                        let digit = digit_font.as_ref().and_then(|f| {
+                            let r = c.text_range();
+                            let ch = ptext.get(r.clone()).filter(|s| s.len() == 1)?.chars().next()?;
+                            let mut glyphs = c.glyphs();
+                            let (g, None) = (glyphs.next()?, glyphs.next()) else { return None };
+                            let st = &out.styles[style_at(map(r.start))];
+                            let swap = f.swap(st.digits, ch, g.advance)?;
+                            let hs = if st.horizontal_scale > 0.0 { st.horizontal_scale } else { 1.0 };
+                            Some(digits::DigitSwap { delta: swap.delta * hs, ..swap })
+                        });
                         slots.push(KernSlot {
                             run: run.index(),
                             start: c.text_range().start,
@@ -728,6 +749,7 @@ impl Layouter {
                             rtl: c.is_rtl(),
                             blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= prefix.len(),
                             upright: vertical && c.first_style().brush.1 != VClass::Rotate as u8,
+                            digit,
                         });
                     }
                 }
@@ -780,6 +802,11 @@ impl Layouter {
                     }
                     kern_px[j] = units / 1000.0 * first.size;
                 }
+                // A swapped digit changes its cluster's advance: the glyphs after it move by the
+                // difference, like kerning, so alignment and carets follow (review finding 7).
+                for (kern, slot) in kern_px.iter_mut().zip(&slots) {
+                    *kern += slot.digit.map_or(0.0, |d| d.delta);
+                }
                 let line_kern: f32 = kern_px.iter().sum();
                 // Per run on the line: (run index, glyph → slot, glyphs emitted, first slot whose
                 // kerning isn't applied yet).
@@ -799,6 +826,10 @@ impl Layouter {
                     }
                     cursors.push((run.index(), g2s, 0, base));
                 }
+                // Spec 6.1: kashida stretches justified lines only, never a last line (except with
+                // "Justify all"); a forced line break ends a line like the paragraph's last one.
+                let ends_forced = ptext.get(line.text_range()).is_some_and(|s| s.ends_with('\n'));
+                let kashida_line = kashida_para && !ends_forced && (!last_line || ps.align == TextAlign::JustifyAll);
                 // Parley aligned box lines without the kerning.
                 let kern_align = if is_box {
                     match ps.align {
@@ -813,7 +844,10 @@ impl Layouter {
                     // The start indent is on the paragraph's start side (the right in RTL).
                     let base = line_origin + if rtl { indent_end } else { indent_start } - kern_align;
                     let slack = avail.unwrap_or(0.0) - adv - line_kern;
-                    base + if last_line {
+                    base + if kashida_line && rtl {
+                        // Justified from the left edge, past the whitespace hung there.
+                        -m.offset - m.trailing_whitespace
+                    } else if last_line {
                         match ps.align {
                             TextAlign::JustifyCenter => slack * 0.5 - m.offset,
                             TextAlign::JustifyRight => slack - m.offset,
@@ -835,7 +869,7 @@ impl Layouter {
                     };
                     target - m.offset
                 };
-                let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll;
+                let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll && !kashida_line;
                 let line_index = out.lines.len();
                 let lr = line.text_range();
                 let g0 = out.glyphs.len();
@@ -885,6 +919,7 @@ impl Layouter {
                     let mut pen = gr.offset();
                     let mut cursor = cursors.iter_mut().find(|c| c.0 == run.index());
                     for g in gr.glyphs() {
+                        let swap = cursor.as_deref().and_then(|c| c.1.get(c.2)).and_then(|&slot| slots.get(slot)).and_then(|s| s.digit);
                         // Kerning of the clusters before this glyph's cluster.
                         if let Some(c) = cursor.as_deref_mut() {
                             if let Some(&slot) = c.1.get(c.2) {
@@ -897,7 +932,7 @@ impl Layouter {
                         }
                         out.glyphs.push(PlacedGlyph {
                             face,
-                            id: g.id,
+                            id: swap.map_or(g.id, |d| d.id),
                             x: dx + pen + g.x + extra,
                             y: baseline + g.y,
                             style: si,
@@ -956,6 +991,26 @@ impl Layouter {
                     extra -= squeeze_punctuation(text, &mut out.clusters[c0..], &mut out.glyphs[g0..]);
                 }
                 let mut line_shift = 0.0f32;
+                if kashida_line {
+                    let slack = avail.unwrap_or(0.0) - (adv + extra);
+                    if slack > 0.0 {
+                        let cx = kashida_justify::LineText {
+                            ptext: &ptext,
+                            prange_start: prange.start,
+                            prefix: prefix.len(),
+                            k,
+                            fallback: &fallback,
+                            small_caps: &small_caps,
+                            styles: &out.styles,
+                            run_starts: &run_starts,
+                        };
+                        let joins = self.plan_joins(fonts, &cx, &line, &kashida_cands);
+                        let ap = kashida_justify::Apply { text, rtl, baseline, spread_all: ps.align == TextAlign::JustifyAll && last_line };
+                        let (added, shift) = kashida_justify::justify_line(&mut out.clusters[c0..], &mut out.glyphs, g0, &joins, slack, &ap);
+                        extra += added;
+                        line_shift = shift;
+                    }
+                }
                 if justify_all {
                     let slack = avail.unwrap_or(0.0) - (adv + extra);
                     if slack > 0.0 {
@@ -1294,14 +1349,19 @@ fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
     best
 }
 
+/// Indices of the line's word gaps: blank clusters between its first and last visible ones.
+fn word_gap_indices(clusters: &[ClusterInfo], text: &str) -> Vec<usize> {
+    let blank = |c: &ClusterInfo| text.get(c.range.clone()).is_some_and(|s| !s.is_empty() && s.chars().all(char::is_whitespace));
+    let (lo, hi) = clusters.iter().filter(|c| !blank(c)).fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
+    clusters.iter().enumerate().filter(|(_, c)| blank(c) && c.x > lo && c.x < hi).map(|(i, _)| i).collect()
+}
+
 /// Spreads the slack of a "Justify all" last line over its word gaps (Photoshop's default letter
 /// spacing is 0%). A line without gaps is letter-spaced instead, except cursive text, which
 /// can't be: it moves whole to its start edge. `clusters` and `glyphs` are the line's, in visual
 /// order. Returns (width added to the line, shift of the whole line).
 fn justify_all_line(clusters: &mut [ClusterInfo], glyphs: &mut [PlacedGlyph], text: &str, slack: f32, rtl: bool) -> (f32, f32) {
-    let blank = |c: &ClusterInfo| text.get(c.range.clone()).is_some_and(|s| !s.is_empty() && s.chars().all(char::is_whitespace));
-    let (lo, hi) = clusters.iter().filter(|c| !blank(c)).fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.x), hi.max(c.x)));
-    let gaps: Vec<usize> = clusters.iter().enumerate().filter(|(_, c)| blank(c) && c.x > lo && c.x < hi).map(|(i, _)| i).collect();
+    let gaps = word_gap_indices(clusters, text);
     if !gaps.is_empty() {
         let step = slack / gaps.len() as f32;
         let gap_x: Vec<f32> = gaps.iter().filter_map(|&i| clusters.get(i)).map(|c| c.x).collect();

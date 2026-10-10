@@ -2477,6 +2477,7 @@ version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82d07aafccd67af15d02512a6adf5896fbc5ed00f2e99b471d2efa14016db3db"
 dependencies = [
+ "core_maths",
  "icu_collections",
  "icu_locale_fallback",
  "icu_provider",
@@ -4547,6 +4548,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-psd",
  "photocraft-raster",
+ "raqim-kashida",
  "skrifa",
 ]
 
@@ -5007,6 +5009,16 @@ name = "range-alloc"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
+
+[[package]]
+name = "raqim-kashida"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41528d6ee290f711f21e8e69f3165b343132fd16c04b61348bbd9bcef046caa3"
+dependencies = [
+ "icu_properties",
+ "icu_segmenter",
+]
 
 [[package]]
 name = "rav1e"

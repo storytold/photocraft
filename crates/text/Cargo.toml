@@ -33,6 +33,13 @@ flate2 = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
 
+# Kashida candidates (arabic-naskh rules, MIT, Khaled Hosny): plain text in, joins with priorities
+# out, no font data. Only its built-in pattern sets are used, never its pattern compiler.
+# Native only: it depends on icu_segmenter with default features, which turn on `auto` and `lstm`
+# (neural line-break models) and would grow the web build, which must stay under Cloudflare's
+# 25 MiB per-file cap (packaging/web/package.sh). The web build keeps word-gap justification.
+raqim-kashida = "0.3"
+
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
 flate2 = { workspace = true }
