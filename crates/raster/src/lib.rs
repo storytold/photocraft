@@ -292,6 +292,23 @@ impl Surface {
                             *d = [g, g, g, s[1] as f32 / 255.0];
                         }
                     }
+                    (ColorMode::Cmyk, SampleType::U8, _) => {
+                        // Identical ink bytes share the exact ICC result; alpha is independent.
+                        let mut previous: Option<([u8; 4], [f32; 3])> = None;
+                        let src = &t.data[base..base + dst.len() * n];
+                        for (d, s) in dst.iter_mut().zip(src.chunks_exact(n)) {
+                            let ink = [s[0], s[1], s[2], s[3]];
+                            let rgb = match previous {
+                                Some((key, rgb)) if key == ink => rgb,
+                                _ => {
+                                    let rgb = photocraft_color::convert::cmyk_to_rgb(ink.map(|v| v as f32 / 255.0));
+                                    previous = Some((ink, rgb));
+                                    rgb
+                                }
+                            };
+                            *d = [rgb[0], rgb[1], rgb[2], s.get(4).map_or(1.0, |v| *v as f32 / 255.0)];
+                        }
+                    }
                     _ => {
                         let mut px = [0.0f32; 8];
                         for (i, d) in dst.iter_mut().enumerate() {
@@ -837,6 +854,27 @@ mod tests {
         g.write_pixel(0, 0, &[0.5, 1.0]);
         let v = g.rgba(0, 0);
         assert!((v[0] - v[2]).abs() < 1e-6 && (v[3] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn repeated_cmyk_reads_match_individual_pixels_bitwise() {
+        let rect = Rect::new(-2, -1, 515, 2);
+        for depth in SampleType::ALL {
+            for alpha in [false, true] {
+                let fmt = PixelFormat::new(ColorMode::Cmyk, depth, alpha);
+                let mut s = Surface::with_default(fmt, &[0.2, 0.4, 0.6, 0.3, 0.7]);
+                for (i, x) in (-1..514).enumerate() {
+                    let c = if i / 2 % 256 == 0 { -0.0 } else { (i / 2 % 256) as f32 / 255.0 };
+                    s.write_pixel(x, 0, &[c, 0.4, 0.6, 0.3, (i % 9) as f32 / 8.0]);
+                }
+                let mut out = vec![[0.0; 4]; (rect.width() * rect.height()) as usize];
+                s.read_rgba_into(rect, &mut out);
+                for (i, actual) in out.iter().enumerate() {
+                    let expected = s.rgba(rect.x0 + (i % rect.width() as usize) as i32, rect.y0 + (i / rect.width() as usize) as i32);
+                    assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits), "{depth:?}, alpha={alpha}, pixel={i}");
+                }
+            }
+        }
     }
 
     #[test]

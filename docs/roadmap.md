@@ -39,6 +39,12 @@ approximated or left out, each with a warning; damaged or unknown files fall bac
 preview. Affinity writing is not implemented: no Affinity installation was available to check
 written files, so `.af` export stays unsupported.
 
+2026-10-10: current `.af` artboard properties (`phrp`/`aprp`) are recognized alongside the
+legacy flag, including converted curve boards. Synthetic two-board regressions check separate
+bounds, overflow clipping, `.pcraft`/PSD board and pixel round trips, and moving one board with its
+children through undo/redo. Nested boards remain masked groups; rotated/curved board outlines
+still import at their bounding rectangle.
+
 2026-10-09: `corpus/affinity/` now has 39 pinned documents and 21 PNGs (20 rendered references and
 one bitmap-fill texture): the prior 21 public documents plus 18 CC0 samples for #1606. The new
 samples compare against their exported PNGs;
@@ -92,6 +98,13 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: Native CMYK solid and gradient fills share depth-quantized samples between
+rendering and PSD export. The uncached 16-bit CMYK gradient now round-trips with zero
+rendered error; psd-tools round trips rise from 307 to 308. Mixed and Photoshop round
+trips remain 169 and 258; rendering oracle counts remain 146, 237 and 133.
+Exact 8-bit CMYK row reuse reduces 1 MP conversion-read time by 77% for smooth ramps,
+33% with dithering and 10% for random colours (M4 Max, release optimization level 3).
+
 2026-10-10: [Shape stroke controls](shape-strokes.md) expose existing Solid/Dashed/Dotted,
 custom dash/gap, offset, caps, joins, alignment, miter-limit and opacity capabilities in
 Shape/Pen options and Properties. Properties stages a cached canvas preview before one
@@ -103,6 +116,7 @@ filled bar. This extends UI reachability and does not claim Photoshop-authored s
 | Menu wiring | 626/626 menu items dispatch a command (`parity.md`) | high but shallow | Says nothing about behaviour. |
 | PSD fidelity (rendering) | Corpus oracle 115/170 (68%): 30 differ, 26 have no usable reference, 1 import error. 2026-10-07: io corpus 146/170, psd-tools corpus 236/309 (was 229: Advanced Blending knockouts), Photoshop oracles 132/258 | medium | Push to 170/170 under way (effects/strokes, multi-instance effects, 16/32-bit and colour modes, references for skipped files). |
 | PSD round trip | 169/169 re-import identically; every adjustment layer and blend mode round-trips | high (within corpus) | Floors in `crates/io/tests/corpus.rs`; raise, never lower. Corpora: `cargo xtask corpus --all` (ours: https://github.com/storytold/photocraft-corpus). |
+| OpenRaster read/write | 2026-10-09: 34 Krita 5.2.9-authored `.ora` files (27 blend modes, groups, pass-through, offsets, opacity, visibility, masks, 16-bit, gray) render within 3/255 of Krita's merged image (30) or differ for known reasons (4: Krita's lighter/darker-colour tie-break, Hard Mix at exactly 1, a linear-light 16-bit document); Krita re-opens our exports and renders them identically to its originals (33/34; Soft Light is written as `svg:soft-light`) | medium (one authoring app) | MyPaint and GIMP files untested. Masks are applied to pixels and layer styles dropped on save (reported). See [OpenRaster](ora.md). |
 | Paint.NET import | 2026-10-09: 14/14 local PDN3 textures preserve editable layers exactly through `.pcraft` and render within 2.142/255 of full-size previews; a supplied 5.x document (1280×720, 11 layers) passes editing/history/native saves and matches its thumbnail within 0.418/255 mean; all 14 blend modes exercised synthetically | medium (limited corpus) | Import only; metadata omitted. More current-version files and full-size exports needed. See [PDN support](pdn.md). |
 | Smart filters / text / effect shapes in PSDs | Measured on our Photoshop-authored set (https://github.com/storytold/photocraft-corpus, `corpus/photoshop`, 258 files): see the per-group floors in `crates/io/tests/corpus.rs` and `crates/engine/tests/photoshop_oracles.rs`. Smart objects and smart filters now survive PSD save and open (41 corpus files, 206 smart objects, round trip strict; Photoshop opens our exports with live filters); re-rendering Photoshop's smart filters with ours matches 5/30 (was 1/30) | low–medium | Remaining re-render gaps are filter maths (Gaussian/Motion Blur, Unsharp Mask, Emboss, Add Noise RNG) and bicubic placement. |
 | Core editing (layers, masks, selections, adjustments, filters, transforms) | Broad engine coverage; many interaction bugs fixed after 0.2.0 (adjustment dialogs, Curves, crop, Move/Transform modifiers, gesture origin) | medium | Fixes not yet user-validated. |

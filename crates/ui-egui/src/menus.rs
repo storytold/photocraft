@@ -915,11 +915,29 @@ fn menu_tint(name: &str) -> Option<egui::Color32> {
     })
 }
 
+/// The open menus' items, kept between frames: building them asks every command whether it can
+/// run, which on a document with thousands of layers costs far more than a frame.
+pub(crate) struct ItemCache {
+    /// [`crate::native_menu::state_hash`] of the state the items were built from.
+    state: u64,
+    items: Vec<MenuItem>,
+}
+
+impl ItemCache {
+    /// The items, while they still describe `state`. A frame with a click or key press rebuilds
+    /// them, which covers state the hash doesn't list.
+    fn reuse(self, state: u64, input: bool) -> Option<Vec<MenuItem>> {
+        (!input && self.state == state).then_some(self.items)
+    }
+}
+
 /// Draws the menu bar; returns the right edge of the last menu title (the bar itself fills the row).
 pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     // Built only while a menu is open: every item's enabled/checked state scales with the
-    // document (layer lookups), which cost milliseconds per frame on large layouts (#125).
-    let items: std::cell::OnceCell<Vec<MenuItem>> = std::cell::OnceCell::new();
+    // document (layer lookups), which cost milliseconds per frame on large layouts (#125). While
+    // one stays open, the items are reused until what they depend on changes.
+    let kept = std::cell::Cell::new(app.menu_cache.take());
+    let built: std::cell::OnceCell<ItemCache> = std::cell::OnceCell::new();
     let app_ref: &PhotocraftApp = app;
     let mut right = ui.cursor().left();
     let lang = crate::i18n::current();
@@ -964,7 +982,14 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                     .style(config.style.clone())
                     .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(egui::containers::menu::MenuConfig::MENU_CONFIG_TAG, config))
                     .show(|ui| {
-                        let items = items.get_or_init(|| menu_items(app_ref));
+                        let items = &built
+                            .get_or_init(|| {
+                                let state = crate::native_menu::state_hash(app_ref, None);
+                                let input = crate::native_menu::had_input(ui.ctx());
+                                let items = kept.take().and_then(|c| c.reuse(state, input)).unwrap_or_else(|| menu_items(app_ref));
+                                ItemCache { state, items }
+                            })
+                            .items;
                         let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(top)).collect();
                         ui.set_min_width(220.0);
                         if mine.is_empty() {
@@ -989,6 +1014,8 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
         });
     });
     nav.store(ui.ctx());
+    // No menu open this frame: nothing is kept.
+    app.menu_cache = built.into_inner();
     // The press-drag gesture ends with the button (its release was handled by the rows above).
     if ui.input(|i| i.pointer.primary_released() || !i.pointer.primary_down()) {
         ui.ctx().data_mut(|d| d.remove::<bool>(press_gesture_id()));
@@ -1482,6 +1509,42 @@ mod tests {
         harness.run_steps(4);
         assert!(harness.query_by_label_contains("Open…").is_none(), "File menu should close");
         assert!(harness.query_by_label_contains("Duplicate…").is_some(), "Image menu should open on hover");
+    }
+
+    /// An open menu reuses its items between frames (building them costs far more than a frame on
+    /// a document with thousands of layers), rebuilds them when the state changes under it, and
+    /// keeps nothing once it closes.
+    #[test]
+    fn an_open_menu_reuses_its_items_until_the_state_changes() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 700.0)).build_ui_state(
+            |ui, app| {
+                menu_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        harness.run_steps(3);
+        assert!(harness.state().menu_cache.is_none(), "no menu open, nothing built");
+        harness.get_by_label("File").click();
+        harness.run_steps(3);
+        // The same allocation frame after frame: the items were not rebuilt.
+        let built = |app: &PhotocraftApp| app.menu_cache.as_ref().map(|c| c.items.as_ptr());
+        let close = |app: &PhotocraftApp| app.menu_cache.as_ref().and_then(|c| c.items.iter().find(|i| i.id == "file.close")).map(|i| i.enabled);
+        let first = built(harness.state());
+        assert!(first.is_some());
+        assert_eq!(close(harness.state()), Some(false));
+        harness.run_steps(3);
+        assert_eq!(built(harness.state()), first);
+        // A document opened under the open menu (a job ending, an agent): the items follow.
+        harness.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        harness.run_steps(1);
+        assert_eq!(close(harness.state()), Some(true));
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(3);
+        assert!(harness.state().menu_cache.is_none(), "closed, nothing kept");
     }
 
     #[test]

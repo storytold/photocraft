@@ -832,6 +832,53 @@ mod tests {
         }
     }
 
+    /// A serde type error from numbers the dialog sends as JSON floats (`1.0`) for an integer
+    /// field ("invalid type: floating point `1.0`, expected u32"), as opposed to a legitimate
+    /// refusal such as "no selection" or "needs a map".
+    fn float_type_error(e: &str) -> bool {
+        e.contains("invalid type: floating point")
+    }
+
+    /// #2501: every schema dialog, opened with its default fields and drawn once, runs its command
+    /// (OK) and its live preview without a type error from integer fields sent as floats.
+    #[test]
+    fn every_dialog_default_runs_without_float_type_errors() {
+        let ids: Vec<&str> = photocraft_engine::command_specs().iter().map(|c| c.id).filter(|id| has_dialog(id)).collect();
+        assert!(ids.len() > 100, "{} dialogs", ids.len());
+        let mut failures = Vec::new();
+        for id in ids {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 24, "height": 24})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            let Some(dialog) = open(&mut app, id) else { continue };
+            let mut f = app.ui.dialogs.iter().find(|d| d.id == dialog).unwrap().fields.clone();
+            egui::Context::default().run_ui(Default::default(), |ui| body(ui, &mut f)).textures_delta.clear();
+            let params = params_of(&f);
+            let st = app.session.active().unwrap();
+            let (doc, active) = ((*st.doc).clone(), st.active_layer);
+            if let Err(e) = app.session.execute(id, params.clone()) {
+                let e = e.to_string();
+                if float_type_error(&e) {
+                    failures.push(format!("{id} OK {params}: {e}"));
+                }
+            }
+            // The preview swallows the error; rerun its params at full size to see it.
+            if preview_document(&doc, active, id, &params, 1).is_none() {
+                let mut s = photocraft_engine::Session::new();
+                s.add_document(doc, None);
+                if let Some(a) = active {
+                    s.select_layer(a).unwrap();
+                }
+                if let Err(e) = s.execute(id, params.clone()).map_err(|e| e.to_string())
+                    && float_type_error(&e)
+                {
+                    failures.push(format!("{id} preview {params}: {e}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     #[test]
     fn colour_params_parse_with_and_without_a_default() {
         let p = parse_spec(r##"{"color":color=#ffffff,"vineColor":color,"bad":color=#zz}"##);
