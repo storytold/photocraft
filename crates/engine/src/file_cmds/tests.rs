@@ -17,6 +17,52 @@ fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
 
+#[test]
+fn jpeg2000_headless_saves_preserve_depth_and_accept_quality() {
+    let s = session(16, 8, 16);
+    let (jp2, warnings) = encode(doc(&s), "copy.jp2", None).unwrap();
+    assert!(jp2.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n"));
+    assert!(!warnings.iter().any(|w| w.contains("lossy compression")));
+    let back = photocraft_codecs::decode(&jp2).unwrap();
+    assert_eq!(back.dimensions(), (16, 8));
+    assert_eq!(back.sample_type(), photocraft_codecs::SampleType::U16);
+    let (raw, warnings) = encode(doc(&s), "copy.j2c", Some(6.0)).unwrap();
+    assert!(raw.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]));
+    assert!(warnings.iter().any(|w| w.contains("lossy compression")), "{warnings:?}");
+    assert_eq!(photocraft_codecs::decode(&raw).unwrap().dimensions(), (16, 8));
+    let dir = tmp("jpeg2000-batch");
+    for (name, bytes) in [("one.JP2", &jp2), ("two.j2k", &raw), ("three.J2C", &raw)] {
+        std::fs::write(join(&dir, name), bytes).unwrap();
+    }
+    assert_eq!(list_images(&dir).unwrap().len(), 3, "folder-based automation picks up every supported JPEG 2000 suffix");
+}
+
+#[test]
+fn image_processor_preserves_lossless_jpeg2000_default() {
+    use photocraft_codecs::{ChannelLayout, Format, Image, decode};
+    let dir = tmp("jpeg2000-processor");
+    let img = Image::from_u16(16, 8, ChannelLayout::Rgb, &(0..384).map(|i| (i * 479 % 65536) as u16).collect::<Vec<_>>()).unwrap();
+    let input = join(&dir, "source.jp2");
+    std::fs::write(&input, photocraft_codecs::encode(&img, Format::Jpeg2000, &Default::default()).unwrap()).unwrap();
+    let mut s = Session::new();
+    for format in ["jp2", "same"] {
+        let out = join(&dir, format);
+        let result = s.execute("file.scripts.imageProcessor", json!({"input": [input], "output": out, "format": format})).unwrap();
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        let output = decode(&std::fs::read(join(&out, "source.jp2")).unwrap()).unwrap();
+        assert_eq!(output.data(), img.data(), "{format} retains native samples without an explicit quality");
+    }
+    let source = photocraft_io::import("source.jp2", &std::fs::read(&input).unwrap()).unwrap().document;
+    let fallback = SaveOpts::default().or_quality(8.0);
+    let (_, warnings) = encode(&source, "copy.jp2", fallback).unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("lossy compression")));
+    let (_, warnings) = encode(&source, "copy.jp2", SaveOpts::from(Some(6.0)).or_quality(8.0)).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("lossy compression")), "{warnings:?}");
+    for ext in ["jpg", "webp"] {
+        assert_eq!(encode(&source, &format!("copy.{ext}"), fallback).unwrap().0, encode(&source, &format!("copy.{ext}"), Some(8.0)).unwrap().0);
+    }
+}
+
 /// Writes a solid-colour PNG of `w × h` and returns its path.
 fn png(dir: &str, name: &str, w: u32, h: u32, color: &str) -> String {
     let mut s = Session::new();

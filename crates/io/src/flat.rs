@@ -315,7 +315,7 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
         if let Some(linear) = convert_rgb(&img, Builtin::LinearSrgb.profile(), Intent::RelativeColorimetric, false, CSample::F32)? {
             img = linear;
         }
-    } else if !format.caps().icc {
+    } else if !format.caps().icc || (format == Format::Jpeg2000 && opts.encode.jpeg2000_codestream) {
         // Untagged files read back as sRGB: convert to it (as Quick Export does) rather than
         // write values that only mean something under the dropped profile.
         if let Some(srgb) = convert_rgb(&img, Builtin::Srgb.profile(), Intent::Perceptual, true, img.sample_type())? {

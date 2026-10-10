@@ -48,6 +48,7 @@ fn default_build_formats_all_symmetric() {
     let expected = [
         Format::Png,
         Format::Jpeg,
+        Format::Jpeg2000,
         Format::Tiff,
         Format::WebP,
         Format::Gif,
@@ -132,6 +133,13 @@ fn detect_magic_png() {
 fn detect_magic_jpeg() {
     assert_eq!(detect(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(Format::Jpeg));
     assert_eq!(detect(&[0xFF, 0xD8]), None);
+}
+#[test]
+fn detect_magic_jpeg2000_container_and_codestream() {
+    assert_eq!(detect(b"\0\0\0\x0cjP  \r\n\x87\n"), Some(Format::Jpeg2000));
+    assert_eq!(detect(&[0xFF, 0x4F, 0xFF, 0x51]), Some(Format::Jpeg2000));
+    assert_eq!(detect(&[0xFF, 0x4F]), None);
+    assert_eq!(detect(b"\0\0\0\x0cjP  \r\n"), None);
 }
 #[test]
 fn detect_magic_tiff_both_endians_and_bigtiff() {
@@ -242,6 +250,10 @@ fn extensions_map_back() {
 #[test]
 fn extension_specific_cases() {
     assert_eq!(from_extension("JPG"), Some(Format::Jpeg));
+    assert_eq!(from_extension("photo.JP2"), Some(Format::Jpeg2000));
+    assert_eq!(from_extension("j2k"), Some(Format::Jpeg2000));
+    assert_eq!(from_extension("j2c"), Some(Format::Jpeg2000));
+    assert_eq!(from_extension("jpx"), None);
     assert_eq!(from_extension("tif"), Some(Format::Tiff));
     assert_eq!(from_extension("pfm"), Some(Format::Pnm));
     assert_eq!(from_extension("pam"), Some(Format::Pnm));

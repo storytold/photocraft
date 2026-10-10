@@ -1,6 +1,14 @@
 # Raster formats
 
-`photocraft-codecs` provides format detection, capability declarations, decode limits, metadata handling, and encoding for flat images. The default build declares read/write support for PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, Netpbm/PFM, QOI, OpenEXR, and Radiance HDR. HEIF/HEIC (iPhone and Mac photos) is read-only, decoded in pure Rust by `heic-rs` through the optional `photocraft-heif` crate. It is a build-time choice behind the `heif` cargo feature (`cargo build -p photocraft --features heif`): official builds include it; without it HEIC files are still recognised and opening one reports that HEIC support isn't included in that build. AVIF encoding is optional; AVIF decoding is not implemented in the current crate.
+`photocraft-codecs` provides format detection, capability declarations, decode limits, metadata handling, and encoding for flat images. The default build declares read/write support for PNG, JPEG, an initial JPEG 2000 subset, TIFF, WebP, GIF, BMP, TGA, ICO, Netpbm/PFM, QOI, OpenEXR, and Radiance HDR. HEIF/HEIC (iPhone and Mac photos) is read-only, decoded in pure Rust by `heic-rs` through the optional `photocraft-heif` crate. It is a build-time choice behind the `heif` cargo feature (`cargo build -p photocraft --features heif`): official builds include it; without it HEIC files are still recognised and opening one reports that HEIC support isn't included in that build. AVIF encoding is optional; AVIF decoding is not implemented in the current crate.
+
+## JPEG 2000
+
+JP2 containers and raw J2K/J2C codestreams open as Gray or RGB images, with optional straight alpha. The first implementation accepts unsigned, full-resolution components with a common precision of 1–16 bits: precisions up to 8 bits scale to the full 8-bit range, and 9–16 bits scale to the full 16-bit range. Exports preserve 8- or 16-bit Gray/RGB samples and transparency, and use lossless compression by default.
+
+Save As supports `.jp2`, `.j2k` and `.j2c`; Export As offers lossless JP2 without a quality slider. An explicit quality requests lossy compression: CLI `--quality` and MCP/serve use 1–100, while headless engine save commands use 0–12. The suffix chooses the container: `.jp2` retains ICC profiles and capture resolution, while `.j2k` and `.j2c` have neither field. Raw RGB document exports convert profiled colours to sRGB before omitting the profile and report metadata losses.
+
+This is an initial subset. Palettes/channel mappings, signed or subsampled components, mixed component precisions, YCbCr/CMYK and complex JPX files remain unsupported. A JP2-compatible JPX container with one codestream can use the same subset, but `.jpx` is not an advertised extension. EXIF, XMP and other container metadata are not retained; imports and exports report those losses. See the [JPEG 2000 format notes](https://github.com/storytold/photocraft/blob/main/docs/jpeg2000.md) for the further coding-tool restrictions.
 
 ## Layered TIFF
 

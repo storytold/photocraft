@@ -153,6 +153,8 @@ pub enum DecodeWarning {
     /// The image data ends early (truncated or damaged file); the decoder filled in the rest
     /// (a baseline JPEG's missing rows come out grey).
     Truncated { format: Format },
+    /// Container metadata beyond the codec's supported subset was not imported.
+    MetadataDropped { format: Format },
     /// Deep image data (per-pixel sample lists) was composited into the flat image; the samples
     /// themselves (Z and other deep channels) are not part of the flat result.
     DeepFlattened { format: Format, max_samples_per_pixel: u32 },
@@ -170,6 +172,7 @@ impl fmt::Display for DecodeWarning {
             DecodeWarning::Truncated { format } => {
                 write!(f, "{} data ends early (the file is truncated or damaged); part of the image is missing", format.name())
             }
+            DecodeWarning::MetadataDropped { format } => write!(f, "{} metadata outside the supported subset was not imported", format.name()),
             DecodeWarning::DeepFlattened { format, max_samples_per_pixel } => write!(
                 f,
                 "{format} deep data was composited into a flat image (up to {max_samples_per_pixel} samples per pixel); per-pixel depth is not kept",

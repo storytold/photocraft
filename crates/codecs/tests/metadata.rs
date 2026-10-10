@@ -70,6 +70,10 @@ fn jpeg_metadata() {
     check_format(Format::Jpeg);
 }
 #[test]
+fn jpeg2000_metadata() {
+    check_format(Format::Jpeg2000);
+}
+#[test]
 fn tiff_metadata() {
     check_format(Format::Tiff);
 }

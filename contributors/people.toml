@@ -26,7 +26,7 @@ display_name = "Brandon Thomas"
 sync_github_name = false
 
 [people.Streetblock]
-sync_github_name = true
+sync_github_name = false
 
 [people.switch87]
 real_name = "Gert Pellin"

@@ -155,6 +155,30 @@ async fn headless_edit_render_save_roundtrip() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn jpeg2000_export_quality_is_explicit_and_does_not_persist() {
+    let dir = tmp("jpeg2000-quality");
+    let source = write_image(&dir, "source.png", photocraft_codecs::Format::Png);
+    let source = photocraft_codecs::decode(&source).unwrap();
+    let client = connect(headless_in(&dir)).await;
+    json_of(&call(&client, "doc_open", json!({"path": "source.png"})).await);
+    for quality in [None, Some(80), None] {
+        let mut params = json!({"path": "copy.jp2"});
+        if let Some(q) = quality {
+            params["quality"] = json!(q);
+        }
+        let saved = json_of(&call(&client, "doc_export", params).await);
+        assert_eq!(saved["warnings"].to_string().contains("lossy compression"), quality.is_some(), "{saved}");
+        let back = photocraft_codecs::decode(&std::fs::read(dir.join("copy.jp2")).unwrap()).unwrap();
+        assert_eq!(back.dimensions(), source.dimensions());
+        if quality.is_none() {
+            assert_eq!(back.data(), source.data(), "omitting quality keeps lossless pixels");
+        }
+    }
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn command_list_filters() {
     let client = connect(PhotocraftMcp::headless()).await;
     let all = json_of(&call(&client, "command_list", json!({})).await);

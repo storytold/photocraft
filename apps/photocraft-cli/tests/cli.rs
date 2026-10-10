@@ -31,6 +31,28 @@ fn ok(cmd: &mut Command) -> (String, String) {
 }
 
 #[test]
+fn jpeg2000_conversion_supports_containers_codestreams_and_quality() {
+    let dir = tmp("jpeg2000");
+    let input = dir.join("source.png");
+    write_png(&input, 16, 8, 13);
+    for (ext, raw) in [("jp2", false), ("j2k", true), ("j2c", true)] {
+        let output = dir.join(format!("out.{ext}"));
+        ok(bin().arg("convert").arg(&input).arg(&output));
+        let bytes = std::fs::read(&output).unwrap();
+        assert_eq!(bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]), raw, "{ext}");
+        assert_eq!(bytes.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n"), !raw, "{ext}");
+        let back = photocraft_codecs::decode(&bytes).unwrap();
+        assert_eq!(back.dimensions(), (16, 8));
+        let original = photocraft_codecs::decode(&std::fs::read(&input).unwrap()).unwrap();
+        assert_eq!(back.data(), original.data(), "{ext} defaults to lossless");
+    }
+    let output = dir.join("quality.jp2");
+    let (_, warnings) = ok(bin().arg("convert").arg(&input).arg(&output).args(["--quality", "80"]));
+    assert!(warnings.contains("lossy compression"), "{warnings}");
+    assert_eq!(photocraft_codecs::decode(&std::fs::read(output).unwrap()).unwrap().dimensions(), (16, 8));
+}
+
+#[test]
 fn usage_and_unknown_command() {
     let o = bin().output().unwrap();
     assert_eq!(o.status.code(), Some(2));

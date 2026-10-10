@@ -116,8 +116,8 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 
 /// Extensions the batch commands pick up from a folder.
 const OPENABLE: &[&str] = &[
-    "pdn", "ora", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm",
-    "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
+    "pdn", "ora", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "jp2", "j2k", "j2c", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico",
+    "pnm", "ppm", "pgm", "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
@@ -209,23 +209,25 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
     Ok(r.document)
 }
 
-/// What a headless save writes beyond the format: JPEG quality and TIFF layers.
+/// What a headless save writes beyond the format: compression quality and TIFF layers.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SaveOpts {
-    /// Photoshop's 0–12 JPEG scale.
+    /// Explicit compression quality on Photoshop's 0–12 JPEG scale.
     pub quality: Option<f64>,
     /// TIFF: keep the layers. Off unless a command's params ask (`"tiffLayers": true`).
     pub tiff_layers: bool,
+    /// Existing Image Processor JPEG/WebP default; it must not request lossy JPEG 2000.
+    default_quality: Option<f64>,
 }
 
 impl SaveOpts {
     /// `quality` and `tiffLayers` from a command's params.
     pub(crate) fn from_params(p: &Value) -> Self {
-        SaveOpts { quality: f64_param(p, "quality"), tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false) }
+        SaveOpts { quality: f64_param(p, "quality"), tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), ..Default::default() }
     }
 
     pub(crate) fn or_quality(mut self, q: f64) -> Self {
-        self.quality = self.quality.or(Some(q));
+        self.default_quality = self.default_quality.or(Some(q));
         self
     }
 }
@@ -240,9 +242,10 @@ impl From<Option<f64>> for SaveOpts {
 pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
     let save = save.into();
     let mut opts = photocraft_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
-    if let Some(q) = save.quality {
+    if let Some(q) = save.quality.or(save.default_quality) {
         let q = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
         opts.encode.jpeg_quality = q;
+        opts.encode.jpeg2000_quality = save.quality.map(|_| q);
         // A quality on a WebP save asks for the lossy encoder; the default WebP stays lossless.
         opts.encode.webp_quality = q;
         opts.encode.webp_lossless = false;
@@ -1256,7 +1259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save a Copy…",
             &["File"],
             Some("Cmd+Alt+S"),
-            r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"layers":bool=true,"tiffLayers":bool=false (TIFF: keep the layers; flat by default)}"##,
+            r##"{"path":str (format from the extension),"quality":0..12? (JPEG/JPEG 2000/WebP),"layers":bool=true,"tiffLayers":bool=false (TIFF: keep the layers; flat by default)}"##,
             native_doc,
             save_a_copy
         ),
@@ -1322,7 +1325,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Image Processor…",
             &["File", "Scripts"],
             None,
-            r##"{"input":folder|[paths],"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"tiffLayers":bool=false,"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"input":folder|[paths],"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12? (JPEG/WebP default 8; JPEG 2000 lossless when omitted),"tiffLayers":bool=false,"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
             native,
             image_processor
         ),

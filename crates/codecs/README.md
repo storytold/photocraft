@@ -34,6 +34,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | PNG | yes | yes | U8, U16 | Gray, GrayA, RGB, RGBA | yes | yes (iCCP) | yes (eXIf) | yes (iTXt `XML:com.adobe.xmp`) | yes (pHYs) | yes (tEXt/zTXt/iTXt) | no | `png` |
 | JPEG | yes | yes | U8 | Gray, RGB, CMYK | no | yes (multi-segment APP2) | yes (APP1) | yes (APP1) | yes (JFIF) | no | yes | `zune-jpeg` / `jpeg-encoder` |
+| JPEG 2000 (JP2/J2K/J2C) | yes | yes | U8, U16 | Gray, GrayA, RGB, RGBA | yes | yes (JP2 only) | no | no | yes (JP2 only) | no | optional (9/7) | `oxideav-jpeg2000` |
 | TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included) | yes | yes (tag 34675) | no | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
 | WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
 | GIF | yes | yes | U8 | RGBA | 1-bit | no | no | no | no | no | yes (256-colour palette) | `image` |
@@ -61,6 +62,17 @@ the encode plan, and `fidelity_warnings` reports the conversion when it loses in
 the same.
 
 ## Documented asymmetries and limitations
+
+* **JPEG 2000.** The first slice reads unsigned full-resolution components with a common
+  precision of 1–16 bits, scaled to U8/U16, and writes lossless 8-/16-bit Gray/GrayA/RGB/RGBA.
+  JP2 retains ICC and capture resolution; raw J2K/J2C drops them with export warnings.
+  `jpeg2000_quality: Some(1..=100)` requests lossy 9/7 with a codestream byte budget of
+  `512 + native sample bytes * (quality / 100)^2`; default encoding is reversible 5/3.
+  Palettes, signed/subsampled/mixed
+  components, non-Gray/RGB colour spaces and additional coding tools are explicitly unsupported.
+  EXIF/XMP are not retained. Independent container/header checks bound packet/block work before
+  decoding; the component-plane budget alone is not a total memory cap. See
+  [the supported subset and validation](../../docs/jpeg2000.md).
 
 * **Camera raw files** (DNG, CR2, NEF, ARW… which are TIFF-structured) are recognised and refused
   with `CodecError::Unsupported`: they are sensor data, not flat images. `photocraft-raw` decodes
@@ -185,6 +197,13 @@ also passed to the underlying decoders. A violation returns `CodecError::LimitEx
 defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
 PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
+
+JPEG 2000 shares one budget between container metadata and estimated decoding work. Its
+conservative allowance includes 48 bytes per component sample, eight times the compressed
+codestream size, a separate row/column scratch allowance and packet/code-block bookkeeping.
+Coefficient state, integer planes and floating-point wavelet/conversion arrays coexist in the
+backend; skinny tiles also need line buffers that a sample-only estimate can miss. The estimate
+is a workload guard, not a total process-memory cap.
 
 ## Tests
 

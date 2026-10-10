@@ -11,7 +11,7 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 5] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA")];
+const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("jp2", "JPEG 2000")];
 
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -299,6 +299,18 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jp2_does_not_inherit_lossy_options_from_another_format() {
+        let mut fields = Map::new();
+        fields.insert("format".into(), json!("jp2"));
+        fields.insert("quality".into(), json!(10));
+        fields.insert("lossless".into(), json!(false));
+        let settings = settings(&fields);
+        assert_eq!(settings.jpeg_quality, None);
+        assert_eq!(settings.webp_quality, None);
+        assert!(settings.webp_lossless);
+    }
 
     #[test]
     fn export_document_scales_height_when_rounded_width_is_unchanged() {

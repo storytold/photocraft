@@ -92,6 +92,9 @@ fn save_dialog_preserves_flat_and_existing_layered_format_defaults() {
     let ctx = egui::Context::default();
     for (path, layered) in [
         ("/pics/My image.JPEG", false),
+        ("/pics/My image.JP2", false),
+        ("/pics/My image.j2k", false),
+        ("/pics/My image.J2C", false),
         ("/pics/My image.PSD", true),
         ("/pics/My image.psb", true),
         ("/pics/My image.pcraft", true),

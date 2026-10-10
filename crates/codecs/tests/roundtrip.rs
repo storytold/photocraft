@@ -110,6 +110,9 @@ mod png {
 mod jpeg {
     cases!(Format::Jpeg);
 }
+mod jpeg2000 {
+    cases!(Format::Jpeg2000);
+}
 mod tiff {
     cases!(Format::Tiff);
 }

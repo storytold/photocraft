@@ -38,7 +38,7 @@ pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use half::f16;
 
-use crate::codecs::{exr, heif, jpeg, png, pnm, tiff, via_image, webp};
+use crate::codecs::{exr, heif, jpeg, jpeg2000, png, pnm, tiff, via_image, webp};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -66,6 +66,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
     let img = match format {
         Format::Png => png::decode(bytes, l),
         Format::Jpeg => jpeg::decode(bytes, l),
+        Format::Jpeg2000 => jpeg2000::decode(bytes, l),
         Format::Tiff => tiff::decode(bytes, l),
         Format::WebP => webp::decode(bytes, l),
         Format::Pnm => pnm::decode(bytes, l),
@@ -192,6 +193,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
     match format {
         Format::Png => png::encode(image, plan, opts),
         Format::Jpeg => jpeg::encode(image, plan, opts),
+        Format::Jpeg2000 => jpeg2000::encode(image, plan, opts),
         Format::Tiff => tiff::encode(image, plan, opts),
         Format::WebP => webp::encode(image, plan, opts),
         Format::Pnm => pnm::encode(image, plan, opts),

@@ -81,10 +81,10 @@ pub struct SaveParams {
     /// `path`, so a flattened or converted copy never replaces the opened file.
     #[serde(default)]
     pub path: Option<String>,
-    /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
+    /// Format override as an extension (pcraft, psd, png, jpg, jp2, j2k, j2c, tif, webp, exr, …).
     #[serde(default)]
     pub format: Option<String>,
-    /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
+    /// JPEG, JPEG 2000 or WebP quality 1..100. JPEG 2000 and WebP are lossless when omitted.
     #[serde(default)]
     pub quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
@@ -828,6 +828,7 @@ impl PhotocraftMcp {
                 let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, ..Default::default() };
                 if let Some(q) = p.quality {
                     opts.encode.jpeg_quality = q.clamp(1, 100);
+                    opts.encode.jpeg2000_quality = Some(q.clamp(1, 100));
                     opts.encode.webp_quality = q.clamp(1, 100);
                     opts.encode.webp_lossless = false;
                 }

@@ -20,9 +20,9 @@ mod recovery_tests;
 /// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm",
-    "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco",
-    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "psd", "psb", "psdt", "png", "jpg", "jpeg", "jp2", "j2k", "j2c", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr",
+    "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg",
+    "svgz", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -56,6 +56,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg"]),
+    ("JPEG 2000", &["jp2", "j2k", "j2c"]),
     ("WebP", &["webp"]),
     ("TIFF", &["tif"]),
     ("Targa", &["tga"]),
@@ -461,6 +462,17 @@ mod tests {
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
 
+    #[test]
+    fn jpeg2000_is_available_in_open_and_save_filters() {
+        for ext in ["jp2", "j2k", "j2c"] {
+            assert!(OPEN_EXTS.contains(&ext));
+            let filters = save_filters(&format!("image.{ext}"));
+            assert_eq!(filters[0].0, "JPEG 2000");
+            assert!(filters[0].1.iter().any(|e| e == ext));
+        }
+        assert!(!OPEN_EXTS.contains(&"jpx"));
+    }
+
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn open_filters_cover_uppercase_and_mixed_case_extensions() {
@@ -562,7 +574,7 @@ mod tests {
         }
         let _ = invoke(&mut app, "file.saveACopy");
         // Export As, Quick Export, Save for Web (with and without slices).
-        for format in ["png", "jpg", "webp", "tif", "tga"] {
+        for format in ["png", "jpg", "webp", "tif", "tga", "jp2"] {
             dialog(&mut app, "file.export.exportAs", json!({"format": format}));
         }
         for format in ["png", "jpg", "gif", "webp"] {
@@ -585,7 +597,7 @@ mod tests {
             "psd",                       // Save As untitled
             "pcraft jpeg gif bmp psd",   // Save As opened .pcraft .jpeg .gif .bmp .dng
             "psd",                       // Save a Copy
-            "png jpg webp tif tga",      // Export As
+            "png jpg webp tif tga jp2",  // Export As
             "png jpg gif webp",          // Quick Export
             "gif png png jpg wbmp html", // Save for Web: gif png8 png24 jpeg wbmp, then with slices
             "csv pcpresets",             // Measurement Log, Export Presets

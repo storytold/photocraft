@@ -7,6 +7,8 @@ use crate::image::{ChannelLayout, SampleType};
 pub enum Format {
     Png,
     Jpeg,
+    /// JPEG 2000: JP2 containers and raw J2K/J2C codestreams.
+    Jpeg2000,
     Tiff,
     WebP,
     Gif,
@@ -76,9 +78,10 @@ const ALL_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::C
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 14] = [
+    pub const ALL: [Format; 15] = [
         Format::Png,
         Format::Jpeg,
+        Format::Jpeg2000,
         Format::Tiff,
         Format::WebP,
         Format::Gif,
@@ -107,6 +110,7 @@ impl Format {
         match self {
             Format::Png => "PNG",
             Format::Jpeg => "JPEG",
+            Format::Jpeg2000 => "JPEG 2000",
             Format::Tiff => "TIFF",
             Format::WebP => "WebP",
             Format::Gif => "GIF",
@@ -128,6 +132,7 @@ impl Format {
         match self {
             Format::Png => &["png", "apng"],
             Format::Jpeg => &["jpg", "jpeg", "jpe", "jfif"],
+            Format::Jpeg2000 => &["jp2", "j2k", "j2c"],
             Format::Tiff => &["tif", "tiff"],
             Format::WebP => &["webp"],
             Format::Gif => &["gif"],
@@ -147,6 +152,7 @@ impl Format {
         match self {
             Format::Png => "image/png",
             Format::Jpeg => "image/jpeg",
+            Format::Jpeg2000 => "image/jp2",
             Format::Tiff => "image/tiff",
             Format::WebP => "image/webp",
             Format::Gif => "image/gif",
@@ -194,6 +200,8 @@ pub fn caps(format: Format) -> FormatCaps {
             FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, exif: true, xmp: true, dpi: true, text: true, animation: true, ..base }
         }
         Format::Jpeg => FormatCaps { layouts: &[L::Gray, L::Rgb, L::Cmyk], alpha: false, icc: true, exif: true, xmp: true, dpi: true, lossy: true, ..base },
+        // ICC and resolution belong to the JP2 container; raw codestream export reports their loss.
+        Format::Jpeg2000 => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, dpi: true, ..base },
         Format::Tiff => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, icc: true, xmp: true, dpi: true, text: true, ..base },
         Format::WebP => FormatCaps { icc: true, exif: true, xmp: true, animation: true, ..base },
         Format::Gif => FormatCaps { layouts: &[L::Rgba], animation: true, lossy: true, ..base },
@@ -220,6 +228,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(Format::Jpeg);
+    }
+    if b.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n") || b.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
+        return Some(Format::Jpeg2000);
     }
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") || b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);

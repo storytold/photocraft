@@ -101,6 +101,7 @@ impl Headless {
                     photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
                 if let Some(q) = p.get("quality").and_then(Value::as_u64) {
                     opts.encode.jpeg_quality = q.clamp(1, 100) as u8;
+                    opts.encode.jpeg2000_quality = Some(q.clamp(1, 100) as u8);
                     opts.encode.webp_quality = q.clamp(1, 100) as u8;
                     opts.encode.webp_lossless = false;
                 }
@@ -304,6 +305,23 @@ mod tests {
 
     fn session() -> Mutex<Headless> {
         Mutex::new(Headless::trusted_local())
+    }
+
+    #[test]
+    fn jpeg2000_save_quality_is_explicit_and_does_not_persist() {
+        let path = std::env::temp_dir().join(format!("pc-rpc-jpeg2000-{}.jp2", std::process::id()));
+        let mut h = Headless::trusted_local();
+        h.handle("doc.new", json!({"width": 16, "height": 8, "background": "#808080"})).unwrap();
+        for quality in [None, Some(80), None] {
+            let mut params = json!({"path": path.to_string_lossy()});
+            if let Some(q) = quality {
+                params["quality"] = json!(q);
+            }
+            let saved = h.handle("doc.save", params).unwrap();
+            assert_eq!(saved["warnings"].to_string().contains("lossy compression"), quality.is_some(), "{saved}");
+            assert_eq!(photocraft_codecs::decode(&std::fs::read(&path).unwrap()).unwrap().dimensions(), (16, 8));
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

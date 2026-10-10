@@ -1,6 +1,6 @@
 # Roadmap
 
-Status legend: ✅ done · 🟡 in progress · ⬜ not started. Updated 2026-10-08.
+Status legend: ✅ done · 🟡 in progress · ⬜ not started. Updated 2026-10-10.
 
 **Parity metrics.** `cargo xtask parity` measures how much of Photoshop's menu tree is *wired to a
 command* and writes [`parity.md`](parity.md). It does **not** measure whether those commands behave
@@ -23,7 +23,7 @@ readiness; treat it as an upper bound.
 | M8 PSD v2 | 🟡 | adjustments (incl. Selective Color, Color Lookup), fills, effects, patterns, text, shapes, smart objects, alpha channels; oracle 111/170 |
 | M9 Text, vector, styles | 🟡 | type engine + Warp Text, shapes / pen / paths, all 10 effects on CPU and GPU (parity ≤1/255, 30/31 corpus effect files on the GPU) |
 | M10 Smart features | 🟡 | classical Select Subject / Object, content-aware fill and scale, healing, auto-align / auto-blend; ML backend not started |
-| M11 Automation + formats | 🟡 | MCP (headless + live bridge), batch, Image Processor, prefs over MCP; DoD test passes (10 agent tasks over MCP, `automation/tests/agent_tasks.rs`); since 2026-10-07 the CLI rejects unknown flags and answers `<subcommand> --help`, batch runs report same-name outputs instead of overwriting them, MCP `command_batch` steps can start background jobs, and headless saves never flatten over the opened file; JP2 / DICOM / DPX / C2PA pending |
+| M11 Automation + formats | 🟡 | MCP (headless + live bridge), batch, Image Processor, prefs over MCP; DoD test passes (10 agent tasks over MCP, `automation/tests/agent_tasks.rs`); since 2026-10-07 the CLI rejects unknown flags and answers `<subcommand> --help`, batch runs report same-name outputs instead of overwriting them, MCP `command_batch` steps can start background jobs, and headless saves never flatten over the opened file; an [initial JPEG 2000 subset](jpeg2000.md) supports JP2/J2K/J2C, with broader #1047 compatibility still open; DICOM / DPX / C2PA pending |
 | M12 Pro parity | 🟡 | CMYK / Lab / Indexed / Bitmap / Duotone, ICC + soft proofing, channels + Quick Mask, smart-object stack modes, artboards, layer comps; print, HDR, photomerge, timeline pending |
 
 **Menu parity: 532 / 625 (85.1%)** on 2026-10-01, up from 224 (35.8%) the day before. See [`parity.md`](parity.md).
@@ -46,6 +46,16 @@ mean differences range from 0.44/255 (conical gradients) to 86.05/255 (RGB/32 re
 Clouds, hearts, cogs, callouts, arrows, double stars, tears, crescents, diamonds and circular segments
 now import as parametric shapes; the special-shapes sample measures 5.68/255 against its PNG. The
 remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
+
+2026-10-10: JPEG 2000's initial subset reads JP2/J2K/J2C with unsigned, full-resolution
+Gray/RGB components and optional straight alpha at a common 1–16-bit precision. It writes
+8-/16-bit images losslessly by default; explicit CLI or headless quality requests lossy
+compression. JP2 keeps ICC profiles and capture resolution; raw J2K/J2C exports omit those
+fields and convert profiled RGB colours to sRGB. Save As supports all three suffixes, and
+Export As offers lossless JP2. Palettes/channel mappings, signed/subsampled components,
+mixed precisions, YCbCr/CMYK and complex JPX remain unsupported; EXIF/XMP and other metadata
+are not retained. Further coding-tool restrictions are listed in [the format notes](jpeg2000.md).
+This initial support leaves [#1047](https://github.com/storytold/photocraft/issues/1047) open.
 
 ## Honest parity assessment (2026-10-05)
 
@@ -229,7 +239,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 | **M0** | Skeleton | Workspace, all crate stubs, lints, `xtask` (layers check, ci), CI matrix, testkit | `cargo test --workspace` green; `cargo check --target wasm32-unknown-unknown -p photocraft-engine -p photocraft-ui-egui` green; layering check passes |
 | **M1** | Foundation | geom, color (formats, blend math for all 27 modes, sRGB/linear), raster (sparse COW tiles, U8/U16/F32), doc (full type model incl. CMYK/Lab/adjust/smart), ops (history) | Property tests (proptest) on tile COW and history; blend-mode reference tests against published formulas |
 | **M2** | PSD v1 | `photocraft-psd`: header, resources, layer records, channel data (raw/RLE/ZIP/ZIP+pred), masks, groups (lsct), unicode names, unknown-block passthrough, merged image, PSB; writer | Round-trip byte-stability tests; synthetic PSD generator tests; fuzz target; ≥150 unit tests |
-| **M3** | Viewer app | codecs (png/jpeg/tiff/webp/gif/bmp/tga/pnm/qoi/exr/hdr, all read+write), CPU compositor, egui shell (menu from registry, canvas pan/zoom, layers panel, history), open/save, native + web build | Opens PNG/JPEG/PSD, shows layers, toggles visibility, undo/redo, saves PNG/PSD; web build loads a file from the browser |
+| **M3** | Viewer app | codecs (png/jpeg/jp2/tiff/webp/gif/bmp/tga/pnm/qoi/exr/hdr, all read+write within their supported subsets), CPU compositor, egui shell (menu from registry, canvas pan/zoom, layers panel, history), open/save, native + web build | Opens PNG/JPEG/PSD, shows layers, toggles visibility, undo/redo, saves PNG/PSD; web build loads a file from the browser |
 | **M4** | Native format + engine | `.pcraft` bundle, command registry with schemas, jobs/cancellation, snapshots via arc-swap, CLI (`convert`, `run`, `inspect`) | CLI parity tests: every GUI command also runs headless |
 | **M5** | GPU compositor | wgpu planner backend, tile residency, parity tests vs CPU (all blend modes), viewport on GPU, mips | GPU vs CPU ≤1/255; pan/zoom 60 fps on a 100 MP / 20-layer document |
 | **M6** | Paint + select | platform input (pen: macOS/Windows/Linux/web), brush engine v1, eraser, marquee/lasso/wand, move, free transform, crop | Brush latency <1 frame; selection-restricted paint tests |
@@ -237,5 +247,5 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 | **M8** | PSD v2 | adjustment layers, fill layers, lfx2 effects (descriptor parser), text (EngineData) preserve+render, smart objects, vector masks | Composite-oracle pass rate ≥90% on corpus |
 | **M9** | Text, vector, styles | parley text layers, shapes/pen/paths, all 10 layer effects on GPU | Visual goldens; PSD text round-trip |
 | **M10** | Smart features | `ml` (ort native / ort-web on the web), Select Subject/Object/Sky, Remove BG, Remove tool, content-aware fill, healing, AI denoise, RAW develop | Quality benchmarks on a public dataset; timing budgets |
-| **M11** | Automation + formats | MCP server, batch, scripting, remaining formats (JP2, DICOM, DPX…), C2PA | An agent completes 10 scripted edit tasks via MCP |
+| **M11** | Automation + formats | MCP server, batch, scripting, remaining JPEG 2000 coverage (#1047), DICOM, DPX…, C2PA | An agent completes 10 scripted edit tasks via MCP |
 | **M12** | Pro parity | CMYK/Lab UI, print, HDR display, photomerge/HDR merge, timeline, layer comps, artboards, symmetry, neural filters | `xtask parity` ≥ 90% of Photoshop menu checklist |
