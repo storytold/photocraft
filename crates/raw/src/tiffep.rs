@@ -66,7 +66,7 @@ pub(crate) fn cfa(t: &Tiff, raw: &Ifd, ifds: &[Ifd]) -> Option<Cfa> {
 
 /// Nikon maker note: "Nikon\0", version, then an embedded TIFF header whose
 /// offsets are relative to itself.
-fn nikon_maker_note<'a>(t: &Tiff<'a>, ifds: &[Ifd]) -> Option<(Tiff<'a>, Ifd)> {
+pub(crate) fn nikon_maker_note<'a>(t: &Tiff<'a>, ifds: &[Ifd]) -> Option<(Tiff<'a>, Ifd)> {
     let e = ifds.iter().find_map(|i| i.get(tag::MAKER_NOTE).copied())?;
     let b = t.raw(&e)?;
     if !b.starts_with(b"Nikon\0") {

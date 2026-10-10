@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod camera_settings;
 mod cameras;
 mod color;
 mod cr2;
@@ -52,6 +53,7 @@ mod opcodes;
 mod orf;
 mod par;
 mod preview;
+mod profile;
 mod raf;
 mod rw2;
 mod sensor;
@@ -62,12 +64,14 @@ mod tiffep;
 #[cfg(feature = "testgen")]
 pub mod testgen;
 
+pub use crate::camera_settings::{CameraSettings, PictureControl, camera_settings, picture_control};
 pub use crate::color::{Calibration, ColorInfo, Mat3};
 pub use crate::demosaic::Demosaic;
-pub use crate::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor};
+pub use crate::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor, develop_sensor_profile};
 pub use crate::error::RawError;
 pub use crate::opcodes::GainMap;
 pub use crate::preview::{Preview, embedded_preview};
+pub use crate::profile::{CameraProfile, camera_model_matches};
 pub use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
 
 use crate::tiff::{Tiff, tag};

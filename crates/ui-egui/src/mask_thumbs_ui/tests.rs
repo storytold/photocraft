@@ -140,7 +140,8 @@ fn a_new_mask_is_targeted_so_the_next_footer_trash_keeps_its_layer() {
     h.state_mut().run("layer.new.layer", json!({"name": "Fresh mask"})).unwrap();
     let id = h.state().session.active().unwrap().active_layer.unwrap();
     h.run_steps(3);
-    let at = h.get_by_label("Add a mask  (from the selection; Alt inverts)").rect().center();
+    let label = format!("Add a mask  (from the selection; {} inverts)", crate::shortcuts::pretty("Alt"));
+    let at = h.get_by_label(&label).rect().center();
     click_with(&mut h, at, Modifiers::NONE);
     assert!(h.state().ui.mask_target && !h.state().ui.vector_mask_target);
     assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_some());

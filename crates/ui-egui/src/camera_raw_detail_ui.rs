@@ -24,6 +24,7 @@ pub(crate) struct DetailPreview {
     source: Surface,
     area: PixelRect,
     coverage: Coverage,
+    display_transform: Arc<photocraft_cms::Transform>,
     result: Option<(u64, Surface)>,
     pending: Option<(u64, Receiver<DetailResult>)>,
     cancel: Arc<AtomicBool>,
@@ -43,11 +44,12 @@ impl Drop for DetailPreview {
 }
 
 impl DetailPreview {
-    pub(crate) fn new(source: Surface, area: PixelRect, coverage: Coverage) -> Self {
+    pub(crate) fn new(source: Surface, area: PixelRect, coverage: Coverage, display_transform: Arc<photocraft_cms::Transform>) -> Self {
         Self {
             source,
             area,
             coverage,
+            display_transform,
             result: None,
             pending: None,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -63,6 +65,11 @@ impl DetailPreview {
 
     pub(crate) fn pending(&self) -> bool {
         self.pending.is_some()
+    }
+
+    pub(crate) fn set_display_transform(&mut self, transform: Arc<photocraft_cms::Transform>) {
+        self.display_transform = transform;
+        self.crop = None;
     }
 
     fn poll(&mut self, revision: u64) {
@@ -176,7 +183,7 @@ impl DetailPreview {
         };
         let key = (if original { 0 } else { revision }, original, crop);
         if self.crop != Some(key) {
-            let color = crop_image(surface, crop);
+            let color = crop_image(surface, crop, &self.display_transform);
             let options = TextureOptions { magnification: egui::TextureFilter::Nearest, ..TextureOptions::LINEAR };
             match &mut self.texture {
                 Some(t) => t.set(color, options),
@@ -331,14 +338,13 @@ fn visible_pixels(image: Rect, viewport: Rect, area: PixelRect, max_side: usize)
     (crop.width() as usize <= max_side && crop.height() as usize <= max_side && crop.width() as u64 * crop.height() as u64 <= 16_777_216).then_some(crop)
 }
 
-fn crop_image(surface: &Surface, area: PixelRect) -> ColorImage {
+fn crop_image(surface: &Surface, area: PixelRect, transform: &photocraft_cms::Transform) -> ColorImage {
     let width = area.width() as usize;
     let mut row = vec![[0.0; 4]; width];
     let mut pixels = Vec::with_capacity(width * area.height() as usize);
-    let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     for y in area.y0..area.y1 {
         surface.read_rgba_into(PixelRect::new(area.x0, y, area.x1, y + 1), &mut row);
-        pixels.extend(row.iter().map(|q| Color32::from_rgba_unmultiplied(enc(q[0]), enc(q[1]), enc(q[2]), enc(q[3]))));
+        pixels.extend(row.iter().map(|q| crate::camera_raw_ui::color::display_pixel(q, transform)));
     }
     ColorImage::new([width, area.height() as usize], pixels)
 }
@@ -346,6 +352,29 @@ fn crop_image(surface: &Surface, area: PixelRect) -> ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn display_transform() -> Arc<photocraft_cms::Transform> {
+        photocraft_cms::cached(photocraft_cms::Builtin::Srgb.profile(), photocraft_cms::Builtin::Srgb.profile(), Default::default()).unwrap()
+    }
+
+    #[test]
+    fn native_resolution_crop_uses_the_document_profile() {
+        use photocraft_cms::{Builtin, cached};
+        let transform = cached(Builtin::ProPhotoCompat.profile(), Builtin::Srgb.profile(), Default::default()).unwrap();
+        let area = PixelRect::new(0, 0, 2, 1);
+        let mut source = Surface::new(photocraft_color::PixelFormat::RGBA16);
+        let grey = 0.18f32.powf(1.0 / 1.8);
+        source.write_pixel(0, 0, &[grey, grey, grey, 1.0]);
+        source.write_pixel(1, 0, &[grey, grey, grey, 0.0]);
+        let image = crop_image(&source, area, &transform);
+        assert!((i32::from(image.pixels[0].r()) - 118).abs() <= 1);
+        assert_eq!(image.pixels[1].a(), 0);
+        let mut detail = DetailPreview::new(source, area, Coverage::None, transform);
+        detail.crop = Some((0, true, area));
+        detail.set_display_transform(display_transform());
+        assert!(detail.crop.is_none(), "monitor changes invalidate only the displayed crop");
+    }
+
     use photocraft_color::PixelFormat;
     #[test]
     fn refinement_uses_the_engine_at_source_resolution_and_respects_selection() {
@@ -365,7 +394,7 @@ mod tests {
     #[test]
     fn stale_refinements_and_failed_old_revisions_do_not_replace_new_settings() {
         let source = Surface::with_default(PixelFormat::RGBA8, &[0.2, 0.4, 0.6, 1.0]);
-        let mut preview = DetailPreview::new(source.clone(), PixelRect::new(0, 0, 16, 16), Coverage::None);
+        let mut preview = DetailPreview::new(source.clone(), PixelRect::new(0, 0, 16, 16), Coverage::None, display_transform());
         let (tx, rx) = std::sync::mpsc::channel();
         preview.pending = Some((1, rx));
         tx.send(Ok((1, source.clone()))).unwrap();
@@ -404,13 +433,13 @@ mod tests {
                 let full = develop(&source, area, &params, &Coverage::None);
                 let expected = photocraft_engine::lens_cmds::camera_raw_surface(&source, area, &params);
                 assert_eq!(full, expected);
-                let mut preview = DetailPreview::new(source, area, Coverage::None);
+                let mut preview = DetailPreview::new(source, area, Coverage::None, display_transform());
                 preview.result = Some((1, full));
                 preview.ready = true;
                 let dark = preview.sample([0.0, 0.0], 1, false, &params).unwrap();
                 let light = preview.sample([1.0 / 40.0, 0.0], 1, false, &params).unwrap();
                 assert!(light[0] - dark[0] > 0.5, "native alternating pixels survive: {mode:?}/{depth:?}");
-                assert_eq!(crop_image(&expected, PixelRect::new(-12, 8, -10, 9)).size, [2, 1]);
+                assert_eq!(crop_image(&expected, PixelRect::new(-12, 8, -10, 9), &display_transform()).size, [2, 1]);
                 assert!(preview.sample([f32::NAN, 0.0], 1, false, &params).is_none());
                 assert!(preview.sample([0.5, 0.5], 2, false, &params).is_none());
             }
@@ -420,7 +449,7 @@ mod tests {
     #[test]
     fn huge_sparse_images_keep_the_proxy_without_starting_an_unbounded_worker() {
         let source = Surface::new(PixelFormat::RGBA8);
-        let mut preview = DetailPreview::new(source, PixelRect::new(0, 0, 8001, 8000), Coverage::None);
+        let mut preview = DetailPreview::new(source, PixelRect::new(0, 0, 8001, 8000), Coverage::None, display_transform());
         preview.request(&Context::default(), 1, &CameraRaw { exposure: 1.0, ..Default::default() });
         assert!(!preview.pending());
         assert!(preview.error.as_deref().unwrap().contains("64 megapixels"));

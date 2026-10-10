@@ -142,6 +142,16 @@ fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
 
 /// Develops sensor data.
 pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
+    develop_sensor_profile(s, opts, None)
+}
+
+/// Develop with an explicitly supplied, model-matched camera calibration/look.
+pub fn develop_sensor_profile(s: &Sensor, opts: &DevelopOptions, profile: Option<&crate::CameraProfile>) -> Result<Developed> {
+    let mut color_info = s.color.clone();
+    if let Some(profile) = profile {
+        profile.validate(s)?;
+        color_info.calibrations.clone_from(&profile.calibrations);
+    }
     let c = s.crop;
     if c.is_empty() || c.x + c.width > s.width || c.y + c.height > s.height || s.data.len() < s.width * s.height * s.samples {
         return Err(RawError::malformed("crop lies outside the sensor data"));
@@ -157,10 +167,9 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     let sc = Scale { s, lin: s.linearization.as_deref() };
 
     // White balance: camera-space neutral, max component 1.
-    let as_shot = s
-        .color
+    let as_shot = color_info
         .as_shot_neutral
-        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
+        .or_else(|| color_info.as_shot_white_xy.and_then(|xy| color_info.xy_to_neutral(xy)))
         .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
         .and_then(normalize);
     let neutral = match opts.white_balance {
@@ -179,7 +188,7 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     let mult = neutral.map(|v| (1.0 / v) as f32);
 
     // Balanced camera → XYZ D50.
-    let to_xyz: Mat3 = match s.color.balanced_to_xyz_d50(neutral) {
+    let to_xyz: Mat3 = match color_info.balanced_to_xyz_d50(neutral) {
         Some(m) => m,
         None => {
             if s.format != RawFormat::Dng {
@@ -188,8 +197,9 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
             color::srgb_to_xyz_d50()
         }
     };
-    let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
-    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain);
+    let gain = 2f64.powf(s.baseline_exposure + profile.map_or(0.0, |p| p.exposure_offset) + opts.exposure.clamp(-10.0, 10.0));
+    let prepared_profile = profile.map(|p| p.prepare(&color_info, neutral, gain as f32));
+    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), if profile.is_some() { 1.0 } else { gain });
     let out_m: [[f32; 3]; 3] = out_m.map(|r| r.map(|v| v as f32));
 
     let (w, h) = (c.width, c.height);
@@ -295,13 +305,18 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         let start = b * band * w * 3;
         let src = &rgb[start..start + chunk.len()];
         for (o, p) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(src.as_chunks::<3>().0) {
-            for k in 0..3 {
-                o[k] = lut.encode(out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
+            let linear = out_m.map(|row| row[0] * p[0] + row[1] * p[1] + row[2] * p[2]);
+            let linear = prepared_profile.as_ref().map_or(linear, |profile| profile.render(linear));
+            for (out, value) in o.iter_mut().zip(linear) {
+                *out = lut.encode(value);
             }
         }
     });
     rgb.clear();
     rgb.shrink_to_fit();
+    if let Some(profile) = profile {
+        warnings.push(format!("camera profile: {} ({})", profile.name, profile.camera_model));
+    }
 
     let (out, ow, oh) = if opts.orient { orient(out, w, h, s.orientation) } else { (out, w, h) };
     let nmax = mult.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);

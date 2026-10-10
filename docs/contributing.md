@@ -7,7 +7,8 @@
 - **Commands, not handlers:** new features are engine commands with tests, and the UI calls them (checklist below).
 - **Layering:** `cargo xtask layers` must pass. Register new crates in `xtask/src/layers.rs`.
 - **Tests:** required for every change. Format code needs round-trip and malformed-input tests. Pixel code is tested at 8, 16 and 32-bit. If you touch psd, io, codecs, compose, gpu, text or format, also run the real-file corpus tests: `cargo xtask test-corpus` (fetches the pinned corpora, including our Photoshop oracles from https://github.com/storytold/photocraft-corpus, then runs the `corpus`-feature tests; CI always runs them). Never commit corpus files; see `docs/development.md` › Test corpora.
-- **Style:** `cargo fmt`, and `cargo clippy -- -D warnings`. Match surrounding code. Comments explain *why*.
+- **Style:** `cargo fmt`, and `cargo clippy -- -D warnings`. Match surrounding code. Comments explain *why*. Write code comments and project documentation in English.
+- **Privacy:** Use synthetic or anonymized examples. Keep personal filesystem paths, account details, credentials, private image metadata and private QA artifacts out of source, documentation and commits. Preserve required third-party license notices and attribution.
 - **UI:** use `theme::Tokens` and `widgets::*`. Verify visually (offscreen `snapshot` example or the control channel) before submitting, and attach before/after screenshots to PRs.
 - **Commits:** small, focused, with a clear subject line.
 

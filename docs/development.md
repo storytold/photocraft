@@ -226,6 +226,13 @@ intents, black point compensation). It ships CC0 built-in profiles, including a 
 
 - Documents carry an optional embedded ICC profile (`Document::icc_profile`); `edit.assignProfile`
   and `edit.convertToProfile` change it. Mode changes (`image.mode.*`) convert through cms.
+- New colour settings preserve embedded profiles automatically (`askOnMismatch = false`).
+  The mismatch prompt remains opt-in in Edit › Color Settings; existing saved preferences
+  remain authoritative. Camera Raw previews use the document-to-monitor ICC transform too.
+- Native RAW import includes 55 licensed camera calibrations and supports optional user DCPs.
+  Adobe installations are not scanned automatically. [Exact coverage and licenses](camera-profile-coverage.md).
+  See [camera profiles](camera-profiles.md) for locations, overrides, Picture Control
+  selection, the `raw.profiles` inventory command and rendering limitations.
 - **Proof Colors** (⌘Y), **Proof Setup** and **Gamut Warning** (⇧⌘Y) bake a 3D LUT
   (`cms::Lut3d`) that the canvas shader applies; the document pixels never change.
 - Convert colours with `photocraft_cms::transform::cached(src, dst, opts)`: transforms are cached

@@ -1,0 +1,13 @@
+Public-domain camera profile data
+
+Files marked Public-Domain in manifest.json contain the original ProfileCopyright
+notice "public domain" and ProfileEmbedPolicy=3 (No Restrictions). They are
+published in RawTherapee/RawTherapee at the pinned revision in manifest.json.
+
+The original DCP bytes and notices are preserved exactly, inside lossless gzip
+containers. The source URL, upstream Git blob hash and SHA-256 for every file
+are recorded in manifest.json. These are data assets, not RawTherapee program
+code. No permission is inferred for files with missing or ambiguous notices;
+those files are excluded from this bundle.
+
+Files expressly marked "RawTherapee CC0" are covered by LICENSE-CC0.txt instead.
