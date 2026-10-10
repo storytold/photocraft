@@ -3,12 +3,14 @@
 //! modify (expand, contract, border, smooth, feather), anti-aliased lasso,
 //! and combining with an existing selection.
 
+use std::sync::Arc;
+
 use photocraft_color::PixelFormat;
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
-use crate::photo_util::par_rows;
+use crate::photo_util::{par_map, par_rows};
 
 /// How a new selection combines with the current one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -79,49 +81,57 @@ fn coverage8(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-/// Builds a GRAY8 selection surface from 8-bit coverage over `area`, allocating only the tiles
-/// that hold something (as [`Surface::prune`] would leave them).
-fn surface_from_coverage8(bytes: &[u8], area: Rect) -> Surface {
+/// Builds a GRAY8 selection surface over `area` (masks row-major over it) whose coverage at
+/// each sample is `f(prev, new)`, `prev` reading 0 without a `prev` mask and missing samples
+/// reading 0. Tiles are filled in parallel straight from the masks, a row at a time (no
+/// full-canvas byte buffer); only the tiles that hold something are kept (as [`Surface::prune`]
+/// would leave them), and fully selected tiles share one tile (copy-on-write), so the inside of a
+/// large selection costs no memory per tile (#211).
+fn surface_from_masks(area: Rect, new: &[f32], prev: Option<&[f32]>, f: impl Fn(f32, f32) -> f32 + Sync + Send) -> Surface {
     let mut s = Surface::new(PixelFormat::GRAY8);
+    if area.is_empty() {
+        return s;
+    }
     let w = area.width() as usize;
     let ts = TILE_SIZE as usize;
-    for tc in area.tiles() {
-        let tr = tc.rect().intersect(&area);
-        let (lx, span) = ((tr.x0 - area.x0) as usize, tr.width() as usize);
-        let row = |y: i32| bytes.get((y - area.y0) as usize * w + lx..(y - area.y0) as usize * w + lx + span);
-        if !(tr.y0..tr.y1).any(|y| row(y).is_some_and(|r| r.iter().any(|b| *b != 0))) {
-            continue;
-        }
-        let data = s.tile_mut(tc).bytes_mut();
-        for y in tr.y0..tr.y1 {
-            let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
-            if let (Some(src), Some(dst)) = (row(y), data.get_mut(o..o + span)) {
-                dst.copy_from_slice(src);
+    let full = s.solid_tile(&[1.0]);
+    let row = |i0: usize, dst: &mut [u8]| {
+        let n = dst.len();
+        match (new.get(i0..i0 + n), prev.map(|p| p.get(i0..i0 + n))) {
+            (Some(sn), None) => dst.iter_mut().zip(sn).for_each(|(d, v)| *d = coverage8(f(0.0, *v))),
+            (Some(sn), Some(Some(sp))) => dst.iter_mut().zip(sn.iter().zip(sp)).for_each(|(d, (v, p))| *d = coverage8(f(*p, *v))),
+            _ => {
+                let at = |m: &[f32], i: usize| m.get(i).copied().unwrap_or(0.0);
+                for (i, d) in (i0..).zip(dst.iter_mut()) {
+                    *d = coverage8(f(prev.map_or(0.0, |p| at(p, i)), at(new, i)));
+                }
             }
         }
-    }
+    };
+    // Every tile starts as one shared blank tile; `Arc::make_mut` gives each task its own copy.
+    let blanks = s.take_tiles(area);
+    let built = par_map(blanks.len(), |k| {
+        let (tc, blank) = blanks.get(k)?;
+        let tr = tc.rect().intersect(&area);
+        let (lx, span) = ((tr.x0 - area.x0) as usize, tr.width() as usize);
+        let mut tile = Arc::clone(blank);
+        let data = Arc::make_mut(&mut tile).bytes_mut();
+        let (mut lo, mut hi) = (if tr == tc.rect() { u8::MAX } else { 0 }, 0u8);
+        for y in tr.y0..tr.y1 {
+            let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+            let Some(dst) = data.get_mut(o..o + span) else { continue };
+            row((y - area.y0) as usize * w + lx, dst);
+            (lo, hi) = dst.iter().fold((lo, hi), |(lo, hi), b| (lo.min(*b), hi.max(*b)));
+        }
+        (hi > 0).then(|| (*tc, if lo == u8::MAX { Arc::clone(&full) } else { tile }))
+    });
+    s.put_tiles(built.into_iter().flatten());
     s
 }
 
-/// 8-bit coverage of `m` (missing samples are 0), computed in parallel.
-fn to_coverage8(m: &[f32], area: Rect, f: impl Fn(usize, f32) -> f32 + Sync + Send) -> Vec<u8> {
-    let w = area.width() as usize;
-    let mut bytes = vec![0u8; w * area.height() as usize];
-    par_rows(&mut bytes, w, 1, |y, row| {
-        for (x, b) in row.iter_mut().enumerate() {
-            let i = y * w + x;
-            *b = coverage8(f(i, m.get(i).copied().unwrap_or(0.0)));
-        }
-    });
-    bytes
-}
-
-/// Builds a GRAY8 selection surface from a mask over `area`.
+/// Builds a GRAY8 selection surface from a mask over `area` (missing samples are 0).
 pub fn mask_to_surface(m: &[f32], area: Rect) -> Surface {
-    if area.is_empty() {
-        return Surface::new(PixelFormat::GRAY8);
-    }
-    surface_from_coverage8(&to_coverage8(m, area, |_, v| v), area)
+    surface_from_masks(area, m, None, |_, v| v)
 }
 
 /// Combines `new` with `old` by `mode`. Returns `None` when nothing is selected.
@@ -132,22 +142,18 @@ pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMo
     // Quantize to the 8-bit grid selections are stored on, so combining a mask with itself is
     // exact. Below half an 8-bit step is nothing.
     let q = |v: f32| f32::from(coverage8(v)) / 255.0;
-    let bytes = match mode {
-        SelectionMode::Replace => to_coverage8(new, area, |_, v| v),
+    let s = match mode {
+        SelectionMode::Replace => surface_from_masks(area, new, None, |_, v| v),
         _ => {
             let prev = mask_from_surface(old, area);
-            let at = |i: usize| prev.get(i).copied().unwrap_or(0.0);
             match mode {
-                SelectionMode::Add => to_coverage8(new, area, |i, v| at(i).max(q(v))),
-                SelectionMode::Subtract => to_coverage8(new, area, |i, v| (at(i) - q(v)).max(0.0)),
-                _ => to_coverage8(new, area, |i, v| at(i).min(q(v))),
+                SelectionMode::Add => surface_from_masks(area, new, Some(&prev), |p, v| p.max(q(v))),
+                SelectionMode::Subtract => surface_from_masks(area, new, Some(&prev), |p, v| (p - q(v)).max(0.0)),
+                _ => surface_from_masks(area, new, Some(&prev), |p, v| p.min(q(v))),
             }
         }
     };
-    if bytes.iter().all(|b| *b == 0) {
-        return None;
-    }
-    Some(surface_from_coverage8(&bytes, area))
+    (s.tile_count() > 0).then_some(s)
 }
 
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
@@ -1202,7 +1208,10 @@ mod tests {
         let mut rng = crate::photo_util::Rng(7);
         let mut u = move || (rng.next() >> 11) as f32 / (1u64 << 53) as f32;
         // Off-grid areas spanning several tiles, including negative origins.
-        for area in [Rect::new(0, 0, 300, 20), Rect::new(-37, 250, 530, 263), Rect::new(255, -3, 258, 600), Rect::new(5, 5, 6, 6)] {
+        // The last one holds whole tiles, which fully selected masks fill (shared tiles).
+        for area in
+            [Rect::new(0, 0, 300, 20), Rect::new(-37, 250, 530, 263), Rect::new(255, -3, 258, 600), Rect::new(5, 5, 6, 6), Rect::new(-37, -300, 530, 263)]
+        {
             let n = area.width() as usize * area.height() as usize;
             let old_m: Vec<f32> = (0..n).map(|i| if i % 97 < 40 { u() } else { 0.0 }).collect();
             let old = old_mask_to_surface(&old_m, area);
@@ -1211,7 +1220,7 @@ mod tests {
             let mut slow_read = Vec::new();
             old.read_region_into(area, &mut slow_read);
             assert_eq!(mask_from_surface(Some(&old), area), slow_read);
-            for kind in 0..3 {
+            for kind in 0..4 {
                 let new: Vec<f32> = (0..n)
                     .map(|i| match kind {
                         0 => u() * 1.2 - 0.1,
@@ -1222,7 +1231,8 @@ mod tests {
                                 0.0
                             }
                         }
-                        _ => 0.001,
+                        2 => 0.001,
+                        _ => f32::from(u8::from(i >= 1000)),
                     })
                     .collect();
                 for mode in [SelectionMode::Replace, SelectionMode::Add, SelectionMode::Subtract, SelectionMode::Intersect] {

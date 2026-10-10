@@ -398,7 +398,9 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     if pw.checked_mul(ph).is_none_or(|n| n > MAX_MODIFY_PIXELS) {
         return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
     }
-    let padded = pad_mask(&m, w, h, pad, at_bounds);
+    // Unpadded (the usual case) the mask is used as it is: two serial full-canvas copies were
+    // most of a 24 MP Feather or Smooth (#211).
+    let padded = if pad == 0 { m } else { pad_mask(&m, w, h, pad, at_bounds) };
     let out = match op {
         "expand" => sel::expand(&padded, pw, ph, r),
         "contract" => sel::contract(&padded, pw, ph, r),
@@ -406,7 +408,7 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
         "smooth" => sel::smooth(&padded, pw, ph, r),
         _ => sel::feather(&padded, pw, ph, r),
     };
-    let out = crop_mask(&out, pw, pad, w, h);
+    let out = if pad == 0 { out } else { crop_mask(&out, pw, pad, w, h) };
     let label = match op {
         "expand" => "Expand Selection",
         "contract" => "Contract Selection",
@@ -435,19 +437,18 @@ fn pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> V
     if w == 0 || h == 0 {
         return out;
     }
+    // Row by row (a copy and two fills), not sample by sample (#211).
     for (py, row) in out.chunks_exact_mut(pw).enumerate() {
-        let inside_y = (pad..pad + h).contains(&py);
-        if outside_empty && !inside_y {
+        if outside_empty && !(pad..pad + h).contains(&py) {
             continue;
         }
         let y = py.saturating_sub(pad).min(h - 1);
-        for (px, v) in row.iter_mut().enumerate() {
-            let inside_x = (pad..pad + w).contains(&px);
-            if outside_empty && !inside_x {
-                continue;
-            }
-            let x = px.saturating_sub(pad).min(w - 1);
-            *v = m.get(y * w + x).copied().unwrap_or(0.0);
+        let (Some(src), Some((left, rest))) = (m.get(y * w..(y + 1) * w), row.split_at_mut_checked(pad)) else { continue };
+        let Some((mid, right)) = rest.split_at_mut_checked(w) else { continue };
+        mid.copy_from_slice(src);
+        if !outside_empty {
+            left.fill(src.first().copied().unwrap_or(0.0));
+            right.fill(src.last().copied().unwrap_or(0.0));
         }
     }
     out
@@ -455,7 +456,11 @@ fn pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> V
 
 /// The `w`×`h` centre of a mask padded by `pad_mask`.
 fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
-    m.chunks_exact(pw).skip(pad).take(h).flat_map(|row| row.iter().skip(pad).take(w).copied()).collect()
+    let mut out = Vec::with_capacity(w.saturating_mul(h));
+    for row in m.chunks_exact(pw.max(1)).skip(pad).take(h) {
+        out.extend_from_slice(row.get(pad..pad + w).unwrap_or_default());
+    }
+    out
 }
 
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within
@@ -1006,5 +1011,46 @@ mod tests {
         assert!(s.active().unwrap().doc.selection.is_none());
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(coverage(&s, 2, 2), 1.0);
+    }
+
+    /// The previous per-sample padding and cropping, kept as the oracle for the row-wise ones.
+    fn old_pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> Vec<f32> {
+        let pw = w + 2 * pad;
+        let mut out = vec![0.0f32; pw * (h + 2 * pad)];
+        for (py, row) in out.chunks_exact_mut(pw).enumerate() {
+            let inside_y = (pad..pad + h).contains(&py);
+            if outside_empty && !inside_y {
+                continue;
+            }
+            let y = py.saturating_sub(pad).min(h - 1);
+            for (px, v) in row.iter_mut().enumerate() {
+                if outside_empty && !(pad..pad + w).contains(&px) {
+                    continue;
+                }
+                *v = m.get(y * w + px.saturating_sub(pad).min(w - 1)).copied().unwrap_or(0.0);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn row_wise_pad_and_crop_match_per_sample_ones() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let (w, h) = (37, 23);
+        let m: Vec<f32> = (0..w * h)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed % 1000) as f32 / 999.0
+            })
+            .collect();
+        for pad in [0, 1, 5, 40] {
+            for outside_empty in [false, true] {
+                let padded = pad_mask(&m, w, h, pad, outside_empty);
+                assert_eq!(padded, old_pad_mask(&m, w, h, pad, outside_empty), "pad {pad} {outside_empty}");
+                assert_eq!(crop_mask(&padded, w + 2 * pad, pad, w, h), m, "pad {pad}");
+            }
+        }
     }
 }

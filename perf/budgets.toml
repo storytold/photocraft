@@ -324,7 +324,7 @@ issue = 211
 bench = "perf_scenarios"
 row = "Select > Modify > Smooth r 50 on 24 MP"
 budget_ms = 100
-enforce = false  # #211: fastest samples 30-33 ms; p95 still over budget at load avg > 100
+enforce = false  # #2873: p95 20-45 ms on 16 cores (load up to ~15), over 100 ms only at load avg > 20; CI cores unmeasured
 
 [[scenario]]
 id = "P27"
@@ -333,7 +333,7 @@ issue = 211
 bench = "perf_scenarios"
 row = "Select > Modify > Feather r 50 on 24 MP"
 budget_ms = 100
-enforce = false  # #211: fastest samples 30-33 ms; p95 still over budget at load avg > 100
+enforce = false  # #2873: p95 20-45 ms on 16 cores (load up to ~15), over 100 ms only at load avg > 20; CI cores unmeasured
 
 [[scenario]]
 id = "P28"
