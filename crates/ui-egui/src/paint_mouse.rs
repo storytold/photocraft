@@ -98,8 +98,14 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && response.drag_started_by(PointerButton::Secondary);
     let right_click = response.secondary_clicked();
-    if right_click
+    // A pen's barrel button is often held while the pen moves. Waiting for a completed
+    // egui click loses that gesture to the drag threshold; open on press instead.
+    let right_press = response.contains_pointer() && response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
+    if right_press
         && !erase
+        && !resize_start
+        && !resizing
+        && !crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods))
         && !layer_menu
         && has_brush_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
@@ -186,7 +192,9 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // just being open: a press elsewhere closes the picker in the same click that closes the menu.
     let press = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
     let on_menu = press.is_some_and(|p| ctx.layer_id_at(p).is_some_and(|l| l.order == egui::Order::Foreground));
-    let outside = press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !on_menu;
+    let opening_press = ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) && press == Some(egui::pos2(x, y));
+    // A clamped popup may open away from the pen; its opening press is not an outside click.
+    let outside = !opening_press && press.is_some_and(|p| !area.response.rect.contains(p) && !crate::brush_picker::on_chip(ctx, p)) && !on_menu;
     if outside || key_close || area.inner {
         crate::brush_picker::close(&mut app.ui);
     }
@@ -339,6 +347,23 @@ mod tests {
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert_eq!(h.state().ui.brush_picker, None);
+    }
+
+    #[test]
+    fn pen_barrel_press_opens_picker_before_release_and_survives_hover_movement() {
+        let mut h = harness(None);
+        // Near the bottom edge the popup is moved away from the opening pointer.
+        let p = h.state().last_canvas_rect.right_bottom() - vec2(10.0, 10.0);
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        press(&mut h, p, PointerButton::Secondary, true);
+        assert_eq!(h.state().ui.brush_picker, Some([p.x, p.y]), "opens on barrel press, before release");
+        let moved = p - vec2(24.0, 18.0);
+        h.event(egui::Event::PointerMoved(moved));
+        h.run_steps(12);
+        press(&mut h, moved, PointerButton::Secondary, false);
+        assert_eq!(h.state().ui.brush_picker, Some([p.x, p.y]), "pen movement must not cancel the popup");
+        assert!(strokes(&h).is_empty(), "barrel press must not paint");
     }
 
     #[test]

@@ -2,6 +2,11 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
+exclude = ["vendor/winit"]
+
+[patch.crates-io]
+# winit 0.30 drops the Windows pen barrel button. Keep the fix local and reproducible.
+winit = { path = "vendor/winit" }
 
 [workspace.package]
 version = "0.6.0"
