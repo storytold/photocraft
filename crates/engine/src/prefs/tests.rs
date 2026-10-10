@@ -63,6 +63,22 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
 }
 
 #[test]
+fn favorite_themes_persist_and_reject_invalid_lists() {
+    let mut s = Session::new();
+    assert!(s.prefs().interface.favorite_themes.is_empty());
+    s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": ["classic", "studio"]})).unwrap();
+    assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+    s.execute("prefs.set", json!({"path": "interface.theme", "value": "pro"})).unwrap();
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+    for invalid in [json!("classic"), json!(["unknown"]), json!(["classic", "classic"]), json!([23])] {
+        assert!(s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": invalid})).is_err());
+        assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+    }
+}
+
+#[test]
 fn get_set_reset_by_path() {
     let mut s = session();
     assert_eq!(s.execute("prefs.get", json!({"path": "performance.historyStates"})).unwrap(), json!(50));

@@ -107,6 +107,8 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("square-plus", include_bytes!("../../../assets/icons/square-plus.svg")),
     ("squares-subtract", include_bytes!("../../../assets/icons/squares-subtract.svg")),
     ("stamp", include_bytes!("../../../assets/icons/stamp.svg")),
+    ("star", include_bytes!("../../../assets/icons/star.svg")),
+    ("star-filled", include_bytes!("../../../assets/icons/star-filled.svg")),
     ("sun", include_bytes!("../../../assets/icons/sun.svg")),
     ("symmetry-diagonal", include_bytes!("../../../assets/icons/symmetry-diagonal.svg")),
     ("symmetry-dual", include_bytes!("../../../assets/icons/symmetry-dual.svg")),

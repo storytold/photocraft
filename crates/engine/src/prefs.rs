@@ -215,6 +215,8 @@ pub struct Interface {
     pub appearance_mode: AppearanceMode,
     pub dark_theme: DarkTheme,
     pub light_theme: LightTheme,
+    /// Theme shortcuts shown in the appearance button's context menu.
+    pub favorite_themes: Vec<Theme>,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
@@ -252,6 +254,7 @@ impl Default for Interface {
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::ProMedium,
             light_theme: LightTheme::StudioLight,
+            favorite_themes: Vec::new(),
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             canvas_border: CanvasBorder::DropShadow,
@@ -1153,6 +1156,20 @@ fn set_path(root: &mut Value, path: &str, value: Value) -> std::result::Result<(
 
 /// Validate one value for `path` before it is stored (choices, ranges, colours).
 fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
+    if path == "interface.favoriteThemes" {
+        let items = v.as_array().ok_or("`interface.favoriteThemes` must be a list of theme ids")?;
+        if items.len() > Theme::NAMES.len() {
+            return Err("`interface.favoriteThemes` contains too many themes".into());
+        }
+        let mut seen = Vec::with_capacity(items.len());
+        for item in items {
+            let theme = item.as_str().and_then(Theme::parse).ok_or_else(|| format!("unknown favorite theme `{item}`"))?;
+            if seen.contains(&theme) {
+                return Err(format!("duplicate favorite theme `{}`", theme.name()));
+            }
+            seen.push(theme);
+        }
+    }
     if path == "performance.renderingMode" && v.is_null() {
         return Ok(()); // Legacy policy, resolved from useGpu and gpuBackend.
     }
