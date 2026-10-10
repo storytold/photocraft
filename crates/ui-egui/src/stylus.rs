@@ -412,9 +412,10 @@ impl AndroidTouchRecovery {
                 egui::Event::Touch { device_id, id, phase: egui::TouchPhase::Cancel, pos, .. } => {
                     if self.primary == Some((*device_id, *id)) {
                         self.primary = None;
+                        let at = *pos;
                         events.push(event);
                         events.push(egui::Event::PointerButton {
-                            pos: *pos,
+                            pos: at,
                             button: egui::PointerButton::Primary,
                             pressed: false,
                             modifiers,
