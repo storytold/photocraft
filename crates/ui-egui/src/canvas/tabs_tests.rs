@@ -112,3 +112,57 @@ fn saved_document_tabs_track_file_identity() {
         assert!(h.state().session.active().unwrap().is_dirty());
     }
 }
+
+/// What a Ctrl press reports: on Windows and Linux Ctrl is also the command key, on macOS it isn't.
+fn ctrl() -> egui::Modifiers {
+    egui::Modifiers { ctrl: true, command: !cfg!(target_os = "macos"), ..egui::Modifiers::NONE }
+}
+
+/// #2340: Ctrl+Tab shows the next document's tab and Ctrl+Shift+Tab the previous one, wrapping
+/// around at either end, as in Photoshop. Plain Tab still hides the panels instead.
+#[test]
+fn ctrl_tab_cycles_through_the_document_tabs() {
+    let mut h = harness(3, ThemeKind::Pro);
+    let active = |h: &Harness<'_, PhotocraftApp>| h.state().session.active_index();
+    assert_eq!(active(&h), Some(2), "the last new document is active");
+    let press = |h: &mut Harness<'_, PhotocraftApp>, shift: bool| {
+        h.key_press_modifiers(if shift { ctrl() | egui::Modifiers::SHIFT } else { ctrl() }, egui::Key::Tab);
+        h.run_steps(2);
+    };
+    press(&mut h, false);
+    assert_eq!(active(&h), Some(0), "Ctrl+Tab on the last tab wraps to the first");
+    press(&mut h, false);
+    assert_eq!(active(&h), Some(1));
+    press(&mut h, true);
+    assert_eq!(active(&h), Some(0), "Ctrl+Shift+Tab goes back");
+    press(&mut h, true);
+    assert_eq!(active(&h), Some(2), "and wraps to the last tab");
+    assert!(h.state().ui.panels.dock, "Ctrl+Tab doesn't hide the panels");
+    // Tab order is document order, so a dragged tab is cycled through at its new place.
+    h.state_mut().session.move_document(0, 2);
+    h.state_mut().session.set_active(1);
+    press(&mut h, false);
+    assert_eq!(h.state().session.active().unwrap().doc.name, "ch1-p01.png");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(active(&h), Some(2), "plain Tab doesn't switch documents");
+    assert!(!h.state().ui.panels.dock, "plain Tab hides the panels");
+}
+
+/// One document: Ctrl+Tab stays on it quietly; a focused widget or text field doesn't keep the key.
+#[test]
+fn ctrl_tab_with_one_document_or_a_focused_field() {
+    let mut h = harness(1, ThemeKind::Pro);
+    h.key_press_modifiers(ctrl(), egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active_index(), Some(0));
+    assert!(crate::shortcut_dispatch::take_log(&h.ctx).iter().all(|(_, o)| *o == crate::shortcut_dispatch::Outcome::Ran), "no disabled-shortcut report");
+    use crate::shortcut_dispatch::Focus;
+    for (key, sc) in [("Ctrl+Tab", "window.nextDocument"), ("Ctrl+Shift+Tab", "window.previousDocument")] {
+        let parsed = crate::shortcuts::parse(key).unwrap();
+        assert!(Focus::Widget.allows(&parsed) && Focus::Text.allows(&parsed), "{key} reaches {sc} from a focused field");
+        let bound = crate::shortcut_dispatch::bindings(h.state()).into_iter().find(|(_, s)| *s == parsed).map(|(id, _)| id);
+        assert_eq!(bound.as_deref(), Some(sc));
+    }
+    assert!(!Focus::Widget.allows(&crate::shortcuts::parse("Tab").unwrap()), "a focused widget keeps plain Tab");
+}

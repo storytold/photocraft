@@ -60,6 +60,94 @@ fn literal_psd_tabs_shape_as_whitespace_without_shifting_text_offsets() {
     assert!(l.caret(2).0 > l.caret(1).0, "caret moves across the tab");
 }
 
+/// Pen position of the cluster starting at byte `at`.
+fn cluster_x(l: &crate::TextLayout, at: usize) -> f32 {
+    l.clusters.iter().find(|c| c.range.start == at).map(|c| c.x).unwrap()
+}
+
+/// #1881: a tab advances to Photoshop's next default tab stop (every 36 pt, from the anchor or
+/// the box's left edge), not one space width.
+#[test]
+fn tabs_advance_to_the_next_default_tab_stop() {
+    let mut e = TextEngine::new();
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let l = e.layout(&point("a\tb", 20.0), 72.0);
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef");
+    assert!(near(cluster_x(&l, 2), 36.0), "{}", cluster_x(&l, 2));
+    assert!(near(l.caret(2).0, 36.0), "the caret after the tab sits on the stop");
+    // Stops are in points: twice the pixels at 144 dpi.
+    let l = e.layout(&point("a\tb", 20.0), 144.0);
+    assert!(near(cluster_x(&l, 2), 72.0), "{}", cluster_x(&l, 2));
+    // Each tab moves to the following stop; text past a stop skips to the next one.
+    let l = e.layout(&point("a\t\tb", 20.0), 72.0);
+    assert!(near(cluster_x(&l, 3), 72.0), "{}", cluster_x(&l, 3));
+    let l = e.layout(&point("MMM\tb", 20.0), 72.0);
+    assert!(cluster_x(&l, 3) > 36.0);
+    assert!(near(cluster_x(&l, 4), 72.0), "{}", cluster_x(&l, 4));
+    // A tab at the start of a line goes to the first stop; the line extent includes it.
+    let l = e.layout(&point("\tb", 20.0), 72.0);
+    assert!(near(cluster_x(&l, 1), 36.0), "{}", cluster_x(&l, 1));
+    assert!(l.lines[0].x1 > 36.0);
+    // Paragraph text measures from the box's left edge.
+    let mut t = point("a\tb", 20.0);
+    t.shape = TextShape::Box { x: 10.0, y: 0.0, width: 300.0, height: 100.0 };
+    let l = e.layout(&t, 72.0);
+    assert!(near(cluster_x(&l, 2), 46.0), "{}", cluster_x(&l, 2));
+}
+
+/// The tab stays a tab in the document: PSD type round-trips it unchanged.
+#[test]
+fn psd_round_trips_tabs() {
+    for shape in [TextShape::Point, TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 100.0 }] {
+        let t = TextLayer { shape, ..point("Name\tValue\n\tIndented", 20.0) };
+        let back = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&t, 72.0, None), 72.0).unwrap();
+        assert_eq!(back.text, t.text, "{shape:?}");
+    }
+}
+
+/// Expanded tabs never push paragraph text past the box's right edge.
+#[test]
+fn tabs_wrap_inside_the_box() {
+    let mut e = TextEngine::new();
+    let mut t = point("a\tb\tc\td\te\tf\tg", 20.0);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 100.0, height: 1000.0 };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() > 1, "{}", l.lines.len());
+    // Lines break at the real tab widths: "c" (stop 72 px) still fits, "d" (stop 108 px) wraps.
+    let line_of = |at: usize| l.clusters.iter().find(|c| c.range.start == at).map(|c| c.line).unwrap();
+    assert_eq!((line_of(4), line_of(6)), (0, 1));
+    assert!((cluster_x(&l, 6) - 0.0).abs() < 0.05, "a wrapped line starts at the box edge");
+    for c in &l.clusters {
+        let ch = &t.text[c.range.clone()];
+        if ch != "\t" {
+            assert!(c.x + c.advance <= 100.0 + 1e-3, "{ch:?} at {} overflows", c.x);
+        }
+    }
+}
+
+/// Right-aligned and centred point text keep their alignment around the expanded tab.
+#[test]
+fn tabs_keep_point_text_alignment() {
+    let mut e = TextEngine::new();
+    let r = e.layout(&with_para(point("a\tb", 20.0), ParagraphStyle { align: TextAlign::Right, ..Default::default() }), 72.0);
+    assert!(r.lines[0].x1.abs() < 0.05, "{:?}", r.lines[0]);
+    let b = r.clusters.iter().find(|c| c.range.start == 2).unwrap();
+    assert!((b.x + b.advance).abs() < 0.05, "b ends at the anchor: {b:?}");
+    assert!(r.lines[0].x0 < -36.0);
+    // Paragraph text: the line still ends at the box's right edge; a trailing tab is
+    // whitespace outside the line's extent.
+    for text in ["a\tb", "a\tb\t"] {
+        let t = with_para(
+            TextLayer { shape: TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 }, ..point(text, 20.0) },
+            ParagraphStyle { align: TextAlign::Right, ..Default::default() },
+        );
+        let l = e.layout(&t, 72.0);
+        let b = l.clusters.iter().find(|c| c.range.start == 2).unwrap();
+        assert!((b.x + b.advance - 200.0).abs() < 0.5, "{text:?}: {b:?}");
+        assert!((l.lines[0].x1 - 200.0).abs() < 0.5, "{text:?}: {:?}", l.lines[0]);
+    }
+}
+
 #[test]
 fn metrics_are_stable_and_scale_with_dpi() {
     let mut e = TextEngine::new();
@@ -646,6 +734,92 @@ fn txt2_keeps_a_kept_objects_extras_and_drops_them_with_its_text() {
     let object = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
     assert!(object.get("21").is_none(), "pen positions of another text are dropped: {:?}", object.get("21"));
     assert!(object.path(&["0", "keep"]).is_none(), "model extras of another text are dropped");
+}
+
+/// A `Txt2` shaped like Photoshop's: document resources and settings beside the text objects
+/// (`/0`, `/1 /0`, `/1 /2`), style runs carrying a full style (font, size, leading) besides the
+/// auto-kern mode, a Latin-1 string without a byte-order mark, reals, and a second object no
+/// layer names. `modes` are the object's `(UTF-16 length, auto-kern mode)` runs for "AVA\r".
+fn photoshop_txt2(modes: &[(usize, i64)]) -> Vec<u8> {
+    let mut v = b"\n\n/98 << /0 14 >> /0 << /1 << /0 [ << /0 << /0 (MyriadPro-Regular) /2 0 >> >> ] >> >> /1 << /0 << /0 1 /1 .5 >> /1 [ << /0 << /0 (\xfe\xff\0A\0V\0A\0\r) /6 << /0 [ ".to_vec();
+    for (len, m) in modes {
+        v.extend_from_slice(format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 /2 14.5 /11 {m} >> >> >> /1 {len} >> ").as_bytes());
+    }
+    v.extend_from_slice(
+        b"] >> /7 << /0 1 >> >> /21 << /1 [ 1.25 2.5 ] >> >> << /0 << /0 (\xfe\xff\0B\0\r) >> /21 << /1 [ 3.0 ] >> >> ] /2 << /0 7 >> >> /3 << /0 .25 >>",
+    );
+    v
+}
+
+/// #2374: an unedited save hands Photoshop back its own `Txt2`, byte for byte. Rebuilding it
+/// dropped `/1 /0` and `/1 /2`, emptied unnamed objects and cut every style run down to its
+/// auto-kern mode, and Photoshop refused to open the file.
+#[test]
+fn unchanged_txt2_is_written_back_byte_for_byte() {
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_txt2(&[(2, 1), (2, 1)]);
+    let tysh = with_text_index(&crate::psd::build_tysh(&styled("AVA", CharStyle::default()), 72.0, None), 0);
+    let mut t = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2(&mut t, &tysh, &crate::psd::parse_txt2(&prev).unwrap());
+    assert!(t.char_runs().iter().all(|r| r.style.kerning == Kerning::Metrics));
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev);
+    // An optical run reads back and writes back the same way.
+    let prev = photoshop_txt2(&[(1, 2), (3, 1)]);
+    crate::psd::apply_txt2(&mut t, &tysh, &crate::psd::parse_txt2(&prev).unwrap());
+    assert_eq!(t.char_runs().first().map(|r| r.style.kerning), Some(Kerning::Optical));
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev);
+}
+
+/// An edited auto-kern mode changes only `/11` (splitting the run it falls inside); the file's
+/// style keys, the other `/1` keys and the objects no layer names all survive.
+#[test]
+fn edited_txt2_keeps_the_files_styles_and_objects() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_txt2(&[(4, 1)]);
+    let style = |kerning: Kerning| CharStyle { kerning, ..Default::default() };
+    let t = runs_of("AVA", &[(1, style(Kerning::Optical)), (2, style(Kerning::Metrics))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    let before = crate::psd::parse_txt2(&prev).unwrap();
+    for key in [&["0"][..], &["1", "0"], &["1", "2"], &["3"]] {
+        assert_eq!(out.path(key), before.path(key), "/{} survives", key.join(" /"));
+    }
+    let objects = out.path(&["1", "1"]).and_then(E::as_array).unwrap();
+    assert_eq!(objects.len(), 2, "the object no layer names is kept");
+    assert_eq!(objects.get(1), before.path(&["1", "1"]).and_then(E::as_array).unwrap().get(1));
+    let object = &objects[0];
+    assert_eq!(object.path(&["0", "7", "0"]).and_then(E::as_i64), Some(1), "model extras survive");
+    assert!(object.path(&["21", "1"]).is_some(), "pen positions survive an unchanged text");
+    let runs = object.path(&["0", "6", "0"]).and_then(E::as_array).unwrap();
+    let got: Vec<(i64, i64)> =
+        runs.iter().map(|r| (r.get("1").and_then(E::as_i64).unwrap(), r.path(&["0", "0", "6", "11"]).and_then(E::as_i64).unwrap())).collect();
+    assert_eq!(got, vec![(1, 2), (3, 1)], "the run is split where the mode changes");
+    for r in runs {
+        assert_eq!(r.path(&["0", "0", "6", "1"]).and_then(E::as_f64), Some(12.0), "the font size survives");
+        assert_eq!(r.path(&["0", "0", "6", "2"]).and_then(E::as_f64), Some(14.5), "the leading survives");
+    }
+    // And it reads back with the edited modes.
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &out);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(1, Kerning::Optical), (2, Kerning::Metrics)]);
+}
+
+/// The file's style runs are only reused when they cover the text: runs of another length (or
+/// hostile lengths) fall back to generated runs, without panicking.
+#[test]
+fn txt2_runs_that_dont_cover_the_text_are_regenerated() {
+    use crate::engine_data::Value as E;
+    let t = runs_of("AVA", &[(3, CharStyle::default())]);
+    for modes in [&[(3, 1)][..], &[(9, 1)], &[(i64::MAX as usize, 1), (2, 1)], &[]] {
+        let prev = photoshop_txt2(modes);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let runs = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].path(&["0", "6", "0"]).and_then(E::as_array).unwrap();
+        let total: i64 = runs.iter().filter_map(|r| r.get("1").and_then(E::as_i64)).sum();
+        assert_eq!(total, 4, "{modes:?}");
+        assert!(out.path(&["1", "2"]).is_some());
+    }
 }
 
 /// A file-controlled `TextIndex` must not size the save: out-of-range numbers are ignored (the

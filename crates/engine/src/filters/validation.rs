@@ -34,7 +34,7 @@ impl Rule {
 }
 
 // The bounds and choices are the core filters' public dialog-unit contract. Defaults remain in
-// params_for; extended/gallery filters keep their own parsing until their validation is added.
+// params_for; gallery filters are checked in gallery_cmds.
 fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
     use Rule::{Bool, Choice, Number, Unsigned};
     Some(match id {
@@ -92,11 +92,49 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
     })
 }
 
+// Extended filters: only their documented choices are checked for now, since `prepare` injects
+// extra keys (colours, map documents) and their numeric ranges clamp in params_for.
+fn choices(id: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    Some(match id {
+        "filter.pixelate.mezzotint" => {
+            &[("type", "fineDots|mediumDots|grainyDots|coarseDots|shortLines|mediumLines|longLines|shortStrokes|mediumStrokes|longStrokes")]
+        }
+        "filter.stylize.diffuse" => &[("mode", "normal|darkenOnly|lightenOnly|anisotropic")],
+        "filter.stylize.extrude" => &[("type", "blocks|pyramids"), ("depthMode", "random|levelBased")],
+        "filter.stylize.tiles" => &[("fill", "background|foreground|inverse|unaltered")],
+        "filter.stylize.traceContour" => &[("edge", "lower|upper")],
+        "filter.stylize.wind" => &[("method", "wind|blast|stagger"), ("direction", "fromRight|fromLeft")],
+        "filter.distort.displace" => &[("fit", "stretch|tile"), ("undefinedAreas", "repeat|wrap")],
+        "filter.distort.shear" => &[("undefinedAreas", "wrap|repeat")],
+        "filter.distort.zigZag" => &[("style", "pondRipples|outFromCenter|aroundCenter")],
+        "filter.render.lensFlare" => &[("lens", "zoom|prime35|prime105|moviePrime")],
+        "filter.render.lightingEffects" => &[("lightType", "spot|point|infinite"), ("texture", "none|red|green|blue|alpha|luminance")],
+        "filter.blur.smartBlur" => &[("quality", "high|medium|low"), ("mode", "normal|edgeOnly|overlayEdge")],
+        "filter.blur.lensBlur" => {
+            &[("shape", "hexagon|triangle|square|pentagon|heptagon|octagon"), ("depthMap", "none|transparency|layerMask"), ("distribution", "uniform|gaussian")]
+        }
+        "filter.blur.shapeBlur" => &[("shape", "circle|ring|square|diamond|triangle|hexagon|star|heart|cross")],
+        "filter.other.hsbHsl" => &[("inputMode", "rgb|hsb|hsl"), ("rowOrder", "hsb|hsl|rgb")],
+        "filter.video.deInterlace" => &[("eliminate", "oddFields|evenFields"), ("createBy", "interpolation|duplication")],
+        _ => return None,
+    })
+}
+
 /// Runs both at dispatch (before committing a floating selection) and at the shared runner
-/// (direct specs/Last Filter). Filters outside this module's core family are unaffected.
+/// (direct specs/Last Filter). Filters outside the core and extended families are unaffected.
 pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
-    let Some(fields) = fields(id) else { return Ok(()) };
     let bad = |msg| EngineError::BadParams { cmd: id.into(), msg };
+    if let Some(choices) = choices(id) {
+        for &(key, allowed) in choices {
+            if let Some(value) = params.get(key)
+                && !Rule::Choice(allowed).accepts(value)
+            {
+                return Err(bad(format!("`{key}` must be {}", Rule::Choice(allowed).expected())));
+            }
+        }
+        return Ok(());
+    }
+    let Some(fields) = fields(id) else { return crate::gallery_cmds::validate_params(id, params) };
     if params.is_null() {
         return Ok(());
     }
@@ -268,6 +306,46 @@ mod tests {
         for (key, value) in [("layer", json!("2")), ("target", json!("typo")), ("target", json!({"channel":-1})), ("coalesce", json!(false))] {
             rejected(&mut s, "filter.blur.gaussianBlur", key, value);
         }
+    }
+
+    #[test]
+    fn extended_filter_choices_match_their_specs_and_reject_unlisted_values() {
+        let mut s = session(8);
+        let specs = crate::filters_ext::specs();
+        let ids = [
+            "filter.pixelate.mezzotint",
+            "filter.stylize.diffuse",
+            "filter.stylize.extrude",
+            "filter.stylize.tiles",
+            "filter.stylize.traceContour",
+            "filter.stylize.wind",
+            "filter.distort.displace",
+            "filter.distort.shear",
+            "filter.distort.zigZag",
+            "filter.render.lensFlare",
+            "filter.render.lightingEffects",
+            "filter.blur.smartBlur",
+            "filter.blur.lensBlur",
+            "filter.blur.shapeBlur",
+            "filter.other.hsbHsl",
+            "filter.video.deInterlace",
+        ];
+        for id in ids {
+            let doc = specs.iter().find(|spec| spec.id == id).unwrap().params;
+            for &(key, allowed) in choices(id).unwrap() {
+                // The table repeats the registry's params doc, so the two cannot drift apart.
+                assert!(doc.contains(&format!("\"{key}\":\"{allowed}\"")), "{id}.{key}");
+                for value in [json!("zzbogus"), json!(false), json!(1), Value::Null] {
+                    rejected(&mut s, id, key, value);
+                }
+                for value in allowed.split('|') {
+                    validate_params(id, &json!({key:value})).unwrap();
+                }
+            }
+        }
+        // Keys `prepare` injects, and undocumented ones, stay accepted as before.
+        s.execute("filter.stylize.tiles", json!({"count":4,"foreground":[1,0,0,1]})).unwrap();
+        s.execute("filter.stylize.wind", json!({"direction":"fromLeft"})).unwrap();
     }
 
     #[test]

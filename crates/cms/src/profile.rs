@@ -448,7 +448,8 @@ fn parse_profile(bytes: &[u8]) -> Result<Profile, CmsError> {
     let version = (r.u8(8)?, r.u8(9)?);
     let class = ProfileClass::from_sig(r.u32(12)?);
     let color_space = ColorSpace::from_sig(r.u32(16)?);
-    let pcs = match &r.u32(20)?.to_be_bytes() {
+    let pcs_sig = r.u32(20)?;
+    let pcs = match &pcs_sig.to_be_bytes() {
         b"Lab " => Pcs::Lab,
         _ => Pcs::Xyz,
     };
@@ -539,15 +540,18 @@ fn parse_profile(bytes: &[u8]) -> Result<Profile, CmsError> {
         bytes: None,
         hash: Default::default(),
     };
-    // Validate channel counts of LUTs against the header.
+    // Validate channel counts of LUTs against the header. A DeviceLink connects two device
+    // spaces: its header PCS field holds the output colour space (ICC.1:2010 §7.2.7), so a
+    // CMYK→CMYK link has a 4→4 AToB0.
     let dev = p.color_space.channels();
+    let conn = if p.class == ProfileClass::DeviceLink { ColorSpace::from_sig(pcs_sig).channels() } else { 3 };
     for l in p.a2b.iter().flatten() {
-        if dev != 0 && l.inputs != dev || l.outputs != 3 {
+        if dev != 0 && l.inputs != dev || conn != 0 && l.outputs != conn {
             return Err(CmsError::Invalid(format!("AToB tag has {}→{} channels for a {:?} profile", l.inputs, l.outputs, p.color_space)));
         }
     }
     for l in p.b2a.iter().flatten() {
-        if l.inputs != 3 || dev != 0 && l.outputs != dev {
+        if conn != 0 && l.inputs != conn || dev != 0 && l.outputs != dev {
             return Err(CmsError::Invalid(format!("BToA tag has {}→{} channels for a {:?} profile", l.inputs, l.outputs, p.color_space)));
         }
     }

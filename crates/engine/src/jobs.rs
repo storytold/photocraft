@@ -562,7 +562,7 @@ impl Session {
 
     /// Running jobs followed by the last few that ended (newest last), for `jobs.list`.
     pub fn jobs_with_recent(&self) -> Vec<JobInfo> {
-        self.jobs.recent.iter().cloned().chain(self.jobs()).collect()
+        self.jobs().into_iter().chain(self.jobs.recent.iter().cloned()).collect()
     }
 
     /// The running job that locks document `doc`, if any.

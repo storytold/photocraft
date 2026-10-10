@@ -436,3 +436,78 @@ fn png_phys_outranks_its_exif() {
     let with_phys = [&png[..ihdr_end], &chunk, &png[ihdr_end..]].concat();
     near(decode(&with_phys).unwrap().meta.dpi, 150.0114);
 }
+
+/// `camera_exif` plus IFD1, the embedded thumbnail a camera (or the last editor) wrote:
+/// JPEGInterchangeFormat / JPEGInterchangeFormatLength naming a fake JPEG after the IFD.
+fn exif_with_thumbnail(e: &Exif) -> Vec<u8> {
+    let mut v = camera_exif(e);
+    let ifd1 = v.len() as u32;
+    // IFD0 (4 entries) ends with its next-IFD pointer.
+    v[8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4].copy_from_slice(&e.u32(ifd1));
+    let thumb = b"\xFF\xD8stale thumbnail\xFF\xD9";
+    let thumb_at = ifd1 + 2 + 2 * 12 + 4;
+    v.extend_from_slice(&e.u16(2));
+    for (tag, value) in [(0x0201u16, thumb_at), (0x0202, thumb.len() as u32)] {
+        v.extend_from_slice(&e.u16(tag));
+        v.extend_from_slice(&e.u16(LONG));
+        v.extend_from_slice(&e.u32(1));
+        v.extend_from_slice(&e.u32(value));
+    }
+    v.extend_from_slice(&e.u32(0));
+    v.extend_from_slice(thumb);
+    v
+}
+
+fn next_ifd(e: &Exif, exif: &[u8]) -> u32 {
+    let at = 8 + 2 + 4 * 12;
+    let b: [u8; 4] = exif[at..at + 4].try_into().unwrap();
+    if e.big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
+}
+
+/// #2147 / #2373: an export must not carry the source's EXIF thumbnail (IFD1). Finder, Android
+/// and upload pickers show it instead of the image, so an edited photo kept its old thumbnail.
+#[test]
+fn exports_drop_the_source_exif_thumbnail() {
+    for e in [&LE, &BE] {
+        let exif = exif_with_thumbnail(e);
+        assert_ne!(next_ifd(e, &exif), 0);
+        for ppi in [None, Some((300.0, 300.0)), Some((240.0, 240.0))] {
+            let out = export_exif(&exif, ppi);
+            assert_eq!(next_ifd(e, &out), 0, "IFD1 is unlinked ({ppi:?})");
+            assert_eq!(out.len(), exif.len(), "nothing moves");
+            assert!(out.windows(6).any(|w| w == b"NIKON\0"), "the rest of the EXIF is kept");
+            near(exif_resolution(&out), ppi.map_or(300.0, |p| p.0));
+        }
+        // Only the pointer changes.
+        let out = export_exif(&exif, None);
+        let differing: Vec<usize> = (0..exif.len()).filter(|&i| exif[i] != out[i]).collect();
+        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i)), "{differing:?}");
+        // With a JPEG-style prefix too.
+        let prefixed = [b"Exif\0\0".as_slice(), &exif].concat();
+        assert_eq!(next_ifd(e, &export_exif(&prefixed, None)[6..]), 0);
+        // An EXIF without a thumbnail comes through untouched.
+        assert!(matches!(export_exif(&camera_exif(e), None), Cow::Borrowed(_)));
+        // Through every encoder that writes EXIF.
+        let mut img = Image::from_raw(4, 4, ChannelLayout::Rgb, SampleType::U8, vec![90; 48]).unwrap();
+        img.meta.exif = Some(exif.clone());
+        let jpeg = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        assert_eq!(next_ifd(e, &exif_of(&jpeg)), 0, "JPEG");
+        for format in [Format::Png, Format::WebP] {
+            let back = decode(&encode(&img, format, &EncodeOptions::default()).unwrap()).unwrap();
+            let got = back.meta.exif.unwrap_or_else(|| panic!("{format:?} kept no EXIF"));
+            let body = got.strip_prefix(b"Exif\0\0").unwrap_or(&got);
+            assert_eq!(next_ifd(e, body), 0, "{format:?}");
+        }
+    }
+}
+
+#[test]
+fn thumbnail_removal_never_panics_on_truncated_exif() {
+    for e in [&LE, &BE] {
+        let exif = exif_with_thumbnail(e);
+        for n in 0..exif.len() {
+            let _ = export_exif(&exif[..n], None);
+            let _ = export_exif(&exif[..n], Some((300.0, 300.0)));
+        }
+    }
+}

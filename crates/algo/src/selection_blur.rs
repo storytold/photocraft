@@ -4,7 +4,7 @@
 //!
 //! * **Smooth** is a box average with edge-replicated borders: a running sum per line, `O(1)` per
 //!   pixel whatever the radius.
-//! * **Feather** is a Gaussian (`σ = radius / 2`, kernel truncated at `⌈3σ⌉` and normalized, zero
+//! * **Feather** is a Gaussian (`σ = radius`, as Photoshop's, kernel truncated at `⌈3σ⌉` and normalized, zero
 //!   outside the canvas). Small kernels are convolved directly. Wide ones are written as a short
 //!   cosine series over the kernel window, `k(j) ≈ a₀ + Σ aₖ cos(ωₖ j)`, and every term is a
 //!   sliding windowed sum `Σ m[x+j]·e^{iωₖj}` updated in `O(1)` per pixel, so the cost doesn't grow
@@ -155,10 +155,13 @@ fn box_line(src: &[f32], dst: &mut [f32], r: usize) {
     }
 }
 
-/// Select › Modify › Smooth: box average of radius `round(r)` (edges replicated), then the
-/// contrast curve `(v − ½)·4 + ½` that re-hardens the edge and drops specks.
+/// Select › Modify › Smooth: box average of radius `round(r)` (edges replicated), then a hard
+/// threshold at ½, as in Photoshop: straight edges stay exactly where they were, corners round
+/// off and specks drop (measured on Photoshop 27.11, Smooth 8 on a 32 px square: every sampled
+/// pixel 0 or 255, corner cut where the 17×17 average crosses ½). The contrast curve
+/// `(v − ½)·4 + ½` used before left grey, half-selected pixels along every edge.
 pub(crate) fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let curve = |v: f32| ((v - 0.5) * 4.0 + 0.5).clamp(0.0, 1.0);
+    let curve = |v: f32| if v >= 0.5 { 1.0 } else { 0.0 };
     let n = w.saturating_mul(h);
     if m.len() != n || n == 0 {
         return m.iter().map(|v| curve(*v)).collect();
@@ -539,12 +542,15 @@ impl CosKernel {
     }
 }
 
-/// Select › Modify › Feather: Gaussian blur of the mask with `σ = radius / 2`, the kernel
-/// truncated at `⌈3σ⌉` and normalized, zero beyond the canvas.
+/// Select › Modify › Feather: Gaussian blur of the mask with `σ = radius`, the kernel truncated
+/// at `⌈3σ⌉` and normalized, zero beyond the canvas. Photoshop's feather radius is the Gaussian's
+/// σ (measured on Photoshop 27.11; the same mapping the mask feather uses, fitted on the
+/// psd-tools corpus in `photocraft_compose::masks::feather_sigma`). It was `radius / 2`: half
+/// as wide as Photoshop's.
 pub(crate) fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
     let n = w.saturating_mul(h);
     let sigma = if radius.is_finite() {
-        radius.max(0.0) / 2.0
+        radius.max(0.0)
     } else if radius > 0.0 {
         MAX_SIGMA
     } else {
@@ -614,11 +620,11 @@ mod tests {
         }
 
         pub fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-            box_blur(m, w, h, r.max(0.0).round() as usize).into_iter().map(|v| ((v - 0.5) * 4.0 + 0.5).clamp(0.0, 1.0)).collect()
+            box_blur(m, w, h, r.max(0.0).round() as usize).into_iter().map(|v| if v >= 0.5 { 1.0 } else { 0.0 }).collect()
         }
 
         pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
-            let sigma = radius.max(0.0) / 2.0;
+            let sigma = radius.max(0.0);
             if sigma < 0.1 {
                 return m.to_vec();
             }
@@ -680,6 +686,27 @@ mod tests {
         vec![("binary", binary), ("soft", soft), ("blob", blob), ("sparse", sparse), ("rect", rect)]
     }
 
+    /// Photoshop 27.11, measured: a 32×32 rectangle at (16,16) in 64×64, Select › Modify ›
+    /// Feather 4 px, filled white. Row y = 32 for x = 8..=24, then (16,16), (18,18), (20,20).
+    #[test]
+    fn feather_matches_photoshop() {
+        const ROW: [u8; 17] = [7, 13, 22, 34, 50, 70, 92, 115, 140, 163, 185, 205, 221, 233, 242, 248, 252];
+        const DIAG: [(usize, u8); 3] = [(16, 76), (18, 134), (20, 190)];
+        let (w, h) = (64, 64);
+        let m: Vec<f32> = (0..w * h).map(|i| if (16..48).contains(&(i % w)) && (16..48).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+        let f = feather(&m, w, h, 4.0);
+        let v = |x: usize, y: usize| (f[y * w + x] * 255.0).round() as i32;
+        for (i, want) in ROW.iter().enumerate() {
+            let x = 8 + i;
+            assert!((v(x, 32) - i32::from(*want)).abs() <= 3, "x {x}: {} vs Photoshop {want}", v(x, 32));
+        }
+        // Photoshop's corners come out a few levels darker than a true 2-D Gaussian's; the row
+        // is the defining measurement.
+        for (d, want) in DIAG {
+            assert!((v(d, d) - i32::from(want)).abs() <= 4, "({d},{d}): {} vs Photoshop {want}", v(d, d));
+        }
+    }
+
     #[test]
     fn feather_matches_direct_gaussian() {
         for (w, h, seed) in [(97, 61, 1), (40, 150, 2), (13, 7, 3)] {
@@ -692,13 +719,32 @@ mod tests {
         }
     }
 
+    /// Photoshop 27.11, measured: a 32×32 rectangle at (16,16) in 64×64, Select › Modify ›
+    /// Smooth 8 px, filled white. The straight edge stays hard at x = 16; only the corner rounds.
+    #[test]
+    fn smooth_matches_photoshop() {
+        let (w, h) = (64, 64);
+        let m: Vec<f32> = (0..w * h).map(|i| if (16..48).contains(&(i % w)) && (16..48).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+        let s = smooth(&m, w, h, 8.0);
+        let row: Vec<f32> = (8..=24).map(|x| s[32 * w + x]).collect();
+        let want_row: Vec<f32> = (8..=24).map(|x| if x >= 16 { 1.0 } else { 0.0 }).collect();
+        assert_eq!(row, want_row);
+        let diag: Vec<f32> = (16..=24).map(|d| s[d * w + d]).collect();
+        assert_eq!(diag, [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    }
+
     #[test]
     fn smooth_matches_direct_box() {
         for (w, h, seed) in [(97, 61, 4), (40, 150, 5), (13, 7, 6)] {
             for (kind, m) in masks(w, h, seed) {
                 for radius in [0.0, 0.4, 1.0, 2.0, 5.0, 16.0, 50.0, 500.0] {
-                    let d = max_diff(&smooth(&m, w, h, radius), &oracle::smooth(&m, w, h, radius));
-                    assert!(d <= 1.0 / 255.0, "{kind} {w}x{h} r {radius}: {d}");
+                    // The threshold is hard, so a pixel may only differ where the box average sits
+                    // within float rounding of ½ (the running sum adds in another order).
+                    let (fast, slow) = (smooth(&m, w, h, radius), oracle::smooth(&m, w, h, radius));
+                    let avg = oracle::box_blur(&m, w, h, radius.max(0.0).round() as usize);
+                    for (i, (a, b)) in fast.iter().zip(&slow).enumerate() {
+                        assert!(a == b || (avg[i] - 0.5).abs() < 1e-4, "{kind} {w}x{h} r {radius} pixel {i}: {a} vs {b} (average {})", avg[i]);
+                    }
                 }
             }
         }

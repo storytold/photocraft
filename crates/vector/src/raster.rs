@@ -15,6 +15,10 @@
 use photocraft_doc::{FillRule, PathOp};
 use photocraft_geom::Rect;
 
+/// Coverage below this is f32 round-off in the cell prefix sum, not area: it is well under half
+/// a 16-bit step (7.6e-6), so 8- and 16-bit output is unchanged by dropping it.
+const RESIDUE: f32 = 1e-6;
+
 #[derive(Clone, Copy, Debug)]
 struct Edge {
     x0: f64,
@@ -216,7 +220,10 @@ impl Rasterizer {
             let mut sum = 0.0f32;
             for (o, a) in row_out.iter_mut().zip(st.acc.iter()) {
                 sum += *a;
-                *o = sum.clamp(0.0, 1.0);
+                // Opposite boundaries don't cancel exactly in f32, leaving ~1e-7 just past a
+                // shape's right edge; that residue would count as content (#2537). Snap it (and
+                // a NaN) to 0.
+                *o = if sum >= RESIDUE { sum.min(1.0) } else { 0.0 };
             }
         }
     }

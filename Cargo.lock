@@ -4339,6 +4339,7 @@ name = "photocraft-engine"
 version = "0.6.0"
 dependencies = [
  "blake3",
+ "exr",
  "flate2",
  "photocraft-affinity",
  "photocraft-algo",
@@ -4504,11 +4505,13 @@ name = "photocraft-raw"
 version = "0.6.0"
 dependencies = [
  "flate2",
+ "image",
  "jxl-oxide",
  "photocraft-raw",
  "png 0.18.1",
  "rayon",
  "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
  "zune-jpegxl",
 ]
 

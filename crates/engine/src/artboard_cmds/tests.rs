@@ -385,3 +385,44 @@ fn moving_an_artboard_past_the_canvas_grows_it() {
     s.undo();
     assert_eq!((doc(&s).size.width, doc(&s).size.height), (100, 80));
 }
+
+#[test]
+fn moving_an_artboard_past_the_canvas_keeps_its_shapes_whole() {
+    // #2389: a shape's pixels are cut at the canvas; the board moved before the canvas grew,
+    // so its shape rendered against the old edge and stayed missing or clipped.
+    let shape_board = |s: &mut Session| {
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        let sh = s.execute("shape.create", json!({"kind": "rect", "rect": [10, 20, 30, 30], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.new.artboardFromLayers", json!({})).unwrap();
+        sh
+    };
+    for (cmd, p, size, red, not_red) in [
+        ("layer.artboard.set", json!({"x": 120}), (150, 100), [(121, 21), (130, 30), (149, 49)], None),
+        ("layer.translate", json!({"dx": 110, "dy": 0}), (150, 100), [(121, 21), (130, 30), (149, 49)], None),
+        ("layer.artboard.set", json!({"y": 120}), (100, 150), [(11, 121), (20, 130), (39, 149)], None),
+        // Partly past the edge: the whole shape, not just the part inside the old canvas.
+        ("layer.artboard.set", json!({"x": 90}), (120, 100), [(91, 21), (95, 30), (110, 30)], Some((15, 30))),
+    ] {
+        let mut s = Session::new();
+        let sh = shape_board(&mut s);
+        s.execute(cmd, p.clone()).unwrap();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), size, "{cmd} {p}");
+        for (x, y) in red {
+            assert!(red_at(&s, x, y), "{cmd} {p}: ({x}, {y})");
+        }
+        if let Some((x, y)) = not_red {
+            assert!(!red_at(&s, x, y), "{cmd} {p}: ({x}, {y}) left behind");
+        }
+        let info = s.execute("shape.info", json!({"layer": sh})).unwrap();
+        assert_eq!(info["bounds"], json!([red[0].0 - 1, red[0].1 - 1, 30, 30]), "{cmd} {p}");
+        // One undo step back to the original board; redo brings the whole shape back.
+        s.undo();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), (100, 100));
+        assert!(red_at(&s, 20, 30), "{cmd} {p}: undo");
+        s.redo();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), size);
+        for (x, y) in red {
+            assert!(red_at(&s, x, y), "{cmd} {p}: redo ({x}, {y})");
+        }
+    }
+}

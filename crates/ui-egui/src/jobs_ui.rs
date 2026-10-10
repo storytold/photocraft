@@ -545,33 +545,75 @@ fn elapsed(ms: f64) -> String {
     if s < 60.0 { format!("{s:.1} s") } else { format!("{}:{:02}", (s / 60.0).floor() as u64, (s % 60.0).floor() as u64) }
 }
 
+/// Where the opening card drew its parts last frame (tests check that everything fits, #2423).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpenCardRects {
+    pub card: Rect,
+    pub title: Rect,
+    pub cancel: Rect,
+}
+
+fn open_card_rects_id() -> egui::Id {
+    egui::Id::new("open-card-rects")
+}
+
+/// The opening card's parts as drawn last frame, if it was shown.
+pub fn open_card_rects(ctx: &egui::Context) -> Option<OpenCardRects> {
+    ctx.data(|d| d.get_temp::<OpenCardRects>(open_card_rects_id()))
+}
+
+/// The card's width and padding, and the height it has when the title and message fit one line.
+const OPEN_CARD_WIDTH: f32 = 340.0;
+const OPEN_CARD_PAD: f32 = 18.0;
+const OPEN_CARD_MIN_HEIGHT: f32 = 132.0;
+
 /// The canvas area of an opening tab: the file name, a bar and Cancel, centred on the
-/// workspace backdrop.
+/// workspace backdrop. The name and the message stay on one line (truncated with "…", the full
+/// text on hover) and the card grows to fit its rows, so nothing lands outside it (#2423).
 pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let Some(tab) = app.jobs.opens.iter().find(|o| o.job == job).cloned() else { return };
     let Some(j) = app.session.job(job) else { return };
     let t = Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
     ui.painter().rect_filled(area, 0.0, t.canvas);
-    let card = Rect::from_center_size(area.center(), vec2(340.0, 132.0));
-    ui.painter().rect_filled(card, t.radius_lg, t.card);
-    ui.painter().rect_stroke(card, t.radius_lg, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(18.0)));
-    child.label(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0)));
+    // Centre the card at the height its content needed last frame; the background is painted
+    // once the rows are laid out, so a taller content (a long translation) still gets a card.
+    let height_id = egui::Id::new(("open-card-height", job));
+    let height = ui.ctx().data(|d| d.get_temp::<f32>(height_id)).unwrap_or(OPEN_CARD_MIN_HEIGHT);
+    let card = Rect::from_center_size(area.center(), vec2(OPEN_CARD_WIDTH, height));
+    let fill = ui.painter().add(egui::Shape::Noop);
+    let border = ui.painter().add(egui::Shape::Noop);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(OPEN_CARD_PAD)));
+    let title = child
+        .add(egui::Label::new(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0))).truncate())
+        .rect;
     child.add_space(4.0);
     let msg = if j.message.is_empty() { tl!("Reading…").to_string() } else { format!("{}…", j.message) };
-    child.label(RichText::new(msg).color(t.text_dim).size(12.0));
+    child.add(egui::Label::new(RichText::new(msg).color(t.text_dim).size(12.0)).truncate());
     child.add_space(10.0);
     let (br, _) = child.allocate_exact_size(vec2(child.available_width(), 8.0), Sense::hover());
     bar(&child, br, shown_fraction(&j), &t);
     child.add_space(10.0);
     let mut cancel_it = false;
+    let mut cancel_rect = Rect::NOTHING;
     child.horizontal(|ui| {
         ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel_it = crate::widgets::secondary_button(ui, tl!("Cancel"), 76.0).clicked();
+            let r = crate::widgets::secondary_button(ui, tl!("Cancel"), 76.0);
+            cancel_it = r.clicked();
+            cancel_rect = r.rect;
         });
     });
+    let content = child.min_rect();
+    let needed = (content.height() + 2.0 * OPEN_CARD_PAD).max(OPEN_CARD_MIN_HEIGHT);
+    let card = Rect::from_min_size(card.min, vec2(OPEN_CARD_WIDTH, height.max(needed)));
+    ui.painter().set(fill, egui::Shape::rect_filled(card, t.radius_lg, t.card));
+    ui.painter().set(border, egui::Shape::rect_stroke(card, t.radius_lg, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside));
+    if (needed - height).abs() > 0.5 {
+        ui.ctx().data_mut(|d| d.insert_temp(height_id, needed));
+        ui.ctx().request_repaint();
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(open_card_rects_id(), OpenCardRects { card, title, cancel: cancel_rect }));
     if cancel_it {
         cancel(app, job);
     }

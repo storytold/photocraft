@@ -18,7 +18,7 @@ struct Op {
     opacity: f32,
     mask_density: f32,
     mask_default: f32,
-    _pad1: f32,
+    fill: f32,       // layer Fill for fs_blend (psblend::composite_fill); 1 elsewhere
     tex_origin: vec2<i32>,
     tex_size: vec2<i32>,
     mask_origin: vec2<i32>,
@@ -48,7 +48,7 @@ const F_STROKE_OUT: u32 = 1024u; // effect paint: outside stroke band
 const F_FIRST: u32 = 2048u;      // outside strokes: nothing accumulated yet
 const F_CHANNELS: u32 = 4096u;   // lerp: per-channel weights in p0 (channel restrictions)
 const F_LAB: u32 = 65536u;      // Lab document: Normal mixes in CIELAB
-const F_HDR: u32 = 262144u;     // 32-bit float document: Add / Divide don't clip at 1
+const F_HDR: u32 = 262144u;     // 32-bit float document: Add / Divide and Hue/Saturation/Color/Luminosity don't clip at 1
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
@@ -216,22 +216,24 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
 
-fn clip_color(c: vec3<f32>) -> vec3<f32> {
+// photocraft_color::blend::clip_color: towards grey until within 0..top; a luminosity outside
+// that range has no in-gamut colour (and max − lum is rounding noise), so it gives its grey.
+fn clip_color(c: vec3<f32>, top: f32) -> vec3<f32> {
     let l = lum(c);
     let n = min(min(c.r, c.g), c.b);
     let x = max(max(c.r, c.g), c.b);
     var out = c;
     if (n < 0.0) {
         let d = l - n;
-        if (abs(d) < 1e-12) { out = vec3(l); } else { out = l + (out - l) * l / d; }
+        if (l > 0.0 && d > 0.0) { out = l + (out - l) * l / d; } else { out = vec3(l); }
     }
-    if (x > 1.0) {
+    if (x > top) {
         let d = x - l;
-        if (abs(d) < 1e-12) { out = vec3(l); } else { out = l + (out - l) * (1.0 - l) / d; }
+        if (l < top && d > 0.0) { out = l + (out - l) * (top - l) / d; } else { out = vec3(l); }
     }
     return out;
 }
-fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> { return clip_color(c + (l - lum(c))); }
+fn set_lum(c: vec3<f32>, l: f32, top: f32) -> vec3<f32> { return clip_color(c + (l - lum(c)), top); }
 fn sat(c: vec3<f32>) -> f32 { return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }
 fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
     let mx = max(max(c.r, c.g), c.b);
@@ -241,11 +243,13 @@ fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
 }
 
 fn blend_rgb(mode: i32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
+    // blend_rgb_within: 32-bit documents keep values above 1 (f32::MAX).
+    let top = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
     switch mode {
-        case 24: { return set_lum(set_sat(cs, sat(cb)), lum(cb)); } // Hue
-        case 25: { return set_lum(set_sat(cb, sat(cs)), lum(cb)); } // Saturation
-        case 26: { return set_lum(cs, lum(cb)); }                  // Color
-        case 27: { return set_lum(cb, lum(cs)); }                  // Luminosity
+        case 24: { return set_lum(set_sat(cs, sat(cb)), lum(cb), top); } // Hue
+        case 25: { return set_lum(set_sat(cb, sat(cs)), lum(cb), top); } // Saturation
+        case 26: { return set_lum(cs, lum(cb), top); }                  // Color
+        case 27: { return set_lum(cb, lum(cs), top); }                  // Luminosity
         case 7: { return select(cb, cs, lum(cs) < lum(cb)); }      // DarkerColor
         case 12: { return select(cb, cs, lum(cs) > lum(cb)); }     // LighterColor
         default: {
@@ -293,6 +297,46 @@ fn composite_g(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, gamma_on: bo
     let g = op.p4.w; // psblend::text_gamma
     let pw = (1.0 - as_) * ab * text_enc(b.rgb, g) + (1.0 - ab) * as_ * text_enc(s.rgb, g) + as_ * ab * text_enc(bl, g);
     return vec4(text_dec(pw / ao, g), ao);
+}
+
+// psblend::fill_is_special: Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light,
+// Linear Light, Hard Mix, Difference (mode_index 5, 6, 10, 11, 16, 17, 19, 20).
+fn fill_is_special(mode: i32) -> bool {
+    return mode == 5 || mode == 6 || mode == 10 || mode == 11 || mode == 16 || mode == 17 || mode == 19 || mode == 20;
+}
+
+// psblend::composite_fill, with a single blend_rgb call (fs_blend's only composite: every
+// inlined blend_rgb copy grows the shader, and WARP compiles it slowly). Normal modes take Fill
+// as coverage; below 100% Fill the special eight blend a source pulled toward the mode's neutral
+// colour (Hard Mix: (cb - f(1 - cs)) / (1 - f)) at `opacity`, Fill staying coverage over
+// transparency. Lab documents mix Normal in CIELAB; type layers mix in the text gamma space.
+fn composite_fill(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32, gamma_on: bool) -> vec4<f32> {
+    let f = clamp(fill, 0.0, 1.0);
+    let special = f < 1.0 && fill_is_special(mode);
+    let ab = b.a;
+    var over = s.a * opacity;
+    var alone = over * f;
+    if (!special) { over = alone; }
+    if (over <= 0.0) { return b; }
+    let ao = ab + (1.0 - ab) * alone;
+    if (ao <= 0.0) { return vec4(0.0); }
+    if (!special && !gamma_on && (op.flags & F_LAB) != 0u && mode == M_NORMAL && ab > 0.0) {
+        let m = srgb_to_lab(b.rgb) * (ab * (1.0 - over) / ao) + srgb_to_lab(s.rgb) * (over / ao);
+        return vec4(lab_to_srgb(m), ao);
+    }
+    var neutral = 0.0;
+    if (mode == 5 || mode == 6) { neutral = 1.0; }
+    if (mode == 16 || mode == 17) { neutral = 0.5; }
+    var cs = s.rgb;
+    if (special) { cs = vec3(neutral) + (s.rgb - vec3(neutral)) * f; }
+    var bl = blend_rgb(mode, b.rgb, cs);
+    if (special && mode == 19) { bl = clamp((b.rgb - f * (vec3(1.0) - s.rgb)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
+    let wb = ab * (1.0 - over) / ao;
+    let wbs = ab * over / ao;
+    let ws = (1.0 - ab) * alone / ao;
+    if (!gamma_on) { return vec4(wb * b.rgb + wbs * bl + ws * s.rgb, ao); }
+    let g = op.p4.w;
+    return vec4(text_dec(wb * text_enc(b.rgb, g) + wbs * text_enc(bl, g) + ws * text_enc(s.rgb, g), g), ao);
 }
 
 // photocraft_color::convert::{srgb_to_lab, lab_to_srgb} (D50, Bradford to sRGB).
@@ -548,7 +592,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             return vec3(select(0.0, 1.0, round_half_up(gray(c) * 255.0) >= p0.x));
         }
         case 3: { return vec3(posterize(c.r, p0.x), posterize(c.g, p0.x), posterize(c.b, p0.x)); }
-        case 4: { return clamp((c - 0.5) * p0.y + 0.5 + p0.x, vec3(0.0), vec3(1.0)); }   // B/C legacy
+        case 4: { return clamp((c + p0.x - p0.z) * p0.y + p0.z + p0.w, vec3(0.0), vec3(1.0)); }   // B/C legacy: brightness before (p0.x) or after (p0.w) contrast around compose::adjust::LEGACY_PIVOT (p0.z)
         case 5: {                                                              // B/C modern
             let b = p0.x; let ct = p0.y;
             return vec3(mcontrast(mbright(c.r, b), ct), mcontrast(mbright(c.g, b), ct), mcontrast(mbright(c.b, b), ct));
@@ -573,7 +617,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             let light = clamp(p0.z + dl, -1.0, 1.0);
             if (p0.w > 0.5) {
                 hh = rem_euclid(p0.x, 360.0) / 360.0;
-                ss = max(abs(sat), 0.25);
+                ss = min(abs(sat), 1.0);
             } else {
                 hh = rem_euclid(hsl.x + (p0.x + dh) / 360.0, 1.0);
                 ss = clamp(hsl.y * (1.0 + sat), 0.0, 1.0);
@@ -608,7 +652,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             let g = p3.y;
             let lin = vec3(t_decode(c.r, g), t_decode(c.g, g), t_decode(c.b, g));
             var f = vec3(t_encode(dot(p0.xyz, lin), g), t_encode(dot(p1.xyz, lin), g), t_encode(dot(p2.xyz, lin), g));
-            if (p3.x > 0.5) { f = set_lum(f, lum(c)); }
+            if (p3.x > 0.5) { f = set_lum(f, lum(c), 1.0); }
             return clamp(f, vec3(0.0), vec3(1.0));
         }
         case 12: {                                                             // Black & White
@@ -703,9 +747,11 @@ fn layer_texel(d: vec2<i32>) -> vec4<f32> {
     if ((op.flags & F_GRADIENT) != 0u) {
         let t = gradient_t(d);
         var c = vec4(lut(0, t), lut(1, t), lut(2, t), lut(3, t));
-        // p2.w: dither (gradient fills).
+        // p2.w: dither (gradient fills), rounded to p2.z levels on integer documents.
         if (op.p2.w > 0.5) {
-            c = vec4(clamp(c.rgb + (dither_noise(d) - 0.5) / 255.0, vec3(0.0), vec3(1.0)), c.a);
+            var rgb = clamp(c.rgb + (dither_noise(d) - 0.5) / 255.0, vec3(0.0), vec3(1.0));
+            if (op.p2.z > 0.0) { rgb = floor(rgb * op.p2.z + 0.5) / op.p2.z; }
+            c = vec4(rgb, c.a);
         }
         return c;
     }
@@ -746,10 +792,10 @@ fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
     var s = textureLoad(tex_b, p, 0);
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
-        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity);
+        s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
-    return composite_g(op.mode, b, s, op.opacity, (op.flags & F_TEXT_GAMMA) != 0u);
+    return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
 }
 
 // composite_atop(base = A, src = B): blend as if the base were opaque, keep its alpha.

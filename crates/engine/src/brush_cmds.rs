@@ -312,6 +312,9 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
 /// dabs on the pixel grid), hard and at full flow, with the options-bar mode.
 fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
     let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
+    if flag(p, "block", false) {
+        return block_brush(brush, p);
+    }
     brush.aliased = true;
     if num(p, "hardness").is_none() {
         brush.hardness = 1.0;
@@ -320,6 +323,42 @@ fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
         brush.flow = 1.0;
     }
     Ok(brush)
+}
+
+/// Edge of the Eraser's Block in screen pixels (Photoshop): constant on screen, so it covers
+/// `BLOCK_SCREEN_PX / zoom` document pixels.
+pub const BLOCK_SCREEN_PX: f64 = 16.0;
+
+/// The Eraser's Block edge in document pixels at view `zoom`: `16 / zoom`, rounded to whole
+/// pixels (a zoom that is not a positive number counts as 100 %).
+pub fn block_size(zoom: f64) -> f32 {
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    (BLOCK_SCREEN_PX / zoom).round().clamp(1.0, f64::from(photocraft_paint::brush::MAX_BRUSH_SIZE)) as f32
+}
+
+/// The Eraser's Block mode (`"block": true`): a hard, aliased square of
+/// [`BLOCK_SCREEN_PX`] screen pixels at the stroke's `"zoom"`, i.e. `16 / zoom` document
+/// pixels rounded to whole pixels. Size, opacity, flow, hardness and the brush's dynamics don't
+/// apply (Photoshop); colour, erase, smoothing and the seed are the resolved brush's.
+fn block_brush(b: BrushSettings, p: &Value) -> Result<BrushSettings> {
+    let zoom = match p.get("zoom") {
+        None => 1.0,
+        Some(v) => v.as_f64().filter(|z| z.is_finite() && *z > 0.0).ok_or_else(|| bad("paint.pencil", "`zoom` must be a positive number"))?,
+    };
+    Ok(BrushSettings {
+        size: block_size(zoom),
+        aliased: true,
+        square: true,
+        pressure_size: false,
+        pressure_opacity: false,
+        spacing: 0.25,
+        color: b.color,
+        background: b.background,
+        erase: b.erase,
+        smoothing: b.smoothing,
+        seed: b.seed,
+        ..BrushSettings::default()
+    })
 }
 
 /// Applies the options-bar blend `mode` to a brush. `"mode"` accepts any blend-mode name
@@ -882,7 +921,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.pencil",
             "Pencil",
-            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…"="normal","erase":bool?,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             has_paintable,
             pencil,
             true

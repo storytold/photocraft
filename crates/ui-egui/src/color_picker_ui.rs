@@ -235,16 +235,63 @@ const REQUEST: &str = "__pickColor";
 /// swatch, Edit › Stroke's swatch). The dialog loop opens it ([`open_requested`]), since that
 /// needs the dialog's id.
 pub fn request(f: &mut Map<String, Value>, title: &str) {
-    f.insert(REQUEST.into(), json!(title));
+    request_field(f, "color", title);
 }
 
-/// Opens the Color Picker dialog `id`'s body asked for ([`request`]), on its colour: OK sets that
-/// dialog's `color` field (not the foreground), Cancel leaves it as it was.
+/// [`request`] for another `"#rrggbb"` field of the dialog: a top-level key (`vineColor`), or a
+/// JSON pointer into the fields (`/values/guidesGridAndSlices/guideColor`).
+pub fn request_field(f: &mut Map<String, Value>, field: &str, title: &str) {
+    f.insert(REQUEST.into(), json!({ "title": title, "field": field }));
+}
+
+/// The picker's title for the colour called `name`: "Color Picker (Vine Color)".
+pub fn title_for(name: &str) -> String {
+    crate::i18n::fmt(tl!("Color Picker ({name})"), &[("name", name)])
+}
+
+/// The `"#rrggbb"` at `field` of `f` (a key or a JSON pointer).
+fn field_value<'a>(f: &'a Map<String, Value>, field: &str) -> Option<&'a str> {
+    match field.strip_prefix('/') {
+        Some(rest) => {
+            let (first, tail) = rest.split_once('/').unwrap_or((rest, ""));
+            let v = f.get(first)?;
+            if tail.is_empty() { v.as_str() } else { v.pointer(&format!("/{tail}"))?.as_str() }
+        }
+        None => f.get(field)?.as_str(),
+    }
+}
+
+/// Sets `field` of `f` (a key or a JSON pointer to an existing value) to `value`.
+fn set_field(f: &mut Map<String, Value>, field: &str, value: Value) -> Result<(), String> {
+    match field.strip_prefix('/') {
+        Some(rest) => {
+            let (first, tail) = rest.split_once('/').unwrap_or((rest, ""));
+            let v = f.get_mut(first).ok_or("the dialog has no such colour")?;
+            let slot = if tail.is_empty() { v } else { v.pointer_mut(&format!("/{tail}")).ok_or("the dialog has no such colour")? };
+            *slot = value;
+        }
+        None => {
+            f.insert(field.into(), value);
+        }
+    }
+    Ok(())
+}
+
+/// Opens the Color Picker dialog `id`'s body asked for ([`request`], [`request_field`]), on its
+/// colour: OK sets that field of the dialog (not the foreground), Cancel leaves it as it was.
 pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
     let Some(d) = app.ui.dialog_mut(id) else { return };
-    let Some(title) = d.fields.remove(REQUEST).and_then(|v| v.as_str().map(str::to_string)) else { return };
-    let rgb = d.fields.get("color").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
-    open_for_field(app, &title, rgb, id, "color");
+    let (title, field) = match d.fields.remove(REQUEST) {
+        Some(Value::String(title)) => (title, "color".to_string()),
+        Some(Value::Object(o)) => {
+            let get = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_string);
+            let (Some(title), Some(field)) = (get("title"), get("field")) else { return };
+            (title, field)
+        }
+        _ => return,
+    };
+    let rgb = field_value(&d.fields, &field).and_then(parse_hex).unwrap_or([0.0; 3]);
+    open_for_field(app, &title, rgb, id, &field);
 }
 
 pub fn owns(f: &Map<String, Value>) -> bool {
@@ -659,12 +706,21 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             return Err("the Color Picker has no field to set".into());
         };
         let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
-        d.fields.insert(field.into(), json!(color));
+        set_field(&mut d.fields, field, json!(color))?;
         return Ok(json!({ "color": color }));
     }
     if target == "cropShield" {
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
+    }
+    // The Note tool's colour for new notes (#2144).
+    if target == "noteColor" {
+        app.ui.analysis.note_color = parse_hex(color).ok_or("not a colour")?;
+        return Ok(json!({ "color": color }));
+    }
+    if target == "pasteboard" {
+        // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
+        return app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}}));
     }
     let r = app.run("tools.setColors", json!({ target: color }))?;
     if target == "foreground" {

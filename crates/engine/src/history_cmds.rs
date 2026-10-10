@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, int};
-use crate::image_cmds::for_each_layer;
+use crate::image_cmds::reidentify_copied_layers;
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -66,7 +66,7 @@ fn new_document(s: &mut Session, p: &Value) -> Result<Value> {
         _ if !label.trim().is_empty() => label,
         _ => format!("{} copy", doc.name),
     };
-    for_each_layer(&mut doc.layers, &mut |l| l.id = photocraft_doc::LayerId::fresh());
+    reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
     Ok(json!({ "document": index, "name": name }))
