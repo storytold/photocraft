@@ -73,15 +73,15 @@ pub(crate) fn with_doc_sampler<R>(doc: &Document, layer: Option<LayerId>, all_la
 /// caller gets `changed: false`, whatever the mode. (Select Subject and Object Selection run
 /// heuristics that often find nothing on busy photos; clearing the selection then looks like
 /// a dead button.)
-fn apply(s: &mut Session, label: &str, region: Option<Region>, m: SelectionMode) -> Result<Value> {
+fn apply(s: &mut Session, label: &str, region: Option<&Region>, m: SelectionMode) -> Result<Value> {
     if region.is_none() {
         // Nothing found: leave the selection (and history) alone.
         let selected = s.active().ok_or(EngineError::NoDocument)?.doc.selection.is_some();
         return Ok(json!({ "selected": selected, "changed": false }));
     }
-    let bbox = region.as_ref().map(|r| r.bbox);
+    let bbox = region.map(|r| r.bbox);
     let selected = s.edit(label, |doc, _| {
-        doc.selection = combine_region(doc.selection.as_ref(), region.as_ref(), m);
+        doc.selection = combine_region(doc.selection.as_ref(), region, m);
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected, "changed": true, "bounds": bbox.map(|r| [r.x0, r.y0, r.width() as i32, r.height() as i32]) }))
@@ -115,7 +115,7 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
         let r = quick::quick_select(smp, canvas, &pts, size)?;
         if enhance { matting::refine_mask(smp, &matting::region_reader(&r), r.bbox, canvas, &ENHANCE) } else { Some(r) }
     })?;
-    apply(s, "Quick Selection", region, m)
+    apply(s, "Quick Selection", region.as_ref(), m)
 }
 
 fn rect_param(p: &Value) -> Option<Rect> {
@@ -133,18 +133,65 @@ fn rect_param(p: &Value) -> Option<Rect> {
 fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let rect = rect_param(p).ok_or_else(|| bad("select.object", "needs \"rect\": [x, y, w, h]"))?;
     let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
-    apply(s, "Object Selection", region, mode(p, "replace"))
+    apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
+}
+
+/// Select Subject's last result (#2865), so running it again on unchanged pixels answers at
+/// once instead of recomputing superpixels, saliency and GrabCut (P29). Keyed by the pixels it
+/// was computed from: valid while [`same_pixels`](crate::layer_multi_cmds::same_pixels) (a
+/// tile-pointer comparison) holds against that document, so selection-only edits such as
+/// Deselect keep it. One entry per session; the document is held weakly, so the cache never
+/// keeps a closed or edited document's tiles alive (the session also drops it on pixel edits
+/// and when its document closes). Its memory is the mask: one byte per pixel of its bounds.
+#[derive(Debug, Default)]
+pub struct SubjectCache {
+    doc: std::sync::Weak<Document>,
+    doc_id: Option<photocraft_doc::DocId>,
+    /// The sampled layer; `None` = the composite.
+    target: Option<LayerId>,
+    region: Option<std::sync::Arc<Region>>,
+}
+
+impl SubjectCache {
+    /// Forget the result if it was computed from the document `id` (it is closing).
+    pub(crate) fn forget_doc(&mut self, id: photocraft_doc::DocId) {
+        if self.doc_id == Some(id) {
+            *self = Self::default();
+        }
+    }
 }
 
 fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
-    let region = with_sampler(s, b(p, "sampleAllLayers", true), |smp, doc| subject::select_subject(smp, doc.bounds()))?;
-    apply(s, "Select Subject", region, mode(p, "replace"))
+    let all_layers = b(p, "sampleAllLayers", true);
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
+    let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
+    let c = &s.subject_cache;
+    let hit = c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
+    let region = if hit {
+        c.region.clone()
+    } else {
+        let doc = std::sync::Arc::clone(&d.doc);
+        let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, doc| subject::select_subject(smp, doc.bounds())).map(std::sync::Arc::new);
+        s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, region: region.clone() };
+        region
+    };
+    let out = apply(s, "Select Subject", region.as_deref(), mode(p, "replace"))?;
+    // Follow the document past the selection edit just made (same pixels), so a short history
+    // dropping the older state doesn't turn the next repeat into a miss.
+    if let Some(d) = s.active()
+        && s.subject_cache.doc_id == Some(d.doc.id)
+        && s.subject_cache.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc))
+    {
+        s.subject_cache.doc = std::sync::Arc::downgrade(&d.doc);
+    }
+    Ok(out)
 }
 
 fn focus_area(s: &mut Session, p: &Value) -> Result<Value> {
     let (range, noise) = (f(p, "range", 0.5).clamp(0.0, 1.0), f(p, "noise", 0.0).clamp(0.0, 1.0));
     let region = with_sampler(s, b(p, "sampleAllLayers", true), |smp, doc| focus::focus_area(smp, doc.bounds(), range, noise))?;
-    apply(s, "Focus Area", region, mode(p, "replace"))
+    apply(s, "Focus Area", region.as_ref(), mode(p, "replace"))
 }
 
 fn refine_params(p: &Value) -> RefineParams {
@@ -451,6 +498,39 @@ mod tests {
         assert!(v > 0.9, "IoU {v}");
         s.execute("edit.undo", json!({})).unwrap();
         assert!(s.active().unwrap().doc.selection.is_none());
+    }
+
+    /// #2865: a repeat on unchanged pixels reuses the last mask (an identical selection, even
+    /// after Deselect); sampling something else or a pixel edit computes it again.
+    #[test]
+    fn select_subject_repeat_reuses_the_mask_until_pixels_change() {
+        let (mut s, _) = disc(8);
+        let sel = |s: &Session| {
+            let mut v = Vec::new();
+            s.active().unwrap().doc.selection.as_ref().unwrap().read_region_into(Rect::new(0, 0, 200, 160), &mut v);
+            v
+        };
+        let cached = |s: &Session| s.subject_cache.region.clone().unwrap();
+        s.execute("select.subject", json!({})).unwrap();
+        let (first, mask) = (sel(&s), cached(&s));
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.subject", json!({})).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&mask, &cached(&s)), "the repeat recomputed the mask");
+        assert_eq!(sel(&s), first);
+        // Another sampled target (the layer rather than the composite) is a miss.
+        s.execute("select.subject", json!({"sampleAllLayers": false})).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&mask, &cached(&s)));
+        // A pixel edit drops the entry; the next run recomputes it.
+        s.edit("paint", |doc, _| {
+            let bg = doc.layers[0].surface_mut().unwrap();
+            let n = bg.channels();
+            bg.write_region(Rect::new(0, 0, 1, 1), &vec![1.0; n]);
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.subject_cache.region.is_none());
+        s.execute("select.subject", json!({})).unwrap();
+        assert_eq!(sel(&s), first);
     }
 
     /// A vertical Gaussian-blurred edge at x = 40 (warm left, cool right) with the left half selected.
