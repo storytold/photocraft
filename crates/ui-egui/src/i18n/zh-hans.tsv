@@ -2325,6 +2325,9 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
+
+	Rasterize svg groups deeper than	栅格化超过此深度的 SVG 组
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	设为 0 可关闭此阈值；嵌套超过 100 层的 SVG 组始终会被栅格化。
 	Rule of Thirds	三等分
 	Triangle	三角形
 	Golden Ratio	黄金比例
@@ -2365,6 +2368,8 @@ fontWeight	Italic	斜体
 	Create Ellipse	创建椭圆
 	Create Triangle	创建三角形
 	Create Polygon	创建多边形
+	Pressure curve	压感曲线
+	Click to add a point, right-click to remove	单击添加点，右键单击删除点
 	Some brush presets could not be loaded	部分画笔预设无法加载
 	Retry saving presets	重试保存预设
 	Brush preset changes are not saved: {error}	画笔预设的更改未保存：{error}

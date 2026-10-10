@@ -2591,6 +2591,9 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+
+	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 отключает этот порог; группы SVG с вложенностью более 100 уровней всегда растрируются.
 	Rule of Thirds	Правило третей
 	Triangle	Треугольник
 	Golden Ratio	Золотое сечение
@@ -2631,6 +2634,10 @@ fontWeight	Italic	Курсив
 	Create Ellipse	Создать эллипс
 	Create Triangle	Создать треугольник
 	Create Polygon	Создать многоугольник
+	Pressure curve	Кривая нажима
+	Click to add a point, right-click to remove	Щёлкните, чтобы добавить точку; щелчок правой кнопкой удаляет её
+	Soft	Мягкая
+	Hard	Жёсткая
 	Some brush presets could not be loaded	Не удалось загрузить некоторые наборы кистей
 	Retry saving presets	Повторить сохранение наборов
 	Brush preset changes are not saved: {error}	Изменения наборов кистей не сохранены: {error}

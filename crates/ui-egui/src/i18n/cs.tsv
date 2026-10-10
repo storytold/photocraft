@@ -2317,6 +2317,9 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+
+	Rasterize svg groups deeper than	Rasterizovat skupiny SVG hlubší než tato úroveň
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 vypne tento práh; skupiny SVG vnořené hlouběji než 100 úrovní se rastrují vždy.
 	Rule of Thirds	Pravidlo třetin
 	Triangle	Trojúhelník
 	Golden Ratio	Zlatý řez
@@ -2357,6 +2360,8 @@ fontWeight	Italic	Kurzíva
 	Create Ellipse	Vytvořit elipsu
 	Create Triangle	Vytvořit trojúhelník
 	Create Polygon	Vytvořit mnohoúhelník
+	Pressure curve	Křivka přítlaku
+	Click to add a point, right-click to remove	Kliknutím přidáte bod, pravým tlačítkem bod odeberete
 	Some brush presets could not be loaded	Některé předvolby štětců se nepodařilo načíst
 	Retry saving presets	Zkusit znovu uložit předvolby
 	Brush preset changes are not saved: {error}	Změny předvoleb štětců nejsou uloženy: {error}

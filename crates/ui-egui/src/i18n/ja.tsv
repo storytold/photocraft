@@ -3342,6 +3342,9 @@ fontWeight	Italic	斜体
 	Color to Alpha…	カラーを透明に…
 	Transparency Threshold	透明のしきい値
 	Opacity Threshold	不透明度のしきい値
+
+	Rasterize svg groups deeper than	この深さを超える SVG グループをラスタライズ
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 でこのしきい値は無効になります。100 階層を超えて入れ子になった SVG グループは常にラスタライズされます。
 	Rule of Thirds	三分割法
 	Golden Ratio	黄金比
 	Golden Spiral	黄金螺旋
@@ -3381,6 +3384,8 @@ fontWeight	Italic	斜体
 	Create Ellipse	楕円を作成
 	Create Triangle	三角形を作成
 	Create Polygon	多角形を作成
+	Pressure curve	筆圧カーブ
+	Click to add a point, right-click to remove	クリックでポイントを追加、右クリックで削除
 	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
 	Retry saving presets	プリセットの保存を再試行
 	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}

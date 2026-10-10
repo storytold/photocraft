@@ -2725,6 +2725,9 @@ fontWeight	Italic	Miring
 	Color to Alpha…	Warna ke Alpha…
 	Transparency Threshold	Ambang transparansi
 	Opacity Threshold	Ambang opasitas
+
+	Rasterize svg groups deeper than	Rasterisasi grup SVG yang lebih dalam dari ini
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 menonaktifkan ambang ini; grup SVG yang bersarang lebih dari 100 tingkat selalu dirasterisasi.
 	Rule of Thirds	Aturan Sepertiga
 	Triangle	Segitiga
 	Golden Ratio	Rasio Emas
@@ -2765,6 +2768,8 @@ fontWeight	Italic	Miring
 	Create Ellipse	Buat Elips
 	Create Triangle	Buat Segitiga
 	Create Polygon	Buat Poligon
+	Pressure curve	Kurva tekanan
+	Click to add a point, right-click to remove	Klik untuk menambah titik, klik kanan untuk menghapusnya
 	Some brush presets could not be loaded	Beberapa preset kuas tidak dapat dimuat
 	Retry saving presets	Coba simpan preset lagi
 	Brush preset changes are not saved: {error}	Perubahan preset kuas belum disimpan: {error}

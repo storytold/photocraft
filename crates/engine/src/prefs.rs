@@ -314,6 +314,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
+    /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
+    pub pressure_curve: Vec<[f32; 2]>,
 }
 
 impl Default for Tools {
@@ -330,7 +333,103 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
         }
+    }
+}
+
+/// Preferences › Tools › Pressure Curve, ready to evaluate: a monotone cubic (Fritsch–Carlson)
+/// through the control points, so a firmer press never gives less pressure. The points are
+/// sanitised here, not trusted: a whole-section update or a hand-edited preferences file can store
+/// anything. Non-finite points are dropped, the rest clamped to 0..1, sorted by input (one point
+/// per input), capped at [`Self::MAX_POINTS`], and their outputs made non-decreasing; before the
+/// first point and after the last the curve stays flat. Fewer than two usable points is linear.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PressureCurve {
+    xs: Vec<f32>,
+    ys: Vec<f32>,
+    /// Tangents at the points.
+    ms: Vec<f32>,
+}
+
+impl PressureCurve {
+    pub const MAX_POINTS: usize = 16;
+
+    pub fn new(points: &[[f32; 2]]) -> Self {
+        let mut pts: Vec<[f32; 2]> =
+            points.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]).collect();
+        pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        pts.dedup_by(|b, a| {
+            // Same input: keep the later point's output.
+            let same = (a[0] - b[0]).abs() < 1e-6;
+            if same {
+                a[1] = b[1];
+            }
+            same
+        });
+        pts.truncate(Self::MAX_POINTS);
+        if pts.len() < 2 {
+            pts = vec![[0.0, 0.0], [1.0, 1.0]];
+        }
+        let xs: Vec<f32> = pts.iter().map(|p| p[0]).collect();
+        let mut ys: Vec<f32> = pts.iter().map(|p| p[1]).collect();
+        for i in 1..ys.len() {
+            ys[i] = ys[i].max(ys[i - 1]);
+        }
+        // Fritsch–Carlson tangents: secant averages, zero at flat steps, limited so the cubic
+        // never overshoots (which keeps it monotone).
+        let n = xs.len();
+        let d: Vec<f32> = (0..n - 1).map(|k| (ys[k + 1] - ys[k]) / (xs[k + 1] - xs[k])).collect();
+        let mut ms = vec![0.0f32; n];
+        ms[0] = d[0];
+        ms[n - 1] = d[n - 2];
+        for k in 1..n - 1 {
+            ms[k] = if d[k - 1] * d[k] <= 0.0 { 0.0 } else { (d[k - 1] + d[k]) / 2.0 };
+        }
+        for k in 0..n - 1 {
+            if d[k] == 0.0 {
+                ms[k] = 0.0;
+                ms[k + 1] = 0.0;
+                continue;
+            }
+            let (a, b) = (ms[k] / d[k], ms[k + 1] / d[k]);
+            let s = a * a + b * b;
+            if s > 9.0 {
+                let t = 3.0 / s.sqrt();
+                ms[k] = t * a * d[k];
+                ms[k + 1] = t * b * d[k];
+            }
+        }
+        Self { xs, ys, ms }
+    }
+
+    /// The curve's output for pen pressure `x` (0..1; anything else is clamped, NaN reads as 0).
+    pub fn eval(&self, x: f32) -> f32 {
+        let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) };
+        let n = self.xs.len();
+        let (Some(&x0), Some(&xn)) = (self.xs.first(), self.xs.last()) else { return x };
+        if x <= x0 {
+            return self.ys.first().copied().unwrap_or(x);
+        }
+        if x >= xn {
+            return self.ys.last().copied().unwrap_or(x);
+        }
+        let k = self.xs.partition_point(|&v| v <= x).saturating_sub(1).min(n.saturating_sub(2));
+        let (Some(&xa), Some(&xb), Some(&ya), Some(&yb), Some(&ma), Some(&mb)) =
+            (self.xs.get(k), self.xs.get(k + 1), self.ys.get(k), self.ys.get(k + 1), self.ms.get(k), self.ms.get(k + 1))
+        else {
+            return x;
+        };
+        let h = xb - xa;
+        let t = (x - xa) / h;
+        let (t2, t3) = (t * t, t * t * t);
+        let y = (2.0 * t3 - 3.0 * t2 + 1.0) * ya + (t3 - 2.0 * t2 + t) * h * ma + (-2.0 * t3 + 3.0 * t2) * yb + (t3 - t2) * h * mb;
+        y.clamp(ya.min(yb), ya.max(yb))
+    }
+
+    /// The identity (the default curve): pressure passes through unchanged.
+    pub fn is_linear(&self) -> bool {
+        self.xs == [0.0, 1.0] && self.ys == [0.0, 1.0]
     }
 }
 
@@ -365,6 +464,8 @@ pub struct FileHandling {
     pub ignore_exif_profile_tag: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
+    /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
+    pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
     pub recent_files: Vec<String>,
@@ -382,6 +483,7 @@ impl Default for FileHandling {
             ignore_exif_profile_tag: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
+            rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
         }
@@ -950,6 +1052,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
     Some(match path {
         "fileHandling.autosaveMinutes" => (1.0, 240.0),
         "fileHandling.recentFileCount" => (0.0, 100.0),
+        "fileHandling.rasterizeSvgGroupsDeeperThan" => (0.0, photocraft_doc::MAX_GROUP_DEPTH as f64),
         "interface.notificationDurationSeconds" => (1.0, 120.0),
         "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
@@ -1069,6 +1172,18 @@ fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
     }
     if is_color(path) && v.as_str().and_then(parse_hex).is_none() {
         return Err(format!("`{path}` must be a #rrggbb colour"));
+    }
+    if path == "tools.pressureCurve" {
+        let pts = v.as_array().ok_or("`tools.pressureCurve` must be a list of [input, output] points")?;
+        if !(2..=PressureCurve::MAX_POINTS).contains(&pts.len()) {
+            return Err(format!("`tools.pressureCurve` needs 2..={} points (got {})", PressureCurve::MAX_POINTS, pts.len()));
+        }
+        for p in pts {
+            let ok = p.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(|x| x.as_f64().is_some_and(|x| (0.0..=1.0).contains(&x))));
+            if !ok {
+                return Err(format!("`tools.pressureCurve` points are [input, output] pairs within 0..1 (got {p})"));
+            }
+        }
     }
     if let Some(sc) = path.strip_prefix("shortcuts.") {
         let s = v.as_str().ok_or_else(|| format!("shortcut for `{sc}` must be a string"))?;

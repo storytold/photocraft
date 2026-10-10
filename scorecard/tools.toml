@@ -78,9 +78,9 @@ note = "brush_resize.rs (#297, #370): Alt+right-drag, or Control+Option-drag on 
 [[item]]
 id = "TOOL-213-11"
 target = "Editable pressure curve, global and per control"
-status = "missing"
+status = "partial"
 issue = 213
-note = "No pressure curve in engine, paint or ui-egui"
+note = "Global: Preferences › Tools › Pressure Curve (prefs tools.pressureCurve; monotone cubic, engine prefs::PressureCurve; applied to every pen sample in ui-egui stylus.rs before any brush; editor pressure_curve_ui.rs with Linear/Soft/Hard presets). Missing: per-control curves (each brush dynamic's own response to pressure, tilt, rotation)"
 
 [[item]]
 id = "TOOL-213-12"

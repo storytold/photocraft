@@ -2385,6 +2385,9 @@ fontWeight	Italic	Cursiva
 	Color to Alpha…	Color a alfa…
 	Transparency Threshold	Umbral de transparencia
 	Opacity Threshold	Umbral de opacidad
+
+	Rasterize svg groups deeper than	Rasterizar grupos SVG con mayor profundidad
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desactiva este umbral; los grupos SVG anidados a más de 100 niveles siempre se rasterizan.
 	Rule of Thirds	Regla de los tercios
 	Triangle	Triángulo
 	Golden Ratio	Proporción áurea
@@ -2425,6 +2428,8 @@ fontWeight	Italic	Cursiva
 	Create Ellipse	Crear elipse
 	Create Triangle	Crear triángulo
 	Create Polygon	Crear polígono
+	Pressure curve	Curva de presión
+	Click to add a point, right-click to remove	Haz clic para añadir un punto; clic derecho para quitarlo
 	Some brush presets could not be loaded	No se pudieron cargar algunos ajustes preestablecidos de pincel
 	Retry saving presets	Reintentar guardar los ajustes preestablecidos
 	Brush preset changes are not saved: {error}	Los cambios en los ajustes preestablecidos de pincel no se han guardado: {error}

@@ -3428,6 +3428,9 @@ cameraRaw	Masking	Маскування
 	Dual Axis	Подвійна вісь
 	Diagonal	Діагональна
 	Transform Symmetry	Трансформувати симетрію
+
+	Rasterize svg groups deeper than	Растеризувати групи SVG глибше цього рівня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 вимикає цей поріг; групи SVG із вкладеністю понад 100 рівнів завжди растеризуються.
 	Rule of Thirds	Правило третин
 	Golden Ratio	Золотий перетин
 	Golden Spiral	Золота спіраль
@@ -3465,6 +3468,8 @@ cameraRaw	Masking	Маскування
 	Create Ellipse	Створити еліпс
 	Create Triangle	Створити трикутник
 	Create Polygon	Створити багатокутник
+	Pressure curve	Крива натиску
+	Click to add a point, right-click to remove	Клацніть, щоб додати точку; клацання правою кнопкою вилучає її
 	Some brush presets could not be loaded	Не вдалося завантажити деякі набори пензлів
 	Retry saving presets	Повторити збереження наборів
 	Brush preset changes are not saved: {error}	Зміни наборів пензлів не збережено: {error}

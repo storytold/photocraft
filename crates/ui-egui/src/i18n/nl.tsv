@@ -3503,6 +3503,9 @@ cameraRaw	Whites	Witten
 	Dual Axis	Dubbele as
 	Diagonal	Diagonaal
 	Transform Symmetry	Symmetrie transformeren
+
+	Rasterize svg groups deeper than	SVG-groepen rasteriseren dieper dan deze grens
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schakelt deze drempel uit; SVG-groepen die dieper dan 100 niveaus zijn genest, worden altijd gerasterd.
 	Rule of Thirds	Regel van derden
 	Golden Ratio	Gulden snede
 	Golden Spiral	Gulden spiraal
@@ -3538,6 +3541,8 @@ cameraRaw	Whites	Witten
 	Create Ellipse	Ellips maken
 	Create Triangle	Driehoek maken
 	Create Polygon	Veelhoek maken
+	Pressure curve	Drukcurve
+	Click to add a point, right-click to remove	Klik om een punt toe te voegen, rechtsklik om het te verwijderen
 	Some brush presets could not be loaded	Sommige penseelvoorinstellingen konden niet worden geladen
 	Retry saving presets	Opslaan van voorinstellingen opnieuw proberen
 	Brush preset changes are not saved: {error}	Wijzigingen in penseelvoorinstellingen zijn niet opgeslagen: {error}
