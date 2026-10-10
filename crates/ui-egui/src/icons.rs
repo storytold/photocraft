@@ -95,6 +95,8 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Move => "move",
         Tool::RectMarquee => "square-dashed",
         Tool::EllipseMarquee => "circle-dashed",
+        Tool::SingleRowMarquee => "marquee-row",
+        Tool::SingleColumnMarquee => "marquee-column",
         Tool::Brush => "brush",
         Tool::Pencil => "pencil",
         Tool::MixerBrush => "palette",

@@ -64,6 +64,9 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("lock", include_bytes!("../../../assets/icons/lock.svg")),
     ("lock-open", include_bytes!("../../../assets/icons/lock-open.svg")),
     ("lollipop", include_bytes!("../../../assets/icons/lollipop.svg")),
+    // PhotoCraft originals: the Single Row / Single Column Marquee glyphs.
+    ("marquee-column", include_bytes!("../../../assets/icons/marquee-column.svg")),
+    ("marquee-row", include_bytes!("../../../assets/icons/marquee-row.svg")),
     ("maximize-2", include_bytes!("../../../assets/icons/maximize-2.svg")),
     ("message-square", include_bytes!("../../../assets/icons/message-square.svg")),
     ("minus", include_bytes!("../../../assets/icons/minus.svg")),

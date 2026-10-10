@@ -1501,6 +1501,8 @@
 	Could not complete the Free Transform command because the layer is locked.	Не вдалося виконати команду «Вільна трансформація», бо шар заблоковано.
 	Rectangular Marquee Tool	Інструмент «Прямокутне виділення»
 	Elliptical Marquee Tool	Інструмент «Еліптичне виділення»
+	Single Row Marquee Tool	Інструмент «Виділення одного рядка»
+	Single Column Marquee Tool	Інструмент «Виділення одного стовпця»
 	Brush Tool	Інструмент «Пензель»
 	Pencil Tool	Інструмент «Олівець»
 	Eraser Tool	Інструмент «Гумка»

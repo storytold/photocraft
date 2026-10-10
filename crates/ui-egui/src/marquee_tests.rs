@@ -622,3 +622,58 @@ fn selection_cursor_follows_the_modifiers_and_the_floating_piece() {
     tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, none);
     assert_eq!(selection_cursor(&app, Tool::RectMarquee, [30.0, 20.0], none), Some(SelCursor::Outline));
 }
+
+/// A click with `tool` at document point `(x, y)`, as the canvas sends it.
+fn click_with(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, m: Modifiers) {
+    use crate::canvas::{ToolEvent, tool_event};
+    app.ui.tool = tool;
+    tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, m);
+    tool_event(app, ToolEvent::Up { x, y }, m);
+}
+
+/// Single Row / Single Column Marquee (#2837): a click selects one pixel row (column) across the
+/// whole canvas; ⇧ adds, ⌥ subtracts, as with the other marquees.
+#[test]
+fn single_row_and_column_marquee_select_one_pixel_lines() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.ui.extras.snap = false;
+    let bounds = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().map_or(Rect::EMPTY, |s| s.content_bounds());
+    let at = |app: &PhotocraftApp, x: i32, y: i32| app.session.active().unwrap().doc.selection.as_ref().map_or(0.0, |s| s.sample_channel(x, y, 0));
+
+    click_with(&mut app, Tool::SingleRowMarquee, 120.3, 37.6, Modifiers::NONE);
+    assert_eq!(bounds(&app), Rect::new(0, 37, 200, 38));
+    click_with(&mut app, Tool::SingleRowMarquee, 15.0, 60.2, Modifiers::SHIFT);
+    assert_eq!(bounds(&app), Rect::new(0, 37, 200, 61));
+    assert!(at(&app, 5, 37) > 0.99 && at(&app, 199, 60) > 0.99 && at(&app, 100, 50) < 0.01, "two rows, nothing between");
+
+    click_with(&mut app, Tool::SingleColumnMarquee, 42.9, 80.0, Modifiers::NONE);
+    assert_eq!(bounds(&app), Rect::new(42, 0, 43, 100));
+    click_with(&mut app, Tool::SingleColumnMarquee, 150.5, 3.0, Modifiers::SHIFT);
+    assert_eq!(bounds(&app), Rect::new(42, 0, 151, 100));
+    click_with(&mut app, Tool::SingleColumnMarquee, 42.0, 10.0, Modifiers::ALT);
+    assert_eq!(bounds(&app), Rect::new(150, 0, 151, 100), "⌥ subtracts the column");
+}
+
+/// The two single-line marquees sit in the Marquee flyout but M (⇧M) cycles only the
+/// Rectangular and Elliptical Marquee, as in Photoshop; automation picks them by name.
+#[test]
+fn m_cycles_only_the_rectangular_and_elliptical_marquee() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.ui.tool = Tool::SingleRowMarquee;
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Key { key: egui::Key::M, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+            ..Default::default()
+        };
+        ctx.begin_pass(raw);
+        crate::shortcuts::handle(&mut app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+        seen.push(app.ui.tool);
+    }
+    assert_eq!(seen, [Tool::RectMarquee, Tool::EllipseMarquee, Tool::RectMarquee, Tool::EllipseMarquee]);
+    assert_eq!(Tool::from_name("SingleRowMarquee"), Some(Tool::SingleRowMarquee));
+    assert_eq!(Tool::from_name("Single Column Marquee Tool"), Some(Tool::SingleColumnMarquee));
+}

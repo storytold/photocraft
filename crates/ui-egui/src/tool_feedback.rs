@@ -37,6 +37,8 @@ pub fn is_selection_tool(tool: Tool) -> bool {
         tool,
         Tool::RectMarquee
             | Tool::EllipseMarquee
+            | Tool::SingleRowMarquee
+            | Tool::SingleColumnMarquee
             | Tool::Lasso
             | Tool::PolygonLasso
             | Tool::MagneticLasso

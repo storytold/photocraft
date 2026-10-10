@@ -135,7 +135,16 @@ pub const PEN_MENU: &[Row] = &[
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
-        Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso | Tool::MagicWand | Tool::ObjectSelection | Tool::Pen
+        Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::SingleRowMarquee
+            | Tool::SingleColumnMarquee
+            | Tool::Lasso
+            | Tool::PolygonLasso
+            | Tool::MagneticLasso
+            | Tool::MagicWand
+            | Tool::ObjectSelection
+            | Tool::Pen
     )
 }
 

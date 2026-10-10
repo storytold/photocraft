@@ -27,7 +27,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Group | Present | Missing |
 |---|---|---|
 | Move, artboard | Move | Artboard (commands `layer.new.artboard*` exist) |
-| Marquee | Rectangular, Elliptical | Single Row, Single Column |
+| Marquee | Rectangular, Elliptical, Single Row, Single Column | |
 | Lasso | Lasso, Polygonal, Magnetic | |
 | Selection | Object Selection, Quick Selection, Magic Wand | |
 | Crop and slice | Crop, Slice, Slice Select | Perspective Crop |

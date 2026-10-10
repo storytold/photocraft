@@ -1518,6 +1518,8 @@
 	Could not complete the Free Transform command because the layer is locked.	Не удалось выполнить команду «Свободное трансформирование», потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
+	Single Row Marquee Tool	Область (горизонтальная строка)
+	Single Column Marquee Tool	Область (вертикальная строка)
 	Brush Tool	Кисть
 	Pencil Tool	Карандаш
 	Eraser Tool	Ластик

@@ -17,7 +17,7 @@ use crate::{PhotocraftApp, icons, widgets};
 const TOOL_SECTIONS: &[&[&[Tool]]] = &[
     &[&[Tool::Move]],
     &[
-        &[Tool::RectMarquee, Tool::EllipseMarquee],
+        &[Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee],
         &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
         &[Tool::Crop, Tool::Slice, Tool::SliceSelect],
@@ -913,7 +913,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::vline(ui, 22.0);
                         widgets::checkbox(ui, &mut b.mixer.sample_all_layers, tl!("Sample All Layers"));
                     }
-                    Tool::RectMarquee | Tool::EllipseMarquee if t.pro => {
+                    Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee if t.pro => {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for (i, (icon, tip)) in [
                             ("square", tl!("New selection").to_string()),
@@ -939,16 +939,18 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // Photoshop greys Anti-alias for the Rectangular Marquee (its edges are always hard).
                         ui.add_enabled_ui(app.ui.tool == Tool::EllipseMarquee, |ui| widgets::checkbox(ui, &mut o.anti_alias, tl!("Anti-alias")));
                         widgets::vline(ui, 22.0);
-                        opt_label(ui, tl!("Style"));
+                        // A single row or column has no style or size: Photoshop greys them.
+                        let sized = matches!(app.ui.tool, Tool::RectMarquee | Tool::EllipseMarquee);
+                        ui.add_enabled_ui(sized, |ui| opt_label(ui, tl!("Style")));
                         let styles = [
                             ("normal".to_string(), tl!("Normal")),
                             ("fixedRatio".to_string(), tl!("Fixed Ratio")),
                             ("fixedSize".to_string(), tl!("Fixed Size")),
                         ];
-                        if widgets::dropdown(ui, "marquee-style", &mut o.marquee_style, &styles, 96.0) {
+                        if ui.add_enabled_ui(sized, |ui| widgets::dropdown(ui, "marquee-style", &mut o.marquee_style, &styles, 96.0)).inner {
                             (o.marquee_width, o.marquee_height) = if o.marquee_style == "fixedSize" { (64.0, 64.0) } else { (1.0, 1.0) };
                         }
-                        let fixed = o.marquee_style != "normal";
+                        let fixed = sized && o.marquee_style != "normal";
                         let (unit, range) = if o.marquee_style == "fixedSize" { ("px", 1.0..=300_000.0) } else { ("", 0.001..=999.0) };
                         ui.add_enabled_ui(fixed, |ui| {
                             opt_label(ui, tl!("Width"));
@@ -1182,6 +1184,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ui,
                         &format!(
                             "Drag to select  ·  {} add  ·  {} subtract  ·  {} intersect  ·  click to deselect",
+                            crate::shortcuts::pretty("Shift"),
+                            crate::shortcuts::pretty("Alt"),
+                            crate::shortcuts::pretty("Shift+Alt")
+                        ),
+                    ),
+                    Tool::SingleRowMarquee | Tool::SingleColumnMarquee => hint(
+                        ui,
+                        &format!(
+                            "Click to select a one-pixel line  ·  {} add  ·  {} subtract  ·  {} intersect",
                             crate::shortcuts::pretty("Shift"),
                             crate::shortcuts::pretty("Alt"),
                             crate::shortcuts::pretty("Shift+Alt")
