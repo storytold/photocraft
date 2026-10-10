@@ -165,6 +165,7 @@ pub mod transform_tool;
 pub mod type_panels_ui;
 pub mod type_tool;
 mod type_transform;
+pub mod ui_bidi;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;

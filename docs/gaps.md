@@ -193,8 +193,9 @@ what an agent can't finish alone.
 - **Missing:** catalogs for Hindi, Arabic and Vietnamese (3 of the 12 key languages); right-to-
   left UI layout; Devanagari/Thai/Khmer fallback fonts; engine error and status messages in
   English in every language; browser-locale detection and CJK fonts on the web; Japanese IME on
-  Windows (#590); installed Japanese fonts missing from the font list (#2330); Arabic layer names
-  as tofu (#1408, #1693).
+  Windows (#590); installed Japanese fonts missing from the font list (#2330); Arabic/Hebrew UI
+  lazy fallback on desktop (layer names no longer tofu, #1408/#1693); web UI still lacks script
+  fonts.
 - **Detail:** [`localization-parity.md`](localization-parity.md).
 - **Estimate:** 80–140 h. **Human:** native-speaker review of every catalog (none is recorded).
 
