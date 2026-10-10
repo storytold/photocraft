@@ -88,6 +88,13 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
             }
             if id == "actions.play" {
                 play(app, p)
+            } else if actions_cmds::shell_save_command(id) {
+                // Write synchronously, so the next step doesn't meet a document locked by a
+                // background save.
+                let background = std::mem::replace(&mut app.background_jobs, false);
+                let r = app.replay_save(id, p);
+                app.background_jobs = background;
+                r
             } else if actions_cmds::shell_view_command(id) {
                 app.sync_views();
                 app.run(id, p.clone())
@@ -679,5 +686,37 @@ mod tests {
         let d = &app.session.active().unwrap().doc;
         assert_eq!(d.layers.len(), 2);
         assert_eq!(d.layers[1].surface().unwrap().pixel(5, 5), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn recorded_save_as_and_save_replay_and_write_the_file() {
+        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let log = written.clone();
+        let services = crate::Services {
+            export: Some(Box::new(|doc, path, _| {
+                photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(move |path, _| {
+                log.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.run("actions.record", json!({})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "out/result.psd"})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        app.run("actions.stop", json!({})).unwrap();
+        let steps = &app.session.actions.list[0].steps;
+        assert_eq!(steps, &[("layer.new.layer".into(), json!({})), ("file.saveAs".into(), json!({"path": "out/result.psd"})), ("file.save".into(), json!({}))]);
+        written.borrow_mut().clear();
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let played = app.run("actions.play", json!({"action": 0})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(*written.borrow(), ["out/result.psd", "out/result.psd"]);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("out/result.psd"));
     }
 }

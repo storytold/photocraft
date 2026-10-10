@@ -67,11 +67,19 @@ impl ActionState {
 pub fn replayable(id: &str) -> bool {
     // Again journals its concrete transform too; recording the wrapper would replay it twice.
     id == "actions.play"
-        || (!id.starts_with("actions.") && id != "edit.transform.again" && (shell_view_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
+        || (!id.starts_with("actions.")
+            && id != "edit.transform.again"
+            && (shell_view_command(id) || shell_save_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
+}
+
+/// File › Save and Save As, recorded by the desktop shell once the save has a path (#2032).
+/// The shell replays them; batch and droplets write to their destination folder instead.
+pub fn shell_save_command(id: &str) -> bool {
+    matches!(id, "file.save" | "file.saveAs")
 }
 
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
-/// them as unsupported instead of silently dropping them.
+/// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
     matches!(id, "view.fitOnScreen" | "view.actualPixels" | "view.zoomIn" | "view.zoomOut")
 }
