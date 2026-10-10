@@ -135,3 +135,31 @@ fn the_background_layer_has_no_pop_up_slider() {
     click(&mut h, arrow.center());
     assert!(by_role(&h, "Opacity", Role::Slider).is_none(), "Photoshop greys Opacity for the Background");
 }
+
+#[test]
+fn dragging_opacity_and_fill_labels_scrubs_percentages_in_one_history_step() {
+    for (name, value) in [("Opacity", (|l: &photocraft_doc::Layer| l.opacity) as fn(&photocraft_doc::Layer) -> f32), ("Fill", |l| l.fill_opacity)] {
+        let mut h = harness();
+        // The label, not the adjacent spin button or popup arrow, is the drag target.
+        // The popup arrow is named after its field; the text label sits on the same row (egui
+        // exposes a label's text as its value, not its name).
+        let arrow = by_role(&h, name, Role::Button).unwrap_or_else(|| panic!("missing {name} popup arrow"));
+        let with_colon = format!("{name}:");
+        let rect = h
+            .query_all_by_role(Role::Label)
+            .filter(|node| {
+                let text = node.accesskit_node().value();
+                (text.as_deref() == Some(name) || text.as_deref() == Some(with_colon.as_str())) && (node.rect().center().y - arrow.center().y).abs() < 10.0
+            })
+            .map(|node| node.rect())
+            .next()
+            .unwrap_or_else(|| panic!("missing {name} text label"));
+        let before = steps(&h);
+        drag(&mut h, rect.center(), rect.center() - vec2(40.0, 0.0));
+        assert!((value(&layer(&h)) - 0.8).abs() < 0.03, "{name}: label scrub changed the value");
+        assert_eq!(steps(&h), before + 1, "{name}: a label scrub is one history step");
+        h.state_mut().session.undo();
+        h.run_steps(3);
+        assert!((value(&layer(&h)) - 1.0).abs() < 1e-6, "{name}: undo restores the original value");
+    }
+}

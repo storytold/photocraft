@@ -84,6 +84,25 @@ fn define_apply_visibility_and_text() {
 }
 
 #[test]
+fn listed_pixel_methods_can_be_used_to_redefine_variables() {
+    for method in ["fit", "fill", "asIs", "conform"] {
+        let (mut s, photo, _badge, _title) = session();
+        let defined = s
+            .execute(
+                "image.variables.define",
+                json!({"defs": [{"name": "photo", "layer": photo.0, "type": "pixelReplacement", "method": method, "align": "bottomRight", "clip": true}]}),
+            )
+            .unwrap();
+        let expected = doc(&s).variables.defs.clone();
+        let listed = s.execute("variables.list", json!({})).unwrap();
+        s.execute("image.variables.define", json!({"defs": listed["defs"]})).unwrap();
+        assert_eq!(doc(&s).variables.defs, expected, "{method}");
+        assert_eq!(defined["defs"][0]["method"], method);
+        assert_eq!(listed["defs"][0]["method"], method);
+    }
+}
+
+#[test]
 fn bad_params_are_errors() {
     let (mut s, _p, badge, _t) = session();
     assert!(s.execute("image.variables.define", json!({"defs": [{"name": "x", "layer": 999999, "type": "visibility"}]})).is_err());
@@ -321,6 +340,88 @@ fn export_data_sets_as_files() {
     assert_eq!(text_of(&s, title), "Old");
 }
 
+fn visibility_export_session(names: &[&str]) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "white", "name": "card"})).unwrap();
+    let layer = doc(&s).layers[0].id;
+    s.execute("image.variables.define", json!({"defs": [{"name": "show", "layer": layer.0, "type": "visibility"}]})).unwrap();
+    let sets: Vec<_> =
+        names.iter().enumerate().map(|(i, name)| json!({"name": name, "values": [{"variable": "show", "kind": "visibility", "value": i == 0}]})).collect();
+    s.execute("image.variables.dataSets", json!({"dataSets": sets})).unwrap();
+    s
+}
+
+#[test]
+fn export_data_sets_rejects_collisions_before_writing() {
+    for (label, names, naming, collision) in [
+        ("sanitized", ["unique", "a b", "a_b"], "{name}", "a_b.png"),
+        ("constant", ["unique", "a b", "a_b"], "{document}", "card.png"),
+        ("case", ["unique", "Card", "card"], "{name}", "card.png"),
+    ] {
+        let mut s = visibility_export_session(&names);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.entries();
+        let past = s.active().unwrap().history.past_len();
+        let redo = s.active().unwrap().history.can_redo();
+        let dir = tmp(&format!("collision-{label}"));
+        let first = format!("{dir}/unique.png");
+        let collided = format!("{dir}/{collision}");
+        std::fs::write(&first, b"keep earlier export").unwrap();
+        std::fs::write(&collided, b"keep colliding export").unwrap();
+        let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": naming})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{err}");
+        let message = err.to_string();
+        assert!(message.contains(collision) && message.contains("{index}"), "{message}");
+        assert_eq!(std::fs::read(&first).unwrap(), b"keep earlier export");
+        assert_eq!(std::fs::read(&collided).unwrap(), b"keep colliding export");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let absent = format!("{dir}/not-created");
+        assert!(s.execute("file.export.dataSetsAsFiles", json!({"dir": absent, "naming": naming})).is_err());
+        assert!(!std::path::Path::new(&absent).exists());
+        let after = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before, &after.doc));
+        assert_eq!(after.revision, revision);
+        assert_eq!(after.history.entries(), history);
+        assert_eq!(after.history.past_len(), past);
+        assert_eq!(after.history.can_redo(), redo);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn export_data_sets_unique_paths_preserve_variations_and_document() {
+    for (label, names, naming, selected, expected) in [
+        ("indexed", ["a b", "a_b"], "card-{index}", None, vec!["card-001.png", "card-002.png"]),
+        ("distinct", ["a-b", "a_b"], "{name}", None, vec!["a-b.png", "a_b.png"]),
+        ("subset", ["a b", "a_b"], "{name}", Some(vec!["a b"]), vec!["a_b.png"]),
+    ] {
+        let mut s = visibility_export_session(&names);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.entries();
+        let past = s.active().unwrap().history.past_len();
+        let redo = s.active().unwrap().history.can_redo();
+        let dir = tmp(&format!("unique-{label}"));
+        let result = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": naming, "dataSets": selected})).unwrap();
+        let paths: Vec<_> = expected.iter().map(|name| format!("{dir}/{name}")).collect();
+        assert_eq!(result, json!({"files": paths, "count": paths.len()}));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), paths.len());
+        for (i, path) in paths.iter().enumerate() {
+            let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
+            let pixel = photocraft_compose::render(&exported, Rect::new(0, 0, 1, 1)).px[0];
+            assert_eq!(pixel, if i == 0 { [1.0; 4] } else { [0.0; 4] });
+        }
+        let after = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before, &after.doc));
+        assert_eq!(after.revision, revision);
+        assert_eq!(after.history.entries(), history);
+        assert_eq!(after.history.past_len(), past);
+        assert_eq!(after.history.can_redo(), redo);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn pixel_replacement_changes_the_layer() {
     let (mut s, photo, _b, _t) = session();
@@ -380,5 +481,109 @@ fn applied_text_is_rendered_in_the_document_and_in_exports() {
     assert!(dark(&exported) > 0, "the exported row keeps its text");
     s.execute("image.applyDataSet", json!({"name": "row1"})).unwrap();
     assert!(dark(doc(&s)) > 0, "the applied text is drawn");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A text layer created bold-italic with tracking, underline, all caps and colour, bound to a
+/// `headline` text variable with one data set per value.
+fn styled_text_session(values: &[&str]) -> (Session, Value) {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 120, "background": "white"})).unwrap();
+    let id = s
+        .execute(
+            "type.create",
+            json!({"x": 10, "y": 60, "text": "Before", "font": "Inter", "weight": 700, "italic": true, "size": 40,
+                   "color": "#C0392B", "tracking": 120, "underline": true, "caps": "all"}),
+        )
+        .unwrap()["layer"]
+        .clone();
+    s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": id, "type": "textReplacement"}]})).unwrap();
+    let sets: Vec<Value> =
+        values.iter().enumerate().map(|(i, v)| json!({"name": format!("s{i}"), "values": [{"variable": "headline", "kind": "text", "value": v}]})).collect();
+    s.execute("image.variables.dataSets", json!({ "dataSets": sets })).unwrap();
+    (s, id)
+}
+
+fn text_layer(s: &Session, id: &Value) -> TextLayer {
+    match &doc(s).layer(LayerId(id.as_u64().unwrap())).unwrap().content {
+        LayerContent::Text(t) => t.clone(),
+        _ => panic!("not a text layer"),
+    }
+}
+
+#[test]
+fn applied_text_keeps_the_character_style() {
+    // Applying a text value cleared the style runs, so weight, italic, tracking, underline and
+    // caps fell back to the defaults (#2742). The new text takes the first character's style.
+    let (mut s, id) = styled_text_session(&["After"]);
+    let before = text_layer(&s, &id);
+    let style = before.char_runs()[0].style.clone();
+    assert_eq!((style.weight, style.italic), (700, true), "precondition: {style:?}");
+    let paragraphs = before.paragraph_runs()[0].style.clone();
+    s.execute("image.applyDataSet", json!({"name": "s0"})).unwrap();
+    let after = text_layer(&s, &id);
+    assert_eq!(after.text, "After");
+    let runs = after.char_runs();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].len, "After".len());
+    assert_eq!(runs[0].style, style, "the whole character style is kept");
+    assert_eq!(after.paragraph_runs()[0].style, paragraphs, "paragraph settings are kept");
+    assert_eq!((after.font_family.as_str(), after.size_pt, after.color), (before.font_family.as_str(), before.size_pt, before.color));
+    // type.info reports the same style as before.
+    let info = s.execute("type.info", json!({"layer": id})).unwrap();
+    assert_eq!(info["runs"][0]["style"]["weight"], 700);
+    assert_eq!(info["runs"][0]["style"]["italic"], true);
+
+    // Undo restores the original text and runs.
+    s.execute("edit.undo", json!({})).unwrap();
+    let undone = text_layer(&s, &id);
+    assert_eq!(undone.text, "Before");
+    assert_eq!(undone.runs, before.runs);
+}
+
+#[test]
+fn applied_text_takes_the_first_runs_style_and_survives_empty_values() {
+    let (mut s, id) = styled_text_session(&["One style", ""]);
+    // Make the second half of the text regular, upright and blue: a two-run layer.
+    s.execute("type.edit", json!({"layer": id, "runs": [{"start": 3, "end": 6, "weight": 400, "italic": false, "color": "#0000FF"}]})).unwrap();
+    let before = text_layer(&s, &id);
+    assert_eq!(before.char_runs().len(), 2, "precondition: two runs");
+    let first = before.char_runs()[0].style.clone();
+    s.execute("image.applyDataSet", json!({"name": "s0"})).unwrap();
+    let after = text_layer(&s, &id);
+    assert_eq!(after.text, "One style");
+    let runs = after.char_runs();
+    assert_eq!(runs.len(), 1, "the replacement is one run");
+    assert_eq!(runs[0].style, first, "in the first run's style");
+
+    // An empty value empties the layer without panicking and keeps the style for later text.
+    s.execute("image.applyDataSet", json!({"name": "s1"})).unwrap();
+    let empty = text_layer(&s, &id);
+    assert_eq!(empty.text, "");
+    assert_eq!(empty.char_runs()[0].style, first);
+    s.execute("image.applyDataSet", json!({"name": "s0"})).unwrap();
+    assert_eq!(text_layer(&s, &id).char_runs()[0].style, first);
+}
+
+#[test]
+fn exported_data_sets_keep_the_character_style() {
+    // file.export.dataSetsAsFiles applies each set to a copy of the document the same way.
+    let (mut s, id) = styled_text_session(&["After"]);
+    let style = text_layer(&s, &id).char_runs()[0].style.clone();
+    let dir = tmp("styled-export");
+    let out = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": "psd"})).unwrap();
+    let path = out["files"][0].as_str().unwrap();
+    let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
+    let t = exported
+        .layers
+        .iter()
+        .find_map(|l| match &l.content {
+            LayerContent::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+        .expect("the export keeps the type layer");
+    assert_eq!(t.text, "After");
+    let got = &t.char_runs()[0].style;
+    assert_eq!((got.weight, got.italic, got.underline), (style.weight, style.italic, style.underline));
     let _ = std::fs::remove_dir_all(&dir);
 }

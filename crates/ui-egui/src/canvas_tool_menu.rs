@@ -1,9 +1,11 @@
-//! Canvas context menus for the selection tools, the Pen and an active Free Transform box.
+//! Canvas context menus for the selection tools, the Pen, an active Free Transform box and the
+//! pasteboard (outside the image).
 
 use egui::Context;
 use photocraft_doc::LayerContent;
+use photocraft_engine::prefs::{self, CanvasColor};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{PhotocraftApp, state::Tool};
 
@@ -19,6 +21,9 @@ pub struct CanvasToolMenu {
     /// Opened over a Free Transform box: its modes instead of the tool's actions.
     #[serde(default)]
     pub transform: bool,
+    /// Opened outside the image: the pasteboard colour instead of the tool's actions.
+    #[serde(default)]
+    pub pasteboard: bool,
 }
 
 /// One menu row: label and command id. `None` is a separator.
@@ -32,7 +37,25 @@ pub const TRANSFORM_MENU: &[Row] = &[
     Some(("Skew", "edit.transform.skew")),
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
+    Some(("Warp", "edit.transform.warp")),
 ];
+
+/// Photoshop's pasteboard menu (right-click outside the image): the pasteboard colour, the choice
+/// Preferences › Interface also offers. The ids are this menu's own: [`choose`] turns them into
+/// `prefs.set` (`pasteboard.<CanvasColor name>`) or opens the Color Picker.
+pub const PASTEBOARD_MENU: &[Row] = &[
+    Some(("Default", "pasteboard.default")),
+    Some(("Black", "pasteboard.black")),
+    Some(("Dark Gray", "pasteboard.darkGray")),
+    Some(("Medium Gray", "pasteboard.mediumGray")),
+    Some(("Light Gray", "pasteboard.lightGray")),
+    Some(("Custom", "pasteboard.custom")),
+    None,
+    Some(("Select Custom Color…", PASTEBOARD_PICK)),
+];
+
+/// The pasteboard menu's Select Custom Color… row.
+pub const PASTEBOARD_PICK: &str = "pasteboard.selectCustomColor";
 
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
 /// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
@@ -123,7 +146,9 @@ pub fn selection_rows(has_selection: bool) -> &'static [Row] {
 
 /// The rows of an open menu.
 pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
-    if menu.transform {
+    if menu.pasteboard {
+        PASTEBOARD_MENU
+    } else if menu.transform {
         TRANSFORM_MENU
     } else if menu.tool == Tool::Pen {
         PEN_MENU
@@ -138,10 +163,14 @@ pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> b
 }
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
-/// Scale and Rotate are Free Transform's mode, so only Free Transform shows it checked.
-fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+/// Scale and Rotate are Free Transform's mode, so only Free Transform shows it checked. Warp is
+/// not a box mode (it is its own session), and `for_command` would read it as Free.
+pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.pasteboard {
+        return pasteboard_choice(command) == Some(app.session.prefs().interface.canvas_color);
+    }
     menu.transform
-        && !matches!(command, "edit.transform.scale" | "edit.transform.rotate")
+        && matches!(command, "edit.freeTransform" | "edit.transform.skew" | "edit.transform.distort" | "edit.transform.perspective")
         && app.ui.transform.as_ref().is_some_and(|t| t.mode == crate::state::TransformMode::for_command(command))
 }
 
@@ -152,11 +181,67 @@ pub fn open_transform(app: &mut PhotocraftApp, pos: [f32; 2]) -> bool {
     }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool: app.ui.tool, has_selection: false, has_path: false, path_name: None, transform: true });
+    app.ui.canvas_tool_menu =
+        Some(CanvasToolMenu { pos, tool: app.ui.tool, has_selection: false, has_path: false, path_name: None, transform: true, pasteboard: false });
     true
 }
 
+/// The pasteboard colour a pasteboard menu row picks (`None` for Select Custom Color… or a row
+/// of another menu).
+fn pasteboard_choice(command: &str) -> Option<CanvasColor> {
+    command.strip_prefix("pasteboard.").and_then(CanvasColor::parse)
+}
+
+/// The engine command (and params) a pasteboard row runs, for the automation policy: every row
+/// changes a preference.
+pub fn engine_call(menu: &CanvasToolMenu, command: &str) -> (String, Value) {
+    match pasteboard_choice(command) {
+        Some(c) if menu.pasteboard => ("prefs.set".into(), json!({"values": {"interface.canvasColor": c.name()}})),
+        _ if menu.pasteboard => ("prefs.set".into(), json!({})),
+        _ => (command.into(), json!({})),
+    }
+}
+
+/// Does a right-click with `tool` at document point `doc` open the pasteboard menu? Outside the
+/// image, for the tools whose right-click has no job there: not the painting tools (their Brush
+/// Preset picker or right-button erase), the Pen (its path menu) or text being edited.
+pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+    let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
+    outside && tool != Tool::Pen && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
+}
+
+/// Right-click on the pasteboard: its colour menu at screen point `pos`.
+pub fn open_pasteboard(app: &mut PhotocraftApp, tool: Tool, pos: [f32; 2]) -> bool {
+    if !pos.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    app.ui.brush_picker = None;
+    app.ui.layer_menu = None;
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection: false, has_path: false, path_name: None, transform: false, pasteboard: true });
+    true
+}
+
+/// A pasteboard row: set the colour, or open the Color Picker on the custom one.
+fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    if command == PASTEBOARD_PICK {
+        let rgb = prefs::parse_hex(&app.session.prefs().interface.canvas_custom_color).map_or([0.5; 3], |c| c.map(|v| f32::from(v) / 255.0));
+        crate::color_picker_ui::open_for_target(app, "pasteboard", "Color Picker (Custom Canvas Color)", rgb);
+        return Ok(());
+    }
+    let (command, params) = engine_call(menu, command);
+    app.run(&command, params).map(|_| ())
+}
+
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.pasteboard {
+        return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
+    }
+    // Warp needs a layer or selection box: a lone mask, channel or path keeps the plain box.
+    if menu.transform && command == "edit.transform.warp" {
+        return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none() && t.path.is_none());
+    }
     if menu.transform || menu.tool != Tool::Pen {
         return crate::menus::is_enabled(app, command);
     }
@@ -204,7 +289,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, pos: [f32; 2]) -> bool {
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false });
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false, pasteboard: false });
     true
 }
 
@@ -213,7 +298,9 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     if !available(app, &menu, command) {
         return;
     }
-    let result = if menu.tool == Tool::Pen && !menu.transform {
+    let result = if menu.pasteboard {
+        choose_pasteboard(app, &menu, command)
+    } else if menu.tool == Tool::Pen && !menu.transform {
         choose_pen(app, ctx, &menu, command)
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
@@ -413,6 +500,36 @@ mod tests {
         assert!(h.state().ui.canvas_tool_menu.is_none());
         right_click(&mut h, center, Modifiers::COMMAND);
         assert!(h.state().ui.canvas_tool_menu.is_none(), "command right-click belongs to layer picker");
+    }
+
+    #[test]
+    fn right_click_outside_the_image_picks_the_pasteboard_color() {
+        let mut app = app();
+        app.ui.tool = Tool::RectMarquee;
+        let mut h = harness(app);
+        let rect = h.state().last_canvas_rect;
+        let outside = rect.min + vec2(5.0, 5.0);
+        right_click(&mut h, rect.center(), Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| !m.pasteboard), "inside: the tool's own menu");
+        h.state_mut().ui.canvas_tool_menu = None;
+        right_click(&mut h, outside, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().unwrap();
+        assert!(menu.pasteboard && rows(&menu) == PASTEBOARD_MENU, "outside: the pasteboard menu");
+        let ctx = h.ctx.clone();
+        choose(h.state_mut(), &ctx, "pasteboard.black");
+        assert_eq!(crate::prefs_ui::pasteboard_color(h.state()), Some(egui::Color32::BLACK));
+        // Select Custom Color… opens the Color Picker; OK makes its colour the custom pasteboard.
+        right_click(&mut h, outside, Modifiers::NONE);
+        choose(h.state_mut(), &ctx, PASTEBOARD_PICK);
+        let mut f = h.state().ui.dialogs.last().unwrap().fields.clone();
+        f.insert("color".into(), json!("#123456"));
+        crate::color_picker_ui::confirm(h.state_mut(), &f).unwrap();
+        assert_eq!(crate::prefs_ui::pasteboard_color(h.state()), Some(egui::Color32::from_rgb(0x12, 0x34, 0x56)));
+        // A painting tool keeps its Brush Preset picker there.
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        right_click(&mut h, outside, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none() && h.state().ui.brush_picker.is_some());
     }
 
     fn labels(rows: &[Row]) -> Vec<Option<&str>> {

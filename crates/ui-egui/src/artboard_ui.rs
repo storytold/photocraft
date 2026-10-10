@@ -82,6 +82,8 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     let key = |k: &str| format!("artboard-{}-{k}", layer.id.0);
     let mut edit: Option<Value> = None;
+    // The custom background swatch was clicked: its colour, for the Color Picker.
+    let mut pick: Option<[f32; 3]> = None;
     ui.label(egui::RichText::new(tl!("Artboard")).font(crate::theme::semibold(12.0)).color(t.text));
     ui.add_space(4.0);
     let mut preset = a.preset.clone();
@@ -120,7 +122,12 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     });
     ui.horizontal(|ui| {
         let mut bg = a.background.name().to_string();
-        let opts = [("white".to_string(), tl!("White")), ("black".to_string(), tl!("Black")), ("transparent".to_string(), tl!("Transparent")), ("custom".to_string(), tl!("Other…"))];
+        let opts = [
+            ("white".to_string(), tl!("White")),
+            ("black".to_string(), tl!("Black")),
+            ("transparent".to_string(), tl!("Transparent")),
+            ("custom".to_string(), tl!("Other…")),
+        ];
         if crate::widgets::dropdown(ui, &key("bg"), &mut bg, &opts, 120.0) {
             let mut params = json!({"layer": layer.id.0, "background": bg});
             if bg == "custom" {
@@ -137,9 +144,9 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         }
         if let ArtboardBackground::Custom(c) = a.background {
             let [r8, g8, b8, _] = c.to_rgba8();
-            let mut rgb = [r8, g8, b8];
-            if crate::widgets::color_edit_button_srgb(ui, &mut rgb).changed() {
-                edit = Some(json!({"layer": layer.id.0, "background": "custom", "color": format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]), "coalesce": key("color")}));
+            // PhotoCraft's Color Picker, as everywhere else (#2144): OK sets the background.
+            if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(r8, g8, b8), tl!("Color")).clicked() {
+                pick = Some(c.to_rgb());
             }
         }
     });
@@ -148,6 +155,10 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     {
         app.ui.status = e;
         app.ui.status_error = true;
+    }
+    if let Some(rgb) = pick {
+        let title = crate::color_picker_ui::title_for(tl!("Color"));
+        crate::color_picker_ui::open_for_command(app, &title, rgb, "layer.artboard.set", json!({"layer": layer.id.0, "background": "custom"}));
     }
 }
 
@@ -169,7 +180,14 @@ mod tests {
         app.run("layer.new.artboard", json!({"rect": [0, 0, 40, 50]})).unwrap();
         app.run("layer.new.artboard", json!({"rect": [60, 10, 40, 30]})).unwrap();
         let doc = app.session.active().unwrap().doc.clone();
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)), zoom: 1.0, center: [50.0, 25.0], flip: false, rotation: 0.0 };
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 50.0)),
+            zoom: 1.0,
+            center: [50.0, 25.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
         let rects = pasteboard_rects(&xf, &doc);
         let area: f32 = rects.iter().map(|r| r.area()).sum();
         // 100×50 canvas − 40×50 − 40×30 boards.

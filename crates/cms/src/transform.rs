@@ -510,7 +510,9 @@ fn apply_matrix(m: &Option<(usize, usize, Vec<f32>, Vec<f32>)>, v: &[f32; 16], o
 
 // ------------------------------------------------------------ parallel helpers
 
+#[cfg(not(target_arch = "wasm32"))]
 const PAR_MIN_PIXELS: usize = 16 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const PAR_CHUNK_PIXELS: usize = 8 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -549,7 +551,9 @@ fn par_inplace(buf: &mut [f32], _stride: usize, f: impl Fn(&mut [f32]) + Sync) {
 /// Stages from `src` device values to `dst` device values.
 pub(crate) fn link_stages(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<Vec<Stage>, CmsError> {
     for p in [src, dst] {
-        if matches!(p.class, ProfileClass::DeviceLink | ProfileClass::NamedColor | ProfileClass::Abstract) && p.color_space != ColorSpace::Lab {
+        // A Lab DeviceLink stands in for an abstract profile only when it also ends in Lab.
+        let lab_to_lab = p.color_space == ColorSpace::Lab && p.a2b.iter().flatten().all(|l| l.outputs == 3) && p.b2a.iter().flatten().all(|l| l.inputs == 3);
+        if matches!(p.class, ProfileClass::DeviceLink | ProfileClass::NamedColor | ProfileClass::Abstract) && !lab_to_lab {
             return Err(CmsError::Unsupported(format!("{:?} profiles cannot be used as a source or destination", p.class)));
         }
     }

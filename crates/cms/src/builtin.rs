@@ -127,6 +127,13 @@ pub fn srgb() -> &'static Profile {
     Builtin::Srgb.profile()
 }
 
+/// Gray with a linear tone curve: what a grayscale OpenEXR holds. Not a [`Builtin`], as it is
+/// only assigned to such files, never offered as a working space.
+pub fn linear_gray() -> &'static Profile {
+    static PROFILE: OnceLock<Profile> = OnceLock::new();
+    PROFILE.get_or_init(|| gray("Linear Gray (Photocraft)", Curve::Gamma(1.0)))
+}
+
 /// The ICC D65 used for the RGB spaces (chromaticity 0.3127, 0.3290).
 fn d65() -> [f64; 3] {
     math::xy_to_xyz(math::D65_XY)

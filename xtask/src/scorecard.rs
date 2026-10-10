@@ -7,7 +7,7 @@
 //! - `crates/io/tests/corpus.rs`: the corpus floors (`Source { .. }` constants).
 //! - `scorecard/*.toml`: per-area checklists (id, target, status, issue, note).
 //! - the prefs audit: `Preferences` fields that no code outside `prefs.rs` / `prefs_ui.rs` reads.
-//! - counted from the tree: never-crash attribute coverage, `docs/parity.md`'s live count.
+//! - counted from the tree: never-crash attribute coverage, `docs/parity-checklist.md`'s live count.
 //!
 //! `--check` fails when `docs/scorecard.md` differs from what would be generated.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -432,9 +432,9 @@ fn never_crash(root: &Path) -> (usize, Vec<String>) {
     (roots.len(), missing)
 }
 
-/// `**626 of 626 menu items live (100.0%).**` from `docs/parity.md`.
+/// `**626 of 626 menu items live (100.0%).**` from `docs/parity-checklist.md`.
 fn parity_line(root: &Path) -> Option<String> {
-    let s = std::fs::read_to_string(root.join("docs/parity.md")).ok()?;
+    let s = std::fs::read_to_string(root.join("docs/parity-checklist.md")).ok()?;
     s.lines().find(|l| l.contains("menu items live")).map(|l| l.trim().trim_matches('*').trim_end_matches('.').to_string())
 }
 
@@ -610,7 +610,7 @@ It is a heuristic lower bound: a generic name can look read when it isn't.\n\n"
             }
             "automation" => {
                 if let Some(p) = &inp.parity {
-                    s.push_str(&format!("Menu wiring (`docs/parity.md`): {p}. This counts dispatch, not behaviour.\n\n"));
+                    s.push_str(&format!("Menu wiring (`docs/parity-checklist.md`): {p}. This counts dispatch, not behaviour.\n\n"));
                 }
             }
             "reliability" => {

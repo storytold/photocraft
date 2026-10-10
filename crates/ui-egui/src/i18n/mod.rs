@@ -785,6 +785,22 @@ mod tests {
         }
     }
 
+    /// `menus::reveal_label` picks one name per platform, so every name needs a translation
+    /// whichever OS runs the tests (UI-217-19).
+    #[test]
+    fn reveal_labels_are_translated() {
+        for lang in Lang::all().filter(|l| l.complete_menus()) {
+            let cat = lang.0.catalog();
+            for label in ["Reveal in Finder", "Show in Explorer", "Show in Folder"] {
+                let tr = cat.plain(label);
+                assert!(tr.is_some(), "{} missing {label}", lang.code());
+                if label != "Reveal in Finder" {
+                    assert!(!tr.unwrap_or_default().contains("Finder"), "{}: {label} names the Finder", lang.code());
+                }
+            }
+        }
+    }
+
     #[test]
     fn layer_color_names_are_translated() {
         for lang in Lang::all().filter(|l| l.complete_menus()) {

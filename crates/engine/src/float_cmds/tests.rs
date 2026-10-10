@@ -148,3 +148,44 @@ fn copy_floats_a_duplicate_and_leaves_the_original() {
     let doc = &s.active().unwrap().doc;
     assert!(alpha(doc, id, 12, 12) == 1.0 && alpha(doc, id, 42, 12) == 1.0, "dropped: both");
 }
+
+#[test]
+fn float_with_the_mask_target_moves_the_mask_not_the_layer() {
+    let (mut s, id) = session();
+    s.edit("mask", |doc, _| {
+        let l = doc.layer_mut(id).unwrap();
+        let mut m = photocraft_doc::LayerMask::reveal_all();
+        m.surface.fill_rect(Rect::new(10, 10, 30, 30), &[0.0]);
+        l.mask = Some(m);
+        Ok(())
+    })
+    .unwrap();
+    let mask_at = |s: &Session, x, y| s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+    s.execute("select.float", json!({"dx": 25, "dy": 0, "copy": true, "target": "mask"})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    assert_eq!(mask_at(&s, 12, 12), 0.0, "the copy leaves the mask where it was");
+    assert_eq!(mask_at(&s, 37, 12), 0.0, "the mask's selected part moved");
+    assert_eq!(mask_at(&s, 60, 12), 1.0);
+    assert_eq!(alpha(&s.active().unwrap().doc, id, 37, 12), 0.0, "the layer's pixels did not move");
+    assert_eq!(alpha(&s.active().unwrap().doc, id, 12, 12), 1.0);
+}
+
+#[test]
+fn cutting_an_untouched_part_of_the_mask_moves_it_and_leaves_the_background_colour() {
+    let (mut s, id) = session();
+    s.edit("mask", |doc, _| {
+        let mut m = photocraft_doc::LayerMask::hide_all();
+        m.surface.fill_rect(Rect::new(50, 10, 70, 30), &[1.0]);
+        doc.layer_mut(id).unwrap().mask = Some(m);
+        Ok(())
+    })
+    .unwrap();
+    s.tools.background = [0.5, 0.5, 0.5, 1.0];
+    let mask_at = |s: &Session, x, y| s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+    // (10..30)² is the mask's untouched black; it moves over the white at (50..70, 10..30).
+    s.execute("select.float", json!({"dx": 40, "dy": 0, "target": "mask"})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    assert_eq!(mask_at(&s, 55, 12), 0.0, "the untouched black moved");
+    assert!((mask_at(&s, 12, 12) - 0.5).abs() < 0.01, "the hole takes the background colour");
+    assert_eq!(mask_at(&s, 40, 12), 0.0);
+}

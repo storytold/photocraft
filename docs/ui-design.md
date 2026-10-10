@@ -50,7 +50,7 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Free Transform | `transform_tool.rs` | ⌘T. Corners and edges scale proportionally (⇧ frees them: an edge then stretches one axis); ⌥ scales about the reference point; ⌘-corner distorts; dragging outside rotates (⇧ snaps to 15°); dragging inside moves. Preview = document without the moving pixels + a textured 24×24 mesh. ↩ or a double-click commits via `edit.transform {rect, quad}`. |
 | Quick layer pick | `quick_pick.rs` | macOS: ⌘⌥⌃-click with any tool selects the topmost visible layer with pixels under the pointer (`layer.pickAt`) without switching tools; the drag and release are swallowed. Windows/Linux have no third modifier distinct from the ⌃⌥ brush resize, so the gesture is a no-op there (use the Move tool's Auto-Select). A failed pick is a status-bar error. |
 | Layers rows | `panels.rs` | Double-click: on the name renames in place; on the Background makes it a normal layer; on an adjustment or fill thumbnail opens its Properties; on a Smart Object thumbnail opens its contents (Edit Contents); anywhere else on the row opens Layer Style. |
-| Layer masks | `panels.rs` | Clicking the mask thumbnail targets the mask (corner-bracket frame; the tab reads "Layer, Layer Mask/8"). Brush, eraser (paints background colour), gradient and bucket then send `"target": "mask"`. Adjustment and fill layers target their mask automatically. |
+| Layer masks | `panels.rs` | Clicking the mask thumbnail targets the mask (corner-bracket frame; the tab reads "Layer, Layer Mask/8"). Brush, eraser (paints background colour), gradient, bucket and moving the selected pixels (⌘-drag, `select.float`; the hole takes the background colour) then send `"target": "mask"`. Adjustment and fill layers target their mask automatically. |
 | Levels / Curves | `tone.rs` | Histogram of the image *below* the adjustment. Curves: click to add a point, drag out to delete. Every change is a coalesced `layer.setAdjustment`, so one drag = one undo step and the canvas updates at full resolution on the GPU. |
 
 While editing type, hold Ctrl (Windows/Linux) or Command (macOS) for an oriented transform
@@ -81,6 +81,16 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 - **Narrow windows** drop controls that are also in a menu before anything overlaps: Discord (Help › Discord), then the theme toggle, then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
 
 ## Menus
+
+An embedding application's `panels.menu_bar` and `panels.rail` flags belong to its current
+session. Restoring a saved workspace or remembered panel layout preserves both flags, including
+when the serialized layout contains their values. Panel visibility, dock layout, tabs and Timeline
+visibility follow the saved layout.
+
+The Pro status bar's Document Dimensions readout follows Preferences › Units & Rulers › Rulers,
+including changes made from a ruler's context menu. It uses the document resolution for physical
+units, each side's own extent for percentages and the selected point-size convention for points
+and picas. The readout retains the document's pixels-per-inch value.
 
 `menu_catalog.rs` holds Photoshop's menu tree (standard command names, order, separators, default shortcuts). Items whose id matches an engine or UI command are live; others render disabled until implemented. Give new commands the catalogue's id (for example `image.imageSize`) and they light up in the right place automatically.
 

@@ -75,6 +75,10 @@ pub fn document_sizes(doc: &Document) -> (u64, u64) {
 
 /// The status bar text for `key` (Photoshop wording).
 pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) -> String {
+    status_info_text_with_units(doc, key, tool, profile, &Default::default())
+}
+
+fn status_info_text_with_units(doc: &Document, key: &str, tool: &str, profile: &str, units: &photocraft_engine::prefs::UnitsAndRulers) -> String {
     let bits = doc.depth.bits();
     match key {
         "sizes" => {
@@ -93,10 +97,18 @@ pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) ->
             let n = doc.layer_count();
             crate::i18n::trn(crate::i18n::current(), n as u64, "{n} Layer", "{n} Layers")
         }
-        _ => crate::i18n::fmt(
+        _ if units.rulers == photocraft_engine::prefs::Unit::Pixels => crate::i18n::fmt(
             tl!("{w} px x {h} px ({ppi} ppi)"),
             &[("w", &doc.size.width.to_string()), ("h", &doc.size.height.to_string()), ("ppi", &widgets::fmt_num(doc.resolution_dpi as f64))],
         ),
+        _ => {
+            let dpi = doc.resolution_dpi as f64;
+            let (w, h) = (doc.size.width as f64, doc.size.height as f64);
+            crate::i18n::fmt(
+                tl!("{w} {unit} x {h} {unit} ({ppi} ppi)"),
+                &[("w", &units.format(w, dpi, w)), ("h", &units.format(h, dpi, h)), ("unit", units.rulers.suffix()), ("ppi", &widgets::fmt_num(dpi))],
+            )
+        }
     }
 }
 
@@ -128,7 +140,13 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         status_message(app, ui, &t);
         return;
     };
-    let text = status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc));
+    let text = status_info_text_with_units(
+        &st.doc,
+        &app.ui.chrome.status_info,
+        tl!(app.ui.tool.label()),
+        &profile_name(&st.doc),
+        &app.session.prefs().units_and_rulers,
+    );
     let mut pct = app.ui.views[i].zoom * 100.0;
     if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 64.0).changed() {
         app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
@@ -143,6 +161,7 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     icons::paint(ui, r, "chevron-right", 11.0, t.text_dim);
     let resp = resp.on_hover_text(tl!("Show"));
     egui::Popup::menu(&resp).show(|ui| {
+        crate::widgets::style_spectrum_popup_menu(ui);
         ui.set_min_width(200.0);
         for (key, label) in STATUS_INFO {
             let on = app.ui.chrome.status_info == *key;
@@ -238,6 +257,65 @@ mod tests {
         assert_eq!(status_info_text(&d, "layers", "", ""), "1 Layer");
         assert_eq!(status_info_text(&d, "tool", "Brush Tool", ""), "Brush Tool");
         assert!(status_info_text(&d, "profile", "", "sRGB IEC61966-2.1").ends_with("(8bpc)"));
+    }
+
+    #[test]
+    fn status_dimensions_follow_ruler_units_and_document_resolution() {
+        use photocraft_engine::prefs::{PointSize, Unit, UnitsAndRulers};
+        let mut d = doc();
+        d.resolution_dpi = 300.0;
+        for (unit, expected) in [
+            (Unit::Pixels, "2400 px x 1500 px (300 ppi)"),
+            (Unit::Inches, "8 in x 5 in (300 ppi)"),
+            (Unit::Centimeters, "20.32 cm x 12.7 cm (300 ppi)"),
+            (Unit::Millimeters, "203.2 mm x 127 mm (300 ppi)"),
+            (Unit::Points, "576 pt x 360 pt (300 ppi)"),
+            (Unit::Picas, "48 pica x 30 pica (300 ppi)"),
+            (Unit::Percent, "100 % x 100 % (300 ppi)"),
+        ] {
+            let units = UnitsAndRulers { rulers: unit, ..Default::default() };
+            assert_eq!(status_info_text_with_units(&d, "dimensions", "", "", &units), expected);
+            for (key, _) in STATUS_INFO.iter().filter(|(key, _)| *key != "dimensions") {
+                assert_eq!(status_info_text_with_units(&d, key, "Brush Tool", "sRGB", &units), status_info_text(&d, key, "Brush Tool", "sRGB"));
+            }
+        }
+        d.resolution_dpi = 240.0;
+        let units = UnitsAndRulers { rulers: Unit::Points, point_size: PointSize::Traditional, ..Default::default() };
+        assert_eq!(status_info_text_with_units(&d, "dimensions", "", "", &units), "722.7 pt x 451.7 pt (240 ppi)");
+    }
+
+    #[test]
+    fn status_bar_updates_dimensions_after_a_ruler_preference_change() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut failures = Vec::new();
+        for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::ProMedium] {
+            for width in [800.0, 1200.0] {
+                let builder = Harness::builder().with_size(vec2(width, 600.0)).with_max_steps(64);
+                let mut h = builder.build_eframe(move |cc| {
+                    PhotocraftApp::setup_context(&cc.egui_ctx, theme);
+                    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                    app.run("prefs.set", json!({"path": "interface.theme", "value": theme.id()})).unwrap();
+                    app.ui.theme = theme;
+                    app
+                });
+                h.state_mut().run("file.new", json!({"width": 1920, "height": 1080, "resolution": 72})).unwrap();
+                h.state_mut().sync_views();
+                h.run_steps(4);
+                assert_eq!(h.state().ui.theme, theme, "the fixture renders the requested theme");
+                assert!(h.query_by_label("1920 px x 1080 px (72 ppi)").is_some());
+                h.state_mut().run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "inches"})).unwrap();
+                h.run_steps(4);
+                if h.query_by_label("26.667 in x 15 in (72 ppi)").is_none() || h.query_by_label("1920 px x 1080 px (72 ppi)").is_some() {
+                    failures.push(format!("{theme:?}, width={width}: inches"));
+                }
+                h.state_mut().run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "cm"})).unwrap();
+                h.run_steps(4);
+                if h.query_by_label("67.73 cm x 38.1 cm (72 ppi)").is_none() {
+                    failures.push(format!("{theme:?}, width={width}: centimeters"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "the status bar must follow the preference immediately: {failures:?}");
     }
 
     #[test]
