@@ -111,7 +111,8 @@ impl Default for ViewOptions {
             snap_to: SnapTo::default(),
             flip_horizontal: false,
             pixel_aspect: "square".into(),
-            pixel_aspect_correction: false,
+            // Photoshop shows non-square pixels corrected until the user turns it off.
+            pixel_aspect_correction: true,
             pattern_preview: false,
             pixel_art_preview: false,
             arrange: "tabs".into(),
@@ -133,6 +134,13 @@ impl ViewOptions {
     }
     pub fn hides_tabs(&self) -> bool {
         self.screen_mode != "standard"
+    }
+    /// Horizontal display scale of a document pixel: the pixel aspect ratio while View › Pixel
+    /// Aspect Ratio Correction is on, else 1 (square). The document's pixels never change.
+    pub fn display_aspect(&self) -> f32 {
+        let r = pixel_aspect_ratio(&self.pixel_aspect);
+        // `ui.set` can store any string; only the dialog's 0.1–10 range is drawn.
+        if self.pixel_aspect_correction && r.is_finite() { r.clamp(0.1, 10.0) } else { 1.0 }
     }
     /// Photoshop's full screen modes show no scroll bars.
     pub fn shows_scrollbars(&self) -> bool {

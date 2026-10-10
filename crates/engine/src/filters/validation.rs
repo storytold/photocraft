@@ -34,7 +34,7 @@ impl Rule {
 }
 
 // The bounds and choices are the core filters' public dialog-unit contract. Defaults remain in
-// params_for; gallery filters keep their own parsing until their validation is added.
+// params_for; gallery filters are checked in gallery_cmds.
 fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
     use Rule::{Bool, Choice, Number, Unsigned};
     Some(match id {
@@ -134,7 +134,7 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
         }
         return Ok(());
     }
-    let Some(fields) = fields(id) else { return Ok(()) };
+    let Some(fields) = fields(id) else { return crate::gallery_cmds::validate_params(id, params) };
     if params.is_null() {
         return Ok(());
     }
