@@ -16,6 +16,10 @@ use crate::{BlurPath, Ctx, FieldPin, IrisPin, SpinPin};
 #[path = "tests_iris.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "tests_tilt_shift.rs"]
+mod tilt_shift_tests;
+
 /// Gaussian σ for a gallery blur amount in px.
 fn sigma_of(blur: f32) -> f32 {
     blur.clamp(0.0, 500.0) * 0.6
@@ -86,7 +90,7 @@ fn variable_blur(src: &Image, out: Rect, ctx: &Ctx, smax: f32, trim_levels: bool
         let (level, lw): (&[f32], usize) = if k == 0 {
             (&p, ww)
         } else {
-            // Only Iris opts in. Each level needs its own box-cascade reach,
+            // Iris and Tilt-Shift opt in. Each level needs its own box-cascade reach,
             // not the maximum blur's trailing halo. Keep the original top/left:
             // moving the running sums' start changes floating-point cancellation.
             let trim = trim_levels && win.intersect(&out) == out;
@@ -146,9 +150,10 @@ pub(crate) fn tilt_shift(src: &Image, out: Rect, ctx: &Ctx, blur: f32, centre: (
     // Band normal (the band runs along `angle`).
     let (s, c) = angle.to_radians().sin_cos();
     let (nx, ny) = (s, c);
-    let smax = sigma_of(blur);
+    // A NaN amount must not become the upper bound of f32::clamp below.
+    let smax = sigma_of(blur).max(0.0);
     let (f0, f1) = (focus.max(0.0), focus.max(0.0) + transition.max(1e-3));
-    variable_blur(src, out, ctx, smax, false, |x, y| {
+    variable_blur(src, out, ctx, smax, true, |x, y| {
         let d = ((x - cx) * nx + (y - cy) * ny).abs() / ss;
         smax * smoothstep(f0, f1, d)
     })

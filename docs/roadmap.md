@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha gate added; earlier the same day: major, honest assessment moved to `target-app-parity.md`; milestones re-dated; new Current focus and What's next with estimates) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Tilt-Shift progress linked; alpha gate added; earlier the same day: major, honest assessment moved to `target-app-parity.md`; milestones re-dated; new Current focus and estimates) · **Target:** Adobe Photoshop 2026
 
 Forward-looking plan: milestones, the **Current focus** list, and what's next with estimates.
 Where we stand today is in [`target-app-parity.md`](target-app-parity.md) (two numbers, by
@@ -65,6 +65,9 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
    Photoshop re-open check (FILE-216-4); Photoshop-oracle floor 133/256 → 200+. 150–250 h.
 2. **Performance budgets** ([G2](gaps.md#g2-interactive-performance)): the 22 over-budget
    scenarios, the P12 GPU crash at 150 layers, brush and cursor lag (#2619, #2566). 200–350 h.
+   Tilt-Shift now reuses the existing exact-output per-level halo/copy optimization;
+   [measured progress and limits](tilt-shift-performance.md) (2026-10-10). The budget
+   gaps remain open.
 3. **User bug backlog** ([G3](gaps.md#g3-user-reported-bug-backlog)): 579 open issues, most from
    0.5/0.6 users; triage weekly, fix regressions first. 250–400 h.
 4. **Brush and transform feel** ([G4](gaps.md#g4-brush-feel), [G5](gaps.md#g5-transform-handles-and-modifiers)):
@@ -106,6 +109,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Linked measured Tilt-Shift progress under performance focus; budgets, estimates and stage unchanged |
 | 2026-10-10 | minor | Alpha gate table (core-workflow gate from the progress-docs standard): passes, stage stays alpha |
 | 2026-10-10 | major | Progress-docs standard: honest assessment and dated measurements moved to `target-app-parity.md`, Affinity notes to `file-format-parity.md`; new Current focus and estimates; `parity.md` renamed `parity-checklist.md` |
 | 2026-10-08 | minor | Tools, Affinity import and performance measurements added |

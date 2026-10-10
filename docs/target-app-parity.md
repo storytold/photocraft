@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment into this file) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment) · **Target:** Adobe Photoshop 2026
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -382,6 +382,17 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: Tilt-Shift reuses the established contiguous premultiplication and
+per-level trailing-halo trimming. Nine local 24 MP RGB U8/U16/F32 cases improve
+1.07–1.49× with separated observed ranges (Ryzen 7 9700X, Windows, eight workers):
+default blur 15, 609.5 → 451.7 ms; rotated blur 80, 1729.3 → 1241.4 ms. At 36 MP,
+rotated blur 80: 2458.7 → 1668.0 ms; the saturated-field gain is inconclusive.
+The existing filtered preview proxy at document blur 80/300 improves from
+66.9/179.4 → 55.9/132.8 ms; its default blur 15 gain is inconclusive.
+Finite pixel bits match the frozen starting kernel exactly. These are computation
+timings with two baseline rounds, not GUI frame latency or a Photoshop parity
+increase; see [method, upstream SIMD/rustfft investigation and full ranges](tilt-shift-performance.md).
+
 2026-10-10: Iris Blur pin preparation, saturated-distance evaluation and trailing
 Gaussian-level halo trimming measure 1.18–1.76× faster across eight local 24 MP
 RGB U8/U16/F32 cases (Ryzen 7 9700X, Windows, eight workers). Default blur 15:
@@ -527,6 +538,7 @@ See [method and results](octagonal-mask-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Added measured Tilt-Shift computation/filtered-proxy gains and inconclusive cases; parity percentages and budgets unchanged |
 | 2026-10-10 | minor | Readiness-by-audience table: percent and hours for full, mainstream and essentials; full number confirmed as the additive weighted sum over dimensions (46%, reported ~45%) |
 | 2026-10-10 | minor | Added mainstream-practitioner (~43%) and essentials-user (~61%) numbers with written weights and discounts; full ready-for-real-work rechecked against its written weights (46%, reported ~45%), unchanged |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate in `roadmap.md`: passes |
