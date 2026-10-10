@@ -48,6 +48,8 @@ pub struct Runtime {
     pub(crate) checker_key: Option<[[u8; 3]; 2]>,
     /// Style last sent to the GPU canvas.
     pub(crate) gpu_style: Option<crate::gpu_canvas::CanvasStyle>,
+    /// Tool options as last remembered in the preferences (see `tool_memory`).
+    pub(crate) tool_options: Option<crate::state::ToolOptions>,
 }
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
@@ -137,6 +139,7 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     crate::dock::restore(app);
     crate::brush_picker::restore(app);
+    crate::tool_memory::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
@@ -2368,6 +2371,33 @@ mod tests {
         tick(&mut app3, &ctx);
         assert_eq!(app3.ui.brush_picker_list.scale, *crate::brush_picker::SCALE_RANGE.end());
         assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && app3.ui.brush_picker_list.show_tip);
+    }
+
+    #[test]
+    fn tool_options_survive_a_restart() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.tool_options.feather = 12.0;
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        // Only what differs from the defaults is stored.
+        assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0}));
+        let saved = store.lock().unwrap().clone().unwrap();
+        let (mut app2, _) = app_with_saved(Some(saved));
+        tick(&mut app2, &ctx);
+        assert!(!app2.ui.tool_options.move_auto_select);
+        assert_eq!(app2.ui.tool_options.feather, 12.0);
+        assert_eq!(app2.ui.tool_options.tolerance, crate::state::ToolOptions::default().tolerance);
+        // A hand-edited file: unreadable fields keep their defaults, the good ones still load.
+        for bad in [json!("junk"), json!({"move_auto_select": "no", "feather": 1e300, "tolerance": 5.0, "unknown": 1})] {
+            let (mut app3, _) = app_with_saved(Some(json!({"toolOptions": bad}).to_string()));
+            tick(&mut app3, &ctx);
+            let o = &app3.ui.tool_options;
+            assert!(o.move_auto_select && o.feather == 0.0, "{bad}");
+            assert_eq!(o.tolerance, if bad.is_object() { 5.0 } else { 32.0 });
+        }
     }
 
     #[test]
