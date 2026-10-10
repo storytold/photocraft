@@ -3513,3 +3513,17 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+
+# Color panel modes (#294)
+	Hue Cube	Куб тону
+	Brightness Cube	Куб яскравості
+	Color Wheel	Колірне коло
+	Grayscale Sliders	Повзунки градацій сірого
+	RGB Sliders	Повзунки RGB
+	HSB Sliders	Повзунки HSB
+	CMYK Sliders	Повзунки CMYK
+	Lab Sliders	Повзунки Lab
+	Web Color Sliders	Повзунки вебкольорів
+	Copy Color's Hex Code	Копіювати шістнадцятковий код кольору
+	Color management is unavailable.	Керування кольором недоступне.
+	Out of gamut for printing: click to use the closest printable color	Поза колірним охопленням друку: клацніть, щоб узяти найближчий друкований колір

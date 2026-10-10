@@ -120,9 +120,9 @@ note = "saturation_track/lightness_track (adjust_editors.rs): grey -> the hue an
 [[item]]
 id = "UI-217-17"
 target = "Color panel: wheel plus RGB/HSB/CMYK/Lab/Gray/Web slider modes; resizes with its group"
-status = "missing"
-issue = 217
-note = "panels.rs:1837 single field + hex/RGB readout"
+status = "done"
+issue = 294
+note = "color_panel_ui.rs: Hue/Brightness Cube, Color Wheel and the six slider sets from the panel menu (persisted); CMYK/Gray/Lab through photocraft-cms; controls fit the group height"
 
 [[item]]
 id = "UI-217-18"

@@ -2825,3 +2825,17 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+
+# Color panel modes (#294)
+	Hue Cube	Cube de teinte
+	Brightness Cube	Cube de luminosité
+	Color Wheel	Roue chromatique
+	Grayscale Sliders	Curseurs Niveaux de gris
+	RGB Sliders	Curseurs RVB
+	HSB Sliders	Curseurs TSL
+	CMYK Sliders	Curseurs CMJN
+	Lab Sliders	Curseurs Lab
+	Web Color Sliders	Curseurs Couleurs Web
+	Copy Color's Hex Code	Copier le code hexadécimal de la couleur
+	Color management is unavailable.	La gestion des couleurs n’est pas disponible.
+	Out of gamut for printing: click to use the closest printable color	Hors gamut d’impression : cliquez pour utiliser la couleur imprimable la plus proche

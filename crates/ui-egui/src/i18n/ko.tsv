@@ -2984,3 +2984,17 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+
+# Color panel modes (#294)
+	Hue Cube	색조 큐브
+	Brightness Cube	밝기 큐브
+	Color Wheel	색상환
+	Grayscale Sliders	회색 음영 슬라이더
+	RGB Sliders	RGB 슬라이더
+	HSB Sliders	HSB 슬라이더
+	CMYK Sliders	CMYK 슬라이더
+	Lab Sliders	Lab 슬라이더
+	Web Color Sliders	웹 색상 슬라이더
+	Copy Color's Hex Code	색상의 16진 코드 복사
+	Color management is unavailable.	색상 관리를 사용할 수 없습니다.
+	Out of gamut for printing: click to use the closest printable color	인쇄 색상 범위 밖: 클릭하면 가장 가까운 인쇄 가능 색상을 사용합니다

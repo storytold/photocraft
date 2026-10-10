@@ -836,6 +836,8 @@ pub struct DockTabs {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorPanelState {
+    /// What the panel shows: Hue Cube, Color Wheel, a slider set… (its panel menu, #294).
+    pub mode: crate::color_panel_ui::ColorPanelMode,
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
 }

@@ -3514,3 +3514,17 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+
+# Color panel modes (#294)
+	Hue Cube	Κύβος απόχρωσης
+	Brightness Cube	Κύβος φωτεινότητας
+	Color Wheel	Χρωματικός τροχός
+	Grayscale Sliders	Ρυθμιστικά κλίμακας του γκρι
+	RGB Sliders	Ρυθμιστικά RGB
+	HSB Sliders	Ρυθμιστικά HSB
+	CMYK Sliders	Ρυθμιστικά CMYK
+	Lab Sliders	Ρυθμιστικά Lab
+	Web Color Sliders	Ρυθμιστικά χρωμάτων Web
+	Copy Color's Hex Code	Αντιγραφή δεκαεξαδικού κωδικού χρώματος
+	Color management is unavailable.	Η διαχείριση χρωμάτων δεν είναι διαθέσιμη.
+	Out of gamut for printing: click to use the closest printable color	Εκτός χρωματικής γκάμας εκτύπωσης: κάντε κλικ για να χρησιμοποιήσετε το πλησιέστερο εκτυπώσιμο χρώμα

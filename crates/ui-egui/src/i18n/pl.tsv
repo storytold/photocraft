@@ -3426,3 +3426,17 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+
+# Color panel modes (#294)
+	Hue Cube	Sześcian odcienia
+	Brightness Cube	Sześcian jasności
+	Color Wheel	Koło kolorów
+	Grayscale Sliders	Suwaki skali szarości
+	RGB Sliders	Suwaki RGB
+	HSB Sliders	Suwaki HSB
+	CMYK Sliders	Suwaki CMYK
+	Lab Sliders	Suwaki Lab
+	Web Color Sliders	Suwaki kolorów internetowych
+	Copy Color's Hex Code	Kopiuj kod szesnastkowy koloru
+	Color management is unavailable.	Zarządzanie kolorami jest niedostępne.
+	Out of gamut for printing: click to use the closest printable color	Poza gamutem druku: kliknij, aby użyć najbliższego koloru do druku

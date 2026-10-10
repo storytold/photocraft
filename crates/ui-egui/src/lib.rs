@@ -41,6 +41,7 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod cjk_fonts;
 pub mod clip_line_ui;
+pub mod color_panel_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod comps_ui;
@@ -1392,6 +1393,8 @@ impl eframe::App for PhotocraftApp {
         // remembered once the pointer is up. Here, after every panel, rather than in the
         // picker's own code: the control channel can set it while the picker is closed.
         brush_picker::persist(self, &ctx);
+        // The Color panel's mode, likewise (`ui.set {colorPanel}` works with the panel hidden).
+        color_panel_ui::persist(self, &ctx);
         self.automation_input = false;
         native_menu::sync(self, &ctx);
         if screen_picker::busy(&ctx) {
