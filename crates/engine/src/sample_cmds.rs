@@ -60,7 +60,7 @@ impl SampleLayers {
 /// centred on the pixel under the point, clipped to `canvas`. `None` when the point is off the
 /// canvas (or not finite), or `size` is not one of [`SAMPLE_SIZES`].
 pub fn sample_rect(x: f64, y: f64, size: u32, canvas: Rect) -> Option<Rect> {
-    if !(x.is_finite() && y.is_finite()) || !SAMPLE_SIZES.contains(&size) {
+    if !(x.is_finite() && y.is_finite() && SAMPLE_SIZES.contains(&size)) {
         return None;
     }
     let (fx, fy) = (x.floor(), y.floor());
