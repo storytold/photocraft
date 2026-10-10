@@ -13,8 +13,8 @@
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
 //! A file seen for the first time is only remembered (one changed while its document was closed
-//! keeps waiting for Update Modified Content, as in Photoshop); one that can't be read yet (another
-//! app is still writing it) keeps its old stamp, so the next look tries again. Only smart objects
+//! keeps waiting for Update Modified Content, as in Photoshop); one that can't be read (another app
+//! is still writing it) is tried again once it changes again, not on every look. Only smart objects
 //! of the document itself follow their files, not ones nested in another smart object's contents.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -140,15 +140,10 @@ impl Session {
                 }
                 Ok(())
             });
-            match r {
-                Ok(()) => updated.extend(ids),
-                // Not readable yet (still being written): the edit left nothing behind, and the
-                // next look tries again.
-                Err(_) => {
-                    if let Some(old) = before.get(&path) {
-                        self.link_stamps.insert((doc, path), *old);
-                    }
-                }
+            // Not readable (still being written, or not a format smart objects read): the edit left
+            // nothing behind, and the file is tried again once it changes again, not on every look.
+            if r.is_ok() {
+                updated.extend(ids);
             }
         }
         Ok(json!({"updated": updated}))
