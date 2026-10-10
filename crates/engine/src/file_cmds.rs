@@ -619,6 +619,57 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
     x
 }
 
+/// Read-only camera data shown in File Info. Prefer embedded EXIF and fill gaps from
+/// XMP (RAW conversions and some editors only preserve the XMP properties).
+fn camera_file_info(exif_bytes: Option<&[u8]>, xmp: Option<&str>) -> Value {
+    let info = exif_bytes.map(photocraft_algo::exif::read).unwrap_or_default();
+    let x = xmp.unwrap_or("");
+    let xmp_field = |names: &[&str]| -> Option<String> {
+        names.iter().find_map(|tag| {
+            find_element(x, tag)
+                .and_then(|(_, _, inner)| li_values(inner).into_iter().next())
+                .or_else(|| find_attr(x, tag).map(|(_, _, v)| xml_unescape(v)))
+                .filter(|s| !s.trim().is_empty())
+        })
+    };
+    let number = |s: String| -> Option<f64> {
+        let (num, denom) = match s.trim().split_once('/') {
+            Some((n, d)) => (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?),
+            None => (s.trim().parse::<f64>().ok()?, 1.0),
+        };
+        (denom != 0.0 && num.is_finite() && denom.is_finite()).then_some(num / denom)
+    };
+    let numeric = |tags: &[&str]| xmp_field(tags).and_then(number);
+    let exposure = info.exposure_time.or_else(|| numeric(&["exif:ExposureTime"])).filter(|v| v.is_finite() && *v > 0.0).map(|v| {
+        if v < 1.0 {
+            format!("1/{} s", (1.0 / v).round() as u64)
+        } else {
+            format!("{v:.2} s")
+        }
+    });
+    let aperture = info.f_number.or_else(|| numeric(&["exif:FNumber"])).filter(|v| v.is_finite() && *v > 0.0).map(|v| format!("f/{v}"));
+    let iso = info.iso.or_else(|| numeric(&["exif:ISOSpeedRatings", "exif:PhotographicSensitivity"]))
+        .filter(|v| v.is_finite() && *v > 0.0).map(|v| format!("{v:.0}"));
+    let focal = info.focal_length.or_else(|| numeric(&["exif:FocalLength"]))
+        .filter(|v| v.is_finite() && *v > 0.0).map(|v| format!("{v:.1} mm"));
+    let mut camera = serde_json::Map::new();
+    for (key, value) in [
+        ("make", info.make.or_else(|| xmp_field(&["tiff:Make"]))),
+        ("model", info.model.or_else(|| xmp_field(&["tiff:Model"]))),
+        ("dateTaken", info.date_taken.or_else(|| xmp_field(&["exif:DateTimeOriginal", "photoshop:DateCreated"]))),
+        ("exposure", exposure),
+        ("fNumber", aperture),
+        ("iso", iso),
+        ("focalLength", focal),
+        ("lens", info.lens.or_else(|| xmp_field(&["aux:Lens", "exifEX:LensModel"]))),
+    ] {
+        if let Some(value) = value {
+            camera.insert(key.into(), json!(value));
+        }
+    }
+    Value::Object(camera)
+}
+
 fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
     let keys = ["title", "author", "authorTitle", "description", "keywords", "copyright", "copyrightStatus", "copyrightUrl"];
     let edits = p.as_object().is_some_and(|m| m.keys().any(|k| keys.contains(&k.as_str())));
@@ -631,7 +682,9 @@ fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(read_file_info(d.doc.metadata.xmp.as_deref()))
+    let mut fields = read_file_info(d.doc.metadata.xmp.as_deref());
+    fields["camera"] = camera_file_info(d.doc.metadata.exif.as_deref(), d.doc.metadata.xmp.as_deref());
+    Ok(fields)
 }
 
 // ---------- Automate ----------
@@ -1296,7 +1349,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "File Info…",
             &["File"],
             Some("Cmd+Alt+Shift+I"),
-            r##"{"title":str?,"author":str?,"authorTitle":str?,"description":str?,"keywords":[str]|"a; b"?,"copyright":str?,"copyrightStatus":"unknown|copyrighted|publicDomain"?,"copyrightUrl":str?} (no keys: read)"##,
+            r##"{"title":str?,"author":str?,"authorTitle":str?,"description":str?,"keywords":[str]|"a; b"?,"copyright":str?,"copyrightStatus":"unknown|copyrighted|publicDomain"?,"copyrightUrl":str?} (no keys: read includes read-only camera data)"##,
             has_doc,
             file_info
         ),

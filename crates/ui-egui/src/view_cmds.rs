@@ -809,6 +809,28 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             ui.end_row();
         }
     });
+    if f.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
+        let camera = f.get("__camera").and_then(Value::as_object);
+        ui.add_space(12.0);
+        ui.label(egui::RichText::new("Camera Data").strong());
+        if camera.is_none_or(|fields| fields.is_empty()) {
+            ui.label("No camera metadata available");
+        } else if let Some(camera) = camera {
+            egui::Grid::new("file-info-camera-data").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                for (field, label) in [
+                    ("make", "Make"), ("model", "Model"), ("dateTaken", "Date taken"),
+                    ("exposure", "Exposure"), ("fNumber", "Aperture"), ("iso", "ISO"),
+                    ("focalLength", "Focal length"), ("lens", "Lens"),
+                ] {
+                    if let Some(value) = camera.get(field).and_then(Value::as_str) {
+                        ui.label(label);
+                        ui.add(egui::Label::new(value).selectable(true));
+                        ui.end_row();
+                    }
+                }
+            });
+        }
+    }
 }
 
 /// Folder the batch dialogs start from: next to the active document, else the working directory.
@@ -892,7 +914,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             let kw = info["keywords"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default();
             dialog(
                 app,
-                json!({"title": info["title"], "author": info["author"], "authorTitle": info["authorTitle"], "description": info["description"], "keywords": kw, "copyright": info["copyright"], "copyrightStatus": info["copyrightStatus"], "copyrightUrl": info["copyrightUrl"]}),
+                json!({"title": info["title"], "author": info["author"], "authorTitle": info["authorTitle"], "description": info["description"], "keywords": kw, "copyright": info["copyright"], "copyrightStatus": info["copyrightStatus"], "copyrightUrl": info["copyrightUrl"], "__camera": info["camera"]}),
                 json!({"copyrightStatus": ["unknown", "copyrighted", "publicDomain"]}),
             )
         }

@@ -212,6 +212,50 @@ fn rotated_jpegs_open_and_place_upright() {
 }
 
 #[test]
+fn file_info_reads_camera_exif_and_xmp_without_making_camera_data_editable() {
+    let mut s = session(16, 16, 8);
+    s.active_mut().unwrap().doc.metadata.exif = Some(photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
+        make: Some("SONY".into()),
+        model: Some("ILCE-7RM5".into()),
+        lens: Some("24-70mm".into()),
+        date_taken: Some("2024:02:17 12:40:19".into()),
+        exposure_time: Some(0.004),
+        f_number: Some(8.0),
+        iso: Some(400.0),
+        focal_length: Some(33.1),
+        focal_length_35mm: None,
+    }));
+    let read = s.execute("file.fileInfo", json!({})).unwrap();
+    assert_eq!(read["camera"]["make"], "SONY");
+    assert_eq!(read["camera"]["model"], "ILCE-7RM5");
+    assert_eq!(read["camera"]["dateTaken"], "2024:02:17 12:40:19");
+    assert_eq!(read["camera"]["exposure"], "1/250 s");
+    assert_eq!(read["camera"]["fNumber"], "f/8");
+    assert_eq!(read["camera"]["iso"], "400");
+    assert_eq!(read["camera"]["focalLength"], "33.1 mm");
+    assert_eq!(read["camera"]["lens"], "24-70mm");
+
+    // A forged camera field in an editing request cannot rewrite EXIF or create a history step.
+    let exif_before = doc(&s).metadata.exif.clone();
+    let history = s.active().unwrap().history.past_len();
+    let again = s.execute("file.fileInfo", json!({"camera": {"make": "other"}})).unwrap();
+    assert_eq!(again["camera"]["make"], "SONY");
+    assert_eq!(doc(&s).metadata.exif, exif_before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+
+    // XMP values fill only EXIF gaps; embedded EXIF takes priority where present.
+    s.active_mut().unwrap().doc.metadata.xmp = Some(r#"<rdf:Description tiff:Make="other" exif:DateTimeOriginal="2021:06:01 10:20:30" aux:Lens="XMP Lens"/>"#.into());
+    let mixed = s.execute("file.fileInfo", json!({})).unwrap();
+    assert_eq!(mixed["camera"]["make"], "SONY");
+    assert_eq!(mixed["camera"]["dateTaken"], "2024:02:17 12:40:19");
+    s.active_mut().unwrap().doc.metadata.exif = None;
+    let xmp = s.execute("file.fileInfo", json!({})).unwrap();
+    assert_eq!(xmp["camera"]["make"], "other");
+    assert_eq!(xmp["camera"]["dateTaken"], "2021:06:01 10:20:30");
+    assert_eq!(xmp["camera"]["lens"], "XMP Lens");
+}
+
+#[test]
 fn file_info_round_trips_through_xmp_and_psd() {
     let mut s = session(8, 8, 8);
     let empty = s.execute("file.fileInfo", json!({})).unwrap();

@@ -9,6 +9,8 @@ pub struct CameraInfo {
     pub make: Option<String>,
     pub model: Option<String>,
     pub lens: Option<String>,
+    /// EXIF DateTimeOriginal, as recorded by the camera (without an assumed timezone).
+    pub date_taken: Option<String>,
     /// Seconds.
     pub exposure_time: Option<f64>,
     pub f_number: Option<f64>,
@@ -113,6 +115,7 @@ pub fn read(exif: &[u8]) -> CameraInfo {
                 0x010F => info.make = t.text(typ, count, field),
                 0x0110 => info.model = t.text(typ, count, field),
                 0x829A => info.exposure_time = t.number(typ, count, field),
+                0x9003 => info.date_taken = t.text(typ, count, field),
                 0x829D => info.f_number = t.number(typ, count, field),
                 0x8827 => info.iso = t.number(typ, count, field),
                 0x920A => info.focal_length = t.number(typ, count, field),
@@ -154,6 +157,9 @@ pub fn build(info: &CameraInfo) -> Vec<u8> {
     }
     if let Some(v) = info.exposure_time {
         exif.push((0x829A, 5, 1, rational(v)));
+    }
+    if let Some(s) = &info.date_taken {
+        exif.push((0x9003, 2, s.len() as u32 + 1, text(s)));
     }
     if let Some(v) = info.f_number {
         exif.push((0x829D, 5, 1, rational(v)));
@@ -219,6 +225,7 @@ mod tests {
             make: Some("Generic".into()),
             model: Some("Camera 1".into()),
             lens: Some("24-70mm".into()),
+            date_taken: Some("2024:02:17 12:40:19".into()),
             exposure_time: Some(0.004),
             f_number: Some(8.0),
             iso: Some(200.0),
