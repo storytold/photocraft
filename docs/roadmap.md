@@ -92,6 +92,12 @@ Confidence: moderate — the next users of 0.2.x will move these numbers either 
 
 ### By dimension
 
+2026-10-10: [Shape stroke controls](shape-strokes.md) expose existing Solid/Dashed/Dotted,
+custom dash/gap, offset, caps, joins, alignment, miter-limit and opacity capabilities in
+Shape/Pen options and Properties. Properties stages a cached canvas preview before one
+undoable edit. Gradient fill controls from #1053 remain open; the Line tool still draws a
+filled bar. This extends UI reachability and does not claim Photoshop-authored stroke parity.
+
 | Dimension | Measured / evidence (2026-10-05) | Grade | Notes |
 |---|---|---|---|
 | Menu wiring | 626/626 menu items dispatch a command (`parity.md`) | high but shallow | Says nothing about behaviour. |

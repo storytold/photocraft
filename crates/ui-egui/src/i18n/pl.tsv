@@ -3398,6 +3398,25 @@ cameraRaw	Roughness	Chropowatość
 	XOR	XOR
 	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
 	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+	Stroke Options	Opcje obrysu
+	Solid	Ciągły
+	Dashed	Kreskowany
+	Dotted	Kropkowany
+	Caps	Zakończenia
+	Butt / Flat	Płaskie
+	Miter	Ostre
+	Round	Okrągłe
+	Bevel	Ścięte
+	Miter limit	Limit ostrego narożnika
+	Dashed line	Linia kreskowana
+	Dash	Kreska
+	Gap	Odstęp
+	Dash / gap lengths × stroke width	Długości kreski / odstępu × szerokość obrysu
+	Add pair	Dodaj parę
+	Remove pair	Usuń parę
+	Dash offset	Przesunięcie kresek
+	Open paths use centered strokes	Otwarte ścieżki używają wyśrodkowanych obrysów
+	Use finite lengths and a positive pattern total	Użyj skończonych długości i dodatniej sumy wzoru
 	No subject found — try Object Selection or the Lasso	Nie znaleziono obiektu — spróbuj Zaznaczania obiektu lub Lassa
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta

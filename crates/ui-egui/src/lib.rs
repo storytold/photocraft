@@ -134,6 +134,7 @@ pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
 pub mod shape_dialog;
+pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
@@ -390,6 +391,7 @@ pub struct PhotocraftApp {
     pub(crate) blend_preview: Option<blend_preview::BlendPreview>,
     /// Patch Tool drag: the healed document at the pointer (`patch_preview`).
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
+    pub(crate) shape_stroke_preview: Option<shape_stroke_ui::ShapeStrokePreview>,
     /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).
     pub(crate) magnetic: magnetic_lasso_ui::Runtime,
     /// The next tool `Down` is a right-button drag that erases (see `paint_mouse`).
@@ -584,6 +586,7 @@ impl PhotocraftApp {
             move_preview: None,
             blend_preview: None,
             patch_preview: None,
+            shape_stroke_preview: None,
             magnetic: Default::default(),
             secondary_erase: false,
             defer_live_stroke: false,

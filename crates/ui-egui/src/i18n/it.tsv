@@ -2445,6 +2445,27 @@ fontWeight	Italic	Corsivo
 	XOR	XOR
 	Color Burn (Paint.NET)	Colore brucia (Paint.NET)
 	Color Dodge (Paint.NET)	Colore scherma (Paint.NET)
+	Stroke Options	Opzioni traccia
+	Solid	Continuo
+	Dashed	Tratteggiato
+	Dotted	Punteggiato
+	Alignment	Allineamento
+	Caps	Estremità
+	Butt / Flat	Piatto
+	Corners	Angoli
+	Miter	Spigolo
+	Round	Arrotondato
+	Bevel	Smusso
+	Miter limit	Limite spigolo
+	Dashed line	Linea tratteggiata
+	Dash	Tratto
+	Gap	Spazio
+	Dash / gap lengths × stroke width	Lunghezze tratto / spazio × larghezza traccia
+	Add pair	Aggiungi coppia
+	Remove pair	Rimuovi coppia
+	Dash offset	Scostamento tratteggio
+	Open paths use centered strokes	I tracciati aperti usano tracce centrate
+	Use finite lengths and a positive pattern total	Usa lunghezze finite e un totale del motivo positivo
 	No subject found — try Object Selection or the Lasso	Nessun soggetto trovato — prova Selezione oggetto o il Lazo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto

@@ -2783,6 +2783,26 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+	Stroke Options	Opsi goresan
+	Solid	Utuh
+	Dashed	Putus-putus
+	Dotted	Titik-titik
+	Caps	Ujung
+	Butt / Flat	Datar
+	Corners	Sudut
+	Miter	Tajam
+	Round	Bulat
+	Bevel	Miring
+	Miter limit	Batas sudut tajam
+	Dashed line	Garis putus-putus
+	Dash	Garis
+	Gap	Celah
+	Dash / gap lengths × stroke width	Panjang garis / celah × lebar goresan
+	Add pair	Tambah pasangan
+	Remove pair	Hapus pasangan
+	Dash offset	Offset garis
+	Open paths use centered strokes	Jalur terbuka menggunakan goresan tengah
+	Use finite lengths and a positive pattern total	Gunakan panjang terbatas dan total pola positif
 	No subject found — try Object Selection or the Lasso	Subjek tidak ditemukan — coba Seleksi Objek atau Laso
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat

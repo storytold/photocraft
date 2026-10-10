@@ -3485,6 +3485,25 @@ cameraRaw	Masking	Маскування
 	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+	Stroke Options	Параметри обведення
+	Solid	Суцільне
+	Dashed	Штрихове
+	Dotted	Пунктирне
+	Caps	Кінці
+	Butt / Flat	Пласкі
+	Miter	Гострі
+	Round	Круглі
+	Bevel	Скошені
+	Miter limit	Межа гострого кута
+	Dashed line	Штрихова лінія
+	Dash	Штрих
+	Gap	Проміжок
+	Dash / gap lengths × stroke width	Довжини штриха / проміжку × ширина обведення
+	Add pair	Додати пару
+	Remove pair	Видалити пару
+	Dash offset	Зсув штрихів
+	Open paths use centered strokes	Відкриті контури використовують обведення по центру
+	Use finite lengths and a positive pattern total	Використовуйте скінченні довжини й додатну суму візерунка
 	No subject found — try Object Selection or the Lasso	Об'єкт не знайдено — спробуйте «Виділення об'єктів» або «Ласо»
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник

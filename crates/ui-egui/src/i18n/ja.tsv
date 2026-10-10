@@ -3399,6 +3399,25 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	Stroke Options	線のオプション
+	Solid	実線
+	Dashed	破線
+	Dotted	点線
+	Caps	線端
+	Butt / Flat	平端
+	Miter	マイター
+	Round	丸型
+	Bevel	ベベル
+	Miter limit	マイター制限
+	Dashed line	破線
+	Dash	線分
+	Gap	間隔
+	Dash / gap lengths × stroke width	線分 / 間隔の長さ × 線幅
+	Add pair	組を追加
+	Remove pair	組を削除
+	Dash offset	破線のオフセット
+	Open paths use centered strokes	開いたパスの線は中央に配置されます
+	Use finite lengths and a positive pattern total	有限の長さと正のパターン合計を使用してください
 	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください

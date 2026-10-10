@@ -2414,6 +2414,27 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+	Stroke Options	Konturoptionen
+	Solid	Durchgezogen
+	Dashed	Gestrichelt
+	Dotted	Gepunktet
+	Alignment	Ausrichtung
+	Caps	Enden
+	Butt / Flat	Stumpf / Flach
+	Corners	Ecken
+	Miter	Gehrung
+	Round	Rund
+	Bevel	Abgeschrägt
+	Miter limit	Gehrungsgrenze
+	Dashed line	Gestrichelte Linie
+	Dash	Strich
+	Gap	Lücke
+	Dash / gap lengths × stroke width	Strich- / Lückenlängen × Konturbreite
+	Add pair	Paar hinzufügen
+	Remove pair	Paar entfernen
+	Dash offset	Strichversatz
+	Open paths use centered strokes	Offene Pfade verwenden zentrierte Konturen
+	Use finite lengths and a positive pattern total	Endliche Längen und eine positive Mustersumme verwenden
 	No subject found — try Object Selection or the Lasso	Kein Motiv gefunden — versuchen Sie das Objektauswahlwerkzeug oder das Lasso
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck

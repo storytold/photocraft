@@ -169,6 +169,31 @@ fn closed_rect_stroke_and_alignment() {
 }
 
 #[test]
+fn aligned_dashes_keep_width_units_and_open_paths_stay_centered() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let square = shapes::rect(10.0, 10.0, 80.0, 80.0);
+    for (align, y, other_y) in [(StrokeAlign::Inside, 11, 7), (StrokeAlign::Center, 9, 6), (StrokeAlign::Outside, 7, 11)] {
+        let sh = ShapeLayer {
+            path: square.clone(),
+            stroke: Some(ShapeStroke { width: 4.0, align, dashes: vec![2.0, 2.0], ..Default::default() }),
+            ..Default::default()
+        };
+        let rgba = CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert!(rgba[(y * 100 + 13) as usize][3] > 0.99);
+        assert!(rgba[(y * 100 + 21) as usize][3] < 0.01);
+        assert!(rgba[(other_y * 100 + 13) as usize][3] < 0.01);
+    }
+    let open = Path::new(vec![Subpath::polyline(&[(10.0, 50.0), (90.0, 50.0)])]);
+    let render = |align| {
+        let sh =
+            ShapeLayer { path: open.clone(), stroke: Some(ShapeStroke { width: 4.0, align, cap: LineCap::Round, ..Default::default() }), ..Default::default() };
+        CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip)
+    };
+    assert_eq!(render(StrokeAlign::Center), render(StrokeAlign::Inside));
+    assert_eq!(render(StrokeAlign::Center), render(StrokeAlign::Outside));
+}
+
+#[test]
 fn dashes_cover_expected_fraction() {
     let line = Path::new(vec![Subpath::polyline(&[(0.0, 50.0), (120.0, 50.0)])]);
     let st = StrokeStyle { width: 4.0, dashes: vec![8.0, 4.0], ..Default::default() };

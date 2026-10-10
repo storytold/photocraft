@@ -74,7 +74,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 29] = [
+pub const UI_SET_FIELDS: [&str; 30] = [
     "tool",
     "panels",
     "dock",
@@ -104,6 +104,7 @@ pub const UI_SET_FIELDS: [&str; 29] = [
     "cropOverlayShow",
     "cropOverlayOrientation",
     "cropShield",
+    "shapeStroke",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -308,6 +309,20 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             // rejected call applies none of its fields (#412's guarantee, down to the values
             // and nested keys).
             let applied = (|| -> std::result::Result<Value, String> {
+                let shape_stroke = match p.get("shapeStroke") {
+                    Some(v) => {
+                        if let Some(object) = v.as_object() {
+                            let keys = ["width", "opacity", "align", "cap", "join", "miterLimit", "dashes", "dashOffset"];
+                            if let Some(key) = object.keys().find(|key| !keys.contains(&key.as_str())) {
+                                return Err(format!("unknown shapeStroke field `{key}`"));
+                            }
+                        }
+                        let o = &app.ui.tool_options;
+                        let base = o.shape_stroke.stroke(o.stroke_width, photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK));
+                        Some(photocraft_engine::vector_cmds::parse_stroke(v, Some(base), photocraft_doc::Color::BLACK)?)
+                    }
+                    None => None,
+                };
                 let tool = match s("tool") {
                     Some(t) => Tool::from_name(t).map(Some).ok_or_else(|| format!("unknown tool `{t}`"))?,
                     None => None,
@@ -431,6 +446,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
 
                 // Apply (nothing below can fail).
+                if let Some(stroke) = shape_stroke {
+                    if let Some(stroke) = stroke {
+                        app.ui.tool_options.stroke_width = stroke.width;
+                        app.ui.tool_options.shape_stroke = crate::shape_stroke_ui::StrokeOptions::from(&stroke);
+                    } else {
+                        app.ui.tool_options.stroke_width = 0.0;
+                    }
+                }
                 if let Some(t) = tool {
                     app.ui.tool = t;
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
@@ -903,6 +926,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
+        "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
         "typeTransform": app.ui.type_transform,
@@ -1064,6 +1088,28 @@ mod tests {
             assert_eq!(call(&mut app, &ctx, "ui.dialog.open", params)["ok"], false);
             assert_eq!(app.ui.dialogs, before);
         }
+    }
+
+    #[test]
+    fn shape_stroke_defaults_are_drivable_and_validate_atomically() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let result = call(
+            &mut app,
+            &ctx,
+            "ui.set",
+            json!({"tool":"Triangle", "shapeStroke":{"width":5,"cap":"round","join":"bevel","dashes":[0,2,4,1],"dashOffset":-0.5}}),
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(app.ui.tool_options.stroke_width, 5.0);
+        assert_eq!(app.ui.tool_options.shape_stroke.dashes, [0.0, 2.0, 4.0, 1.0]);
+        let before = app.ui.clone();
+        let bad = call(&mut app, &ctx, "ui.set", json!({"tool":"Rectangle","shapeStroke":{"dashes":[0,0]}}));
+        assert_eq!(bad["ok"], false);
+        assert_eq!(app.ui, before);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":{"colour":"#ff0000"}}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":null}))["ok"], true);
+        assert_eq!(app.ui.tool_options.stroke_width, 0.0);
     }
 
     #[test]

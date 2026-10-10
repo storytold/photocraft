@@ -306,19 +306,34 @@ fn stroke_json(s: &ShapeStroke) -> Value {
 }
 
 /// Applies stroke keys onto `base` (`null` → no stroke).
-fn parse_stroke(v: &Value, base: Option<ShapeStroke>, fg: Color) -> std::result::Result<Option<ShapeStroke>, String> {
+pub fn parse_stroke(v: &Value, base: Option<ShapeStroke>, fg: Color) -> std::result::Result<Option<ShapeStroke>, String> {
     if v.is_null() || v.as_bool() == Some(false) {
         return Ok(None);
     }
+    if !v.is_object() {
+        return Err("stroke must be an object or null".into());
+    }
+    for (key, lo, hi) in [("width", 0.0, 1_000_000.0), ("opacity", 0.0, 100.0), ("miterLimit", 1.0, 500.0), ("dashOffset", -1_000_000.0, 1_000_000.0)] {
+        if let Some(value) = v.get(key)
+            && !value.as_f64().is_some_and(|n| n.is_finite() && (lo..=hi).contains(&n))
+        {
+            return Err(format!("`{key}` must be a finite number between {lo} and {hi}"));
+        }
+    }
+    for key in ["align", "cap", "join"] {
+        if v.get(key).is_some_and(|value| !value.is_string()) {
+            return Err(format!("`{key}` must be a string"));
+        }
+    }
     let mut s = base.unwrap_or(ShapeStroke { paint: Fill::Solid(fg), ..Default::default() });
     if let Some(w) = f64p(v, "width") {
-        s.width = w.max(0.0) as f32;
+        s.width = w as f32;
     }
     if let Some(c) = v.get("color").or_else(|| v.get("fill")) {
         s.paint = parse_fill(c)?.ok_or("stroke colour cannot be null")?;
     }
     if let Some(o) = f64p(v, "opacity") {
-        s.opacity = (o / 100.0).clamp(0.0, 1.0) as f32;
+        s.opacity = (o / 100.0) as f32;
     }
     if let Some(a) = v.get("align").and_then(Value::as_str) {
         s.align = match a {
@@ -345,18 +360,27 @@ fn parse_stroke(v: &Value, base: Option<ShapeStroke>, fg: Color) -> std::result:
         };
     }
     if let Some(m) = f64p(v, "miterLimit") {
-        s.miter_limit = m.max(1.0) as f32;
+        s.miter_limit = m as f32;
     }
     if let Some(d) = v.get("dashes") {
         s.dashes = match d {
             Value::Null => Vec::new(),
-            Value::Array(a) => a.iter().filter_map(Value::as_f64).map(|x| x.max(0.0) as f32).collect(),
+            Value::Array(a) if a.len() <= 32 => a
+                .iter()
+                .map(|x| {
+                    x.as_f64()
+                        .filter(|n| n.is_finite() && (0.0..=10000.0).contains(n))
+                        .map(|x| x as f32)
+                        .ok_or_else(|| "dash lengths must be finite numbers between 0 and 10000 widths".to_string())
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
             _ => return Err("`dashes` must be an array (multiples of the width)".into()),
         };
     }
     if let Some(o) = f64p(v, "dashOffset") {
         s.dash_offset = o as f32;
     }
+    s.validate()?;
     Ok(Some(s))
 }
 
@@ -431,6 +455,20 @@ fn live_kind(l: &LiveShape) -> &'static str {
 /// Re-renders a shape layer's cache for `doc` (canvas-clipped, document pixel format).
 pub fn refresh_shape(doc: &Document, sh: &mut ShapeLayer) {
     sh.cache = Some(vector::render_shape(sh, doc.pixel_format(), doc.bounds()));
+}
+
+/// A staged stroke edit rendered with the same validation and cache refresh as `shape.edit`.
+/// The caller owns this snapshot; the session and its history remain untouched.
+pub fn preview_shape_stroke(doc: &Document, id: LayerId, params: &Value) -> Result<Document> {
+    let mut result = doc.clone();
+    let layer = result.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Shape(shape) = &mut layer.content else {
+        return Err(EngineError::Other("preview target is not a shape layer".into()));
+    };
+    shape.stroke = parse_stroke(params, shape.stroke.clone(), Color::BLACK).map_err(|e| bad("shape.edit", e))?;
+    vector::flatten::validate_shape(&shape.path, shape.stroke.as_ref()).map_err(|e| bad("shape.edit", e))?;
+    refresh_shape(doc, shape);
+    Ok(result)
 }
 
 /// Moves a layer's vector content by `(dx, dy)`: shape paths (re-rendered) and linked vector
@@ -519,6 +557,12 @@ fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
 }
 
 pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
+    if let Some(st) = s.active() {
+        let locks = st.doc.effective_locks(id);
+        if locks.all || locks.pixels {
+            return Err(EngineError::Other("shape layer is locked".into()));
+        }
+    }
     s.edit(label, |doc, _| {
         let snapshot = doc.clone();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -529,7 +573,9 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
             return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
         };
         let r = f(&mut sh, l);
-        refresh_shape(&snapshot, &mut sh);
+        if r.is_ok() {
+            refresh_shape(&snapshot, &mut sh);
+        }
         l.content = LayerContent::Shape(sh);
         r
     })
@@ -567,6 +613,7 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(CMD, e))?,
         None => None,
     };
+    vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
@@ -578,6 +625,7 @@ fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             sh.live = None;
             sh.psd_raw = None;
+            vector::flatten::validate_shape(&sh.path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
             Ok(())
         })?;
         return shape_info(s, id);
@@ -644,6 +692,7 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(n) = name {
             layer.name = n;
         }
+        vector::flatten::validate_shape(&sh.path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
         Ok(())
     })?;
     shape_info(s, id)

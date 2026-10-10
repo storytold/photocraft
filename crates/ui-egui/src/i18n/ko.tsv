@@ -2954,6 +2954,26 @@ fontWeight	Italic	기울임
 	XOR	XOR
 	Color Burn (Paint.NET)	색상 번 (Paint.NET)
 	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+	Stroke Options	획 옵션
+	Solid	실선
+	Dashed	파선
+	Dotted	점선
+	Alignment	정렬
+	Caps	끝 모양
+	Butt / Flat	평평한 끝
+	Miter	마이터
+	Round	원형
+	Bevel	베벨
+	Miter limit	마이터 한도
+	Dashed line	파선
+	Dash	선
+	Gap	간격
+	Dash / gap lengths × stroke width	선 / 간격 길이 × 획 너비
+	Add pair	쌍 추가
+	Remove pair	쌍 제거
+	Dash offset	파선 오프셋
+	Open paths use centered strokes	열린 패스는 가운데 획을 사용합니다
+	Use finite lengths and a positive pattern total	유한한 길이와 양수 패턴 합계를 사용하세요
 	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 개체 선택 또는 올가미를 사용해 보세요
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요

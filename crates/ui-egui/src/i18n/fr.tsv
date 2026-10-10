@@ -2796,6 +2796,26 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+	Stroke Options	Options du contour
+	Solid	Continu
+	Dashed	Tirets
+	Dotted	Pointillé
+	Caps	Extrémités
+	Butt / Flat	Plat
+	Corners	Angles
+	Miter	Pointe
+	Round	Arrondi
+	Bevel	Biseau
+	Miter limit	Limite de pointe
+	Dashed line	Ligne en tirets
+	Dash	Tiret
+	Gap	Espace
+	Dash / gap lengths × stroke width	Longueurs des tirets / espaces × largeur du contour
+	Add pair	Ajouter une paire
+	Remove pair	Retirer une paire
+	Dash offset	Décalage des tirets
+	Open paths use centered strokes	Les tracés ouverts utilisent des contours centrés
+	Use finite lengths and a positive pattern total	Utiliser des longueurs finies et un total de motif positif
 	No subject found — try Object Selection or the Lasso	Aucun sujet trouvé — essayez la Sélection d'objet ou le Lasso
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré

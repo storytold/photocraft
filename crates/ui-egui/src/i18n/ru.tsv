@@ -2651,6 +2651,26 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+	Stroke Options	Параметры обводки
+	Solid	Сплошная
+	Dashed	Штриховая
+	Dotted	Пунктирная
+	Caps	Концы
+	Butt / Flat	Плоские
+	Corners	Углы
+	Miter	Острые
+	Round	Круглые
+	Bevel	Скошенные
+	Miter limit	Предел острого угла
+	Dashed line	Штриховая линия
+	Dash	Штрих
+	Gap	Пробел
+	Dash / gap lengths × stroke width	Длины штриха / пробела × ширина обводки
+	Add pair	Добавить пару
+	Remove pair	Удалить пару
+	Dash offset	Смещение штрихов
+	Open paths use centered strokes	Открытые контуры используют обводку по центру
+	Use finite lengths and a positive pattern total	Используйте конечные длины и положительную сумму шаблона
 	No subject found — try Object Selection or the Lasso	Объект не найден — попробуйте «Выделение объектов» или «Лассо»
 	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
 	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник
