@@ -612,3 +612,21 @@ fn path_stroke_rejects_oversized_brush_before_rendering() {
     let result = s.execute("path.stroke", json!({"size": 1e30}));
     assert!(result.is_err(), "path strokes share the bounded paint renderer");
 }
+
+#[test]
+fn shape_info_bounds_of_curved_shapes_are_exact() {
+    // Issue #2537: an exact 600×600 ellipse reported width 601.
+    for depth in [8, 16, 32] {
+        let mut s = session(1920, 1080, depth);
+        for (params, want) in [
+            (json!({"kind": "ellipse", "rect": [0, 0, 100, 100], "fill": "#0000ff"}), json!([0, 0, 100, 100])),
+            (json!({"kind": "ellipse", "rect": [660, 240, 600, 600], "fill": "#0000ff"}), json!([660, 240, 600, 600])),
+            (json!({"kind": "ellipse", "rect": [10.5, 10, 100, 100], "fill": "#0000ff"}), json!([10, 10, 101, 100])),
+            (json!({"kind": "rect", "rect": [0, 0, 100, 100], "fill": "#0000ff"}), json!([0, 0, 100, 100])),
+        ] {
+            let id = s.execute("shape.create", params.clone()).unwrap()["layer"].as_u64().unwrap();
+            let info = s.execute("shape.info", json!({"layer": id})).unwrap();
+            assert_eq!(info["bounds"], want, "{params} at {depth}-bit");
+        }
+    }
+}
