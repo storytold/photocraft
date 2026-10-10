@@ -3437,6 +3437,7 @@ fontWeight	Thin	Πολύ λεπτά
 	All Layers No Adjustments	Όλα τα επίπεδα χωρίς προσαρμογές
 	Current & Below No Adjustments	Τρέχον και υποκείμενα χωρίς προσαρμογές
 	Show Sampling Ring	Εμφάνιση δακτυλίου δειγματοληψίας
+	Outer ring: previous color. Inner ring: sampled color.	Εξωτερικός δακτύλιος: προηγούμενο χρώμα. Εσωτερικός δακτύλιος: χρώμα δείγματος.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Εκτός γκάμας εκτύπωσης: κάντε κλικ για το πλησιέστερο εκτυπώσιμο χρώμα

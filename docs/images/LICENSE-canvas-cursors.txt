@@ -1,0 +1,11 @@
+Canvas cursor and sampling comparison screenshots
+Copyright (c) 2026 PhotoCraft contributors
+
+Original screenshot captures and synthetic artwork are licensed under either
+the MIT License or the Apache License, Version 2.0, at your option.
+Full license texts: ../../LICENSE-MIT and ../../LICENSE-APACHE.
+
+These captures show PhotoCraft's existing UI. Existing bundled UI assets retain
+their licenses as documented in ../../ATTRIBUTION.md. The ArtCraft brand marks
+retain the terms in ../brand/LICENSE-brand.txt.
+No personal photos or proprietary editor assets are included.

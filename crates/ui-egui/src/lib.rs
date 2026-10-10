@@ -450,6 +450,8 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// Colors before a sampling gesture, kept independently of the live foreground/background.
+    pub(crate) sampling_comparison: Option<canvas::SamplingComparison>,
     /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
     /// show the precise crosshair whatever the cursor preference (#1758).
     pub caps_lock: bool,
@@ -637,6 +639,7 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            sampling_comparison: None,
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,

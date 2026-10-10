@@ -34,6 +34,17 @@ fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
     h.state().current_zoom()
 }
 
+fn assert_pipette(h: &Harness<'static, PhotocraftApp>) {
+    let output = &h.output().platform_output;
+    if cfg!(target_arch = "wasm32") {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::None, "web paints the pipette");
+        assert!(output.cursor_image.is_none());
+    } else {
+        assert_eq!(output.cursor_icon, egui::CursorIcon::Crosshair, "visible fallback underneath the native pipette");
+        assert!(output.cursor_image.is_some(), "the pipette must reach the OS");
+    }
+}
+
 fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
     crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…");
     h.run_steps(3);
@@ -223,10 +234,11 @@ fn color_picker_samples_the_image_under_its_pipette() {
 
     h.hover_at(red);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pipette replaces the pointer");
+    assert_pipette(&h);
     h.hover_at(r.center());
     h.run_steps(1);
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "over the dialog it is the normal pointer");
+    assert!(h.output().platform_output.cursor_image.is_none(), "dialog widgets must release the pipette");
 
     // A click samples; the press and release may land in one frame (`ui.click`).
     h.hover_at(red);
@@ -294,7 +306,7 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
     let left = pos2(canvas.left() + 60.0, canvas.center().y);
     h.hover_at(left);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+    assert_pipette(&h);
     press(&mut h, left, true);
     press(&mut h, left, false);
     h.run_steps(3);
@@ -545,10 +557,12 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
         h.output().platform_output.cursor_icon
     };
     h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "the pipette replaces the pointer");
+    cursor(&mut h);
+    assert_pipette(&h);
     h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "⌥ samples with a pipette");
+    cursor(&mut h);
+    assert_pipette(&h);
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
     // Every platform reports the crosshair. Windows also hands the OS a black-and-white bitmap
     // for it (`tool_cursor`, #1160), with `Crosshair` underneath as the fallback.

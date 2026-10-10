@@ -2756,6 +2756,7 @@ fontWeight	Italic	Itálico
 	All Layers No Adjustments	Todas as camadas sem ajustes
 	Current & Below No Adjustments	Atual e abaixo sem ajustes
 	Show Sampling Ring	Mostrar anel de amostragem
+	Outer ring: previous color. Inner ring: sampled color.	Anel externo: cor anterior. Anel interno: cor amostrada.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Fora da gama de impressão: clique para a cor imprimível mais próxima

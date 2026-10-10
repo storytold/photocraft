@@ -3514,6 +3514,7 @@ cameraRaw	Whites	Witten
 	Point Sample	Puntmonster
 	Sample Size:	Monstergrootte:
 	Show Sampling Ring	Monsterring tonen
+	Outer ring: previous color. Inner ring: sampled color.	Buitenste ring: vorige kleur. Binnenste ring: bemonsterde kleur.
 
 # Painting symmetry presets.
 	Dual Axis	Dubbele as

@@ -2908,6 +2908,7 @@ fontWeight	Italic	기울임
 	All Layers No Adjustments	모든 레이어(조정 제외)
 	Current & Below No Adjustments	현재 및 이하(조정 제외)
 	Show Sampling Ring	샘플링 링 표시
+	Outer ring: previous color. Inner ring: sampled color.	바깥쪽 링: 이전 색상. 안쪽 링: 샘플링한 색상.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	인쇄 색역 밖: 클릭하면 가장 가까운 인쇄 가능한 색상으로 바뀝니다

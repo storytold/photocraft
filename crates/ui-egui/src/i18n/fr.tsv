@@ -2748,6 +2748,7 @@ fontWeight	Italic	Italique
 	All Layers No Adjustments	Tous les calques sans ajustements
 	Current & Below No Adjustments	Actif et inférieurs sans ajustements
 	Show Sampling Ring	Afficher l'anneau d'échantillonnage
+	Outer ring: previous color. Inner ring: sampled color.	Anneau extérieur : couleur précédente. Anneau intérieur : couleur prélevée.
 
 # Color Picker warnings
 	Out of gamut for printing: click for the nearest printable colour	Hors de la gamme d’impression : cliquez pour la couleur imprimable la plus proche

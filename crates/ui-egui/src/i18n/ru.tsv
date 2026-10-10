@@ -2600,6 +2600,7 @@ fontWeight	Italic	Курсив
 	All Layers No Adjustments	Все слои без коррекции
 	Current & Below No Adjustments	Текущий и ниже без коррекции
 	Show Sampling Ring	Показать кольцо выборки
+	Outer ring: previous color. Inner ring: sampled color.	Внешнее кольцо: предыдущий цвет. Внутреннее кольцо: взятый цвет.
 	Click to sample the foreground colour  ·  {key}-click for background	Клик — взять основной цвет  ·  {key}-клик — фоновый цвет
 
 # Color Picker warnings

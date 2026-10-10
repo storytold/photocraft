@@ -6,6 +6,7 @@ use std::sync::Arc;
 use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, vec2};
 
 mod hand;
+mod symbols;
 
 /// winit's cursor limit. Keep allocations bounded even for hostile brush sizes or zooms.
 const MAX_SIDE: u16 = 2048;
@@ -16,6 +17,8 @@ enum Shape {
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
     Hand { closed: bool },
+    Zoom { out: bool },
+    Pipette,
 }
 
 #[derive(Clone)]
@@ -61,6 +64,24 @@ pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> C
     show(painter, at, Shape::Crosshair { length, gap })
 }
 
+/// Windows has no stock zoom cursors. Other platforms retain their native magnifiers.
+pub(crate) fn zoom(painter: &Painter, at: Pos2, out: bool) -> CursorIcon {
+    if cfg!(target_os = "windows") {
+        show(painter, at, Shape::Zoom { out })
+    } else if out {
+        CursorIcon::ZoomOut
+    } else {
+        CursorIcon::ZoomIn
+    }
+}
+
+/// The tip stays on the sampled pixel. Native root viewports upload the bitmap; web and
+/// immediate viewports draw the same geometry without an interactive overlay widget.
+pub(crate) fn pipette(ctx: &egui::Context, at: Pos2) -> CursorIcon {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pc-tool-pointer")));
+    show(&painter, at, Shape::Pipette)
+}
+
 /// The Hand tool's pointer: an open hand, a fist while it drags (`closed`). winit maps `Grab` and
 /// `Grabbing` to the four-arrow move cursor on Windows, so there it is a bitmap; macOS and the
 /// Linux themes already draw hands, and the OS moves those without waiting for a frame.
@@ -79,9 +100,12 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     // eframe's immediate viewports and web integration do not upload cursor images. Keep their
-    // existing painter path. Other native platforms retain their existing cursor behaviour.
-    if cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT {
-        let scale = ctx.pixels_per_point();
+    // existing painter path. Only the pipette also uses bitmaps on other native platforms.
+    let native = cfg!(target_os = "windows") || (!cfg!(target_arch = "wasm32") && matches!(shape, Shape::Pipette));
+    if native && ctx.viewport_id() == egui::ViewportId::ROOT {
+        // winit gives macOS NSCursor bitmap sizes and hotspots in logical points; Windows
+        // and Linux expect physical pixels. Scaling on macOS would double a Retina pipette.
+        let scale = if cfg!(target_os = "macos") { 1.0 } else { ctx.pixels_per_point() };
         if let Some(image) = cached_image(ctx, shape, scale) {
             ctx.set_cursor_image(Some(image));
             return CursorIcon::None;
@@ -128,6 +152,8 @@ fn paint(painter: &Painter, at: Pos2, shape: Shape) {
             Shape::Crosshair { length, gap } => paint_crosshair(painter, at, length, gap, stroke),
             // Only ever a bitmap: without one the OS draws its own grab cursors.
             Shape::Hand { .. } => {}
+            Shape::Zoom { out } => symbols::paint_zoom(painter, at, out, stroke),
+            Shape::Pipette => symbols::paint_pipette(painter, at, stroke),
         }
     }
 }
@@ -160,6 +186,8 @@ fn extent(shape: Shape) -> Option<f32> {
             length
         }
         Shape::Hand { .. } => hand::HALF,
+        Shape::Zoom { .. } => 14.0,
+        Shape::Pipette => 23.0,
     })
 }
 
@@ -183,6 +211,8 @@ fn coverage(shape: Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             let crease = (0.45 * scale + 0.5 - hand::crease(closed, lx, ly) * scale).clamp(0.0, 1.0);
             (inside * (1.0 - crease), outline.max(inside * crease))
         }
+        Shape::Zoom { out } => stroke_coverage(symbols::zoom_distance(dx / scale, dy / scale, out) * scale, scale),
+        Shape::Pipette => stroke_coverage(symbols::pipette_distance(dx / scale, dy / scale) * scale, scale),
     }
 }
 
