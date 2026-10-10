@@ -553,7 +553,8 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`
 /// (filters, adjustments, paint and fill commands); the shell adds its mask target to these.
 pub fn follows_target(id: &str) -> bool {
-    routed(id)
+    // Moving the selected pixels (⌘-drag, Move tool) moves the targeted mask's, not the layer's.
+    routed(id) || id == "select.float"
 }
 
 /// Commands whose target follows the Channels panel.
