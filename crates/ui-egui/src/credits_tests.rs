@@ -35,6 +35,7 @@ fn people(n: u64) -> Vec<Contributor> {
 }
 
 fn harness(list: Vec<Contributor>, table: bool) -> Harness<'static> {
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let mut h = Harness::builder().with_size(vec2(WIDTH + 20.0, 520.0)).build_ui(move |ui| {
         if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
             return;
@@ -44,7 +45,7 @@ fn harness(list: Vec<Contributor>, table: bool) -> Harness<'static> {
             ui.data_mut(|d| d.insert_temp(id, View { table, ..View::default() }));
         }
         ui.set_width(WIDTH);
-        contributors_in(ui, &list, 1);
+        contributors_in(&mut app, ui, &list, 1);
     });
     crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);

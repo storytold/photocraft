@@ -235,7 +235,7 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
 pub fn blend_from_str(s: &str) -> Option<BlendMode> {
     let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
     let want = norm(s);
-    std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
+    std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
 /// The active selection as the mask of a layer being created, or None without a selection.
