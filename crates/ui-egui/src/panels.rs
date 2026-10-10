@@ -81,7 +81,6 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
     // Two columns when the header chevron asks for them.
-    let slots: usize = sections.iter().map(Vec::len).sum();
     let double =
         app.ui.panels.toolbar_double;
     let w = if double { w1 + bx + 2.0 } else { w1 };
