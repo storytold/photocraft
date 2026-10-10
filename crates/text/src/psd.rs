@@ -740,46 +740,114 @@ pub const MAX_TEXT_INDEX: i32 = 0xFFFF;
 /// `previous` is the block this replaces (the file's own). A kept object — one whose text is
 /// unchanged — keeps everything the file held beyond the two regenerated keys (its model's text
 /// and style runs): Photoshop stores glyph pen positions under `/21 /1` there, and a save with
-/// no text edit must not drop them. A changed text invalidates those extras along with the old
-/// runs, so they are dropped rather than left stale.
+/// no text edit must not drop them. Its own style runs keep every style key too: only their
+/// auto-kern mode is set (split where a mode changes inside a run). A changed text invalidates
+/// those extras along with the old runs, so they are dropped rather than left stale. Everything
+/// else the file's block held — the other keys beside the text objects, objects no layer names —
+/// is kept, and a block whose content comes out unchanged is returned byte for byte (#2374:
+/// Photoshop refused files whose `Txt2` an unedited save had stripped).
 pub fn build_txt2(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>) -> Vec<u8> {
     let prev = previous.and_then(parse_txt2);
     let prev_objects: &[E] = prev.as_ref().and_then(|p| p.path(&["1", "1"]).and_then(E::as_array)).unwrap_or(&[]);
-    let mut slots: Vec<E> = Vec::new();
+    let mut slots: Vec<E> = prev_objects.to_vec();
     for (index, layer) in objects {
         if !(0..=MAX_TEXT_INDEX).contains(index) {
             continue;
         }
         let text = format!("{}\r", layer.text.replace('\n', "\r"));
-        let runs: Vec<E> = txt2_mode_runs(layer)
-            .into_iter()
-            .map(|(mode, len)| {
-                // `<< /0 << /0 << /0 () /6 << /0 0 /11 mode >> >> >> /1 len >>`.
-                let style = E::Dict(vec![("0".into(), E::Int(0)), ("11".into(), E::Int(mode))]);
-                let data = E::Dict(vec![("0".into(), E::String(String::new())), ("6".into(), style)]);
-                E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), data)])), ("1".into(), E::Int(len as i64))])
-            })
-            .collect();
+        let modes = txt2_mode_runs(layer);
         let at = *index as usize;
         let kept = prev_objects.get(at).filter(|o| o.get("0").and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str()));
         let mut object = kept.cloned().unwrap_or_else(E::dict);
         let mut model = object.get("0").cloned().filter(|m| matches!(m, E::Dict(_))).unwrap_or_else(E::dict);
+        let file_runs = kept.and_then(|_| model.path(&["6", "0"]).and_then(E::as_array)).and_then(|runs| with_modes(runs, &modes));
+        let runs = file_runs.unwrap_or_else(|| {
+            modes
+                .iter()
+                .map(|&(mode, len)| {
+                    // `<< /0 << /0 << /0 () /6 << /0 0 /11 mode >> >> >> /1 len >>`.
+                    let style = E::Dict(vec![("0".into(), E::Int(0)), ("11".into(), E::Int(mode))]);
+                    let data = E::Dict(vec![("0".into(), E::String(String::new())), ("6".into(), style)]);
+                    E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), data)])), ("1".into(), E::Int(len as i64))])
+                })
+                .collect()
+        });
         model.set("0", E::String(text));
-        model.set("6", E::Dict(vec![("0".into(), E::Array(runs))]));
+        match model.get_mut("6") {
+            Some(style_run @ E::Dict(_)) => style_run.set("0", E::Array(runs)),
+            _ => model.set("6", E::Dict(vec![("0".into(), E::Array(runs))])),
+        }
         object.set("0", model);
         if slots.len() <= at {
             slots.resize(at + 1, E::dict());
         }
-        slots[at] = object;
+        if let Some(slot) = slots.get_mut(at) {
+            *slot = object;
+        }
     }
-    // The outer dictionary keeps whatever the block held (`/98` version, block extras, …).
-    let mut outer = prev.unwrap_or_else(|| E::Dict(vec![("98".into(), E::Dict(vec![("0".into(), E::Int(14))])), ("0".into(), E::dict())]));
-    outer.set("1", E::Dict(vec![("1".into(), E::Array(slots))]));
+    // The outer dictionary keeps whatever the block held (`/98` version, block extras, …), and
+    // `/1` whatever it holds beside the text objects.
+    let mut outer = prev.clone().unwrap_or_else(|| E::Dict(vec![("98".into(), E::Dict(vec![("0".into(), E::Int(14))])), ("0".into(), E::dict())]));
+    match outer.get_mut("1") {
+        Some(objs @ E::Dict(_)) => objs.set("1", E::Array(slots)),
+        _ => outer.set("1", E::Dict(vec![("1".into(), E::Array(slots))])),
+    }
+    // Nothing changed: the file's own bytes (writing them back would re-encode strings and numbers).
+    if let (Some(bytes), Some(p)) = (previous, &prev)
+        && *p == outer
+    {
+        return bytes.to_vec();
+    }
     match outer {
         E::Dict(items) => ed::write_bare(&items),
         // Unreachable: `parse_txt2` and the fallback above both yield a dictionary.
         _ => ed::write_bare(&[]),
     }
+}
+
+/// The file's own `Txt2` style runs `runs` with the auto-kern modes `modes` (`(mode, UTF-16
+/// length)`, see [`txt2_mode_runs`]) set at `/0 /0 /6 /11`, keeping every other style key. A
+/// run a mode change falls inside is split there. `None` when the runs don't cover the text or
+/// lack a style dictionary: the caller writes its own runs instead.
+fn with_modes(runs: &[E], modes: &[(i64, usize)]) -> Option<Vec<E>> {
+    let lens: Vec<usize> = runs.iter().map(|r| r.get("1").and_then(E::as_i64).and_then(|l| usize::try_from(l).ok())).collect::<Option<_>>()?;
+    let total = modes.iter().try_fold(0usize, |a, m| a.checked_add(m.1))?;
+    if lens.iter().try_fold(0usize, |a, l| a.checked_add(*l))? != total {
+        return None;
+    }
+    let mut out = Vec::with_capacity(runs.len());
+    let (mut mi, mut mode_end) = (0usize, modes.first()?.1);
+    let mut at = 0usize;
+    for (run, len) in runs.iter().zip(lens) {
+        if len == 0 {
+            out.push(run.clone());
+            continue;
+        }
+        let end = at + len;
+        while at < end {
+            while at >= mode_end && mi + 1 < modes.len() {
+                mi += 1;
+                mode_end = mode_end.saturating_add(modes.get(mi)?.1);
+            }
+            let piece_end = end.min(mode_end);
+            if piece_end <= at {
+                return None;
+            }
+            let mut piece = run.clone();
+            if piece_end - at != len {
+                piece.set("1", E::Int(i64::try_from(piece_end - at).ok()?));
+            }
+            let style = piece.get_mut("0").and_then(|v| v.get_mut("0")).and_then(|v| v.get_mut("6")).filter(|v| matches!(v, E::Dict(_)))?;
+            let mode = modes.get(mi)?.0;
+            // Keep the file's value (and its number type) when the mode is the same.
+            if style.get("11").and_then(E::as_i64) != Some(mode) {
+                style.set("11", E::Int(mode));
+            }
+            out.push(piece);
+            at = piece_end;
+        }
+    }
+    Some(out)
 }
 
 /// The layer's text-object number in the document's `Txt2` block, when its `TySh` names one

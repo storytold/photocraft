@@ -45,6 +45,22 @@ fn normalized(p: &Value, colours: &[&str]) -> Map<String, Value> {
     m
 }
 
+/// Integer fields of a spec (`u32` in [`FlameSpec`], [`TreeSpec`], [`FrameSpec`]) given as JSON
+/// floats: dialogs send every number as a float (`1.0`) and agents may too, which serde refuses
+/// for a `u32` ("invalid type: floating point `1.0`, expected u32", #2501). Finite floats round to
+/// the nearest integer, like [`crate::commands::int`]; a negative or too-large result is then
+/// still refused by `spec_from`. Strings (names) and other types are left alone.
+fn whole_numbers(m: &mut Map<String, Value>, keys: &[&str]) {
+    for k in keys {
+        if let Some(Value::Number(n)) = m.get(*k)
+            && !(n.is_u64() || n.is_i64())
+            && let Some(f) = n.as_f64().filter(|f| f.is_finite())
+        {
+            m.insert((*k).to_string(), json!(f.round() as i64));
+        }
+    }
+}
+
 fn spec_from<T: serde::de::DeserializeOwned>(m: Map<String, Value>) -> Result<T> {
     serde_json::from_value(Value::Object(m)).map_err(|e| EngineError::Other(format!("invalid parameters: {e}")))
 }
@@ -137,6 +153,7 @@ fn run_flame(s: &mut Session, p: &Value) -> Result<Value> {
         let i = ["draft", "low", "medium", "high", "fine"].iter().position(|n| *n == q).unwrap_or(2);
         m.insert("quality".into(), json!(i));
     }
+    whole_numbers(&mut m, &["seed"]);
     let spec: FlameSpec = spec_from(m)?;
     let found = flame_paths(s, p);
     let used_path = found.is_some();
@@ -161,6 +178,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     if m.contains_key("branchesColor") && !m.contains_key("customBranchColor") {
         m.insert("customBranchColor".into(), json!(true));
     }
+    whole_numbers(&mut m, &["baseTreeType", "lightDirection", "seed"]);
     let spec: TreeSpec = spec_from(m)?;
     let prims = render2::tree(&spec, canvas(s)?);
     let name = render2::tree_type_names()[(spec.base_tree_type.clamp(1, 34) - 1) as usize];
@@ -170,6 +188,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_frame(s: &mut Session, p: &Value) -> Result<Value> {
     let mut m = normalized(p, &["vineColor", "flowerColor", "leafColor"]);
     index_param(&mut m, "frame", &render2::FRAME_STYLES);
+    whole_numbers(&mut m, &["frame", "lines", "seed"]);
     let spec: FrameSpec = spec_from(m)?;
     let prims = render2::picture_frame(&spec, canvas(s)?);
     let name = render2::FRAME_STYLES[(spec.frame.clamp(1, render2::FRAME_STYLES.len() as u32) - 1) as usize];
@@ -306,6 +325,51 @@ mod tests {
             s.execute("file.new", json!({"width": 96, "height": 96, "mode": mode})).unwrap();
             let r = s.execute("filter.render.pictureFrame", json!({"frame": 13, "newLayer": true})).unwrap_or_else(|e| panic!("{mode}: {e}"));
             assert!(r["bounds"].is_array(), "{mode}");
+        }
+    }
+
+    /// #2501: the Tree and Picture Frame dialogs send every number as a JSON float, and their
+    /// `u32` fields (`baseTreeType`, `lightDirection`, `frame`, `lines`, `seed`) refused `1.0`
+    /// ("invalid type: floating point `1.0`, expected u32"). Whole floats now draw exactly what
+    /// the integers draw, fractional ones (a dragged 1–5 slider) round, and hostile values fail.
+    #[test]
+    fn integer_params_accept_whole_floats_and_round_fractions() {
+        let tree = json!({"baseTreeType": 1.0, "lightDirection": 3.0, "leavesAmount": 50.0, "leavesSize": 100.0, "branchesHeight": 100.0,
+            "branchesThickness": 100.0, "defaultLeaves": true, "customBranchColor": false, "flatShading": false, "seed": 0, "x": 0.5, "y": 0.95, "size": 0.8});
+        let frame =
+            json!({"frame": "vineWithFlowers", "margin": 4.0, "size": 50.0, "arrangement": 50.0, "lines": 1.0, "thickness": 30.0, "fade": 0.0, "seed": 0});
+        for (id, floats, ints) in [
+            ("filter.render.tree", tree.clone(), json!({"baseTreeType": 1, "lightDirection": 3})),
+            (
+                "filter.render.tree",
+                json!({"baseTreeType": 7.4, "lightDirection": 2.6, "seed": 3.0}),
+                json!({"baseTreeType": 7, "lightDirection": 3, "seed": 3}),
+            ),
+            ("filter.render.pictureFrame", frame.clone(), json!({"frame": 1, "lines": 1})),
+            ("filter.render.pictureFrame", json!({"frame": 13.0, "lines": 3.0, "seed": 2.0}), json!({"frame": 13, "lines": 3, "seed": 2})),
+            ("filter.render.flame", json!({"seed": 4.0}), json!({"seed": 4})),
+        ] {
+            let mut s = session(8);
+            let a = s.execute(id, floats.clone()).unwrap_or_else(|e| panic!("{id} {floats}: {e}"));
+            let drawn = pixels(&s);
+            s.execute("edit.undo", json!({})).unwrap();
+            let b = s.execute(id, ints.clone()).unwrap();
+            assert_eq!(a, b, "{id}: {floats} reports what {ints} does");
+            assert_eq!(pixels(&s), drawn, "{id}: {floats} draws what {ints} draws");
+        }
+        // Negative, too large or non-numeric integer fields are refused, never a panic.
+        let mut s = session(8);
+        for (id, p) in [
+            ("filter.render.tree", json!({"baseTreeType": -1.0})),
+            ("filter.render.tree", json!({"lightDirection": 1e300})),
+            ("filter.render.tree", json!({"seed": -0.6})),
+            ("filter.render.pictureFrame", json!({"lines": -3.5})),
+            ("filter.render.pictureFrame", json!({"seed": 5e9})),
+            ("filter.render.pictureFrame", json!({"lines": "two"})),
+            ("filter.render.flame", json!({"seed": f64::MAX})),
+        ] {
+            let e = s.execute(id, p.clone()).expect_err(&format!("{id} {p}"));
+            assert!(e.to_string().contains("invalid parameters"), "{id} {p}: {e}");
         }
     }
 

@@ -46,8 +46,10 @@ pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
 pub mod credits;
+pub mod crop_mode;
 pub mod crop_overlay;
 pub mod crop_shield;
+pub mod crop_size;
 pub mod crop_straighten;
 pub mod crop_ui;
 pub mod delete_layer_prompt;
@@ -62,6 +64,7 @@ pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
 pub mod eyedropper_ui;
+pub mod field_tab;
 pub mod file_dialog;
 pub mod file_open;
 pub mod file_ui;
@@ -165,6 +168,7 @@ mod type_transform;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod warp_preview;
 pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
@@ -207,6 +211,29 @@ pub struct ExportSettings {
 impl Default for ExportSettings {
     fn default() -> Self {
         ExportSettings { jpeg_quality: None, webp_lossless: true, webp_quality: None, tiff_layers: true, xmp_all: true }
+    }
+}
+
+/// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
+/// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234).
+pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
+    match doc.layers.as_slice() {
+        [layer]
+            if matches!(layer.content, photocraft_doc::LayerContent::Raster(_))
+                && layer.visible
+                && layer.opacity >= 1.0
+                && layer.fill_opacity >= 1.0
+                && layer.mask.is_none()
+                && layer.vector_mask.is_none()
+                && layer.effects.items.is_empty()
+                && layer.effects.psd_raw.is_none()
+                && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
+                && photocraft_compose::channel_weights(layer, doc.mode).is_none()
+                && !photocraft_compose::blend_if_active(layer, doc.mode) =>
+        {
+            Some(layer)
+        }
+        _ => None,
     }
 }
 
@@ -274,6 +301,9 @@ pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 /// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
 /// report it (native Wayland): the cursor then follows the cursor preference (#1758).
 pub type CapsLockFn = Box<dyn FnMut() -> bool>;
+/// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
+/// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
+pub type WindowFrameFn = Box<dyn FnMut()>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -339,6 +369,10 @@ pub struct Services {
     /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
     /// the canvas can show the precise crosshair for painting tools, whatever the preference.
     pub caps_lock: Option<CapsLockFn>,
+    /// Keeps the undecorated window borderless, so the content and the pointer stay aligned
+    /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
+    /// decorated or the platform needs no fixing.
+    pub window_frame: Option<WindowFrameFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
@@ -385,6 +419,8 @@ pub struct PhotocraftApp {
     live_stroke: Option<canvas::LiveStroke>,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
     trail: Option<stroke_trail::Trail>,
+    /// The open menus' items, reused between frames (`menus::ItemCache`).
+    pub(crate) menu_cache: Option<menus::ItemCache>,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
@@ -446,9 +482,10 @@ pub struct PhotocraftApp {
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
-    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`). The
-    /// canvas maps document pixels to physical pixels, so point-space geometry divides the view
-    /// zoom by this (see [`Self::point_zoom`]).
+    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
+    /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
+    /// to physical pixels, so point-space geometry divides the view zoom by this (see
+    /// [`Self::point_zoom`]).
     pub ppp: f32,
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
@@ -554,6 +591,9 @@ pub struct PhotocraftApp {
     pub(crate) file_dialog: Option<file_dialog::Pending>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
+    /// Where each document was last saved or exported to through a dialog (#1826): its next Save
+    /// As or export dialog starts there rather than beside the document. Session-only.
+    pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
@@ -583,6 +623,7 @@ impl PhotocraftApp {
             tool_override: None,
             live_stroke: None,
             trail: None,
+            menu_cache: None,
             move_preview: None,
             blend_preview: None,
             patch_preview: None,
@@ -664,6 +705,7 @@ impl PhotocraftApp {
             discard: None,
             file_dialog: None,
             tiff_options: None,
+            save_dirs: HashMap::new(),
             allow_close: false,
             stylus: Default::default(),
             background_jobs: false,
@@ -800,7 +842,8 @@ impl PhotocraftApp {
         } else {
             jobs_ui::run(self, id, params)
         };
-        if r.is_ok() && ADDS_LAYER_MASK.contains(&id) {
+        let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
+        if r.is_ok() && (ADDS_LAYER_MASK.contains(&id) || creates_adjustment_or_fill) {
             // Adding a layer mask targets it, as in Photoshop (#2166).
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
@@ -1028,18 +1071,11 @@ impl PhotocraftApp {
         // Other files keep their format only when it can retain their layers. A plain raster
         // (including an unlocked transparent PNG) can keep its flat format; editable contents,
         // masks and layer appearance settings need a layered format even with just one layer.
-        let plain_raster = matches!(st.doc.layers.as_slice(), [layer]
-            if matches!(layer.content, photocraft_doc::LayerContent::Raster(_))
-                && layer.visible && layer.opacity >= 1.0 && layer.fill_opacity >= 1.0
-                && layer.mask.is_none() && layer.vector_mask.is_none()
-                && layer.effects.items.is_empty() && layer.effects.psd_raw.is_none()
-                && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
-                && photocraft_compose::channel_weights(layer, st.doc.mode).is_none()
-                && !photocraft_compose::blend_if_active(layer, st.doc.mode));
+        let flat = plain_raster(&st.doc).is_some();
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff" | "ora")
-                || (plain_raster && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+                || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
@@ -1061,7 +1097,14 @@ impl PhotocraftApp {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        match self.write_document(path.clone(), &ExportSettings::default(), false)? {
+        // A flat file that can't hold the document (its layers, or the layered file it lives in)
+        // is written as a copy, as in Photoshop: the document keeps its file, so Save still
+        // writes the layered original and the edits stay unsaved (#2550).
+        let st = self.session.active().ok_or("no document")?;
+        let layered =
+            |p: &str| photocraft_engine::file_cmds::saves_in_place(p) || matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
+        let copy = !layered(&path) && (plain_raster(&st.doc).is_none() || st.path.as_deref().is_some_and(layered));
+        match self.write_document(path.clone(), &ExportSettings::default(), copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
         }
@@ -1133,7 +1176,11 @@ impl PhotocraftApp {
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
-        if let Some(state) = self.session.active_mut() {
+        // Only a layered save becomes the document's file; a flat one is a copy, as in the
+        // headless server (#2579).
+        if photocraft_engine::file_cmds::extension(&target).is_some_and(|e| photocraft_engine::file_cmds::layered_extension(&e))
+            && let Some(state) = self.session.active_mut()
+        {
             state.saved_to(target.clone());
         }
         self.ui.status = format!("Saved {target}");
@@ -1291,6 +1338,11 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // An undecorated window gets its caption back when the toolkit changes its flags
+        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
+        if let Some(window_frame) = self.services.window_frame.as_mut() {
+            window_frame();
+        }
         // Native menu key equivalents become the key presses they were (see `native_menu`).
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
@@ -1454,7 +1506,7 @@ impl PhotocraftApp {
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
-    fn sync_mask_targets(&mut self) {
+    pub(crate) fn sync_mask_targets(&mut self) {
         if let Some(st) = self.session.active() {
             if photocraft_engine::mask_view_cmds::current(st).is_some() {
                 self.ui.mask_target = true;
@@ -1872,6 +1924,9 @@ impl PhotocraftApp {
 }
 
 #[cfg(test)]
+mod color_swatch_tests;
+
+#[cfg(test)]
 mod input_tests;
 
 #[cfg(test)]
@@ -1887,6 +1942,12 @@ mod save_identity_tests;
 mod move_auto_select_tests;
 
 #[cfg(test)]
+mod new_group_button_tests;
+
+#[cfg(test)]
+mod move_outline_tests;
+
+#[cfg(test)]
 mod mask_thumb_refresh_tests;
 
 #[cfg(test)]
@@ -1897,6 +1958,9 @@ mod hidden_layer_tests;
 
 #[cfg(test)]
 mod blend_dropdown_keys_tests;
+
+#[cfg(test)]
+mod warp_text_dialog_tests;
 
 #[cfg(test)]
 mod blend_dropdown_wheel_tests;
@@ -1920,6 +1984,9 @@ mod stroke_timing_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;
+
+#[cfg(test)]
+mod window_frame_tests;
 
 #[cfg(test)]
 mod clipboard_tests {

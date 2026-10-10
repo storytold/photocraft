@@ -131,6 +131,43 @@ fn statistics_makes_a_stack_mode_smart_object() {
 }
 
 #[test]
+fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
+    // Like Photoshop, Load Files into Stack › Create Smart Object (Statistics without alignment) and
+    // Statistics with alignment embed one layer per file, bottom to top, with no wrapper group.
+    let dir = tmp("stack-top");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 96, "height": 72, "background": "#606060"})).unwrap();
+    s.edit("texture", |doc, active| {
+        let surf = doc.layer_mut(active.ok_or(EngineError::NoDocument)?).and_then(Layer::surface_mut).ok_or(EngineError::NoDocument)?;
+        for k in 0..40 {
+            let (x, y, v) = ((k * 37) % 88, (k * 23) % 66, (k % 7) as f32 / 6.0);
+            surf.fill_rect(photocraft_geom::Rect::new(x, y, x + 3 + k % 5, y + 2 + k % 4), &[v, 1.0 - v, 0.5, 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    let source = photocraft_compose::flatten(&s.active().unwrap().doc);
+    let files: Vec<String> = (0..3)
+        .map(|i| {
+            let path = format!("{dir}/img{i}.png");
+            crate::file_cmds::save_doc(&s.active().unwrap().doc, &path, None).unwrap();
+            path
+        })
+        .collect();
+    for align in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.scripts.statistics", json!({"mode": "median", "input": files, "align": align})).unwrap();
+        let d = &s.active().unwrap().doc;
+        let LayerContent::Smart(so) = &d.layers[0].content else { panic!("not a smart object") };
+        let photocraft_doc::SmartSource::Embedded { file_name, bytes } = &so.source else { panic!("not embedded") };
+        let inner = crate::smart_cmds::decode_source(file_name, bytes).unwrap();
+        let names: Vec<&str> = inner.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["img0.png", "img1.png", "img2.png"], "align {align}");
+        assert_eq!(photocraft_compose::flatten(d).px, source.px, "align {align}");
+    }
+}
+
+#[test]
 fn contact_sheet_places_thumbnails_with_captions() {
     let dir = tmp("contact");
     images(&dir, 5, 60, 30);

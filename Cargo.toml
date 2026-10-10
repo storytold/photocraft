@@ -45,6 +45,9 @@ arc-swap = "1"
 bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25", default-features = false }
+# Baseline-JPEG decode of lossy DNG tiles (compression 34892), shared with zune-jpeg.
+zune-core = "0.5"
+zune-jpeg = "0.5"
 proptest = "1"
 eframe = { version = "0.36", default-features = false }
 egui = "0.36"
@@ -67,6 +70,10 @@ opt-level = 2
 
 [profile.dev]
 opt-level = 1
+# Line tables keep file:line in panic backtraces but drop variable info, which roughly halves link
+# time and PDB size for the ~260 test binaries (#2204). CI sets the same through
+# CARGO_PROFILE_DEV_DEBUG. To inspect locals in a debugger, build with CARGO_PROFILE_DEV_DEBUG=true.
+debug = "line-tables-only"
 
 [profile.release]
 lto = "thin"
