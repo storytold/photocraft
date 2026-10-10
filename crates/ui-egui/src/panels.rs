@@ -3143,7 +3143,10 @@ fn layer_drag_and_drop(
         // layers, not onto one of them.
         let selected = app.session.active().map(|st| st.selected_layers()).unwrap_or_default();
         let in_multi = selected.len() > 1 && selected.contains(&l.id);
-        if copy && !in_multi && let Some(p) = pointer.filter(|p| rect.contains(*p)) {
+        if copy
+            && !in_multi
+            && let Some(p) = pointer.filter(|p| rect.contains(*p))
+        {
             let position = if (p.y - rect.top()) / rect.height() < 0.5 { "above" } else { "below" };
             let painter = ui.painter();
             if position == "above" {
@@ -3218,11 +3221,7 @@ fn layer_drop_zone(
         return;
     }
     let t = Tokens::get(ctx);
-    let line = if position == "above" {
-        [target.1.left_top(), target.1.right_top()]
-    } else {
-        [target.1.left_bottom(), target.1.right_bottom()]
-    };
+    let line = if position == "above" { [target.1.left_top(), target.1.right_top()] } else { [target.1.left_bottom(), target.1.right_bottom()] };
     ui.painter().line_segment(line, Stroke::new(2.0, t.accent));
     if ctx.input(|i| i.pointer.any_released()) {
         let mut payload = layer_drop_payload(dragged, target.0, position, &selected);
