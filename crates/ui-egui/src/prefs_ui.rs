@@ -793,9 +793,9 @@ pub fn apply(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 }
 
 /// Max dialog width for our dialogs.
-pub fn width(fields: &Map<String, Value>) -> Option<f32> {
+pub fn width(fields: &Map<String, Value>, available: f32) -> Option<f32> {
     match fields.get("__prefsui").and_then(Value::as_str)? {
-        "prefs" => Some(780.0),
+        "prefs" => Some(available.clamp(380.0, 1040.0)),
         "shortcuts" => Some(720.0),
         _ => Some(460.0),
     }
@@ -1002,13 +1002,14 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                 }
             }
         });
-        crate::widgets::vline(ui, 420.0);
+        let content_height = (ui.ctx().content_rect().height() - 240.0).clamp(240.0, 680.0);
+        crate::widgets::vline(ui, content_height);
         ui.vertical(|ui| {
-            ui.set_width(540.0);
+            ui.set_width((ui.available_width() - 12.0).max(340.0));
             let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
             ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
             ui.add_space(6.0);
-            egui::ScrollArea::vertical().max_height(390.0).id_salt("prefs-scroll").show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(content_height - 30.0).id_salt("prefs-scroll").show(ui, |ui| {
                 let order: Vec<String> =
                     f.get("__order").and_then(|o| o.get(&section)).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
                 if !has_visible_fields(&values, &section) {
@@ -1788,6 +1789,17 @@ mod tests {
         assert_eq!(super::rendering_mode_value(explicit.as_object().unwrap()), "gpu");
         let automatic = serde_json::json!({"renderingMode": null, "useGpu": true, "gpuBackend": "auto"});
         assert_eq!(super::rendering_mode_value(automatic.as_object().unwrap()), "auto");
+    }
+
+    #[test]
+    fn preferences_dialog_width_follows_the_window() {
+        let prefs = serde_json::json!({"__prefsui": "prefs"});
+        let prefs = prefs.as_object().unwrap();
+        assert_eq!(super::width(prefs, 200.0), Some(380.0));
+        assert_eq!(super::width(prefs, 800.0), Some(800.0));
+        assert_eq!(super::width(prefs, 3000.0), Some(1040.0));
+        let shortcuts = serde_json::json!({"__prefsui": "shortcuts"});
+        assert_eq!(super::width(shortcuts.as_object().unwrap(), 3000.0), Some(720.0));
     }
     use super::*;
     use std::sync::{Arc, Mutex};
