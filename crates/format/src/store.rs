@@ -580,9 +580,13 @@ impl PcraftWriter {
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
         let p = self.prepare(doc, opts)?;
         let mut stats = p.stats;
+        // A directory bundle owns only paths beneath its root. Reject symlinked
+        // subdirectories and object/output files before writing or cleaning up.
+        check_bundle_symlinks(dir)?;
         for sub in ["tiles", "blobs", "composite"] {
             std::fs::create_dir_all(dir.join(sub))?;
         }
+        check_bundle_symlinks(dir)?;
         let canonical_dir = std::fs::canonicalize(dir)?;
         if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
             self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir, ..Default::default() });
@@ -627,7 +631,7 @@ impl PcraftWriter {
                 Object::Tile(..) => stats.tiles_written += 1,
                 Object::Blob(_) => stats.blobs_written += 1,
             }
-            write_atomic(&object_path, &obj.compressed())?;
+            write_bundle_file(&object_path, &obj.compressed())?;
             let written = path_signature(&object_path)?;
             if let Some(cache) = &mut self.verified_directory {
                 match written {
@@ -641,14 +645,14 @@ impl PcraftWriter {
             }
         }
         for (name, data) in &p.previews {
-            write_atomic(&dir.join(name), data)?;
+            write_bundle_file(&dir.join(name), data)?;
         }
         for stale in [THUMB, COMPOSITE] {
             if !p.previews.iter().any(|(n, _)| *n == stale) {
                 let _ = std::fs::remove_file(dir.join(stale));
             }
         }
-        write_atomic(&dir.join(MANIFEST), &p.manifest)?;
+        write_bundle_file(&dir.join(MANIFEST), &p.manifest)?;
         for path in existing {
             if !p.objects.contains_key(&path) {
                 std::fs::remove_file(dir.join(&path))?;
@@ -698,6 +702,48 @@ impl PcraftWriter {
     }
 }
 
+/// Refuse links at any bundle-managed destination. Symlinks must never let a
+/// save inspect or replace files outside the chosen directory bundle.
+fn reject_bundle_symlink(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => Err(FormatError::Unsupported(format!("directory bundle contains a symbolic link at {}", path.display()))),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Check every directory and file that a bundle save may write or remove.
+/// In particular, tiles/ and blobs/ must be actual directories, not links.
+fn check_bundle_symlinks(dir: &Path) -> Result<()> {
+    reject_bundle_symlink(dir)?;
+    for sub in ["tiles", "blobs", "composite"] {
+        let subdir = dir.join(sub);
+        reject_bundle_symlink(&subdir)?;
+        if sub != "composite" && subdir.is_dir() {
+            for entry in std::fs::read_dir(&subdir)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.strip_suffix(".zst").is_some_and(is_valid_hash) {
+                    reject_bundle_symlink(&entry.path())?;
+                }
+            }
+        }
+    }
+    for name in [MANIFEST, THUMB, COMPOSITE] {
+        reject_bundle_symlink(&dir.join(name))?;
+    }
+    Ok(())
+}
+
+/// Directory bundles never follow the final path's symlink when replacing files,
+/// even if one appears after the initial path checks.
+fn write_bundle_file(path: &Path, data: &[u8]) -> Result<()> {
+    crate::atomic::atomic_write_no_follow(path, data)?;
+    Ok(())
+}
+
 fn list_objects(dir: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for sub in ["tiles", "blobs"] {
@@ -705,7 +751,7 @@ fn list_objects(dir: &Path) -> Result<HashSet<String>> {
         for e in rd {
             let e = e?;
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".zst") {
+            if name.strip_suffix(".zst").is_some_and(is_valid_hash) {
                 out.insert(format!("{sub}/{name}"));
             }
         }

@@ -134,7 +134,16 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// [`atomic_write`] through an explicit file system and retry policy (the failure-injection seam).
 pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let target = resolve_symlink(path);
+    atomic_write_at_path(fs, retry, path, resolve_symlink(path), bytes)
+}
+
+/// Write a bundle-owned file without following its final symlink. The atomic
+/// replacement replaces the link itself, never the file it points to.
+pub(crate) fn atomic_write_no_follow(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_at_path(&RealFs, RenameRetry::platform(), path, path.to_path_buf(), bytes)
+}
+
+fn atomic_write_at_path(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, target: PathBuf, bytes: &[u8]) -> io::Result<()> {
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
     let dir = match target.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
