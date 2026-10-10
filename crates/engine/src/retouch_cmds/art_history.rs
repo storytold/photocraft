@@ -94,7 +94,7 @@ fn history_source(s: &Session, p: &Value) -> Result<(photocraft_doc::Document, u
             let Some(i) = v.as_u64() else {
                 return Err(err("invalid number"));
             };
-            i as usize
+            usize::try_from(i).map_err(|_| err(format!("no history state {i} (0..={past})")))?
         }
     };
     let doc = match idx {
@@ -434,6 +434,7 @@ mod tests {
             s.execute("paint.artHistoryBrush", json!({"points": [[0, 0]], "style": "nope"})).unwrap_err().to_string().contains("unknown Art History style")
         );
         assert!(s.execute("paint.artHistoryBrush", json!({"points": [[0, 0]], "state": 99})).is_err());
+        assert!(s.execute("paint.artHistoryBrush", json!({"points": [[0, 0]], "state": u64::MAX})).is_err());
         assert!(s.execute("paint.artHistoryBrush", json!({"points": [[0, 0]], "area": -1})).is_err());
         assert!(s.execute("paint.artHistoryBrush", json!({"points": [[0, 0]], "size": "nan"})).is_err());
         let many: Vec<[f32; 2]> = (0..10_000).map(|i| [i as f32, 0.0]).collect();
