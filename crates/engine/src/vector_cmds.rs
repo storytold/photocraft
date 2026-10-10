@@ -1026,8 +1026,13 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let bg = s.tools.background;
     let dmg = s.edit("Stroke Path", |doc, _| {
         let sel = doc.selection.clone();
-        let lock = doc.effective_locks(id).transparency;
+        let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        // Pixel and full locks (the layer's own or a parent group's) refuse the stroke, as Fill Path does (#2388).
+        if locks.pixels || locks.all {
+            return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+        }
+        let lock = locks.transparency;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Stroke Path needs a pixel layer".into()))?;
         let mut brush = brush.clone();
         if brush.erase && lock {
