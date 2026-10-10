@@ -284,7 +284,9 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;
     let steps_v = p.get("steps").or_else(|| p.get("action")).ok_or_else(|| bad(cmd, "missing \"steps\" (the action to run)"))?;
-    let steps = parse_steps(steps_v, cmd)?;
+    let mut steps = parse_steps(steps_v, cmd)?;
+    // The droplet's output folder replaces recorded saves, as in batch.
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id));
     check_known(&steps, cmd)?;
     let path = if path.ends_with(".pcdroplet") || path.ends_with(".json") { path.to_string() } else { format!("{path}.pcdroplet") };
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));

@@ -772,8 +772,11 @@ impl OutputClaims {
 
 fn batch(_s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let steps =
+    let mut steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    // Each result goes to the destination folder, which overrides the action's recorded Save /
+    // Save As steps (Photoshop's "Override Action 'Save As' Commands").
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id));
     if let Some((id, _)) = steps.iter().find(|(id, _)| crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
