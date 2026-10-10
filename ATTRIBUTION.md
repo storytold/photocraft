@@ -77,9 +77,15 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
+## Committed test fixtures (not shipped)
+
+| Path | What | Author | Source | License |
+|---|---|---|---|---|
+| `crates/codecs/tests/fixtures/jxl/` (13 files, 7 KB) | JPEG XL decoder fixtures: 12×9 procedural images (gradients and counting patterns) encoded with libjxl's `cjxl` 0.7 by `scripts/jxl_fixtures.py`, plus the source JPEG of two of them | PhotoCraft contributors | this repository | MIT OR Apache-2.0 |
+
 ## Test data (not committed, not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+`corpus/` is gitignored and no other test fixtures are committed to the repository.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:

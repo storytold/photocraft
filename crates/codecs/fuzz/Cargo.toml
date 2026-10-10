@@ -14,9 +14,10 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-photocraft-codecs = { path = "..", features = ["heif"] }
-# Called directly too: the codec turns its panics into errors (see decode_heif.rs).
+photocraft-codecs = { path = "..", features = ["heif", "jxl"] }
+# Called directly too: the codecs turn their panics into errors (see decode_heif.rs, decode_jxl.rs).
 heic-rs = "=0.1.1"
+photocraft-jxl = { path = "../../jxl" }
 
 [profile.release]
 debug = 1
@@ -59,6 +60,13 @@ bench = false
 [[bin]]
 name = "decode_heif"
 path = "fuzz_targets/decode_heif.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_jxl"
+path = "fuzz_targets/decode_jxl.rs"
 test = false
 doc = false
 bench = false

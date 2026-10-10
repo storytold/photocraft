@@ -66,7 +66,7 @@ jobs:
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|jxl)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
             echo "os=$all" >> "$GITHUB_OUTPUT"
           else
             echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
@@ -111,19 +111,20 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
-      # `--features heif`: official builds open HEIC photos via the optional photocraft-heif crate.
+      # `--features heif,jxl`: official builds open HEIC photos and JPEG XL images via the optional
+      # photocraft-heif and photocraft-jxl crates.
       - name: Test
-        run: cargo test --workspace --locked --features heif
+        run: cargo test --workspace --locked --features heif,jxl
 
-      # The same codecs without the optional decoder: HEIC must stay a clear "not in this build"
-      # error for distributors who leave it out.
-      - name: Test without heif
+      # The same codecs without the optional decoders: HEIC and JPEG XL must stay a clear "not in
+      # this build" error for distributors who leave them out.
+      - name: Test without heif and jxl
         if: runner.os == 'Linux'
-        run: cargo test -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked
+        run: cargo test -p photocraft-heif -p photocraft-jxl -p photocraft-codecs -p photocraft-io --locked
 
       # The same tests built with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run here. Linux only. Keep the exact `--workspace
-      # --features heif` of the Test step: any other package or feature selection resolves a
+      # --features heif,jxl` of the Test step: any other package or feature selection resolves a
       # different feature set, recompiles the whole dependency graph into the same target dir and
       # runs the runner out of disk (as `-p photocraft-text -p photocraft-ui-egui` did after #800).
       - name: Check out craft-fonts
@@ -139,10 +140,10 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: cargo test --workspace --locked --features heif
+        run: cargo test --workspace --locked --features heif,jxl
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --features heif,jxl -- -D warnings
 
       - name: Dependency layering
         run: cargo xtask layers

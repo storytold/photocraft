@@ -42,7 +42,7 @@ BASENAME="photocraft-$VERSION-linux-$ARCH"
 echo "==> PhotoCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif)
+  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif,jxl)
 fi
 BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"

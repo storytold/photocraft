@@ -13,7 +13,8 @@ pub const CORPUS_CRATES: &[&str] = &["photocraft-psd", "photocraft-codecs", "pho
 /// Opt-in corpus crates: fetched and tested only with `test-corpus --pixls`.
 pub const PIXLS_CRATES: &[&str] = &["photocraft-raw"];
 
-/// Corpus crates with a `heif` feature: test-corpus enables it so the HEIF corpus tests run.
+/// Corpus crates with `heif` and `jxl` features: test-corpus enables both so the HEIF corpus tests
+/// and the JPEG XL fixture tests run.
 const HEIF_CRATES: &[&str] = &["photocraft-codecs", "photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates).
@@ -22,6 +23,7 @@ const CRITICAL: &[&str] = &[
     "crates/io/",
     "crates/codecs/",
     "crates/heif/",
+    "crates/jxl/",
     "crates/compose/",
     "crates/gpu/",
     "crates/text/",
@@ -250,12 +252,12 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
         c.args(["-p", k]);
     }
     let mut features: Vec<String> = crates.iter().map(|k| format!("{k}/corpus")).collect();
-    features.extend(crates.iter().filter(|k| HEIF_CRATES.contains(&k.as_str())).map(|k| format!("{k}/heif")));
+    features.extend(crates.iter().filter(|k| HEIF_CRATES.contains(&k.as_str())).flat_map(|k| [format!("{k}/heif"), format!("{k}/jxl")]));
     c.args(["--features", &features.join(",")]);
     if !passthrough.is_empty() {
         c.arg("--").args(passthrough);
     }
-    run(c, &format!("cargo test --release --features corpus,heif ({})", crates.join(", ")))
+    run(c, &format!("cargo test --release --features corpus,heif,jxl ({})", crates.join(", ")))
 }
 
 #[cfg(test)]

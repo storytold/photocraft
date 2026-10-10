@@ -28,6 +28,16 @@ fn samples() -> Vec<(Format, Vec<u8>)> {
         let bytes = std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}: run `cargo xtask corpus --all`", p.display()));
         v.push((Format::Heif, bytes));
     }
+    // Read-only JPEG XL (feature `jxl`): a bare Modular codestream, a VarDCT one and a container
+    // with EXIF and XMP boxes, encoded by libjxl's cjxl (`scripts/jxl_fixtures.py`).
+    #[cfg(feature = "jxl")]
+    for bytes in [
+        &include_bytes!("fixtures/jxl/rgb8-lossless.jxl")[..],
+        include_bytes!("fixtures/jxl/rgb8-lossy.jxl"),
+        include_bytes!("fixtures/jxl/exif-xmp-orient6.jxl"),
+    ] {
+        v.push((Format::Jxl, bytes.to_vec()));
+    }
     // Extra variants: interlaced PNG, ASCII PNM, CMYK JPEG.
     let img = synth(19, 13, ChannelLayout::Rgb, SampleType::U8, 1, 0.3);
     v.push((Format::Png, encode(&img, Format::Png, &EncodeOptions { png_interlaced: true, ..Default::default() }).unwrap()));

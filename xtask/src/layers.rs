@@ -41,6 +41,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("codecs", Class::Standalone),
     // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.
     ("heif", Class::Standalone),
+    // Optional JPEG XL decoder (jxl-oxide), used only by `codecs` behind its `jxl` feature.
+    ("jxl", Class::Standalone),
     ("raw", Class::Standalone),
     ("affinity", Class::Standalone),
     ("adobe-assets", Class::Standalone),
@@ -87,9 +89,10 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 }
 
 /// The only workspace dependencies a standalone crate may have: (from, to), both standalone and
-/// both publishable. `codecs` uses the optional `heif` decoder crate behind its `heif` feature, so
-/// distributors can leave HEVC decoding out of a build; `heif` itself depends on no workspace crate.
-pub const STANDALONE_EXCEPTIONS: &[(&str, &str)] = &[("codecs", "heif")];
+/// both publishable. `codecs` uses the optional `heif` and `jxl` decoder crates behind its `heif`
+/// and `jxl` features, so distributors can leave HEVC or JPEG XL decoding out of a build; neither
+/// decoder crate depends on a workspace crate.
+pub const STANDALONE_EXCEPTIONS: &[(&str, &str)] = &[("codecs", "heif"), ("codecs", "jxl")];
 
 fn standalone_exception(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
@@ -323,11 +326,20 @@ mod tests {
     }
 
     #[test]
-    fn standalone_exception_is_exactly_codecs_to_heif() {
-        assert!(check(&[c("photocraft-codecs", &[("photocraft-heif", Normal, true)])]).is_empty());
-        assert!(check(&[c("photocraft-codecs", &[("photocraft-heif", Dev, true)])]).is_empty());
-        // Not the other way round, not for other standalone crates, and heif stays dependency-free.
-        for (from, to) in [("photocraft-heif", "photocraft-codecs"), ("photocraft-psd", "photocraft-heif"), ("photocraft-heif", "photocraft-geom")] {
+    fn standalone_exceptions_are_exactly_codecs_to_its_decoder_crates() {
+        for dec in ["photocraft-heif", "photocraft-jxl"] {
+            assert!(check(&[c("photocraft-codecs", &[(dec, Normal, true)])]).is_empty());
+            assert!(check(&[c("photocraft-codecs", &[(dec, Dev, true)])]).is_empty());
+        }
+        // Not the other way round, not for other standalone crates, and the decoders stay dependency-free.
+        for (from, to) in [
+            ("photocraft-heif", "photocraft-codecs"),
+            ("photocraft-jxl", "photocraft-codecs"),
+            ("photocraft-psd", "photocraft-heif"),
+            ("photocraft-heif", "photocraft-geom"),
+            ("photocraft-jxl", "photocraft-heif"),
+            ("photocraft-jxl", "photocraft-geom"),
+        ] {
             let v = check(&[c(from, &[(to, Normal, true)])]);
             assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{from} -> {to}");
         }
