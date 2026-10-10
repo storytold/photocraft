@@ -3688,14 +3688,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::magnetic_lasso_ui::pointer(app, ev, mods) {
         return;
     }
-    // ⌘ held is the Move tool (`hold_keys::cmd_moves`). The canvas resolves the held key before
-    // the event (`tool_override`); automation and tests send the modifier with the event.
-    let tool = match app.active_tool() {
-        t if app.tool_override.is_none() && mods.command && crate::hold_keys::cmd_moves(t) && app.ui.transform.is_none() && app.ui.text_edit.is_none() => {
-            Tool::Move
-        }
-        t => t,
-    };
+    let tool = event_tool(app, mods);
     if tool == Tool::Eyedropper {
         match ev {
             ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => {
@@ -3988,6 +3981,18 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
         return Some(true);
     }
     (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
+}
+
+/// The tool a pointer event with `mods` goes to: ⌘ held is the Move tool (`hold_keys::cmd_moves`).
+/// The canvas resolves the held key before the event (`tool_override`); automation and tests send
+/// the modifier with the event.
+pub(crate) fn event_tool(app: &PhotocraftApp, mods: egui::Modifiers) -> Tool {
+    match app.active_tool() {
+        t if app.tool_override.is_none() && mods.command && crate::hold_keys::cmd_moves(t) && app.ui.transform.is_none() && app.ui.text_edit.is_none() => {
+            Tool::Move
+        }
+        t => t,
+    }
 }
 
 /// Does a ⌘ (⌘⌥) press with selection tool `tool` at `p` move the whole layer (a duplicate with

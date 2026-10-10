@@ -140,14 +140,17 @@ fn override_held(mods: egui::Modifiers) -> bool {
     mods.ctrl && !mods.mac_cmd
 }
 
-/// Start snapping for a drag beginning at `p` (called on pointer down).
-fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
+/// Start snapping for a drag beginning at `p` with `mods` held (called on pointer down).
+fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
     if app.session.active().is_none() {
         return;
     }
-    let tool = app.ui.tool;
+    // The tool the press acts as: ⌘ makes a painting tool the Move tool, and a selection tool
+    // outside the selection moves the layer as the Move tool does (#2681).
+    let tool = crate::canvas::event_tool(app, mods);
+    let moves_layer = crate::canvas::command_moves_layer(app, tool, p, mods);
     let tol = tolerance(app);
     let gesture = if let Some(t) = &app.ui.transform {
         if t.mode == crate::state::TransformMode::Distort {
@@ -163,7 +166,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
         }
     } else if tool == Tool::Move && crate::rulers::guide_at(app, p[0], p[1]).is_some() {
         Some((Gesture::Guide, Vec::new()))
-    } else if tool == Tool::Move {
+    } else if tool == Tool::Move || moves_layer {
         let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
         moving_rect(app).map(|rect| (Gesture::Move { rect }, exclude))
     } else if tool == Tool::Crop
@@ -231,7 +234,7 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
     match ev {
         ToolEvent::Down { x, y, pressure } => {
-            begin(app, [x, y]);
+            begin(app, [x, y], mods);
             // Moves snap their delta, which is zero at the start: keep the press point.
             let p = match app.prefs_rt.snap.as_ref().map(|s| &s.gesture) {
                 Some(Gesture::Point) => {
@@ -362,6 +365,22 @@ mod tests {
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
         assert_eq!(mover_bounds(&app).x0, 300);
         assert!(app.prefs_rt.snap.is_none());
+    }
+
+    /// ⌘ turns a painting tool, or a marquee outside the selection, into the Move tool for the
+    /// drag: it gets the Move tool's box and smart-guide snapping, not the selected tool's.
+    #[test]
+    fn command_drag_temporary_move_snaps_like_the_move_tool() {
+        for tool in [Tool::Brush, Tool::RectMarquee] {
+            let mut app = app_with_box();
+            app.ui.tool = tool;
+            let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, cmd);
+            let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
+            assert_eq!(gesture, Some(Gesture::Move { rect: [40.0, 40.0, 90.0, 80.0] }), "{tool:?}: the mover's box");
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, cmd);
+            assert_eq!(mover_bounds(&app).x0, 300, "{tool:?}: snapped to the target's edge");
+        }
     }
 
     #[test]
