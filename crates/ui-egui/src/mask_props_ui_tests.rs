@@ -116,3 +116,36 @@ fn uncommitted_mask_number_stays_with_its_layer() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_ne!(doc.layer(first).unwrap().mask.as_ref().unwrap().density, 0.5, "uncommitted expression is not applied on selection change");
 }
+
+/// A targeted vector mask shows its own Density/Feather section and edits go through
+/// `layer.vectorMask.edit` (the compositor already renders both).
+#[test]
+fn vector_mask_properties_edit_density_and_feather() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let id = session.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    session.execute("layer.vectorMask.revealAll", json!({})).unwrap();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    app.ui.vector_mask_target = true;
+    app.ui.panels.properties = true;
+    app.last_canvas_rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+    let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                if Tokens::get(ui.ctx()).pro {
+                    properties_body(app, ui);
+                } else {
+                    properties_window(app, ui.ctx());
+                }
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Density").next().is_some(), "the vector mask section is shown");
+    assert!(h.query_all_by_label("Feather").next().is_some());
+    drag(&mut h, 0, &[1.0, 0.8, 0.5]);
+    let vm = h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().vector_mask.clone().unwrap();
+    assert!((vm.density - 0.5).abs() < 0.02, "density edited through the vector mask command: {}", vm.density);
+}
