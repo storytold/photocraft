@@ -185,6 +185,30 @@ fn pencil_dabs_sit_on_the_pixel_grid() {
     assert_eq!(s.rgba(9, 5)[3], 1.0);
 }
 
+#[test]
+fn pencil_1px_line_is_a_clean_8_connected_staircase() {
+    // #2139: a 1 px Pencil line is one pixel per column (or row, when steep) on the ideal line
+    // between the end pixels: no doubled pixels at the steps.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let cases = [((2.5, 2.5), (22.5, 9.5)), ((3.5, 30.5), (10.5, 5.5)), ((1.2, 1.7), (25.8, 4.1)), ((5.5, 5.5), (17.5, 17.5)), ((20.3, 3.6), (4.9, 12.2))];
+    for ((ax, ay), (bx, by)) in cases {
+        let s = paint(&b, &[StrokePoint::new(ax, ay, 1.0), StrokePoint::new(bx, by, 1.0)], 40, 40);
+        let painted: Vec<(i32, i32)> = (0..40).flat_map(|y| (0..40).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect();
+        let (a, e) = ((ax.floor(), ay.floor()), (bx.floor(), by.floor()));
+        let steep = (e.1 - a.1).abs() > (e.0 - a.0).abs();
+        let major = |p: (f64, f64)| if steep { (p.1, p.0) } else { (p.0, p.1) };
+        let ((m0, n0), (m1, n1)) = (major(a), major(e));
+        assert_eq!(painted.len() as f64, (m1 - m0).abs() + 1.0, "{a:?}->{e:?}: one pixel per step, got {painted:?}");
+        for &(x, y) in &painted {
+            let (m, n) = major((f64::from(x), f64::from(y)));
+            let ideal = n0 + (n1 - n0) * (m - m0) / (m1 - m0);
+            assert!((n - ideal).abs() <= 0.5 + 1e-9, "{a:?}->{e:?}: ({x},{y}) is off the line");
+        }
+        let columns: std::collections::BTreeSet<i64> = painted.iter().map(|&(x, y)| major((f64::from(x), f64::from(y))).0 as i64).collect();
+        assert_eq!(columns.len(), painted.len(), "{a:?}->{e:?}: a column holds two pixels");
+    }
+}
+
 // ---------- spacing ----------
 
 #[test]
