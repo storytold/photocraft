@@ -870,11 +870,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     None => Err("automation read authority is not configured".into()),
                 };
                 wrap(opened.and_then(|(name, bytes)| {
+                    let identity = match &app.services.automation_path {
+                        Some(resolve) => resolve(crate::AutomationPathKind::Read, path)?,
+                        None => path.to_string(),
+                    };
                     let name = app.open_name(&name);
                     let warnings = app.open_automation_bytes(&name, &bytes)?;
                     // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
                     if !crate::preset_files_ui::is_preset_file(&name) {
-                        app.opened_from(path);
+                        app.opened_from(&identity);
                     }
                     Ok(json!({"path": path, "name": name, "warnings": warnings}))
                 }))
@@ -1680,6 +1684,36 @@ mod tests {
         assert_eq!(app.session.active().unwrap().path, None);
         let r = call(&mut app, &ctx, "app.save", json!({}));
         assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
+    }
+
+    #[test]
+    fn automation_open_retains_the_desktop_path_for_save_and_recent_files() {
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                import: Some(Box::new(|name, _, _max_svg_group_depth| {
+                    Ok((
+                        photocraft_doc::Document::new(
+                            name,
+                            photocraft_geom::Size::new(4, 4),
+                            photocraft_color::ColorMode::Rgb,
+                            photocraft_color::SampleType::U8,
+                        ),
+                        vec![],
+                    ))
+                })),
+                automation_read: Some(Box::new(|_| Ok(("poster.pcraft".into(), vec![])))),
+                automation_path: Some(Box::new(|kind, path| {
+                    assert!(matches!(kind, crate::AutomationPathKind::Read));
+                    Ok(format!("/workspace/{path}"))
+                })),
+                ..Default::default()
+            },
+        );
+        let reply = call(&mut app, &egui::Context::default(), "app.open", json!({"path": "posters/poster.pcraft"}));
+        assert_eq!(reply["result"]["path"], "posters/poster.pcraft");
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/workspace/posters/poster.pcraft"));
+        assert_eq!(app.ui.recent_files, ["/workspace/posters/poster.pcraft"]);
     }
 
     fn deny_ambient_file(id: &str, _: &serde_json::Value) -> photocraft_engine::Result<()> {

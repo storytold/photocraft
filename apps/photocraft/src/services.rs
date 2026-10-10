@@ -309,6 +309,17 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let automation_path = automation.clone().map(|workspace| {
+        Box::new(move |kind, path: &str| {
+            use photocraft_ui_egui::AutomationPathKind;
+            match kind {
+                AutomationPathKind::Read => workspace.read_document_path(path),
+                AutomationPathKind::Write => workspace.write_document_path(path),
+                AutomationPathKind::WriteBack => workspace.document_write_request(path),
+            }
+            .map_err(|error| error.to_string())
+        }) as photocraft_ui_egui::AutomationPathFn
+    });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
     let automation_command = automation.map(|_| {
@@ -331,6 +342,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
         automation_write,
+        automation_path,
         automation_command,
         automation_authorize,
         encode_png: Some(Box::new(|w, h, rgba| {

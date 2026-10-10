@@ -293,10 +293,32 @@ pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Surface {
 
 // ---------- close / revert / save a copy / open as ----------
 
-fn close_all(s: &mut Session) -> Result<Value> {
+/// Confirmations use document identities and revisions, so a parked close cannot discard newer
+/// edits or a different tab. No session state changes until the whole prompt is answered.
+pub(crate) fn close_document(s: &mut Session, index: usize, p: &Value) -> Result<()> {
+    let state = s.documents().get(index).ok_or(EngineError::NoDocument)?;
+    let mut discard = false;
+    if let Some(value) = p.get("discardDocuments") {
+        let entries = value.as_array().ok_or_else(|| EngineError::Other("discardDocuments must be an array".into()))?;
+        for entry in entries {
+            let id = entry.get("document").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("discard confirmation needs a document id".into()))?;
+            let revision = entry.get("revision").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("discard confirmation needs a revision".into()))?;
+            if state.doc.id.0 == id {
+                if state.revision != revision {
+                    return Err(EngineError::Other("the document changed after Don't Save; close it again to confirm".into()));
+                }
+                discard = true;
+            }
+        }
+    }
+    s.close_contents(index, discard)?;
+    Ok(())
+}
+
+fn close_all(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.documents().len();
     while !s.documents().is_empty() {
-        s.close(s.documents().len() - 1);
+        close_document(s, s.documents().len() - 1, p)?;
     }
     Ok(json!({"closed": n}))
 }
@@ -309,7 +331,7 @@ fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.documents().len() - 1;
     for i in (0..s.documents().len()).rev() {
         if i != keep {
-            s.close(i);
+            close_document(s, i, p)?;
         }
     }
     s.set_active(0);
@@ -1223,13 +1245,21 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
-        spec!("file.closeAll", "Close All", &["File"], Some("Cmd+Alt+W"), "{}", has_doc, |s, _| close_all(s)),
+        spec!(
+            "file.closeAll",
+            "Close All",
+            &["File"],
+            Some("Cmd+Alt+W"),
+            r##"{"discardDocuments":[{"document":id,"revision":revision}]?}"##,
+            has_doc,
+            close_all
+        ),
         spec!(
             "file.closeOthers",
             "Close Others",
             &["File"],
             Some("Cmd+Alt+P"),
-            r##"{"document":index? (the one to keep; default active)}"##,
+            r##"{"document":index? (the one to keep; default active),"discardDocuments":[{"document":id,"revision":revision}]?}"##,
             has_doc,
             close_others
         ),

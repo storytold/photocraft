@@ -220,6 +220,17 @@ pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &j
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Translate between scoped automation requests and desktop document identities.
+#[derive(Clone, Copy)]
+pub enum AutomationPathKind {
+    /// Read-root-relative request to absolute desktop identity.
+    Read,
+    /// Write-root-relative request to absolute desktop identity.
+    Write,
+    /// Existing desktop identity to a write-root-relative request.
+    WriteBack,
+}
+pub type AutomationPathFn = Box<dyn Fn(AutomationPathKind, &str) -> Result<String, String>>;
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
@@ -295,6 +306,7 @@ pub struct Services {
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
+    pub automation_path: Option<AutomationPathFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -1123,15 +1135,28 @@ impl PhotocraftApp {
     pub fn save_automation(&mut self, path: Option<String>) -> Result<(String, Vec<String>), String> {
         let state = self.session.active().ok_or("no document")?;
         // As File › Save: without `path` only a layered file is written back (#416).
+        let implicit = path.is_none();
         let target = path
             .or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
             .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?;
+        let target = if implicit {
+            match &self.services.automation_path {
+                Some(resolve) => resolve(AutomationPathKind::WriteBack, &target)?,
+                None => target,
+            }
+        } else {
+            target
+        };
+        let identity = match &self.services.automation_path {
+            Some(resolve) => resolve(AutomationPathKind::Write, &target)?,
+            None => target.clone(),
+        };
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
         if let Some(state) = self.session.active_mut() {
-            state.saved_to(target.clone());
+            state.saved_to(identity);
         }
         self.ui.status = format!("Saved {target}");
         self.ui.status_error = false;

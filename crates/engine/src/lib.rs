@@ -167,6 +167,8 @@ pub struct DocState {
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
+    /// Base directory for unsaved Edit Contents documents; never a Save destination.
+    pub(crate) smart_source_dir: Option<std::path::PathBuf>,
     /// An Affinity document (or its preview) must not acquire the native source as its Save path.
     pub source_read_only: bool,
     /// Increments on every change; UIs re-render when it moves.
@@ -205,6 +207,7 @@ impl DocState {
             selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
+            smart_source_dir: None,
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
@@ -427,10 +430,21 @@ impl Session {
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {
+        self.try_close(index).ok()
+    }
+
+    /// Close only after Edit Contents has saved successfully. A failed linked-file write must
+    /// leave the edited child open, so callers can report the error and the user can retry.
+    pub fn try_close(&mut self, index: usize) -> Result<DocState> {
+        self.close_contents(index, false)
+    }
+
+    /// A confirmed discard skips smart-content save-back without marking the child saved.
+    pub(crate) fn close_contents(&mut self, index: usize, discard: bool) -> Result<DocState> {
         if index >= self.docs.len() {
-            return None;
+            return Err(EngineError::NoDocument);
         }
-        smart_cmds::on_close(self, index);
+        smart_cmds::on_close(self, index, discard)?;
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
         }
@@ -444,7 +458,7 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
-        Some(d)
+        Ok(d)
     }
 
     /// Run a command by id with JSON params. Returns a JSON result.

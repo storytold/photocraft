@@ -19,6 +19,8 @@ struct RootCapability {
     /// The root as an absolute path (trusted launch configuration), to recognise absolute request
     /// paths that name a file beneath it.
     path: PathBuf,
+    /// Canonical root for desktop identities and implicit save-back requests.
+    document_root: PathBuf,
 }
 
 /// Separate directory capabilities for automation reads and writes.
@@ -40,6 +42,42 @@ impl AuthorizedWorkspace {
     /// omitted; omitted authority fails closed.
     pub fn new(read_root: Option<&Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
         Ok(Self { read: open_root(read_root, "read")?, write: open_root(write_root, "write")? })
+    }
+
+    /// Absolute identity for an opened document. I/O still uses the capability.
+    pub fn read_document_path(&self, path: &str) -> Result<String, AutomationError> {
+        let relative = request_path(path, self.read.as_ref())?;
+        let root = self.read.as_ref().ok_or_else(|| path_error(path, "read authority is absent"))?;
+        let resolved = root.dir.canonicalize(relative).map_err(|e| file_error("resolve", path, e))?;
+        document_identity(root.document_root.join(resolved))
+    }
+
+    /// Absolute identity for an explicit automation save, including a new file.
+    pub fn write_document_path(&self, path: &str) -> Result<String, AutomationError> {
+        let relative = request_path(path, self.write.as_ref())?;
+        let root = self.write.as_ref().ok_or_else(|| path_error(path, "write authority is absent"))?;
+        let parent = relative.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let parent = root.dir.canonicalize(parent).map_err(|e| file_error("resolve", path, e))?;
+        let leaf = relative.file_name().ok_or_else(|| path_error(path, "missing file name"))?;
+        let parent = if parent == Path::new(".") { root.document_root.clone() } else { root.document_root.join(parent) };
+        document_identity(parent.join(leaf))
+    }
+
+    /// Convert a desktop document identity back to a scoped request for implicit Save.
+    /// A document opened from a separate read root must not overwrite a same-named
+    /// file in the write root.
+    pub fn document_write_request(&self, path: &str) -> Result<String, AutomationError> {
+        let root = self.write.as_ref().ok_or_else(|| path_error(path, "write authority is absent"))?;
+        let relative = Path::new(path)
+            .strip_prefix(&root.document_root)
+            .map_err(|_| path_error(path, "document is outside the write root; pass an explicit relative path"))?;
+        let relative = relative
+            .components()
+            .map(|part| part.as_os_str().to_str().ok_or_else(|| path_error(path, "path is not UTF-8")))
+            .collect::<Result<Vec<_>, _>>()?
+            .join("/");
+        relative_path(&relative)?;
+        Ok(relative)
     }
 
     /// Read one regular file below the configured read root.
@@ -93,6 +131,10 @@ impl AuthorizedWorkspace {
     }
 }
 
+fn document_identity(path: PathBuf) -> Result<String, AutomationError> {
+    path.into_os_string().into_string().map_err(|_| AutomationError::BadRequest("document path is not UTF-8".into()))
+}
+
 fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapability>, AutomationError> {
     let Some(path) = path else { return Ok(None) };
     if path.as_os_str().is_empty() {
@@ -103,7 +145,8 @@ fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapabili
     // Textual (no link resolution), like the request paths it is compared with.
     let absolute =
         std::path::absolute(path).map_err(|e| AutomationError::Io(format!("cannot resolve automation {authority} root `{}`: {e}", path.display())))?;
-    Ok(Some(RootCapability { dir: Arc::new(dir), path: absolute }))
+    let document_root = std::fs::canonicalize(path).map_err(|e| AutomationError::Io(e.to_string()))?;
+    Ok(Some(RootCapability { dir: Arc::new(dir), path: absolute, document_root }))
 }
 
 /// A request path as the relative path the root's capability resolves. An absolute path is
@@ -393,6 +436,80 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
         (inside, outside, workspace)
+    }
+
+    #[test]
+    fn document_identity_is_absolute_and_write_back_stays_in_its_root() {
+        let (inside, outside, workspace) = roots("document-identity");
+        workspace.write("poster.pcraft", b"poster").unwrap();
+        let identity = workspace.read_document_path("poster.pcraft").unwrap();
+        assert_eq!(Path::new(&identity), std::fs::canonicalize(&inside).unwrap().join("poster.pcraft"));
+        assert_eq!(workspace.document_write_request(&identity).unwrap(), "poster.pcraft");
+        assert_eq!(workspace.write_document_path("new.pcraft").unwrap(), std::fs::canonicalize(&inside).unwrap().join("new.pcraft").to_string_lossy());
+        let separate = AuthorizedWorkspace::new(Some(&inside), Some(&outside)).unwrap();
+        assert!(separate.document_write_request(&identity).is_err());
+        for invalid in ["../escape.pcraft", "/escape.pcraft", "a/../escape.pcraft"] {
+            assert!(workspace.read_document_path(invalid).is_err());
+            assert!(workspace.write_document_path(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn absolute_requests_keep_desktop_identities_and_implicit_save_authority() {
+        let (inside, outside, workspace) = roots("absolute-document-identity");
+        let poster = inside.join("poster.pcraft").to_string_lossy().into_owned();
+        workspace.write(&poster, b"poster").unwrap();
+        let identity = workspace.read_document_path(&poster).unwrap();
+        assert_eq!(identity, workspace.read_document_path("poster.pcraft").unwrap());
+        let request = workspace.document_write_request(&identity).unwrap();
+        workspace.write(&request, b"edited").unwrap();
+        assert_eq!(workspace.read(&poster).unwrap(), b"edited");
+        let new_file = inside.join("new.pcraft").to_string_lossy().into_owned();
+        assert_eq!(workspace.write_document_path(&new_file).unwrap(), workspace.write_document_path("new.pcraft").unwrap());
+        let separate = AuthorizedWorkspace::new(Some(&inside), Some(&outside)).unwrap();
+        assert_eq!(separate.read_document_path(&poster).unwrap(), identity);
+        assert!(separate.write_document_path(&poster).is_err());
+        assert!(separate.document_write_request(&identity).is_err());
+        for invalid in [outside.join("escape.pcraft"), inside.join("../outside/escape.pcraft")] {
+            assert!(workspace.read_document_path(&invalid.to_string_lossy()).is_err());
+            assert!(workspace.write_document_path(&invalid.to_string_lossy()).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_root_accepts_configured_absolute_paths_and_saves_canonical_identities() {
+        let (inside, outside, _) = roots("aliased-document-root");
+        let alias = outside.join("alias");
+        std::os::unix::fs::symlink(&inside, &alias).unwrap();
+        let workspace = AuthorizedWorkspace::new(Some(&alias), Some(&alias)).unwrap();
+        let poster = alias.join("poster.pcraft").to_string_lossy().into_owned();
+        workspace.write(&poster, b"poster").unwrap();
+        let identity = workspace.read_document_path(&poster).unwrap();
+        assert_eq!(Path::new(&identity), std::fs::canonicalize(&inside).unwrap().join("poster.pcraft"));
+        assert_eq!(workspace.write_document_path(&poster).unwrap(), identity);
+        let request = workspace.document_write_request(&identity).unwrap();
+        workspace.write(&request, b"edited").unwrap();
+        assert_eq!(workspace.read(&poster).unwrap(), b"edited");
+        assert_eq!(
+            workspace.write_document_path(&alias.join("new.pcraft").to_string_lossy()).unwrap(),
+            std::fs::canonicalize(&inside).unwrap().join("new.pcraft").to_string_lossy()
+        );
+        std::os::unix::fs::symlink(&outside, inside.join("escape")).unwrap();
+        for invalid in [alias.join("escape/missing.pcraft"), outside.join("missing.pcraft")] {
+            assert!(workspace.read_document_path(&invalid.to_string_lossy()).is_err());
+            assert!(workspace.write_document_path(&invalid.to_string_lossy()).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn document_identity_rejects_escaping_symlinks() {
+        let (inside, outside, workspace) = roots("document-identity-symlink");
+        std::fs::write(outside.join("poster.pcraft"), b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside, inside.join("escape")).unwrap();
+        assert!(workspace.read_document_path("escape/poster.pcraft").is_err());
+        assert!(workspace.write_document_path("escape/new.pcraft").is_err());
     }
 
     #[test]

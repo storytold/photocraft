@@ -405,3 +405,33 @@ fn an_answer_of_the_wrong_kind_is_an_error_not_a_crash() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.documents().len(), 1);
 }
+
+#[test]
+fn relink_picker_keeps_the_original_document_and_layer() {
+    let (mut app, open, _) = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let path = std::env::temp_dir().join(format!("photocraft-relink-picker-{}.pcraft", std::process::id()));
+    app.run("layer.smartObjects.exportContents", json!({"path": path})).unwrap();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.relinkToFile", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error);
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.relinkToFile", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    answer(&open, Some(FileDialogAnswer::Paths(vec![path.to_string_lossy().into_owned()])));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.id, other);
+    let original = app.session.documents().iter().find(|st| st.doc.id == doc).unwrap();
+    let photocraft_doc::LayerContent::Smart(smart) = &original.doc.layer(layer).unwrap().content else { panic!("smart object") };
+    assert!(matches!(&smart.source, photocraft_doc::SmartSource::Linked { path: linked } if linked == &path.to_string_lossy()));
+    std::fs::remove_file(path).unwrap();
+}

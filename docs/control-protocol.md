@@ -66,7 +66,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   base64 PNG data; a path is relative to the automation write root. Raises the window first
   (default) because occluded macOS windows stop rendering
 - `ui.focus`: bring the main window to the front
-- `app.open {path}` / `app.save {path?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
+- `app.open {path}` / `app.save {path?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name`, `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file inside the write root, like File › Save. A document opened from a separate read root requires an explicit relative save path. The desktop remembers the absolute file location for interactive Save and Open Recent; protocol request and response paths remain relative. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`
 
 ## Engine commands
@@ -144,6 +144,18 @@ contents outward. `app.save` exports the active document to a scoped file; it is
 for Save Contents. Save the parent document to disk when the edits are complete. These rules
 also apply to recorded actions and synthetic UI input; interactive desktop commands retain
 their usual file access. Source replacement, relinking and export commands remain restricted.
+
+On the interactive desktop, Save Contents writes an external linked source in its original
+format and keeps the link. It refuses to overwrite a source whose bytes changed since that
+contents editor opened or last saved; save a copy of conflicting edits before reopening the
+source. A successful save refreshes every open instance of that file, preserving each instance's
+placement and filters. Save the affected parent documents to keep those refreshed caches on disk.
+
+Don't Save closes contents without writing their source or updating their parent. Cancelling a
+later Close All prompt keeps those contents open and dirty. The `file.close*` commands accept
+`discardDocuments: [{document: id, revision: revision}]` for explicit discards; identities and
+revisions must match the documents being closed. Close All and Quit ask about mockups that become
+dirty while saving contents, including shared instances in other open documents.
 
 `type.editText` starts inline editing of the active type layer and selects all its text, like
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
