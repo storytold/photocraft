@@ -4524,3 +4524,26 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+# Generative Fill and Generative AI Settings (#41)
+	API key	API ključ
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Opišite šta da se stvori u selekciji ili ostavite prazno da se slika nastavi kroz nju.
+	Generative AI	Generativna AI
+	Generative AI Settings…	Podešavanja generativne AI…
+	Generative AI needs the desktop app.	Generativna AI radi samo u desktop aplikaciji.
+	Generative Fill uses {name} ({model}).	Generativna popuna koristi {name} ({model}).
+	Generative Fill…	Generativna popuna…
+	Get a Gemini API key from Google AI Studio	Nabavite Gemini API ključ u Google AI Studiju
+	No API key is saved for {provider}.	Nema sačuvanog API ključa za {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Ništa se ne šalje dok ne pokrenete Generativnu popunu. Svaki put kada to uradite, PhotoCraft šalje Google-u (generativelanguage.googleapis.com) izabranu oblast i sliku oko nje, crno-belu masku selekcije i vaš opis, uz vaš API ključ. Važe Google-ovi uslovi korišćenja i politika privatnosti za Gemini API, a korišćenje se naplaćuje na vaš ključ. Rezultati nose Google-ov SynthID vodeni žig.
+	Off. Set up a provider with your own API key to use Generative Fill.	Isključeno. Podesite dobavljača sa sopstvenim API ključem da biste koristili Generativnu popunu.
+	Paste your Gemini API key	Nalepite svoj Gemini API ključ
+	Prompt (optional)	Opis (opciono)
+	Provider	Dobavljač
+	Remove Key	Ukloni ključ
+	Saved (paste to replace)	Sačuvano (nalepite da zamenite)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Izabrana oblast, slika oko nje i opis šalju se ka {name} ({model}).
+	What is sent, and to whom	Šta se šalje i kome
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Vaš ključ se čuva ovde: {store}, nikad u datotekama podešavanja PhotoCrafta.
+	the macOS Keychain	macOS privezak ključeva
+	Windows Credential Manager	Windows menadžer akreditiva
+	memory until PhotoCraft quits	memorija, dok se PhotoCraft ne zatvori

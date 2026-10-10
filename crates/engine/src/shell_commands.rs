@@ -24,6 +24,8 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.panel.iconic", "Collapse to Icons", &[], None),
     ("window.panel.window", "Open Panel in Own Window", &[], None),
     ("ui.dock", "Arrange Panels", &[], None),
+    // Edit › Generative AI Settings… (#41); the UI's `genai_ui::SETTINGS`.
+    ("ui.generativeAiSettings", "Generative AI Settings…", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),

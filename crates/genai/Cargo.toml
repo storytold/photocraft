@@ -1,0 +1,14 @@
+[package]
+name = "photocraft-genai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Generative image providers behind one trait; HTTP goes through an injected transport"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
