@@ -2311,3 +2311,13 @@ fontWeight	Italic	Kurzíva
 	Create Ellipse	Vytvořit elipsu
 	Create Triangle	Vytvořit trojúhelník
 	Create Polygon	Vytvořit mnohoúhelník
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Smazat vrstvu „{name}“?
+	Delete {count} layers? {names}	Smazat vrstvy ({count})? {names}
+	Delete layer?	Smazat vrstvu?
+	The document is closed	Dokument je zavřený
+	The document or selected layers changed. Please request deletion again.	Dokument nebo vybrané vrstvy se změnily. Požádejte o smazání znovu.
+	Missing delete command	Chybí příkaz ke smazání
+	Invalid delete command	Neplatný příkaz ke smazání
+	Layer deleted, but confirmation preference could not be saved: {error}	Vrstva byla smazána, ale nastavení potvrzení se nepodařilo uložit: {error}

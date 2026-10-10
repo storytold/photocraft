@@ -2380,3 +2380,13 @@ fontWeight	Italic	Corsivo
 	Create Ellipse	Crea ellisse
 	Create Triangle	Crea triangolo
 	Create Polygon	Crea poligono
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Eliminare il livello «{name}»?
+	Delete {count} layers? {names}	Eliminare {count} livelli? {names}
+	Delete layer?	Eliminare il livello?
+	The document is closed	Il documento è chiuso
+	The document or selected layers changed. Please request deletion again.	Il documento o i livelli selezionati sono cambiati. Richiedi nuovamente l’eliminazione.
+	Missing delete command	Comando di eliminazione mancante
+	Invalid delete command	Comando di eliminazione non valido
+	Layer deleted, but confirmation preference could not be saved: {error}	Il livello è stato eliminato, ma non è stato possibile salvare la preferenza di conferma: {error}

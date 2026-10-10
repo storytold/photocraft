@@ -1798,7 +1798,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::panel_footer(ui, |ui| {
         let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete layer"));
         if trash.clicked() {
-            actions.push(("layer.delete".into(), json!({})));
+            actions.push(("layer.delete".into(), json!({"__trash": true})));
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
         let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));

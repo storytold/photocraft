@@ -3420,3 +3420,13 @@ cameraRaw	Masking	Маскування
 	Create Ellipse	Створити еліпс
 	Create Triangle	Створити трикутник
 	Create Polygon	Створити багатокутник
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Видалити шар «{name}»?
+	Delete {count} layers? {names}	Видалити шари ({count})? {names}
+	Delete layer?	Видалити шар?
+	The document is closed	Документ закрито
+	The document or selected layers changed. Please request deletion again.	Документ або вибрані шари змінилися. Повторіть запит на видалення.
+	Missing delete command	Відсутня команда видалення
+	Invalid delete command	Недійсна команда видалення
+	Layer deleted, but confirmation preference could not be saved: {error}	Шар видалено, але не вдалося зберегти налаштування підтвердження: {error}

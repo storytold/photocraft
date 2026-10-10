@@ -2719,3 +2719,13 @@ fontWeight	Italic	Miring
 	Create Ellipse	Buat Elips
 	Create Triangle	Buat Segitiga
 	Create Polygon	Buat Poligon
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Hapus layer ‘{name}’?
+	Delete {count} layers? {names}	Hapus {count} layer? {names}
+	Delete layer?	Hapus layer?
+	The document is closed	Dokumen sudah ditutup
+	The document or selected layers changed. Please request deletion again.	Dokumen atau layer yang dipilih telah berubah. Minta penghapusan lagi.
+	Missing delete command	Perintah hapus tidak tersedia
+	Invalid delete command	Perintah hapus tidak valid
+	Layer deleted, but confirmation preference could not be saved: {error}	Layer dihapus, tetapi preferensi konfirmasi tidak dapat disimpan: {error}

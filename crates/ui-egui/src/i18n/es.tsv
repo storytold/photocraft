@@ -2379,3 +2379,13 @@ fontWeight	Italic	Cursiva
 	Create Ellipse	Crear elipse
 	Create Triangle	Crear triángulo
 	Create Polygon	Crear polígono
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	¿Eliminar la capa «{name}»?
+	Delete {count} layers? {names}	¿Eliminar {count} capas? {names}
+	Delete layer?	¿Eliminar capa?
+	The document is closed	El documento está cerrado
+	The document or selected layers changed. Please request deletion again.	El documento o las capas seleccionadas han cambiado. Solicita la eliminación de nuevo.
+	Missing delete command	Falta el comando de eliminación
+	Invalid delete command	Comando de eliminación no válido
+	Layer deleted, but confirmation preference could not be saved: {error}	La capa se eliminó, pero no se pudo guardar la preferencia de confirmación: {error}

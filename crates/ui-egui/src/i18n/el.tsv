@@ -3420,3 +3420,13 @@ fontWeight	Thin	Πολύ λεπτά
 	Create Ellipse	Δημιουργία έλλειψης
 	Create Triangle	Δημιουργία τριγώνου
 	Create Polygon	Δημιουργία πολυγώνου
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Διαγραφή του επιπέδου «{name}»;
+	Delete {count} layers? {names}	Διαγραφή {count} επιπέδων; {names}
+	Delete layer?	Διαγραφή επιπέδου;
+	The document is closed	Το έγγραφο είναι κλειστό
+	The document or selected layers changed. Please request deletion again.	Το έγγραφο ή τα επιλεγμένα επίπεδα άλλαξαν. Ζητήστε ξανά τη διαγραφή.
+	Missing delete command	Λείπει η εντολή διαγραφής
+	Invalid delete command	Μη έγκυρη εντολή διαγραφής
+	Layer deleted, but confirmation preference could not be saved: {error}	Το επίπεδο διαγράφηκε, αλλά δεν ήταν δυνατή η αποθήκευση της προτίμησης επιβεβαίωσης: {error}

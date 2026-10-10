@@ -3333,3 +3333,13 @@ cameraRaw	Roughness	Chropowatość
 	Create Ellipse	Utwórz elipsę
 	Create Triangle	Utwórz trójkąt
 	Create Polygon	Utwórz wielokąt
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Usunąć warstwę „{name}”?
+	Delete {count} layers? {names}	Usunąć warstwy ({count})? {names}
+	Delete layer?	Usunąć warstwę?
+	The document is closed	Dokument jest zamknięty
+	The document or selected layers changed. Please request deletion again.	Dokument lub zaznaczone warstwy uległy zmianie. Ponownie zażądaj usunięcia.
+	Missing delete command	Brak polecenia usuwania
+	Invalid delete command	Nieprawidłowe polecenie usuwania
+	Layer deleted, but confirmation preference could not be saved: {error}	Warstwa została usunięta, ale nie udało się zapisać ustawienia potwierdzenia: {error}

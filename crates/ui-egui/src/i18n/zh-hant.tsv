@@ -2288,3 +2288,13 @@ fontWeight	Italic	斜體
 	Create Ellipse	建立橢圓
 	Create Triangle	建立三角形
 	Create Polygon	建立多邊形
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	刪除圖層「{name}」？
+	Delete {count} layers? {names}	刪除 {count} 個圖層？{names}
+	Delete layer?	刪除圖層？
+	The document is closed	文件已關閉
+	The document or selected layers changed. Please request deletion again.	文件或所選圖層已變更。請重新要求刪除。
+	Missing delete command	缺少刪除指令
+	Invalid delete command	無效的刪除指令
+	Layer deleted, but confirmation preference could not be saved: {error}	圖層已刪除，但無法儲存確認設定：{error}

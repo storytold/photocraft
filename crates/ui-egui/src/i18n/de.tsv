@@ -2349,3 +2349,13 @@ fontWeight	Italic	Kursiv
 	Create Ellipse	Ellipse erstellen
 	Create Triangle	Dreieck erstellen
 	Create Polygon	Polygon erstellen
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Ebene „{name}“ löschen?
+	Delete {count} layers? {names}	{count} Ebenen löschen? {names}
+	Delete layer?	Ebene löschen?
+	The document is closed	Das Dokument ist geschlossen
+	The document or selected layers changed. Please request deletion again.	Das Dokument oder die ausgewählten Ebenen haben sich geändert. Bitte die Löschung erneut anfordern.
+	Missing delete command	Löschbefehl fehlt
+	Invalid delete command	Ungültiger Löschbefehl
+	Layer deleted, but confirmation preference could not be saved: {error}	Die Ebene wurde gelöscht, aber die Bestätigungseinstellung konnte nicht gespeichert werden: {error}

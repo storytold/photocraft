@@ -2732,3 +2732,13 @@ fontWeight	Italic	Italique
 	Create Ellipse	Créer une ellipse
 	Create Triangle	Créer un triangle
 	Create Polygon	Créer un polygone
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Supprimer le calque « {name} » ?
+	Delete {count} layers? {names}	Supprimer {count} calques ? {names}
+	Delete layer?	Supprimer le calque ?
+	The document is closed	Le document est fermé
+	The document or selected layers changed. Please request deletion again.	Le document ou les calques sélectionnés ont changé. Demandez à nouveau la suppression.
+	Missing delete command	Commande de suppression manquante
+	Invalid delete command	Commande de suppression non valide
+	Layer deleted, but confirmation preference could not be saved: {error}	Le calque a été supprimé, mais la préférence de confirmation n’a pas pu être enregistrée : {error}
