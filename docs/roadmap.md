@@ -77,6 +77,12 @@ The transform also corrects f32 envelope errors past coordinate 4096, including 
 distances at selected pixels. The parallel path needs an additional four bytes per pixel;
 see [measurements, correctness and limits](selection-distance-performance.md).
 
+2026-10-10: Quick Selection object strokes through raster surfaces measured
+3.46-3.70x faster at 8-bit, 16-bit and 32f on 24-36 MP documents (AWS
+c7i.4xlarge, five paired release runs), with identical region bounds and mask bytes.
+Hybrid FIFO push/relabel and sparse edge enumeration preserve the fitted energy.
+See [stroke measurements and reproduction](quick-selection-performance.md).
+
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
 workflow depth and the plug-in ecosystem. Most fixes since 0.2.0 have passed our tests but have
