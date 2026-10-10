@@ -573,7 +573,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             let light = clamp(p0.z + dl, -1.0, 1.0);
             if (p0.w > 0.5) {
                 hh = rem_euclid(p0.x, 360.0) / 360.0;
-                ss = max(abs(sat), 0.25);
+                ss = min(abs(sat), 1.0);
             } else {
                 hh = rem_euclid(hsl.x + (p0.x + dh) / 360.0, 1.0);
                 ss = clamp(hsl.y * (1.0 + sat), 0.0, 1.0);

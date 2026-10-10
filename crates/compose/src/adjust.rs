@@ -303,12 +303,13 @@ pub fn hue_range_tables(ranges: &[HueRange; 6]) -> [Vec<f32>; 3] {
 }
 
 /// One Hue/Saturation evaluation: hue shift in degrees, saturation and lightness in -1..=1.
-/// Colorize sets the hue and saturation instead of shifting them.
+/// Colorize sets the hue and saturation instead of shifting them; at 0% it leaves only the
+/// lightness, as in Photoshop (#2326). Ticking Colorize in the dialog starts saturation at 25%.
 pub fn hue_saturation(c: [f32; 3], hue: f32, s: f32, l: f32, colorize: bool) -> [f32; 3] {
     let (mut hh, mut ss, ll) = rgb_to_hsl(c);
     if colorize {
         hh = hue.rem_euclid(360.0) / 360.0;
-        ss = s.abs().max(0.25);
+        ss = s.abs().min(1.0);
     } else {
         hh = (hh + hue / 360.0).rem_euclid(1.0);
         ss = (ss * (1.0 + s)).clamp(0.0, 1.0);
@@ -938,6 +939,30 @@ mod tone_tests {
         assert!((red[0] - red[1]).abs() < 0.05, "red desaturated {red:?}");
         assert!((b.px[1][2] - 0.9).abs() < 1e-4 && (b.px[1][0] - 0.1).abs() < 1e-4, "blue untouched {:?}", b.px[1]);
         assert_eq!(b.px[2], [0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn colorize_at_zero_saturation_is_grey() {
+        // Photoshop: Colorize at 0% saturation leaves no colour, only the pixel's lightness (#2326).
+        let px = vec![[0.9, 0.2, 0.1, 1.0], [0.1, 0.6, 0.8, 1.0], [0.5, 0.5, 0.5, 1.0]];
+        for depth in [None, Some(SampleType::U8), Some(SampleType::U16), Some(SampleType::F32)] {
+            for lightness in [0.0, 30.0, -30.0] {
+                let a = Adjustment::HueSaturation { hue: 200.0, saturation: 0.0, lightness, colorize: true, ranges: HueRange::defaults() };
+                let mut b = Buffer { rect: Rect::new(0, 0, 3, 1), px: px.clone() };
+                apply_depth(&a, &mut b, Transfer::Srgb, depth);
+                for p in &b.px {
+                    assert!((p[0] - p[1]).abs() < 1e-4 && (p[1] - p[2]).abs() < 1e-4, "{depth:?} lightness {lightness}: {p:?}");
+                }
+            }
+            // Low saturations still tint: the old 25% floor no longer hides them.
+            let tint = |saturation: f32| {
+                let a = Adjustment::HueSaturation { hue: 0.0, saturation, lightness: 0.0, colorize: true, ranges: HueRange::defaults() };
+                let mut b = Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[0.5, 0.5, 0.5, 1.0]] };
+                apply_depth(&a, &mut b, Transfer::Srgb, depth);
+                b.px[0][0] - b.px[0][2]
+            };
+            assert!(tint(10.0) > 0.05 && tint(10.0) < tint(25.0), "{depth:?}: 10% {} vs 25% {}", tint(10.0), tint(25.0));
+        }
     }
 
     #[test]
