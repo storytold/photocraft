@@ -706,7 +706,7 @@ fn tab_strips_never_overlap_the_menu_button() {
                                     return;
                                 }
                                 let mut s = sel;
-                                let r = crate::widgets::card_ex(ui, "t", tabs, &mut s, false, |ui, _| {
+                                let r = crate::widgets::card_ex(ui, "t", tabs, &mut s, false, false, |ui, _| {
                                     ui.label("body");
                                 });
                                 *out = Some((r.tabs, r.menu.rect, r.chevron, ui.max_rect()));
@@ -773,7 +773,7 @@ fn dock_strips_fit_and_the_chevron_menu_switches_tabs() {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            let _ = crate::widgets::card_ex(ui, "color", &["Color", "Swatches", "Gradients", "Patterns"], sel, false, |ui, _| {
+            let _ = crate::widgets::card_ex(ui, "color", &["Color", "Swatches", "Gradients", "Patterns"], sel, false, false, |ui, _| {
                 ui.label("body");
             });
         },
@@ -819,4 +819,145 @@ fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
     let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
     v.as_object_mut().unwrap().remove("dock");
     assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
+}
+
+fn strip_tabs(h: &Harness<'static, PhotocraftApp>, g: Group) -> Vec<(usize, Rect)> {
+    last_strips(&h.ctx).into_iter().find(|s| s.group == g).map(|s| s.tabs).unwrap_or_else(|| panic!("{g:?} strip not drawn"))
+}
+
+fn tab_rect(h: &Harness<'static, PhotocraftApp>, g: Group, tab: usize) -> Rect {
+    strip_tabs(h, g).into_iter().find(|(i, _)| *i == tab).map(|(_, r)| r).unwrap_or_else(|| panic!("{g:?} tab {tab} not on the strip"))
+}
+
+fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+}
+
+#[test]
+fn move_tab_reorders_by_name_and_bad_saved_orders_fall_back() {
+    let mut l = DockLayout::default();
+    let names = |l: &DockLayout, g, pro| l.visible_tabs(g, pro).into_iter().map(|(_, n)| n).collect::<Vec<_>>();
+    l.move_tab(Group::Layers, 2, Some(0), true);
+    assert_eq!(l.visible_tabs(Group::Layers, true), vec![(2, "Paths"), (0, "Layers"), (1, "Channels")]);
+    l.move_tab(Group::Layers, 2, None, true);
+    assert_eq!(names(&l, Group::Layers, true), ["Layers", "Channels", "Paths"]);
+    assert!(l.tab_order.is_empty(), "the default order is stored as nothing");
+    // Out-of-range tabs and moves onto themselves change nothing; an unknown `before` is last.
+    for (tab, before) in [(9, Some(0)), (usize::MAX, None), (1, Some(1)), (2, Some(9))] {
+        let mut m = l.clone();
+        m.move_tab(Group::Layers, tab, before, true);
+        assert_eq!(names(&m, Group::Layers, true), ["Layers", "Channels", "Paths"], "{tab} {before:?}");
+    }
+    // Names, not positions: the order survives the Pro/Studio swap of Color and Swatches.
+    l.move_tab(Group::Color, 3, Some(0), true);
+    assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Swatches", "Gradients"]);
+    assert_eq!(names(&l, Group::Color, false), ["Patterns", "Color", "Swatches", "Gradients"]);
+    // Hidden tabs keep their place for when they come back.
+    l.hide_tab(Group::Color, 1, true);
+    assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Gradients"]);
+    // Garbage in a saved layout falls back per group, and never loses the rest of the layout.
+    for bad in [
+        json!(5),
+        json!("x"),
+        json!(null),
+        json!({"layers": "paths"}),
+        json!({"nope": ["Paths"]}),
+        json!({"layers": [1, null, {"a": 1}]}),
+        json!({"layers": ["Nope", "Paths", "Paths"]}),
+    ] {
+        let back: DockLayout = serde_json::from_value(json!({"order": ["layers"], "tabOrder": bad})).unwrap();
+        assert_eq!(back.order().first(), Some(&Group::Layers), "{bad}");
+        let layers = names(&back, Group::Layers, true);
+        assert!(layers == ["Layers", "Channels", "Paths"] || layers == ["Paths", "Layers", "Channels"], "{bad}: {layers:?}");
+        assert_eq!(back.visible_tabs(Group::Color, true).len(), 4);
+    }
+    let back: DockLayout = serde_json::from_value(json!({"tabOrder": {"layers": ["Channels"]}})).unwrap();
+    assert_eq!(names(&back, Group::Layers, true), ["Channels", "Layers", "Paths"], "missing tabs follow in their default order");
+}
+
+/// #2272: dragging a tab along its strip reorders the group's tabs; the order persists in the
+/// UI state, the remembered layout and saved workspaces, and clicking still selects.
+#[test]
+fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (app, _, _) = app_with_layers();
+        let mut h = harness(app, vec2(1200.0, 800.0), theme);
+        let order = h.state().ui.dock.order();
+        let rects = last_rects(&h.ctx);
+        let paths = tab_rect(&h, Group::Layers, 2);
+        let layers = tab_rect(&h, Group::Layers, 0);
+        drag(&mut h, paths.center(), layers.left_center() + vec2(4.0, 0.0));
+        let strip: Vec<usize> = strip_tabs(&h, Group::Layers).iter().map(|(i, _)| *i).collect();
+        assert_eq!(strip, [2, 0, 1], "{theme:?}: Paths moved before Layers");
+        assert_eq!(h.state().ui.dock.order(), order, "{theme:?}: a tab drag along the strip leaves the groups put");
+        assert_eq!(last_rects(&h.ctx), rects);
+        // The dragged tab is brought to the front; dockTabs keeps its original indices.
+        assert_eq!(h.state().ui.dock_tabs.layers, 2, "{theme:?}");
+
+        // A plain click still selects, and selects the tab under the pointer.
+        let layers = tab_rect(&h, Group::Layers, 0).center();
+        click(&mut h, layers);
+        assert_eq!(h.state().ui.dock_tabs.layers, 0, "{theme:?}");
+        assert_eq!(strip_tabs(&h, Group::Layers).iter().map(|(i, _)| *i).collect::<Vec<_>>(), [2, 0, 1]);
+
+        // UI state round trip (the control channel's ui.get / ui.set).
+        let dock = serde_json::to_value(&h.state().ui.dock).unwrap();
+        assert_eq!(dock["tabOrder"], json!({"layers": ["Paths", "Layers", "Channels"]}));
+        let ctx = h.ctx.clone();
+        let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"tabOrder": {"layers": ["Channels"]}}}));
+        crate::control::handle(h.state_mut(), &ctx, &req);
+        assert_eq!(h.state().ui.dock.visible_tabs(Group::Layers, is_pro(theme))[0], (1, "Channels"));
+        let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": dock}));
+        crate::control::handle(h.state_mut(), &ctx, &req);
+        assert_eq!(h.state().ui.dock.visible_tabs(Group::Layers, is_pro(theme))[0], (2, "Paths"));
+
+        // Remembered across launches (prefs panelLayout) ...
+        h.state_mut().session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+        persist(h.state_mut(), &ctx);
+        let saved = h.state().session.prefs().panel_layout.clone();
+        let (mut fresh, _, _) = app_with_layers();
+        fresh.session.prefs.edit(|p| {
+            p.workspace.remember_workspace_changes = true;
+            p.panel_layout = saved.clone();
+        });
+        restore(&mut fresh);
+        assert_eq!(fresh.ui.dock.visible_tabs(Group::Layers, is_pro(theme))[0], (2, "Paths"), "{theme:?}");
+
+        // ... and in a saved workspace, which Essentials resets and selecting brings back.
+        crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.newWorkspace", json!({"name": "Paths First"})).unwrap();
+        crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
+        assert!(h.state().ui.dock.tab_order.is_empty());
+        crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Paths First"})).unwrap();
+        h.run_steps(3);
+        assert_eq!(strip_tabs(&h, Group::Layers).iter().map(|(i, _)| *i).collect::<Vec<_>>(), [2, 0, 1], "{theme:?}");
+    }
+}
+
+/// Dragging a tab off its strip moves the whole group (as dragging the strip does); a locked
+/// workspace keeps both the tab and group order.
+#[test]
+fn a_tab_dragged_off_the_strip_moves_the_group_and_locking_stops_reordering() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let paths = tab_rect(&h, Group::Layers, 2);
+    let to = rect_of(&h, Group::Color).left_top() + vec2(120.0, 10.0);
+    drag(&mut h, paths.center(), to);
+    assert_eq!(h.state().ui.dock.order().first(), Some(&Group::Layers));
+    assert!(h.state().ui.dock.tab_order.is_empty(), "the tabs kept their order");
+
+    h.state_mut().session.prefs.edit(|p| p.workspace_locked = true);
+    h.run_steps(2);
+    let order = h.state().ui.dock.order();
+    let paths = tab_rect(&h, Group::Layers, 2);
+    let layers = tab_rect(&h, Group::Layers, 0).left_center();
+    drag(&mut h, paths.center(), layers + vec2(4.0, 0.0));
+    assert!(h.state().ui.dock.tab_order.is_empty());
+    let paths = tab_rect(&h, Group::Layers, 2);
+    drag(&mut h, paths.center(), paths.center() + vec2(0.0, 500.0));
+    assert_eq!(h.state().ui.dock.order(), order);
 }

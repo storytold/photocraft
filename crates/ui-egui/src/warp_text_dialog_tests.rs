@@ -193,3 +193,16 @@ fn confirming_warp_text_is_one_undoable_step() {
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(warp(app), before);
 }
+
+/// #2689: as in Photoshop, the dialog lists Style, then the orientation, then Bend and the two
+/// distortions.
+#[test]
+fn warp_text_dialog_lists_style_orientation_then_bend_and_distortions() {
+    let mut app = app_with_type();
+    open(&mut app);
+    let h = harness(app);
+    let top = |name: &str| h.query_all_by_label(name).map(|n| n.rect().top()).fold(f32::INFINITY, f32::min);
+    let order = ["Style", "Orientation", "Bend", "Horizontal Distortion", "Vertical Distortion"].map(top);
+    assert!(order.iter().all(|y| y.is_finite()), "every field is shown: {order:?}");
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "fields top to bottom: {order:?}");
+}

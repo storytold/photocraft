@@ -557,7 +557,7 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let in_place = p.get("inPlace").and_then(Value::as_bool).unwrap_or(false);
                 if crate::layer_multi_cmds::multi(s, p) {
-                    return crate::layer_multi_cmds::duplicate_selected(s, in_place);
+                    return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layers");
                 }
                 let id = layer_param(s, p)?;
                 let nid = s.edit("Duplicate Layer", |doc, active| {

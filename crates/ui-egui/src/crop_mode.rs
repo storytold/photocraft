@@ -55,7 +55,7 @@ pub fn moves_image(app: &PhotocraftApp) -> bool {
 /// goes from `from` to `to` degrees (zoom and flip unchanged). `center` itself when anything isn't
 /// finite.
 pub fn pivot_center(center: [f32; 2], c: [f64; 2], from: f32, to: f32, flip: bool) -> [f32; 2] {
-    let a = ViewXform { rect: Rect::ZERO, zoom: 1.0, center, flip, rotation: from };
+    let a = ViewXform { rect: Rect::ZERO, zoom: 1.0, center, flip, rotation: from, aspect: 1.0 };
     // c's offset from the view centre on screen (at zoom 1), then the same offset in the new view.
     let off = a.to_screen(c[0] as f32, c[1] as f32).to_vec2();
     let u = ViewXform { rotation: to, ..a }.unmap_vec(off);
@@ -202,7 +202,7 @@ pub fn press_view(app: &PhotocraftApp) -> Option<PressView> {
 /// `to` shows at the screen position where `from` shows `p` (zoom and flip are the same). `p`
 /// itself when anything isn't finite.
 fn remap(p: [f64; 2], from: PressView, to: PressView, flip: bool) -> [f64; 2] {
-    let at = |v: PressView| ViewXform { rect: Rect::ZERO, zoom: 1.0, center: v.center, flip, rotation: v.rotation };
+    let at = |v: PressView| ViewXform { rect: Rect::ZERO, zoom: 1.0, center: v.center, flip, rotation: v.rotation, aspect: 1.0 };
     let q = at(to).to_doc(at(from).to_screen(p[0] as f32, p[1] as f32));
     if q.iter().all(|v| v.is_finite()) { q } else { p }
 }
@@ -251,7 +251,7 @@ pub fn offset_image(app: &mut PhotocraftApp, rect: [f64; 4], press: Option<Press
 /// A screen vector `s` (points, at the current zoom ignored) as a document vector of the same
 /// length: undoes the view's flip and rotation.
 pub fn screen_to_doc_vec(app: &PhotocraftApp, s: [f64; 2]) -> [f64; 2] {
-    let xf = ViewXform { rect: Rect::ZERO, zoom: 1.0, center: [0.0, 0.0], flip: app.ui.view.flip_horizontal, rotation: view_rotation(app) };
+    let xf = ViewXform { rect: Rect::ZERO, zoom: 1.0, center: [0.0, 0.0], flip: app.ui.view.flip_horizontal, rotation: view_rotation(app), aspect: 1.0 };
     let u = xf.unmap_vec(vec2(s[0] as f32, s[1] as f32));
     [f64::from(u.x), f64::from(u.y)]
 }
@@ -761,7 +761,7 @@ mod tests {
             for (from, to) in [(0.0, 30.0), (45.0, -90.0), (170.0, -170.0)] {
                 let center = [100.0f32, 50.0];
                 let c = [70.0, 20.0];
-                let a = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), zoom: 2.0, center, flip, rotation: from };
+                let a = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), zoom: 2.0, center, flip, rotation: from, aspect: 1.0 };
                 let n = pivot_center(center, c, from, to, flip);
                 let b = ViewXform { center: n, rotation: to, ..a };
                 let (p, q) = (a.to_screen(70.0, 20.0), b.to_screen(70.0, 20.0));

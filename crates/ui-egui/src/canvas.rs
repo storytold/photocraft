@@ -688,6 +688,10 @@ pub struct ViewXform {
     /// Camera rotation in degrees around [`Self::center`]. Clockwise (Y-down) is positive; applied
     /// before flip.
     pub rotation: f32,
+    /// View › Pixel Aspect Ratio Correction: a document pixel is drawn this many times wider than
+    /// tall (1 = square). Applied in document space, before rotation, so a rotated view still
+    /// shows the stretched image turned as a whole.
+    pub aspect: f32,
 }
 
 impl ViewXform {
@@ -700,6 +704,7 @@ impl ViewXform {
             center: v.center,
             flip: app.ui.view.flip_horizontal,
             rotation: v.rotation,
+            aspect: app.ui.view.display_aspect(),
         })
     }
 
@@ -712,16 +717,27 @@ impl ViewXform {
         }
     }
 
-    /// Unflip then unrotate a screen-space vector (no zoom). Hand pan and zoom-about use this.
+    /// Document pixel width over height on screen: [`Self::aspect`], or 1 when it is unusable.
+    fn sx(self) -> f32 {
+        if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 }
+    }
+
+    /// Screen points per document pixel along the document's x axis.
+    pub fn zoom_x(&self) -> f32 {
+        self.zoom * self.sx()
+    }
+
+    /// Unflip, unrotate and unstretch a screen-space vector (no zoom). Hand pan and zoom-about
+    /// use this.
     pub fn unmap_vec(self, d: Vec2) -> Vec2 {
         let d = if self.flip { vec2(-d.x, d.y) } else { d };
         let (c, s) = self.sincos();
-        vec2(d.x * c + d.y * s, -d.x * s + d.y * c)
+        vec2((d.x * c + d.y * s) / self.sx(), -d.x * s + d.y * c)
     }
 
     pub fn to_screen(&self, x: f32, y: f32) -> Pos2 {
         let (c, s) = self.sincos();
-        let dx = x - self.center[0];
+        let dx = (x - self.center[0]) * self.sx();
         let dy = y - self.center[1];
         let rx = dx * c - dy * s;
         let ry = dx * s + dy * c;
@@ -760,10 +776,12 @@ pub fn doc_point_at(app: &PhotocraftApp, pos: Pos2) -> Option<[f64; 2]> {
 }
 
 /// Fit the document into `area` (egui points) for a display with `ppp` physical pixels per
-/// point; `View::zoom` is stored in physical pixels per document pixel.
-pub fn fit_view(view: &mut View, doc: &Document, area: Vec2, ppp: f32) {
+/// point; `View::zoom` is stored in physical pixels per document pixel. `aspect` is the
+/// displayed pixel aspect ratio ([`ViewXform::aspect`]): the image is that much wider on screen.
+pub fn fit_view(view: &mut View, doc: &Document, area: Vec2, ppp: f32, aspect: f32) {
     let (w, h) = (doc.size.width as f32, doc.size.height as f32);
-    let points = ((area.x - 40.0) / w).min((area.y - 40.0) / h).min(1.0);
+    let shown_w = w * if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let points = ((area.x - 40.0) / shown_w).min((area.y - 40.0) / h).min(1.0);
     let zoom = crate::zoom_levels::clamp(points * ppp, [doc.size.width, doc.size.height]);
     view.zoom = zoom;
     view.center = [w / 2.0, h / 2.0];
@@ -773,9 +791,10 @@ pub fn fit_view(view: &mut View, doc: &Document, area: Vec2, ppp: f32) {
 
 /// Centre the document and zoom until it fills the canvas. One axis can extend beyond the
 /// viewport, matching the Hand tool's Fill Screen action.
-pub fn fill_view(view: &mut View, doc: &Document, area: Vec2, ppp: f32) {
+pub fn fill_view(view: &mut View, doc: &Document, area: Vec2, ppp: f32, aspect: f32) {
     let (w, h) = (doc.size.width as f32, doc.size.height as f32);
-    let points = (area.x / w).max(area.y / h);
+    let shown_w = w * if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+    let points = (area.x / shown_w).max(area.y / h);
     let zoom = crate::zoom_levels::clamp(points * ppp, [doc.size.width, doc.size.height]);
     view.zoom = zoom;
     view.center = [w / 2.0, h / 2.0];
@@ -2333,20 +2352,22 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         view.doc_size = size;
     }
+    // View › Pixel Aspect Ratio Correction: document pixels are shown this much wider.
+    let aspect = app.ui.view.display_aspect();
     if view.fit_pending && rect.width() > 50.0 {
-        fit_view(&mut view, &doc, rect.size(), ppp);
+        fit_view(&mut view, &doc, rect.size(), ppp, aspect);
     }
     if view.fill_pending && rect.width() > 50.0 {
-        fill_view(&mut view, &doc, rect.size(), ppp);
+        fill_view(&mut view, &doc, rect.size(), ppp, aspect);
     }
     // Preferences › Tools › Overscroll off: clamp before anything is drawn (scrollbars.rs).
-    if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view(&mut view, rect.size(), ppp) {
+    if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view(&mut view, rect.size() / vec2(aspect, 1.0), ppp) {
         ctx.request_repaint();
     }
     let flip = app.ui.view.flip_horizontal;
     // Canvas geometry (ViewXform, ViewParams, painter rects) is in egui points.
     let point_zoom = view.zoom / ppp;
-    let xf = ViewXform { rect, zoom: point_zoom, center: view.center, flip, rotation: view.rotation };
+    let xf = ViewXform { rect, zoom: point_zoom, center: view.center, flip, rotation: view.rotation, aspect };
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -2368,9 +2389,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
-    // A flipped view draws through the CPU path (the GPU canvas shader has no mirroring).
-    // Rotation stays on the GPU: it is a view uniform, not a CPU blit.
-    let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation);
+    // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
+    // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
+    let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
     if app.gpu.is_some()
         && gpu_ok
         && let Some((k, key, preview_size)) =
@@ -3189,7 +3210,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, &mut view, flip, app.session.prefs().tools.overscroll, egui::Id::new(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, &mut view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::new(("pc-canvas", idx)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -3761,8 +3782,9 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         }
         // The layers themselves follow the pointer (`move_ui`); the arrow only when they can't.
         Tool::Move if !crate::move_ui::showing(app) => {
-            let off = vec2(((last[0] - d.start[0]) as f32) * xf.zoom, ((last[1] - d.start[1]) as f32) * xf.zoom);
-            painter.arrow(xf.to_screen(d.start[0] as f32, d.start[1] as f32), off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));
+            let from = xf.to_screen(d.start[0] as f32, d.start[1] as f32);
+            let off = xf.to_screen(last[0] as f32, last[1] as f32) - from;
+            painter.arrow(from, off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));
         }
         _ => {}
     }
@@ -5127,7 +5149,8 @@ mod tests {
         app.run("cloneSource.set", json!({"source": [16,16]})).unwrap();
         app.ui.tool = Tool::CloneStamp;
         app.session.tools.brush.size = 20.0;
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0 };
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let revision = app.session.active().unwrap().revision;
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let ctx = ui.ctx();
@@ -5280,7 +5303,14 @@ mod tests {
     #[test]
     fn view_transform_roundtrip() {
         for flip in [false, true] {
-            let xf = ViewXform { rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)), zoom: 2.5, center: [320.0, 240.0], flip, rotation: 0.0 };
+            let xf = ViewXform {
+                rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)),
+                zoom: 2.5,
+                center: [320.0, 240.0],
+                flip,
+                rotation: 0.0,
+                aspect: 1.0,
+            };
             let s = xf.to_screen(10.0, 20.0);
             let d = xf.to_doc(s);
             assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3);
@@ -5674,7 +5704,7 @@ mod tests {
             let ctx = ui.ctx();
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
             let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-            let xf = ViewXform { rect, zoom, center: [60.0, 30.0], flip: false, rotation: 0.0 };
+            let xf = ViewXform { rect, zoom, center: [60.0, 30.0], flip: false, rotation: 0.0, aspect: 1.0 };
             draw_drag_preview(app, &painter, &xf);
         });
         let egui::FullOutput { mut textures_delta, shapes, .. } = out;
@@ -5931,7 +5961,7 @@ mod tests {
         let doc = app.session.active().unwrap().doc.clone();
         let mut view = View { fill_pending: true, ..View::default() };
 
-        fill_view(&mut view, &doc, vec2(600.0, 600.0), 1.0);
+        fill_view(&mut view, &doc, vec2(600.0, 600.0), 1.0, 1.0);
 
         assert_eq!(view.zoom, 3.0, "the short edge fills the available height");
         assert_eq!(view.center, [200.0, 100.0]);
@@ -5939,15 +5969,15 @@ mod tests {
 
         // A scaled display stores the physical factor: the same point zoom is 2× the device px.
         let mut view = View { fill_pending: true, ..View::default() };
-        fill_view(&mut view, &doc, vec2(600.0, 600.0), 2.0);
+        fill_view(&mut view, &doc, vec2(600.0, 600.0), 2.0, 1.0);
         assert_eq!(view.zoom, 6.0);
 
         // Fit never magnifies past the 1 point-per-pixel cap; on a scaled display the cap is 2.
         let mut view = View { fit_pending: true, ..View::default() };
-        fit_view(&mut view, &doc, vec2(600.0, 600.0), 1.0);
+        fit_view(&mut view, &doc, vec2(600.0, 600.0), 1.0, 1.0);
         assert_eq!(view.zoom, 1.0);
         let mut view = View { fit_pending: true, ..View::default() };
-        fit_view(&mut view, &doc, vec2(600.0, 600.0), 2.0);
+        fit_view(&mut view, &doc, vec2(600.0, 600.0), 2.0, 1.0);
         assert_eq!(view.zoom, 2.0);
     }
 
@@ -5977,12 +6007,12 @@ mod tests {
         let p = pos2(600.0, 200.0);
         for ppp in [1.0f32, 2.0] {
             // `View::zoom` is physical; the transform works in points.
-            let xf = ViewXform { rect, zoom: 1.0 / ppp, center: [400.0, 300.0], flip: false, rotation: 0.0 };
+            let xf = ViewXform { rect, zoom: 1.0 / ppp, center: [400.0, 300.0], flip: false, rotation: 0.0, aspect: 1.0 };
             let doc = xf.to_doc(p);
             // Off: the document point under the pointer stays under it.
             let mut view = View { zoom: 1.0, center: [400.0, 300.0], ..Default::default() };
             zoom_about(&mut view, &xf, p, 2.0, false, ppp);
-            let after = ViewXform { rect, zoom: 2.0 / ppp, center: view.center, flip: false, rotation: 0.0 };
+            let after = ViewXform { rect, zoom: 2.0 / ppp, center: view.center, flip: false, rotation: 0.0, aspect: 1.0 };
             let s = after.to_screen(doc[0] as f32, doc[1] as f32);
             assert!((s - p).length() < 0.5, "ppp {ppp}: {s:?} vs {p:?}");
             // On: the clicked point is the view centre.
@@ -6025,7 +6055,8 @@ mod transform_controls_tests {
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_show_transform = true;
 
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let r = transform_controls_rect(&app, &xf).expect("shape layers have transform bounds");
         assert!(transform_controls_hit(r, r.right_bottom()));
 
@@ -6068,7 +6099,8 @@ mod transform_controls_tests {
         // The Move tool's transform controls.
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_show_transform = true;
-        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let r = transform_controls_rect(&app, &xf).unwrap();
         assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
         assert!(app.ui.transform.is_none());

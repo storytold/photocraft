@@ -1747,6 +1747,7 @@
 	Scratch: {size}	Travail : {size}
 	Untagged {mode}	{mode} sans profil
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppp)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppp)
 	Resolution: {dpi} pixels/inch	Résolution : {dpi} pixels/pouce
 	Doc: {w} × {h} px	Doc : {w} × {h} px
 	Frame {current} / {total}	Image {current} / {total}
@@ -2868,3 +2869,5 @@ fontWeight	Italic	Italique
 	Previous Document	Document précédent
 	W x H x Resolution	L x H x Résolution
 	Front Image	Image de premier plan
+	Search settings…	Rechercher des réglages…
+	No matching settings	Aucun réglage correspondant
