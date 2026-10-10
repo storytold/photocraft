@@ -180,6 +180,23 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+/// Preferences ▸ General ▸ Resize Image During Place: off, a larger image keeps its natural size
+/// instead of being fitted to the canvas; an explicit `"fit"` still wins.
+#[test]
+fn resize_image_during_place_preference_controls_the_fit() {
+    let dir = tmp("place-fit-pref");
+    let big = png(&dir, "big.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    s.execute("prefs.set", json!({"path": "general.resizeImageDuringPlace", "value": false})).unwrap();
+    let r = s.execute("file.placeEmbedded", json!({"path": big})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 100.0).abs() < 1e-9, "natural size: {r}");
+    let b = r["bounds"].as_array().unwrap();
+    assert!(b[2].as_f64().unwrap() > 100.0, "wider than the canvas: {b:?}");
+    // An explicit "fit": true overrides the preference.
+    let r = s.execute("file.placeEmbedded", json!({"path": big, "fit": true})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 50.0).abs() < 1e-9, "fitted on request: {r}");
+}
+
 /// A 40×20 JPEG (left half red, right half blue) tagged EXIF Orientation = 6: shown upright it
 /// is 20×40, red on top.
 fn rotated_jpeg(dir: &str) -> String {

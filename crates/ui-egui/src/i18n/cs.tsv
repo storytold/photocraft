@@ -47,6 +47,8 @@
 	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
+	Remove from Recent	Odebrat z nedávných
+	Remove {name} from Recent	Odebrat {name} z nedávných
 	Close	Zavřít
 	Minimize	Minimalizovat
 	Maximize	Maximalizovat
@@ -1547,6 +1549,8 @@
 	Blur Tool	Nástroj rozostření
 	Bold	Tučné
 	Brush	Štětec
+	Pencil	Tužka
+	Block	Blok
 	Brush Pose	Poloha štětce
 	Brush Tip Shape	Tvar hrotu štětce
 	Brush Tool	Nástroj štětec
@@ -1763,6 +1767,7 @@
 	Invalid {mode} profile	Neplatný profil {mode}
 	Unnamed {mode} profile	Bezejmenný profil {mode}
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Rozlišení: {dpi} pixelů/palec
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
 	Frame {current} / {total}	Snímek {current} / {total}
@@ -2336,6 +2341,7 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+	PhotoCraft — Screen Color Picker	PhotoCraft — Výběr barvy obrazovky
 
 	Rasterize svg groups deeper than	Rasterizovat skupiny SVG hlubší než tato úroveň
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 vypne tento práh; skupiny SVG vnořené hlouběji než 100 úrovní se rastrují vždy.
@@ -2424,3 +2430,5 @@ fontWeight	Italic	Kurzíva
 	Previous Document	Předchozí dokument
 	W x H x Resolution	Š x V x Rozlišení
 	Front Image	Přední obraz
+	Search settings…	Hledat nastavení…
+	No matching settings	Žádná odpovídající nastavení

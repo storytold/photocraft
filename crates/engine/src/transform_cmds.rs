@@ -18,7 +18,15 @@ fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "edit.transform".into(), msg: msg.into() }
 }
 
-/// Document-space bounds a transform of `layer` starts from (what Free Transform frames).
+/// Layers a transform moves as a whole, even with a selection: groups, and the kinds that keep the
+/// transform instead of pixels (type, shapes, smart objects). Only pixel layers move just the
+/// selected pixels.
+pub fn moves_whole(layer: &Layer) -> bool {
+    matches!(layer.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
+}
+
+/// Document-space bounds a transform of `layer` starts from (what Free Transform frames): the
+/// content within the selection, or all of it for a layer that [`moves_whole`] (#2630).
 /// Content scans are cached per tile: snapping asks for every layer's bounds per Move drag.
 pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
     let content = match &layer.content {
@@ -28,7 +36,7 @@ pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
     let content =
         if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content };
     match &doc.selection {
-        Some(sel) if !layer.is_group() => content.intersect(&sel.content_bounds()),
+        Some(sel) if !moves_whole(layer) => content.intersect(&sel.content_bounds()),
         _ => content,
     }
 }
@@ -226,7 +234,7 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
     }
     // With a selection only the selected pixels move, and so only the same region of a linked
     // mask (#205). Groups, type, shapes and smart objects move whole.
-    let mask_sel = doc_sel.filter(|_| !matches!(l.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_)));
+    let mask_sel = doc_sel.filter(|_| !moves_whole(l));
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
@@ -767,5 +775,33 @@ mod tests {
         let mut sel = Surface::new(PixelFormat::GRAY8);
         sel.fill_rect(Rect::new(0, 0, 4, 4), &[1.0]);
         assert!(matches!(split_gray_selected(&s, &sel), Ok(None)));
+    }
+
+    /// #2630: type can't be partly transformed, so a selection doesn't narrow the frame: Free
+    /// Transform (and the frame-based presets) act on the whole type layer.
+    #[test]
+    fn a_selection_does_not_narrow_a_type_layers_frame() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 120})).unwrap();
+        s.execute("type.create", json!({"x": 20, "y": 60, "text": "Hello", "size": 36})).unwrap();
+        let whole = active_bounds(&s);
+        s.execute("select.rect", json!({"x": whole.x0, "y": whole.y0, "width": whole.width() / 2, "height": whole.height()})).unwrap();
+        let st = s.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(transform_bounds(&st.doc, l), whole, "the frame is the whole type layer");
+        // Corners of the frame moved 10 px right: a pure translation of the whole text.
+        let q = [[whole.x0 + 10, whole.y0], [whole.x1 + 10, whole.y0], [whole.x1 + 10, whole.y1], [whole.x0 + 10, whole.y1]];
+        s.execute("edit.transform", json!({"quad": q})).unwrap();
+        let moved = active_bounds(&s);
+        assert!(moved.x0.abs_diff(whole.x0 + 10) <= 1 && moved.width().abs_diff(whole.width()) <= 1, "{whole:?} -> {moved:?}");
+        // Rotate 180° turns it about its own centre, not the selection's.
+        s.execute("edit.transform.rotate180", json!({})).unwrap();
+        let turned = active_bounds(&s);
+        assert!(turned.x0.abs_diff(moved.x0) <= 2 && turned.x1.abs_diff(moved.x1) <= 2, "{moved:?} -> {turned:?}");
+        // A pixel layer still frames only the selected pixels.
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 5, "height": 10})).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(transform_bounds(&st.doc, st.doc.layer(st.active_layer.unwrap()).unwrap()), Rect::new(10, 10, 15, 20));
     }
 }

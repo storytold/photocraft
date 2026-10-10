@@ -975,11 +975,9 @@ pub const SECTIONS: [(&str, &str); 18] = [
 pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
     "general.beepWhenDone",
-    "general.resizeImageDuringPlace",
     "general.alwaysCreateSmartObjectsWhenPlacing",
     "general.animatedZoom",
     "general.zoomResizesWindows",
-    "interface.dynamicColorSliders",
     "workspace.autoCollapseIconPanels",
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
@@ -1369,7 +1367,7 @@ fn capitalize(s: &str) -> String {
 pub const TEMPORARY_TOOLS: &[(&str, &str, &str)] = &[
     ("tools.temporary.hand", "Hand Tool (hold)", "Space"),
     ("tools.temporary.zoomIn", "Zoom In (hold, drag to scrub)", "Cmd+Space"),
-    ("tools.temporary.zoomOut", "Zoom Out (hold)", "Cmd+Alt+Space"),
+    ("tools.temporary.zoomOut", "Zoom Out (hold)", "Alt+Space"),
 ];
 
 /// Every bindable id with its default: commands, then the temporary tools.

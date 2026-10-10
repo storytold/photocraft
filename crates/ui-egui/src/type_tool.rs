@@ -595,6 +595,8 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                     }
                     Key::Enter if m.command => commit(app),
                     Key::Enter => insert(app, "\n"),
+                    // Photoshop types a tab character; layout advances it to the next tab stop.
+                    Key::Tab if !m.command && !m.alt && !m.shift => insert(app, "\t"),
                     Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
                     // Preferences ▸ Type: with "Use Escape to Commit" off, Escape cancels the
                     // session (undoes it, removing a just-created layer) like the Cancel button.

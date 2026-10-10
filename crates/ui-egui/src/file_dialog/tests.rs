@@ -292,6 +292,12 @@ fn save_and_export_dialogs_start_beside_the_document() {
     }
 }
 
+/// The path `pick_save` suggests for `name` in `dir` on this platform: it joins with `Path::join`,
+/// which uses `\` on Windows, so the expected values must be built the same way (#2745).
+fn joined(dir: &str, name: &str) -> String {
+    std::path::Path::new(dir).join(name).to_string_lossy().into_owned()
+}
+
 /// #1826: after the user navigates a save or export dialog elsewhere, the document's next dialog
 /// starts there. Save As of a saved document still suggests its own path; other documents and
 /// closed documents are unaffected.
@@ -305,8 +311,6 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
         FileDialogRequest::Save { suggested } => suggested.clone(),
         other => panic!("save dialog expected, got {other:?}"),
     };
-    // Suggestions are built with `Path::join`, which uses `\` on Windows (#2745).
-    let joined = |dir: &str, name: &str| std::path::Path::new(dir).join(name).to_string_lossy().into_owned();
     // An export starts beside the document; the user saves it under /renders instead.
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);

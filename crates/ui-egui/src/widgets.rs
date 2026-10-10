@@ -55,7 +55,7 @@ pub fn surface(ui: &Ui, rect: Rect, fill: Color32, raised: bool) {
 /// A dock card: rounded container with a header of pill tabs and optional trailing actions.
 /// Returns the index of the selected tab.
 pub fn card(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, body: impl FnOnce(&mut Ui, usize)) {
-    let _ = card_ex(ui, id, tabs, selected, false, body);
+    let _ = card_ex(ui, id, tabs, selected, false, false, body);
 }
 
 /// What happened on a card's tab strip this frame (see [`card_ex`]).
@@ -75,13 +75,46 @@ pub struct CardResponse {
     pub tabs: Vec<(usize, Rect)>,
     /// The » overflow button, when some tabs didn't fit.
     pub chevron: Option<Rect>,
+    /// A tab dragged along the strip was dropped: `(tab, before)` (#2272).
+    pub tab_reorder: Option<(usize, Option<usize>)>,
+    /// A tab is being dragged away from the strip.
+    pub tab_dragging_out: bool,
+    /// A tab drag ended away from the strip.
+    pub tab_dropped_out: bool,
+}
+
+impl CardResponse {
+    fn new(strip: Response, menu: Response, tabs: crate::tab_strip::StripOut) -> Self {
+        CardResponse {
+            strip,
+            menu,
+            tab_clicked: tabs.clicked,
+            tab_double_clicked: tabs.double_clicked,
+            tab_context: tabs.context,
+            tabs: tabs.tabs,
+            chevron: tabs.chevron,
+            tab_reorder: tabs.reorder,
+            tab_dragging_out: tabs.dragging_out,
+            tab_dropped_out: tabs.dropped_out,
+        }
+    }
 }
 
 /// [`card`] that can be collapsed to its tab strip and reports strip and menu interactions.
-pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
+/// With `reorderable`, tabs can be dragged along the strip (reported, not applied).
+#[allow(clippy::too_many_arguments)]
+pub fn card_ex(
+    ui: &mut Ui,
+    id: &str,
+    tabs: &[&str],
+    selected: &mut usize,
+    collapsed: bool,
+    reorderable: bool,
+    body: impl FnOnce(&mut Ui, usize),
+) -> CardResponse {
     let t = Tokens::get(ui.ctx());
     if t.pro {
-        return pro_panel(ui, id, tabs, selected, collapsed, body);
+        return pro_panel(ui, id, tabs, selected, collapsed, reorderable, body);
     }
     let m = body_margin(false);
     let frame = egui::Frame::NONE
@@ -101,20 +134,12 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
             let menu_rect = Rect::from_min_max(pos2(row.right() - 22.0, row.top() + 1.0), pos2(row.right(), row.bottom() - 1.0));
             let menu = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(menu_rect)), "ellipsis", 22.0, false, &tip);
             let area = Rect::from_min_max(row.min, pos2((menu_rect.left() - 4.0).max(row.left()), row.bottom()));
-            let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected);
+            let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected, reorderable);
             if !collapsed {
                 ui.add_space(6.0);
                 body(ui, *selected);
             }
-            CardResponse {
-                strip,
-                menu,
-                tab_clicked: tabs_out.clicked,
-                tab_double_clicked: tabs_out.double_clicked,
-                tab_context: tabs_out.context,
-                tabs: tabs_out.tabs,
-                chevron: tabs_out.chevron,
-            }
+            CardResponse::new(strip, menu, tabs_out)
         })
         .inner;
     ui.add_space(6.0);
@@ -152,7 +177,15 @@ pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 /// Photoshop-grammar panel group: dark tab strip with flat tabs, flat body, hamburger menu.
-fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
+fn pro_panel(
+    ui: &mut Ui,
+    id: &str,
+    tabs: &[&str],
+    selected: &mut usize,
+    collapsed: bool,
+    reorderable: bool,
+    body: impl FnOnce(&mut Ui, usize),
+) -> CardResponse {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width();
     // Tab strip. Its background senses drags (move the group) and double-clicks (collapse);
@@ -163,7 +196,7 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
     ui.painter().rect_filled(strip, rounding, t.tab_strip);
     // Panel menu (hamburger); the tabs stay left of it, eliding or overflowing (#151).
     let menu = Rect::from_center_size(pos2(strip.right() - 14.0, strip.center().y), vec2(20.0, 18.0));
-    let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed);
+    let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed, reorderable);
     let mresp = ui.interact(menu, ui.id().with((id, "menu")), Sense::click());
     let c = if mresp.hovered() { t.text } else { t.text_faint };
     for k in 0..3 {
@@ -178,15 +211,7 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
         });
     }
     ui.add_space(2.0);
-    CardResponse {
-        strip: strip_resp,
-        menu: mresp,
-        tab_clicked: tabs_out.clicked,
-        tab_double_clicked: tabs_out.double_clicked,
-        tab_context: tabs_out.context,
-        tabs: tabs_out.tabs,
-        chevron: tabs_out.chevron,
-    }
+    CardResponse::new(strip_resp, mresp, tabs_out)
 }
 
 pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
@@ -939,6 +964,9 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
             reveal |= wheeled;
             chosen.extend(stepped);
         }
+        // The row nearest the pointer, by its distance to each row.
+        let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
+        let mut nearest: Option<(f32, &T)> = None;
         for (v, l) in options {
             let item = ui.selectable_label(v == current, tl!(l));
             if reveal && v == current {
@@ -947,10 +975,21 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
             if item.hovered() {
                 hovered = Some(v.clone());
             }
+            if let Some(p) = pointer {
+                let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
+                if nearest.is_none_or(|(n, _)| d < n) {
+                    nearest = Some((d, v));
+                }
+            }
             if item.clicked() {
                 *current = v.clone();
                 chosen.push(v.clone());
             }
+        }
+        // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
+        // so keep previewing the nearest row instead of flashing the current value back (#2553).
+        if hovered.is_none() {
+            hovered = nearest.map(|(_, v)| v.clone());
         }
     });
     if combo_box_arrow_keys(ui, &response.response, current, options) {
@@ -1419,7 +1458,7 @@ mod tests {
                 if round {
                     *v = v.round();
                 }
-                if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if ui.button(tl!("OK")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     *ok = Some(*v);
                 }
             },

@@ -139,3 +139,33 @@ fn gallery_is_a_smart_filter_on_smart_objects() {
     assert_eq!(sm.smart_filters[0].command, "filter.filterGallery");
     assert_eq!(sm.smart_filters[0].params["effects"][0]["filter"], json!("texturizer"));
 }
+
+#[test]
+fn unknown_choice_names_are_bad_params_without_editing() {
+    let mut s = session(8, "rgb");
+    let before = pixels(&s);
+    let history = s.active().unwrap().history.entries();
+    let mut checked = 0;
+    for f in GalleryFilter::ALL.iter().copied() {
+        for prm in f.params() {
+            let GalleryParamKind::Choice(names) = prm.kind else { continue };
+            let id = f.command_id();
+            for v in [json!("zzbogus"), json!(true), json!([0])] {
+                let err = s.execute(id, json!({prm.key: v})).unwrap_err();
+                assert!(matches!(err, EngineError::BadParams { .. }), "{id}.{}: {err}", prm.key);
+                assert!(err.to_string().contains(prm.key), "{err}");
+                let stack = json!({"effects": [{"filter": f.key(), "params": {prm.key: v}}]});
+                assert!(matches!(s.execute("filter.filterGallery", stack), Err(EngineError::BadParams { .. })), "{id}.{}", prm.key);
+            }
+            assert_eq!(pixels(&s), before);
+            assert_eq!(s.active().unwrap().history.entries(), history);
+            // Every listed name (any case) and an index still run.
+            for v in names.iter().map(|n| json!(n.to_uppercase())).chain([json!(names.len() - 1)]) {
+                s.execute(id, json!({prm.key: v})).unwrap();
+                s.undo();
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 16, "{checked}");
+}

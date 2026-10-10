@@ -584,6 +584,22 @@ fn fills_and_dissolve() {
     d.layers.push(clip);
     d.layers.push(Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert)));
     check(&mut g, &d, "opaque gradient over everything");
+    // Stacked dithered gradients, the top one in Color Dodge (#2755): the dither is rounded to
+    // the document's levels on both sides, so the dodge doesn't blow it up into speckle.
+    let mut d = base_doc(64, 48);
+    for (name, stops, angle, blend) in [
+        ("under", vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))], 0.0, BlendMode::Normal),
+        ("dodge", vec![(0.0, Color::rgb(0.88, 0.88, 0.88)), (1.0, Color::rgb(0.97, 0.97, 0.97))], 90.0, BlendMode::ColorDodge),
+    ] {
+        let mut f = Fill::gradient(stops, angle, 1.0, GradientStyle::Linear, false);
+        if let Fill::Gradient { dither, .. } = &mut f {
+            *dither = true;
+        }
+        let mut l = Layer::new(name, LayerContent::Fill(f));
+        l.blend = blend;
+        d.layers.push(l);
+    }
+    check(&mut g, &d, "dithered gradients under Color Dodge");
     let mut d = base_doc(64, 48);
     let mut l = noise_layer("dis", PixelFormat::RGBA8, Rect::new(0, 0, 64, 48), 41, 0.2);
     l.blend = BlendMode::Dissolve;

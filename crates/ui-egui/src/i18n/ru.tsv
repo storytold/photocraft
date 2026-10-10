@@ -49,6 +49,8 @@
 	Right	Правый
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
+	Remove from Recent	Удалить из недавних
+	Remove {name} from Recent	Удалить {name} из недавних
 	Close	Закрыть
 	Minimize	Свернуть
 	Maximize	Развернуть
@@ -490,6 +492,7 @@
 	Wand	Волшебная палочка
 	Eyedropper	Пипетка
 	Brush	Кисть
+	Block	Квадрат
 	Pencil	Карандаш
 	Eraser	Ластик
 	Clone Stamp	Штамп
@@ -644,6 +647,7 @@
 	Resolution:	Разрешение:
 	Resolution: {dpi} pixels/inch	Разрешение: {dpi} пикс./дюйм
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Pixels:	Пикселы:
 	Pixel Length:	Длина в пикселах:
 	Logical Length:	Логическая длина:
@@ -2609,6 +2613,7 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+	PhotoCraft — Screen Color Picker	PhotoCraft — Пипетка цвета экрана
 
 	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 отключает этот порог; группы SVG с вложенностью более 100 уровней всегда растрируются.
@@ -2709,3 +2714,5 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+	Search settings…	Поиск настроек…
+	No matching settings	Нет подходящих настроек

@@ -115,6 +115,7 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 }
 
 /// Extensions the batch commands pick up from a folder.
+#[cfg(not(target_arch = "wasm32"))]
 const OPENABLE: &[&str] = &[
     "pdn", "ora", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm",
     "heic", "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef", "svg", "svgz", "af", "afdesign", "afphoto", "afpub",
@@ -399,9 +400,9 @@ fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
 /// History label of an embedded place.
 pub const PLACE_EMBEDDED: &str = "Place Embedded";
 
-/// Place a file's bytes as a smart object layer, centred and (when larger than the canvas)
-/// scaled down to fit, like Photoshop's Place with "Resize Image During Place". `linked` makes it
-/// a linked smart object that refers to that path instead of embedding the bytes.
+/// Place a file's bytes as a smart object layer, centred, and (with Preferences ▸ General ▸
+/// Resize Image During Place, on by default) scaled down to fit when larger than the canvas.
+/// `linked` makes it a linked smart object that refers to that path instead of embedding the bytes.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
@@ -416,9 +417,11 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     }
     let src = imported.document;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
+    // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
+    let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(s.prefs().general.resize_image_during_place);
     let scale = match f64_param(p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
-        None if p.get("fit").and_then(Value::as_bool) != Some(false) && (w > cw || h > ch) => (cw / w).min(ch / h),
+        None if fit && (w > cw || h > ch) => (cw / w).min(ch / h),
         None => 1.0,
     };
     let center = match p.get("center").and_then(Value::as_array) {
@@ -772,8 +775,12 @@ impl OutputClaims {
 
 fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let steps =
+    let mut steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    // Each result goes to the destination folder, which overrides the action's recorded Save /
+    // Save As steps (Photoshop's "Override Action 'Save As' Commands"). Recorded view steps
+    // (zoom, fit) don't change the output, so they are skipped (#2752).
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id));
     if let Some((id, _)) = steps.iter().find(|(id, _)| crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
@@ -1297,13 +1304,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool=true,"center":[x,y]?}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
-        spec!("file.placeLinked", "Place Linked…", &["File"], None, r##"{"path":str,"scale":%?,"fit":bool=true,"center":[x,y]?}"##, native_doc, |s, p| place(
-            s, p, true
-        )),
+        spec!(
+            "file.placeLinked",
+            "Place Linked…",
+            &["File"],
+            None,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?}"##,
+            native_doc,
+            |s, p| place(s, p, true)
+        ),
         spec!(
             "file.fileInfo",
             "File Info…",
