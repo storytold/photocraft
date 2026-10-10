@@ -545,6 +545,11 @@ fn elapsed(ms: f64) -> String {
     if s < 60.0 { format!("{s:.1} s") } else { format!("{}:{:02}", (s / 60.0).floor() as u64, (s % 60.0).floor() as u64) }
 }
 
+/// Translate worker messages in the shell, keeping the engine/control protocol language-neutral.
+fn open_message(message: &str) -> String {
+    if message.is_empty() { tl!("Reading…").to_string() } else { format!("{}…", tl!(message)) }
+}
+
 /// The canvas area of an opening tab: the file name, a bar and Cancel, centred on the
 /// workspace backdrop.
 pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
@@ -559,7 +564,7 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(18.0)));
     child.label(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0)));
     child.add_space(4.0);
-    let msg = if j.message.is_empty() { tl!("Reading…").to_string() } else { format!("{}…", j.message) };
+    let msg = open_message(&j.message);
     child.label(RichText::new(msg).color(t.text_dim).size(12.0));
     child.add_space(10.0);
     let (br, _) = child.allocate_exact_size(vec2(child.available_width(), 8.0), Sense::hover());
@@ -609,3 +614,20 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 #[cfg(test)]
 #[path = "jobs_ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod localization_tests {
+    #[test]
+    fn opening_stages_follow_the_display_language() {
+        for (code, reading, decoding) in
+            [("zh-hans", "正在读取…", "正在解码…"), ("zh-hant", "正在讀取…", "正在解碼…"), ("en", "Reading…", "Decoding…")]
+        {
+            crate::i18n::with_language(crate::i18n::Lang::from_code(code).unwrap(), || {
+                assert_eq!(super::open_message(""), reading);
+                assert_eq!(super::open_message("Reading"), reading);
+                assert_eq!(super::open_message("Decoding"), decoding);
+                assert_eq!(super::open_message("Unknown stage"), "Unknown stage…");
+            });
+        }
+    }
+}

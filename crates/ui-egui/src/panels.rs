@@ -3108,7 +3108,7 @@ fn fx_drag_feedback(ctx: &egui::Context, doc: &photocraft_doc::Document) {
         Some(i) => doc.layer(LayerId(from)).and_then(|l| l.effects.items.get(i)).map_or("", |e| e.label()),
         None => "Effects",
     };
-    crate::layer_transfer::ghost(ctx, p, label);
+    crate::layer_transfer::ghost(ctx, p, tl!(label));
     if ctx.input(|i| i.modifiers.alt) {
         ctx.set_cursor_icon(egui::CursorIcon::Copy);
     }
@@ -3146,10 +3146,10 @@ fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, actions: &
 fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
     let t = Tokens::get(ui.ctx());
     let indent = 30.0 + depth as f32 * 14.0 + 34.0;
-    let mut rows: Vec<(String, bool, Option<&'static str>)> = vec![("Effects".into(), l.effects.enabled, None)];
+    let mut rows: Vec<(String, bool, Option<&'static str>)> = vec![(tl!("Effects").into(), l.effects.enabled, None)];
     for e in &l.effects.items {
         let kind = crate::layer_style::KINDS.iter().find(|k| k.1 == e.label()).map(|k| k.0);
-        rows.push((e.label().to_string(), e.enabled(), kind));
+        rows.push((tl!(e.label()).to_string(), e.enabled(), kind));
     }
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
@@ -4113,3 +4113,30 @@ mod group_drag_selection_tests {
 #[cfg(test)]
 #[path = "mask_props_ui_tests.rs"]
 mod mask_properties_tests;
+
+#[cfg(test)]
+mod effect_localization_tests {
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn effect_rows_draw_in_the_selected_language() {
+        crate::i18n::with_language(crate::i18n::Lang::from_code("zh-hans").unwrap(), || {
+            let mut session = photocraft_engine::Session::new();
+            session.execute("file.new", serde_json::json!({"width": 64, "height": 48})).unwrap();
+            session.execute("layer.new.layer", serde_json::json!({})).unwrap();
+            session.execute("layer.layerStyle.dropShadow", serde_json::json!({})).unwrap();
+            let layer = session.active().unwrap().doc.layer(session.active().unwrap().active_layer.unwrap()).unwrap().clone();
+            let mut actions = Vec::new();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(320.0, 180.0)).build_ui_state(
+                move |ui, app: &mut crate::PhotocraftApp| super::effect_rows(app, ui, &layer, 0, &mut actions),
+                crate::PhotocraftApp::new(session, crate::Services::default()),
+            );
+            crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(2);
+            h.get_by_label("效果");
+            h.get_by_label("投影");
+            assert!(h.query_by_label("Effects").is_none());
+            assert!(h.query_by_label("Drop Shadow").is_none());
+        });
+    }
+}
