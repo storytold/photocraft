@@ -486,7 +486,8 @@ fn selected_pixels_move_off_the_background_but_not_off_a_fully_locked_layer() {
             Ok(())
         })
         .unwrap();
-    for (tool, m) in [(Tool::RectMarquee, Modifiers::COMMAND), (Tool::Move, Modifiers::NONE)] {
+    // ⌘ with the Brush is the Move tool too (#2248).
+    for (tool, m) in [(Tool::RectMarquee, Modifiers::COMMAND), (Tool::Move, Modifiers::NONE), (Tool::Brush, Modifiers::COMMAND)] {
         app.ui.tool = tool;
         drag(&mut app, [20.0, 20.0], [40.0, 20.0], m);
         assert_eq!(error_dialogs(&app), [crate::move_lock::MESSAGE], "{tool:?}");
