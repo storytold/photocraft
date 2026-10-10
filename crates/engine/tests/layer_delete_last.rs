@@ -1,5 +1,5 @@
-//! Delete Layer never leaves a document without layers (#1107): the single-layer path refuses
-//! like the multi-select path does, and changes nothing.
+//! Delete Layer may leave an empty document. Single-layer and group deletion must reset the
+//! layer target and remain undoable, including calls with an explicit layer parameter.
 
 use photocraft_engine::Session;
 use serde_json::json;
@@ -11,33 +11,42 @@ fn one_layer_doc() -> Session {
 }
 
 #[test]
-fn deleting_the_only_layer_is_refused() {
+fn deleting_the_only_layer_is_undoable() {
     let mut s = one_layer_doc();
     let id = s.active().unwrap().doc.layers[0].id;
-    let undo_before = s.active().unwrap().history.can_undo();
-    let r = s.execute("layer.delete", json!({"layer": id.0}));
-    assert!(r.is_err(), "deleted the last layer ({r:?})");
+    s.execute("layer.delete", json!({"layer": id.0})).unwrap();
     let st = s.active().unwrap();
-    assert_eq!(st.doc.layers.len(), 1);
-    assert_eq!(st.active_layer, Some(id));
-    assert_eq!(st.history.can_undo(), undo_before, "a refused delete left a history step");
+    assert!(st.doc.layers.is_empty());
+    assert_eq!(st.active_layer, None);
+    assert!(st.selected_layers().is_empty());
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+    assert_eq!(s.active().unwrap().active_layer, Some(id));
 }
 
 #[test]
-fn deleting_the_only_layer_without_a_param_is_refused() {
+fn deleting_the_only_layer_without_a_param_is_undoable() {
     let mut s = one_layer_doc();
-    assert!(s.execute("layer.delete", json!({})).is_err());
+    s.execute("layer.delete", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layers.is_empty());
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.undo());
     assert_eq!(s.active().unwrap().doc.layers.len(), 1);
 }
 
 #[test]
-fn deleting_a_group_that_holds_every_layer_is_refused() {
+fn deleting_a_group_that_holds_every_layer_is_undoable() {
     let mut s = one_layer_doc();
     let r = s.execute("layer.groupLayers", json!({})).unwrap();
     let group = r["layer"].as_u64().unwrap_or_else(|| s.active().unwrap().active_layer.unwrap().0);
     assert_eq!(s.active().unwrap().doc.layers.len(), 1, "the group should be the only top-level layer");
-    assert!(s.execute("layer.delete", json!({"layer": group})).is_err());
+    s.execute("layer.delete", json!({"layer": group})).unwrap();
+    assert!(s.active().unwrap().doc.layers.is_empty());
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.undo());
     assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+    assert_eq!(s.active().unwrap().active_layer.unwrap().0, group);
+    assert_eq!(s.active().unwrap().doc.layer_count(), 2, "undo restores the group's child too");
 }
 
 #[test]

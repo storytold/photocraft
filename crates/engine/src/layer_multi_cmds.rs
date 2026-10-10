@@ -1179,12 +1179,12 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
     let sel = selected(s);
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
+        for id in &ids {
+            crate::commands::check_delete_unlocked(doc, *id)?;
+        }
         let neighbours = active.map(|id| deletion_neighbours(doc, id)).unwrap_or_default();
         for id in &ids {
             doc.remove(*id).ok_or(EngineError::NoLayer(*id))?;
-        }
-        if doc.layers.is_empty() {
-            return Err(EngineError::Other("a document must keep at least one layer".into()));
         }
         *active = neighbours.into_iter().find(|candidate| doc.layer(*candidate).is_some());
         Ok(())

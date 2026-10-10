@@ -198,6 +198,153 @@ fn layer_lifecycle_with_undo() {
 }
 
 #[test]
+fn layer_delete_last_layer_keeps_an_editable_document() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "depth": depth, "background": "transparent"})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.delete", json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert!(st.doc.layers.is_empty());
+        assert_eq!(st.active_layer, None);
+        assert!(st.selected_layers().is_empty());
+        assert!(!s.is_enabled("layer.delete"));
+        assert_eq!(px(&mut s, 1, 1), vec![0.0; 4], "empty canvas is transparent at {depth} bits");
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().active_layer, Some(id));
+        assert_eq!(s.active().unwrap().selected_layers(), vec![id]);
+        assert!(s.redo());
+        assert!(s.active().unwrap().doc.layers.is_empty());
+        s.execute("layer.new.layer", json!({"name": "New paint"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        assert_eq!(px(&mut s, 1, 1), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+}
+
+#[test]
+fn layer_delete_all_selected_is_one_undo_step() {
+    let mut s = session_with_doc();
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Child"})).unwrap();
+    s.execute("layer.groupLayers", json!({"name": "Group"})).unwrap();
+    let ids: Vec<_> = s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id).collect();
+    for id in &ids {
+        s.execute("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
+    }
+    let selected = s.active().unwrap().selected_layers();
+    s.execute("layer.delete", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layers.is_empty());
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.active().unwrap().selected_layers().is_empty());
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id).collect::<Vec<_>>(), ids);
+    assert_eq!(s.active().unwrap().selected_layers(), selected);
+    assert!(s.redo());
+    assert!(s.active().unwrap().doc.layers.is_empty());
+}
+
+#[test]
+fn layer_delete_group_retargets_its_active_child() {
+    let mut s = session_with_doc();
+    let background = s.active().unwrap().active_layer.unwrap();
+    let child = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.select", json!({"layer": child.0})).unwrap();
+    s.execute("layer.delete", json!({"layer": group.0})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(background));
+    assert_eq!(s.active().unwrap().selected_layers(), vec![background]);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().active_layer, Some(child));
+    assert!(s.active().unwrap().doc.layer(group).is_some());
+}
+
+#[test]
+fn layer_delete_respects_background_lock() {
+    for depth in [8, 16, 32] {
+        for mode in ["selected", "explicit", "multi", "group"] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 4, "height": 4, "depth": depth})).unwrap();
+            let background = s.active().unwrap().active_layer.unwrap();
+            let locks = s.active().unwrap().doc.layer(background).unwrap().locks;
+            assert!(locks.transparency && locks.position && !locks.all);
+            let params = match mode {
+                "explicit" => json!({"layer": background.0}),
+                "multi" => {
+                    s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+                    s.execute("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
+                    json!({})
+                }
+                "group" => {
+                    s.execute("layer.groupLayers", json!({})).unwrap();
+                    json!({})
+                }
+                _ => json!({}),
+            };
+            let before = s.active().unwrap().doc.clone();
+            let revision = s.active().unwrap().revision;
+            let selected = s.active().unwrap().selected_layers();
+            let error = s.execute("layer.delete", params.clone()).unwrap_err();
+            assert!(error.to_string().contains("locked"), "{depth} bits, {mode}: {error}");
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().revision, revision);
+            assert_eq!(s.active().unwrap().selected_layers(), selected);
+            if mode != "group" {
+                // The standard Background conversion removes its special locks.
+                s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+                s.execute("layer.delete", params).unwrap();
+                assert!(s.active().unwrap().doc.layers.is_empty());
+                assert!(s.undo());
+                assert!(s.active().unwrap().doc.layer(background).is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn layer_delete_locked_targets_is_atomic() {
+    for multi in [false, true] {
+        let mut s = session_with_doc();
+        let background = s.active().unwrap().active_layer.unwrap();
+        let id = LayerId(s.execute("layer.new.layer", json!({"name": "Locked"})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.setProps", json!({"locked": true})).unwrap();
+        let params = if multi {
+            s.execute("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
+            json!({})
+        } else {
+            json!({"layer": id.0})
+        };
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let selected = s.active().unwrap().selected_layers();
+        let error = s.execute("layer.delete", params).unwrap_err();
+        assert!(error.to_string().contains("locked"), "{error}");
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().selected_layers(), selected);
+        // A refused delete adds no history step: undo still targets the lock operation.
+        assert!(s.undo());
+        assert!(!s.active().unwrap().doc.layer(id).unwrap().locks.all);
+    }
+}
+
+#[test]
+fn layer_delete_respects_group_and_descendant_locks() {
+    for lock_group in [false, true] {
+        let mut s = session_with_doc();
+        let child = LayerId(s.execute("layer.new.layer", json!({"name": "Child"})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.groupLayers", json!({"name": "Group"})).unwrap();
+        let group = s.active().unwrap().active_layer.unwrap();
+        let locked = if lock_group { group } else { child };
+        s.execute("layer.setProps", json!({"layer": locked.0, "locked": true})).unwrap();
+        let target = if lock_group { child } else { group };
+        let before = s.active().unwrap().doc.clone();
+        assert!(s.execute("layer.delete", json!({"layer": target.0})).unwrap_err().to_string().contains("locked"));
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    }
+}
+
+#[test]
 fn bad_blend_mode_is_a_param_error() {
     let mut s = session_with_doc();
     let e = s.execute("layer.setProps", json!({"blend": "sparkle"})).unwrap_err();
@@ -1325,6 +1472,7 @@ fn mask_and_pixels_keep_their_own_colour_pair() {
 fn delete_layer_selects_neighbour_and_undo_restores_layer() {
     for deleted_index in 0..3 {
         let mut s = session_with_doc();
+        s.execute("layer.new.layerFromBackground", json!({})).unwrap();
         let ids = ["bottom", "middle", "top"].map(|name| LayerId(s.execute("layer.new.layer", json!({"name":name})).unwrap()["layer"].as_u64().unwrap()));
         if deleted_index == 0 {
             let background = s.active().unwrap().doc.layers[0].id;
@@ -1361,6 +1509,7 @@ fn delete_multiple_layers_selects_next_survivor() {
 #[test]
 fn delete_layer_neighbours_follow_group_row_order() {
     let mut s = session_with_doc();
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
     let background = s.active().unwrap().active_layer.unwrap();
     let lower = LayerId(s.execute("layer.new.layer", json!({"name":"Below group"})).unwrap()["layer"].as_u64().unwrap());
     let child = LayerId(s.execute("layer.new.layer", json!({"name":"Child"})).unwrap()["layer"].as_u64().unwrap());
@@ -1377,15 +1526,23 @@ fn delete_layer_neighbours_follow_group_row_order() {
 }
 
 #[test]
-fn delete_layer_preserves_an_unaffected_active_layer_and_last_layer_guard() {
+fn delete_layer_preserves_an_unaffected_active_layer_and_can_delete_last_layer() {
     let mut s = session_with_doc();
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
     let background = s.active().unwrap().active_layer.unwrap();
     let other = LayerId(s.execute("layer.new.layer", json!({"name":"Other"})).unwrap()["layer"].as_u64().unwrap());
     s.execute("layer.delete", json!({"layer":background.0})).unwrap();
     assert_eq!(s.active().unwrap().active_layer, Some(other));
     let before = s.active().unwrap().history.past_len();
-    assert!(s.execute("layer.delete", json!({})).is_err());
-    assert_eq!(s.active().unwrap().doc.layer_count(), 1);
+    s.execute("layer.delete", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer_count(), 0);
+    assert_eq!(s.active().unwrap().active_layer, None);
+    assert!(s.active().unwrap().selected_layers().is_empty());
+    assert_eq!(s.active().unwrap().history.past_len(), before + 1);
+    assert!(s.undo());
     assert_eq!(s.active().unwrap().active_layer, Some(other));
     assert_eq!(s.active().unwrap().history.past_len(), before);
+    assert!(s.redo());
+    assert_eq!(s.active().unwrap().doc.layer_count(), 0);
+    assert_eq!(s.active().unwrap().active_layer, None);
 }

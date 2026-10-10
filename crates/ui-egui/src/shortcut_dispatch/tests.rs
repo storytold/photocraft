@@ -477,16 +477,110 @@ fn delete_without_a_selection_deletes_every_selected_layer() {
     assert_eq!(names(&h).len(), n - 2);
 }
 
+#[test]
+fn delete_without_a_selection_can_remove_all_layers() {
+    for key in ["Delete", "Backspace"] {
+        for count in [1, 2] {
+            let mut h = harness();
+            let s = &mut h.state_mut().session;
+            s.execute("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
+            let first = s.active().unwrap().active_layer.unwrap();
+            if count == 2 {
+                s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+                s.execute("layer.select", json!({"layer": first.0, "mode": "add"})).unwrap();
+            }
+            h.run_steps(2);
+            put_focus(&mut h, Place::Canvas);
+            let before = names(&h);
+            press(&mut h, key);
+            assert_eq!(logged(&h), ["layer.delete"], "{count} layers, {key}");
+            let st = h.state().session.active().unwrap();
+            assert!(st.doc.layers.is_empty());
+            assert_eq!(st.active_layer, None);
+            assert!(st.selected_layers().is_empty());
+            press(&mut h, "Cmd+Z");
+            assert_eq!(names(&h), before, "one undo restores every layer");
+        }
+    }
+}
+
+#[test]
+fn delete_preserves_background_until_unlocked() {
+    for key in ["Delete", "Backspace"] {
+        for count in [1, 2] {
+            let mut h = harness();
+            let s = &mut h.state_mut().session;
+            s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+            let background = s.active().unwrap().active_layer.unwrap();
+            assert!(!s.active().unwrap().doc.layer(background).unwrap().locks.all, "Background has special locks, not a full lock");
+            if count == 2 {
+                s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+                s.execute("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
+            }
+            let before = s.active().unwrap().doc.clone();
+            h.run_steps(2);
+            put_focus(&mut h, Place::Canvas);
+            press(&mut h, key);
+            assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Failed(why))] if id == "layer.delete" && why.contains("locked")));
+            assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc), "{key}: even mixed selections stay intact");
+            h.state_mut().session.execute("layer.new.layerFromBackground", json!({})).unwrap();
+            h.run_steps(2);
+            press(&mut h, key);
+            assert_eq!(logged(&h), ["layer.delete"]);
+            assert!(h.state().session.active().unwrap().doc.layers.is_empty(), "{key}: unlocked layers can be deleted");
+            press(&mut h, "Cmd+Z");
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count);
+        }
+    }
+}
+
+#[test]
+fn delete_preserves_locked_layers_and_pixels() {
+    for key in ["Delete", "Backspace"] {
+        for selection in [false, true] {
+            let mut h = harness();
+            let s = &mut h.state_mut().session;
+            if !selection {
+                s.execute("select.deselect", json!({})).unwrap();
+            }
+            s.execute("layer.setProps", json!({"locked": true})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let id = s.active().unwrap().active_layer.unwrap();
+            let pixel = before.layer(id).unwrap().surface().unwrap().pixel(25, 25);
+            put_focus(&mut h, Place::Canvas);
+            press(&mut h, key);
+            let command = if selection { "edit.clear" } else { "layer.delete" };
+            assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Failed(why))] if id == command && why.contains("locked")));
+            let doc = &h.state().session.active().unwrap().doc;
+            assert!(std::sync::Arc::ptr_eq(&before, doc));
+            assert_eq!(doc.layer(id).unwrap().surface().unwrap().pixel(25, 25), pixel);
+        }
+    }
+}
+
 /// A selection keeps Edit › Clear: the selected pixels go, the layer stays.
 #[test]
 fn delete_with_a_selection_clears_it() {
-    let mut h = harness();
-    put_focus(&mut h, Place::Canvas);
-    let before = names(&h);
-    assert!(h.state().session.active().unwrap().doc.selection.is_some());
-    press(&mut h, "Delete");
-    assert_eq!(logged(&h), ["edit.clear"]);
-    assert_eq!(names(&h), before, "no layer was deleted");
+    for key in ["Delete", "Backspace"] {
+        let mut h = harness();
+        put_focus(&mut h, Place::Canvas);
+        let s = &mut h.state_mut().session;
+        // Fill a larger region first, then clear only a smaller selection inside it.
+        s.execute("select.rect", json!({"x": 30, "y": 30, "width": 10, "height": 10})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let pixel = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().pixel(35, 35);
+        let before = names(&h);
+        press(&mut h, key);
+        assert_eq!(logged(&h), ["edit.clear"]);
+        assert_eq!(names(&h), before, "no layer was deleted");
+        let st = h.state().session.active().unwrap();
+        let surface = st.doc.layer(id).unwrap().surface().unwrap();
+        assert_eq!(surface.pixel(35, 35), vec![0.0; 4], "selected pixels cleared");
+        assert_eq!(surface.pixel(25, 25), pixel, "pixels outside the selection preserved");
+        assert!(st.doc.selection.is_some());
+        press(&mut h, "Cmd+Z");
+        assert_eq!(h.state().session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().pixel(35, 35), pixel);
+    }
 }
 
 #[test]

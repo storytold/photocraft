@@ -88,6 +88,18 @@ pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     Ok(())
 }
 
+/// Deleting a group also deletes its contents, so check full locks and Background protection
+/// throughout its subtree.
+pub(crate) fn check_delete_unlocked(doc: &Document, id: LayerId) -> Result<()> {
+    let target = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
+    for (path, _, layer) in doc.walk() {
+        if path.starts_with(&target) && (doc.locks_at(&path).all || crate::extra_cmds::is_background(layer)) {
+            return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", layer.name)));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn is_mask_target(p: &Value) -> bool {
     p.get("target").and_then(Value::as_str) == Some("mask")
 }
@@ -568,11 +580,9 @@ fn build() -> Vec<CommandSpec> {
             }
             let id = layer_param(s, p)?;
             s.edit("Delete Layer", |doc, active| {
+                check_delete_unlocked(doc, id)?;
                 let neighbours = crate::layer_multi_cmds::deletion_neighbours(doc, id);
                 doc.remove(id).ok_or(EngineError::NoLayer(id))?;
-                if doc.layers.is_empty() {
-                    return Err(EngineError::Other("a document must keep at least one layer".into()));
-                }
                 if active.is_some_and(|current| doc.layer(current).is_none()) {
                     *active = neighbours.into_iter().find(|candidate| doc.layer(*candidate).is_some());
                 }
