@@ -16,8 +16,17 @@ use crate::{EngineError, Result, Session};
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
-fn has_selection(s: &Session) -> std::result::Result<(), String> {
-    s.active().filter(|d| d.doc.selection.is_some()).map(|_| ()).ok_or_else(|| "no selection".into())
+fn has_selection_or_mask(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or_else(|| "no document open".to_string())?;
+    if d.doc.selection.is_some() {
+        return Ok(());
+    }
+    if let Some(l) = d.active_layer.and_then(|id| d.doc.layer(id))
+        && l.mask.is_some()
+    {
+        return Ok(());
+    }
+    Err("no selection or layer mask".into())
 }
 
 fn f(p: &Value, k: &str, d: f32) -> f32 {
@@ -153,7 +162,11 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
     let params = refine_params(p);
     let decontaminate = b(p, "decontaminate", false);
     let amount = f(p, "amount", 100.0).clamp(0.0, 100.0);
-    let mut output = p.get("output").and_then(Value::as_str).unwrap_or("selection").to_string();
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let active = d.active_layer.filter(|id| d.doc.layer(*id).is_some());
+    let default_output =
+        if d.doc.selection.is_none() && active.and_then(|id| d.doc.layer(id)).and_then(|l| l.mask.as_ref()).is_some() { "layerMask" } else { "selection" };
+    let mut output = p.get("output").and_then(Value::as_str).unwrap_or(default_output).to_string();
     if !matches!(output.as_str(), "selection" | "layerMask" | "newLayer" | "newLayerWithMask") {
         return Err(bad("select.refineEdge", "output must be selection|layerMask|newLayer|newLayerWithMask"));
     }
@@ -161,7 +174,8 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
         output = "newLayerWithMask".into();
     }
     let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
-        let sel = doc.selection.as_ref()?;
+        let mask_surf = active.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref()).map(|m| &m.surface);
+        let sel = doc.selection.as_ref().or(mask_surf)?;
         matting::refine_mask(smp, &matting::surface_reader(sel), sel.content_bounds(), doc.bounds(), &params)
     })?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -255,7 +269,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Refine Edge",
             [],
             r##"{"radius":px=0,"smartRadius":bool=false,"smooth":0..100=0,"feather":px=0,"contrast":0..100=0,"shiftEdge":-100..100=0,"decontaminate":bool=false,"amount":0..100=100,"output":"selection|layerMask|newLayer|newLayerWithMask"="selection","sampleAllLayers":bool=false}"##,
-            has_selection,
+            has_selection_or_mask,
             refine_edge
         ),
         spec!(
@@ -499,6 +513,22 @@ mod tests {
         s.execute("edit.undo", json!({})).unwrap();
         s.execute("select.refineEdge", json!({"feather": 8, "contrast": 100})).unwrap();
         assert!(cov(&s, 38, 20) == 1.0 && cov(&s, 42, 20) == 0.0);
+    }
+
+    #[test]
+    fn refine_edge_works_on_layer_mask_without_selection() {
+        let mut s = blurred_edge_selected();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.selection.is_none());
+        assert!(s.active().unwrap().doc.layers[0].mask.is_some());
+        assert!(s.is_enabled("select.refineEdge"));
+
+        let r = s.execute("select.refineEdge", json!({"radius": 8})).unwrap();
+        assert_eq!(r["output"], "layerMask");
+        let d = s.active().unwrap();
+        let m = d.doc.layers[0].mask.as_ref().unwrap();
+        assert!(soft_count(&m.surface, 20) >= 4);
     }
 
     #[test]

@@ -2232,6 +2232,13 @@ fn layer_row(
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
             }
+        } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
+            if kind == crate::mask_thumbs_ui::MaskKind::Pixel {
+                actions.push(("ui.maskTarget".into(), json!(true)));
+            }
+            if let Some((cmd, val)) = crate::mask_thumbs_ui::double_click_command(app, kind) {
+                actions.push((cmd.into(), val));
+            }
         } else if pos.and_then(|p| masks.hit(p)).is_none() {
             let id = match &l.content {
                 LayerContent::Adjustment(_) | LayerContent::Fill(_) if on(thumb) => "layer.layerContentOptions",
