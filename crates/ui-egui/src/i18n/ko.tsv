@@ -650,6 +650,8 @@
 	Pro Medium Gray Theme	프로 중간 회색 테마
 	Studio Theme	스튜디오 테마
 	Studio Light Theme	스튜디오 밝은 테마
+	Adwaita Light Theme	Adwaita 밝은 테마
+	Adwaita Dark Theme	Adwaita 어두운 테마
 	Classic Theme	클래식 테마
 	Solarized dark	Solarized 어두움
 	Solarized Dark Theme	Solarized 어두운 테마
@@ -1840,6 +1842,8 @@
 	Standard	표준
 	Studio	스튜디오
 	Studio light	스튜디오 밝게
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita 어둡게
 	Subdivisions	하위 분할
 	System	시스템
 	Text engine	텍스트 엔진
@@ -2906,3 +2910,9 @@ fontWeight	Italic	기울임
 	Keep this tab open to retain your brushes.	브러시를 유지하려면 이 탭을 열어 두세요.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	브라우저 저장소를 사용할 수 없어 브러시는 이 세션에서만 유지됩니다. 유지하려면 이 탭을 열어 두세요.
 	Saving brush presets… Keep this tab open until saving finishes.	브러시 사전 설정 저장 중… 저장이 끝날 때까지 이 탭을 열어 두세요.
+	Reflect	반사
+	Glow	광선
+	Negation	부정
+	XOR	XOR
+	Color Burn (Paint.NET)	색상 번 (Paint.NET)
+	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)

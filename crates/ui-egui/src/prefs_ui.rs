@@ -87,6 +87,8 @@ fn theme_kind(t: Theme) -> ThemeKind {
         Theme::Studio => ThemeKind::Studio,
         Theme::StudioLight => ThemeKind::StudioLight,
         Theme::Classic => ThemeKind::Classic,
+        Theme::Adwaita => ThemeKind::Adwaita,
+        Theme::AdwaitaDark => ThemeKind::AdwaitaDark,
         Theme::SolarizedDark => ThemeKind::SolarizedDark,
         Theme::System => ThemeKind::System,
     }
@@ -99,6 +101,8 @@ fn theme_pref(k: ThemeKind) -> Theme {
         ThemeKind::Studio => Theme::Studio,
         ThemeKind::StudioLight => Theme::StudioLight,
         ThemeKind::Classic => Theme::Classic,
+        ThemeKind::Adwaita => Theme::Adwaita,
+        ThemeKind::AdwaitaDark => Theme::AdwaitaDark,
         ThemeKind::SolarizedDark => Theme::SolarizedDark,
         ThemeKind::System => Theme::System,
     }
@@ -1950,7 +1954,9 @@ mod tests {
         h.run_steps(4);
         h.get_by_value("Pro medium").click();
         h.run_steps(2);
-        assert!(h.query_by_label("Solarized dark").is_some());
+        for label in ["Adwaita", "Adwaita dark", "Solarized dark", "System"] {
+            assert!(h.query_by_label(label).is_some(), "missing theme choice {label}");
+        }
         h.get_by_label("System").click();
         h.run_steps(2);
         h.get_by_label("Apply").click();

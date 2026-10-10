@@ -678,6 +678,8 @@
 	Pro Medium Gray Theme	Motiv Pro (středně šedý)
 	Studio Theme	Motiv Studio
 	Studio Light Theme	Motiv Studio (světlý)
+	Adwaita Light Theme	Motiv Adwaita (světlý)
+	Adwaita Dark Theme	Motiv Adwaita (tmavý)
 	Classic Theme	Klasický motiv
 	Solarized dark	Solarized tmavý
 	Solarized Dark Theme	Tmavý motiv Solarized
@@ -1889,6 +1891,8 @@
 	Standard	Standardní
 	Studio	Studio
 	Studio light	Studio světlý
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita tmavý
 	Subdivisions	Dílky
 	System	Systém
 	Text engine	Textový modul
@@ -2327,3 +2331,9 @@ fontWeight	Italic	Kurzíva
 	Keep this tab open to retain your brushes.	Nechte tuto kartu otevřenou, abyste si štětce zachovali.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Úložiště prohlížeče není k dispozici; štětce platí jen pro tuto relaci. Nechte tuto kartu otevřenou, abyste si je zachovali.
 	Saving brush presets… Keep this tab open until saving finishes.	Ukládání předvoleb štětců… Nechte tuto kartu otevřenou, dokud ukládání neskončí.
+	Reflect	Odraz
+	Glow	Záře
+	Negation	Negace
+	XOR	XOR
+	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
+	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)

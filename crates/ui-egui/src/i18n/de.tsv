@@ -668,6 +668,8 @@
 	Pro Medium Gray Theme	Pro-Design (Mittelgrau)
 	Studio Theme	Studio-Design
 	Studio Light Theme	Studio-Design (Hell)
+	Adwaita Light Theme	Adwaita-Design (Hell)
+	Adwaita Dark Theme	Adwaita-Design (Dunkel)
 	Classic Theme	Klassisches Design
 	Solarized dark	Solarized dunkel
 	Solarized Dark Theme	Solarized-Design (Dunkel)
@@ -1865,6 +1867,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio hell
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita dunkel
 	Subdivisions	Unterteilungen
 	System	System
 	Text engine	Text-Engine
@@ -2366,3 +2370,9 @@ fontWeight	Italic	Kursiv
 	Keep this tab open to retain your brushes.	Lass diesen Tab geöffnet, um deine Pinsel zu behalten.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Der Browserspeicher ist nicht verfügbar; Pinsel gelten nur für diese Sitzung. Lass diesen Tab geöffnet, um sie zu behalten.
 	Saving brush presets… Keep this tab open until saving finishes.	Pinselvorgaben werden gespeichert… Lass diesen Tab geöffnet, bis das Speichern abgeschlossen ist.
+	Reflect	Reflektieren
+	Glow	Glühen
+	Negation	Negation
+	XOR	XOR
+	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
+	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)

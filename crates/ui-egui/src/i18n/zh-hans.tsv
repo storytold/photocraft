@@ -674,6 +674,8 @@
 	Pro Medium Gray Theme	专业中灰主题
 	Studio Theme	工作室主题
 	Studio Light Theme	工作室浅色主题
+	Adwaita Light Theme	Adwaita 浅色主题
+	Adwaita Dark Theme	Adwaita 深色主题
 	Classic Theme	经典主题
 	Solarized dark	Solarized 深色
 	Solarized Dark Theme	Solarized 深色主题
@@ -1882,6 +1884,8 @@
 	Standard	标准
 	Studio	工作室
 	Studio light	工作室（浅色）
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita（深色）
 	Subdivisions	细分
 	System	系统
 	Text engine	文字引擎
@@ -2335,3 +2339,9 @@ fontWeight	Italic	斜体
 	Keep this tab open to retain your brushes.	请保持此标签页打开以保留您的画笔。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	浏览器存储不可用；画笔仅在本次会话中有效。请保持此标签页打开以保留它们。
 	Saving brush presets… Keep this tab open until saving finishes.	正在保存画笔预设… 请保持此标签页打开，直到保存完成。
+	Reflect	反射
+	Glow	发光
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
+	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)

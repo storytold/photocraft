@@ -663,6 +663,10 @@
 	Classic Theme	Klassiek thema
 	Solarized dark	Solarized donker
 	Solarized Dark Theme	Solarized-thema donker
+	Adwaita Light Theme	Adwaita-thema licht
+	Adwaita Dark Theme	Adwaita-thema donker
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita donker
 	Next Theme	Volgend thema
 	Actions	Acties
 	Brush Settings	Penseelinstellingen
@@ -3512,3 +3516,9 @@ cameraRaw	Whites	Witten
 	Keep this tab open to retain your brushes.	Houd dit tabblad open om je penselen te behouden.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Browseropslag is niet beschikbaar; penselen gelden alleen voor deze sessie. Houd dit tabblad open om ze te behouden.
 	Saving brush presets… Keep this tab open until saving finishes.	Penseelvoorinstellingen opslaan… Houd dit tabblad open tot het opslaan klaar is.
+	Reflect	Reflecteren
+	Glow	Gloed
+	Negation	Negatie
+	XOR	XOR
+	Color Burn (Paint.NET)	Kleur doordrukken (Paint.NET)
+	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)

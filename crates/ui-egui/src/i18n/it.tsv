@@ -668,6 +668,8 @@
 	Pro Medium Gray Theme	Tema Pro grigio medio
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio chiaro
+	Adwaita Light Theme	Tema Adwaita chiaro
+	Adwaita Dark Theme	Tema Adwaita scuro
 	Classic Theme	Tema classico
 	Solarized dark	Solarized scuro
 	Solarized Dark Theme	Tema Solarized scuro
@@ -1871,6 +1873,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio chiaro
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita scuro
 	Subdivisions	Suddivisioni
 	System	Sistema
 	Text engine	Motore testo
@@ -2397,3 +2401,9 @@ fontWeight	Italic	Corsivo
 	Keep this tab open to retain your brushes.	Tieni aperta questa scheda per conservare i tuoi pennelli.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	L'archiviazione del browser non è disponibile; i pennelli valgono solo per questa sessione. Tieni aperta questa scheda per conservarli.
 	Saving brush presets… Keep this tab open until saving finishes.	Salvataggio dei predefiniti pennello… Tieni aperta questa scheda finché il salvataggio non è completato.
+	Reflect	Riflesso
+	Glow	Bagliore
+	Negation	Negazione
+	XOR	XOR
+	Color Burn (Paint.NET)	Colore brucia (Paint.NET)
+	Color Dodge (Paint.NET)	Colore scherma (Paint.NET)

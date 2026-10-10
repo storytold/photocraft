@@ -662,6 +662,8 @@
 	Pro Medium Gray Theme	Thème Pro gris moyen
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
+	Adwaita Light Theme	Thème Adwaita clair
+	Adwaita Dark Theme	Thème Adwaita sombre
 	Classic Theme	Thème Classique
 	Solarized dark	Solarized sombre
 	Solarized Dark Theme	Thème Solarized sombre
@@ -1844,6 +1846,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio clair
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita sombre
 	Subdivisions	Subdivisions
 	System	Système
 	Text engine	Moteur de texte
@@ -2748,3 +2752,9 @@ fontWeight	Italic	Italique
 	Keep this tab open to retain your brushes.	Gardez cet onglet ouvert pour conserver vos formes.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Le stockage du navigateur n'est pas disponible ; les formes ne durent que le temps de la session. Gardez cet onglet ouvert pour les conserver.
 	Saving brush presets… Keep this tab open until saving finishes.	Enregistrement des paramètres prédéfinis de forme… Gardez cet onglet ouvert jusqu'à la fin de l'enregistrement.
+	Reflect	Réflexion
+	Glow	Lueur
+	Negation	Négation
+	XOR	XOR
+	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
+	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)

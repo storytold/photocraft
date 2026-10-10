@@ -70,6 +70,8 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
     ("window.theme.solarizedDark", "Solarized Dark Theme", &["Window", "Theme"], None),
+    ("window.theme.adwaita", "Adwaita Light Theme", &["Window", "Theme"], None),
+    ("window.theme.adwaitaDark", "Adwaita Dark Theme", &["Window", "Theme"], None),
     ("window.theme.system", "System", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
@@ -313,6 +315,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         | "window.theme.studioLight"
         | "window.theme.classic"
         | "window.theme.solarizedDark"
+        | "window.theme.adwaita"
+        | "window.theme.adwaitaDark"
         | "window.theme.system" => {
             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, k);

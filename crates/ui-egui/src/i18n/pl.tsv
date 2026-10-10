@@ -672,6 +672,8 @@
 	Pro Medium Gray Theme	Motyw Pro (średni szary)
 	Studio Theme	Motyw Studio
 	Studio Light Theme	Motyw Studio (jasny)
+	Adwaita Light Theme	Motyw Adwaita (jasny)
+	Adwaita Dark Theme	Motyw Adwaita (ciemny)
 	Classic Theme	Motyw klasyczny
 	Solarized dark	Solarized ciemny
 	Solarized Dark Theme	Ciemny motyw Solarized
@@ -1869,6 +1871,8 @@
 	Standard	Standardowy
 	Studio	Studio
 	Studio light	Studio jasny
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita ciemny
 	Subdivisions	Podziały
 	System	Systemowy
 	Text engine	Silnik tekstu
@@ -3350,3 +3354,9 @@ cameraRaw	Roughness	Chropowatość
 	Keep this tab open to retain your brushes.	Nie zamykaj tej karty, aby zachować pędzle.
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Pamięć przeglądarki jest niedostępna; pędzle działają tylko w tej sesji. Nie zamykaj tej karty, aby je zachować.
 	Saving brush presets… Keep this tab open until saving finishes.	Zapisywanie ustawień predefiniowanych pędzli… Nie zamykaj tej karty, dopóki zapis się nie zakończy.
+	Reflect	Odbicie
+	Glow	Poświata
+	Negation	Negacja
+	XOR	XOR
+	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
+	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)

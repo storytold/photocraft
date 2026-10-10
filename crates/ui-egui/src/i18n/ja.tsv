@@ -674,6 +674,8 @@
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
+	Adwaita Light Theme	Adwaita(ライト)テーマ
+	Adwaita Dark Theme	Adwaita(ダーク)テーマ
 	Classic Theme	クラシックテーマ
 	Solarized dark	Solarized ダーク
 	Solarized Dark Theme	Solarized ダークテーマ
@@ -1878,6 +1880,8 @@
 	Standard	標準
 	Studio	スタジオ
 	Studio light	スタジオ(ライト)
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita(ダーク)
 	Subdivisions	分割数
 	System	システム
 	Text engine	テキストエンジン
@@ -3351,3 +3355,9 @@ fontWeight	Italic	斜体
 	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
 	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
 	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。
+	Reflect	反射
+	Glow	グロー
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
+	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
