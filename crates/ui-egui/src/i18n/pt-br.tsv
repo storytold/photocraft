@@ -2850,3 +2850,6 @@ fontWeight	Italic	Itálico
 	Previous Document	Documento anterior
 	W x H x Resolution	L x A x Resolução
 	Front Image	Imagem frontal
+	Perspective Crop Tool	Ferramenta Corte demarcado em perspectiva
+	Show Grid	Mostrar grade
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Arraste uma caixa ou clique em quatro cantos · arraste os cantos até as bordas de uma forma inclinada · {commit} confirma · Esc cancela

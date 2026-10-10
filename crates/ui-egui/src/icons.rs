@@ -110,6 +110,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::MagneticLasso => "lasso-magnetic",
         Tool::MagicWand => "wand-sparkles",
         Tool::Crop => "crop",
+        Tool::PerspectiveCrop => "perspective-crop",
         Tool::Slice => "slice-knife",
         Tool::SliceSelect => "square-dashed-mouse-pointer",
         Tool::Gradient => "blend",

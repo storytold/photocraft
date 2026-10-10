@@ -54,7 +54,7 @@ what an agent can't finish alone.
   scripted check there) is the only real oracle.
 
 ### G6. Missing tools
-- **Missing (15 of 68):** Artboard, Single Row Marquee, Single Column Marquee, Perspective Crop,
+- **Missing (14 of 68):** Artboard, Single Row Marquee, Single Column Marquee,
   Frame, Color Sampler (#1046), Color Replacement (engine command exists), Art History Brush,
   Freeform Pen and Curvature Pen (#1054), Add Anchor Point, Delete Anchor Point, Convert Point
   (only as Pen + ⌥), Horizontal Type Mask, Vertical Type Mask.

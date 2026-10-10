@@ -337,6 +337,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if focus == Focus::None && crate::crop_ui::keys(app, ctx) {
         return;
     }
+    // Perspective Crop with a pending quad: ↵ commits, Esc cancels.
+    if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
+        return;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return;

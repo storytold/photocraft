@@ -127,6 +127,56 @@ fn catmull_rom(t: f64) -> [f64; 4] {
 /// The result has the same format as `src`, with alpha added if `src` had none; pixels outside
 /// the warped quad are transparent.
 pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp) -> Result<Surface, photocraft_raster::AllocationError> {
+    warp(src, src_rect, h, interp, None)
+}
+
+/// [`warp_surface`] keeping only the destination pixels inside `clip`. The work is bounded by
+/// `clip` even when part of the source lies at or beyond the map's horizon (a Perspective Crop of a
+/// layer that reaches far past the crop quad), which would make the full warped extent unbounded.
+pub fn warp_surface_clipped(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp, clip: Rect) -> Result<Surface, photocraft_raster::AllocationError> {
+    warp(src, src_rect, h, interp, Some(clip))
+}
+
+/// Is `q` (TL, TR, BR, BL) a usable Perspective Crop quad: finite, strictly convex with every
+/// corner angle above ~0.06°, wound clockwise on screen (y down) and at least 1 px² in area?
+pub fn convex_quad(q: &[[f64; 2]; 4]) -> bool {
+    if q.iter().flatten().any(|v| !v.is_finite()) {
+        return false;
+    }
+    let mut area2 = 0.0;
+    for i in 0..4 {
+        let (a, b, c) = (q[i], q[(i + 1) % 4], q[(i + 2) % 4]);
+        let (e1, e2) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        let cross = e1[0] * e2[1] - e1[1] * e2[0];
+        // sin(turn) = cross / (|e1| |e2|): positive (clockwise on screen) and not a straight angle.
+        if cross.is_nan() || cross <= 1e-3 * e1[0].hypot(e1[1]) * e2[0].hypot(e2[1]) {
+            return false;
+        }
+        area2 += a[0] * b[1] - b[0] * a[1];
+    }
+    area2.is_finite() && area2 >= 2.0
+}
+
+/// The output size a Perspective Crop of `q` (TL, TR, BR, BL) takes when none is given: the mean
+/// length of the top and bottom edges by the mean length of the left and right edges.
+pub fn quad_size(q: &[[f64; 2]; 4]) -> (f64, f64) {
+    let len = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
+    let [tl, tr, br, bl] = *q;
+    ((len(tl, tr) + len(bl, br)) / 2.0, (len(tl, bl) + len(tr, br)) / 2.0)
+}
+
+/// The homography taking the quad `q` (TL, TR, BR, BL) onto the rectangle (0, 0)–(`w`, `h`), corner
+/// to corner: the inverse of the unit-square-to-quad map (Heckbert, "Fundamentals of Texture
+/// Mapping and Image Warping", 1989, §2.2.3) scaled to the rectangle. `None` when `q` isn't a
+/// [`convex_quad`] or the size isn't positive.
+pub fn quad_to_rect(q: &[[f64; 2]; 4], w: f64, h: f64) -> Option<Homography> {
+    if !convex_quad(q) || !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return None;
+    }
+    Homography::rect_to_quad([0.0, 0.0, w, h], *q)?.inverse()
+}
+
+fn warp(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp, clip: Option<Rect>) -> Result<Surface, photocraft_raster::AllocationError> {
     let mut fmt = src.format();
     let converted;
     let mut src = if fmt.alpha {
@@ -137,13 +187,17 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
         &converted
     };
     let mut out = Surface::new(fmt);
-    if src_rect.is_empty() {
+    if src_rect.is_empty() || clip.is_some_and(|c| c.is_empty()) {
         return Ok(out);
     }
     let mut h = *h;
     let mut src_rect = src_rect;
-    // Pre-reduce for large downscales (bicubic alone aliases below ~50%).
-    let (cx, cy) = ((src_rect.x0 + src_rect.x1) as f64 / 2.0, (src_rect.y0 + src_rect.y1) as f64 / 2.0);
+    // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
+    // that matters is the one at the source point landing in the clip's centre.
+    let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
+        Some((c, inv)) => inv.apply((c.x0 as f64 + c.x1 as f64) / 2.0, (c.y0 as f64 + c.y1 as f64) / 2.0),
+        None => ((src_rect.x0 + src_rect.x1) as f64 / 2.0, (src_rect.y0 + src_rect.y1) as f64 / 2.0),
+    };
     let scale = h.local_scale(cx, cy);
     let reduced;
     if interp != Interp::Nearest && scale < 0.5 && scale > 0.0 {
@@ -157,15 +211,32 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
     // Destination bounds: the warped corners (plus a pixel for filter support).
     let corners = [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)]
         .map(|(x, y)| h.apply(x as f64, y as f64));
-    if corners.iter().any(|c| !c.0.is_finite() || !c.1.is_finite()) {
+    // A sampled pixel's inverse w is 1 / (forward w at its source point). While the forward w keeps one sign over the source
+    // (plus the margin the sampler reads), every sampled pixel lies at least `w_lo` from the inverse horizon, so clipping a tile
+    // there keeps its footprint exact and bounded even when a steep Distort brings that horizon into the tile (#2271).
+    let (sx0, sy0, sx1, sy1) = (src_rect.x0 as f64 - 1.0, src_rect.y0 as f64 - 1.0, src_rect.x1 as f64 + 1.0, src_rect.y1 as f64 + 1.0);
+    let fwd_w = [(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1)].map(|(x, y)| h.0[6] * x + h.0[7] * y + h.0[8]);
+    let side = [1.0, -1.0].into_iter().find(|&s| fwd_w.iter().all(|&c| s * c > 0.0));
+    let w_lo = 1.0 / fwd_w.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+    let finite = corners.iter().all(|c| c.0.is_finite() && c.1.is_finite());
+    let lim = 1 << 20;
+    let bounds = || {
+        let bx0 = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor().max(-(lim as f64)) as i32 - 1;
+        let by0 = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor().max(-(lim as f64)) as i32 - 1;
+        let bx1 = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil().min(lim as f64) as i32 + 1;
+        let by1 = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil().min(lim as f64) as i32 + 1;
+        Rect::new(bx0, by0, bx1, by1)
+    };
+    let dst = match clip {
+        // The warped corners only bound the result while the whole source is in front of the horizon.
+        Some(c) if finite && side.is_some() => bounds().intersect(&c),
+        Some(c) => c,
+        None if finite => bounds(),
+        None => return Ok(out),
+    };
+    if dst.is_empty() {
         return Ok(out);
     }
-    let lim = 1 << 20;
-    let bx0 = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor().max(-(lim as f64)) as i32 - 1;
-    let by0 = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor().max(-(lim as f64)) as i32 - 1;
-    let bx1 = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil().min(lim as f64) as i32 + 1;
-    let by1 = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil().min(lim as f64) as i32 + 1;
-    let dst = Rect::new(bx0, by0, bx1, by1);
     let n = fmt.channels();
     let a = n - 1;
     let tile_count = dst.tiles().count();
@@ -174,13 +245,6 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
     tiles.try_reserve_exact(tile_count).map_err(|_| photocraft_raster::AllocationError::NotEnoughMemory { bytes: tile_bytes })?;
     tiles.extend(dst.tiles().map(|tc| tc.rect().intersect(&dst)).filter(|r| !r.is_empty()));
     let src_ref: &Surface = src;
-    // A sampled pixel's inverse w is 1 / (forward w at its source point). While the forward w keeps one sign over the source
-    // (plus the margin the sampler reads), every sampled pixel lies at least `w_lo` from the inverse horizon, so clipping a tile
-    // there keeps its footprint exact and bounded even when a steep Distort brings that horizon into the tile (#2271).
-    let (sx0, sy0, sx1, sy1) = (src_rect.x0 as f64 - 1.0, src_rect.y0 as f64 - 1.0, src_rect.x1 as f64 + 1.0, src_rect.y1 as f64 + 1.0);
-    let fwd_w = [(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1)].map(|(x, y)| h.0[6] * x + h.0[7] * y + h.0[8]);
-    let side = [1.0, -1.0].into_iter().find(|&s| fwd_w.iter().all(|&c| s * c > 0.0));
-    let w_lo = 1.0 / fwd_w.iter().fold(0.0f64, |m, c| m.max(c.abs()));
     let work = |t: &Rect| -> Result<Option<(Rect, Vec<f32>)>, photocraft_raster::AllocationError> {
         // Source footprint of this tile (inverse-mapped corners of its sampled part), padded for the filter.
         let tc = [(t.x0, t.y0), (t.x1, t.y0), (t.x1, t.y1), (t.x0, t.y1)].map(|(x, y)| (x as f64, y as f64));
@@ -326,6 +390,30 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Perspective Crop's map lands each quad corner exactly on its rectangle corner; degenerate,
+    /// self-crossing, counter-clockwise and non-finite quads have none.
+    #[test]
+    fn quad_to_rect_maps_corners_and_refuses_bad_quads() {
+        let q = [[30.0, 12.0], [140.0, 25.0], [128.0, 110.0], [14.0, 95.0]];
+        let h = quad_to_rect(&q, 100.0, 80.0).unwrap();
+        for (c, want) in q.iter().zip([[0.0, 0.0], [100.0, 0.0], [100.0, 80.0], [0.0, 80.0]]) {
+            let (x, y) = h.apply(c[0], c[1]);
+            assert!((x - want[0]).abs() < 1e-9 && (y - want[1]).abs() < 1e-9, "{c:?} -> ({x}, {y})");
+        }
+        let (w, ht) = quad_size(&q);
+        assert!((w - 112.874).abs() < 1e-3 && (ht - 85.185).abs() < 1e-3, "{w} x {ht}");
+        for bad in [
+            [[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [0.0, 50.0]],
+            [[0.0, 0.0], [50.0, 50.0], [50.0, 0.0], [0.0, 50.0]],
+            [[0.0, 0.0], [0.0, 50.0], [50.0, 50.0], [50.0, 0.0]],
+            [[0.0, 0.0], [f64::NAN, 0.0], [50.0, 50.0], [0.0, 50.0]],
+            [[0.0, 0.0]; 4],
+        ] {
+            assert!(quad_to_rect(&bad, 10.0, 10.0).is_none(), "{bad:?}");
+        }
+        assert!(quad_to_rect(&q, 0.0, 10.0).is_none());
+    }
 
     fn rgba() -> Surface {
         Surface::new(PixelFormat::RGBA8)

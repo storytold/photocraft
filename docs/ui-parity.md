@@ -12,8 +12,8 @@ Status: **done** (behaves as in Photoshop, with a test), **partial** (exists, di
 **missing**. Evidence is a file under `crates/ui-egui/src/` unless another path is given, a
 scorecard id, or an issue. Modifier names are macOS first (⌘ ⌥ ⇧); Windows/Linux use Ctrl and Alt.
 
-**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 53/68
-present (78%, measured). Free Transform modifiers and Crop are close to Photoshop; the gaps are
+**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 54/68
+present (79%, measured). Free Transform modifiers and Crop are close to Photoshop; the gaps are
 in the long tail of modifiers, in-transform UI, spring-loaded tools, panels and preferences.
 Remaining: 60–110 h for transforms and modifiers (gap G5), 60–100 h for tools (G6), 150–250 h
 for panels and workspace (G9).
@@ -30,7 +30,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Marquee | Rectangular, Elliptical | Single Row, Single Column |
 | Lasso | Lasso, Polygonal, Magnetic | |
 | Selection | Object Selection, Quick Selection, Magic Wand | |
-| Crop and slice | Crop, Slice, Slice Select | Perspective Crop |
+| Crop and slice | Crop, Perspective Crop, Slice, Slice Select | |
 | Frame | | Frame (`layer.new.frameFromLayers` exists) |
 | Eyedropper | Eyedropper, Ruler, Note, Count | Color Sampler (#1046) |
 | Retouch | Remove, Spot Healing, Healing, Patch, Content-Aware Move, Red Eye | |

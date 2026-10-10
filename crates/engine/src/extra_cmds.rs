@@ -681,7 +681,7 @@ pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) 
     Ok(json!({"layer": active.unwrap_or(first), "layers": done}))
 }
 
-fn rasterize_all(s: &mut Session) -> Result<Value> {
+pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
     let ids: Vec<LayerId> = s.active().map(|d| d.doc.walk().into_iter().map(|(_, _, l)| l.id).collect()).unwrap_or_default();
     let key = step_key(s, "rasterizeAll");
     let mut n = 0;

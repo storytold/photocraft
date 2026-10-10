@@ -175,7 +175,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Refuses to resample `doc` to `nw` x `nh` px when the raster alone would pass the budget, before
 /// allocating any of it (#1544). `hint` ends the message with what the caller can do instead.
-fn check_resample_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, hint: &str) -> Result<()> {
+pub(crate) fn check_resample_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, hint: &str) -> Result<()> {
     let bpp = doc.pixel_format().bytes_per_pixel().max(1) as u64;
     let bytes = u64::from(nw).saturating_mul(u64::from(nh)).saturating_mul(bpp);
     if bytes <= MAX_RESAMPLE_BYTES {

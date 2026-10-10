@@ -3443,3 +3443,6 @@ fontWeight	Italic	斜体
 	Previous Document	前のドキュメント
 	W x H x Resolution	幅 x 高さ x 解像度
 	Front Image	前面の画像
+	Perspective Crop Tool	遠近法の切り抜きツール
+	Show Grid	グリッドを表示
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	ボックスをドラッグするか 4 つの角をクリック · 角を傾いた形の端までドラッグ · {commit} で確定 · Esc でキャンセル
