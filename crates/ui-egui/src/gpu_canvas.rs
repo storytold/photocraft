@@ -47,9 +47,10 @@ const VIEW_UNIFORM_SIZE: u64 = 128;
 const VIEW_FLOATS: usize = 32;
 const TILE_UNIFORM_SIZE: u64 = 16;
 
-/// Whether this view can use the GPU canvas. Flip is still a CPU blit; rotation is a shader uniform.
-pub fn gpu_view_ok(flip: bool, _rotation: f32) -> bool {
-    !flip
+/// Whether this view can use the GPU canvas. Flip and non-square pixel aspect correction are
+/// still CPU blits (the shader's filtering assumes square pixels); rotation is a shader uniform.
+pub fn gpu_view_ok(flip: bool, _rotation: f32, aspect: f32) -> bool {
+    !flip && (aspect - 1.0).abs() < 1e-6
 }
 
 /// Parameters for drawing one document view. Positions are in egui points.
@@ -2032,9 +2033,10 @@ mod tests {
         assert_eq!(VIEW_FLOATS, 32);
         assert_eq!(VIEW_UNIFORM_SIZE, 128);
         assert_eq!(VIEW_FLOATS * 4, VIEW_UNIFORM_SIZE as usize);
-        assert!(gpu_view_ok(false, 0.0));
-        assert!(gpu_view_ok(false, 45.0_f32.to_radians()));
-        assert!(!gpu_view_ok(true, 45.0_f32.to_radians()));
+        assert!(gpu_view_ok(false, 0.0, 1.0));
+        assert!(gpu_view_ok(false, 45.0_f32.to_radians(), 1.0));
+        assert!(!gpu_view_ok(true, 45.0_f32.to_radians(), 1.0));
+        assert!(!gpu_view_ok(false, 0.0, 2.0), "pixel aspect correction draws on the CPU");
         // Identity packing: rotation 0 matches the unrotated origin + scale map.
         let origin = [10.0, 20.0];
         let (scale, center) = (2.0, [40.0, 8.0]);
