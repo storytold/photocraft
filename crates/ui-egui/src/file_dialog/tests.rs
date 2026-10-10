@@ -292,6 +292,12 @@ fn save_and_export_dialogs_start_beside_the_document() {
     }
 }
 
+/// The path `pick_save` suggests for `name` in `dir` on this platform: it joins with `Path::join`,
+/// which uses `\` on Windows, so the expected values must be built the same way (#2745).
+fn joined(dir: &str, name: &str) -> String {
+    std::path::Path::new(dir).join(name).to_string_lossy().into_owned()
+}
+
 /// #1826: after the user navigates a save or export dialog elsewhere, the document's next dialog
 /// starts there. Save As of a saved document still suggests its own path; other documents and
 /// closed documents are unaffected.
@@ -305,16 +311,18 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
         FileDialogRequest::Save { suggested } => suggested.clone(),
         other => panic!("save dialog expected, got {other:?}"),
     };
+    // Suggestions are built with `Path::join`, which uses `\` on Windows (#2745).
+    let joined = |dir: &str, name: &str| std::path::Path::new(dir).join(name).to_string_lossy().into_owned();
     // An export starts beside the document; the user saves it under /renders instead.
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/proj/result.png");
+    assert_eq!(suggested(&open), joined("/proj", "result.png"));
     answer(&open, Some(FileDialogAnswer::SaveTo("/renders/result.png".into())));
     app.poll_file_dialog(&ctx, None);
     // The next export starts in /renders; Save As still offers the document's own path.
     app.pick_save("again.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/renders/again.png");
+    assert_eq!(suggested(&open), joined("/renders", "again.png"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
@@ -330,7 +338,7 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     app.poll_file_dialog(&ctx, None);
     app.pick_save("third.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/renders/third.png");
+    assert_eq!(suggested(&open), joined("/renders", "third.png"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     // Another document has its own memory: untitled, it starts wherever the shell defaults.
@@ -348,7 +356,7 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     app.session.set_active(0);
     app.pick_save("swap.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/renders/swap.png");
+    assert_eq!(suggested(&open), joined("/renders", "swap.png"));
     app.session.set_active(1);
     answer(&open, Some(FileDialogAnswer::SaveTo("/moved/swap.png".into())));
     app.poll_file_dialog(&ctx, None);
@@ -358,7 +366,7 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     app.run("file.close", json!({"document": 1})).unwrap();
     app.pick_save("last.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/moved/last.png");
+    assert_eq!(suggested(&open), joined("/moved", "last.png"));
     assert!(!app.save_dirs.contains_key(&second));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);

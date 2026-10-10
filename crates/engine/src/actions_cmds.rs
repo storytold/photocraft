@@ -1,5 +1,5 @@
 //! Window › Actions, as engine commands (`actions.record` / `stop` / `play` / `list` / `get` /
-//! `delete`).
+//! `delete` / `move` / `rename`).
 //!
 //! The list lives on [`Session`] so the panel, the CLI, the control channel and MCP share one
 //! copy. Recording copies replayable journal entries (commands whose [`CommandSpec::journal`] is
@@ -67,11 +67,19 @@ impl ActionState {
 pub fn replayable(id: &str) -> bool {
     // Again journals its concrete transform too; recording the wrapper would replay it twice.
     id == "actions.play"
-        || (!id.starts_with("actions.") && id != "edit.transform.again" && (shell_view_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
+        || (!id.starts_with("actions.")
+            && id != "edit.transform.again"
+            && (shell_view_command(id) || shell_save_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
+}
+
+/// File › Save and Save As, recorded by the desktop shell once the save has a path (#2032).
+/// The shell replays them; batch and droplets write to their destination folder instead.
+pub fn shell_save_command(id: &str) -> bool {
+    matches!(id, "file.save" | "file.saveAs")
 }
 
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
-/// them as unsupported instead of silently dropping them.
+/// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
     matches!(id, "view.fitOnScreen" | "view.actualPixels" | "view.zoomIn" | "view.zoomOut")
 }
@@ -380,6 +388,49 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": name}))
 }
 
+/// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
+pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
+
+/// Rename an action in place. Nested `actions.play` steps that call it by name, and its
+/// function-key binding, follow the new name so nothing silently stops working.
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    not_playing(s, "actions.rename")?;
+    let idx = resolve(&s.actions.list, p, "actions.rename")?;
+    let name = match p.get("name") {
+        Some(Value::String(n)) if !n.trim().is_empty() => n.clone(),
+        Some(Value::String(_)) => return Err(bad("actions.rename", "\"name\" is empty")),
+        Some(_) => return Err(bad("actions.rename", "\"name\" must be a string")),
+        None => return Err(bad("actions.rename", "needs \"name\"")),
+    };
+    let old = s.actions.list.get(idx).map(|a| a.name.clone()).ok_or_else(|| bad("actions.rename", "no such action"))?;
+    if old == name {
+        return Ok(json!({"action": name, "index": idx}));
+    }
+    if s.actions.list.iter().any(|a| a.name == name) {
+        return Err(bad("actions.rename", "an action with this name already exists"));
+    }
+    let pending = s.actions.recording.map_or(s.journal.len(), |(start, _)| start);
+    let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
+    for (id, params) in calls {
+        if id == "actions.play" && params.get("action").and_then(Value::as_str) == Some(old.as_str()) {
+            params["action"] = json!(name);
+        }
+    }
+    if let Some(action) = s.actions.list.get_mut(idx) {
+        action.name = name.clone();
+    }
+    s.actions.touch();
+    let (from, to) = (format!("{PLAY_SHORTCUT_PREFIX}{old}"), format!("{PLAY_SHORTCUT_PREFIX}{name}"));
+    if s.prefs().shortcuts.contains_key(&from) {
+        s.edit_prefs(|prefs| {
+            if let Some(key) = prefs.shortcuts.remove(&from) {
+                prefs.shortcuts.insert(to, key);
+            }
+        });
+    }
+    Ok(json!({"action": name, "index": idx}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -452,6 +503,16 @@ pub fn specs() -> Vec<CommandSpec> {
             run: delete,
             journal: false,
         },
+        CommandSpec {
+            id: "actions.rename",
+            label: "Rename Action",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index, "name":str} → {action, index}. The name must not be empty or whitespace-only and must be unique. Nested Play Action steps and the action's function key follow the rename."##,
+            enabled: always,
+            run: rename,
+            journal: false,
+        },
     ]
 }
 
@@ -462,6 +523,30 @@ mod tests {
 
     fn pixel(s: &Session, layer: usize, x: i32, y: i32) -> Vec<f32> {
         s.active().unwrap().doc.layers[layer].surface().unwrap().pixel(x, y)
+    }
+
+    #[test]
+    fn rename_keeps_calls_and_function_key_and_rejects_bad_names() {
+        let mut s = Session::new();
+        s.actions.list.push(Action { name: "Action 1".into(), steps: vec![("layer.new.layer".into(), json!({}))] });
+        s.actions.list.push(Action { name: "Caller".into(), steps: vec![("actions.play".into(), json!({"action": "Action 1"}))] });
+        s.edit_prefs(|p| p.shortcuts.insert(format!("{PLAY_SHORTCUT_PREFIX}Action 1"), "F2".into()));
+        assert_eq!(s.execute("actions.rename", json!({"action": 0, "name": "Sepia"})).unwrap()["action"], "Sepia");
+        assert_eq!(s.execute("actions.list", json!({})).unwrap()["actions"][0]["name"], "Sepia");
+        assert_eq!(s.actions.list[1].steps[0].1["action"], "Sepia");
+        assert_eq!(s.prefs().shortcuts.get("actions.play:Sepia").map(String::as_str), Some("F2"));
+        assert!(!s.prefs().shortcuts.contains_key("actions.play:Action 1"));
+        for bad in [
+            json!({"action": 0, "name": ""}),
+            json!({"action": 0, "name": "  "}),
+            json!({"action": 0, "name": "Caller"}),
+            json!({"action": 0, "name": 7}),
+            json!({"action": 9, "name": "X"}),
+            json!({"action": 0}),
+        ] {
+            assert!(s.execute("actions.rename", bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(s.actions.list[0].name, "Sepia");
     }
 
     fn record_red(s: &mut Session, depth: u32) {

@@ -55,6 +55,11 @@ fn has_layer_pixels(s: &Session) -> std::result::Result<(), String> {
     active_layer(s)?.surface().map(|_| ()).ok_or_else(|| "the active layer has no pixels".into())
 }
 
+/// Copy also copies a targeted alpha channel, with or without a pixel layer (#2307).
+fn can_copy(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_clip::copies_alpha_channel(s) { Ok(()) } else { has_layer_pixels(s) }
+}
+
 fn has_clip(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     s.clipboard.as_ref().map(|_| ()).ok_or_else(|| "the clipboard is empty".into())
@@ -172,6 +177,10 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return paste_to_target(s, p, in_place, None, "Paste");
     }
+    // A targeted colour channel takes the paste instead of a new layer (#2307).
+    if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+        return crate::channel_clip::paste(s, p, k, in_place, None, "Paste");
+    }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
     let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
@@ -192,7 +201,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
 /// canvas and no `center` is given), else onto `center` (the view centre from the UI) or the
 /// canvas centre.
-fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
+pub(crate) fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
     if in_place || (clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
         return (0, 0);
     }
@@ -202,7 +211,7 @@ fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i
     ((cx - (b.x0 + b.x1) as f64 / 2.0).round() as i32, (cy - (b.y0 + b.y1) as f64 / 2.0).round() as i32)
 }
 
-fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
+pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
     if dx == 0 && dy == 0 { surface.clone() } else { photocraft_algo::resample::translate_surface(surface, dx, dy) }
 }
 
@@ -253,6 +262,10 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = active_id(s)?;
     let has_sel = d.doc.selection.is_some();
+    if !has_sel && !cut && crate::layer_multi_cmds::multi(s, &Value::Null) {
+        // No selection, several layers selected: copy every one of them (Photoshop, #2777).
+        return crate::layer_multi_cmds::duplicate_selected(s, true, "Layer Via Copy");
+    }
     if !has_sel && !cut {
         // No selection: Layer via Copy duplicates the whole layer (Photoshop).
         let nid = s.edit("Layer Via Copy", |doc, active| {
@@ -300,16 +313,11 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
         // Composite of visible layers only (hidden ones stay where they are).
         let mut solo = doc.clone();
         solo.layers.retain(|l| l.visible);
-        let buf = photocraft_compose::flatten(&solo);
-        let buf = if is_background { buf.over_background([1.0, 1.0, 1.0]) } else { buf };
         let fmt = doc.pixel_format();
         let fmt = if is_background { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
-        let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
         let mut merged = Layer::raster(base.name.clone(), fmt);
         merged.locks = base.locks;
-        let surf = crate::pixels_mut(&mut merged)?;
-        surf.write_region(doc.bounds(), &data);
-        surf.prune();
+        *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers(&solo, fmt, is_background.then_some([1.0, 1.0, 1.0]));
         let mid = merged.id;
         let mut out = Vec::with_capacity(doc.layers.len());
         for (i, l) in doc.layers.drain(..).enumerate() {
@@ -550,16 +558,25 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
-        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{}", has_pixels, |s, _| {
+        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{} (a targeted colour channel cuts that channel only)", has_pixels, |s, p| {
             // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
             let id = active_id(s)?;
             crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+            // A targeted colour channel cuts that channel only (#2698).
+            if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+                return crate::channel_clip::cut(s, id, k);
+            }
             let r = copy(s, false)?;
             let bg = s.tools.background;
             s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
             Ok(r)
         }),
-        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", has_layer_pixels, |s, _| copy(s, false)),
+        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{} (a targeted colour or alpha channel copies that channel, as grayscale)", can_copy, |s, _| {
+            match crate::channel_clip::copy(s)? {
+                Some(r) => Ok(r),
+                None => copy(s, false),
+            }
+        }),
         spec!("edit.copyMerged", "Copy Merged", &["Edit"], Some("Cmd+Shift+C"), "{}", has_doc, |s, _| copy(s, true)),
         spec!(
             "edit.paste",
@@ -1047,6 +1064,34 @@ mod tests {
             assert_eq!(st.doc.layers.len(), layers, "{cmd}: undo removes the layer");
             assert!(st.doc.selection.is_some(), "{cmd}: and restores the selection");
         }
+    }
+
+    /// #2777: with several layers selected and no pixel selection, Layer via Copy (Cmd+J) copies
+    /// every selected layer in one step, each copy above its original and the copies selected.
+    /// With a pixel selection it still copies the active layer's selected pixels only.
+    #[test]
+    fn layer_via_copy_duplicates_every_selected_layer() {
+        let mut s = session();
+        let a = s.active().unwrap().active_layer.unwrap();
+        let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b.0, "mode": "toggle"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("layer.new.layerViaCopy", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let ids: Vec<LayerId> = st.doc.layers.iter().map(|l| l.id).collect();
+        assert_eq!(ids.len(), 5, "background, a, a copy, b, b copy");
+        assert_eq!((ids[1], ids[3]), (a, b), "each copy sits above its original");
+        let mut selected = st.selected_layers();
+        selected.sort_by_key(|l| l.0);
+        assert_eq!(selected, vec![ids[2], ids[4]], "the copies become the selection");
+        assert_eq!(st.history.past_len(), steps + 1, "one undo step");
+        assert!(s.undo());
+        s.execute("layer.select", json!({"layer": b.0})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0, "mode": "toggle"})).unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layerViaCopy", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers.len(), 4, "a pixel selection copies one layer's pixels");
     }
 
     fn active_content(s: &Session) -> LayerContent {
