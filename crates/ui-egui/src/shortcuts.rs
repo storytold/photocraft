@@ -196,6 +196,28 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
         });
     }
     if typing {
+        // A text field copies and pastes on egui's Copy / Cut / Paste events, which egui-winit
+        // makes from the window's key and so never sends as key presses. A ⌘C / ⌘X / ⌘V press
+        // here is the Mac menu's key equivalent (AppKit takes the key while Edit › Copy, Cut or
+        // Paste is enabled), which a text field ignores: pasting text worked only while
+        // PhotoCraft's own clipboard was empty. Give those presses back as the events; Paste asks
+        // the window for the clipboard text, which arrives as a Paste event next frame.
+        raw.events.retain_mut(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers: m, .. } = *e else { return true };
+            if !m.command || m.alt || m.shift {
+                return true;
+            }
+            match key {
+                Key::C => *e = egui::Event::Copy,
+                Key::X => *e = egui::Event::Cut,
+                Key::V => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    return false;
+                }
+                _ => {}
+            }
+            true
+        });
         return;
     }
     let seen = egui::Id::new("pc-paste-key-seen");
@@ -598,6 +620,47 @@ mod tests {
         let mut r = raw(vec![egui::Event::Paste("x".into())], Modifiers::COMMAND);
         clipboard_keys(&ctx, true, &mut r);
         assert!(matches!(r.events.as_slice(), [_, egui::Event::Paste(_)]));
+    }
+
+    /// In a text field the Mac menu's ⌘C / ⌘X key equivalents become the field's Copy / Cut, and
+    /// its ⌘V asks the window for the clipboard text, which the field pastes. Other keys, and ⇧ / ⌥
+    /// chords, pass through.
+    #[test]
+    fn menu_key_equivalents_reach_a_text_field_as_clipboard_events() {
+        let ctx = egui::Context::default();
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+        let cmd = Modifiers::COMMAND;
+        let events = vec![
+            key(Key::C, true, cmd),
+            key(Key::X, true, cmd),
+            key(Key::V, true, cmd),
+            key(Key::V, false, cmd),
+            key(Key::A, true, cmd),
+            key(Key::C, true, cmd | Modifiers::SHIFT),
+        ];
+        let mut r = egui::RawInput { events: [vec![egui::Event::ModifiersChanged(cmd)], events].concat(), ..Default::default() };
+        // In a frame, as the app calls it, so the request for the clipboard text is in its output.
+        ctx.begin_pass(egui::RawInput::default());
+        clipboard_keys(&ctx, true, &mut r);
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        assert!(
+            matches!(
+                &r.events[1..],
+                [
+                    egui::Event::Copy,
+                    egui::Event::Cut,
+                    egui::Event::Key { key: Key::V, pressed: false, .. },
+                    egui::Event::Key { key: Key::A, .. },
+                    egui::Event::Key { key: Key::C, .. }
+                ]
+            ),
+            "{:?}",
+            r.events
+        );
+        // The ⌘V press became a request for the clipboard's text.
+        let asked = out.viewport_output.values().flat_map(|v| &v.commands).any(|c| matches!(c, egui::ViewportCommand::RequestPaste));
+        assert!(asked, "the window is asked for the clipboard text");
     }
 
     /// #1638: every ⌘V is one press, however its key-down and key-up arrive.
