@@ -38,6 +38,11 @@
 	New…	Nouveau…
 	Open…	Ouvrir…
 	Open As…	Ouvrir en tant que…
+	Open EXR Parts…	Ouvrir les parties EXR…
+	Add beauty precomp from the AOVs	Ajouter la précomposition de la beauté depuis les AOV
+	Both	Les deux
+	Left	Gauche
+	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
 	Close	Fermer
@@ -800,7 +805,6 @@
 	Blending Options	Options de fusion
 	Blue	Bleu
 	Blue, Red, Yellow	Bleu, rouge, jaune
-	Both	Les deux
 	Both Axes	Deux axes
 	Bottom	Bas
 	Brightness	Luminosité
@@ -1113,7 +1117,6 @@
 	Leading	Interlignage
 	Leading (set to the font size × auto-leading when Auto)	Interlignage (en Auto : taille de police × interlignage automatique)
 	Leave as is (don't color manage)	Laisser tel quel (sans gestion des couleurs)
-	Left	Gauche
 	Left align text	Aligner le texte à gauche
 	Length:	Longueur :
 	Level	Niveau
@@ -1285,6 +1288,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Enregistrez ● une suite de modifications, puis rejouez-la ▶ sur n'importe quel document.
 	Red	Rouge
 	Redefine style by current selection	Redéfinir le style d'après la sélection actuelle
+	Refine	Affiner
 	Reflected Gradient	Dégradé réfléchi
 	Registration Marks	Repères de montage
 	Regular	Normal
@@ -1323,7 +1327,6 @@
 	Restore All	Tout restaurer
 	Restore Defaults	Rétablir les valeurs par défaut
 	Restrictive (Web)	Restrictive (Web)
-	Right	Droite
 	Right align text	Aligner le texte à droite
 	Rigid	Rigide
 	Rotate:	Rotation :
@@ -1608,6 +1611,7 @@
 	Mobile	Mobile
 	Move Tool	Outil Déplacement
 	Could not use the move tool because the layer is locked.	Impossible d'utiliser l'outil Déplacement, car le calque est verrouillé.
+	Could not complete the Free Transform command because the layer is locked.	Impossible d'exécuter la commande Transformation libre, car le calque est verrouillé.
 	Multiply	Produit
 	My Brushes	Mes pinceaux
 	Neutrals	Neutres
@@ -2651,6 +2655,7 @@ cameraRaw	Blending	Fusion
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
+	Color Picker ({name})	Sélecteur de couleurs ({name})
 	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)
 	Fill color	Couleur de remplissage
 	Color Picker (Stroke Color)	Sélecteur de couleurs (Couleur du contour)
@@ -2827,5 +2832,9 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+	Use Classic Mode	Utiliser le mode classique
+	Auto Center Preview	Centrer automatiquement l'aperçu
+	Next Document	Document suivant
+	Previous Document	Document précédent
 	W x H x Resolution	L x H x Résolution
 	Front Image	Image de premier plan

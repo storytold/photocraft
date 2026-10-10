@@ -24,6 +24,11 @@
 	New from Clipboard	클립보드에서 새로 만들기
 	Open…	열기…
 	Open As…	형식을 지정하여 열기…
+	Open EXR Parts…	EXR 파트 열기…
+	Add beauty precomp from the AOVs	AOV에서 뷰티 프리컴포지션 추가
+	Both	양쪽
+	Left	왼쪽
+	Right	오른쪽
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
 	Close	닫기
@@ -789,7 +794,6 @@
 	Blending Options	혼합 옵션
 	Blue	파랑
 	Blue, Red, Yellow	파랑, 빨강, 노랑
-	Both	둘 다
 	Both Axes	양쪽 축
 	Bottom	아래쪽
 	Brightness	밝기
@@ -1105,7 +1109,6 @@
 	Leading	행간
 	Leading (set to the font size × auto-leading when Auto)	행간(자동일 때 글꼴 크기 × 자동 행간으로 설정)
 	Leave as is (don't color manage)	그대로 두기(색상 관리 안 함)
-	Left	왼쪽
 	Left align text	텍스트 왼쪽 정렬
 	Length:	길이:
 	Level	레벨
@@ -1277,6 +1280,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	연속된 편집을 ● 기록한 다음 원하는 문서에서 ▶ 재생하세요.
 	Red	빨강
 	Redefine style by current selection	현재 선택으로 스타일 재정의
+	Refine	다듬기
 	Reflected Gradient	반사 그레이디언트
 	Registration Marks	맞춤 표시
 	Regular	보통
@@ -1314,7 +1318,6 @@
 	Restore All	모두 복원
 	Restore Defaults	기본값 복원
 	Restrictive (Web)	제한됨(웹)
-	Right	오른쪽
 	Right align text	텍스트 오른쪽 정렬
 	Rigid	고정
 	Rotate:	회전:
@@ -1603,6 +1606,7 @@
 	Mobile	모바일
 	Move Tool	이동 도구
 	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
+	Could not complete the Free Transform command because the layer is locked.	레이어가 잠겨 있어 자유 변형 명령을 완료할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -2813,6 +2817,7 @@ cameraRaw	Color	색상
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
+	Color Picker ({name})	색상 선택기 ({name})
 	Color Picker (Fill Color)	색상 선택기 (채우기 색상)
 	Fill color	채우기 색상
 	Color Picker (Stroke Color)	색상 선택기 (획 색상)
@@ -2986,5 +2991,9 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+	Use Classic Mode	클래식 모드 사용
+	Auto Center Preview	미리 보기 자동 가운데 맞춤
+	Next Document	다음 문서
+	Previous Document	이전 문서
 	W x H x Resolution	폭 x 높이 x 해상도
 	Front Image	전면 이미지

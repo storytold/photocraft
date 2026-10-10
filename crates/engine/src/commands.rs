@@ -901,8 +901,13 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         cmd!("tools.defaultColors", "Default Foreground and Background Colors", [], Some("D"), "{}", always, |s, _| {
-            s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
-            s.tools.background = [1.0, 1.0, 1.0, 1.0];
+            if s.tools.mask_targeted {
+                s.tools.foreground = crate::ToolState::MASK_COLORS[0];
+                s.tools.background = crate::ToolState::MASK_COLORS[1];
+            } else {
+                s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+                s.tools.background = [1.0, 1.0, 1.0, 1.0];
+            }
             Ok(Value::Null)
         }),
         // Queries (not journaled)
@@ -1153,6 +1158,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::paint_cmds::specs());
     v.extend(crate::extra_cmds::specs());
     v.extend(crate::file_cmds::specs());
+    v.extend(crate::exr_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());
     v.extend(crate::type_styles_cmds::specs());
     v.extend(crate::type_spell_cmds::specs());

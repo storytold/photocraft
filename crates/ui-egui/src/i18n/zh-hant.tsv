@@ -40,6 +40,11 @@
 	New from Clipboard	從剪貼簿新增
 	Open…	開啟…
 	Open As…	開啟為…
+	Open EXR Parts…	開啟 EXR 分段…
+	Add beauty precomp from the AOVs	從 AOV 預合成美麗通道
+	Both	兩者
+	Left	左
+	Right	右
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
 	Close	關閉
@@ -816,7 +821,6 @@
 	Blending Options	混合選項
 	Blue	藍色
 	Blue, Red, Yellow	藍色、紅色、黃色
-	Both	兩者
 	Both Axes	兩軸
 	Bottom	下
 	Brightness	亮度
@@ -1135,7 +1139,6 @@
 	Leading	行距
 	Leading (set to the font size × auto-leading when Auto)	行距 (自動時設為字體大小 × 自動行距)
 	Leave as is (don't color manage)	保持原樣 (不進行色彩管理)
-	Left	左
 	Left align text	文字靠左對齊
 	Length:	長度：
 	Level	層級
@@ -1307,6 +1310,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	錄製 ● 一連串編輯，然後在任何文件上播放 ▶。
 	Red	紅色
 	Redefine style by current selection	依目前選取項目重新定義樣式
+	Refine	調整
 	Reflected Gradient	反射性漸層
 	Registration Marks	對齊標記
 	Regular	標準
@@ -1345,7 +1349,6 @@
 	Restore All	全部還原
 	Restore Defaults	還原預設值
 	Restrictive (Web)	限制 (網頁)
-	Right	右
 	Right align text	文字靠右對齊
 	Rigid	剛性
 	Rotate:	旋轉：
@@ -1635,6 +1638,7 @@
 	Mobile	行動裝置
 	Move Tool	移動工具
 	Could not use the move tool because the layer is locked.	無法使用移動工具，因為圖層已鎖定。
+	Could not complete the Free Transform command because the layer is locked.	無法完成「任意變形」指令，因為圖層已鎖定。
 	Multiply	色彩增值
 	My Brushes	我的筆刷
 	Neutrals	中間色
@@ -2203,6 +2207,7 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	檢色器（文字顏色）
+	Color Picker ({name})	檢色器（{name}）
 	Color Picker (Fill Color)	檢色器（填滿顏色）
 	Fill color	填滿顏色
 	Color Picker (Stroke Color)	檢色器（筆畫顏色）
@@ -2385,5 +2390,9 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Use Classic Mode	使用傳統模式
+	Auto Center Preview	自動置中預視
+	Next Document	下一個文件
+	Previous Document	上一個文件
 	W x H x Resolution	寬 x 高 x 解析度
 	Front Image	前面的影像

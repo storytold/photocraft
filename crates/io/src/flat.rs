@@ -146,21 +146,7 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     };
     let (w, h) = img.dimensions();
     let mut doc = Document::new(name, Size::new(w, h), mode, depth);
-    let fmt = PixelFormat::new(mode, depth, true);
-    let mut s = Surface::new(fmt);
-    if img.layout() == target_layout && img.sample_type() == csample {
-        s.write_interleaved(Rect::new(0, 0, w as i32, h as i32), img.data());
-    } else {
-        // Converted a band of rows at a time: no second full-size copy of the image.
-        let row = img.data().len() / (h.max(1) as usize);
-        let band = (BAND_BYTES / row.max(1)).max(1);
-        for (i, rows) in img.data().chunks(row.max(1) * band).enumerate() {
-            let n = (rows.len() / row.max(1)) as u32;
-            let part = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec())?.convert(target_layout, csample);
-            let y0 = (i * band) as i32;
-            s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
-        }
-    }
+    let mut s = image_surface(img, target_layout, csample)?;
     s.prune();
     // As in Photoshop: an opaque image opens as the locked Background layer, one with
     // transparency (an alpha channel, or a tRNS chunk the decoder expands to one) as a normal
@@ -183,6 +169,37 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
     }
     Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+}
+
+/// The pixels of a decoded image as a surface of `fmt`, converting layout and sample type a
+/// band of rows at a time so no second full-size copy of the image is made.
+pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: CSample) -> Result<Surface, IoError> {
+    let mode = match target_layout {
+        ChannelLayout::Gray | ChannelLayout::GrayA => ColorMode::Grayscale,
+        ChannelLayout::Cmyk | ChannelLayout::CmykA => ColorMode::Cmyk,
+        _ => ColorMode::Rgb,
+    };
+    let depth = match csample {
+        CSample::U8 => SampleType::U8,
+        CSample::U16 => SampleType::U16,
+        _ => SampleType::F32,
+    };
+    let fmt = PixelFormat::new(mode, depth, true);
+    let (w, h) = img.dimensions();
+    let mut s = Surface::new(fmt);
+    if img.layout() == target_layout && img.sample_type() == csample {
+        s.write_interleaved(Rect::new(0, 0, w as i32, h as i32), img.data());
+    } else {
+        let row = img.data().len() / (h.max(1) as usize);
+        let band = (BAND_BYTES / row.max(1)).max(1);
+        for (i, rows) in img.data().chunks(row.max(1) * band).enumerate() {
+            let n = (rows.len() / row.max(1)) as u32;
+            let part = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec())?.convert(target_layout, csample);
+            let y0 = (i * band) as i32;
+            s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
+        }
+    }
+    Ok(s)
 }
 
 /// `Some(surface)` when the document is exactly one visible, unmasked,

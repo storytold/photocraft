@@ -4339,6 +4339,7 @@ name = "photocraft-engine"
 version = "0.6.0"
 dependencies = [
  "blake3",
+ "exr",
  "flate2",
  "photocraft-affinity",
  "photocraft-algo",

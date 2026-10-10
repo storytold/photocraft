@@ -38,6 +38,7 @@ pub mod blocks;
 mod channel_map;
 pub mod comps_map;
 pub mod effects_map;
+pub mod exr_parts;
 mod flat;
 mod gradient_bake;
 pub mod linked;

@@ -540,10 +540,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(m) = mask_target {
                     app.ui.mask_target = m;
                     app.ui.vector_mask_target &= !m;
+                    app.sync_mask_targets();
                 }
                 if let Some(m) = vector_mask_target {
                     app.ui.vector_mask_target = m;
                     app.ui.mask_target &= !m;
+                    app.sync_mask_targets();
                 }
                 // Selection tools' options-bar mode: 0 New, 1 Add, 2 Subtract, 3 Intersect.
                 if let Some(m) = selection_mode {
@@ -844,6 +846,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
                     d.reposition = space;
                 }
+                // A Crop drag in the default mode turns and pans the view with the image: its
+                // points are read as the view showed them at the press (`crop_mode`).
+                let ev = match ev {
+                    ToolEvent::Move { x, y, pressure } => {
+                        let [x, y] = crate::crop_mode::control_point(app, [x, y]);
+                        ToolEvent::Move { x, y, pressure }
+                    }
+                    ToolEvent::Up { x, y } => {
+                        let [x, y] = crate::crop_mode::control_point(app, [x, y]);
+                        ToolEvent::Up { x, y }
+                    }
+                    down => down,
+                };
                 tool_event(app, ev, mods);
             }
             app.stylus.feed.set(None);
