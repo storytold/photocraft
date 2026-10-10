@@ -1,49 +1,93 @@
-//! Quick Selection brush.
+//! Quick Selection brush, behaving like Photoshop's.
 //!
-//! A brush stroke seeds a graph cut in a working window around the stroke:
+//! Photoshop 25.4 was measured as a black box: synthetic images and public-domain paintings,
+//! strokes driven on its canvas, the exact selection masks read back (no Photoshop code or
+//! assets were used). What it does:
 //!
-//! 1. Stroked pixels are hard foreground; a GMM of their colours is the foreground model.
-//! 2. A geodesic distance from the stroke over a barrier map (the colour gradient of a lightly
-//!    smoothed image above the texture level found under the stroke; raster-scan geodesic
-//!    transform, Toivanen 1996; Criminisi, Sharp & Blake, "GeoS: Geodesic Image Segmentation",
-//!    ECCV 2008) separates what is reachable without crossing an edge from what lies behind
-//!    edges. Pixels behind edges are
-//!    sampled for the background GMM (mixed with a uniform outlier density, so a window without
-//!    any edge simply selects everything similar), and the distance also enters the data term.
-//! 3. A contrast-sensitive min cut (Boykov & Jolly 2001) snaps the result to image edges; only
-//!    components touching the stroke are kept.
+//! - The brush footprint is always selected, whatever colours it covers.
+//! - Beyond the footprint the selection grows to image edges, but every selected pixel costs a
+//!   little: a click selects a whole object only when the object is small enough to be worth it
+//!   for that brush. With a 30 px brush a click selects a 220 px red square on blue but not a
+//!   240 px one, a 120 x 400 bar but not a 160 x 400 one, and a weak edge (a step of 15 levels)
+//!   only around a 100 px square. A click in a flat area selects about the brush disc.
+//! - A stroke is one set of seeds: a short drag inside a square too big for a click selects it.
+//! - Colours elsewhere in the image make no difference (no global colour model).
+//! - It works on the whole document when it has at most 512 x 512 pixels and at exactly half
+//!   resolution above (any size, any brush), aligned to the document's corner; the mask is then
+//!   scaled up bilinearly (edges show a 25 % / 75 % step).
 //!
-//! This follows the spirit of "Paint Selection" (Liu, Sun & Shum, SIGGRAPH 2009) and of
-//! geodesic matting (Bai & Sapiro, ICCV 2007). Large windows run at a reduced working resolution
-//! and the boundary is re-cut at full resolution.
+//! The model reproducing this is one min cut (Boykov & Jolly, ICCV 2001; max-flow by Boykov &
+//! Kolmogorov, PAMI 2004) over the working image minimising
+//!
+//! ```text
+//!   sum over selected pixels p beyond the footprint of  AREA * (1 + DIST * d(p)^POW)
+//!   + sum over cut neighbour pairs p~q of  w(|I_p - I_q|) / |p - q|
+//!   w(D) = FLOOR + 1 / (1 + (D / SIGMA)^K)
+//! ```
+//!
+//! with the (slightly grown) footprint hard foreground and `d` the distance from it. The
+//! constants were fitted to Photoshop's masks.
 
 use photocraft_geom::Rect;
 
-use super::gmm::Gmm;
-use super::{FREE, HARD_FG, Region, RgbImage, Sampler, contrast_beta, grid_cut, keep_seeded, subsample};
+use super::{FREE, HARD_FG, Region, RgbImage, Sampler};
 
-/// Covariance ridge for the (often tiny) stroke sample: ~6 levels of standard deviation.
-const QREG: f32 = 6e-4;
-/// Geodesic distance (colour units above noise) that counts as "behind an edge".
-const EDGE: f32 = 0.06;
-/// Neighbour colour steps below this never count as edges (smooth shading, fine noise).
-const MIN_STEP: f32 = 0.03;
-/// Data-term weight of the geodesic distance (nats per `EDGE`).
-const KAPPA: f32 = 2.0;
-const GAMMA: f32 = 50.0;
+/// The model's constants (see the module docs); [`Tuning::default`] is the fit to Photoshop.
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    /// Cost of each selected pixel beyond the footprint, times `1 + dist * d^pow` with `d` its
+    /// distance from the footprint (working pixels).
+    pub area: f32,
+    pub dist: f32,
+    pub pow: f32,
+    /// Cut weight between neighbours: `floor + 1 / (1 + (|Ip - Iq| / sigma)^k)` (RGB in 0..1).
+    pub floor: f32,
+    pub sigma: f32,
+    pub k: f32,
+    /// The footprint grows by `grow + grow_frac * radius` working pixels (Photoshop's settled click).
+    pub grow: f32,
+    pub grow_frac: f32,
+    /// Larger working windows are cut coarse to fine: at half size first, then again only in a
+    /// band around that boundary (Lombaert, Sun, Grady & Xu, "A Multilevel Banded Graph Cuts
+    /// Method for Fast Image Segmentation", ICCV 2005).
+    pub direct_px: usize,
+}
 
-/// Default working-resolution budget (pixels) for a stroke.
-pub const WORK_PX: usize = 160_000;
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            area: 0.004079,
+            dist: 0.002651,
+            pow: 0.98885,
+            floor: 0.018847,
+            sigma: 0.048450,
+            k: 1.98549,
+            grow: 1.69371,
+            grow_frac: 0.103003,
+            direct_px: 300_000,
+        }
+    }
+}
 
-/// Grows a selection from a brush stroke (`points` in document pixels, brush diameter `size`).
-/// Returns the new region (to be added to or subtracted from the current selection), or `None`
-/// when the stroke misses the canvas.
-pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, work_px: usize) -> Option<Region> {
-    if points.is_empty() {
+/// The working step for a document of `w` x `h` pixels: Photoshop works on the whole document
+/// up to 512 x 512 pixels and at half resolution above.
+pub fn working_step(w: usize, h: usize) -> usize {
+    if w.saturating_mul(h) <= 512 * 512 { 1 } else { 2 }
+}
+
+/// Grows a selection from a brush stroke (`points` in document pixels, brush diameter `size`)
+/// on the document `canvas`. Returns the new region (to be added to or subtracted from the
+/// current selection), or `None` when the stroke misses the canvas.
+pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32) -> Option<Region> {
+    quick_select_with(sampler, canvas, points, size, &Tuning::default())
+}
+
+/// [`quick_select`] with explicit model constants.
+pub fn quick_select_with(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, t: &Tuning) -> Option<Region> {
+    if points.is_empty() || canvas.is_empty() {
         return None;
     }
-    let size = size.max(1.0);
-    let r = size / 2.0;
+    let r = size.max(1.0) / 2.0;
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for &(x, y) in points {
         x0 = x0.min(x - r);
@@ -51,66 +95,114 @@ pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], 
         x1 = x1.max(x + r);
         y1 = y1.max(y + r);
     }
-    let bbox = Rect::new(x0.floor() as i32, y0.floor() as i32, (x1.ceil() as i32).saturating_add(1), (y1.ceil() as i32).saturating_add(1)).intersect(&canvas);
+    let clamp = |v: f32| v.clamp(i32::MIN as f32 / 2.0, i32::MAX as f32 / 2.0) as i32;
+    let bbox = Rect::new(clamp(x0.floor()), clamp(y0.floor()), clamp(x1.ceil()).saturating_add(1), clamp(y1.ceil()).saturating_add(1)).intersect(&canvas);
     if bbox.is_empty() {
         return None;
     }
-    let margin = (size * 6.0).max(512.0) as i32;
-    let window = bbox.inflate(margin).intersect(&canvas);
-    let step = super::scale_for(window, work_px);
-    let img = sampler.rgb_scaled(window, step);
-    let (lw, lh) = (img.w, img.h);
-    let st = step as f32;
-    let pts: Vec<(f32, f32)> = points.iter().map(|&(x, y)| ((x - window.x0 as f32) / st, (y - window.y0 as f32) / st)).collect();
-    let seeds = stroke_mask(&pts, (r / st).max(0.75), lw, lh);
-    if !seeds.iter().any(|s| *s) {
-        return None;
-    }
-    let (fg, bg, low) = segment(&img, &seeds);
-    if !low.iter().any(|v| *v) {
-        return None;
-    }
-    super::finish_region(sampler, window, step, &low, lw, lh, Some((&fg, &bg)))
-}
-
-/// The working-resolution segmentation: (foreground model, background model, labels).
-pub fn segment(img: &RgbImage, seeds: &[bool]) -> (Gmm, Gmm, Vec<bool>) {
-    let (lw, lh) = (img.w, img.h);
-    let geo = geodesic(img, seeds);
-    let fs: Vec<[f32; 3]> = img.px.iter().zip(seeds).filter(|(_, s)| **s).map(|(p, _)| *p).collect();
-    let bs: Vec<[f32; 3]> = img.px.iter().zip(&geo).filter(|(_, d)| **d > EDGE).map(|(p, _)| *p).collect();
-    let fs = subsample(&fs, 20_000);
-    let bs = subsample(&bs, 20_000);
-    let fg = Gmm::fit(&fs, (fs.len() / 40).clamp(1, 4), QREG).unwrap_or_else(broad_model);
-    let bg = if bs.len() >= 30 { Gmm::fit(&bs, 6, QREG) } else { None };
-    let eval = |(p, d): (&[f32; 3], &f32)| -> (f32, f32) {
-        let cf = fg.neg_log(*p) + KAPPA * (d / EDGE).min(4.0);
-        let cb = match &bg {
-            Some(b) => -((0.85 * b.log_prob(*p).exp() + 0.15).ln() as f32),
-            None => 0.0,
+    let step = working_step(canvas.width() as usize, canvas.height() as usize) as i32;
+    let rw = r / step as f32;
+    // Work in a window around the stroke; grow it while the selection runs into its border.
+    let mut margin = (48.0f32).max(2.0 * rw) as i32 * step;
+    loop {
+        let snap0 = |v: i32, o: i32| o + (v - o).div_euclid(step) * step;
+        let grown = bbox.inflate(margin).intersect(&canvas);
+        let window = Rect::new(snap0(grown.x0, canvas.x0), snap0(grown.y0, canvas.y0), grown.x1, grown.y1);
+        let img = sampler.rgb_scaled(window, step as usize);
+        let (lw, lh) = (img.w, img.h);
+        let s = step as f32;
+        let pts: Vec<(f32, f32)> = points.iter().map(|&(x, y)| ((x - window.x0 as f32) / s, (y - window.y0 as f32) / s)).collect();
+        let seeds = stroke_mask(&pts, rw.max(0.5), lw, lh);
+        if !seeds.iter().any(|v| *v) {
+            return None;
+        }
+        // The window's sides are free like the canvas' edges, so a selection that stays clear of
+        // them is the best over the whole canvas too (outside the window it could only add cost).
+        // One that reaches a side inside the canvas is recomputed in a larger window.
+        let inner = [window.x0 > canvas.x0, window.y0 > canvas.y0, window.x1 < canvas.x1, window.y1 < canvas.y1];
+        let low = select_working(&img, &seeds, rw, t);
+        let touches = |side: usize| match side {
+            0 => (0..lh).any(|y| low[y * lw]),
+            1 => (0..lw).any(|x| low[x]),
+            2 => (0..lh).any(|y| low[y * lw + lw - 1]),
+            _ => (0..lw).any(|x| low[(lh - 1) * lw + x]),
         };
-        (cf, cb)
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let costs: Vec<(f32, f32)> = {
-        use rayon::prelude::*;
-        img.px.par_iter().zip(geo.par_iter()).map(eval).collect()
-    };
-    #[cfg(target_arch = "wasm32")]
-    let costs: Vec<(f32, f32)> = img.px.iter().zip(geo.iter()).map(eval).collect();
-    let (cf, cb): (Vec<f32>, Vec<f32>) = costs.into_iter().unzip();
-    let fixed: Vec<u8> = seeds.iter().map(|s| if *s { HARD_FG } else { FREE }).collect();
-    let cut = grid_cut(img, &cf, &cb, &fixed, GAMMA, contrast_beta(img));
-    let low = keep_seeded(&cut, seeds, lw, lh);
-    (fg, bg.unwrap_or_else(broad_model), low)
+        if (0..4).any(|k| inner[k] && touches(k)) {
+            margin = margin.saturating_mul(2);
+            continue;
+        }
+        let mask = upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize);
+        return super::trim_region(Region { bbox: window, mask });
+    }
 }
 
-/// A near-uniform density over the RGB cube.
-pub fn broad_model() -> Gmm {
-    let corners: Vec<[f32; 3]> = (0..8).map(|i| [(i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32]).collect();
-    // Eight fixed, distinct samples: the fit cannot fail.
-    #[allow(clippy::expect_used)]
-    Gmm::fit(&corners, 1, 0.0).expect("non-degenerate")
+/// The model at working resolution: `seeds` (the brush footprint, `radius` working pixels) are
+/// selected; returns the selection.
+pub fn select_working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
+    let (w, h) = (img.w, img.h);
+    let d = crate::selection::edt(seeds, w, h);
+    let grow = (t.grow + t.grow_frac * radius).max(0.0);
+    let cost_fg: Vec<f32> = d.iter().map(|d| t.area * (1.0 + t.dist * (d - grow).max(0.0).powf(t.pow))).collect();
+    let fixed: Vec<u8> = d.iter().map(|d| if *d <= grow { HARD_FG } else { FREE }).collect();
+    let (floor, sigma, k) = (t.floor, t.sigma.max(1e-4), t.k);
+    let weight = move |d2: f32| floor + 1.0 / (1.0 + (d2.sqrt() / sigma).powf(k));
+    cut_levels(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024))
+}
+
+/// Band half-width (pixels) re-cut at each finer level.
+const BAND: f32 = 3.0;
+
+/// Min cut with only foreground costs, coarse to fine above `direct_px` pixels: the half-size
+/// problem (colours averaged, pixel costs summed, cut weights doubled since a coarse side spans two
+/// fine ones) gives a boundary, and the full-size cut is redone only within `BAND` of it. Seeds
+/// stay foreground.
+fn cut_levels(img: &RgbImage, fixed: &[u8], cost_fg: &[f32], weight: &dyn Fn(f32) -> f32, scale: f32, direct_px: usize) -> Vec<bool> {
+    let (w, h) = (img.w, img.h);
+    let zeros = vec![0.0f32; w * h];
+    if w * h <= direct_px || w < 8 || h < 8 {
+        return super::grid_cut_with(img, cost_fg, &zeros, fixed, |d2| scale * weight(d2));
+    }
+    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+    let coarse_img = img.downsample(2);
+    let mut cfix = vec![FREE; cw * ch];
+    let mut ccost = vec![0.0f32; cw * ch];
+    for y in 0..h {
+        for x in 0..w {
+            let c = (y / 2) * cw + x / 2;
+            ccost[c] += cost_fg[y * w + x];
+            if fixed[y * w + x] == HARD_FG {
+                cfix[c] = HARD_FG;
+            }
+        }
+    }
+    let coarse = cut_levels(&coarse_img, &cfix, &ccost, weight, scale * 2.0, direct_px);
+    let proj: Vec<bool> = (0..w * h).map(|i| coarse[(i / w / 2) * cw + (i % w) / 2]).collect();
+    // Band: within BAND of the projected boundary.
+    let edge: Vec<bool> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let v = proj[i];
+            (x > 0 && proj[i - 1] != v) || (x + 1 < w && proj[i + 1] != v) || (y > 0 && proj[i - w] != v) || (y + 1 < h && proj[i + w] != v)
+        })
+        .collect();
+    if !edge.iter().any(|e| *e) {
+        return (0..w * h).map(|i| proj[i] || fixed[i] == HARD_FG).collect();
+    }
+    let near = crate::selection::edt(&edge, w, h);
+    let banded: Vec<u8> = (0..w * h)
+        .map(|i| {
+            if fixed[i] == HARD_FG {
+                HARD_FG
+            } else if near[i] <= BAND {
+                FREE
+            } else if proj[i] {
+                HARD_FG
+            } else {
+                super::HARD_BG
+            }
+        })
+        .collect();
+    super::grid_cut_with(img, cost_fg, &zeros, &banded, |d2| scale * weight(d2))
 }
 
 /// Pixels within `radius` (working pixels) of the polyline `pts`, plus each point's own pixel.
@@ -143,105 +235,24 @@ pub fn stroke_mask(pts: &[(f32, f32)], radius: f32, w: usize, h: usize) -> Vec<b
     m
 }
 
-fn blur3(img: &RgbImage) -> RgbImage {
-    let (w, h) = (img.w, img.h);
-    let mut tmp = img.clone();
-    for y in 0..h {
-        for x in 0..w {
-            let (l, r) = (img.at(x.saturating_sub(1), y), img.at((x + 1).min(w - 1), y));
-            let c = img.at(x, y);
-            tmp.px[y * w + x] = [0, 1, 2].map(|k| (l[k] + c[k] + r[k]) / 3.0);
-        }
+/// Bilinear upsampling (pixel centres aligned, edges clamped) of a working-resolution selection
+/// to 8-bit coverage, as Photoshop scales its half-resolution result.
+pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: usize) -> Vec<u8> {
+    if step == 1 {
+        return low.iter().map(|b| if *b { 255 } else { 0 }).collect();
     }
-    let mut out = tmp.clone();
+    let at = |x: i64, y: i64| -> f32 { if low[(y.clamp(0, lh as i64 - 1) as usize) * lw + x.clamp(0, lw as i64 - 1) as usize] { 1.0 } else { 0.0 } };
+    let s = step as f32;
+    let mut out = vec![0u8; w * h];
     for y in 0..h {
+        let fy = (y as f32 + 0.5) / s - 0.5;
+        let (iy, ty) = (fy.floor() as i64, fy - fy.floor());
         for x in 0..w {
-            let (u, d) = (tmp.at(x, y.saturating_sub(1)), tmp.at(x, (y + 1).min(h - 1)));
-            let c = tmp.at(x, y);
-            out.px[y * w + x] = [0, 1, 2].map(|k| (u[k] + c[k] + d[k]) / 3.0);
+            let fx = (x as f32 + 0.5) / s - 0.5;
+            let (ix, tx) = (fx.floor() as i64, fx - fx.floor());
+            let v = (at(ix, iy) * (1.0 - tx) + at(ix + 1, iy) * tx) * (1.0 - ty) + (at(ix, iy + 1) * (1.0 - tx) + at(ix + 1, iy + 1) * tx) * ty;
+            out[y * w + x] = (v * 255.0).round() as u8;
         }
     }
     out
-}
-
-/// Geodesic distance from `seeds` over a barrier map: each pixel costs its colour gradient
-/// magnitude (smoothed image) above the texture level of the stroke (twice the median gradient
-/// under it), plus a tiny spatial term. Raster-scan approximation (two forward/backward sweeps,
-/// 8-neighbours).
-pub fn geodesic(img: &RgbImage, seeds: &[bool]) -> Vec<f32> {
-    let (w, h) = (img.w, img.h);
-    let sm = blur3(&blur3(img));
-    // Texture level of what the user painted: median local gradient over the stroke (grown by
-    // two pixels). Gradual colour changes and texture at that level cost nothing.
-    let mut near = vec![false; w * h];
-    for (i, _) in seeds.iter().enumerate().filter(|(_, s)| **s) {
-        let (x, y) = (i % w, i / w);
-        for yy in y.saturating_sub(2)..(y + 3).min(h) {
-            near[yy * w + x.saturating_sub(2)..yy * w + (x + 3).min(w)].fill(true);
-        }
-    }
-    // Colour gradient magnitude (central differences) of the smoothed image.
-    let mut g = vec![0.0f32; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let (l, r) = (sm.at(x.saturating_sub(1), y), sm.at((x + 1).min(w - 1), y));
-            let (u, dn) = (sm.at(x, y.saturating_sub(1)), sm.at(x, (y + 1).min(h - 1)));
-            g[y * w + x] = ((super::d2(l, r) + super::d2(u, dn)) * 0.25).sqrt();
-        }
-    }
-    let mut diffs: Vec<f32> = (0..w * h).filter(|i| near[*i]).map(|i| g[i]).collect();
-    let tau = if diffs.is_empty() {
-        0.0
-    } else {
-        let mid = diffs.len() / 2;
-        *diffs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1
-    };
-    let thr = (2.0 * tau).max(MIN_STEP);
-    // Crossing pixels whose gradient exceeds the texture level costs the excess: a barrier map,
-    // so an edge costs about its contrast whatever direction the path crosses it.
-    let e: Vec<f32> = g.iter().map(|v| (v - thr).max(0.0)).collect();
-    let cost = |a: usize, b: usize, len: f32| len * (0.5 * (e[a] + e[b]) + 1e-6);
-    let mut d: Vec<f32> = seeds.iter().map(|s| if *s { 0.0 } else { f32::INFINITY }).collect();
-    let sq = std::f32::consts::SQRT_2;
-    for _ in 0..2 {
-        for y in 0..h {
-            for x in 0..w {
-                let i = y * w + x;
-                let mut v = d[i];
-                if x > 0 {
-                    v = v.min(d[i - 1] + cost(i, i - 1, 1.0));
-                }
-                if y > 0 {
-                    v = v.min(d[i - w] + cost(i, i - w, 1.0));
-                    if x > 0 {
-                        v = v.min(d[i - w - 1] + cost(i, i - w - 1, sq));
-                    }
-                    if x + 1 < w {
-                        v = v.min(d[i - w + 1] + cost(i, i - w + 1, sq));
-                    }
-                }
-                d[i] = v;
-            }
-        }
-        for y in (0..h).rev() {
-            for x in (0..w).rev() {
-                let i = y * w + x;
-                let mut v = d[i];
-                if x + 1 < w {
-                    v = v.min(d[i + 1] + cost(i, i + 1, 1.0));
-                }
-                if y + 1 < h {
-                    v = v.min(d[i + w] + cost(i, i + w, 1.0));
-                    if x + 1 < w {
-                        v = v.min(d[i + w + 1] + cost(i, i + w + 1, sq));
-                    }
-                    if x > 0 {
-                        v = v.min(d[i + w - 1] + cost(i, i + w - 1, sq));
-                    }
-                }
-                d[i] = v;
-            }
-        }
-    }
-    d
 }

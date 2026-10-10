@@ -350,8 +350,15 @@ fn reveal_in_finder(s: &mut Session, p: &Value) -> Result<Value> {
     let SmartSource::Linked { path } = &sm.source else {
         return Err(other("embedded smart objects have no file to reveal"));
     };
+    reveal(path, p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// Show `path` in the platform file manager ([`reveal_command`] + [`spawn`]); `dry_run` answers
+/// the program and arguments instead (tests). Shared by the smart-object command and the document
+/// tab's Reveal in Finder (UI-217-6).
+pub(crate) fn reveal(path: &str, dry_run: bool) -> Result<Value> {
     let (program, args) = reveal_command(path);
-    if p.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
+    if dry_run {
         return Ok(json!({"program": program, "args": args}));
     }
     spawn(program, &args)?;
@@ -909,7 +916,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.layerStyle.blendingOptions",
             "Blending Options…",
             ["Layer", "Layer Style"],
-            r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?,"channels":[bool,…]?,"knockout":"none|shallow|deep"?,"blendInteriorEffectsAsGroup":bool?,"blendClippedLayersAsGroup":bool?,"transparencyShapesLayer":bool?,"layerMaskHidesEffects":bool?,"vectorMaskHidesEffects":bool?} (Blend If values 0..255; split points fade; null resets. Advanced Blending: channels = which colour channels blend (R G B / C M Y K / L a b); Photoshop's defaults are knockout none, interior effects off, clipped layers as group on, transparency shapes on, masks hide effects off)"##,
+            r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?,"channels":[bool,…]?,"knockout":"none|shallow|deep"?,"blendInteriorEffectsAsGroup":bool?,"blendClippedLayersAsGroup":bool?,"transparencyShapesLayer":bool?,"layerMaskHidesEffects":bool?,"vectorMaskHidesEffects":bool?} (Blend If values 0..255; split points fade; null resets. Advanced Blending: channels = which colour channels blend (R G B / C M Y K / L a b); PhotoCraft's defaults are knockout none, interior effects off, clipped layers as group on, transparency shapes on, masks hide effects off)"##,
             has_layer,
             blending_options
         ),

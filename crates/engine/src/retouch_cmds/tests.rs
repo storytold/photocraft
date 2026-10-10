@@ -4,6 +4,37 @@ use photocraft_color::ColorMode;
 const DEPTHS: [u64; 3] = [8, 16, 32];
 
 #[test]
+fn proximity_match_reads_original_pixels_for_overlapping_offsets() {
+    // Shifting source one pixel to the left overlaps the destination in a
+    // left-to-right traversal: reading the output would repeat the first value.
+    let img = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
+    let mask = [false, true, true, true, false, false];
+    let result = proximity_source_patch(&img, 6, 1, 1, &mask, -1, 0).unwrap();
+    assert_eq!(result, vec![10.0, 10.0, 20.0, 30.0, 50.0, 60.0]);
+    assert_eq!(img, vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0], "source remains untouched");
+}
+
+#[test]
+fn proximity_match_preserves_channels_and_unmasked_pixels() {
+    // A two-channel image shifted from the row above.
+    let img = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let mask = [false, false, true, false];
+    let result = proximity_source_patch(&img, 2, 2, 2, &mask, 0, -1).unwrap();
+    assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 7.0, 8.0]);
+}
+
+#[test]
+fn proximity_match_rejects_invalid_translations_without_panicking() {
+    let img = vec![1.0, 2.0, 3.0, 4.0];
+    let mask = [true, false, false, false];
+    assert!(proximity_source_patch(&img, 2, 2, 1, &mask, -1, 0).is_none());
+    assert!(proximity_source_patch(&img, 2, 2, 1, &mask, 0, -1).is_none());
+    assert!(proximity_source_patch(&img, 2, 2, 1, &mask, i32::MAX, 0).is_none());
+    assert!(proximity_source_patch(&img, 2, 2, 1, &mask[..3], 0, 0).is_none());
+    assert!(proximity_source_patch(&img, usize::MAX, 2, 1, &mask, 0, 0).is_none());
+}
+
+#[test]
 fn clone_preview_matches_source_without_mutating_session() {
     use crate::presets::clone_source::Mapping;
     for depth in DEPTHS {

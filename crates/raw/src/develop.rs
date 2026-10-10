@@ -3,7 +3,7 @@
 //! exposure, gamma 1.8 encode to 16 bits, orientation.
 
 use crate::color::{self, Mat3};
-use crate::demosaic::{Demosaic, PAD, Padded, demosaic};
+use crate::demosaic::{Demosaic, PAD, Padded, Pattern, demosaic, demosaic_cfa};
 use crate::error::{RawError, Result};
 use crate::sensor::Sensor;
 use crate::{Limits, RawFormat, par};
@@ -47,7 +47,9 @@ pub struct RawInfo {
     /// Sensor data size.
     pub sensor_width: usize,
     pub sensor_height: usize,
-    /// CFA pattern at the crop origin, e.g. `"RGGB"`; `None` for LinearRaw.
+    /// CFA pattern at the crop origin: `"RGGB"` for Bayer; other patterns list
+    /// their whole repeat row by row, rows separated by `/` (X-Trans:
+    /// `"GGRGGB/GGBGGR/…"`); `None` for LinearRaw.
     pub cfa: Option<String>,
     /// White-balance multipliers used (R, G, B, normalized to a minimum of 1).
     pub wb_multipliers: [f64; 3],
@@ -147,8 +149,10 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     if s.samples != 1 && s.samples != 3 {
         return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
     }
-    // Working buffers: one f32 plane plus f32 RGB plus u16 RGB per pixel.
-    opts.limits.check(c.width as u64, c.height as u64, 4 + 12 + 6)?;
+    // Working buffers: one f32 plane plus f32 RGB plus u16 RGB per pixel, and
+    // a green plane for non-Bayer patterns.
+    let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
+    opts.limits.check(c.width as u64, c.height as u64, if bayer { 4 + 12 + 6 } else { 4 + 4 + 12 + 6 })?;
     let mut warnings = s.warnings.clone();
     let sc = Scale { s, lin: s.linearization.as_deref() };
 
@@ -191,39 +195,42 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     let (w, h) = (c.width, c.height);
     let band = par::band_rows(w);
     let mut rgb: Vec<f32>;
-    let phase;
+    let pattern: Option<String>;
     match &s.cfa {
         Some(cfa) => {
             // Normalized, balanced, clipped CFA plane.
             let mut plane = Padded::new(w, h);
             let stride = plane.stride;
-            // Fast path: black varies at most per 2×2 position (the Bayer period).
+            // Fast path: black varies at most per 2×2 position, so black and gain
+            // repeat every `period` columns (the CFA width, made even).
             let bl = &s.black;
-            let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2);
+            let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2) && cfa.width <= 16;
+            let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
             plane.fill_rows(band, |y0, chunk| {
                 for (r, prow) in chunk.chunks_exact_mut(stride).enumerate() {
                     let row = &mut prow[PAD..PAD + w];
                     let y = c.y + y0 + r;
                     if periodic {
-                        // Per column parity: black and the combined scale × white-balance gain.
-                        let k: [(f32, f32); 2] = std::array::from_fn(|p| {
-                            let x = c.x + p;
-                            let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
-                            let range = s.white[0] - black;
-                            let gain = if range >= 1.0 { mult[usize::from(cfa.color(x, y)).min(2)] / range } else { 0.0 };
-                            (black, gain)
-                        });
+                        // Per column of the period: black and the combined scale × white-balance gain.
+                        let k: Vec<(f32, f32)> = (0..period)
+                            .map(|p| {
+                                let x = c.x + p;
+                                let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
+                                let range = s.white[0] - black;
+                                let gain = if range >= 1.0 { mult[usize::from(cfa.color(x, y)).min(2)] / range } else { 0.0 };
+                                (black, gain)
+                            })
+                            .collect();
                         let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
+                        let ks = k.iter().cycle();
                         match &sc.lin {
                             None => {
-                                for (i, (v, &raw)) in row.iter_mut().zip(src).enumerate() {
-                                    let (black, gain) = k[i & 1];
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
                                     *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
                                 }
                             }
                             Some(l) => {
-                                for (i, (v, &raw)) in row.iter_mut().zip(src).enumerate() {
-                                    let (black, gain) = k[i & 1];
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
                                     let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
                                     *v = ((lin - black) * gain).clamp(0.0, 1.0);
                                 }
@@ -246,13 +253,20 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
                 }
             });
             plane.fill_borders();
-            let p = cfa.phase(c.x, c.y);
-            phase = Some(p);
-            rgb = demosaic(&plane, p, opts.demosaic, &to_xyz);
+            let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
+            if bayer {
+                let p = cfa.phase(c.x, c.y);
+                pattern = Some(names(&p));
+                rgb = demosaic(&plane, p, opts.demosaic, &to_xyz);
+            } else {
+                let pat = Pattern::of(cfa, c.x, c.y);
+                pattern = Some(pat.colors.chunks(pat.w.max(1)).map(names).collect::<Vec<_>>().join("/"));
+                rgb = demosaic_cfa(&plane, &pat);
+            }
             drop(plane);
         }
         None => {
-            phase = None;
+            pattern = None;
             rgb = vec![0.0f32; w * h * 3];
             par::chunks_mut(&mut rgb, band * w * 3, |b, chunk| {
                 for (r, row) in chunk.chunks_exact_mut(w * 3).enumerate() {
@@ -301,7 +315,7 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
             model: s.model.clone(),
             sensor_width: s.width,
             sensor_height: s.height,
-            cfa: phase.map(|p| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect()),
+            cfa: pattern,
             wb_multipliers: mult.map(|m| f64::from(m / nmax)),
             orientation: s.orientation,
             baseline_exposure: s.baseline_exposure,

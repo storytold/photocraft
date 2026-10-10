@@ -25,6 +25,8 @@
 	Layer	Vrstva
 	Type	Text
 	Select	Výběr
+	Selected	Vybrané
+	Scope	Rozsah
 	Top Left	Vlevo nahoře
 	Top Right	Vpravo nahoře
 	Bottom Left	Vlevo dole
@@ -676,7 +678,11 @@
 	Pro Medium Gray Theme	Motiv Pro (středně šedý)
 	Studio Theme	Motiv Studio
 	Studio Light Theme	Motiv Studio (světlý)
+	Adwaita Light Theme	Motiv Adwaita (světlý)
+	Adwaita Dark Theme	Motiv Adwaita (tmavý)
 	Classic Theme	Klasický motiv
+	Solarized dark	Solarized tmavý
+	Solarized Dark Theme	Tmavý motiv Solarized
 	Next Theme	Další motiv
 	Actions	Akce
 	Brush Settings	Nastavení štětce
@@ -769,7 +775,7 @@
 	All Caps	Verzálky
 	All Slices	Všechny řezy
 	All User Slices	Všechny uživatelské řezy
-	All shortcuts reset to Photoshop defaults.	Všechny zkratky byly obnoveny na výchozí hodnoty Photoshopu.
+	All shortcuts reset to PhotoCraft defaults.	Všechny zkratky byly obnoveny na výchozí hodnoty PhotoCraftu.
 	Alt	Alt
 	Always use pressure for opacity	Vždy použít přítlak pro krytí
 	Always use pressure for size	Vždy použít přítlak pro velikost
@@ -1090,7 +1096,7 @@
 	Ignore All	Ignorovat vše
 	Image Size	Velikost obrazu
 	Import Brushes…	Importovat štětce…
-	Import Photoshop brushes (.abr)	Importovat štětce Photoshopu (.abr)
+	Import brushes (.abr)	Importovat štětce (.abr)
 	Import Presets	Importovat přednastavení
 	Imported	Importováno
 	Indent First	Odsazení prvního řádku
@@ -1140,7 +1146,6 @@
 	Liquify is not open	Zkapalnit není otevřeno
 	Load	Načíst
 	Load 3D LUT…	Načíst 3D LUT…
-	Load Photoshop brushes (.abr)	Načíst štětce Photoshopu (.abr)
 	Load channel as selection	Načíst kanál jako výběr
 	Load…	Načíst…
 	Localized Color Clusters	Lokalizované shluky barev
@@ -1543,7 +1548,7 @@
 	Current Tool	Aktuální nástroj
 	Custom Shape Tool	Nástroj vlastní tvar
 	Cyans	Azurové
-	Default Photoshop Size	Výchozí velikost
+	Default PhotoCraft Size	Výchozí velikost PhotoCraft
 	Delete Workspace	Odstranit pracovní prostor
 	Diamond	Kosočtverec
 	Dimensions:	Rozměry:
@@ -1892,6 +1897,8 @@
 	Standard	Standardní
 	Studio	Studio
 	Studio light	Studio světlý
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita tmavý
 	Subdivisions	Dílky
 	System	Systém
 	Text engine	Textový modul
@@ -1943,6 +1950,7 @@
 	Collapse group  ({key}-click: all groups)	Sbalit skupinu  ({key}+kliknutí: všechny skupiny)
 	Create new brush from the current settings	Vytvořit nový štětec z aktuálního nastavení
 	Create new brush from these settings	Vytvořit nový štětec z tohoto nastavení
+	Update the current brush with these settings	Aktualizovat aktuální štětec těmito nastaveními
 	Delete brush	Odstranit štětec
 	Drag the arrow to set the angle, the dots to set the roundness	Tažením šipky nastavíte úhel, tažením bodů kulatost
 	Expand	Rozbalit
@@ -2020,7 +2028,13 @@
 	Align with layer	Zarovnat s vrstvou
 	Reset Alignment	Obnovit zarovnání
 	Centre the gradient (offset 0, 0)	Vystředit přechod (posun 0, 0)
-	The current gradient (pick one in Window › Gradients)	Aktuální přechod (vyberte v nabídce Okno › Přechody)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor přechodů
+	Gradient picker	Výběr přechodu
+	Save As Preset	Uložit jako preset
+	The gradient the Gradient tool paints with	Přechod, který kreslí nástroj Přechod
+	Adds the current gradient to the Gradients panel	Přidá aktuální přechod do panelu Přechody
+	Gradient stops	Zarážky přechodu
 	Select a type layer to edit its character and paragraph settings.	Vyberte textovou vrstvu a upravte nastavení znaků a odstavce.
 	Text color	Barva textu
 	Type Options	Možnosti textu
@@ -2052,6 +2066,9 @@
 	Cancelled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
 	Opening {name}	Otevírání {name}
+	Saving {name}	Ukládání {name}
+	A save to {name} is still running; try again when it finishes	Ukládání do {name} stále probíhá; zkuste to znovu, až skončí
+	{label} is writing the file and can no longer be cancelled	{label} zapisuje soubor a už ho nelze zrušit
 	Opening {name}…	Otevírání {name}…
 	Opening…	Otevírání…
 	Reading…	Načítání…
@@ -2187,6 +2204,10 @@ cameraRaw	Color	Barvy
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Výběr barvy (Barva textu)
+	Color Picker (Fill Color)	Výběr barvy (Barva výplně)
+	Fill color	Barva výplně
+	Color Picker (Stroke Color)	Výběr barvy (Barva tahu)
+	Stroke color	Barva tahu
 	Pick screen color	Vybrat barvu obrazovky
 	Sample a pixel anywhere on the screen	Vzorkovat pixel kdekoli na obrazovce
 	Click to pick · Esc to cancel	Kliknutí vybere · Esc zruší
@@ -2259,6 +2280,11 @@ fontWeight	Italic	Kurzíva
 	Reset View	Obnovit zobrazení
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
 
+# Painting symmetry presets.
+	Dual Axis	Dvojitá osa
+	Diagonal	Diagonální
+	Transform Symmetry	Transformovat symetrii
+
 # Eyedropper Sample Size and Sample (#1649).
 	Point Sample	Bodový vzorek
 	3 by 3 Average	Průměr 3 × 3
@@ -2278,3 +2304,52 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+	Rule of Thirds	Pravidlo třetin
+	Triangle	Trojúhelník
+	Golden Ratio	Zlatý řez
+	Golden Spiral	Zlatá spirála
+	Auto Show Overlay	Automaticky zobrazit překryv
+	Always Show Overlay	Vždy zobrazit překryv
+	Never Show Overlay	Nikdy nezobrazit překryv
+	Cycle Overlay	Přepnout překryv
+	Cycle Orientation	Přepnout orientaci
+	Set the overlay options for the Crop tool	Nastavit volby překryvu pro nástroj Oříznutí
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+klik převzalo pracovní prostředí, které pomocí Alt+tažení přesouvá okna. Nastavte jeho klávesu pro přesun oken na Super, nebo zamkněte Alt v nabídce Okno › Modifikační klávesy.
+	Auto Hide Notifications	Automaticky skrývat oznámení
+	Notification Duration (seconds)	Trvání oznámení (sekundy)
+	Appearance Mode	Režim vzhledu
+	Dark Theme	Tmavý motiv
+	Light Theme	Světlý motiv
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Další režim vzhledu
+	Sync with system	Synchronizovat se systémem
+	Active	Aktivní
+	Color Picker (Solid Color)	Výběr barvy (plná barva)
+	Straighten the image by drawing a line on it	Narovnat obraz nakreslením čáry
+	Set additional Crop options	Nastavit další volby oříznutí
+	Show Cropped Area	Zobrazit oříznutou oblast
+	Enable Crop Shield	Povolit stínění oříznutí
+	Match Canvas	Podle plátna
+	Auto Adjust Opacity	Automaticky upravit krytí
+	Crop Shield color	Barva stínění oříznutí
+	Color Picker (Crop Shield Color)	Výběr barvy (Barva stínění oříznutí)
+	From Center	Ze středu
+	Link radii	Propojit poloměry
+	Star Ratio:	Poměr hvězdy:
+	Create Rectangle	Vytvořit obdélník
+	Create Ellipse	Vytvořit elipsu
+	Create Triangle	Vytvořit trojúhelník
+	Create Polygon	Vytvořit mnohoúhelník
+	Some brush presets could not be loaded	Některé předvolby štětců se nepodařilo načíst
+	Retry saving presets	Zkusit znovu uložit předvolby
+	Brush preset changes are not saved: {error}	Změny předvoleb štětců nejsou uloženy: {error}
+	Keep this tab open to retain your brushes.	Nechte tuto kartu otevřenou, abyste si štětce zachovali.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Úložiště prohlížeče není k dispozici; štětce platí jen pro tuto relaci. Nechte tuto kartu otevřenou, abyste si je zachovali.
+	Saving brush presets… Keep this tab open until saving finishes.	Ukládání předvoleb štětců… Nechte tuto kartu otevřenou, dokud ukládání neskončí.
+	Reflect	Odraz
+	Glow	Záře
+	Negation	Negace
+	XOR	XOR
+	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
+	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)

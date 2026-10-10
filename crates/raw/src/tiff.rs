@@ -13,6 +13,7 @@ pub(crate) mod tag {
     pub const IMAGE_LENGTH: u16 = 257;
     pub const BITS_PER_SAMPLE: u16 = 258;
     pub const COMPRESSION: u16 = 259;
+    pub const PREDICTOR: u16 = 317;
     pub const PHOTOMETRIC: u16 = 262;
     pub const MAKE: u16 = 271;
     pub const MODEL: u16 = 272;
@@ -65,6 +66,7 @@ pub(crate) mod tag {
     pub const OPCODE_LIST_2: u16 = 51009;
     pub const OPCODE_LIST_3: u16 = 51022;
     pub const BASELINE_EXPOSURE_OFFSET: u16 = 51109;
+    pub const PROFILE_GAIN_TABLE_MAP: u16 = 52525;
     // CR2 private tag in the raw IFD: slice count, slice width, last slice width.
     pub const CR2_SLICE: u16 = 50752;
 }

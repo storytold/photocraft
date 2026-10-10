@@ -157,8 +157,7 @@ impl Headless {
             let previously_active = self.session.active_index();
             self.session.set_active(i);
             if let Some(st) = self.session.active_mut() {
-                st.saved_revision = st.revision;
-                st.path = Some(target.to_string_lossy().into_owned());
+                st.saved_to(target.to_string_lossy().into_owned());
             }
             if let Some(active) = previously_active {
                 self.session.set_active(active);

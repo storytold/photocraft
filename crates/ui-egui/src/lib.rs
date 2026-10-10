@@ -19,6 +19,7 @@ pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
 pub mod adjust_ui;
+mod alt_grab;
 pub mod analysis_ui;
 pub mod artboard_ui;
 pub(crate) mod blend_preview;
@@ -45,6 +46,9 @@ pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
 pub mod credits;
+pub mod crop_overlay;
+pub mod crop_shield;
+pub mod crop_straighten;
 pub mod crop_ui;
 pub mod dialog_blend_ui;
 pub mod dialogs;
@@ -64,6 +68,7 @@ pub mod fill_ui;
 pub mod filter_dialog;
 #[cfg(not(target_arch = "wasm32"))]
 mod filter_preview_worker;
+mod font_preview;
 pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
@@ -122,18 +127,21 @@ pub mod rulers;
 pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
+pub mod shape_dialog;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
+pub(crate) mod solid_fill_ui;
 pub mod state;
 pub mod stroke_constraint;
 pub mod stroke_trail;
 pub mod stroke_ui;
 pub mod stylus;
 pub mod swatches_ui;
+pub mod symmetry_ui;
 mod tab_strip;
 pub mod theme;
 pub mod tiff_options_ui;
@@ -198,6 +206,10 @@ impl Default for ExportSettings {
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Encode a document and write it to a path, reporting the stage to the job; returns the export
+/// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
+/// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
+pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &jobs_ui::SaveCtl) -> Result<Vec<String>, String> + Send + Sync>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -217,15 +229,17 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
+/// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
+pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
 pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
 /// Poll successful or failed background writes: (document id, revision, result).
 pub type AutosaveResultsFn = Box<dyn FnMut() -> Vec<(u64, u64, Result<(), String>)>>;
 /// Drop the recovery data of a document (by `DocId` value) once it is saved or closed.
 pub type DiscardAutosaveFn = Box<dyn FnMut(u64)>;
-/// Load recoverable documents left by a previous session. Their recovery data stays until the
-/// documents are saved or closed.
-pub type RecoverFn = Box<dyn FnMut() -> Vec<Recovered>>;
+/// List recoverable documents without decoding them. Their data stays until the documents are
+/// saved or closed; the shell runs each entry's loader on a background worker.
+pub type RecoverFn = Box<dyn FnMut() -> Vec<Recoverable>>;
 /// Photoshop's own keyboard shortcut set on this machine, as (source path, `.kys` XML text):
 /// the newest install's live `Keyboard Shortcuts.psp` on the desktop, `None` without one.
 pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
@@ -233,13 +247,14 @@ pub type PhotoshopShortcutsFn = Box<dyn FnMut() -> Option<(String, String)>>;
 /// its autosaves replace the entry, and saving or closing it drops the entry.
 pub type AdoptAutosaveFn = Box<dyn FnMut(u64, &str)>;
 
-/// A document [`RecoverFn`] found.
-pub struct Recovered {
-    /// The recovery entry it was loaded from (see [`AdoptAutosaveFn`]).
+/// A recovery entry [`RecoverFn`] found; its loader owns only the data it needs to read.
+pub struct Recoverable {
+    /// The recovery entry to adopt once loading succeeds (see [`AdoptAutosaveFn`]).
     pub key: String,
+    pub name: String,
     /// Where the user last saved it, if anywhere.
     pub path: Option<String>,
-    pub doc: Document,
+    pub load: Box<dyn FnOnce() -> Result<Document, String> + Send + 'static>,
 }
 /// Append text to a file (History Log).
 pub type AppendTextFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
@@ -249,6 +264,9 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 pub type QuitFn = Box<dyn FnMut()>;
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
+/// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
+/// report it (native Wayland): the cursor then follows the cursor preference (#1758).
+pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -264,6 +282,9 @@ pub struct Services {
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
+    /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
+    pub save_file: Option<SaveFileFn>,
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
@@ -288,6 +309,7 @@ pub struct Services {
     pub save_prefs: Option<SaveTextFn>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
+    pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -307,9 +329,12 @@ pub struct Services {
     /// The pointer position read from the OS (desktop): winit 0.30's file drops carry none, and
     /// the window gets no pointer events during an OS drag (see `file_open::DropTarget`).
     pub cursor_pos: Option<CursorPosFn>,
+    /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
+    /// the canvas can show the precise crosshair for painting tools, whatever the preference.
+    pub caps_lock: Option<CapsLockFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
-    /// one, brush presets are session-only (web, tests).
+    /// one, brush presets are session-only unless the shell attached a store before startup.
     pub preset_store: Option<std::sync::mpsc::Receiver<photocraft_engine::preset_store::Opened>>,
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
@@ -375,6 +400,9 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
+    /// show the precise crosshair whatever the cursor preference (#1758).
+    pub caps_lock: bool,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
@@ -387,6 +415,10 @@ pub struct PhotocraftApp {
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
+    /// The pointer rested on the notice stack last frame. Used to give a fresh auto-hide delay in
+    /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
+    /// (#2022); set by `notices::show`.
+    pub(crate) notices_hovered: bool,
     /// Apply theme on first frame.
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
@@ -400,6 +432,10 @@ pub struct PhotocraftApp {
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
+    /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`). The
+    /// canvas maps document pixels to physical pixels, so point-space geometry divides the view
+    /// zoom by this (see [`Self::point_zoom`]).
+    pub ppp: f32,
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
@@ -447,6 +483,7 @@ pub struct PhotocraftApp {
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
+    pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
     /// Liquify dialog, Puppet Warp and Perspective Warp sessions (distort_ui).
     pub(crate) distort: distort_ui::Distort,
     /// Gradient tool live-mode drags and previews (gradient_ui).
@@ -481,7 +518,7 @@ pub struct PhotocraftApp {
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
-    channel_thumbs: Option<(DocId, std::sync::Weak<Document>, Vec<egui::TextureHandle>)>,
+    channel_thumbs: Option<(DocId, std::sync::Weak<Document>, bool, Vec<egui::TextureHandle>)>,
     /// Channels panel overlays / channel views drawn over the canvas, per document id.
     pub(crate) channel_views: HashMap<u64, channel_view::Cache>,
     /// Selection outline keyed by (document, mask identity × step × visible region).
@@ -540,6 +577,7 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            caps_lock: false,
             opacity_keys: None,
             control_rx: None,
             pending_screenshots: Vec::new(),
@@ -547,12 +585,14 @@ impl PhotocraftApp {
             input_waiters: Vec::new(),
             live_adjust: None,
             frame: 0,
+            notices_hovered: false,
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
             last_window_title: String::new(),
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
             drop_places: Default::default(),
@@ -587,6 +627,7 @@ impl PhotocraftApp {
             transform_preview: None,
             move_mods: Default::default(),
             style_preview: None,
+            solid_fill_preview: None,
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
@@ -610,7 +651,7 @@ impl PhotocraftApp {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
-        // Saved preferences (and recovered documents) are in place before the first frame.
+        // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         // After the saved preferences and their revision mark, so the imported set is saved.
         kys_import::auto_import(&mut app);
@@ -690,6 +731,9 @@ impl PhotocraftApp {
     }
 
     fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if matches!(id, "paint.setSymmetry" | "paint.symmetryFromPath" | "paint.symmetryDisable") {
+            self.ui.symmetry_transform = None;
+        }
         let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         if self.automation_input
             && let Some(authorize) = self.services.automation_command.as_ref()
@@ -720,6 +764,12 @@ impl PhotocraftApp {
         let params = self.with_mask_target(id, params);
         let params = vector_ui::with_active_path(self, id, params);
         let path_mask = vector_ui::takes_path_mask(id) && params.get("path").is_some_and(|v| !v.is_null());
+        let creates_active_mask =
+            matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection")
+                && self
+                    .session
+                    .active()
+                    .is_some_and(|st| st.active_layer.is_some_and(|layer| params.get("layer").and_then(Value::as_u64).is_none_or(|target| target == layer.0)));
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -735,6 +785,11 @@ impl PhotocraftApp {
             // The new layer's vector mask becomes the active path, as in Photoshop: the path it
             // was made from is no longer selected, so the next fill layer isn't masked by it too.
             self.ui.selected_path = Some("layer".into());
+        }
+        if r.is_ok() && creates_active_mask {
+            // Adding a mask selects its thumbnail: the next brush or footer Delete targets it.
+            self.ui.mask_target = true;
+            self.ui.vector_mask_target = false;
         }
         if r.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
             self.clip_external = false;
@@ -766,6 +821,7 @@ impl PhotocraftApp {
     pub fn sync_views(&mut self) {
         type_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
+        crate::crop_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();
         // Where the document of view `i` is now. Views not tracked yet keep their index.
         let now = |i: usize| match self.view_docs.get(i) {
@@ -924,20 +980,22 @@ impl PhotocraftApp {
             return self.save_to(path);
         }
         let st = self.session.active().ok_or("no document")?;
-        // Suggest the file's own name if Save As can write its format, otherwise switch to .psd.
+        // PDN imports default to our native format, which preserves Paint.NET's blend modes.
+        // Other files keep their format when writable, otherwise switch to .psd.
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
-            p => std::path::Path::new(p.as_deref().unwrap_or(&st.doc.name)).with_extension("psd").to_string_lossy().into_owned(),
+            p => {
+                let source = p.as_deref().unwrap_or(&st.doc.name);
+                let ext = if photocraft_engine::file_cmds::extension(source).as_deref() == Some("pdn") { "pcraft" } else { "psd" };
+                std::path::Path::new(source).with_extension(ext).to_string_lossy().into_owned()
+            }
         };
         let doc = st.doc.id;
-        self.pick_save(&suggested, move |app, path| {
-            app.refocus(doc)?;
-            app.save_to(path)
-        })
+        self.pick_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path)))
     }
 
     /// [`Self::save_as`] once the path is known.
@@ -948,35 +1006,63 @@ impl PhotocraftApp {
             tiff_options_ui::park(self, path.clone())?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        let (path, warnings) = self.write_document(path, &ExportSettings::default(), false)?;
-        Ok(serde_json::json!({"path": path, "warnings": warnings}))
+        match self.write_document(path.clone(), &ExportSettings::default(), false)? {
+            Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
+            None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
+        }
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
     /// document's path unless saving a copy. A copy leaves the original's path and unsaved
-    /// changes intact. Returns the path and the export warnings (also shown to the user).
-    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<(String, Vec<String>), String> {
+    /// changes intact. Returns the path and the export warnings (also shown to the user), or
+    /// `None` when the save went to a background job (#2017), which finishes it in
+    /// [`jobs_ui::tick`].
+    pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        if self.background_jobs
+            && let Some(save) = self.services.save_file.clone()
+        {
+            return jobs_ui::start_save(self, path, settings.clone(), copy, save);
+        }
         let st = self.session.active().ok_or("no document")?;
+        let (doc, revision) = (st.doc.id, st.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
-        if !copy && let Some(st) = self.session.active_mut() {
-            st.path = Some(path.clone());
-            st.saved_revision = st.revision;
-        }
+        self.saved(doc, revision, &path, &warnings, copy);
+        Ok(Some((path, warnings)))
+    }
+
+    /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
+    /// state (unless a copy), the status, script events and the warnings.
+    pub(crate) fn saved(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
         self.ui.status = format!("Saved {path}");
-        // "Save Document" script events and File › Generate › Image Assets.
-        if !copy
-            && let Some(i) = self.session.active_index()
-            && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut self.session, i)
-        {
-            self.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
+        if !copy {
+            // A background save may finish while another document is active (or after its
+            // document was closed, when there is nothing left to record).
+            let _ = self.with_document(doc, |app| {
+                if let Some(st) = app.session.active_mut() {
+                    st.saved_to(path.to_string());
+                    // The job locked the document, but record the revision that was written.
+                    st.saved_revision = revision;
+                }
+                // "Save Document" script events and File › Generate › Image Assets.
+                if let Some(i) = app.session.active_index()
+                    && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, i)
+                {
+                    app.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
+                }
+                Ok(())
+            });
         }
         self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&path)), &warnings);
+        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(path)), warnings);
         self.sync_views();
-        Ok((path, warnings))
+    }
+
+    /// A save is running in the background.
+    pub(crate) fn saving(&self) -> bool {
+        !self.jobs.saves.is_empty()
     }
 
     /// Save through the control session's capability-scoped writer. No file
@@ -993,8 +1079,7 @@ impl PhotocraftApp {
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
         if let Some(state) = self.session.active_mut() {
-            state.path = Some(target.clone());
-            state.saved_revision = state.revision;
+            state.saved_to(target.clone());
         }
         self.ui.status = format!("Saved {target}");
         self.ui.status_error = false;
@@ -1071,6 +1156,9 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
+        // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
+        self.caps_lock = self.services.caps_lock.as_mut().is_some_and(|f| f());
         if !self.styled {
             Self::setup_context(ctx, self.ui.theme);
             self.styled = true;
@@ -1195,7 +1283,7 @@ impl eframe::App for PhotocraftApp {
         if !chrome && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
-        if chrome {
+        if chrome && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
         if chrome && self.ui.panels.options_bar {
@@ -1218,6 +1306,7 @@ impl eframe::App for PhotocraftApp {
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
+        gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
@@ -1305,6 +1394,9 @@ impl PhotocraftApp {
         if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
             self.ui.vector_mask_target = false;
         }
+        if self.ui.mask_target && !st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some()) {
+            self.ui.mask_target = false;
+        }
     }
 
     fn prune_thumbs(&mut self) {
@@ -1339,6 +1431,14 @@ impl PhotocraftApp {
     }
 
     pub fn set_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
+        if let Err(e) = self.run("prefs.set", serde_json::json!({"path": "interface.theme", "value": kind.id()})) {
+            self.ui.status = e;
+        } else {
+            self.apply_theme(ctx, kind);
+        }
+    }
+
+    pub(crate) fn apply_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
         self.ui.theme = kind;
         theme::apply(ctx, kind);
         self.checker = None;
@@ -1480,9 +1580,22 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
-    /// Zoom of the active document's main view (screen points per document pixel).
+    /// Zoom of the active document's main view: screen (device) pixels per document pixel, the
+    /// user-facing factor (`100%` is `1.0`).
     pub fn current_zoom(&self) -> f32 {
         self.session.active_index().and_then(|i| self.ui.views.get(i)).map_or(1.0, |v| v.zoom)
+    }
+
+    /// Screen (device) pixels per egui point of the canvas (`ctx.pixels_per_point`), as of the
+    /// last canvas frame. `1.0` before the first frame.
+    pub fn canvas_ppp(&self) -> f32 {
+        if self.ppp.is_finite() && self.ppp > 0.0 { self.ppp } else { 1.0 }
+    }
+
+    /// The active view's zoom in egui points per document pixel: the unit every screen-space
+    /// distance, tolerance and texture-level choice on the canvas is measured in.
+    pub fn point_zoom(&self) -> f32 {
+        self.current_zoom() / self.canvas_ppp()
     }
 }
 
@@ -1498,7 +1611,8 @@ impl PhotocraftApp {
         // View-only commands bump revision without changing pixels. Keeping a Weak pins allocation
         // identity against address reuse without retaining the document's pixel data.
         let snapshot = std::sync::Arc::downgrade(&doc);
-        if !matches!(&self.channel_thumbs, Some((d, old, _)) if *d == id && old.ptr_eq(&snapshot)) {
+        let show_color = self.session.prefs().interface.show_channels_in_color;
+        if !matches!(&self.channel_thumbs, Some((d, old, in_color, _)) if *d == id && old.ptr_eq(&snapshot) && *in_color == show_color) {
             let comp = photocraft_compose::thumbnail(&doc, 56);
             let (w, h) = (comp.width as usize, comp.height as usize);
             let side = w.max(h);
@@ -1524,7 +1638,8 @@ impl PhotocraftApp {
                             let rgba = [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0);
                             let x = photocraft_raster::from_rgba(&fmt, rgba)[k];
                             let g = if cmyk { 1.0 - x } else { x };
-                            egui::Color32::from_gray((g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+                            let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                            channel_tint(fmt.mode, k, byte, show_color)
                         },
                         &format!("c{k}"),
                     ));
@@ -1545,9 +1660,9 @@ impl PhotocraftApp {
                 }
                 texs.push(ctx.load_texture(format!("chan-a{i}"), egui::ColorImage::new([side, side], px), egui::TextureOptions::LINEAR));
             }
-            self.channel_thumbs = Some((id, snapshot, texs));
+            self.channel_thumbs = Some((id, snapshot, show_color, texs));
         }
-        self.channel_thumbs.as_ref().map(|(_, _, t)| t.iter().map(|t| t.id()).collect()).unwrap_or_default()
+        self.channel_thumbs.as_ref().map(|(_, _, _, t)| t.iter().map(|t| t.id()).collect()).unwrap_or_default()
     }
 }
 
@@ -1583,9 +1698,31 @@ fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     sig
 }
 
+/// A channel thumbnail pixel whose lightness is `byte` (255 = white: full light, no ink).
+/// Preferences ▸ Interface ▸ Show Channels in Color tints RGB channels from black to their
+/// primary and CMYK channels from white to their ink, as Photoshop does; otherwise grey.
+fn channel_tint(mode: photocraft_doc::ColorMode, k: usize, byte: u8, in_color: bool) -> egui::Color32 {
+    use photocraft_doc::ColorMode::{Cmyk, Rgb};
+    if !in_color {
+        return egui::Color32::from_gray(byte);
+    }
+    match (mode, k) {
+        (Rgb, 0) => egui::Color32::from_rgb(byte, 0, 0),
+        (Rgb, 1) => egui::Color32::from_rgb(0, byte, 0),
+        (Rgb, 2) => egui::Color32::from_rgb(0, 0, byte),
+        (Cmyk, 0) => egui::Color32::from_rgb(byte, 255, 255),
+        (Cmyk, 1) => egui::Color32::from_rgb(255, byte, 255),
+        (Cmyk, 2) => egui::Color32::from_rgb(255, 255, byte),
+        _ => egui::Color32::from_gray(byte),
+    }
+}
+
 impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     fn export_os_clipboard(&mut self) {
+        if !self.session.prefs().general.export_clipboard {
+            return;
+        }
         let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else { return };
         let b = clip.bounds;
         if b.is_empty() {
@@ -1621,13 +1758,19 @@ impl PhotocraftApp {
 
     /// If the OS clipboard holds an image that isn't the one we put there, make it the session
     /// clipboard (so ⌘V pastes screenshots and images copied in other apps, like Photoshop).
-    /// Returns true when a new external image was imported.
+    /// Returns true when a new external image was imported. Once the OS clipboard no longer holds
+    /// the image we mirrored or imported (text or a file was copied since), that image is stale:
+    /// it is dropped rather than pasted.
     pub(crate) fn import_os_clipboard(&mut self) -> bool {
         let Some(get) = self.services.clipboard_get_image.as_mut() else { return false };
-        let Some((w, h, bytes)) = get() else { return false };
-        if w == 0 || h == 0 || bytes.len() != w as usize * h as usize * 4 {
+        let image = get().filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+        let Some((w, h, bytes)) = image else {
+            if self.os_clip_sig.take().is_some() {
+                self.session.clipboard = None;
+                self.clip_external = false;
+            }
             return false;
-        }
+        };
         let sig = clip_signature(w, h, &bytes);
         if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
             return false;
@@ -1652,6 +1795,9 @@ mod pencil_tests;
 mod transform_undo_tests;
 
 #[cfg(test)]
+mod save_identity_tests;
+
+#[cfg(test)]
 mod move_auto_select_tests;
 
 #[cfg(test)]
@@ -1664,10 +1810,24 @@ mod hidden_layer_tests;
 mod blend_dropdown_keys_tests;
 
 #[cfg(test)]
+mod blend_dropdown_wheel_tests;
+
+#[cfg(test)]
 mod marquee_tests;
 
 #[cfg(test)]
+mod caps_lock_tests;
+
+#[cfg(test)]
+mod view_sync_tests;
+
+#[cfg(test)]
 mod stamp_tests;
+
+#[cfg(test)]
+mod alt_click_tests;
+#[cfg(test)]
+mod stroke_timing_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;
@@ -1698,12 +1858,38 @@ mod clipboard_tests {
         assert_eq!((w, h, px.len()), (8, 4, 8 * 4 * 4));
         // Our own image comes back unchanged (no re-import, keeps the original position).
         assert!(!app.import_os_clipboard());
+        // Text copied elsewhere replaces our image: nothing to paste, not the stale image.
+        let ours = os.lock().unwrap().take();
+        assert!(!app.import_os_clipboard());
+        assert!(app.session.clipboard.is_none());
+        *os.lock().unwrap() = ours;
+        app.run("edit.copy", serde_json::json!({})).unwrap();
         // Another app puts a 3×2 red image on the clipboard: ⌘V pastes it.
         *os.lock().unwrap() = Some((3, 2, [255u8, 0, 0, 255].repeat(6)));
         app.run("edit.paste", serde_json::json!({})).unwrap();
         let st = app.session.active().unwrap();
         let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
         assert_eq!(surf.content_bounds().width(), 3);
+    }
+
+    #[test]
+    fn os_clipboard_honours_export_clipboard_preference() {
+        let os: OsClip = Arc::default();
+        let a = os.clone();
+        let services = Services {
+            clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+                *a.lock().unwrap() = Some((w, h, px.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.session.execute("prefs.set", serde_json::json!({"values": {"general.exportClipboard": false}})).unwrap();
+        app.session.execute("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 8, "height": 4})).unwrap();
+        app.run("edit.copy", serde_json::json!({})).unwrap();
+        assert!(os.lock().unwrap().is_none(), "copy does not mirror to OS clipboard when export_clipboard is off");
     }
 
     type OsClip = Arc<Mutex<Option<(u32, u32, Vec<u8>)>>>;
@@ -1827,5 +2013,26 @@ mod clipboard_tests {
         let mask = st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
         assert!((mask.value(32, 32) - 128.0 / 255.0).abs() < 2.0 / 255.0, "the grey, centred in the view: {}", mask.value(32, 32));
         assert_eq!(mask.value(0, 0), 0.0, "the rest of the mask is unchanged");
+    }
+}
+
+#[cfg(test)]
+mod channel_tint_tests {
+    use super::channel_tint;
+    use egui::Color32;
+    use photocraft_doc::ColorMode::{Cmyk, Grayscale, Rgb};
+
+    #[test]
+    fn channels_in_color_tint_rgb_from_black_and_cmyk_inks_from_white() {
+        assert_eq!(channel_tint(Rgb, 0, 255, true), Color32::from_rgb(255, 0, 0));
+        assert_eq!(channel_tint(Rgb, 2, 0, true), Color32::BLACK);
+        // CMYK: no ink is white, full ink is the ink's colour.
+        assert_eq!(channel_tint(Cmyk, 0, 255, true), Color32::WHITE);
+        assert_eq!(channel_tint(Cmyk, 0, 0, true), Color32::from_rgb(0, 255, 255));
+        assert_eq!(channel_tint(Cmyk, 1, 0, true), Color32::from_rgb(255, 0, 255));
+        assert_eq!(channel_tint(Cmyk, 2, 0, true), Color32::from_rgb(255, 255, 0));
+        assert_eq!(channel_tint(Cmyk, 3, 0, true), Color32::BLACK);
+        assert_eq!(channel_tint(Grayscale, 0, 77, true), Color32::from_gray(77));
+        assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
     }
 }

@@ -210,9 +210,12 @@ impl<'a> ZipReader<'a> {
         let data = match e.method {
             0 => raw.to_vec(),
             8 => {
-                let mut out = Vec::with_capacity(e.uncompressed);
+                // The uncompressed length comes from an untrusted ZIP header: a
+                // small forged archive must not reserve gigabytes up front, so the
+                // preallocation is capped (DEFLATE expands at most ~1032x).
+                let mut out = Vec::with_capacity(e.uncompressed.min(raw.len().saturating_mul(1032)).min(64 << 20));
                 flate2::read::DeflateDecoder::new(raw)
-                    .take(max as u64 + 1)
+                    .take((max as u64).saturating_add(1))
                     .read_to_end(&mut out)
                     .map_err(|err| FormatError::corrupt(format!("zip entry `{}`: {err}", e.name)))?;
                 out
@@ -269,6 +272,50 @@ mod tests {
         bytes[pos] = b'j';
         let r = ZipReader::new(&bytes).unwrap();
         assert!(r.read_by_name("a", 100).is_err());
+    }
+
+    /// A valid DEFLATE-compressed bundle may be read with an effectively
+    /// unlimited caller budget (e.g. corruption/round-trip checks). On 64-bit
+    /// targets `usize::MAX as u64 + 1` overflows, so the decoder must saturate.
+    #[test]
+    fn deflated_entry_with_unbounded_limit_round_trips() {
+        use std::io::Write as _;
+
+        let content = b"DEFLATE-compressed PhotoCraft project content, with a valid CRC.";
+        let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(content).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Construct a standards-conforming DEFLATE entry from the store-only
+        // writer: keep its actual compressed bytes, but set the ZIP method,
+        // original length and CRC in *both* the local and central headers.
+        let mut writer = ZipWriter::new();
+        writer.add("manifest.json", &compressed).unwrap();
+        let mut bytes = writer.finish().unwrap();
+        let eocd = bytes.len() - 22;
+        let central = u32_at(&bytes, eocd + 16).unwrap() as usize;
+        let crc = crc32(content).to_le_bytes();
+        let length = (content.len() as u32).to_le_bytes();
+
+        bytes[8..10].copy_from_slice(&8u16.to_le_bytes());
+        bytes[14..18].copy_from_slice(&crc);
+        bytes[22..26].copy_from_slice(&length);
+        bytes[central + 10..central + 12].copy_from_slice(&8u16.to_le_bytes());
+        bytes[central + 16..central + 20].copy_from_slice(&crc);
+        bytes[central + 24..central + 28].copy_from_slice(&length);
+
+        let archive = ZipReader::new(&bytes).unwrap();
+        assert_eq!(archive.read_by_name("manifest.json", usize::MAX).unwrap(), content);
+        assert_eq!(archive.read_by_name("manifest.json", content.len()).unwrap(), content);
+        assert!(matches!(archive.read_by_name("manifest.json", content.len() - 1), Err(FormatError::LimitExceeded(_))));
+
+        // A tiny archive with a forged 4 GiB size must be rejected without
+        // trying to allocate its claimed output capacity in advance.
+        let mut forged = bytes;
+        forged[22..26].copy_from_slice(&u32::MAX.to_le_bytes());
+        forged[central + 24..central + 28].copy_from_slice(&u32::MAX.to_le_bytes());
+        let archive = ZipReader::new(&forged).unwrap();
+        assert!(matches!(archive.read_by_name("manifest.json", usize::MAX), Err(FormatError::Corrupt(_))));
     }
 
     #[test]

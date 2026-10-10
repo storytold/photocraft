@@ -130,24 +130,39 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
         s.postscript_name = None;
         hit(true);
     }
-    if let Some(v) = p.get("postscriptName").and_then(Value::as_str) {
-        s.postscript_name = Some(v.to_string());
-        hit(true);
-    }
     if let Some(v) = p.get("fontStyle").and_then(Value::as_str) {
         s.font_style = v.to_string();
+        s.postscript_name = None;
         let l = v.to_lowercase();
         s.italic = l.contains("italic") || l.contains("oblique");
         let g = photocraft_text::fonts::guess_from_postscript(&format!("X-{}", v.replace(' ', "")));
         s.weight = g.weight;
+        if let Some(face) = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.named_face(&s.font_family, v) {
+            s.weight = face.weight.round() as u16;
+            s.italic = face.italic;
+            s.postscript_name = face.postscript_name;
+        }
         hit(true);
     }
     if let Some(v) = p.get("weight").and_then(Value::as_f64) {
-        s.weight = v.clamp(1.0, 1000.0) as u16;
+        let weight = v.clamp(1.0, 1000.0) as u16;
+        if s.weight != weight {
+            s.postscript_name = None;
+            s.font_style.clear();
+        }
+        s.weight = weight;
         hit(true);
     }
     if let Some(v) = p.get("italic").and_then(Value::as_bool) {
+        if s.italic != v {
+            s.postscript_name = None;
+            s.font_style.clear();
+        }
         s.italic = v;
+        hit(true);
+    }
+    if let Some(v) = p.get("postscriptName").and_then(Value::as_str) {
+        s.postscript_name = Some(v.to_string());
         hit(true);
     }
     if let Some(v) = f32p(p, "size") {
@@ -569,7 +584,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Type",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"text":str? (replace all, styles kept),"replace":{"start":char,"end":char,"text":str}?,"runs":[{"start":char,"end":char,…character keys}]?,"box":[x,y,w,h]? (to paragraph text),"point":[x,y]? (to point text),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"antialias":"none|sharp|crisp|strong|smooth"?,"name":str?,"kerning":1/1000em|"metrics"|"optical"|"off"? (with "range":[startChar,endChar]?, default all),"kernPair":{"at":caretChar,"by":1/1000em}? (Photoshop Alt+←/→: the pair before the caret becomes manual, its current kerning + by)}"##,
+            params: r##"{"layer":id?,"text":str? (replace all, styles kept),"replace":{"start":char,"end":char,"text":str}?,"runs":[{"start":char,"end":char,…character keys}]?,"box":[x,y,w,h]? (to paragraph text),"point":[x,y]? (to point text),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"antialias":"none|sharp|crisp|strong|smooth"?,"name":str?,"kerning":1/1000em|"metrics"|"optical"|"off"? (with "range":[startChar,endChar]?, default all),"kernPair":{"at":caretChar,"by":1/1000em}? (Alt+←/→: the pair before the caret becomes manual, its current kerning + by)}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
@@ -768,7 +783,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
                 match p.get("family").and_then(Value::as_str) {
                     Some(f) => {
-                        let faces: Vec<Value> = eng.fonts.faces(f).into_iter().map(|x| json!({ "family": x.family, "weight": x.weight, "italic": x.italic, "axes": x.axes })).collect();
+                        let faces: Vec<Value> = eng.fonts.faces(f).into_iter().map(|x| json!({ "family": x.family, "style": x.style, "postscriptName": x.postscript_name, "weight": x.weight, "italic": x.italic, "axes": x.axes })).collect();
                         Ok(json!({ "faces": faces }))
                     }
                     None => Ok(json!({ "families": eng.fonts.families() })),
@@ -793,6 +808,21 @@ mod tests {
             LayerContent::Text(t) => t.clone(),
             other => panic!("{}", other.kind_name()),
         }
+    }
+
+    #[test]
+    fn named_face_metadata_replaces_old_postscript_identity() {
+        let mut style = CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-Regular".into()), ..Default::default() };
+        apply_char_props(&mut style, &json!({"fontStyle": "SemiBold"}));
+        assert_eq!(style.weight, 600);
+        assert_eq!(style.postscript_name.as_deref(), Some("Inter-SemiBold"));
+        apply_char_props(&mut style, &json!({"weight": 400}));
+        assert!(style.postscript_name.is_none());
+        assert!(style.font_style.is_empty());
+        apply_char_props(&mut style, &json!({"fontStyle": "unknown-style"}));
+        assert!(style.postscript_name.is_none());
+        apply_char_props(&mut style, &json!({"fontStyle": "Regular", "postscriptName": "ExplicitFace"}));
+        assert_eq!(style.postscript_name.as_deref(), Some("ExplicitFace"));
     }
 
     #[test]

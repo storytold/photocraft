@@ -122,7 +122,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         ToolEvent::Down { .. } => {
             if active(app) {
                 // A click on the first point, or on the last one again, closes the outline.
-                let reach = 8.0 / app.current_zoom().max(0.01) as f64;
+                let reach = 8.0 / app.point_zoom().max(0.01) as f64;
                 let near = |q: [f64; 2]| (q[0] - p[0]).hypot(q[1] - p[1]) < reach;
                 let close = app.drag.as_ref().is_some_and(|d| d.points.len() >= 3 && (near(d.start) || d.points.last().is_some_and(|l| near([l[0], l[1]]))));
                 if close {

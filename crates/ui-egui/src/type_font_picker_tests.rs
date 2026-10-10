@@ -89,3 +89,108 @@ fn reopening_focuses_the_search_field_and_clicking_it_keeps_the_menu_open() {
     assert_eq!(h.state().current, "Zeta Sans");
     assert!(popup_rect(&h).is_none(), "choosing a font closes the menu");
 }
+
+#[test]
+fn arrows_apply_fonts_without_closing_and_enter_accepts() {
+    let mut h = harness();
+    open(&mut h);
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state().current, "Family 01");
+    assert!(popup_rect(&h).is_some());
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowUp);
+    h.run();
+    assert_eq!(h.state().current, "Family 01");
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(popup_rect(&h).is_none());
+}
+
+#[test]
+fn arrows_follow_the_filtered_list_and_handle_no_matches() {
+    let mut h = harness();
+    open(&mut h);
+    h.get_by_role(Role::TextInput).type_text("Family 5");
+    h.run();
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state().current, "Family 50");
+    h.key_press(Key::ArrowUp);
+    h.run();
+    assert_eq!(h.state().current, "Family 50", "clamp at the first match");
+    h.get_by_role(Role::TextInput).type_text("missing");
+    h.run();
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowUp);
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().current, "Family 50");
+    assert!(popup_rect(&h).is_some(), "no match cannot accept an unrelated font");
+}
+
+#[test]
+fn arrows_scroll_the_selected_font_into_view() {
+    let mut h = harness();
+    open(&mut h);
+    for _ in 0..59 {
+        h.key_press(Key::ArrowDown);
+        h.run();
+    }
+    assert_eq!(h.state().current, "Family 59");
+    let row = h.get_by_label("Family 59");
+    assert!(popup_rect(&h).unwrap().contains(row.rect().center()));
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state().current, "Zeta Sans", "clamp at the last font");
+}
+
+#[test]
+fn empty_font_list_ignores_navigation() {
+    let mut h = harness();
+    h.state_mut().families.clear();
+    open(&mut h);
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowUp);
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().current, "Family 00");
+    assert!(popup_rect(&h).is_some());
+}
+
+#[test]
+fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
+    use crate::{PhotocraftApp, Services};
+    use serde_json::json;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+        |ui, app| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal(|ui| crate::type_tool::options_bar(app, ui));
+            }
+        },
+        app,
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    h.query_all_by_role(Role::ComboBox).next().unwrap().click();
+    h.run();
+    h.get_by_role(Role::TextInput).type_text("JetBrains");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    let font = |app: &PhotocraftApp| {
+        let doc = &app.session.active().unwrap().doc;
+        match &doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => t.font_family.clone(),
+            _ => panic!("type layer"),
+        }
+    };
+    assert_eq!(font(h.state()), "JetBrains Mono");
+    h.key_press(Key::Enter);
+    h.run();
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(font(h.state()), "Inter");
+}

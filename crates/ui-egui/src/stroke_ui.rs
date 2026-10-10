@@ -91,9 +91,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Color:"));
         let current = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
-        let mut rgb = [1usize, 3, 5].map(|i| current.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()).unwrap_or(0));
-        if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
-            f.insert("color".into(), json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
+        let rgb = [1usize, 3, 5].map(|i| current.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()).unwrap_or(0));
+        // As in Photoshop, the swatch opens the Color Picker on the stroke colour.
+        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Stroke color")).clicked() {
+            crate::color_picker_ui::request(f, tl!("Color Picker (Stroke Color)"));
         }
     });
 

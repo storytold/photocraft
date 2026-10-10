@@ -24,6 +24,8 @@
 	Layer	Calque
 	Type	Texte
 	Select	Sélection
+	Selected	Sélectionnés
+	Scope	Portée
 	Top Left	En haut à gauche
 	Top Right	En haut à droite
 	Bottom Left	En bas à gauche
@@ -660,7 +662,11 @@
 	Pro Medium Gray Theme	Thème Pro gris moyen
 	Studio Theme	Thème Studio
 	Studio Light Theme	Thème Studio clair
+	Adwaita Light Theme	Thème Adwaita clair
+	Adwaita Dark Theme	Thème Adwaita sombre
 	Classic Theme	Thème Classique
+	Solarized dark	Solarized sombre
+	Solarized Dark Theme	Thème Solarized sombre
 	Next Theme	Thème suivant
 	Actions	Actions
 	Brush Settings	Paramètres du pinceau
@@ -744,7 +750,7 @@
 	All Caps	Tout en capitales
 	All Slices	Toutes les tranches
 	All User Slices	Toutes les tranches utilisateur
-	All shortcuts reset to Photoshop defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de Photoshop.
+	All shortcuts reset to PhotoCraft defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de PhotoCraft.
 	Alt	Alt
 	Always use pressure for opacity	Toujours utiliser la pression pour l'opacité
 	Always use pressure for size	Toujours utiliser la pression pour la taille
@@ -1059,7 +1065,7 @@
 	Ignore All	Tout ignorer
 	Image Size	Taille de l'image
 	Import Brushes…	Importer des pinceaux…
-	Import Photoshop brushes (.abr)	Importer des pinceaux Photoshop (.abr)
+	Import brushes (.abr)	Importer des pinceaux (.abr)
 	Import Presets	Importer des préréglages
 	Imported	Importé
 	Indent First	Retrait de première ligne
@@ -1109,7 +1115,6 @@
 	Liquify is not open	Liquéfier n'est pas ouvert
 	Load	Charger
 	Load 3D LUT…	Charger une LUT 3D…
-	Load Photoshop brushes (.abr)	Charger des pinceaux Photoshop (.abr)
 	Load channel as selection	Charger le canal comme sélection
 	Load…	Charger…
 	Localized Color Clusters	Groupes de couleurs localisés
@@ -1506,7 +1511,7 @@
 	Current Tool	Outil actif
 	Custom Shape Tool	Outil Forme personnalisée
 	Cyans	Cyans
-	Default Photoshop Size	Taille Photoshop par défaut
+	Default PhotoCraft Size	Taille PhotoCraft par défaut
 	Delete Workspace	Supprimer l'espace de travail
 	Diamond	Losange
 	Dimensions:	Dimensions :
@@ -1847,6 +1852,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio clair
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita sombre
 	Subdivisions	Subdivisions
 	System	Système
 	Text engine	Moteur de texte
@@ -1896,6 +1903,7 @@
 	Collapse group  ({key}-click: all groups)	Réduire le groupe  ({key}-clic : tous les groupes)
 	Create new brush from the current settings	Créer un nouveau pinceau à partir des paramètres actuels
 	Create new brush from these settings	Créer un nouveau pinceau à partir de ces paramètres
+	Update the current brush with these settings	Mettre à jour le pinceau actuel avec ces paramètres
 	Delete brush	Supprimer le pinceau
 	Drag the arrow to set the angle, the dots to set the roundness	Faites glisser la flèche pour régler l'angle, les points pour régler l'arrondi
 	Expand	Développer
@@ -1970,7 +1978,13 @@
 	Align with layer	Aligner sur le calque
 	Reset Alignment	Réinitialiser l'alignement
 	Centre the gradient (offset 0, 0)	Centrer le dégradé (décalage 0, 0)
-	The current gradient (pick one in Window › Gradients)	Le dégradé actuel (choisissez-en un dans Fenêtre › Dégradés)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Éditeur de dégradé
+	Gradient picker	Sélecteur de dégradé
+	Save As Preset	Enregistrer comme préreglage
+	The gradient the Gradient tool paints with	Le dégradé que l'outil Dégradé applique
+	Adds the current gradient to the Gradients panel	Ajoute le dégradé actuel au panneau Dégradés
+	Gradient stops	Arrêts de dégradé
 	Select a type layer to edit its character and paragraph settings.	Sélectionnez un calque de texte pour modifier ses paramètres de caractère et de paragraphe.
 	Text color	Couleur du texte
 	Type Options	Options de texte
@@ -2002,6 +2016,9 @@
 	Cancelled {label}	{label} : annulé
 	Esc to cancel	Échap pour annuler
 	Opening {name}	Ouverture de {name}
+	Saving {name}	Enregistrement de {name}
+	A save to {name} is still running; try again when it finishes	Un enregistrement de {name} est encore en cours ; réessayez lorsqu’il sera terminé
+	{label} is writing the file and can no longer be cancelled	{label} écrit le fichier et ne peut plus être annulé
 	Opening {name}…	Ouverture de {name}…
 	Opening…	Ouverture…
 	Reading…	Lecture…
@@ -2364,7 +2381,7 @@
 	Pixel	Pixel
 	Adjustment	Ajustement
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Faites glisser (lasso) ou cliquez des points (polygonal) · {add} ajouter · {sub} soustraire
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Tracez un cadre de recadrage · faites glisser à l'intérieur pour le déplacer · les bords le redimensionnent ({ratio} proportions, {centre} centre) · Espace le déplace pendant le tracé · {commit} valide · Échap annule
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Tracez un cadre de recadrage · faites glisser à l'intérieur pour le déplacer · les bords le redimensionnent ({ratio} proportions, {centre} centre) · Espace le déplace pendant le tracé · flèches le décalent · X permute l'orientation · {commit} valide · Échap annule
 	{mode} Color · {bits} bit	Couleurs {mode} · {bits} bits
 	Drag to move the layer	Faites glisser pour déplacer le calque
 	Scrubby Zoom	Zoom par glissement
@@ -2613,6 +2630,10 @@ cameraRaw	Blending	Fusion
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
+	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)
+	Fill color	Couleur de remplissage
+	Color Picker (Stroke Color)	Sélecteur de couleurs (Couleur du contour)
+	Stroke color	Couleur du contour
 	Pick screen color	Choisir une couleur à l’écran
 	Sample a pixel anywhere on the screen	Prélever un pixel n’importe où sur l’écran
 	Click to pick · Esc to cancel	Cliquer pour choisir · Échap pour annuler
@@ -2680,6 +2701,11 @@ fontWeight	Italic	Italique
 	Reset View	Réinitialiser la vue
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Faites glisser autour du centre pour tourner la vue  ·  Maj contraint à 15°
 
+# Painting symmetry presets.
+	Dual Axis	Deux axes
+	Diagonal	Diagonale
+	Transform Symmetry	Transformer la symétrie
+
 # Eyedropper Sample Size and Sample (#1649).
 	Point Sample	Échantillon ponctuel
 	3 by 3 Average	Moyenne 3 × 3
@@ -2699,3 +2725,52 @@ fontWeight	Italic	Italique
 	Color to Alpha…	Couleur vers alpha…
 	Transparency Threshold	Seuil de transparence
 	Opacity Threshold	Seuil d'opacité
+	Rule of Thirds	Règle des tiers
+	Triangle	Triangle
+	Golden Ratio	Nombre d’or
+	Golden Spiral	Spirale d’or
+	Auto Show Overlay	Afficher automatiquement la superposition
+	Always Show Overlay	Toujours afficher la superposition
+	Never Show Overlay	Ne jamais afficher la superposition
+	Cycle Overlay	Changer de superposition
+	Cycle Orientation	Changer d’orientation
+	Set the overlay options for the Crop tool	Définir les options de superposition de l’outil Recadrage
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-clic a été intercepté par le bureau, qui déplace les fenêtres avec Alt-glisser. Réglez sa touche de déplacement des fenêtres sur Super, ou verrouillez Alt dans Fenêtre › Touches de modification.
+	Auto Hide Notifications	Masquer automatiquement les notifications
+	Notification Duration (seconds)	Durée de la notification (secondes)
+	Appearance Mode	Mode d’apparence
+	Dark Theme	Thème sombre
+	Light Theme	Thème clair
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Mode d’apparence suivant
+	Sync with system	Synchroniser avec le système
+	Active	Actif
+	Color Picker (Solid Color)	Sélecteur de couleurs (couleur unie)
+	Straighten the image by drawing a line on it	Redresser l’image en traçant une ligne dessus
+	Set additional Crop options	Définir d’autres options de recadrage
+	Show Cropped Area	Afficher la zone recadrée
+	Enable Crop Shield	Activer le masque de recadrage
+	Match Canvas	Identique à la zone de travail
+	Auto Adjust Opacity	Réglage automatique de l’opacité
+	Crop Shield color	Couleur du masque de recadrage
+	Color Picker (Crop Shield Color)	Sélecteur de couleurs (Couleur du masque de recadrage)
+	From Center	À partir du centre
+	Link radii	Lier les rayons
+	Star Ratio:	Proportion de l'étoile :
+	Create Rectangle	Créer un rectangle
+	Create Ellipse	Créer une ellipse
+	Create Triangle	Créer un triangle
+	Create Polygon	Créer un polygone
+	Some brush presets could not be loaded	Certains paramètres prédéfinis de forme n'ont pas pu être chargés
+	Retry saving presets	Réessayer d'enregistrer les paramètres prédéfinis
+	Brush preset changes are not saved: {error}	Les modifications des paramètres prédéfinis de forme ne sont pas enregistrées : {error}
+	Keep this tab open to retain your brushes.	Gardez cet onglet ouvert pour conserver vos formes.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Le stockage du navigateur n'est pas disponible ; les formes ne durent que le temps de la session. Gardez cet onglet ouvert pour les conserver.
+	Saving brush presets… Keep this tab open until saving finishes.	Enregistrement des paramètres prédéfinis de forme… Gardez cet onglet ouvert jusqu'à la fin de l'enregistrement.
+	Reflect	Réflexion
+	Glow	Lueur
+	Negation	Négation
+	XOR	XOR
+	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
+	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)

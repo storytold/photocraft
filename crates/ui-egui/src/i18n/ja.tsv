@@ -21,6 +21,8 @@
 	Layer	レイヤー
 	Type	文字
 	Select	選択
+	Selected	選択済み
+	Scope	範囲
 	Top Left	左上
 	Top Right	右上
 	Bottom Left	左下
@@ -672,7 +674,11 @@
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
+	Adwaita Light Theme	Adwaita(ライト)テーマ
+	Adwaita Dark Theme	Adwaita(ダーク)テーマ
 	Classic Theme	クラシックテーマ
+	Solarized dark	Solarized ダーク
+	Solarized Dark Theme	Solarized ダークテーマ
 	Next Theme	次のテーマ
 	Actions	アクション
 	Brush Settings	ブラシ設定
@@ -758,7 +764,7 @@
 	All Caps	すべて大文字
 	All Slices	すべてのスライス
 	All User Slices	すべてのユーザースライス
-	All shortcuts reset to Photoshop defaults.	すべてのショートカットを初期状態に戻しました。
+	All shortcuts reset to PhotoCraft defaults.	すべてのショートカットを初期状態に戻しました。
 	Alt	Alt
 	Alt-click to define a source point to clone from	Alt+クリックでコピー元を指定
 	Always use pressure for opacity	常に筆圧を不透明度に使う
@@ -1080,7 +1086,7 @@
 	Ignore All	すべて無視
 	Image Size	画像サイズ
 	Import Brushes…	ブラシを読み込み…
-	Import Photoshop brushes (.abr)	Photoshop ブラシ(.abr)を読み込み
+	Import brushes (.abr)	ブラシ(.abr)を読み込み
 	Import Presets	プリセットを読み込み
 	Imported	読み込み済み
 	Indent First	先頭行の字下げ
@@ -1130,7 +1136,6 @@
 	Liquify is not open	ゆがみは開いていません
 	Load	読み込み
 	Load 3D LUT…	3D LUT を読み込み…
-	Load Photoshop brushes (.abr)	Photoshop ブラシ(.abr)を読み込み
 	Load channel as selection	チャンネルを選択範囲として読み込み
 	Load…	読み込み…
 	Localized Color Clusters	近似色のクラスター化
@@ -1532,7 +1537,7 @@
 	Current Tool	現在のツール
 	Custom Shape Tool	カスタムシェイプツール
 	Cyans	シアン系
-	Default Photoshop Size	既定サイズ
+	Default PhotoCraft Size	PhotoCraft 既定サイズ
 	Delete Workspace	ワークスペースを削除
 	Diamond	ダイヤモンド形
 	Dimensions:	寸法:
@@ -1881,6 +1886,8 @@
 	Standard	標準
 	Studio	スタジオ
 	Studio light	スタジオ(ライト)
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita(ダーク)
 	Subdivisions	分割数
 	System	システム
 	Text engine	テキストエンジン
@@ -1933,6 +1940,7 @@
 	Create new brush from the current settings	現在の設定から新規ブラシを作成
 	Create new brush from these settings	この設定から新規ブラシを作成
 	Delete brush	ブラシを削除
+	Update the current brush with these settings	この設定で現在のブラシを更新
 	Drag the arrow to set the angle, the dots to set the roundness	矢印をドラッグして角度、点をドラッグして真円率を設定
 	Expand	展開
 	Expand Panel Group	パネルグループを展開
@@ -2009,7 +2017,13 @@
 	Align with layer	レイヤーに揃える
 	Reset Alignment	位置をリセット
 	Centre the gradient (offset 0, 0)	グラデーションを中央に配置(オフセット 0, 0)
-	The current gradient (pick one in Window › Gradients)	現在のグラデーション(ウィンドウ › グラデーション で選択)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	グラデーションエディター
+	Gradient picker	グラデーションピッカー
+	Save As Preset	プリセットとして保存
+	The gradient the Gradient tool paints with	グラデーションツールで描画されるグラデーション
+	Adds the current gradient to the Gradients panel	現在のグラデーションをグラデーション パネルに追加します
+	Gradient stops	グラデーション ストップ
 	Select a type layer to edit its character and paragraph settings.	文字レイヤーを選択すると、文字と段落の設定を編集できます。
 	Text color	文字色
 	Type Options	文字オプション
@@ -2040,6 +2054,9 @@
 	Cancelled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
 	Opening {name}	{name} を開いています
+	Saving {name}	{name} を保存しています
+	A save to {name} is still running; try again when it finishes	{name} への保存がまだ実行中です。完了してからもう一度お試しください
+	{label} is writing the file and can no longer be cancelled	{label} はファイルを書き込み中のため、キャンセルできません
 	Opening {name}…	{name} を開いています…
 	Opening…	開いています…
 	Reading…	読み込み中…
@@ -2168,6 +2185,10 @@ cameraRaw	Color	カラー
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	カラーピッカー（文字色）
+	Color Picker (Fill Color)	カラーピッカー（塗りつぶしカラー）
+	Fill color	塗りつぶしカラー
+	Color Picker (Stroke Color)	カラーピッカー（線のカラー）
+	Stroke color	線のカラー
 	Pick screen color	画面の色を選択
 	Sample a pixel anywhere on the screen	画面上の任意のピクセルから色を取得
 	Click to pick · Esc to cancel	クリックで選択 · Escでキャンセル
@@ -2239,6 +2260,11 @@ fontWeight	Italic	斜体
 	Rotate View Tool	表示回転ツール
 	Reset View	表示をリセット
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	中心の周りをドラッグして表示を回転  ·  Shift で 15° 単位
+
+# Painting symmetry presets.
+	Dual Axis	二軸
+	Diagonal	斜め
+	Transform Symmetry	対称軸を変形
 
 # Eyedropper Sample Size and Sample (#1649).
 	Point Sample	ポイントサンプル
@@ -3099,7 +3125,7 @@ fontWeight	Italic	斜体
 	Document Size	ドキュメントサイズ
 	Dodge/Burn	覆い焼き/焼き込み
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	ドラッグ (投げ縄) またはクリックでポイント指定 (多角形) · {add} 追加 · {sub} 除外
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	切り抜きボックスをドラッグ · 内側をドラッグで移動 · 縁でサイズ変更 ({ratio} で比率、{centre} で中心) · 描画中は Space で移動 · {commit} で確定 · Esc で取り消し
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	切り抜きボックスをドラッグ · 内側をドラッグで移動 · 縁でサイズ変更 ({ratio} で比率、{centre} で中心) · 描画中は Space で移動 · 矢印キーで微調整 · X で縦横を切り替え · {commit} で確定 · Esc で取り消し
 	Drag to move the layer	ドラッグしてレイヤーを移動
 	Duplicated selection name	複製した選択範囲の名前
 	Dynamics	ダイナミクス
@@ -3303,3 +3329,51 @@ fontWeight	Italic	斜体
 	Color to Alpha…	カラーを透明に…
 	Transparency Threshold	透明のしきい値
 	Opacity Threshold	不透明度のしきい値
+	Rule of Thirds	三分割法
+	Golden Ratio	黄金比
+	Golden Spiral	黄金螺旋
+	Auto Show Overlay	オーバーレイを自動表示
+	Always Show Overlay	オーバーレイを常に表示
+	Never Show Overlay	オーバーレイを表示しない
+	Cycle Overlay	オーバーレイを切り替え
+	Cycle Orientation	方向を切り替え
+	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+	Auto Hide Notifications	通知を自動的に隠す
+	Notification Duration (seconds)	通知の表示時間（秒）
+	Appearance Mode	外観モード
+	Dark Theme	ダークテーマ
+	Light Theme	ライトテーマ
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	次の外観モード
+	Sync with system	システムと同期
+	Active	適用中
+	Color Picker (Solid Color)	カラーピッカー（べた塗り）
+	Straighten the image by drawing a line on it	画像上に線を描いて角度を補正
+	Set additional Crop options	切り抜きの追加オプションを設定
+	Show Cropped Area	切り抜かれた領域を表示
+	Enable Crop Shield	切り抜きシールドを有効にする
+	Match Canvas	カンバスに合わせる
+	Auto Adjust Opacity	不透明度を自動調整
+	Crop Shield color	切り抜きシールドのカラー
+	Color Picker (Crop Shield Color)	カラーピッカー（切り抜きシールドのカラー）
+	From Center	中心から
+	Link radii	半径をリンク
+	Star Ratio:	星の比率:
+	Create Rectangle	長方形を作成
+	Create Ellipse	楕円を作成
+	Create Triangle	三角形を作成
+	Create Polygon	多角形を作成
+	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
+	Retry saving presets	プリセットの保存を再試行
+	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}
+	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
+	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。
+	Reflect	反射
+	Glow	グロー
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
+	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)

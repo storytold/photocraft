@@ -565,6 +565,68 @@ async fn filesystem_policy_rejects_absolute_and_escaping_paths_before_effects() 
     cleanup(&base);
 }
 
+/// The template workflow stays in memory, including saving nested contents back to the parent.
+#[tokio::test(flavor = "multi_thread")]
+async fn embedded_smart_objects_can_be_edited_saved_and_unpacked_without_file_authority() {
+    let client = connect(PhotocraftMcp::headless()).await;
+    let run = async |id: &str, params: Value| json_of(&call(&client, "command_run", json!({"id": id, "params": params})).await);
+    json_of(&call(&client, "doc_new", json!({"width": 16, "height": 12, "background": "white"})).await);
+    run("layer.smartObjects.convertToSmartObject", json!({})).await;
+    let outer = run("layer.smartObjects.convertToSmartObject", json!({})).await["layer"].clone();
+    // An explicit target works even with a regular pixel layer selected.
+    run("layer.new.layer", json!({"name": "Other layer"})).await;
+    assert_eq!(run("layer.smartObjects.editContents", json!({"layer": outer})).await["document"], 1);
+    assert_eq!(run("layer.smartObjects.editContents", json!({})).await["document"], 2);
+    run("layer.setProps", json!({"name": "Edited photo", "opacity": 0.5})).await;
+    assert_eq!(run("layer.smartObjects.saveContents", json!({})).await["updated"], true);
+    json_of(&call(&client, "doc_close", json!({})).await);
+    run("layer.smartObjects.saveContents", json!({})).await;
+    json_of(&call(&client, "doc_close", json!({})).await);
+    assert_eq!(json_of(&call(&client, "session_list", json!({})).await)["documents"].as_array().unwrap().len(), 1);
+
+    // Reopening the saved nested source proves both in-memory parent updates survived closing.
+    run("layer.smartObjects.editContents", json!({"layer": outer})).await;
+    run("layer.smartObjects.editContents", json!({})).await;
+    let doc = json_of(&call(&client, "doc_inspect", json!({})).await);
+    assert_eq!(doc["layers"][0]["name"], "Edited photo");
+    assert_eq!(doc["layers"][0]["opacity"], 0.5);
+    json_of(&call(&client, "doc_close", json!({})).await);
+    json_of(&call(&client, "doc_close", json!({})).await);
+    let unpacked = run("layer.smartObjects.convertToLayers", json!({"layer": outer})).await["layer"].clone();
+    run("layer.smartObjects.convertToLayers", json!({"layer": unpacked})).await;
+    let doc = json_of(&call(&client, "doc_inspect", json!({})).await);
+    assert!(doc["layers"].as_array().unwrap().iter().all(|l| l["kind"] == "Pixel"));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn smart_object_commands_refuse_real_linked_files_without_changing_the_session() {
+    use photocraft_engine::doc::{LayerContent, SmartSource};
+
+    let dir = tmp("linked-smart-object");
+    let original = write_image(&dir, "external.png", photocraft_codecs::Format::Png);
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
+    let layer = session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].clone();
+    let state = session.active_mut().unwrap();
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    smart.source = SmartSource::Linked { path: dir.join("external.png").to_string_lossy().into_owned() };
+    std::fs::write(dir.join("parent.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+    let client = connect(headless_in(&dir)).await;
+    json_of(&call(&client, "doc_open", json!({"path": "parent.pcraft"})).await);
+    let before = json_of(&call(&client, "doc_inspect", json!({})).await);
+    for id in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
+        let response = call(&client, "command_run", json!({"id": id, "params": {"layer": layer}})).await;
+        assert_eq!(response.is_error, Some(true));
+        assert!(text(&response).contains("ambient filesystem paths"), "{}", text(&response));
+        assert_eq!(json_of(&call(&client, "doc_inspect", json!({})).await), before);
+        assert_eq!(json_of(&call(&client, "session_list", json!({})).await)["documents"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(std::fs::read(dir.join("external.png")).unwrap(), original);
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // Bridge mode against a fake control server
 // ---------------------------------------------------------------------------

@@ -209,14 +209,72 @@ fn extension_forms() {
     }
 }
 
+/// Asserts how a flat file opened: the locked Background when opaque, a normal "Layer 0" (as in
+/// Photoshop) when it has transparency.
+fn assert_opens_as(what: &str, d: &photocraft_doc::Document, transparent: bool) {
+    let [l] = &d.layers[..] else { panic!("{what}: {} layers", d.layers.len()) };
+    if transparent {
+        assert_eq!(l.name, "Layer 0", "{what}");
+        assert!(!l.locks.transparency && !l.locks.position, "{what}: unlocked");
+    } else {
+        assert_eq!(l.name, "Background", "{what}");
+        assert!(l.locks.transparency && l.locks.position, "{what}: locked");
+    }
+}
+
 #[test]
 fn background_lock_follows_alpha() {
     let r = export(&single(ColorMode::Rgb, SampleType::U8, false), "png", &ExportOptions::default()).unwrap();
-    let d = import("a.png", &r.bytes).unwrap().document;
-    assert!(d.layers[0].locks.transparency);
+    assert_opens_as("opaque PNG", &import("a.png", &r.bytes).unwrap().document, false);
+    let r = export(&single(ColorMode::Rgb, SampleType::U8, true), "png", &ExportOptions::default()).unwrap();
+    assert_opens_as("RGBA PNG", &import("a.png", &r.bytes).unwrap().document, true);
+}
+
+#[test]
+fn transparent_flat_images_open_as_layer_0() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as CS};
+    let (w, h) = (6u32, 4u32);
+    let n = (w * h) as usize;
+    let enc = |layout: ChannelLayout, sample: CS, format: Format| {
+        let ch = layout.channels();
+        let img = match sample {
+            CS::U8 => Image::from_u8(w, h, layout, (0..n * ch).map(|i| if (i + 1) % ch == 0 && i < ch * 5 { 0 } else { 200 }).collect()),
+            _ => Image::from_u16(w, h, layout, &(0..n * ch).map(|i| if (i + 1) % ch == 0 && i < ch * 5 { 0 } else { 50_000 }).collect::<Vec<_>>()),
+        }
+        .unwrap();
+        photocraft_codecs::encode(&img, format, &EncodeOptions::default()).unwrap()
+    };
+    let cases: Vec<(&str, Vec<u8>, bool)> = vec![
+        ("a.png", enc(ChannelLayout::Rgba, CS::U8, Format::Png), true),
+        ("a16.png", enc(ChannelLayout::Rgba, CS::U16, Format::Png), true),
+        ("ga.png", enc(ChannelLayout::GrayA, CS::U8, Format::Png), true),
+        ("a.tif", enc(ChannelLayout::Rgba, CS::U8, Format::Tiff), true),
+        ("ga.tif", enc(ChannelLayout::GrayA, CS::U16, Format::Tiff), true),
+        ("pal.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], Some(0)).unwrap(), true),
+        ("pal_opaque.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], None).unwrap(), false),
+        ("rgb.png", enc(ChannelLayout::Rgb, CS::U8, Format::Png), false),
+        ("g.png", enc(ChannelLayout::Gray, CS::U16, Format::Png), false),
+        ("rgb.tif", enc(ChannelLayout::Rgb, CS::U8, Format::Tiff), false),
+        ("rgb.jpg", enc(ChannelLayout::Rgb, CS::U8, Format::Jpeg), false),
+    ];
+    for (name, bytes, transparent) in cases {
+        let d = import(name, &bytes).unwrap_or_else(|e| panic!("{name}: {e}")).document;
+        assert_opens_as(name, &d, transparent);
+        // Photoshop numbers the next new layer after "Layer 0" as "Layer 1".
+        assert_eq!(d.next_layer_name("Layer"), "Layer 1", "{name}");
+    }
+}
+
+#[test]
+fn layer_0_saves_back_to_png_and_reopens_as_layer_0() {
     let r = export(&single(ColorMode::Rgb, SampleType::U8, true), "png", &ExportOptions::default()).unwrap();
     let d = import("a.png", &r.bytes).unwrap().document;
-    assert!(!d.layers[0].locks.transparency);
+    assert_opens_as("first open", &d, true);
+    let again = export(&d, "b.png", &ExportOptions::default()).unwrap();
+    assert!(again.warnings.iter().all(|w| !w.contains("flattened")), "a lone Layer 0 is written natively: {:?}", again.warnings);
+    let back = import("b.png", &again.bytes).unwrap().document;
+    assert_opens_as("reopened", &back, true);
+    pixels_eq(&d, &back, 0.0);
 }
 
 #[test]

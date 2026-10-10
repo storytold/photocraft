@@ -48,8 +48,29 @@ real_name = "Willy Foo"
 display_name = "Willy Foo"
 sync_github_name = false
 
+[people.SilentYeti]
+sync_github_name = true
+
 [people.Elvis33LE]
 sync_github_name = true
 
 [people.stevanmarjanovic]
 sync_github_name = true
+
+[people.Hathor875]
+real_name = "Krzysztof Cieślik"
+sync_github_name = true
+
+[people.maxm11]
+sync_github_name = true
+
+[people.skraus2]
+sync_github_name = true
+
+[people.excited-raccoon]
+sync_github_name = true
+
+[people.hamada147]
+real_name = "Ahmed Moussa"
+display_name = "Ahmed Moussa"
+sync_github_name = false

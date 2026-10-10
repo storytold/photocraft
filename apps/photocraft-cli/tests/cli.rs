@@ -136,7 +136,8 @@ fn info_prints_layer_tree_json() {
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["width"], 10);
     assert_eq!(v["height"], 6);
-    assert_eq!(v["layers"][0]["name"], "Background");
+    // An RGBA PNG opens as a normal "Layer 0", not the locked Background (as in Photoshop).
+    assert_eq!(v["layers"][0]["name"], "Layer 0");
     assert!(v.get("history").is_none());
     let (out, _) = ok(bin().arg("info").arg(&a).arg("--compact"));
     assert_eq!(out.trim().lines().count(), 1);

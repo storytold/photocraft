@@ -15,11 +15,13 @@
 //!   layer; unsupported raw variants fall back to the embedded JPEG preview.
 //! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
 //!   layers through the PSD path and are written back the same way; see `tiff_layers`.
+//! * Paint.NET PDN3 documents open as editable bitmap layers (import only).
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
-//! * Every other format goes through `photocraft-codecs` as a single
-//!   "Background" layer (depth and Gray/RGB/CMYK model preserved).
+//! * Every other format goes through `photocraft-codecs` as a single layer
+//!   (depth and Gray/RGB/CMYK model preserved): a locked "Background" when the
+//!   image is opaque, a normal "Layer 0" when it has transparency.
 //!
 //! Exports to PSD render the merged composite with
 //! `photocraft_compose::flatten`; flat exports report what is lost.
@@ -39,6 +41,7 @@ mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
 pub mod pattern_map;
+mod pdn;
 pub mod pixels;
 mod psd_export;
 mod psd_import;
@@ -63,6 +66,9 @@ pub use psd_import::{psd_to_document, psd_to_document_with};
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// Paint.NET document decode failure.
+    #[error("PDN: {0}")]
+    Pdn(String),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -96,7 +102,7 @@ pub struct ImportResult {
     pub document: Document,
     /// Human-readable notes about anything approximated or dropped.
     pub warnings: Vec<String>,
-    /// Save must not write back to the source (an Affinity document: PhotoCraft can't write it).
+    /// Save must not write back to an import-only source, such as Affinity or Paint.NET.
     pub source_read_only: bool,
     /// Only a stand-in picture of the file (an Affinity document whose native data couldn't be
     /// read): Open shows it with its warning; Place and other auxiliary imports refuse it.
@@ -200,6 +206,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
     }
+    if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
+        return pdn::import(name, bytes, ctl);
+    }
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
     }
@@ -221,6 +230,9 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
+    if ext == "pdn" {
+        return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
+    }
     if affinity::EXTENSIONS.contains(&ext.as_str()) {
         return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
     }

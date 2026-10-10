@@ -303,7 +303,8 @@ pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
         return Err(bad(CMD, "the document is empty"));
     }
     let (angle, scale, offset) = gf::from_handles(style, from, to, canvas, 0.0);
-    let fill = Fill::Gradient { stops, angle, scale: clamp_scale(scale), style, reverse, opacity_stops, midpoints: Vec::new(), offset, dither, align: false };
+    let fill = Fill::Gradient { stops, angle, scale: clamp_scale(scale), style, reverse, opacity_stops, midpoints: Vec::new(), offset, dither, align: false }
+        .in_mode(doc.mode);
     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
     l.opacity = opacity;
     l.blend = blend;
@@ -341,8 +342,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn replace_fill(s: &mut Session, id: LayerId, label: &str, new: Fill) -> Result<()> {
     s.edit(label, |doc, _| {
+        let mode = doc.mode;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        l.content = LayerContent::Fill(new);
+        l.content = LayerContent::Fill(new.in_mode(mode));
         Ok(())
     })
 }

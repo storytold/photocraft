@@ -17,6 +17,8 @@
 	Layer	图层
 	Type	文字
 	Select	选择
+	Selected	已选
+	Scope	范围
 	Top Left	左上
 	Top Right	右上
 	Bottom Left	左下
@@ -672,7 +674,11 @@
 	Pro Medium Gray Theme	专业中灰主题
 	Studio Theme	工作室主题
 	Studio Light Theme	工作室浅色主题
+	Adwaita Light Theme	Adwaita 浅色主题
+	Adwaita Dark Theme	Adwaita 深色主题
 	Classic Theme	经典主题
+	Solarized dark	Solarized 深色
+	Solarized Dark Theme	Solarized 深色主题
 	Next Theme	下一代主题
 	Actions	动作
 	Brush Settings	画笔设置
@@ -757,7 +763,7 @@
 	All Caps	全部大写
 	All Slices	所有切片
 	All User Slices	所有用户切片
-	All shortcuts reset to Photoshop defaults.	所有快捷键已重置为 Photoshop 默认值。
+	All shortcuts reset to PhotoCraft defaults.	所有快捷键已重置为 PhotoCraft 默认值。
 	Alt	Alt
 	Alt-click to define a source point to clone from	按 Alt 单击以定义仿制源点
 	Always use pressure for opacity	始终用压感控制不透明度
@@ -1082,7 +1088,7 @@
 	Ignore All	全部忽略
 	Image Size	图像大小
 	Import Brushes…	导入画笔…
-	Import Photoshop brushes (.abr)	导入 Photoshop 画笔（.abr）
+	Import brushes (.abr)	导入画笔（.abr）
 	Import Presets	导入预设
 	Imported	已导入
 	Indent First	首行缩进
@@ -1132,7 +1138,6 @@
 	Liquify is not open	尚未打开液化
 	Load	载入
 	Load 3D LUT…	载入 3D LUT…
-	Load Photoshop brushes (.abr)	载入 Photoshop 画笔（.abr）
 	Load channel as selection	将通道载入为选区
 	Load…	载入…
 	Localized Color Clusters	局部颜色簇
@@ -1539,7 +1544,7 @@
 	Current Tool	当前工具
 	Custom Shape Tool	自定形状工具
 	Cyans	青色
-	Default Photoshop Size	默认 Photoshop 大小
+	Default PhotoCraft Size	默认 PhotoCraft 大小
 	Delete Workspace	删除工作区
 	Diamond	菱形
 	Dimensions:	尺寸：
@@ -1885,6 +1890,8 @@
 	Standard	标准
 	Studio	工作室
 	Studio light	工作室（浅色）
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita（深色）
 	Subdivisions	细分
 	System	系统
 	Text engine	文字引擎
@@ -1934,6 +1941,7 @@
 	Collapse group  (⌥-click: all groups)	折叠组  (⌥-单击：所有组)
 	Create new brush from the current settings	根据当前设置创建新画笔
 	Create new brush from these settings	根据这些设置创建新画笔
+	Update the current brush with these settings	用这些设置更新当前画笔
 	Delete brush	删除画笔
 	Drag the arrow to set the angle, the dots to set the roundness	拖动箭头设置角度，拖动圆点设置圆度
 	Expand	展开
@@ -2062,7 +2070,13 @@ cameraRaw	Blending	混合
 	Align with layer	与图层对齐
 	Reset Alignment	重置对齐
 	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
-	The current gradient (pick one in Window › Gradients)	当前渐变（在“窗口 › 渐变”中选择）
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	渐变编辑器
+	Gradient picker	渐变拾色器
+	Save As Preset	存储为预设
+	The gradient the Gradient tool paints with	渐变工具所使用的渐变
+	Adds the current gradient to the Gradients panel	将当前渐变添加到“渐变”面板
+	Gradient stops	渐变色标
 	Select a type layer to edit its character and paragraph settings.	选择文字图层以编辑字符和段落设置。
 	Text color	文字颜色
 	Type Options	文字选项
@@ -2094,6 +2108,9 @@ cameraRaw	Blending	混合
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opening {name}	正在打开 {name}
+	Saving {name}	正在保存 {name}
+	A save to {name} is still running; try again when it finishes	仍在保存到 {name}；请在完成后重试
+	{label} is writing the file and can no longer be cancelled	{label} 正在写入文件，已无法取消
 	Opening {name}…	正在打开 {name}…
 	Opening…	正在打开…
 	Reading…	正在读取…
@@ -2195,6 +2212,10 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	拾色器（文字颜色）
+	Color Picker (Fill Color)	拾色器（填充颜色）
+	Fill color	填充颜色
+	Color Picker (Stroke Color)	拾色器（描边颜色）
+	Stroke color	描边颜色
 	Pick screen color	选取屏幕颜色
 	Sample a pixel anywhere on the screen	在屏幕任意位置采样像素
 	Click to pick · Esc to cancel	单击选取 · Esc 取消
@@ -2267,6 +2288,11 @@ fontWeight	Italic	斜体
 	Reset View	重置视图
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
 
+# Painting symmetry presets.
+	Dual Axis	双轴
+	Diagonal	对角线
+	Transform Symmetry	变换对称轴
+
 # Eyedropper Sample Size and Sample (#1649).
 	Point Sample	采样点
 	3 by 3 Average	3 × 3 平均
@@ -2286,3 +2312,52 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
+	Rule of Thirds	三等分
+	Triangle	三角形
+	Golden Ratio	黄金比例
+	Golden Spiral	金色螺线
+	Auto Show Overlay	自动显示叠加
+	Always Show Overlay	总是显示叠加
+	Never Show Overlay	从不显示叠加
+	Cycle Overlay	循环切换叠加
+	Cycle Orientation	循环切换取向
+	Set the overlay options for the Crop tool	设置裁剪工具的叠加选项
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 单击被桌面环境截获了，它用 Alt 拖动来移动窗口。请把桌面的窗口移动键改为 Super，或在 窗口 › 修饰键 中锁定 Alt。
+	Auto Hide Notifications	自动隐藏通知
+	Notification Duration (seconds)	通知持续时间（秒）
+	Appearance Mode	外观模式
+	Dark Theme	深色主题
+	Light Theme	浅色主题
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	下一个外观模式
+	Sync with system	与系统同步
+	Active	当前使用
+	Color Picker (Solid Color)	拾色器（纯色）
+	Straighten the image by drawing a line on it	通过在图像上画一条线来拉直图像
+	Set additional Crop options	设置其他裁剪选项
+	Show Cropped Area	显示裁剪区域
+	Enable Crop Shield	启用裁剪屏蔽
+	Match Canvas	匹配画布
+	Auto Adjust Opacity	自动调整不透明度
+	Crop Shield color	裁剪屏蔽颜色
+	Color Picker (Crop Shield Color)	拾色器（裁剪屏蔽颜色）
+	From Center	从中心
+	Link radii	链接半径
+	Star Ratio:	星形比例：
+	Create Rectangle	创建矩形
+	Create Ellipse	创建椭圆
+	Create Triangle	创建三角形
+	Create Polygon	创建多边形
+	Some brush presets could not be loaded	部分画笔预设无法加载
+	Retry saving presets	重试保存预设
+	Brush preset changes are not saved: {error}	画笔预设的更改未保存：{error}
+	Keep this tab open to retain your brushes.	请保持此标签页打开以保留您的画笔。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	浏览器存储不可用；画笔仅在本次会话中有效。请保持此标签页打开以保留它们。
+	Saving brush presets… Keep this tab open until saving finishes.	正在保存画笔预设… 请保持此标签页打开，直到保存完成。
+	Reflect	反射
+	Glow	发光
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
+	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)

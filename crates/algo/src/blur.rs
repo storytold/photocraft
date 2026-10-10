@@ -18,6 +18,7 @@ mod motion_fft;
 mod motion_fft_tests;
 #[cfg(test)]
 mod motion_tests;
+pub(crate) mod radial;
 
 /// Normalized Gaussian kernel with standard deviation `sigma` (radius 3σ).
 pub(crate) fn gaussian_kernel(sigma: f32) -> Vec<f32> {

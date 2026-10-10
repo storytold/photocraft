@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
-use photocraft_engine::Session;
+use photocraft_ui_egui::i18n;
 use photocraft_ui_egui::served_fonts;
 use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
@@ -17,8 +17,8 @@ type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 /// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam",
-    "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
+    "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
+    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
     "afdesign", "afphoto", "afpub",
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
@@ -30,8 +30,8 @@ const FONTS_MANIFEST: &str = "fonts/manifest.txt";
 /// The served fonts: the manifest once read, and what the network has delivered.
 #[derive(Default)]
 struct ServedFonts {
-    /// Font files by family.
-    files: HashMap<String, Vec<String>>,
+    /// Font files by family, each with its Subresource Integrity value when the manifest has one.
+    files: HashMap<String, Vec<(String, Option<String>)>>,
     /// Families fetched or being fetched: each one once per page load.
     fetched: HashSet<String>,
     /// Downloaded files waiting for the next frame: (family, bytes).
@@ -60,6 +60,16 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        // Hydrate before constructing an interactive session: a late load must never undo a
+        // user deletion/reorder. Storage denial or timeout still opens a usable session.
+        let (database, presets, mut preset_warnings) = match crate::indexed_presets::load().await {
+            Ok((db, bridge, warnings)) => (Some(db), bridge, warnings),
+            Err(e) => {
+                let bridge = crate::preset_bridge::Bridge::default();
+                bridge.unavailable(e);
+                (None, bridge, Vec::new())
+            }
+        };
         let pen_target = canvas.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -70,7 +80,12 @@ pub fn start() {
                     let inbox: Inbox = Arc::default();
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
-                    let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone()));
+                    let (session, warnings) = crate::preset_bridge::session(presets.clone());
+                    preset_warnings.extend(warnings);
+                    let mut app = PhotocraftApp::new(session, services(inbox.clone()));
+                    if !preset_warnings.is_empty() {
+                        photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
+                    }
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
                     if let Some(rs) = cc.wgpu_render_state.clone()
@@ -81,7 +96,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, unsaved, served }))
+                    Ok(Box::new(WebShell { app, inbox, unsaved, served, database, presets }))
                 }),
             )
             .await;
@@ -150,7 +165,7 @@ fn query() -> String {
 fn load_font_manifest(served: Served, ctx: egui::Context) {
     wasm_bindgen_futures::spawn_local(async move {
         // Most hosts serve no fonts: a missing manifest is the normal case, not an error.
-        let Ok(bytes) = fetch_bytes(FONTS_MANIFEST).await else { return };
+        let Ok(bytes) = fetch_bytes(FONTS_MANIFEST, None).await else { return };
         let text = String::from_utf8_lossy(&bytes);
         // A host that answers unknown paths with its HTML page (single-page app fallback).
         if text.trim_start().starts_with('<') {
@@ -160,24 +175,41 @@ fn load_font_manifest(served: Served, ctx: egui::Context) {
         for s in skipped {
             log::warn!("{FONTS_MANIFEST}: skipped {s}");
         }
-        let mut files: HashMap<String, Vec<String>> = HashMap::new();
-        for f in fonts {
-            files.entry(f.family).or_default().push(f.file);
+        let mut files: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+        for f in &fonts {
+            files.entry(f.family.clone()).or_default().push((f.file.clone(), f.integrity.clone()));
         }
         log::info!("photocraft-web: {} served font families", files.len());
-        let families: Vec<String> = files.keys().cloned().collect();
         served.lock().unwrap_or_else(|e| e.into_inner()).files = files;
-        served_fonts::add_families(families);
+        // The families for the font menus, and the script fallbacks (the manifest's `scripts`).
+        served_fonts::add_fonts(&fonts);
+        // Fetch now the fallbacks of the scripts the browser's languages use (an Arabic reader gets
+        // the Arabic font before typing); the rest is fetched when text or a font menu needs it.
+        served_fonts::request_for_languages(browser_languages().iter().map(String::as_str));
         ctx.request_repaint();
     });
 }
 
-/// GET `url` (relative to the page) and read the whole body.
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+/// The browser's preferred languages (`navigator.languages`, e.g. `["ar-EG", "en"]`).
+fn browser_languages() -> Vec<String> {
+    web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|l| l.as_string()).collect()).unwrap_or_default()
+}
+
+/// GET `url` (relative to the page) and read the whole body. With `integrity` (a Subresource
+/// Integrity value), the browser rejects a body whose hash differs.
+async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, String> {
     use wasm_bindgen_futures::JsFuture;
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url)).await.map_err(js)?.dyn_into().map_err(|_| "not a Response")?;
+    let request = match integrity {
+        Some(sri) => {
+            let init = web_sys::RequestInit::new();
+            init.set_integrity(sri);
+            window.fetch_with_str_and_init(url, &init)
+        }
+        None => window.fetch_with_str(url),
+    };
+    let resp: web_sys::Response = JsFuture::from(request).await.map_err(js)?.dyn_into().map_err(|_| "not a Response")?;
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -193,9 +225,29 @@ struct WebShell {
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
+    database: Option<web_sys::IdbDatabase>,
+    presets: crate::preset_bridge::Bridge,
 }
 
 impl WebShell {
+    fn save_presets(&mut self, ctx: &egui::Context) {
+        if let Some(db) = self.database.clone()
+            && let Some(batch) = self.presets.begin()
+        {
+            let presets = self.presets.clone();
+            let wake = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = crate::indexed_presets::write(&db, &batch).await;
+                if let Err(e) = &result {
+                    log::error!("Could not save browser presets: {e}");
+                }
+                presets.finish(batch, result);
+                wake.request_repaint();
+            });
+        }
+        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved(), Ordering::Relaxed);
+    }
+
     /// Fetches the served families asked for (picked in a font menu, or needed by a layout) and
     /// installs the files that arrived.
     fn serve_fonts(&mut self, ctx: &egui::Context) {
@@ -207,16 +259,16 @@ impl WebShell {
                 if let Some(files) = s.files.get(&family).cloned()
                     && s.fetched.insert(family.clone())
                 {
-                    fetch.extend(files.into_iter().map(|file| (family.clone(), file)));
+                    fetch.extend(files.into_iter().map(|(file, integrity)| (family.clone(), file, integrity)));
                 }
             }
             (fetch, std::mem::take(&mut s.arrived))
         };
-        for (family, file) in fetch {
+        for (family, file, integrity) in fetch {
             let served = self.served.clone();
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_bytes(&file).await {
+                match fetch_bytes(&file, integrity.as_deref()).await {
                     Ok(bytes) => {
                         served.lock().unwrap_or_else(|e| e.into_inner()).arrived.push((family, bytes));
                         ctx.request_repaint();
@@ -248,11 +300,35 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic(ctx, frame);
-        self.unsaved.store(self.app.has_unsaved_work(), Ordering::Relaxed);
+        self.save_presets(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let error = self.presets.error();
+        if error.is_some() || self.presets.unsaved() {
+            egui::Panel::top("browser_preset_storage").show(ui, |ui| {
+                if let Some(error) = error {
+                    let tokens = photocraft_ui_egui::theme::Tokens::for_kind(self.app.ui.theme);
+                    // Put retry first so floating brush windows cannot cover the control.
+                    ui.horizontal_wrapped(|ui| {
+                        if self.database.is_some() && ui.button(i18n::t("Retry saving presets")).clicked() {
+                            self.presets.retry();
+                            ui.ctx().request_repaint();
+                        }
+                        ui.colored_label(tokens.warning, i18n::fmt(i18n::t("Brush preset changes are not saved: {error}"), &[("error", &error)]));
+                    });
+                    ui.label(if self.database.is_some() {
+                        i18n::t("Keep this tab open to retain your brushes.")
+                    } else {
+                        i18n::t("Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.")
+                    });
+                } else {
+                    ui.label(i18n::t("Saving brush presets… Keep this tab open until saving finishes."));
+                }
+            });
+        }
         self.app.ui(ui, frame);
+        self.save_presets(ui.ctx());
     }
 }
 
@@ -275,8 +351,13 @@ fn services(inbox: Inbox) -> Services {
         })),
         file_dialog: Some(Box::new(|request, _parent, reply| match request {
             // The browser's file picker hands over the file's contents, not a path.
-            FileDialogRequest::Open { .. } => wasm_bindgen_futures::spawn_local(async move {
-                let picked = rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).pick_file().await;
+            FileDialogRequest::Open { extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
+                let dialog = if let Some(exts) = extensions {
+                    rfd::AsyncFileDialog::new().add_filter("Supported Files", &exts)
+                } else {
+                    rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS)
+                };
+                let picked = dialog.pick_file().await;
                 let answer = match picked {
                     Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
                     None => None,

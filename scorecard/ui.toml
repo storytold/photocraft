@@ -43,9 +43,9 @@ note = "No floating groups in dock.rs/panels.rs"
 [[item]]
 id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
-status = "partial"
+status = "done"
 issue = 217
-note = "canvas.rs: Close/Others/All context menu with unsaved prompt; overflow, Reveal, drag reorder still missing"
+note = "canvas.rs: Close/Others/All menu with unsaved prompt; Reveal reuses file.revealInFinder (engine layer_menu_cmds::reveal); the » chevron (tab_strip) lists overflow; dragging a tab reorders via document.move"
 
 [[item]]
 id = "UI-217-7"
@@ -99,9 +99,9 @@ note = "widgets.rs:132 DragValue scrubs and takes + - * / arithmetic; no units i
 [[item]]
 id = "UI-217-14"
 target = "Layers panel: wheel steps blend modes, drop on New/Trash duplicates/deletes, checker behind art"
-status = "missing"
+status = "partial"
 issue = 217
-note = "panels.rs:1108 plain dropdown; trash is click-only (panels.rs:1213)"
+note = "panels.rs: the wheel steps the blend-mode dropdown (widgets::dropdown_wheel_hovered, #1747); trash is click-only, no drop on New/Trash, no checker behind art"
 
 [[item]]
 id = "UI-217-15"

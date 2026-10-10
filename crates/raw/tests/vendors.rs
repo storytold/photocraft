@@ -109,6 +109,7 @@ fn other_raw_containers_are_recognised_but_unsupported() {
     cr3.extend_from_slice(&[0; 12]);
     assert_eq!(identify(&cr3), Some(RawFormat::Cr3));
     assert!(matches!(decode(&cr3, &Limits::default()), Err(RawError::Unsupported(_))));
+    // A bare RAF header has no CFA TIFF (like early FinePix files): recognised, unsupported.
     let mut raf = b"FUJIFILMCCD-RAW 0201FF383501".to_vec();
     raf.resize(200, 0);
     assert_eq!(identify(&raf), Some(RawFormat::Raf));

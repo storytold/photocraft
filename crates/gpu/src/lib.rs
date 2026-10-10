@@ -26,7 +26,8 @@
 //! Vector masks (rasterised once per mask state into a combined mask texture), layers clipped to
 //! pass-through groups, stroked shapes with clipped layers (fill and stroke split once per shape
 //! state), pattern fills and artboards are planned like everything else. What remains
-//! (Multichannel documents, patterns larger than the texture limit) returns [`Unsupported`];
+//! (Multichannel documents, patterns larger than the texture limit, uncached gradients with
+//! coincident colour or opacity stops) returns [`Unsupported`];
 //! callers fall back to the CPU compositor.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -387,6 +388,9 @@ pub struct Compositor {
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, (u64, Tex)>,
+    /// The colour mode of the document being encoded: patterns paint in it
+    /// (`photocraft_compose::pattern::pattern_rgba`).
+    pattern_mode: photocraft_color::ColorMode,
     /// Texture side limit the paging is planned for (the device's, or smaller in tests).
     max_dim: u32,
     /// The device's real texture side limit.
@@ -589,6 +593,7 @@ impl Compositor {
             fx: HashMap::new(),
             temps: Vec::new(),
             patterns: HashMap::new(),
+            pattern_mode: photocraft_color::ColorMode::Rgb,
             max_dim: 0,
             device_max: device.limits().max_texture_dimension_2d,
             page: PAGE,
@@ -852,6 +857,7 @@ impl Compositor {
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
         self.check_fx(doc, &plan)?;
+        self.pattern_mode = doc.pixel_format().mode;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
         if region.is_empty() {
             return Ok(stats);
@@ -1321,20 +1327,21 @@ impl Compositor {
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 
-    /// Premultiplied RGBA32F texture of a pattern (cached by pixel identity).
+    /// Premultiplied RGBA32F texture of a pattern as it paints in the document's mode (cached by
+    /// pixel identity and mode).
     fn pattern_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pat: &Pattern) -> wgpu::TextureView {
         let fp = pat.surface.tiles().fold((pat.width as u64) << 32 | pat.height as u64, |acc, (c, t)| {
             acc.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 20) ^ c.ty as u64
         });
-        let key = format!("{}\u{0}{}", pat.id, pat.name);
+        let mode = self.pattern_mode;
+        let key = format!("{}\u{0}{}\u{0}{mode:?}", pat.id, pat.name);
         if let Some((f, t)) = self.patterns.get(&key)
             && *f == fp
         {
             return t.view.clone();
         }
         let (w, h) = (pat.width, pat.height);
-        let mut px = vec![[0.0f32; 4]; w as usize * h as usize];
-        pat.surface.read_rgba_into(pat.rect(), &mut px);
+        let px = photocraft_compose::pattern::pattern_rgba(pat, mode);
         let bytes: Vec<u8> = px.iter().flat_map(|q| [q[0] * q[3], q[1] * q[3], q[2] * q[3], q[3]]).flat_map(f32::to_le_bytes).collect();
         let t = Tex::new(device, "pc_pattern", w, h, wgpu::TextureFormat::Rgba32Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         queue.write_texture(
@@ -2017,6 +2024,61 @@ mod tests {
             let e = k.entry().unwrap();
             assert!(module.entry_points.iter().any(|ep| ep.name == e), "missing entry point {e}");
         }
+    }
+
+    /// The decimal float literals in `src` (comments skipped; hex literals are exact, so skipped),
+    /// with their line numbers.
+    fn decimal_float_literals(src: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for (n, line) in src.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("").as_bytes();
+            let mut i = 0;
+            while i < code.len() {
+                let digit_or_dot = code[i].is_ascii_digit() || (code[i] == b'.' && code.get(i + 1).is_some_and(u8::is_ascii_digit));
+                let word_before = i > 0 && (code[i - 1].is_ascii_alphanumeric() || code[i - 1] == b'_' || code[i - 1] == b'.');
+                if !digit_or_dot || word_before {
+                    i += 1;
+                    continue;
+                }
+                if code[i] == b'0' && matches!(code.get(i + 1), Some(b'x' | b'X')) {
+                    i += 2;
+                    while i < code.len() && (code[i].is_ascii_hexdigit() || matches!(code[i], b'.' | b'p' | b'P' | b'+' | b'-')) {
+                        i += 1;
+                    }
+                    continue;
+                }
+                let start = i;
+                while i < code.len() && (code[i].is_ascii_digit() || code[i] == b'.') {
+                    i += 1;
+                }
+                if i < code.len() && matches!(code[i], b'e' | b'E') {
+                    let mut j = i + 1;
+                    if j < code.len() && matches!(code[j], b'+' | b'-') {
+                        j += 1;
+                    }
+                    if j < code.len() && code[j].is_ascii_digit() {
+                        i = j;
+                        while i < code.len() && code[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                    }
+                }
+                out.push((n + 1, String::from_utf8_lossy(&code[start..i]).into_owned()));
+            }
+        }
+        out
+    }
+
+    /// Browsers' WebGPU shader compiler (Tint) rejects a float literal beyond f32's finite range
+    /// even when it would round to `f32::MAX` (naga, used natively, rounds it), and then no
+    /// compositor pipeline builds and the web app falls back to the CPU renderer. `3.40282347e38`
+    /// was such a literal.
+    #[test]
+    fn shader_float_literals_fit_f32() {
+        let lits = decimal_float_literals(SHADER);
+        assert!(lits.iter().any(|(_, l)| l == "1.0"), "the scanner finds literals: {lits:?}");
+        let bad: Vec<_> = lits.iter().filter(|(_, l)| l.parse::<f64>().map_or(true, |v| !v.is_finite() || v.abs() > f64::from(f32::MAX))).collect();
+        assert!(bad.is_empty(), "float literals outside f32's finite range (line, literal): {bad:?}");
     }
 
     #[test]

@@ -139,7 +139,7 @@ fn near_border(t: &TransformSession, p: [f64; 2], tol: f64) -> bool {
 
 fn hit(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2]) -> Option<Hit> {
     let h = crate::transform_tool::hit(t, p, crate::transform_tool::handle_tolerance(app));
-    (h != Hit::Outside || near_border(t, p, ROTATE_PX / f64::from(app.current_zoom().max(0.01)))).then_some(h)
+    (h != Hit::Outside || near_border(t, p, ROTATE_PX / f64::from(app.point_zoom().max(0.01)))).then_some(h)
 }
 
 /// Type uses legacy scaling: Shift constrains; Ctrl/Cmd is the mode key, never corner Distort.

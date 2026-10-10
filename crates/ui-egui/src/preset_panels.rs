@@ -511,12 +511,10 @@ fn empty(ui: &mut egui::Ui, s: &str) {
     ui.label(egui::RichText::new(s).color(t.text_faint).size(11.5));
 }
 
-/// Document point under a screen position on the main canvas.
-fn doc_point(app: &PhotocraftApp, pos: Pos2) -> Option<[f64; 2]> {
-    let i = app.session.active_index()?;
-    let v = app.ui.views.get(i)?;
-    let xf = crate::canvas::ViewXform { rect: app.last_canvas_rect, zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal, rotation: v.rotation };
-    Some(xf.to_doc(pos))
+/// Where drops onto the canvas are accepted: the canvas proper, rulers excluded (a drop on the
+/// ruler strip is not a canvas drop).
+fn canvas_drop_rect(app: &PhotocraftApp) -> egui::Rect {
+    crate::rulers::content_rect(app, app.last_canvas_rect)
 }
 
 // ------------------------------------------------------------------ Gradients
@@ -534,7 +532,7 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView { name: g.name.clone(), items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone() }).collect() })
         .collect();
-    let canvas = app.last_canvas_rect;
+    let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
     let events = browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient") }, &mut |ui, r, gi, ii| {
@@ -581,7 +579,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .collect();
     let pats: Vec<Vec<photocraft_doc::Pattern>> =
         app.session.presets.pattern_groups.iter().map(|g| g.items.iter().filter_map(|id| lib.iter().find(|p| &p.id == id).cloned()).collect()).collect();
-    let canvas = app.last_canvas_rect;
+    let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 280.0);
     let ctx = ui.ctx().clone();
@@ -626,7 +624,7 @@ fn float_window(
         .corner_radius(CornerRadius::same(t.radius_lg as u8))
         .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: t.shadow })
         .inner_margin(egui::Margin::same(8));
-    let canvas = app.last_canvas_rect;
+    let canvas = canvas_drop_rect(app);
     let mut close = false;
     egui::Window::new(title)
         .id(egui::Id::new(("preset-window", key)))
@@ -677,7 +675,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView { name: g.name.clone(), items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone() }).collect() })
         .collect();
-    let canvas = app.last_canvas_rect;
+    let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
@@ -725,7 +723,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView { name: g.name.clone(), items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone() }).collect() })
         .collect();
-    let canvas = app.last_canvas_rect;
+    let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
@@ -757,7 +755,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ev::Drop(k, pos) => {
                 app.ui.presets_ui.custom_shape = k.clone();
                 let mut p = json!({"preset": k, "fill": fill});
-                if let (Some(c), Some(d)) = (doc_point(app, *pos), app.session.active()) {
+                if let (Some(c), Some(d)) = (crate::canvas::doc_point_at(app, *pos), app.session.active()) {
                     let side = (d.doc.size.width.min(d.doc.size.height) as f64 * 0.3).max(8.0);
                     p["rect"] = json!([c[0] - side / 2.0, c[1] - side / 2.0, side, side]);
                 }
@@ -1163,6 +1161,29 @@ mod tests {
         let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
         assert_eq!(l.name, "Star");
         assert!(matches!(l.content, photocraft_doc::LayerContent::Shape(_)));
+    }
+
+    /// Regression: preset drops mapped the pointer through the raw widget rect, ignoring the
+    /// rulers' 16 px inset — a dropped shape landed 8 screen px from the pointer, and a drop on
+    /// the ruler strip counted as a canvas drop. Drops now map through, and target, the same
+    /// content rect the canvas draws with.
+    #[test]
+    fn preset_drops_map_through_the_ruler_inset() {
+        let (mut app, _) = app();
+        app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        app.ui.views[0] = crate::state::View { zoom: 2.0, center: [32.0, 24.0], fit_pending: false, fill_pending: false, doc_size: [64, 48], rotation: 0.0 };
+        let p = egui::pos2(400.0, 300.0);
+        let off = crate::canvas::doc_point_at(&app, p).unwrap();
+        assert_eq!(off, [32.0, 24.0], "without rulers the widget rect is the whole mapping");
+        // With rulers the content rect shrinks by the inset on the left and top: the same screen
+        // point is 8 screen px (4 document px at zoom 2) up-left of where it was.
+        app.ui.extras.rulers = true;
+        let on = crate::canvas::doc_point_at(&app, p).unwrap();
+        assert!((on[0] - (off[0] - 4.0)).abs() < 1e-3, "{on:?} vs {off:?}");
+        assert!((on[1] - (off[1] - 4.0)).abs() < 1e-3, "{on:?} vs {off:?}");
+        // The ruler strip is no longer a drop target; the canvas proper still is.
+        assert!(!canvas_drop_rect(&app).contains(egui::pos2(5.0, 300.0)));
+        assert!(canvas_drop_rect(&app).contains(p));
     }
 
     #[test]
