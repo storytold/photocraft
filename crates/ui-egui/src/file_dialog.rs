@@ -12,6 +12,7 @@
 //!
 //! One dialog at a time: asking while one is open is refused.
 
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use photocraft_doc::DocId;
@@ -106,17 +107,35 @@ impl PhotocraftApp {
 
     /// Ask where to save: `then` gets the chosen path, with a lowercase extension when
     /// Preferences ▸ File Handling › Lowercase Extension is on (its default).
+    ///
+    /// A bare file name (export dialogs, an untitled document) starts in the folder the active
+    /// document was last saved or exported to through a dialog, else beside the document
+    /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered for
+    /// the document the dialog was asked for.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         let mut suggested = std::path::PathBuf::from(suggested);
-        // Export dialogs usually provide only a file name. Start beside the source document,
-        // while preserving a caller's explicit directory and the untitled-document fallback.
+        let doc = self.session.active().map(|d| d.doc.id);
+        // Closed documents' folders are no longer needed.
+        let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
+        self.save_dirs.retain(|id, _| open.contains(id));
         if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
-            && let Some(dir) = self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent())
+            && let Some(dir) = doc
+                .and_then(|d| self.save_dirs.get(&d).cloned())
+                .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf))
         {
             suggested = dir.join(suggested);
         }
         self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
-            FileDialogAnswer::SaveTo(path) => then(app, Self::lowercased_extension(app, path)),
+            FileDialogAnswer::SaveTo(path) => {
+                let path = Self::lowercased_extension(app, path);
+                // The web answers a download name, which has no folder to remember.
+                if let Some(doc) = doc
+                    && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
+                {
+                    app.save_dirs.insert(doc, dir.to_path_buf());
+                }
+                then(app, path)
+            }
             _ => Err(UNEXPECTED.into()),
         })
     }

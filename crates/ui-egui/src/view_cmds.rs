@@ -424,6 +424,9 @@ fn wraps(id: &str) -> bool {
             | "file.saveACopy"
             | "file.placeEmbedded"
             | "file.placeLinked"
+            | "layer.smartObjects.replaceContents"
+            | "layer.smartObjects.exportContents"
+            | "layer.smartObjects.convertToLinked"
             | "file.closeAll"
             | "file.closeOthers"
             | "file.fileInfo"
@@ -761,9 +764,7 @@ mod label_tests {
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
-    let warp_text = f.get("__command").and_then(Value::as_str) == Some("type.warpText");
-    let keys: Vec<String> =
-        f.keys().filter(|k| !(k.starts_with("__") || warp_text && matches!(k.as_str(), "layer" | "layers" | "range" | "coalesce"))).cloned().collect();
+    let keys: Vec<String> = f.keys().filter(|k| !k.starts_with("__")).cloned().collect();
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
@@ -861,6 +862,29 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
                 app.place_bytes(&name, bytes, linked)
             }))
         }
+        "layer.smartObjects.replaceContents" => {
+            let st = app.session.active()?;
+            let (doc, layer) = (st.doc.id, st.active_layer?);
+            Some(app.pick_file_bytes(move |app, name, bytes| {
+                app.with_document(doc, |app| {
+                    let r = photocraft_engine::smart_cmds::replace_contents_bytes(&mut app.session, layer, &name, bytes).map_err(|e| e.to_string());
+                    app.sync_views();
+                    r
+                })
+            }))
+        }
+        "layer.smartObjects.exportContents" => Some(export_contents(app)),
+        "layer.smartObjects.convertToLinked" => {
+            let st = app.session.active()?;
+            let (doc, layer) = (st.doc.id, st.active_layer?);
+            let (name, _) = match photocraft_engine::smart_cmds::contents_of(&st.doc, layer) {
+                Ok(c) => c,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            Some(app.pick_save(&name, move |app, path| {
+                app.with_document(doc, |app| app.run("layer.smartObjects.convertToLinked", json!({"layer": layer.0, "path": path})))
+            }))
+        }
         "file.fileInfo" => {
             let info = app.session.execute("file.fileInfo", json!({})).ok()?;
             let kw = info["keywords"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")).unwrap_or_default();
@@ -883,16 +907,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             let fields = app.ui.view.guide_layout.clone();
             dialog(app, fields, json!({}))
         }
-        "type.warpText" => {
-            let styles: Vec<&str> = std::iter::once("none").chain(photocraft_text::warp::STYLES.iter().map(|(_, s)| *s)).collect();
-            let mut fields = json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0});
-            if let Some(Value::Object(target)) = crate::type_tool::formatting_params(app) {
-                for (key, value) in target {
-                    fields[key] = value;
-                }
-            }
-            dialog(app, fields, json!({"style": styles, "orientation": ["horizontal", "vertical"]}))
-        }
+        "type.warpText" => Some(Ok(json!({"dialog": crate::dialogs::open_command_dialog(app, id, label)}))),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             dialog(
@@ -1056,6 +1071,21 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.status_error = false;
         crate::notices::io_warnings(app, &format!("Saved a copy as {}", crate::file_open::display_name(&path)), &warnings);
         Ok(json!({"path": path, "warnings": warnings}))
+    })
+}
+
+/// Layer › Smart Objects › Export Contents: saves the contents file under its own name by default.
+fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document")?;
+    let layer = st.active_layer.ok_or("no layer selected")?;
+    // The contents as they were when asked, like Save a Copy.
+    let (name, bytes) = photocraft_engine::smart_cmds::contents_of(&st.doc, layer).map_err(|e| e.to_string())?;
+    app.pick_save(&name.clone(), move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status = format!("Exported contents to {path}");
+        app.ui.status_error = false;
+        Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
 

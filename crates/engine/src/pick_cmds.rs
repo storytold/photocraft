@@ -1,6 +1,7 @@
 //! Move tool Auto-Select: pick the topmost visible, not fully locked layer with pixels at a canvas
 //! point (Photoshop's options bar "Auto-Select: Layer | Group", ⌘-click with the Move tool, and the
-//! canvas right-click layer list).
+//! canvas right-click layer list). Like Photoshop, Auto-Select hits a type layer anywhere inside its
+//! text's bounds, so a click between letters picks the type rather than the layer under it (#2370).
 
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
@@ -15,6 +16,12 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Layers with visible pixels at (x, y), topmost first (hidden layers and hidden groups skipped).
 pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
+    layers_hit(doc, x, y, false)
+}
+
+/// [`layers_at`], but with `type_bounds` a type layer is hit anywhere inside the bounds of its
+/// rendered text (the gaps between glyphs included), as Photoshop's Auto-Select does.
+fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool) -> Vec<LayerId> {
     // A 1×1 read at i32::MAX would be an empty rect (huge `x` params saturate there).
     if x.checked_add(1).is_none() || y.checked_add(1).is_none() {
         return Vec::new();
@@ -43,6 +50,8 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
         let alpha = match &l.content {
             // Fill layers cover the canvas (their mask limits them).
             LayerContent::Fill(_) => 1.0,
+            // The text's pixel bounds (in document space, so they follow the layer's transform).
+            LayerContent::Text(t) if type_bounds && t.cache.as_ref().is_some_and(|c| c.content_bounds().contains(x, y)) => 1.0,
             _ => match l.surface() {
                 Some(s) => {
                     let mut px = [[0.0f32; 4]; 1];
@@ -76,8 +85,11 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `x`".into() })?.floor() as i32;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let hits = layers_at(&doc, x, y);
-    if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
+    let list = p.get("list").and_then(Value::as_bool).unwrap_or(false);
+    // The right-click list names the layers with pixels under the pointer; Auto-Select also takes
+    // a type layer by its text bounds.
+    let hits = layers_hit(&doc, x, y, !list);
+    if list {
         let names: Vec<Value> = hits.iter().filter_map(|id| doc.layer(*id)).map(|l| json!({"layer": l.id.0, "name": l.name})).collect();
         return Ok(json!({ "layers": names }));
     }
@@ -258,6 +270,58 @@ mod tests {
         assert_eq!(pick(&mut s), bg.0);
         lock(&mut s, bg.0, json!({"all": true}));
         assert_eq!(pick(&mut s), Value::Null);
+    }
+
+    #[test]
+    fn auto_select_hits_a_type_layer_between_its_letters() {
+        // #2370: a click in the gap between two glyphs picked the layer under the type.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        let mut text = None;
+        s.edit("type", |doc, _| {
+            // Two "glyphs", (10..14)×(10..20) and (20..24)×(10..20), with a gap between them.
+            let mut cache = photocraft_raster::Surface::new(doc.pixel_format());
+            for x in [10, 20] {
+                cache.fill_rect(Rect::new(x, 10, x + 4, 20), &[0.0, 0.0, 0.0, 1.0]);
+            }
+            let l = photocraft_doc::Layer::new("T", LayerContent::Text(photocraft_doc::TextLayer { cache: Some(cache), ..Default::default() }));
+            text = Some(l.id);
+            doc.layers.push(l);
+            Ok(())
+        })
+        .unwrap();
+        let t = text.unwrap();
+        let pick = |s: &mut Session, x: i32, y: i32| s.execute("layer.pickAt", json!({"x": x, "y": y, "select": false})).unwrap()["layer"].clone();
+        assert_eq!(pick(&mut s, 12, 15), t.0, "on a glyph");
+        assert_eq!(pick(&mut s, 17, 15), t.0, "between the glyphs: the type layer, not the one under it");
+        assert_eq!(pick(&mut s, 17, 20), bg.0, "below the text bounds");
+        // The right-click list still names only the layers with pixels under the pointer.
+        let list = s.execute("layer.pickAt", json!({"x": 17, "y": 15, "list": true})).unwrap();
+        assert_eq!(list["layers"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn auto_select_hits_typed_text_in_a_gap_between_letters() {
+        // The same through the type engine: "I I" leaves a transparent gap inside its bounds.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        let t = s.execute("type.create", json!({"text": "I   I", "size": 48, "x": 20, "y": 70})).unwrap()["layer"].as_u64().unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let Some(LayerContent::Text(tl)) = doc.layer(LayerId(t)).map(|l| &l.content) else { panic!("a type layer") };
+        let cache = tl.cache.as_ref().expect("rendered type");
+        let b = cache.content_bounds();
+        // A transparent point on the middle row inside the bounds (none: no font to render with).
+        let y = (b.y0 + b.y1) / 2;
+        let gap = (b.x0..b.x1).find(|&x| {
+            let mut px = [[0.0f32; 4]; 1];
+            cache.read_rgba_into(Rect::from_xywh(x, y, 1, 1), &mut px);
+            px[0][3] == 0.0
+        });
+        let Some(x) = gap else { return };
+        assert_eq!(layers_at(&doc, x, y), vec![bg], "no type pixels at the gap");
+        assert_eq!(s.execute("layer.pickAt", json!({"x": x, "y": y, "select": false})).unwrap()["layer"], t);
     }
 
     #[test]

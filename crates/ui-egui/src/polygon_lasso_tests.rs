@@ -344,3 +344,37 @@ fn alt_drags_draw_freehand_and_releasing_alt_keeps_the_polygon_open() {
     crate::canvas::commit_polygon(&mut app);
     assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(110, 100, 0) > 0.5);
 }
+
+#[test]
+fn shift_constrains_polygonal_lasso_segments_but_unmodified_clicks_remain_free() {
+    let mut app = polygon_app();
+    ev(&mut app, "down", 100.0, 100.0, Modifiers::NONE);
+    ev(&mut app, "up", 100.0, 100.0, Modifiers::NONE);
+    assert_eq!(app.ui.polygon, vec![[100.0, 100.0]]);
+
+    // Near a diagonal: Shift constrains to exactly 45° from the previous fixed point.
+    ev(&mut app, "down", 140.0, 120.0, Modifiers::SHIFT);
+    ev(&mut app, "up", 140.0, 120.0, Modifiers::SHIFT);
+    let diagonal = app.ui.polygon[1];
+    assert!((diagonal[0] - diagonal[1]).abs() < 1e-8, "45-degree direction: {diagonal:?}");
+    assert!((diagonal[0] - 100.0 - 40.0_f64.hypot(20.0) / 2.0_f64.sqrt()).abs() < 1e-8);
+    // Releasing Shift restores free placement rather than constraining subsequent points.
+    ev(&mut app, "down", 155.0, 175.0, Modifiers::NONE);
+    ev(&mut app, "up", 155.0, 175.0, Modifiers::NONE);
+    assert_eq!(app.ui.polygon[2], [155.0, 175.0]);
+}
+
+#[test]
+fn shift_polygonal_lasso_snap_has_all_eight_directions_and_handles_zero_length() {
+    let origin = [200.0, 150.0];
+    let directions = [[40.0, 1.0], [40.0, 25.0], [1.0, 40.0], [-40.0, 25.0], [-40.0, -1.0], [-40.0, -25.0], [-1.0, -40.0], [40.0, -25.0]];
+    for delta in directions {
+        let end = crate::canvas::constrained_polygon_point(origin, [origin[0] + delta[0], origin[1] + delta[1]]);
+        let dx = end[0] - origin[0];
+        let dy = end[1] - origin[1];
+        let angle = dy.atan2(dx) / std::f64::consts::FRAC_PI_4;
+        assert!((angle - angle.round()).abs() < 1e-9, "{delta:?} → {end:?}");
+        assert!((dx.hypot(dy) - delta[0].hypot(delta[1])).abs() < 1e-8);
+    }
+    assert_eq!(crate::canvas::constrained_polygon_point(origin, origin), origin);
+}

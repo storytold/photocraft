@@ -44,6 +44,9 @@ arc-swap = "1"
 bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25", default-features = false }
+# Baseline-JPEG decode of lossy DNG tiles (compression 34892), shared with zune-jpeg.
+zune-core = "0.5"
+zune-jpeg = "0.5"
 proptest = "1"
 eframe = { version = "0.36", default-features = false }
 egui = "0.36"

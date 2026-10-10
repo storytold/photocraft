@@ -86,10 +86,24 @@ fn adjusted(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>,
 }
 
 /// Fill (respecting selection coverage) with a straight RGBA colour.
-pub fn fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Option<&Surface>, lock_transparency: bool) {
+pub(crate) fn try_fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Option<&Surface>, lock_transparency: bool) -> crate::Result<()> {
     let fmt = s.format();
     let n = fmt.channels();
-    let mut region = s.read_region(area);
+    let mut region = crate::allocation::read_region(s, area, "filling pixels")?;
+    fill_region(&mut region, fmt, n, area, color, selection, lock_transparency);
+    s.try_write_region(area, &region)
+        .map_err(|e| crate::EngineError::Other(format!("not enough memory while writing filled pixels ({e}); the document was not changed")))
+}
+
+fn fill_region(
+    region: &mut [f32],
+    fmt: photocraft_color::PixelFormat,
+    n: usize,
+    area: Rect,
+    color: [f32; 4],
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+) {
     let w = area.width() as usize;
     for (i, px) in region.chunks_exact_mut(n).enumerate() {
         let x = area.x0 + (i % w) as i32;
@@ -112,17 +126,24 @@ pub fn fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Opt
         photocraft_raster::from_rgba_into(&fmt, o, &mut enc);
         px.copy_from_slice(&enc[..n]);
     }
-    s.write_region(area, &region);
 }
 
 /// Clear pixels (make transparent) within the selection.
-pub fn clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) {
+pub(crate) fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) -> crate::Result<()> {
     let fmt = s.format();
     let n = fmt.channels();
     if !fmt.alpha {
-        return;
+        return Ok(());
     }
-    let mut region = s.read_region(area);
+    let mut region = crate::allocation::read_region(s, area, "erasing pixels")?;
+    clear_region(&mut region, n, area, selection);
+    s.try_write_region(area, &region)
+        .map_err(|e| crate::EngineError::Other(format!("not enough memory while erasing pixels ({e}); the document was not changed")))?;
+    s.prune();
+    Ok(())
+}
+
+fn clear_region(region: &mut [f32], n: usize, area: Rect, selection: Option<&Surface>) {
     let w = area.width() as usize;
     for (i, px) in region.chunks_exact_mut(n).enumerate() {
         let k = selection.map_or(1.0, |sel| sel.sample_channel(area.x0 + (i % w) as i32, area.y0 + (i / w) as i32, 0));
@@ -132,8 +153,6 @@ pub fn clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) {
             px.fill(0.0);
         }
     }
-    s.write_region(area, &region);
-    s.prune();
 }
 
 /// Remap a surface through a pixel-coordinate mapping (used for flips/rotations).
@@ -168,5 +187,8 @@ pub fn merge_down(doc_bounds: Rect, lower: &Layer, upper: &Layer, format: photoc
     merged.id = lower.id;
     merged.blend = lower.blend;
     merged.opacity = 1.0;
+    // Merge Down replaces the lower layer, so keep its editing restrictions.
+    // In particular, a merged Background must remain opaque and position-locked.
+    merged.locks = lower.locks;
     merged
 }

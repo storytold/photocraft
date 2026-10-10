@@ -35,43 +35,53 @@ pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
 
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
 /// warp the content with alpha, then flatten back onto the default value.
-pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Surface {
+pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = s.format();
     let src = s.content_bounds();
     let mut out = Surface::with_default(fmt, &[default]);
     if src.is_empty() {
-        return out;
+        return Ok(out);
     }
     // Content-only copy (default 0 + alpha) so the "outside" is transparent during the warp.
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let mut tmp = Surface::new(with_alpha);
-    let v = s.read_region(src);
-    tmp.write_region(src, &v.iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
-    let w = warp_surface(&tmp, src, h, interp);
+    let v = crate::allocation::read_region(s, src, "transforming a mask or channel")?;
+    let mut lifted =
+        crate::allocation::filled(v.len().checked_mul(2).ok_or_else(|| bad("the mask is too large to transform"))?, 0.0, "transforming a mask or channel")?;
+    let (lifted_pairs, _) = lifted.as_chunks_mut::<2>();
+    for (g, px) in v.iter().zip(lifted_pairs) {
+        px.copy_from_slice(&[*g, 1.0]);
+    }
+    tmp.try_write_region(src, &lifted)?;
+    let w = warp_surface(&tmp, src, h, interp)?;
     // Clear the old content region, then composite the warped content over it. These are written as
     // two sparse regions rather than one dense `src ∪ warped` block: a transform that moves the
     // content far away (e.g. a huge translation) would otherwise allocate a buffer spanning both and
     // hang/OOM. `Surface` is tile-sparse, so distant regions cost only their own tiles.
-    let old: Vec<f32> = vec![default; src.width() as usize * src.height() as usize];
-    out.write_region(src, &old);
+    let old_len = (src.width() as usize).checked_mul(src.height() as usize).ok_or_else(|| bad("the mask is too large to transform"))?;
+    let old = crate::allocation::filled(old_len, default, "transforming a mask or channel")?;
+    out.try_write_region(src, &old)?;
     let b = w.content_bounds();
     if !b.is_empty() {
-        let px = w.read_region(b);
-        let flat: Vec<f32> = px.as_chunks::<2>().0.iter().map(|p| p[0] * p[1] + default * (1.0 - p[1])).collect();
-        out.write_region(b, &flat);
+        let px = crate::allocation::read_region(&w, b, "flattening a transformed mask or channel")?;
+        let mut flat = crate::allocation::filled(px.len() / 2, 0.0, "flattening a transformed mask or channel")?;
+        for (p, f) in px.as_chunks::<2>().0.iter().zip(&mut flat) {
+            *f = p[0] * p[1] + default * (1.0 - p[1]);
+        }
+        out.try_write_region(b, &flat)?;
     }
     out.prune();
-    out
+    Ok(out)
 }
 
 /// Split a single-channel surface whose outside reads as its default (a mask, a channel) by a
 /// selection: (the selected values as grey + alpha = selection, the surface with the selected
 /// values replaced by the default). `None` for surfaces that aren't a single grey channel.
-pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Option<(Surface, Surface)> {
+pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Result<Option<(Surface, Surface)>> {
     let fmt = s.format();
     if fmt.alpha || fmt.channels() != 1 {
-        return None;
+        return Ok(None);
     }
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let mut rest = s.clone();
@@ -80,43 +90,49 @@ pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Option<(Surface, Surfa
     // the moved region stays aligned with the moved pixels.
     let area = sel.content_bounds();
     if area.is_empty() {
-        return Some((lifted, rest));
+        return Ok(Some((lifted, rest)));
     }
-    let v = s.read_region(area);
+    let v = crate::allocation::read_region(s, area, "transforming a selected mask or channel")?;
     let w = area.width() as usize;
-    let mut lp = Vec::with_capacity(v.len() * 2);
-    let mut rp = Vec::with_capacity(v.len());
+    let mut lp = crate::allocation::capacity(
+        v.len().checked_mul(2).ok_or_else(|| bad("the selected mask is too large to transform"))?,
+        "transforming a selected mask or channel",
+    )?;
+    let mut rp = crate::allocation::capacity(v.len(), "transforming a selected mask or channel")?;
     for (i, g) in v.iter().enumerate() {
         let (x, y) = (area.x0 + (i % w) as i32, area.y0 + (i / w) as i32);
         let k = sel.sample_channel(x, y, 0);
         lp.extend([*g, k]);
         rp.push(g * (1.0 - k) + default * k);
     }
-    lifted.write_region(area, &lp);
+    lifted.try_write_region(area, &lp)?;
     lifted.prune();
-    rest.write_region(area, &rp);
+    rest.try_write_region(area, &rp)?;
     rest.prune();
-    Some((lifted, rest))
+    Ok(Some((lifted, rest)))
 }
 
 /// [`warp_gray`] limited to a selection: only the selected values move (the vacated area reads as
 /// the default), as the selected pixels of the layer do.
-pub(crate) fn warp_gray_selected(s: &Surface, sel: &Surface, h: &Homography, interp: Interp) -> Surface {
-    let Some((lifted, mut out)) = split_gray_selected(s, sel) else { return warp_gray(s, h, interp) };
+pub(crate) fn warp_gray_selected(s: &Surface, sel: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+    let Some((lifted, mut out)) = split_gray_selected(s, sel)? else { return warp_gray(s, h, interp) };
     let src = lifted.content_bounds();
     if src.is_empty() {
-        return out;
+        return Ok(out);
     }
-    let w = warp_surface(&lifted, src, h, interp);
+    let w = warp_surface(&lifted, src, h, interp)?;
     let b = w.content_bounds();
     if !b.is_empty() {
-        let moved = w.read_region(b);
-        let under = out.read_region(b);
-        let flat: Vec<f32> = moved.as_chunks::<2>().0.iter().zip(&under).map(|(p, u)| p[0] * p[1] + u * (1.0 - p[1])).collect();
-        out.write_region(b, &flat);
+        let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
+        let under = crate::allocation::read_region(&out, b, "compositing transformed mask pixels")?;
+        let mut flat = crate::allocation::filled(under.len(), 0.0, "compositing transformed mask pixels")?;
+        for (i, (p, u)) in moved.as_chunks::<2>().0.iter().zip(&under).enumerate() {
+            flat[i] = p[0] * p[1] + u * (1.0 - p[1]);
+        }
+        out.try_write_region(b, &flat)?;
     }
     out.prune();
-    out
+    Ok(out)
 }
 
 /// The surface Free Transform moves by itself when the params target one (`"target"`): an
@@ -167,6 +183,7 @@ pub(crate) fn group_locks(doc: &Document, id: LayerId) -> Locks {
 
 /// `group` holds the locks `l` inherits from the groups around it ([`group_locks`]).
 pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, h: &Homography, affine: Option<Affine>, interp: Interp) -> Result<()> {
+    crate::allocation::checkpoint("transforming pixels")?;
     // Photoshop turns the Background into a normal layer before transforming it.
     if l.locks.position && l.name == "Background" {
         l.locks.position = false;
@@ -209,10 +226,10 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
                 let src = c.content_bounds();
-                *c = warp_surface(c, src, h, interp);
+                *c = warp_surface(c, src, h, interp)?;
             }
             if let Some(m) = &mut sm.filter_mask {
-                m.surface = warp_gray(&m.surface, h, interp);
+                m.surface = warp_gray(&m.surface, h, interp)?;
             }
         }
         _ => {
@@ -221,13 +238,13 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
                 *surf = match doc_sel {
                     // Only the selected pixels move: lift them, clear them, warp and paste back.
                     Some(sel) => {
-                        let (lifted, mut rest) = split_selected(surf, sel);
-                        let moved = warp_surface(&lifted, src, h, interp);
+                        let (lifted, mut rest) = split_selected(surf, sel)?;
+                        let moved = warp_surface(&lifted, src, h, interp)?;
                         composite_over(&mut rest, &moved);
                         rest.prune();
                         rest
                     }
-                    None => warp_surface(surf, src, h, interp),
+                    None => warp_surface(surf, src, h, interp)?,
                 };
             }
         }
@@ -236,8 +253,8 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
         && m.linked
     {
         m.surface = match mask_sel {
-            Some(sel) => warp_gray_selected(&m.surface, sel, h, interp),
-            None => warp_gray(&m.surface, h, interp),
+            Some(sel) => warp_gray_selected(&m.surface, sel, h, interp)?,
+            None => warp_gray(&m.surface, h, interp)?,
         };
     }
     if let Some(vm) = l.vector_mask.as_mut()
@@ -250,18 +267,19 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
 }
 
 /// Split a layer surface by a selection: (selected pixels, everything else), both with alpha.
-pub fn split_selected(surf: &Surface, sel: &Surface) -> (Surface, Surface) {
+pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface)> {
     let fmt = surf.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let mut lifted = Surface::new(with_alpha);
-    let mut rest = surf.convert(with_alpha);
+    let mut rest = surf.try_convert(with_alpha)?;
     let src = surf.content_bounds();
     if src.is_empty() {
-        return (lifted, rest);
+        return Ok((lifted, rest));
     }
     let n = with_alpha.channels();
-    let px = rest.read_region(src);
-    let mut lp = px.clone();
+    let px = crate::allocation::read_region(&rest, src, "transforming selected pixels")?;
+    let mut lp = crate::allocation::filled(px.len(), 0.0, "transforming selected pixels")?;
+    lp.copy_from_slice(&px);
     let mut rp = px;
     let w = src.width() as usize;
     // A pixel the selection fully lifts out is reset to the surface's (transparent) default;
@@ -280,10 +298,10 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> (Surface, Surface) {
             r.iter_mut().zip(&rest_clear).for_each(|(d, c)| *d = *c);
         }
     }
-    lifted.write_region(src, &lp);
+    lifted.try_write_region(src, &lp)?;
     lifted.prune();
-    rest.write_region(src, &rp);
-    (lifted, rest)
+    rest.try_write_region(src, &rp)?;
+    Ok((lifted, rest))
 }
 
 pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) {
@@ -390,11 +408,11 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
             // A targeted unlinked mask, alpha channel or Quick Mask transforms by itself.
             let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
             *surf = match &sel {
-                Some(sel) => warp_gray_selected(surf, sel, &h, interp),
-                None => warp_gray(surf, &h, interp),
+                Some(sel) => warp_gray_selected(surf, sel, &h, interp)?,
+                None => warp_gray(surf, &h, interp)?,
             };
             if let Some(sel) = &doc.selection {
-                doc.selection = Some(warp_gray(sel, &h, Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+                doc.selection = Some(warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
             }
             return Ok(());
         }
@@ -410,7 +428,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
-            doc.selection = Some(warp_gray(sel, &h, Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+            doc.selection = Some(warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
         }
         Ok(())
     })?;
@@ -690,6 +708,6 @@ mod tests {
         let s = Surface::new(PixelFormat::RGBA8);
         let mut sel = Surface::new(PixelFormat::GRAY8);
         sel.fill_rect(Rect::new(0, 0, 4, 4), &[1.0]);
-        assert!(split_gray_selected(&s, &sel).is_none());
+        assert!(matches!(split_gray_selected(&s, &sel), Ok(None)));
     }
 }

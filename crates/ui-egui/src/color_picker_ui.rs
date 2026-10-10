@@ -666,6 +666,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
     }
+    if target == "pasteboard" {
+        // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
+        return app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}}));
+    }
     let r = app.run("tools.setColors", json!({ target: color }))?;
     if target == "foreground" {
         crate::type_tool::foreground_changed(app);

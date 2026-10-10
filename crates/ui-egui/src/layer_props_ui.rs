@@ -155,6 +155,17 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 }
             }
         });
+        // The engine already supports equal-gap distribution in both axes. Make those
+        // existing commands discoverable here as well as through Layer > Distribute (#2349).
+        // Three or more selected layers are required; the engine remains authoritative.
+        ui.horizontal_wrapped(|ui| {
+            for (kind, text) in [("horizontally", tl!("Horizontally")), ("vertically", tl!("Vertically"))] {
+                let id = format!("layer.distribute.{kind}");
+                if ui.add_enabled(app.session.is_enabled(&id), egui::Button::new(text)).clicked() {
+                    run.push((id, json!({})));
+                }
+            }
+        });
         ui.add_space(ROW_GAP);
     }
     for (id, p) in run.drain(..) {

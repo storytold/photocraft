@@ -218,7 +218,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::fill_cmds::blend_color_mask(surf, area, color, &band, mode, opacity, preserve || lock);
+            crate::fill_cmds::blend_color_mask(surf, area, color, &band, mode, opacity, preserve || lock)?;
             surf.prune();
         }
         Ok(())
@@ -430,7 +430,7 @@ fn layer_from_background(s: &mut Session) -> Result<Value> {
     Ok(json!({"layer": id.0}))
 }
 
-fn unlock_background(l: &mut Layer) {
+pub(crate) fn unlock_background(l: &mut Layer) {
     l.name = "Layer 0".into();
     l.locks.transparency = false;
     l.locks.position = false;
