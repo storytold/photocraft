@@ -1,0 +1,4 @@
+These original PhotoCraft UI screenshots contain only a synthetic blank document.
+Copyright PhotoCraft contributors.
+Licensed under MIT OR Apache-2.0, like PhotoCraft itself.
+See the repository LICENSE-MIT and LICENSE-APACHE for the full license terms.
