@@ -1121,121 +1121,125 @@ fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
     }
 }
 
-fn theme_preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
-    let p = Tokens::for_kind(kind);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 108.0), Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, 3.0, p.dock);
-    let bar = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 16.0));
-    painter.rect_filled(bar, 0.0, p.chrome);
-    for (x, w) in [(8.0, 18.0), (31.0, 13.0), (49.0, 16.0), (70.0, 12.0)] {
-        painter.rect_filled(egui::Rect::from_min_size(bar.min + vec2(x, 6.0), vec2(w, 3.0)), 1.0, p.text_dim);
-    }
-    let tools = egui::Rect::from_min_max(bar.left_bottom(), egui::pos2(rect.left() + 23.0, rect.bottom()));
-    painter.rect_filled(tools, 0.0, p.chrome);
-    for y in [24.0, 39.0, 54.0, 69.0, 84.0] {
-        // The first tool is the active one.
-        let color = if y == 24.0 { p.accent } else { p.icon };
-        painter.rect_filled(egui::Rect::from_min_size(rect.min + vec2(7.0, y), vec2(9.0, 9.0)), 2.0, color);
-    }
-    let dock = egui::Rect::from_min_max(egui::pos2(rect.right() - 75.0, bar.bottom()), rect.max);
-    painter.rect_filled(dock, 0.0, p.dock);
-    painter.rect_filled(egui::Rect::from_min_size(dock.min, vec2(dock.width(), 12.0)), 0.0, p.tab_strip);
-    painter.rect_filled(egui::Rect::from_min_size(dock.min + vec2(6.0, 4.0), vec2(31.0, 3.0)), 1.0, p.text_dim);
-    for y in [36.0, 55.0, 74.0] {
-        let row = egui::Rect::from_min_size(rect.min + vec2(rect.width() - 71.0, y), vec2(67.0, 16.0));
-        // The middle row is the selected layer.
-        let selected = y == 55.0;
-        painter.rect_filled(row, 1.0, if selected { p.accent } else { p.card });
-        painter.rect_filled(egui::Rect::from_min_size(row.min + vec2(4.0, 3.0), vec2(13.0, 10.0)), 1.0, p.canvas);
-        let label = if selected { egui::Color32::from_white_alpha(210) } else { p.text_dim };
-        painter.rect_filled(egui::Rect::from_min_size(row.min + vec2(22.0, 6.0), vec2(35.0, 3.0)), 1.0, label);
-    }
-    let canvas = egui::Rect::from_min_max(egui::pos2(tools.right(), bar.bottom()), egui::pos2(dock.left(), rect.bottom()));
-    painter.rect_filled(canvas, 0.0, p.canvas);
-    let art = canvas.shrink2(vec2(15.0, 13.0));
-    painter.rect_filled(art, 0.0, p.card);
-    painter.rect_stroke(art, 0.0, egui::Stroke::new(1.0, p.card_border), egui::StrokeKind::Inside);
-}
-
-fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, options: &[(&str, ThemeKind)], width: f32) {
-    let Some((_, first_kind)) = options.first() else { return };
+/// One theme as a Color Theme swatch: its panel colour under a chrome strip with an accent dot,
+/// outlined when chosen. The name is the tooltip and the accessible label.
+fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut String) {
     let t = Tokens::get(ui.ctx());
-    egui::Frame::new()
-        .fill(t.card)
-        .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.card_border }))
-        .corner_radius(t.radius)
-        .inner_margin(10.0)
-        .show(ui, |ui| {
-            ui.set_width(width - 20.0);
-            // Room for the longer list (five dark themes), so both cards line up.
-            ui.set_min_height(298.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!(title)).strong().color(t.text));
-                if active {
-                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-                }
-            });
-            ui.add_space(5.0);
-            let preview = options.iter().find(|(id, _)| *id == selected.as_str()).map_or(*first_kind, |(_, kind)| *kind);
-            theme_preview(ui, preview, width - 20.0);
-            ui.add_space(6.0);
-            for (id, _) in options {
-                let label = choice_label(id);
-                ui.radio_value(selected, (*id).to_string(), tl!(&label));
-            }
-        });
+    let p = Tokens::for_kind(kind);
+    let label = tl!(&choice_label(id)).to_string();
+    let on = selected.as_str() == id;
+    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 26.0), Sense::click());
+    let painter = ui.painter();
+    let inner = rect.shrink(3.0);
+    painter.rect_filled(inner, 2.0, p.dock);
+    painter.rect_filled(egui::Rect::from_min_size(inner.min, vec2(inner.width(), 5.0)), 0.0, p.chrome);
+    painter.circle_filled(inner.right_bottom() - vec2(6.0, 6.0), 2.5, p.accent);
+    let stroke = if on {
+        egui::Stroke::new(2.0, t.accent)
+    } else if resp.hovered() {
+        egui::Stroke::new(1.0, t.text_dim)
+    } else {
+        egui::Stroke::new(1.0, t.card_border)
+    };
+    painter.rect_stroke(rect.shrink(1.0), 3.0, stroke, egui::StrokeKind::Inside);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, &label));
+    if resp.on_hover_text(&label).clicked() {
+        *selected = id.to_string();
+    }
 }
 
+/// A grid row of theme swatches, marked Active when the appearance mode shows this family.
+fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, options: &[(&str, ThemeKind)]) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(tl!(title)).color(t.text_dim));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (id, kind) in options {
+            theme_swatch(ui, *kind, id, selected);
+        }
+        if active {
+            ui.add_space(6.0);
+            ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+        }
+    });
+    ui.end_row();
+}
+
+/// Appearance Mode and the light and dark Color Theme swatches, as rows of the Appearance grid.
 fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Appearance")).strong().color(t.text));
     let mut mode = obj.get("appearanceMode").and_then(Value::as_str).unwrap_or("auto").to_string();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
-        let choices: [(String, &str); 3] = [("auto".into(), tl!("Sync with system")), ("dark".into(), tl!("Dark")), ("light".into(), tl!("Light"))];
-        let pairs: Vec<(String, &str)> = choices.iter().map(|(id, label)| (id.clone(), *label)).collect();
-        crate::widgets::dropdown(ui, "appearance-mode", &mut mode, &pairs, 190.0);
-    });
-    obj.insert("appearanceMode".into(), json!(mode));
-    ui.add_space(8.0);
+    ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
+    let choices: [(String, &str); 3] = [("auto".into(), tl!("Sync with system")), ("dark".into(), tl!("Dark")), ("light".into(), tl!("Light"))];
+    let pairs: Vec<(String, &str)> = choices.iter().map(|(id, label)| (id.clone(), *label)).collect();
+    crate::widgets::dropdown(ui, "appearance-mode", &mut mode, &pairs, 220.0);
+    ui.end_row();
     let light_active = mode == "light" || (mode == "auto" && system == Some(egui::Theme::Light));
-    let width = ((ui.available_width() - 10.0) / 2.0).max(190.0);
+    obj.insert("appearanceMode".into(), json!(mode));
     let mut light = obj.get("lightTheme").and_then(Value::as_str).unwrap_or("studioLight").to_string();
     let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
-    ui.horizontal_top(|ui| {
-        ui.set_min_width(width * 2.0 + 10.0);
-        ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            theme_card(
-                ui,
-                "Light Theme",
-                light_active,
-                &mut light,
-                &[("studioLight", ThemeKind::StudioLight), ("classic", ThemeKind::Classic), ("adwaita", ThemeKind::Adwaita)],
-                width,
-            );
-        });
-        ui.add_space(10.0);
-        ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            theme_card(
-                ui,
-                "Dark Theme",
-                !light_active,
-                &mut dark,
-                &[
-                    ("proMedium", ThemeKind::ProMedium),
-                    ("pro", ThemeKind::Pro),
-                    ("studio", ThemeKind::Studio),
-                    ("solarizedDark", ThemeKind::SolarizedDark),
-                    ("adwaitaDark", ThemeKind::AdwaitaDark),
-                ],
-                width,
-            );
-        });
-    });
+    theme_row(
+        ui,
+        "Light Theme",
+        light_active,
+        &mut light,
+        &[("studioLight", ThemeKind::StudioLight), ("classic", ThemeKind::Classic), ("adwaita", ThemeKind::Adwaita)],
+    );
+    theme_row(
+        ui,
+        "Dark Theme",
+        !light_active,
+        &mut dark,
+        &[
+            ("proMedium", ThemeKind::ProMedium),
+            ("pro", ThemeKind::Pro),
+            ("studio", ThemeKind::Studio),
+            ("solarizedDark", ThemeKind::SolarizedDark),
+            ("adwaitaDark", ThemeKind::AdwaitaDark),
+        ],
+    );
     obj.insert("lightTheme".into(), json!(light));
     obj.insert("darkTheme".into(), json!(dark));
-    ui.add_space(12.0);
+}
+
+/// A titled, outlined group of settings (Photoshop's Interface page has Appearance,
+/// Presentation and Options).
+fn pref_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::new().stroke(egui::Stroke::new(1.0, t.card_border)).corner_radius(t.radius).inner_margin(10.0).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(tl!(title)).strong().color(t.text));
+        ui.add_space(4.0);
+        add(ui);
+    });
+    ui.add_space(8.0);
+}
+
+/// Preferences › Interface laid out like Photoshop's: the theme and canvas settings, then UI
+/// language, font size and scaling, then everything else. Compact enough that the language
+/// shows without scrolling in a small window (#2532).
+fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>) {
+    const APPEARANCE: [&str; 3] = ["canvasColor", "canvasCustomColor", "canvasBorder"];
+    const PRESENTATION: [&str; 3] = ["language", "uiFontSize", "uiScale"];
+    // In Photoshop's order, not the stored one.
+    let pick = |names: &[&str]| names.iter().filter(|n| keys.iter().any(|k| k == *n)).map(|n| n.to_string()).collect::<Vec<_>>();
+    let rest = keys.iter().filter(|k| !APPEARANCE.contains(&k.as_str()) && !PRESENTATION.contains(&k.as_str()));
+    // Checkboxes line up at the left edge, as in Photoshop; the other options keep a label column.
+    let (checks, other): (Vec<String>, Vec<String>) = rest.cloned().partition(|k| obj.get(k).is_some_and(Value::is_boolean));
+    let grid = |id: &str| egui::Grid::new(("prefs-grid", id.to_string())).num_columns(2).spacing([14.0, 7.0]).min_col_width(150.0);
+    pref_group(ui, "Appearance", |ui| {
+        grid("interface-appearance").show(ui, |ui| {
+            appearance_rows(ui, obj, system);
+            field_rows(ui, "interface", obj, pick(&APPEARANCE), lang);
+        });
+    });
+    pref_group(ui, "Presentation", |ui| {
+        grid("interface-presentation").show(ui, |ui| field_rows(ui, "interface", obj, pick(&PRESENTATION), lang));
+    });
+    pref_group(ui, "Options", |ui| {
+        egui::Grid::new("prefs-grid-interface-checks").num_columns(2).spacing([0.0, 7.0]).show(ui, |ui| field_rows(ui, "interface", obj, checks, lang));
+        grid("interface-options").show(ui, |ui| field_rows(ui, "interface", obj, other, lang));
+    });
 }
 
 /// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
@@ -1250,131 +1254,135 @@ fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
 /// number fields with the preference's range, text fields.
 fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>) {
-    let t = Tokens::get(ui.ctx());
+    let mut keys: Vec<String> = order.iter().filter(|k| obj.contains_key(*k)).cloned().collect();
+    keys.extend(obj.keys().filter(|k| !order.contains(k)).cloned());
     if section == "interface" {
-        appearance_rows(ui, obj, system);
+        interface_groups(ui, obj, &keys, lang, system);
+        return;
     }
     if section == "performance" {
         rendering_mode_row(ui, obj);
     }
-    let mut keys: Vec<String> = order.iter().filter(|k| obj.contains_key(*k)).cloned().collect();
-    keys.extend(obj.keys().filter(|k| !order.contains(k)).cloned());
-    egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| {
-        for k in keys {
-            let path = format!("{section}.{k}");
-            // Settings nothing reads yet stay out of the dialog (issue #204); their stored values
-            // pass through untouched.
-            if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme"))
-                || prefs::is_hidden(&path)
-                || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
-                || (section == "export" && !export_field_visible(obj, &k))
-            {
-                continue;
-            }
-            let v = obj.get(&k).cloned().unwrap_or(Value::Null);
-            let human = humanize(&k);
-            let label = tl!(&human).to_string();
-            match &v {
-                Value::Bool(b) => {
-                    ui.label("");
-                    let mut b = *b;
-                    if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
-                        ui.vertical(|ui| {
-                            crate::widgets::checkbox(ui, &mut b, &label);
-                            ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
-                        });
-                    } else {
-                        crate::widgets::checkbox(ui, &mut b, &label);
-                    }
-                    obj.insert(k, json!(b));
-                }
-                Value::String(s) if path == "interface.language" => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
-                    pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
-                    let mut cur = s.clone();
-                    crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
-                    obj.insert(k, json!(cur));
-                }
-                Value::String(s) if prefs::choices(&path).is_some() => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    let opts = prefs::choices(&path).unwrap_or(&[]);
-                    let labels: Vec<String> = opts.iter().map(|o| choice_label(o)).collect();
-                    let pairs: Vec<(String, &str)> = opts.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
-                    let mut cur = s.clone();
-                    crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
-                    obj.insert(k, json!(cur));
-                }
-                Value::String(s) if prefs::is_color(&path) => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    let c = prefs::parse_hex(s).unwrap_or([128, 128, 128]);
-                    let mut rgb = c;
-                    ui.horizontal(|ui| {
-                        // PhotoCraft's Color Picker, as everywhere else (#2144).
-                        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
-                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(PICK_ID), (path.clone(), label.clone())));
-                        }
-                        hex_field(ui, &path, &mut rgb);
-                    });
-                    obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
-                    let _ = color_of(s);
-                }
-                Value::String(s) => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    let mut s = s.clone();
-                    ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0));
-                    obj.insert(k, json!(s));
-                }
-                Value::Number(n) => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
-                    if n.is_u64() || n.is_i64() {
-                        let mut x = n.as_i64().unwrap_or(0);
-                        ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num));
-                        obj.insert(k, json!(x));
-                    } else {
-                        let mut x = n.as_f64().unwrap_or(0.0);
-                        ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num));
-                        obj.insert(k, json!(x));
-                    }
-                }
-                Value::Array(_) if path == "tools.pressureCurve" => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    if let Some(next) = crate::pressure_curve_ui::editor(ui, &v) {
-                        obj.insert(k, next);
-                    }
-                }
-                Value::Array(items) if k == "disks" => {
-                    ui.label(RichText::new(tl!("Scratch disks")).color(t.text_dim));
-                    let mut items = items.clone();
-                    ui.vertical(|ui| {
-                        for d in &mut items {
-                            ui.horizontal(|ui| {
-                                let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-                                let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
-                                crate::widgets::checkbox(ui, &mut on, "");
-                                ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0));
-                                *d = json!({"enabled": on, "path": path});
-                            });
-                        }
-                        if ui.small_button(tl!("Add disk")).clicked() {
-                            items.push(json!({"enabled": true, "path": ""}));
-                        }
-                    });
-                    obj.insert(k, Value::Array(items));
-                }
-                Value::Array(items) => {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                    ui.label(RichText::new(crate::i18n::trn(lang, items.len() as u64, "{n} item", "{n} items")).color(t.text_faint));
-                    if !items.is_empty() && ui.small_button(tl!("Clear")).clicked() {
-                        obj.insert(k, json!([]));
-                    }
-                }
-                _ => continue,
-            }
-            ui.end_row();
+    egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
+}
+
+/// One grid row per setting in `keys`, skipping those drawn elsewhere or not implemented yet.
+fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, keys: Vec<String>, lang: crate::i18n::Lang) {
+    let t = Tokens::get(ui.ctx());
+    for k in keys {
+        let path = format!("{section}.{k}");
+        // Settings nothing reads yet stay out of the dialog (issue #204); their stored values
+        // pass through untouched.
+        if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme"))
+            || prefs::is_hidden(&path)
+            || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
+            || (section == "export" && !export_field_visible(obj, &k))
+        {
+            continue;
         }
-    });
+        let v = obj.get(&k).cloned().unwrap_or(Value::Null);
+        let human = humanize(&k);
+        let label = tl!(&human).to_string();
+        match &v {
+            Value::Bool(b) => {
+                ui.label("");
+                let mut b = *b;
+                if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
+                    ui.vertical(|ui| {
+                        crate::widgets::checkbox(ui, &mut b, &label);
+                        ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                    });
+                } else {
+                    crate::widgets::checkbox(ui, &mut b, &label);
+                }
+                obj.insert(k, json!(b));
+            }
+            Value::String(s) if path == "interface.language" => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
+                pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
+                let mut cur = s.clone();
+                crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
+                obj.insert(k, json!(cur));
+            }
+            Value::String(s) if prefs::choices(&path).is_some() => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let opts = prefs::choices(&path).unwrap_or(&[]);
+                let labels: Vec<String> = opts.iter().map(|o| choice_label(o)).collect();
+                let pairs: Vec<(String, &str)> = opts.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
+                let mut cur = s.clone();
+                crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
+                obj.insert(k, json!(cur));
+            }
+            Value::String(s) if prefs::is_color(&path) => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let c = prefs::parse_hex(s).unwrap_or([128, 128, 128]);
+                let mut rgb = c;
+                ui.horizontal(|ui| {
+                    // PhotoCraft's Color Picker, as everywhere else (#2144).
+                    if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(PICK_ID), (path.clone(), label.clone())));
+                    }
+                    hex_field(ui, &path, &mut rgb);
+                });
+                obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
+                let _ = color_of(s);
+            }
+            Value::String(s) => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let mut s = s.clone();
+                ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0));
+                obj.insert(k, json!(s));
+            }
+            Value::Number(n) => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
+                if n.is_u64() || n.is_i64() {
+                    let mut x = n.as_i64().unwrap_or(0);
+                    ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num));
+                    obj.insert(k, json!(x));
+                } else {
+                    let mut x = n.as_f64().unwrap_or(0.0);
+                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num));
+                    obj.insert(k, json!(x));
+                }
+            }
+            Value::Array(_) if path == "tools.pressureCurve" => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                if let Some(next) = crate::pressure_curve_ui::editor(ui, &v) {
+                    obj.insert(k, next);
+                }
+            }
+            Value::Array(items) if k == "disks" => {
+                ui.label(RichText::new(tl!("Scratch disks")).color(t.text_dim));
+                let mut items = items.clone();
+                ui.vertical(|ui| {
+                    for d in &mut items {
+                        ui.horizontal(|ui| {
+                            let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+                            let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+                            crate::widgets::checkbox(ui, &mut on, "");
+                            ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0));
+                            *d = json!({"enabled": on, "path": path});
+                        });
+                    }
+                    if ui.small_button(tl!("Add disk")).clicked() {
+                        items.push(json!({"enabled": true, "path": ""}));
+                    }
+                });
+                obj.insert(k, Value::Array(items));
+            }
+            Value::Array(items) => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                ui.label(RichText::new(crate::i18n::trn(lang, items.len() as u64, "{n} item", "{n} items")).color(t.text_faint));
+                if !items.is_empty() && ui.small_button(tl!("Clear")).clicked() {
+                    obj.insert(k, json!([]));
+                }
+            }
+            _ => continue,
+        }
+        ui.end_row();
+    }
 }
 
 /// Keyboard Shortcuts and Menus: a searchable list of commands by menu with editable shortcuts
@@ -2025,6 +2033,29 @@ mod tests {
             assert_eq!(item("window.theme.system").checked, Some(false));
             assert_eq!(stored(&store)["interface"]["appearanceMode"], "dark");
             assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Adwaita);
+        }
+    }
+
+    #[test]
+    fn preferences_interface_shows_language_without_scrolling() {
+        // #2532: in a small window the theme cards filled the page and Language sat out of view
+        // below them. Like Photoshop, Presentation follows Appearance and both fit.
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, _) = app_with_store();
+        app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1000.0, 750.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let language = h.get_by_label("Language").rect();
+        let dark = h.get_by_label("Dark Theme").rect();
+        let ok = h.get_by_label("OK").rect();
+        assert!(dark.bottom() < language.top(), "Presentation {language:?} follows the theme swatches {dark:?}");
+        assert!(language.bottom() < ok.top() - 20.0, "Language {language:?} must show above the buttons {ok:?} without scrolling");
+        for theme in ["Studio light", "Classic", "Pro medium", "Adwaita dark"] {
+            assert!(h.query_by_label(theme).is_some(), "missing theme swatch {theme}");
         }
     }
 
