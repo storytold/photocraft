@@ -1763,6 +1763,9 @@ mod tests {
         let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
         assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
         assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
+        // A flat export is a copy: the document keeps its name and file (#2579).
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("warn.psd", Some("in/warn.psd")));
         // Without `path`, only a layered file is written back, like File › Save (#416).
         call(&mut app, &ctx, "app.open", json!({"path": "in/flat.jpg"}));
         let r = call(&mut app, &ctx, "app.save", json!({}));
