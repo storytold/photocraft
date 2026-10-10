@@ -54,6 +54,12 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
     BrushSettings { color: current.color, background: current.background, erase: current.erase, seed: current.seed, ..brush.clone() }
 }
 
+/// A tool's brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
+/// smoothing, with the session's own fields of `current`.
+pub(crate) fn fresh_brush(current: &BrushSettings) -> BrushSettings {
+    session_fields(current, &BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() })
+}
+
 /// Photoshop's 10 % stroke smoothing, what a tool's brush starts at.
 fn first_smoothing() -> photocraft_engine::paint::brush::Smoothing {
     photocraft_engine::paint::brush::Smoothing { amount: 0.1, ..Default::default() }

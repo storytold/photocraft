@@ -677,6 +677,9 @@
 	New Workspace…	Nowy obszar roboczy…
 	Delete Workspace…	Usuń obszar roboczy…
 	Reset Workspace	Resetuj obszar roboczy
+	Reset Tool	Resetuj narzędzie
+	Reset All Tools	Resetuj wszystkie narzędzia
+	Reset all tools to their default settings?	Przywrócić domyślne ustawienia wszystkich narzędzi?
 	Lock Workspace	Zablokuj obszar roboczy
 	Theme	Motyw
 	Pro Theme	Motyw Pro

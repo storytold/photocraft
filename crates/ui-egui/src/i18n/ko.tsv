@@ -651,6 +651,9 @@
 	New Workspace…	새 작업 영역…
 	Delete Workspace…	작업 영역 삭제…
 	Reset Workspace	작업 영역 초기화
+	Reset Tool	도구 초기화
+	Reset All Tools	모든 도구 초기화
+	Reset all tools to their default settings?	모든 도구를 기본 설정으로 초기화하시겠습니까?
 	Lock Workspace	작업 영역 잠금
 	Theme	테마
 	Pro Theme	프로 테마

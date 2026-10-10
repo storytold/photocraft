@@ -2833,6 +2833,9 @@
 	Reset Transform	Επαναφορά μετασχηματισμού
 	Reset View	Επαναφορά προβολής
 	Reset Workspace	Επαναφορά χώρου εργασίας
+	Reset Tool	Επαναφορά εργαλείου
+	Reset All Tools	Επαναφορά όλων των εργαλείων
+	Reset all tools to their default settings?	Επαναφορά όλων των εργαλείων στις προεπιλεγμένες ρυθμίσεις τους;
 	Reset to defaults	Επαναφορά προεπιλογών
 	Resize image during place	Αλλαγή μεγέθους εικόνας κατά την τοποθέτηση
 	Resolution:	Ανάλυση:

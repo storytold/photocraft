@@ -683,6 +683,9 @@
 	New Workspace…	新增工作區…
 	Delete Workspace…	刪除工作區…
 	Reset Workspace	重設工作區
+	Reset Tool	重設工具
+	Reset All Tools	重設所有工具
+	Reset all tools to their default settings?	要將所有工具重設為預設設定嗎？
 	Lock Workspace	鎖定工作區
 	Theme	主題
 	Pro Theme	專業主題
