@@ -79,7 +79,7 @@ pub fn shell_save_command(id: &str) -> bool {
 }
 
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
-/// them as unsupported instead of silently dropping them.
+/// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
     matches!(id, "view.fitOnScreen" | "view.actualPixels" | "view.zoomIn" | "view.zoomOut")
 }
