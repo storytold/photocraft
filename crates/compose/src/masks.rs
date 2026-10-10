@@ -14,7 +14,10 @@ use photocraft_doc::Layer;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
-const FORMAT: PixelFormat = PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::F32, alpha: false };
+// A U16 mask keeps substantially smaller cached tiles than F32 while adding at most
+// 1/65535 quantization error. Mask values are normalized coverage, so this is finer than
+// the final 8-bit display/composite precision.
+const FORMAT: PixelFormat = PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::U16, alpha: false };
 
 struct CacheEntry {
     surface: Surface,
@@ -81,9 +84,9 @@ fn cache() -> &'static Mutex<Cache> {
 /// Entries kept (least recently used dropped first).
 const CAPACITY: usize = 64;
 
-/// Accounted pixel-byte limit of the combined-mask cache. One 36 MP float input and result
-/// fit; larger individual results remain usable but are not retained in the cache.
-pub const CACHE_BUDGET: usize = 512 << 20;
+/// Accounted pixel-byte limit of the combined-mask cache. Five 50 MP U8 input/U16 result pairs
+/// fit, while the hard cap still bounds retention for larger documents or more active masks.
+pub const CACHE_BUDGET: usize = 768 << 20;
 
 enum CachedMask {
     Hit(Surface),
@@ -185,10 +188,79 @@ pub fn has_feather(layer: &Layer) -> bool {
         || layer.vector_mask.as_ref().is_some_and(|v| v.enabled && feather_sigma(v.feather) > 0.0)
 }
 
+/// Apply one of the three box passes to a single line. `scratch` preserves the input while
+/// the sliding sum writes the output, matching the previous sequential implementation exactly.
+fn blur_line(line: &mut [f32], scratch: &mut [f32], r: usize) {
+    if line.is_empty() {
+        return;
+    }
+    let Ok(radius) = isize::try_from(r) else { return };
+    scratch.copy_from_slice(line);
+    let get = |i: isize| scratch[i.clamp(0, scratch.len() as isize - 1) as usize];
+    let mut acc: f32 = (-radius..=radius).map(get).sum();
+    let n = (2 * r + 1) as f32;
+    for (i, dst) in line.iter_mut().enumerate() {
+        *dst = acc / n;
+        let i = i as isize;
+        acc += get(i + radius + 1) - get(i - radius);
+    }
+}
+
+/// Apply three clamped box passes to independent contiguous rows. Scoped OS threads are used
+/// instead of Rayon because mask construction can happen inside a Rayon tile job; nested Rayon
+/// work here can deadlock when every worker waits on the same OnceLock (#276).
+fn blur_rows_chunk(v: &mut [f32], w: usize, r: usize) {
+    let mut scratch = vec![0.0; w];
+    for row in v.chunks_mut(w) {
+        for _ in 0..3 {
+            blur_line(row, &mut scratch, r);
+        }
+    }
+}
+
+fn blur_rows(v: &mut [f32], w: usize, r: usize) {
+    if w == 0 || v.is_empty() {
+        return;
+    }
+    let h = v.len() / w;
+    let threads = if cfg!(target_arch = "wasm32") || v.len() < 1 << 16 {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 16).min(h.max(1))
+    };
+    if threads == 1 {
+        blur_rows_chunk(v, w, r);
+        return;
+    }
+    let rows_per_worker = h.div_ceil(threads);
+    let chunk_len = rows_per_worker.saturating_mul(w);
+    std::thread::scope(|scope| {
+        for chunk in v.chunks_mut(chunk_len) {
+            scope.spawn(move || blur_rows_chunk(chunk, w, r));
+        }
+    });
+}
+
+/// Cache-friendly blocked transpose. It makes the vertical blur contiguous without a Rayon job
+/// or unsafe disjoint-column access; the temporary is released before the next mask is built.
+fn transpose_into(v: &[f32], out: &mut [f32], w: usize, h: usize) {
+    const BLOCK: usize = 32;
+    for by in (0..h).step_by(BLOCK) {
+        for bx in (0..w).step_by(BLOCK) {
+            for y in by..(by + BLOCK).min(h) {
+                for x in bx..(bx + BLOCK).min(w) {
+                    out[x * h + y] = v[y * w + x];
+                }
+            }
+        }
+    }
+}
+
 /// Approximate Gaussian blur of a `w`×`h` plane: three box passes per axis (edges clamp, which
-/// is exact here since the planes extend into constant mask regions).
+/// is exact here since the planes extend into constant mask regions). The axes are processed in
+/// parallel on bounded OS threads, preserving each line's floating-point operation order.
 fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
-    if sigma <= 0.0 || w == 0 || h == 0 {
+    if sigma <= 0.0 || w == 0 || h == 0 || v.len() != w.saturating_mul(h) {
         return;
     }
     // Box widths whose three-pass variance matches sigma² (Wells 1986 / Kovesi).
@@ -197,24 +269,48 @@ fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
     if r == 0 {
         return;
     }
+    // Reserve before modifying the input so allocation failure can use the sequential fallback
+    // without leaving a half-blurred mask.
+    let mut transposed = Vec::new();
+    if transposed.try_reserve_exact(v.len()).is_err() {
+        gaussian_sequential(v, w, h, r);
+        return;
+    }
+    transposed.resize(v.len(), 0.0);
+    blur_rows(v, w, r);
+    transpose_into(v, &mut transposed, w, h);
+    blur_rows(&mut transposed, h, r);
+    transpose_into(&transposed, v, h, w);
+}
+
+/// Allocation-light reference path used if parallel transpose storage cannot be reserved.
+fn gaussian_sequential(v: &mut [f32], w: usize, h: usize, r: usize) {
     let mut line = Vec::new();
-    let mut pass = |v: &mut [f32], len: usize, count: usize, at: &dyn Fn(usize, usize) -> usize| {
-        for k in 0..count {
+    let mut scratch = Vec::new();
+    let len = w.max(h);
+    if line.try_reserve_exact(len).is_err() || scratch.try_reserve_exact(len).is_err() {
+        return;
+    }
+    line.resize(len, 0.0);
+    scratch.resize(len, 0.0);
+    for axis in [false, true] {
+        let (lines, line_len) = if axis { (w, h) } else { (h, w) };
+        for k in 0..lines {
+            for i in 0..line_len {
+                line[i] = if axis { v[i * w + k] } else { v[k * w + i] };
+            }
             for _ in 0..3 {
-                line.clear();
-                line.extend((0..len).map(|i| v[at(k, i)]));
-                let get = |i: isize| line[i.clamp(0, len as isize - 1) as usize];
-                let mut acc: f32 = (-(r as isize)..=r as isize).map(get).sum();
-                let n = (2 * r + 1) as f32;
-                for i in 0..len {
-                    v[at(k, i)] = acc / n;
-                    acc += get(i as isize + r as isize + 1) - get(i as isize - r as isize);
+                blur_line(&mut line[..line_len], &mut scratch[..line_len], r);
+            }
+            for i in 0..line_len {
+                if axis {
+                    v[i * w + k] = line[i];
+                } else {
+                    v[k * w + i] = line[i];
                 }
             }
         }
-    };
-    pass(v, w, h, &|row, i| row * w + i);
-    pass(v, h, w, &|col, i| i * w + col);
+    }
 }
 
 /// The layer's mask values (pixel mask with density × vector mask, each blurred by its feather,
@@ -372,7 +468,7 @@ mod tests {
                 let surface = cached_mask(c, 2, test_surface);
                 second_tx.send(surface.sample_channel(0, 0, 0)).unwrap();
             });
-            assert_eq!(second_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 0.5);
+            assert!((second_rx.recv_timeout(Duration::from_secs(5)).unwrap() - 0.5).abs() <= 1.0 / f32::from(u16::MAX));
             release_tx.send(()).unwrap();
             first.join().unwrap();
             second.join().unwrap();
@@ -464,7 +560,7 @@ mod tests {
             let mut input = one_tile(sample);
             input.fill_rect(Rect::new(1024, 1024, 1025, 1025), &[0.0]);
             let tile_pixels = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize;
-            let expected = tile_pixels * (4 + 2 * sample.bytes()) + 4 + sample.bytes();
+            let expected = tile_pixels * (SampleType::F32.bytes() + 2 * sample.bytes()) + SampleType::F32.bytes() + sample.bytes();
             let bytes = entry_bytes(&result, Some(&input));
             assert_eq!(bytes, expected, "{sample:?}");
             let mut cache = Cache::default();
@@ -590,6 +686,59 @@ mod tests {
     }
 
     #[test]
+    fn parallel_gaussian_matches_the_sequential_reference() {
+        let (w, h, sigma): (usize, usize, f32) = (320, 256, 13.0);
+        let mut parallel: Vec<_> = (0..w * h).map(|i| ((i * 37 % 1009) as f32) / 1008.0).collect();
+        let mut sequential = parallel.clone();
+        let ideal = (12.0 * sigma * sigma / 3.0 + 1.0).sqrt();
+        let r = (((ideal.floor() as usize) | 1).max(1) - 1) / 2;
+        gaussian_sequential(&mut sequential, w, h, r);
+        gaussian(&mut parallel, w, h, sigma);
+        assert_eq!(parallel, sequential, "parallel blur must retain the exact per-line arithmetic");
+    }
+
+    #[test]
+    #[ignore = "manual 50 MP sequential-vs-parallel mask blur measurement"]
+    fn benchmark_50mp_mask_blur() {
+        use std::time::Instant;
+
+        let (w, h, sigma): (usize, usize, f32) = (6336, 7920, 1000.0);
+        let ideal = (12.0 * sigma * sigma / 3.0 + 1.0).sqrt();
+        let r = (((ideal.floor() as usize) | 1).max(1) - 1) / 2;
+        let source: Vec<_> = (0..w * h).map(|i| ((i * 37 % 1009) as f32) / 1008.0).collect();
+        let mut sequential = source.clone();
+        let start = Instant::now();
+        gaussian_sequential(&mut sequential, w, h, r);
+        let sequential_time = start.elapsed();
+        let mut parallel = source;
+        let start = Instant::now();
+        gaussian(&mut parallel, w, h, sigma);
+        let parallel_time = start.elapsed();
+        assert_eq!(parallel, sequential);
+        eprintln!("50 MP mask blur: sequential={sequential_time:?}, parallel={parallel_time:?}");
+    }
+
+    #[test]
+    fn cache_budget_holds_five_50mp_u8_input_u16_result_masks() {
+        // Account for whole 256×256 tiles, as entry_bytes does, rather than just logical pixels.
+        let (w, h) = (6336usize, 7920usize);
+        let tile = photocraft_geom::TILE_SIZE as usize;
+        let tile_count = w.div_ceil(tile) * h.div_ceil(tile);
+        let tile_pixels = tile * tile;
+        let one_entry = tile_count * tile_pixels * (SampleType::U8.bytes() + FORMAT.sample.bytes());
+        assert!(one_entry.saturating_mul(5) <= CACHE_BUDGET, "five reported-size masks must fit");
+
+        let mut cache = Cache::default();
+        let surface = Surface::new(FORMAT);
+        for key in 0..5 {
+            cache.insert(key, surface.clone(), None, one_entry, CACHE_BUDGET, cache.generation);
+        }
+        for key in 0..5 {
+            assert!(cache.get(key).is_some(), "mask {key} was evicted before the next plan");
+        }
+    }
+
+    #[test]
     fn matches_the_cpu_mask_and_is_cached() {
         let mut l = Layer::raster("l", PixelFormat::RGBA8);
         let pts = [(5.0, 5.0), (30.0, 6.0), (20.0, 28.0)];
@@ -605,7 +754,7 @@ mod tests {
         let mut got = Vec::new();
         s.read_region_into(canvas, &mut got);
         for (a, b) in got.iter().zip(&want) {
-            assert!((a - b).abs() < 1e-6);
+            assert!((a - b).abs() <= 1.0 / f32::from(u16::MAX));
         }
         let again = combined_mask(&l, canvas).unwrap();
         assert!(s.tiles().zip(again.tiles()).all(|(a, b)| Arc::ptr_eq(a.1, b.1)));
