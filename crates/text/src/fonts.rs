@@ -1,6 +1,6 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
 //! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
-//! fonts found by scanning the platform font directories (no fontconfig), user-registered font
+//! fonts indexed by CoreText on macOS or scanned from directories elsewhere (no fontconfig), user-registered font
 //! data, and PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
@@ -165,14 +165,24 @@ impl FontDb {
         db
     }
 
-    /// Scans the platform font directories (once). Font files are memory-mapped lazily by
-    /// fontique when a face is first used.
+    /// Loads installed platform fonts once. Font files are memory-mapped lazily by fontique when
+    /// a face is first used.
     pub fn load_system_fonts(&mut self) {
         if self.system_loaded {
             return;
         }
         self.system_loaded = true;
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(target_vendor = "apple")]
+        {
+            // Fontique's CoreText backend enumerates and indexes installed fonts in one pass.
+            // The generic directory scanner registers each file separately; on macOS that
+            // repeatedly merges the growing font database and can stall the UI for minutes.
+            self.fcx.collection.load_system_fonts();
+            self.ps_cache.clear();
+            self.face_cache.clear();
+            self.refresh_generics();
+        }
+        #[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
         {
             // One call per file: fontique's directory scan is much slower on large folders.
             let mut files = Vec::new();
@@ -498,7 +508,7 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
 fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -515,7 +525,7 @@ fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
 fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -624,10 +634,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_vendor = "apple"))]
     fn missing_font_dirs_are_skipped() {
         let mut files = Vec::new();
         super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
         assert!(files.is_empty());
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn core_text_backend_loads_system_families() {
+        let mut db = super::FontDb::with_system_fonts();
+        assert!(db.has_family("Apple Color Emoji"), "CoreText system fonts should be available");
     }
 }
 
