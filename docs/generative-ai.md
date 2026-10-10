@@ -38,9 +38,10 @@ variation (so three requests by default, each billed to the user's key):
 - the selection's bounds plus a margin of context (half the selection's longer side, 64 to
   1024 px), grown toward the provider's output shape and kept inside the canvas, rendered
   from all visible layers in sRGB and scaled to at most 2048 px on the long side, with the
-  selection itself cleared to flat grey. The provider never sees what is being replaced, as
-  Photoshop's fill doesn't, so it can't paint it back: an empty prompt removes what was selected
-  and continues the surroundings, including anything that crosses the selection's edge;
+  selection itself replaced by a soft blur of the colours around it. The provider never sees
+  what is being replaced, as Photoshop's fill doesn't, so it can't paint it back: an empty prompt
+  removes what was selected and continues the surroundings, including anything that crosses the
+  selection's edge. (A flat grey hole was tried first; Gemini drew it in as a grey box or a lamp.);
 - a black-and-white PNG mask of the selection at the same size (white = fill);
 - the prompt.
 
@@ -51,7 +52,11 @@ little, differently each time, which would leave a seam at the selection's edge;
 the selection should come back unchanged, so comparing it with the original measures the drift.
 A per-channel gain and offset fitted there, then the remaining difference near the edge spread
 smoothly inward, bring the fill back in line (`match_surroundings`). A result that doesn't
-resemble the original around the selection (over 25% mean difference) is left as it came. Gemini returns JPEG (its only output format) and its results carry Google's SynthID watermark.
+resemble the original around the selection (over 25% mean difference) is left as it came.
+
+To debug a provider, start the app with `PHOTOCRAFT_GENAI_DUMP=<folder>`: each request's image,
+mask, prompt, raw results and colour-matching figures are written to a new subfolder there. Nothing
+is written without it. Gemini returns JPEG (its only output format) and its results carry Google's SynthID watermark.
 
 ## Keys and privacy
 

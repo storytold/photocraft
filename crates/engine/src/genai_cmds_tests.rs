@@ -366,8 +366,8 @@ fn a_failed_variation_is_dropped_when_others_succeed() {
 
 #[test]
 fn the_selected_pixels_are_never_sent() {
-    // A red square under the selection on white: the provider sees grey there, so it can't paint
-    // the object back, and the surroundings as they are.
+    // A red square under the selection on white: the provider sees the white around it carried
+    // in (no red, and no flat grey it might read as an object), and the surroundings as they are.
     let mut s = session(120, 120);
     s.execute("select.rect", json!({"x": 40, "y": 40, "width": 40, "height": 40})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -381,8 +381,22 @@ fn the_selected_pixels_are_never_sent() {
         let i = ((y - y0) as usize * img.width() as usize + (x - x0) as usize) * 4;
         [img.data()[i], img.data()[i + 1], img.data()[i + 2]]
     };
-    assert_eq!(at(60, 60), [128, 128, 128], "cleared to grey");
+    for (x, y) in [(60, 60), (41, 41), (79, 60)] {
+        assert!(at(x, y).iter().all(|&c| c >= 250), "({x},{y}) {:?}: filled from the white around it", at(x, y));
+    }
     assert_eq!(at(30, 30), [255, 255, 255], "the context is sent as it is");
+}
+
+#[test]
+fn the_fill_takes_the_colours_beside_it() {
+    // Left half black, right half white, a hole across the middle: each side of the hole takes
+    // the colour next to it.
+    let (w, h) = (64usize, 32usize);
+    let original: Vec<f32> = (0..w * h).flat_map(|i| if i % w < 32 { [0.0; 3] } else { [1.0; 3] }).collect();
+    let coverage: Vec<f32> = (0..w * h).map(|i| if (16..48).contains(&(i % w)) && (8..24).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+    let fill = surroundings_fill(&original, &coverage, w, h);
+    assert!(fill[(16 * w + 17) * 3] < 0.2, "{}", fill[(16 * w + 17) * 3]);
+    assert!(fill[(16 * w + 46) * 3] > 0.8, "{}", fill[(16 * w + 46) * 3]);
 }
 
 #[test]
@@ -402,7 +416,7 @@ fn variations_are_requested_at_the_same_time() {
 #[test]
 fn a_models_colour_drift_is_taken_out() {
     // The fake redraws the image 40 levels darker everywhere. Outside the selection that shows
-    // it drifted, so the fill (the grey hole, 128) comes back at 128, not 88.
+    // it drifted, so the fill (white, from around the selection) comes back white, not 215.
     let mut s = session(160, 160);
     s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
     let fake = Arc::new(Fake { echo: Some(-40), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
@@ -410,7 +424,7 @@ fn a_models_colour_drift_is_taken_out() {
     s.execute(FILL, json!({"variations": 1})).unwrap();
     for (x, y) in [(80, 80), (52, 52), (108, 108)] {
         let [r, g, b] = rgb_at(&s, x, y);
-        assert!([r, g, b].iter().all(|&c| c.abs_diff(128) <= 2), "({x},{y}): {r} {g} {b}");
+        assert!([r, g, b].iter().all(|&c| c >= 252), "({x},{y}): {r} {g} {b}");
     }
 }
 
@@ -430,7 +444,8 @@ fn drift_that_varies_across_the_image_leaves_no_seam() {
             [0.5 + d, 0.5 + d, 0.5 + d, 1.0]
         })
         .collect();
-    match_surroundings(&mut px, &reference);
+    let stats = match_surroundings(&mut px, &reference);
+    assert!(stats.starts_with("mean difference"), "{stats}");
     let worst = (0..n).filter(|&i| inside(i)).map(|i| (px[i * 4] - 0.5).abs()).fold(0.0f32, f32::max);
     assert!(worst < 0.02, "worst {worst}");
 }

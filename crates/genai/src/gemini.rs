@@ -150,32 +150,33 @@ impl<T: HttpTransport> ImageProvider for GeminiProvider<T> {
     }
 }
 
-/// The instruction that stands in for a mask parameter. The selected area arrives cleared to flat
-/// grey; the model is told to fill that hole from the scene around it. An empty prompt means
-/// "what would be there without the removed object": the background and anything crossing the
-/// edge carry on through it, and nothing is painted back.
+/// The instruction that stands in for a mask parameter. The selected area arrives blurred out (a
+/// smooth placeholder made of the colours around it), so the model can't copy what was there and
+/// has no flat shape to mistake for an object. An empty prompt means "what would be there without
+/// whatever stood in it": the background and anything crossing the edge carry on through it.
 pub fn fill_instruction(prompt: &str) -> String {
     let what = if prompt.trim().is_empty() {
-        "Fill the grey hole with what would be there if whatever stood in it had never existed: continue the \
+        "Replace the placeholder with what would be there if whatever stood in it had never existed: continue the \
          background, surfaces, textures and lighting from around it, and carry on anything that crosses its edge (lines, \
-         edges, horizon, patterns, partly hidden objects outside it) the way it would plausibly continue. Do not invent \
-         an object to occupy the hole, and do not leave a flat, blurred or smeared patch."
+         edges, horizon, patterns, objects partly outside it) the way it would plausibly continue. Do not add a new \
+         object, light or shape that nothing around it suggests."
             .to_owned()
     } else {
         format!(
-            "Fill the grey hole with: {}. Make it belong to the scene: the right size for its place in the perspective, \
-             lit from the same direction, casting and receiving shadows and reflections, and interacting with whatever \
-             touches it. Around the new content, continue the background and anything that crosses the hole's edge.",
+            "Replace the placeholder with: {}. Make it belong to the scene: the right size for its place in the \
+             perspective, lit from the same direction, casting and receiving shadows and reflections, and interacting \
+             with whatever touches it. Around the new content, continue the background and anything that crosses the \
+             placeholder's edge.",
             prompt.trim().trim_end_matches('.')
         )
     };
     format!(
-        "Edit the first image. Part of it has been cleared to flat grey; the second image is a mask the same size that \
-         marks that hole in white (black is the area to keep). The grey is not part of the scene: none of it may remain. \
-         Before editing, study the whole first image: what the scene is, where the light comes from, the perspective and \
-         depth, and what runs up to the hole. {what} Match the colour, focus, noise and grain of the surroundings so the \
-         edit is seamless. Keep everything in the black area and the framing exactly as they are. Reply with the edited \
-         image only."
+        "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has \
+         been blurred out as a placeholder, black the area to keep. The blur is not part of the scene: replace all of it \
+         with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study \
+         the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs \
+         up to the placeholder. {what} Keep everything in the black area, the framing, the scale and the position of \
+         every object exactly as they are. Reply with the edited image only."
     )
 }
 
@@ -303,7 +304,7 @@ mod tests {
         assert_eq!(body["model"], DEFAULT_MODEL);
         let input = body["input"].as_array().unwrap();
         assert_eq!(input.len(), 3);
-        assert!(input[0]["text"].as_str().unwrap().contains("hole with: a red balloon."));
+        assert!(input[0]["text"].as_str().unwrap().contains("placeholder with: a red balloon."));
         assert_eq!(input[1]["data"], b64(&png_of(1600, 900)));
         assert_eq!(input[2]["type"], "image");
         assert_eq!(body["response_format"]["aspect_ratio"], "16:9");
@@ -314,8 +315,8 @@ mod tests {
     #[test]
     fn an_empty_prompt_asks_for_removal() {
         let empty = fill_instruction("");
-        assert!(empty.contains("had never existed") && empty.contains("Do not invent"), "{empty}");
-        assert!(fill_instruction("  a boat. ").contains("hole with: a boat."));
+        assert!(empty.contains("had never existed") && empty.contains("Do not add a new"), "{empty}");
+        assert!(fill_instruction("  a boat. ").contains("placeholder with: a boat."));
     }
 
     #[test]

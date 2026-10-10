@@ -140,7 +140,7 @@ fn scaled(s: &Surface, area: Rect, w: u32, h: u32) -> Surface {
 
 /// Largest mean difference (0..1) around the selection still treated as colour drift.
 const MAX_DRIFT: f64 = 0.25;
-/// Grey the selected part of the image is cleared to before it is sent.
+/// Grey that transparent parts of the image are shown on when sent.
 const HOLE: f32 = 128.0;
 
 fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
@@ -149,24 +149,28 @@ fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
 }
 
 /// The image and mask sent, both `w`×`h`: `image` (sRGB, already scaled) with the selection
-/// cleared to flat grey, and an opaque black-and-white PNG of the selection (white = fill). The
-/// provider never sees what is being replaced, as Photoshop's fill doesn't, so it can't paint it
-/// back: an empty prompt removes the selected object and continues what lies around it.
+/// replaced by a soft blur of the colours around it, and an opaque black-and-white PNG of the
+/// selection (white = fill). The provider never sees what is being replaced, as Photoshop's fill
+/// doesn't, so it can't paint it back. A flat grey hole was tried first: Gemini read it as an
+/// object (a grey box, a lamp) and drew it in.
 fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) -> Result<(Vec<u8>, Vec<u8>, Reference)> {
     let r = Rect::from_xywh(0, 0, w, h);
     let rgba = image.convert(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true)).to_interleaved(r);
-    let coverage = scaled(sel, area, w, h).read_region(r);
+    let coverage: Vec<f32> = scaled(sel, area, w, h).read_region(r).into_iter().map(|v| v.clamp(0.0, 1.0)).collect();
+    let mut original = Vec::with_capacity(coverage.len() * 3);
+    for px in rgba.as_chunks::<4>().0 {
+        let a = f32::from(px[3]) / 255.0;
+        // Transparent areas read as mid grey, not black.
+        for &c in &px[..3] {
+            original.push((f32::from(c) * a + HOLE * (1.0 - a)) / 255.0);
+        }
+    }
+    let fill = surroundings_fill(&original, &coverage, w as usize, h as usize);
     let mut cleared = Vec::with_capacity(rgba.len());
     let mut mask = Vec::with_capacity(rgba.len());
-    let mut original = Vec::with_capacity(coverage.len() * 3);
-    for (px, &v) in rgba.as_chunks::<4>().0.iter().zip(&coverage) {
-        let m = v.clamp(0.0, 1.0);
-        let a = f32::from(px[3]) / 255.0;
-        // Composite over the hole grey too, so transparent areas read as cleared, not black.
-        for &c in &px[..3] {
-            let c = f32::from(c) * a + HOLE * (1.0 - a);
-            original.push(c / 255.0);
-            cleared.push((c * (1.0 - m) + HOLE * m).round() as u8);
+    for (i, &m) in coverage.iter().enumerate() {
+        for c in 0..3 {
+            cleared.push(((original[i * 3 + c] * (1.0 - m) + fill[i * 3 + c] * m) * 255.0).round().clamp(0.0, 255.0) as u8);
         }
         cleared.push(255);
         let g = (m * 255.0).round() as u8;
@@ -174,6 +178,67 @@ fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32, h: u32) ->
     }
     let reference = Reference { original, coverage, w, h };
     Ok((encode_rgba(cleared, w, h)?, encode_rgba(mask, w, h)?, reference))
+}
+
+/// Colours for the selected area taken from around it (RGB, 0..1, `w`×`h`), by push-pull: the
+/// unselected pixels are averaged down a pyramid of halving sizes until every cell has some, then
+/// the averages are brought back up with bilinear interpolation, each level keeping its own known
+/// pixels. The result keeps the edge colours and turns smooth toward the middle, with no rings
+/// or steps a model could read as shapes.
+fn surroundings_fill(original: &[f32], coverage: &[f32], w: usize, h: usize) -> Vec<f32> {
+    // Each level: (width, height, weight 0..1, colour).
+    let mut levels: Vec<(usize, usize, Vec<f32>, Vec<f32>)> = vec![(w, h, coverage.iter().map(|c| 1.0 - c).collect(), original.to_vec())];
+    while let Some((lw, lh, lwt, lc)) = levels.last()
+        && (*lw > 1 || *lh > 1)
+    {
+        let (nw, nh) = (lw.div_ceil(2), lh.div_ceil(2));
+        let (mut wt, mut col) = (vec![0.0f32; nw * nh], vec![0.0f32; nw * nh * 3]);
+        for y in 0..nh {
+            for x in 0..nw {
+                let (mut sum, mut acc) = (0.0f32, [0.0f32; 3]);
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (sx, sy) = (2 * x + dx, 2 * y + dy);
+                    if sx < *lw && sy < *lh {
+                        let i = sy * lw + sx;
+                        sum += lwt[i];
+                        for c in 0..3 {
+                            acc[c] += lwt[i] * lc[i * 3 + c];
+                        }
+                    }
+                }
+                let i = y * nw + x;
+                if sum > 0.0 {
+                    for c in 0..3 {
+                        col[i * 3 + c] = acc[c] / sum;
+                    }
+                }
+                wt[i] = sum.min(1.0);
+            }
+        }
+        levels.push((nw, nh, wt, col));
+    }
+    // Bring the averages back up: unknown parts of each level take the level above, interpolated.
+    for l in (0..levels.len() - 1).rev() {
+        let (cw, ch, _, coarse) = levels[l + 1].clone();
+        let (lw, lh, wt, col) = &mut levels[l];
+        for y in 0..*lh {
+            let fy = ((y as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (ch - 1) as f32);
+            let (y0, ty) = (fy.floor() as usize, fy.fract());
+            let y1 = (y0 + 1).min(ch - 1);
+            for x in 0..*lw {
+                let fx = ((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (cw - 1) as f32);
+                let (x0, tx) = (fx.floor() as usize, fx.fract());
+                let x1 = (x0 + 1).min(cw - 1);
+                let i = y * *lw + x;
+                for c in 0..3 {
+                    let at = |xx: usize, yy: usize| coarse[(yy * cw + xx) * 3 + c];
+                    let up = (at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx) * (1.0 - ty) + (at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx) * ty;
+                    col[i * 3 + c] = wt[i] * col[i * 3 + c] + (1.0 - wt[i]) * up;
+                }
+            }
+        }
+    }
+    levels.swap_remove(0).3
 }
 
 /// What a result is matched against: the area as it was before the hole was cleared (RGB, 0..1)
@@ -227,19 +292,21 @@ fn box_blur(v: &mut [f32], w: usize, h: usize, r: usize) {
 /// offset fitted over all of it, then what is left near the edge, spread smoothly inward
 /// (normalized convolution), as Photoshop's fills blend into their surroundings.
 /// `px` is RGBA (0..1) at the reference size.
-fn match_surroundings(px: &mut [f32], r: &Reference) {
+fn match_surroundings(px: &mut [f32], r: &Reference) -> String {
     let (w, h) = (r.w as usize, r.h as usize);
     let outside: Vec<f32> = r.coverage.iter().map(|c| 1.0 - c.clamp(0.0, 1.0)).collect();
     let weight: f64 = outside.iter().map(|&o| f64::from(o)).sum();
     if weight < 16.0 || px.len() != w * h * 4 {
-        return;
+        return "not matched: too little outside the selection".into();
     }
     // Drift is a few percent. A result that doesn't resemble the original around the selection
     // (reframed, restyled) is left alone rather than forced onto it.
     let diff: f64 = (0..w * h).map(|i| f64::from(outside[i]) * (0..3).map(|c| f64::from((px[i * 4 + c] - r.original[i * 3 + c]).abs())).sum::<f64>()).sum();
-    if diff / (weight * 3.0) > MAX_DRIFT {
-        return;
+    let drift = diff / (weight * 3.0);
+    if drift > MAX_DRIFT {
+        return format!("not matched: mean difference outside the selection {drift:.3} > {MAX_DRIFT}");
     }
+    let mut stats = format!("mean difference outside the selection {drift:.3}; gain/offset per channel:");
     let radius = (w.max(h) / 16).max(2);
     for c in 0..3 {
         let (mut sx, mut sy, mut sxx, mut sxy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
@@ -254,6 +321,7 @@ fn match_surroundings(px: &mut [f32], r: &Reference) {
         let var = sxx / weight - mx * mx;
         let gain = if var > 1e-5 { ((sxy / weight - mx * my) / var).clamp(0.5, 2.0) } else { 1.0 };
         let (gain, offset) = (gain as f32, (my - gain * mx) as f32);
+        stats.push_str(&format!(" {gain:.3}/{offset:+.3}"));
         let mut num = vec![0.0f32; w * h];
         for i in 0..w * h {
             let v = &mut px[i * 4 + c];
@@ -273,6 +341,7 @@ fn match_surroundings(px: &mut [f32], r: &Reference) {
             *v = v.clamp(0.0, 1.0);
         }
     }
+    stats
 }
 
 /// Decode a provider's PNG or JPEG into 8-bit sRGB, with its size.
@@ -365,17 +434,50 @@ fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request:
 
 /// A provider's image, colour-matched to the original around the selection, scaled into `area`
 /// in document coordinates.
-fn place(bytes: &[u8], area: Rect, reference: &Reference) -> Result<Surface> {
+fn place(bytes: &[u8], area: Rect, reference: &Reference) -> Result<(Surface, String)> {
     let (got, full) = decode(bytes)?;
     let r = Rect::from_xywh(0, 0, reference.w, reference.h);
     let mut at_request = scaled(&got, full, reference.w, reference.h);
     let mut px = at_request.read_region(r);
-    match_surroundings(&mut px, reference);
+    let stats = match_surroundings(&mut px, reference);
     at_request.write_region(r, &px);
     let fitted = scaled(&at_request, r, area.width(), area.height());
     let mut placed = Surface::new(fitted.format());
     placed.write_region(area, &fitted.read_region(Rect::from_xywh(0, 0, area.width(), area.height())));
-    Ok(placed)
+    Ok((placed, stats))
+}
+
+/// Debugging aid: with `PHOTOCRAFT_GENAI_DUMP` set to a folder, each request's image, mask, raw
+/// results and colour-matching figures are written to a new subfolder of it. Nothing is written
+/// unless the variable is set.
+fn dump(request: &EditRequest, results: &[Vec<u8>], stats: &[String]) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(root) = std::env::var_os("PHOTOCRAFT_GENAI_DUMP") else { return };
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        let dir = std::path::Path::new(&root).join(format!("fill-{stamp}"));
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let _ = std::fs::write(dir.join("sent-image.png"), &request.image);
+        let _ = std::fs::write(dir.join("sent-mask.png"), &request.mask);
+        let _ = std::fs::write(dir.join("prompt.txt"), &request.prompt);
+        for (i, bytes) in results.iter().enumerate() {
+            let ext = if bytes.starts_with(b"\x89PNG") { "png" } else { "jpg" };
+            let _ = std::fs::write(dir.join(format!("result-{}.{ext}", i + 1)), bytes);
+        }
+        let _ = std::fs::write(dir.join("color-match.txt"), stats.iter().enumerate().map(|(i, s)| format!("result {}: {s}\n", i + 1)).collect::<String>());
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (request, results, stats);
+}
+
+/// Place every result, then (when asked) dump the request and results for debugging.
+fn place_all(request: &EditRequest, results: &[Vec<u8>], area: Rect, reference: &Reference) -> Result<Vec<Surface>> {
+    let placed = results.iter().map(|b| place(b, area, reference)).collect::<Result<Vec<_>>>()?;
+    let stats: Vec<String> = placed.iter().map(|(_, s)| s.clone()).collect();
+    dump(request, results, &stats);
+    Ok(placed.into_iter().map(|(p, _)| p).collect())
 }
 
 fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {
@@ -415,7 +517,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)) };
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
-            let placed = results.iter().map(|b| place(b, area, &reference)).collect::<Result<Vec<_>>>()?;
+            let placed = place_all(&request, &results, area, &reference)?;
             let source = Source { prompt: request.prompt.clone(), area, request, reference };
             Ok((placed, sel, source))
         },
@@ -512,7 +614,7 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
         move |ctx| {
             let results = request_all(ctx, provider.as_ref(), &source.request, count)?;
             ctx.progress(0.9, "Placing the results");
-            results.iter().map(|b| place(b, source.area, &source.reference)).collect::<Result<Vec<_>>>()
+            place_all(&source.request, &results, source.area, &source.reference)
         },
         move |s, placed| {
             let ids = s.edit("Generate More", |doc, _| {
