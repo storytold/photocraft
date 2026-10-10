@@ -581,34 +581,41 @@ fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
 /// blend mode, clipping and label stay on the smart layer. The cache is the exact composite, so
 /// the document looks the same before and after.
 pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
+    layers_to_smart(doc, &l.name, vec![l.clone()])
+}
+
+pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result<Layer> {
     let canvas = doc.bounds();
-    let background = l.name == "Background" && l.locks.position;
-    let mut inner = l.clone();
-    inner.visible = true;
-    inner.opacity = 1.0;
-    inner.clipped = false;
-    inner.locks = Default::default();
-    if !(inner.is_group() && inner.blend == BlendMode::PassThrough) {
-        inner.blend = BlendMode::Normal;
+    let background = layers.len() == 1 && layers[0].name == "Background" && layers[0].locks.position;
+    let mut inners = layers.clone();
+    if inners.len() == 1 {
+        let inner = &mut inners[0];
+        inner.visible = true;
+        inner.opacity = 1.0;
+        inner.clipped = false;
+        inner.locks = Default::default();
+        if !(inner.is_group() && inner.blend == BlendMode::PassThrough) {
+            inner.blend = BlendMode::Normal;
+        }
+        if background {
+            inner.name = "Layer 0".into();
+        }
     }
-    if background {
-        inner.name = "Layer 0".into();
-    }
-    let mut sub = Document::new(format!("{}.pcraft", l.name), doc.size, doc.mode, doc.depth);
+    let mut sub = Document::new(format!("{}.pcraft", name), doc.size, doc.mode, doc.depth);
     sub.resolution_dpi = doc.resolution_dpi;
     sub.icc_profile = doc.icc_profile.clone();
     sub.global_light = doc.global_light;
     // Pattern fills and pattern layer effects reference document-level patterns by ID.
     // Preserve those resources in the embedded document before rendering or saving it.
     sub.patterns = doc.patterns.clone();
-    if any_layer(l, &|x| matches!(x.content, LayerContent::Smart(_))) {
+    if inners.iter().any(|l| any_layer(l, &|x| matches!(x.content, LayerContent::Smart(_)))) {
         // Nested PSD placed layers find their embedded files here.
         sub.metadata.psd_global_blocks = doc.metadata.psd_global_blocks.clone();
     }
-    sub.layers = vec![inner];
+    sub.layers = inners;
 
-    let has_fx = any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty());
-    let region = subtree_bounds(l, canvas).union(&canvas).inflate(if has_fx { 256 } else { 0 });
+    let has_fx = sub.layers.iter().any(|l| any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty()));
+    let region = sub.layers.iter().map(|l| subtree_bounds(l, canvas)).fold(Rect::EMPTY, |a, b| a.union(&b)).union(&canvas).inflate(if has_fx { 256 } else { 0 });
     let buf = photocraft_compose::render(&sub, region);
     let w = region.width() as usize;
     let mut b = Rect::EMPTY;
@@ -626,24 +633,34 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     cache = photocraft_algo::resample::crop_surface(&cache, b);
     cache.prune();
 
-    shift_layer(&mut sub.layers[0], -b.x0, -b.y0);
+    for l in &mut sub.layers {
+        shift_layer(l, -b.x0, -b.y0);
+    }
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // Seed the decode cache with the composite we already have.
     cache_put(cache_key(&bytes, fmt), SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() });
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
+    let out_name = if background { "Layer 0".to_string() } else { name.to_string() };
     let mut out = Layer::new(
-        if background { "Layer 0".to_string() } else { l.name.clone() },
+        out_name,
         LayerContent::Smart(SmartObject::new(source, Affine::translate(b.x0 as f64, b.y0 as f64), Some(cache))),
     );
-    out.visible = l.visible;
-    out.opacity = l.opacity;
-    out.blend = if l.blend == BlendMode::PassThrough { BlendMode::Normal } else { l.blend };
-    out.clipped = l.clipped;
-    out.label = l.label;
-    if !background {
-        out.locks = l.locks;
+    if layers.len() == 1 {
+        let l = &layers[0];
+        out.visible = l.visible;
+        out.opacity = l.opacity;
+        out.blend = if l.blend == BlendMode::PassThrough { BlendMode::Normal } else { l.blend };
+        out.clipped = l.clipped;
+        out.label = l.label;
+        if !background {
+            out.locks = l.locks;
+        }
+    } else {
+        out.visible = true;
+        out.opacity = 1.0;
+        out.blend = BlendMode::Normal;
     }
     Ok(out)
 }
@@ -661,7 +678,7 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
             layer_to_smart(doc, l)?
         } else {
             let children = ids.iter().map(|id| doc.layer(*id).cloned().ok_or(EngineError::NoLayer(*id))).collect::<Result<Vec<_>>>()?;
-            layer_to_smart(doc, &Layer::group(l.name.clone(), children))?
+            layers_to_smart(doc, &l.name, children)?
         };
         let new_id = so.id;
         // As with Group Layers, place the result in the top selected root's parent. Insert

@@ -70,8 +70,7 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             assert_eq!((inner.mode, inner.depth), (mode, depth));
             assert_eq!(inner.icc_profile, original.icc_profile);
             assert_eq!(inner.resolution_dpi, original.resolution_dpi);
-            let group = &inner.layers[0];
-            assert_eq!(group.children().unwrap().iter().map(|l| l.id).collect::<Vec<_>>(), ids);
+            assert_eq!(inner.layers.iter().map(|l| l.id).collect::<Vec<_>>(), ids);
             let sm = active_smart(&s);
             for source in &original.layers {
                 let mut shifted = source.clone();
@@ -104,7 +103,7 @@ fn selected_group_and_descendant_are_embedded_once() {
     assert_eq!(s.active().unwrap().doc.layers.len(), 1);
     let inner = contents(&s);
     assert_eq!(inner.walk().iter().filter(|(_, _, l)| l.id == a_id).count(), 1);
-    assert_eq!(inner.layers[0].children().unwrap().iter().map(|l| l.id).collect::<Vec<_>>(), vec![group_id, b_id]);
+    assert_eq!(inner.layers.iter().map(|l| l.id).collect::<Vec<_>>(), vec![group_id, b_id]);
     assert_eq!(inner.layer(group_id).unwrap().children().unwrap()[0].id, a_id);
 }
 
