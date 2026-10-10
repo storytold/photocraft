@@ -4576,6 +4576,7 @@ dependencies = [
  "photocraft-text",
  "photocraft-vector",
  "rayon",
+ "roxmltree",
  "serde",
  "serde_json",
  "sys-locale",

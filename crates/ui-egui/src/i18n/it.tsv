@@ -1305,6 +1305,12 @@
 	Rename…	Rinomina…
 	Resample	Ricampiona
 	Reset All to Defaults	Ripristina tutto ai predefiniti
+	Import Shortcuts…	Importa scelte rapide…
+	Load a keyboard shortcut set saved as .kys	Carica un set di scelte rapide da tastiera salvato come .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Importate {n} scelte rapide da {file}. Fai clic su OK per conservarle.
+	{n} commands are not in PhotoCraft.	{n} comandi non esistono in PhotoCraft.
+	Keyboard shortcuts imported	Scelte rapide da tastiera importate
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Il tuo set di scelte rapide da tastiera {set} è in uso qui: {n} scelte rapide differiscono dai valori predefiniti. Modifica › Scelte rapide da tastiera le mostra; Ripristina tutto ai valori predefiniti annulla l'importazione.
 	Reset Section	Reimposta sezione
 	Reset Transform	Reimposta trasformazione
 	Reset to defaults	Ripristina predefiniti
@@ -2379,6 +2385,16 @@ fontWeight	Italic	Corsivo
 	Cycle Orientation	Cambia orientamento
 	Set the overlay options for the Crop tool	Imposta le opzioni di sovrapposizione dello strumento Taglierina
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-click è andato al desktop, che sposta le finestre con Alt-trascina. Imposta il suo tasto per spostare le finestre su Super, oppure blocca Alt in Finestra › Tasti modificatori.
+	Auto Hide Notifications	Nascondi automaticamente le notifiche
+	Notification Duration (seconds)	Durata della notifica (secondi)
+	Appearance Mode	Modalità aspetto
+	Dark Theme	Tema scuro
+	Light Theme	Tema chiaro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Modalità aspetto successiva
+	Sync with system	Sincronizza con il sistema
+	Active	Attivo
 	Color Picker (Solid Color)	Selettore colore (tinta unita)
 	Straighten the image by drawing a line on it	Raddrizza l’immagine tracciando una linea
 	Set additional Crop options	Imposta opzioni di ritaglio aggiuntive

@@ -63,7 +63,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
     ("window.toggle.options", "Options", &["Window"], None),
-    ("window.theme.toggle", "Next Theme", &["Window"], None),
+    ("window.theme.toggle", "Next Appearance Mode", &["Window"], None),
     ("window.theme.pro", "Pro Theme", &["Window", "Theme"], None),
     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
@@ -304,8 +304,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"window": wid}))
         }
         "window.theme.toggle" => {
-            let next = app.ui.theme.next();
-            app.set_theme(ctx, next);
+            crate::prefs_ui::cycle_appearance(app, ctx);
             Ok(Value::Null)
         }
         "window.theme.pro"

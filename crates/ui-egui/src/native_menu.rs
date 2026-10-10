@@ -814,7 +814,7 @@ mod tests {
         assert!(!file.children.contains(&Node::Standard(Standard::CloseWindow)), "⌘W stays File › Close");
     }
 
-    /// Themes and Next Theme move from Window to the app menu's Appearance, checked by the theme.
+    /// Themes and the appearance-mode cycle move from Window to the app menu's Appearance.
     #[test]
     fn themes_move_to_the_app_menus_appearance() {
         let mut a = app(false);
@@ -829,7 +829,7 @@ mod tests {
         assert!(themes.contains(&"window.theme.pro".to_string()) && themes.contains(&"window.theme.classic".to_string()));
         assert_eq!(l.bar.find("window.theme.classic").unwrap().checked, Some(true));
         assert_eq!(l.bar.find("window.theme.pro").unwrap().checked, Some(false));
-        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Theme");
+        assert_eq!(l.bar.find("window.theme.toggle").unwrap().label, "Next Appearance Mode");
         let window = ids(&l.bar.menu(MenuRole::Window).unwrap().children);
         assert!(!window.iter().any(|id| id.starts_with("window.theme.") || id == "[Theme]"), "{window:?}");
     }

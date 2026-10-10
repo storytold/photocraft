@@ -775,17 +775,24 @@ pub fn style_label(style: &str) -> String {
 
 /// Searchable font-family combo box.
 fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    font_picker_in(ui, current, width, &families())
+    family_picker_in(ui, "type-font", current, width, &families())
 }
 
 /// Maximum height of the font menu.
 const FONT_MENU_HEIGHT: f32 = 460.0;
 
 /// [`font_picker`] over a given family list (tests pass their own).
+#[cfg(test)]
 fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families: &[String]) -> bool {
+    family_picker_in(ui, "type-font", current, width, families)
+}
+
+/// Shared by the Type options, Character, style and Glyphs panels. Selection changes still
+/// flow through each caller's existing engine command.
+pub(crate) fn family_picker_in(ui: &mut egui::Ui, salt: &str, current: &mut String, width: f32, families: &[String]) -> bool {
     let mut changed = false;
-    let search_id = ui.id().with("font-search");
-    let combo = egui::ComboBox::from_id_salt("type-font")
+    let search_id = ui.id().with(("font-search", salt));
+    let combo = egui::ComboBox::from_id_salt(salt)
         .selected_text(current.as_str())
         .width(width)
         .height(FONT_MENU_HEIGHT)
@@ -802,6 +809,10 @@ fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families:
         let opened = last_pass.is_none_or(|p| p.saturating_add(1) < pass);
         let mut focus = opened || ui.data(|d| d.get_temp(focus_id)).unwrap_or(false);
         let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
+        // Consume these before TextEdit and the canvas can interpret them as caret movement.
+        let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+        let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+        let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(200.0));
         if r.has_focus() {
             focus = false;
@@ -814,8 +825,38 @@ fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families:
             d.insert_temp(search_id, q.clone());
         });
         let ql = q.to_lowercase();
-        for f in families.iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
-            if ui.selectable_label(f == current, f).clicked() {
+        let filtered: Vec<&String> = families.iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)).collect();
+        if down || up {
+            let index = filtered.iter().position(|f| *f == current);
+            let next = match index {
+                Some(i) if down => i.saturating_add(1).min(filtered.len().saturating_sub(1)),
+                Some(i) => i.saturating_sub(1),
+                None if down => 0,
+                None => filtered.len().saturating_sub(1),
+            };
+            if let Some(f) = filtered.get(next) {
+                changed = **f != *current;
+                current.clone_from(f);
+                // A served family not fetched yet: start now, as a click does.
+                photocraft_text::served::request(f);
+            }
+        }
+        if enter && filtered.iter().any(|f| *f == current) {
+            ui.data_mut(|d| d.remove::<String>(search_id));
+            ui.close();
+        }
+        for f in filtered {
+            let response = ui.add_sized(
+                [330.0, 28.0],
+                egui::Button::selectable(f == current, f).truncate().right_text(egui::Atom::custom(ui.id().with(("font-sample", f)), egui::vec2(100.0, 24.0))),
+            );
+            if (down || up) && f == current {
+                response.scroll_to_me(Some(egui::Align::Center));
+            }
+            if ui.is_rect_visible(response.rect) {
+                crate::font_preview::paint(ui, f, response.rect);
+            }
+            if response.clicked() {
                 *current = f.clone();
                 // A served family not fetched yet: start now, before any text needs it.
                 photocraft_text::served::request(f);

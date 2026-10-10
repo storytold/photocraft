@@ -1,6 +1,6 @@
 //! Design system: themes, colour tokens, radii, typography.
 //!
-//! - **Studio** (default): near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
+//! - **Studio**: near-black surfaces, rounded cards, Inter + JetBrains Mono, soft violet
 //!   accent. Modelled on the look of modern pro editors (such as Photoshop 2025).
 //! - **Studio Light**: the same system on light surfaces.
 //! - **Classic**: a deliberately Windows-2000-era look (grey bevels, square corners, navy selection)
@@ -133,6 +133,8 @@ pub struct Tokens {
     pub bevel: bool,
     /// Pro (Photoshop-grammar) layout: tab strips, flat panels, checkboxes, pill buttons.
     pub pro: bool,
+    /// Toolbar colour chips are large and round, stacked, with the colour buttons below (Studio).
+    pub round_chips: bool,
     /// Panel tab-strip background (Pro).
     pub tab_strip: Color32,
     /// Selected list row (layers, history).
@@ -208,6 +210,7 @@ impl Tokens {
                 radius_lg: 6.0,
                 bevel: false,
                 pro: true,
+                round_chips: false,
                 tab_strip: Color32::from_rgb(38, 38, 38),
                 row_selected: Color32::from_rgb(82, 82, 82),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
@@ -247,6 +250,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(14, 14, 15),
@@ -286,6 +290,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
@@ -325,6 +330,7 @@ impl Tokens {
                 radius_lg: 0.0,
                 bevel: true,
                 pro: false,
+                round_chips: false,
                 tab_strip: Color32::from_rgb(212, 208, 200),
                 row_selected: Color32::from_rgb(10, 36, 106),
                 histogram_bg: Color32::from_gray(40),
@@ -367,6 +373,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_gray(40),
@@ -406,6 +413,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(29, 29, 32),
@@ -448,6 +456,7 @@ impl Tokens {
                 radius_lg: 12.0,
                 bevel: false,
                 pro: false,
+                round_chips: true,
                 tab_strip: Color32::TRANSPARENT,
                 row_selected: Color32::TRANSPARENT,
                 histogram_bg: Color32::from_rgb(0, 43, 54),
