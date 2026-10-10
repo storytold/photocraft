@@ -11,7 +11,7 @@
 //! tool and the engine's `type.*` caret commands. Nothing here panics: indices go through `get`,
 //! and every loop is bounded.
 
-use parley::Layout;
+use parley::{Affinity, Cursor, Layout};
 
 use crate::layout::{ClusterInfo, FORCED_LINE_BREAK, RunBrush, TextLayout};
 
@@ -26,6 +26,24 @@ pub(crate) struct ParagraphNav {
     pub(crate) end: usize,
     /// Length of the direction mark parley's text starts with.
     pub(crate) prefix: usize,
+}
+
+impl ParagraphNav {
+    /// parley's cursor for a layer caret in this paragraph.
+    fn cursor(&self, c: Caret) -> Cursor {
+        let i = c.byte.saturating_sub(self.start).saturating_add(self.prefix);
+        // At the paragraph start the character before is the prefix or the previous paragraph's
+        // break, not a layer character: downstream.
+        let affinity = if c.upstream && c.byte > self.start { Affinity::Upstream } else { Affinity::Downstream };
+        Cursor::from_byte_index(&self.layout, i, affinity)
+    }
+
+    /// The layer caret for a parley cursor; `None` inside the direction prefix.
+    fn to_layer(&self, c: Cursor) -> Option<Caret> {
+        let i = c.index().checked_sub(self.prefix)?;
+        let byte = self.start.saturating_add(i).min(self.end);
+        Some(Caret::new(byte, c.affinity() == Affinity::Upstream && byte > self.start))
+    }
 }
 
 /// A caret: a byte offset in the layer text and the side it belongs to.
@@ -102,4 +120,140 @@ fn not_after_break(l: &TextLayout, text: &str, li: usize, c: Caret) -> Caret {
 /// A cluster that is a line break (a forced line break inside a paragraph).
 fn is_hard_break(text: &str, c: &ClusterInfo) -> bool {
     text.get(c.range.clone()).is_some_and(|s| !s.is_empty() && s.chars().all(|ch| ch == FORCED_LINE_BREAK || ch == '\n' || ch == '\r'))
+}
+
+/// Carets closer than this (line-space px) are one visual stop.
+const SAME_X: f32 = 0.5;
+
+/// Visual direction of an arrow key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dir {
+    Left,
+    Right,
+}
+
+/// How far an arrow key moves: one caret stop (a grapheme), or one word (⌘/Ctrl).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unit {
+    Grapheme,
+    Word,
+}
+
+/// The caret after one arrow press (spec 5.1.3). Visual: parley orders the stops of the line, and
+/// the result skips stops inside the direction prefix, inside a grapheme (parley stops between a
+/// letter and its haraka), and at the same x (zero-width bidi controls). At a line's edge it goes
+/// to the neighbouring drawn line: with the paragraph's flow (→ in LTR, ← in RTL) to the next
+/// line's start edge, against it to the previous line's end edge. This crosses paragraphs, and
+/// never reaches the hidden lines of an overflowing box. Vertical type moves in text order.
+pub fn step(l: &TextLayout, text: &str, from: Caret, dir: Dir, unit: Unit) -> Caret {
+    let from = clamp(l, text, from);
+    if l.vertical {
+        return logical_step(text, from, dir, unit);
+    }
+    let start = caret_geometry(l, text, from);
+    let Some(p) = l.paragraphs.iter().find(|p| (p.start..=p.end).contains(&from.byte)) else { return from };
+    let content = text.get(p.start..p.end).unwrap_or("");
+    let stops = crate::segment::grapheme_boundaries(content);
+    let end = drawn_end(l);
+    let mut cur = p.cursor(from);
+    // Each move passes at least one parley cluster; the bound only guards against a cycle.
+    for _ in 0..content.len().saturating_add(p.prefix).saturating_add(8) {
+        let next = match (dir, unit) {
+            (Dir::Right, Unit::Grapheme) => cur.next_visual(&p.layout),
+            (Dir::Left, Unit::Grapheme) => cur.previous_visual(&p.layout),
+            (Dir::Right, Unit::Word) => cur.next_visual_word(&p.layout),
+            (Dir::Left, Unit::Word) => cur.previous_visual_word(&p.layout),
+        };
+        if next == cur {
+            break;
+        }
+        cur = next;
+        // Inside the LRM/RLM prefix: not a layer position.
+        let Some(c) = p.to_layer(cur) else { continue };
+        // A hidden line of an overflowing box.
+        if c.byte > end {
+            break;
+        }
+        let g = caret_geometry(l, text, c);
+        // parley left the line: lines are crossed below, by paragraph direction.
+        if g.line != start.line {
+            break;
+        }
+        // Between a letter and its marks.
+        if stops.binary_search(&c.byte.saturating_sub(p.start)).is_err() {
+            continue;
+        }
+        // A zero-width stop at the same place.
+        if (g.x - start.x).abs() < SAME_X {
+            continue;
+        }
+        return c;
+    }
+    cross(l, text, from, start, dir)
+}
+
+/// Vertical type keeps moving in text order (RTL in vertical type is a non-goal): → / ↓ forward.
+fn logical_step(text: &str, from: Caret, dir: Dir, unit: Unit) -> Caret {
+    let idx = crate::layout::char_index(text, from.byte);
+    let forward = dir == Dir::Right;
+    let to = match unit {
+        Unit::Grapheme => crate::layout::grapheme_step(text, idx, forward),
+        Unit::Word => crate::layout::word_boundary(text, idx, forward),
+    };
+    Caret::new(crate::layout::byte_index(text, to), false)
+}
+
+/// Leaves the caret's line in `dir`. A word step that stopped short goes to the line's edge
+/// first; at the edge the caret goes to the neighbouring drawn line (see [`step`]).
+fn cross(l: &TextLayout, text: &str, from: Caret, start: CaretGeom, dir: Dir) -> Caret {
+    let Some(line) = l.lines.get(start.line) else { return from };
+    let right = dir == Dir::Right;
+    if let Some(edge) = edge_caret(l, text, start.line, right)
+        && (caret_geometry(l, text, edge).x - start.x).abs() >= SAME_X
+    {
+        return snap_to_grapheme(text, edge);
+    }
+    let forward = right != line.rtl;
+    let target = if forward { start.line.checked_add(1) } else { start.line.checked_sub(1) };
+    let Some((li, next)) = target.and_then(|i| l.lines.get(i).map(|n| (i, n))) else { return from };
+    // Forward: the next line's start edge (its right side in RTL). Backward: the previous line's
+    // end edge (its left side in RTL).
+    let at_right = forward == next.rtl;
+    snap_to_grapheme(text, edge_caret(l, text, li, at_right).unwrap_or(Caret::new(next.range.start, false)))
+}
+
+/// The caret on the left or right visual edge of line `li`: outside its outermost cluster
+/// (trailing whitespace included, forced line breaks not). An empty line: its start.
+fn edge_caret(l: &TextLayout, text: &str, li: usize, right: bool) -> Option<Caret> {
+    let on_line = || l.clusters.iter().filter(|c| c.line == li && !is_hard_break(text, c));
+    let outer = if right { on_line().max_by(|a, b| (a.x + a.advance).total_cmp(&(b.x + b.advance))) } else { on_line().min_by(|a, b| a.x.total_cmp(&b.x)) };
+    let Some(c) = outer else { return l.lines.get(li).map(|ln| Caret::new(ln.range.start, false)) };
+    // The outer side is the cluster's trailing edge when it is its end.
+    let trailing = right != c.rtl;
+    Some(Caret::new(if trailing { c.range.end } else { c.range.start }, trailing))
+}
+
+/// The grapheme boundary at or after `c`: parley 0.11 can wrap a line inside an RTL grapheme
+/// (1a follow-up), leaving a line edge between a letter and its mark.
+fn snap_to_grapheme(text: &str, c: Caret) -> Caret {
+    let b = crate::segment::grapheme_boundaries(text);
+    match b.binary_search(&c.byte) {
+        Ok(_) => c,
+        Err(i) => b.get(i).map_or(c, |&byte| Caret::new(byte, false)),
+    }
+}
+
+/// End of the drawn text: an overflowing box draws fewer lines than parley keeps.
+fn drawn_end(l: &TextLayout) -> usize {
+    l.lines.last().map_or(0, |ln| ln.range.end)
+}
+
+/// `c` on a char boundary and inside the drawn text.
+fn clamp(l: &TextLayout, text: &str, c: Caret) -> Caret {
+    let mut b = c.byte.min(text.len());
+    while b > 0 && !text.is_char_boundary(b) {
+        b -= 1;
+    }
+    let end = drawn_end(l);
+    if b > end { Caret::new(end, end > 0) } else { Caret::new(b, c.upstream) }
 }
