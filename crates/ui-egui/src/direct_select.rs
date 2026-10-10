@@ -35,7 +35,7 @@ pub enum PathRef {
 
 impl PathRef {
     /// The engine's target params for this path.
-    fn params(self) -> Value {
+    pub(crate) fn params(self) -> Value {
         match self {
             PathRef::Work => json!({"name": "work"}),
             PathRef::Layer(id) => json!({"name": "layer", "layer": id}),
@@ -104,19 +104,21 @@ impl Edit {
     }
 }
 
-/// Is Direct Selection what the pointer does now: its own tool, or the Pen with ⌘/Ctrl held.
+/// Is Direct Selection what the pointer does now: its own tool, or the Pen or an anchor point
+/// tool with ⌘/Ctrl held.
 fn direct(tool: Tool, mods: Modifiers) -> bool {
-    tool == Tool::DirectSelection || (tool == Tool::Pen && mods.command)
+    tool == Tool::DirectSelection || (matches!(tool, Tool::Pen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint) && mods.command)
 }
 
-/// Does the canvas draw Direct Selection's overlay instead of the plain path outlines?
+/// Does the canvas draw Direct Selection's overlay instead of the plain path outlines? The Add /
+/// Delete Anchor Point tools show it too: they edit the same paths.
 pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
-    direct(app.ui.tool, mods) || app.ui.direct_selection.drag.is_some()
+    direct(app.ui.tool, mods) || app.ui.direct_selection.drag.is_some() || matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint)
 }
 
 /// The paths Direct Selection edits, front first: the targeted vector mask or the active shape
 /// layer's path, then the work path.
-fn candidates(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
+pub(crate) fn candidates(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
     let layer = crate::vector_ui::targeted_vector_mask(app).or_else(|| crate::vector_ui::active_shape_path(app));
     let work = app.session.active().and_then(|st| st.doc.work_path.clone());
     layer.map(|(id, p)| (PathRef::Layer(id), p)).into_iter().chain(work.map(|p| (PathRef::Work, p))).collect()

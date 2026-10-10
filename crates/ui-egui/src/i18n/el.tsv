@@ -3234,6 +3234,10 @@ cameraRaw	Yellow	Κίτρινο
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
 	Path Selection Tool	Επιλογή διαδρομής (Path Selection Tool)
 	Direct Selection Tool	Άμεση επιλογή (Direct Selection Tool)
+	Add Anchor Point Tool	Εργαλείο προσθήκης σημείου αγκύρωσης
+	Delete Anchor Point Tool	Εργαλείο διαγραφής σημείου αγκύρωσης
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Κάντε κλικ σε ένα τμήμα για να προσθέσετε σημείο αγκύρωσης · {alt}-κλικ σε σημείο αγκύρωσης για διαγραφή
+	Click an anchor point to delete it · {alt}-click a segment to add one	Κάντε κλικ σε ένα σημείο αγκύρωσης για να το διαγράψετε · {alt}-κλικ σε τμήμα για προσθήκη
 	Pen Tool	Πένα (Pen Tool)
 	Polygon Tool	Πολύγωνο (Polygon Tool)
 	Polygonal Lasso Tool	Πολυγωνικό λάσο (Polygonal Lasso Tool)

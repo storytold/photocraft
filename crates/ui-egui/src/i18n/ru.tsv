@@ -1547,6 +1547,10 @@
 	Pen Tool	Перо
 	Path Selection Tool	Выделение контура
 	Direct Selection Tool	Выделение узла
+	Add Anchor Point Tool	Добавить узел
+	Delete Anchor Point Tool	Удалить узел
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Щёлкните сегмент, чтобы добавить узел · {alt}-щелчок по узлу удаляет его
+	Click an anchor point to delete it · {alt}-click a segment to add one	Щёлкните узел, чтобы удалить его · {alt}-щелчок по сегменту добавляет узел
 	Rectangle Tool	Прямоугольник
 	Ellipse Tool	Овал
 	Triangle Tool	Треугольник

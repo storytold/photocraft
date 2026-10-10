@@ -3787,6 +3787,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::direct_select::pointer(app, ev, mods) {
         return;
     }
+    // Add / Delete Anchor Point tools (#1044).
+    if crate::anchor_tools::pointer(app, ev, mods) {
+        return;
+    }
     // Ruler, Count and Note tools.
     if crate::analysis_ui::pointer(app, ev, mods) {
         return;

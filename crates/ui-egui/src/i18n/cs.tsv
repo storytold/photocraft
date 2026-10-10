@@ -1667,6 +1667,10 @@
 	Paints from the document's opening state	Maluje ze stavu dokumentu při otevření
 	Path Selection Tool	Nástroj výběr cesty
 	Direct Selection Tool	Nástroj přímý výběr
+	Add Anchor Point Tool	Nástroj přidat kotevní bod
+	Delete Anchor Point Tool	Nástroj odstranit kotevní bod
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Klepnutím na segment přidáte kotevní bod · {alt}+klik na kotevní bod jej odstraní
+	Click an anchor point to delete it · {alt}-click a segment to add one	Klepnutím na kotevní bod jej odstraníte · {alt}+klik na segment přidá nový bod
 	Pattern Overlay	Překrytí vzorkem
 	Pen Pressure	Přítlak pera
 	Pen Tilt	Náklon pera

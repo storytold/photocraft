@@ -1638,6 +1638,10 @@
 	Paints from the document's opening state	Schildert vanuit de staat waarin het document werd geopend
 	Path Selection Tool	Padselectiegereedschap
 	Direct Selection Tool	Direct-selectiegereedschap
+	Add Anchor Point Tool	Gereedschap Ankerpunt toevoegen
+	Delete Anchor Point Tool	Gereedschap Ankerpunt verwijderen
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Klik op een segment om een ankerpunt toe te voegen · {alt}-klik op een ankerpunt om het te verwijderen
+	Click an anchor point to delete it · {alt}-click a segment to add one	Klik op een ankerpunt om het te verwijderen · {alt}-klik op een segment om er een toe te voegen
 	Pattern Overlay	Patroonbedekking
 	Pen Pressure	Pendruk
 	Pen Tilt	Penkanteling

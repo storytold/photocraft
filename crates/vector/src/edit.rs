@@ -1,6 +1,6 @@
-//! Point-level path editing, Photoshop's Direct Selection and Convert Point tools: move anchors,
-//! drag direction handles, reshape a segment by dragging it, convert between smooth and corner
-//! points, and hit-test a path's parts. Pure geometry on [`Path`]; the engine's `path.*` edit
+//! Point-level path editing, Photoshop's Direct Selection, Convert Point and Add / Delete Anchor
+//! Point tools: move anchors, drag direction handles, reshape a segment by dragging it, convert
+//! between smooth and corner points, insert and remove anchors, and hit-test a path's parts. Pure geometry on [`Path`]; the engine's `path.*` edit
 //! commands and the canvas previews share it, so a preview is exactly what the command commits.
 //!
 //! Knots are addressed as `[subpath, knot]`. Every edit validates its indices and returns an
@@ -167,6 +167,59 @@ pub fn bend_segment(path: &mut Path, knot: [usize; 2], t: f64, d: [f64; 2]) -> R
     Ok(())
 }
 
+fn lerp(a: Point, b: Point, t: f64) -> Point {
+    Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+}
+
+/// Add Anchor Point: inserts an anchor into the segment leaving `knot` at curve parameter `t`
+/// (strictly between 0 and 1) and returns the new knot's `[subpath, knot]`. A curve is split at
+/// `t` (de Casteljau), so its shape does not change and the new anchor is smooth; on a straight
+/// segment (both handles retracted) the new anchor is a corner on the line.
+pub fn add_anchor(path: &mut Path, knot: [usize; 2], t: f64) -> Result<[usize; 2], String> {
+    if !(t.is_finite() && t > 0.0 && t < 1.0) {
+        return Err("`t` must be strictly between 0 and 1".into());
+    }
+    let end = segment_end(path, knot)?;
+    let retracted = |k: &Knot, h: Handle| dist(handle(k, h), k.anchor) < 1e-9;
+    let a = *knot_mut(path, knot)?;
+    let b = *knot_mut(path, end)?;
+    let new = if retracted(&a, Handle::Out) && retracted(&b, Handle::In) {
+        let p = lerp(a.anchor, b.anchor, t);
+        Knot::corner(p.x, p.y)
+    } else {
+        let (p01, p12, p23) = (lerp(a.anchor, a.out_ctrl, t), lerp(a.out_ctrl, b.in_ctrl, t), lerp(b.in_ctrl, b.anchor, t));
+        let (p012, p123) = (lerp(p01, p12, t), lerp(p12, p23, t));
+        knot_mut(path, knot)?.out_ctrl = p01;
+        knot_mut(path, end)?.in_ctrl = p23;
+        Knot::smooth(lerp(p012, p123, t), p012, p123)
+    };
+    let [s, k] = knot;
+    let at = k.checked_add(1).ok_or_else(|| format!("no segment leaves knot {k} of subpath {s}"))?;
+    let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
+    // `at` ≤ len: the segment leaving `k` exists, so `k` < len.
+    sp.knots.insert(at.min(sp.knots.len()), new);
+    Ok([s, at])
+}
+
+/// Delete Anchor Point: removes a knot. Its neighbours are joined by one segment that keeps the
+/// previous anchor's out handle and the next anchor's in handle; a closed subpath stays closed.
+/// Removing a subpath's last anchor removes the subpath. Refused (unchanged) when it would leave
+/// the path with no anchors at all. Returns whether the subpath was removed.
+pub fn delete_anchor(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String> {
+    knot_mut(path, [s, k])?;
+    let total: usize = path.subpaths.iter().map(|sp| sp.knots.len()).fold(0, usize::saturating_add);
+    if total <= 1 {
+        return Err("can't delete the path's only anchor point; delete the path instead".into());
+    }
+    let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
+    if sp.knots.len() <= 1 {
+        path.subpaths.remove(s);
+        return Ok(true);
+    }
+    sp.knots.remove(k);
+    Ok(false)
+}
+
 /// Every anchor of subpath `s` (⌥-click with Direct Selection selects the whole subpath).
 pub fn subpath_anchors(path: &Path, s: usize) -> Vec<[usize; 2]> {
     path.subpaths.get(s).map_or_else(Vec::new, |sp| (0..sp.knots.len()).map(|k| [s, k]).collect())
@@ -186,7 +239,8 @@ pub fn anchors_in(path: &Path, [x0, y0, x1, y1]: [f64; 4]) -> Vec<[usize; 2]> {
     out
 }
 
-fn eval(seg: &[Point; 4], t: f64) -> Point {
+/// The point at parameter `t` of the cubic segment `[anchor, out, in, anchor]`.
+pub fn eval(seg: &[Point; 4], t: f64) -> Point {
     let u = 1.0 - t;
     let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
     Point::new(a * seg[0].x + b * seg[1].x + c * seg[2].x + d * seg[3].x, a * seg[0].y + b * seg[1].y + c * seg[2].y + d * seg[3].y)
@@ -329,6 +383,77 @@ mod tests {
         assert_eq!(r, [0, 0]);
         assert!((t - 0.5).abs() < 0.02, "{t}");
         assert_eq!(hit(&tri(), Point::new(50.0, 40.0), 3.0, &[]), None);
+    }
+
+    #[test]
+    fn adding_to_a_curve_splits_it_without_changing_its_shape() {
+        for t in [0.5, 0.13, 0.9] {
+            let mut p = curve();
+            let seg = curve().subpaths[0].segments()[0];
+            let r = add_anchor(&mut p, [0, 0], t).unwrap();
+            assert_eq!((r, p.subpaths[0].knots.len()), ([0, 1], 4));
+            let k = at(&p, 0, 1);
+            assert!(k.smooth, "a split curve gets a smooth anchor");
+            assert!(dist(k.anchor, eval(&seg, t)) < 1e-9, "the new anchor is where it was clicked");
+            // 100 evenly spaced parameters of the old segment land on the two halves.
+            let halves = p.subpaths[0].segments();
+            for i in 0..=100 {
+                let u = i as f64 / 100.0;
+                let q = if u <= t { eval(&halves[0], u / t) } else { eval(&halves[1], (u - t) / (1.0 - t)) };
+                assert!(dist(q, eval(&seg, u)) < 0.01, "t={t} u={u}");
+            }
+            assert_eq!(halves[2], curve().subpaths[0].segments()[1], "the next segment is untouched");
+        }
+    }
+
+    #[test]
+    fn adding_to_a_straight_segment_makes_a_corner_on_the_line() {
+        let mut p = tri();
+        // The closing segment (2 → 0) wraps: the new anchor goes last.
+        assert_eq!(add_anchor(&mut p, [0, 2], 0.5).unwrap(), [0, 3]);
+        assert_eq!(at(&p, 0, 3), Knot::corner(25.0, 40.0));
+        assert_eq!(add_anchor(&mut p, [0, 0], 0.25).unwrap(), [0, 1]);
+        assert_eq!(at(&p, 0, 1), Knot::corner(25.0, 0.0));
+        assert_eq!(p.subpaths[0].knots.len(), 5);
+        assert!(p.subpaths[0].closed);
+    }
+
+    #[test]
+    fn deleting_joins_the_neighbours_with_their_handles() {
+        let mut sq = Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)])]);
+        assert!(!delete_anchor(&mut sq, [0, 2]).unwrap());
+        assert_eq!((sq.subpaths[0].knots.len(), sq.subpaths[0].closed), (3, true));
+        let mut c = Path::new(vec![Subpath::polyline(&[(0.0, 50.0), (50.0, 0.0), (100.0, 50.0)])]);
+        c.subpaths[0].knots[0].out_ctrl = Point::new(10.0, 20.0);
+        c.subpaths[0].knots[2].in_ctrl = Point::new(90.0, 20.0);
+        delete_anchor(&mut c, [0, 1]).unwrap();
+        assert_eq!(c.subpaths[0].segments(), vec![[Point::new(0.0, 50.0), Point::new(10.0, 20.0), Point::new(90.0, 20.0), Point::new(100.0, 50.0)]]);
+    }
+
+    #[test]
+    fn deleting_a_subpaths_last_anchor_removes_it_but_never_the_last_anchor() {
+        let mut p = tri();
+        p.subpaths.push(Subpath::polyline(&[(5.0, 5.0)]));
+        assert!(delete_anchor(&mut p, [1, 0]).unwrap());
+        assert_eq!(p, tri());
+        let mut one = Path::new(vec![Subpath::polyline(&[(5.0, 5.0)])]);
+        let before = one.clone();
+        assert!(delete_anchor(&mut one, [0, 0]).is_err());
+        assert_eq!(one, before);
+    }
+
+    #[test]
+    fn bad_anchor_edits_are_errors_and_change_nothing() {
+        let mut p = curve();
+        for t in [0.0, 1.0, -0.5, 2.0, f64::NAN, f64::INFINITY] {
+            assert!(add_anchor(&mut p, [0, 0], t).is_err(), "t={t}");
+        }
+        assert!(add_anchor(&mut p, [0, 2], 0.5).is_err(), "an open subpath's last knot starts no segment");
+        assert!(add_anchor(&mut p, [0, usize::MAX], 0.5).is_err());
+        assert!(add_anchor(&mut p, [usize::MAX, 0], 0.5).is_err());
+        assert!(delete_anchor(&mut p, [0, 3]).is_err());
+        assert!(delete_anchor(&mut p, [1, 0]).is_err());
+        assert_eq!(p, curve());
     }
 
     #[test]

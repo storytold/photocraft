@@ -1629,6 +1629,10 @@
 	Paints from the document's opening state	Pinta a partir do estado de abertura do documento
 	Path Selection Tool	Ferramenta Seleção de demarcador
 	Direct Selection Tool	Ferramenta Seleção direta
+	Add Anchor Point Tool	Ferramenta Adicionar ponto de ancoragem
+	Delete Anchor Point Tool	Ferramenta Excluir ponto de ancoragem
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Clique em um segmento para adicionar um ponto de ancoragem · {alt}-clique em um ponto de ancoragem para excluí-lo
+	Click an anchor point to delete it · {alt}-click a segment to add one	Clique em um ponto de ancoragem para excluí-lo · {alt}-clique em um segmento para adicionar um
 	Pattern Overlay	Sobreposição de padrão
 	Pen Pressure	Pressão da caneta
 	Pen Tilt	Inclinação da caneta

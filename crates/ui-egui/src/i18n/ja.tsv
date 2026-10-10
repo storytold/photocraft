@@ -1655,6 +1655,10 @@
 	Paints from the document's opening state	ドキュメントを開いた時点の状態から描画します
 	Path Selection Tool	パスコンポーネント選択ツール
 	Direct Selection Tool	パス選択ツール
+	Add Anchor Point Tool	アンカーポイントの追加ツール
+	Delete Anchor Point Tool	アンカーポイントの削除ツール
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	セグメントをクリックしてアンカーポイントを追加 · {alt}+クリック: アンカーポイントを削除
+	Click an anchor point to delete it · {alt}-click a segment to add one	アンカーポイントをクリックして削除 · {alt}+クリック: セグメントにアンカーポイントを追加
 	Pattern Overlay	パターンオーバーレイ
 	Pen Pressure	ペンの筆圧
 	Pen Tilt	ペンの傾き

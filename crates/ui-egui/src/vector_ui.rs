@@ -486,6 +486,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
+        if paths {
+            crate::anchor_tools::draw_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
+        }
     } else if paths {
         if vector_tool {
             if let Some(wp) = &doc.work_path {
@@ -535,7 +538,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !(is_shape_tool(tool) || matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)) {
+    if !(is_shape_tool(tool) || matches!(tool, Tool::Pen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::PathSelection | Tool::DirectSelection)) {
         return false;
     }
     let t = Tokens::get(ui.ctx());
@@ -556,6 +559,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 &[("shift", &shift), ("alt", &alt)],
             ),
         );
+        return true;
+    }
+    if matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint) {
+        let hint = if tool == Tool::AddAnchorPoint {
+            tl!("Click a segment to add an anchor point · {alt}-click an anchor to delete it")
+        } else {
+            tl!("Click an anchor point to delete it · {alt}-click a segment to add one")
+        };
+        lbl(ui, &crate::i18n::fmt(hint, &[("alt", &crate::shortcuts::pretty("Alt"))]));
         return true;
     }
     if tool == Tool::Pen {
