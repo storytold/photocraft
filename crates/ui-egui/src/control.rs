@@ -1820,6 +1820,7 @@ mod tests {
 
     #[test]
     fn app_save_runs_as_a_background_job_and_the_final_reply_carries_the_path() {
+        use photocraft_engine::automate_cmds::ScriptBinding;
         use serde_json::json;
         let saved: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
         let record = saved.clone();
@@ -1833,6 +1834,16 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.background_jobs = true;
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        // A "Save Document" binding that would leave a trace: automation saves never fire it.
+        app.session.edit_prefs(|prefs| {
+            prefs.script_events.enabled = true;
+            prefs.script_events.bindings = vec![ScriptBinding {
+                event: "saveDocument".into(),
+                script: None,
+                steps: Some(json!([["layer.new.layer", {"name": "From the binding"}]])),
+                name: "Binding".into(),
+            }];
+        });
         let ctx = egui::Context::default();
         let (tx, rx) = std::sync::mpsc::channel();
         let app = app.with_control(rx);
@@ -1855,8 +1866,25 @@ mod tests {
         assert!(!app.saving(), "the save finished");
         assert_eq!(*saved.lock().unwrap(), vec!["out.psd".to_string()]);
         assert_eq!(app.session.active().unwrap().path.as_deref(), Some("out.psd"), "the save was recorded");
+        assert_eq!(app.session.active().unwrap().doc.layer_count(), 1, "the saveDocument binding did not run for an automation save");
         let r = reply.recv().unwrap();
         assert_eq!(r["result"], json!({"path": "out.psd", "warnings": ["Layers were flattened"]}), "{r}");
+
+        // An interactive save (File › Save's worker) still fires the binding.
+        let save = std::sync::Arc::new(|_doc: &photocraft_doc::Document, path: &str, _settings: &crate::ExportSettings, _ctl: &crate::jobs_ui::SaveCtl| {
+            let _ = path;
+            Ok(Vec::new())
+        }) as crate::SaveFileFn;
+        crate::jobs_ui::start_save(&mut app, "user.psd".into(), crate::ExportSettings::default(), false, save, false).unwrap();
+        for _ in 0..100 {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            if !app.saving() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.saving(), "the interactive save finished");
+        assert_eq!(app.session.active().unwrap().doc.layer_count(), 2, "the binding runs for an interactive save");
     }
 
     #[test]

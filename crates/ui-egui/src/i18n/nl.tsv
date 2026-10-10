@@ -2054,6 +2054,7 @@
 	Cancelled {label}	{label} geannuleerd
 	Esc to cancel	Esc om te annuleren
 	Opening {name}	{name} openen
+	Saved {name}	{name} opgeslagen
 	Saving {name}	{name} opslaan
 	A save to {name} is still running; try again when it finishes	Er wordt nog opgeslagen naar {name}; probeer het opnieuw zodra dat klaar is
 	{label} is writing the file and can no longer be cancelled	{label} schrijft het bestand en kan niet meer worden geannuleerd

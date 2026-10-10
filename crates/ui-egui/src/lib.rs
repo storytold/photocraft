@@ -244,6 +244,15 @@ pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
 /// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
 pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &jobs_ui::SaveCtl) -> Result<Vec<String>, String> + Send + Sync>;
+
+/// Who a finished save serves.
+#[derive(Clone, Copy)]
+pub(crate) enum SaveKind {
+    /// Interactive: arm the document's file and fire user-configured hooks.
+    User,
+    /// Automation: flat formats stay copies (#2579) and hooks never fire.
+    Automation,
+}
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -1179,7 +1188,7 @@ impl PhotocraftApp {
         if self.background_jobs
             && let Some(save) = self.services.save_file.clone()
         {
-            return jobs_ui::start_save(self, path, settings.clone(), copy, save);
+            return jobs_ui::start_save(self, path, settings.clone(), copy, save, false);
         }
         let st = self.session.active().ok_or("no document")?;
         let (doc, revision) = (st.doc.id, st.revision);
@@ -1194,18 +1203,36 @@ impl PhotocraftApp {
     /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
     /// state (unless a copy), the status, script events and the warnings.
     pub(crate) fn saved(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
-        self.ui.status = format!("Saved {path}");
+        self.saved_inner(doc, revision, path, warnings, copy, SaveKind::User);
+    }
+
+    /// [`Self::saved`] for automation saves: no user-configured hooks (docs/control-protocol.md).
+    pub(crate) fn saved_automation(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
+        self.saved_inner(doc, revision, path, warnings, copy, SaveKind::Automation);
+    }
+
+    fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
+        // Automation: only a layered save becomes the document's file; a flat one is a
+        // copy, as in the headless server (#2579).
+        let (hooks, arm) = match kind {
+            SaveKind::User => (true, true),
+            SaveKind::Automation => (false, photocraft_engine::file_cmds::extension(path).is_some_and(|e| photocraft_engine::file_cmds::layered_extension(&e))),
+        };
+        self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
         if !copy {
             // A background save may finish while another document is active (or after its
             // document was closed, when there is nothing left to record).
             let _ = self.with_document(doc, |app| {
-                if let Some(st) = app.session.active_mut() {
+                if let Some(st) = app.session.active_mut()
+                    && arm
+                {
                     st.saved_to(path.to_string());
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
-                if let Some(i) = app.session.active_index()
+                if hooks
+                    && let Some(i) = app.session.active_index()
                     && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, i)
                 {
                     app.ui.status = format!("Saved {path}; {} image assets in {}", r["files"].as_array().map_or(0, Vec::len), r["dir"].as_str().unwrap_or(""));
@@ -1214,7 +1241,8 @@ impl PhotocraftApp {
             });
         }
         self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(path)), warnings);
+        let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
+        notices::io_warnings(self, &what, warnings);
         self.sync_views();
     }
 
@@ -1233,35 +1261,27 @@ impl PhotocraftApp {
             path.or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
                 .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?
         };
+        let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
         // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
         if self.background_jobs
             && let Some(save) = self.services.automation_save.clone()
         {
-            return match jobs_ui::start_save(self, target.clone(), ExportSettings::default(), false, save)? {
-                Some((path, warnings)) => Ok(json!({"path": path, "warnings": warnings})),
+            return match jobs_ui::start_save(self, target.clone(), ExportSettings::default(), false, save, true)? {
+                Some((path, warnings)) => Ok(reply(&path, &warnings)),
                 None => {
                     let job = self.jobs.last_started;
-                    Ok(json!({"path": target, "job": job, "pending": true}))
+                    Ok(json!({"path": target, "job": job, "pending": true, "warnings": []}))
                 }
             };
         }
         let state = self.session.active().ok_or("no document")?;
+        let (doc, revision) = (state.doc.id, state.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
-        // Only a layered save becomes the document's file; a flat one is a copy, as in the
-        // headless server (#2579).
-        if photocraft_engine::file_cmds::extension(&target).is_some_and(|e| photocraft_engine::file_cmds::layered_extension(&e))
-            && let Some(state) = self.session.active_mut()
-        {
-            state.saved_to(target.clone());
-        }
-        self.ui.status = format!("Saved {target}");
-        self.ui.status_error = false;
-        notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&target)), &warnings);
-        self.sync_views();
-        Ok(json!({"path": target, "warnings": warnings}))
+        self.saved_automation(doc, revision, &target, &warnings, false);
+        Ok(reply(&target, &warnings))
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {

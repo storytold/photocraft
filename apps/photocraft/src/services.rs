@@ -200,22 +200,32 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
     opts
 }
 
-/// A save on a worker thread (`Services::save_file`, #2017): encode, then write atomically.
-/// Cancelling while encoding leaves the file on disk untouched; once writing starts the save
-/// can't be cancelled.
-fn save_file(
+/// A save on a worker thread (`Services::save_file` and `Services::automation_save`, #2017):
+/// encode, then write through `write`. Cancelling while encoding leaves the target untouched;
+/// once writing starts the save can't be cancelled.
+fn save_through(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+    write: impl Fn(&str, &[u8]) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let r = crate::crash_guard::guard("Save", || photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string()))?;
     ctl.commit()?;
     ctl.progress(0.0, "Writing");
-    write_atomic(Path::new(path), &r.bytes)?;
+    write(path, &r.bytes)?;
     Ok(r.warnings)
+}
+
+fn save_file(
+    doc: &Document,
+    path: &str,
+    settings: &photocraft_ui_egui::ExportSettings,
+    ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+) -> Result<Vec<String>, String> {
+    save_through(doc, path, settings, ctl, |p, b| write_atomic(Path::new(p), b))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -317,13 +327,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
-            ctl.progress(0.0, "Encoding");
-            let opts = export_options(settings);
-            let r = crate::crash_guard::guard("Save", || photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string()))?;
-            ctl.commit()?;
-            ctl.progress(0.0, "Writing");
-            workspace.write(path, &r.bytes).map_err(|error| error.to_string())?;
-            Ok(r.warnings)
+            save_through(doc, path, settings, ctl, |p, b| workspace.write(p, b).map_err(|e| e.to_string()))
         }) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
