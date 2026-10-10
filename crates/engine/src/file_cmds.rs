@@ -830,10 +830,10 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let n = stack.layers.len();
     if p.get("createSmartObject").and_then(Value::as_bool).unwrap_or(false) {
         // "Create Smart Object after Loading Layers": the layers go inside one smart object, ready
-        // for Layer › Smart Objects › Stack Mode.
-        let children = std::mem::take(&mut stack.layers);
-        let group = Layer::new(stem(&paths[0]), LayerContent::Group(photocraft_doc::Group { children, expanded: true, artboard: None }));
-        let smart = crate::smart_cmds::layer_to_smart(&stack, &group)?;
+        // for Layer › Smart Objects › Stack Mode. Like Photoshop, they sit at the top level of the
+        // contents, with no wrapper group.
+        let layers = std::mem::take(&mut stack.layers);
+        let smart = crate::smart_cmds::layers_to_smart(&stack, &stem(&paths[0]), layers)?;
         stack.layers = vec![smart];
     }
     let i = s.add_document(stack, None);
