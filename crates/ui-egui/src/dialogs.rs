@@ -253,8 +253,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             tl!("Create")
                         } else if d.kind == DialogKind::Update {
                             tl!("Download Update")
+                        } else if d.kind == DialogKind::Update {
+                            tl!("Download Update")
                         } else if crate::delete_layer_prompt::owns(&d.fields) {
                             tl!("Delete")
+                        } else if d.fields.contains_key("__export") {
+                            tl!("Export")
+                        } else {
+
                         } else if d.fields.contains_key("__export") {
                             tl!("Export")
                         } else {
