@@ -1741,6 +1741,7 @@
 	Invalid {mode} profile	Profilo {mode} non valido
 	Unnamed {mode} profile	Profilo {mode} senza nome
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Risoluzione: {dpi} pixel/pollice
 	Doc: {w} × {h} px	Doc: {w} × {h} px
 	Frame {current} / {total}	Fotogramma {current} / {total}

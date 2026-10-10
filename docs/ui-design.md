@@ -82,6 +82,11 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 
 ## Menus
 
+The Pro status bar's Document Dimensions readout follows Preferences › Units & Rulers › Rulers,
+including changes made from a ruler's context menu. It uses the document resolution for physical
+units, each side's own extent for percentages and the selected point-size convention for points
+and picas. The readout retains the document's pixels-per-inch value.
+
 `menu_catalog.rs` holds Photoshop's menu tree (standard command names, order, separators, default shortcuts). Items whose id matches an engine or UI command are live; others render disabled until implemented. Give new commands the catalogue's id (for example `image.imageSize`) and they light up in the right place automatically.
 
 Menus never run off the window: the menu bar's menus and submenus scroll with arrows (`menu_nav::level`), and long right-click menus (Layers, canvas tools, Channels, Paths, document tabs) wrap their rows in `widgets::menu_scroll`, so they move up to fit and scroll only when taller than the visible window.

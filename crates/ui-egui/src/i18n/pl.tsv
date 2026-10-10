@@ -1740,6 +1740,7 @@
 	Invalid {mode} profile	Nieprawidłowy profil {mode}
 	Unnamed {mode} profile	Profil {mode} bez nazwy
 	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Rozdzielczość: {dpi} pikseli/cal
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
 	Frame {current} / {total}	Klatka {current} / {total}

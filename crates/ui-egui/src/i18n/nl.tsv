@@ -1728,6 +1728,7 @@
 	Invalid {mode} profile	Ongeldig {mode}-profiel
 	Unnamed {mode} profile	Naamloos {mode}-profiel
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Resolutie: {dpi} pixels/inch
 	Doc: {w} × {h} px	Doc: {w} × {h} px
 	Frame {current} / {total}	Frame {current} / {total}

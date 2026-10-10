@@ -1713,6 +1713,7 @@
 	Scratch: {size}	스크래치: {size}
 	Untagged {mode}	프로파일 없는 {mode}
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	해상도: {dpi}픽셀/인치
 	Doc: {w} × {h} px	문서: {w} × {h} px
 	Frame {current} / {total}	프레임 {current} / {total}
