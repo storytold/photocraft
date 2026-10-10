@@ -2000,6 +2000,7 @@
 	Create Warped Text	建立彎曲文字
 	Rasterize Smart Object	點陣化智慧型物件
 	Rasterize Fill Content	點陣化填滿內容
+	Rasterize Layer Style	點陣化圖層樣式
 	Unlock: picking a preset replaces these settings	解除鎖定：選擇預設集會取代這些設定
 	Lock: keep these settings when picking another preset	鎖定：選擇其他預設集時保留這些設定
 	Diameter:	直徑：

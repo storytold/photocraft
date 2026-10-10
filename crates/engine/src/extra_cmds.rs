@@ -68,7 +68,7 @@ pub(crate) fn style_targets(s: &Session, p: &Value, fits: impl Fn(&Layer) -> boo
 }
 
 /// A key that makes the sub-commands of one command share a single history step.
-fn step_key(s: &Session, what: &str) -> String {
+pub(crate) fn step_key(s: &Session, what: &str) -> String {
     format!("{what}#{}", s.active().map_or(0, |d| d.revision))
 }
 
@@ -613,7 +613,7 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     s
 }
 
-fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
+pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
     let d = s.active()?;
     Some(match &d.doc.layer(id)?.content {
         LayerContent::Text(_) => "type",
@@ -624,8 +624,19 @@ fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
     })
 }
 
-/// Rasterize one layer; `only` restricts it to one kind. Returns false when there was nothing to do.
-fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
+/// Rasterize one layer; `only` restricts it to one kind. Without `only` (Rasterize › Layer / All
+/// Layers: "all vector data") a vector mask becomes a pixel mask too; layer effects stay live, as
+/// in Photoshop (Rasterize › Layer Style bakes them). Returns false when there was nothing to do.
+pub(crate) fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
+    let vector_mask = only.is_none() && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some());
+    let content = rasterize_content(s, id, only, key)?;
+    if vector_mask {
+        s.execute("layer.rasterize.vectorMask", json!({"layer": id.0, "coalesce": key}))?;
+    }
+    Ok(content || vector_mask)
+}
+
+fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
     let Some(kind) = kind_of(s, id).filter(|k| only.is_none_or(|o| o == *k)) else { return Ok(false) };
     match kind {
         "type" => {

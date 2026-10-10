@@ -2002,6 +2002,7 @@
 	Create Warped Text	Crear texto deformado
 	Rasterize Smart Object	Rasterizar objeto inteligente
 	Rasterize Fill Content	Rasterizar contenido de relleno
+	Rasterize Layer Style	Rasterizar estilo de capa
 	Unlock: picking a preset replaces these settings	Desbloquear: al elegir un preajuste se reemplazan estos ajustes
 	Lock: keep these settings when picking another preset	Bloquear: conservar estos ajustes al elegir otro preajuste
 	Diameter:	Diámetro:

@@ -42,10 +42,12 @@ fn kind_blocks(id: &str, l: &Layer) -> bool {
         "layer.rasterize.fillContent" => !matches!(c, LayerContent::Fill(_)),
         "layer.rasterize.smartObject" => !matches!(c, LayerContent::Smart(_)),
         "layer.rasterize.vectorMask" => l.vector_mask.is_none(),
-        // What the command converts: type, shape, fill and Smart Object layers (a raster layer with a
-        // vector mask has Rasterize › Vector Mask; the command used to be enabled for layers with
-        // effects or a vector mask and then fail with "nothing to rasterize").
-        "layer.rasterize.layer" => !matches!(c, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Fill(_) | LayerContent::Smart(_)),
+        // What the command converts: type, shape, fill and Smart Object layers, and vector masks
+        // ("all vector data"). Effects stay live: Rasterize › Layer Style bakes them.
+        "layer.rasterize.layer" => {
+            l.vector_mask.is_none() && !matches!(c, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Fill(_) | LayerContent::Smart(_))
+        }
+        "layer.rasterize.layerStyle" => !photocraft_engine::rasterize_style_cmds::can_bake(l),
         "layer.layerStyle.copyLayerStyle" | "layer.layerStyle.clear" => l.effects.items.is_empty(),
         _ => id.starts_with("layer.combineShapes.") && !matches!(c, LayerContent::Shape(_)),
     }
@@ -84,9 +86,12 @@ enum Targets {
 /// layers happened to be active).
 fn selection_targets(id: &str) -> Option<Targets> {
     Some(match id {
-        "layer.rasterize.layer" | "layer.rasterize.type" | "layer.rasterize.shape" | "layer.rasterize.fillContent" | "layer.rasterize.smartObject" => {
-            Targets::Any
-        }
+        "layer.rasterize.layer"
+        | "layer.rasterize.layerStyle"
+        | "layer.rasterize.type"
+        | "layer.rasterize.shape"
+        | "layer.rasterize.fillContent"
+        | "layer.rasterize.smartObject" => Targets::Any,
         "layer.releaseClippingMask" | "layer.layerStyle.pasteLayerStyle" | "layer.layerStyle.clear" => Targets::Any,
         "layer.createClippingMask" => Targets::AllButLowest,
         "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => Targets::WithoutMask,
@@ -194,7 +199,7 @@ mod tests {
         }
     }
 
-    /// A document with a Background, plain layers, one with a mask, a type layer, a shape, a Smart
+    /// A document with a Background, plain layers, one with a mask, one with a vector mask, a type layer, a shape, a Smart
     /// Object, an adjustment layer and one with a drop shadow; `select` picks a selection (the last
     /// layer is active) and `copied` has a layer style on the clipboard.
     fn world(select: &[&str], copied: bool) -> photocraft_engine::Session {
@@ -206,6 +211,8 @@ mod tests {
         ids.insert("R1", id(s.execute("layer.new.layer", json!({"name": "R1"})).unwrap()));
         ids.insert("R2", id(s.execute("layer.new.layer", json!({"name": "R2"})).unwrap()));
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        ids.insert("V", id(s.execute("layer.new.layer", json!({"name": "V"})).unwrap()));
+        s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
         ids.insert("T", id(s.execute("type.create", json!({"text": "T", "size": 12, "x": 2, "y": 12})).unwrap()));
         ids.insert("S", id(s.execute("shape.create", json!({"kind": "rect", "rect": [4, 4, 6, 6]})).unwrap()));
         s.execute("layer.new.layer", json!({"name": "M"})).unwrap();
@@ -224,14 +231,16 @@ mod tests {
         s
     }
 
-    /// What a layer command can change: kind, clipping, mask and style of every layer.
+    /// What a layer command can change: kind, clipping, masks and style of every layer.
     fn fingerprint(s: &photocraft_engine::Session) -> Vec<String> {
         s.active()
             .unwrap()
             .doc
             .walk()
             .iter()
-            .map(|(_, _, l)| format!("{:?}|{}|{}|{}", std::mem::discriminant(&l.content), l.clipped, l.mask.is_some(), l.effects.items.len()))
+            .map(|(_, _, l)| {
+                format!("{:?}|{}|{}|{}|{}", std::mem::discriminant(&l.content), l.clipped, l.mask.is_some(), l.vector_mask.is_some(), l.effects.items.len())
+            })
             .collect()
     }
 
@@ -244,6 +253,7 @@ mod tests {
         // (command, an enabled item must really change something)
         let commands = [
             ("layer.rasterize.layer", true),
+            ("layer.rasterize.layerStyle", true),
             ("layer.createClippingMask", true),
             ("layer.layerMask.revealAll", true),
             ("layer.layerMask.hideAll", true),
@@ -272,6 +282,10 @@ mod tests {
             &["R1"],
             &["BG"],
             &["FX"],
+            &["V", "R1"],
+            &["R1", "V"],
+            &["V"],
+            &["V", "FX", "T"],
         ];
         let mut checked = 0;
         for sel in selections {

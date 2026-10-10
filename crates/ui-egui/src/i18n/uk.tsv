@@ -2764,6 +2764,7 @@ fontWeight	Italic	Курсивний
 	Create Warped Text	Створити деформований текст
 	Rasterize Smart Object	Растеризувати смартоб'єкт
 	Rasterize Fill Content	Растеризувати вміст заливки
+	Rasterize Layer Style	Растеризувати стиль шару
 	Toggle the Brush Settings panel  (F5)	Перемкнути панель налаштувань пензля  (F5)
 	Create new brush preset from the current settings	Створити новий набір пензля з поточних параметрів
 	Brush Settings…  (F5): every option of this brush	Налаштування пензля…  (F5): усі параметри цього пензля

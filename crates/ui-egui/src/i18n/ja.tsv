@@ -2006,6 +2006,7 @@
 	Create Warped Text	ワープテキストを作成
 	Rasterize Smart Object	スマートオブジェクトをラスタライズ
 	Rasterize Fill Content	塗りの内容をラスタライズ
+	Rasterize Layer Style	レイヤースタイルをラスタライズ
 	Unlock: picking a preset replaces these settings	ロック解除: プリセットを選ぶとこの設定は置き換わります
 	Lock: keep these settings when picking another preset	ロック: 別のプリセットを選んでもこの設定を保持します
 	Diameter:	直径:
