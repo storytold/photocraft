@@ -181,6 +181,18 @@ Bounded halo tiles reduce the large-mask workspace allocation bound from 192/288
 to about 115/163 MB, including output and 16 workers' scratch, excluding the source.
 See [method and results](octagonal-mask-performance.md).
 
+2026-10-10: five CPU imaging algorithms now reuse source work and interpolation.
+On an m7i.4xlarge (16 vCPUs), three alternating paired release runs measured
+dense Extrude Blocks (8/128 px, 24 MP RGB8) 160.301 s -> 0.387 s (414.69x);
+Blast (24 MP CMYK8) 6.231 s -> 0.709 s (8.79x);
+Spin Blur (36 MP RGB8) 9.439 s -> 5.869 s (1.61x);
+Lens Correction (24 MP CMYK16) 0.808 s -> 0.565 s (1.43x);
+Trap (50 px, 36 MP CMYK16) 4.627 s -> 1.333 s (3.47x).
+Default 30/30 px Extrude is 6.26x faster at 24 MP. All 72 full-operation output
+comparisons match exactly, including alpha, across 24 cases and 8/16/32-bit depths.
+Timers include surface assembly but exclude UI, undo and Trap document flattening.
+See [method, raw measurements and reproduction](five-algorithm-performance.md).
+
 ### Where we're going (priority order)
 
 1. **Ship the fixes:** cut 0.2.1 once the current batch lands, so users validate them.

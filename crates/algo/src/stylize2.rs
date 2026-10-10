@@ -2,6 +2,9 @@
 
 use photocraft_geom::Rect;
 
+mod extrude;
+mod wind;
+
 use crate::fxutil::{MAXC, luma, native, ncol, subtractive, xy};
 use crate::image::Image;
 use crate::noise::hash01;
@@ -86,6 +89,10 @@ pub(crate) fn extrude_reach(depth: f32) -> f32 {
 /// height, with shaded sides); Pyramids raise four shaded triangular faces.
 /// Heights are random or follow the cell's brightness.
 pub(crate) fn extrude(src: &Image, out: Rect, ctx: &Ctx, spec: &ExtrudeSpec) -> Vec<f32> {
+    extrude::blocks(src, out, ctx, spec).unwrap_or_else(|| extrude_direct(src, out, ctx, spec))
+}
+
+fn extrude_direct(src: &Image, out: Rect, ctx: &Ctx, spec: &ExtrudeSpec) -> Vec<f32> {
     let n = src.ch;
     let cs = spec.size.clamp(2.0, 255.0).round() as i32;
     let b = ctx.bounds;
@@ -358,6 +365,10 @@ pub(crate) fn wind_reach(method: WindMethod) -> f32 {
 /// Wind: streaks trail downwind from edges (Blast: longer and denser);
 /// Stagger shifts random row segments along the wind.
 pub(crate) fn wind(src: &Image, out: Rect, ctx: &Ctx, method: WindMethod, from_right: bool, seed: u32) -> Vec<f32> {
+    wind::streaks(src, out, ctx, method, from_right, seed).unwrap_or_else(|| wind_direct(src, out, ctx, method, from_right, seed))
+}
+
+fn wind_direct(src: &Image, out: Rect, ctx: &Ctx, method: WindMethod, from_right: bool, seed: u32) -> Vec<f32> {
     let n = src.ch;
     let lmax = wind_reach(method) as i32;
     // Streaks move downwind: from the left they extend to the right (+x).
@@ -406,3 +417,6 @@ pub(crate) fn wind(src: &Image, out: Rect, ctx: &Ctx, method: WindMethod, from_r
     }
     res
 }
+
+#[cfg(test)]
+mod tests;
