@@ -201,6 +201,10 @@ fn print_without_sending_requires_an_output_unless_dry_run() {
     .unwrap();
     assert_eq!(replay["sent"], true);
     assert_eq!(replay["copies"], 1);
+
+    let both = format!("{}/print-and-export.pdf", tmp("sending-export"));
+    do_print_with_spooler(&mut s, &json!({"output": both, "send": true, "dryRun": true}), "file.print", |_| Err(other("dry run invoked spooler"))).unwrap();
+    assert!(s.file_menu.last_print.as_ref().unwrap().get("send").is_none(), "a removed output must not leave send: true in remembered settings");
 }
 
 #[test]

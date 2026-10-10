@@ -888,4 +888,18 @@ mod tests {
             assert!(r["dialog"].is_u64(), "{id}");
         }
     }
+
+    #[test]
+    fn print_dialog_does_not_inherit_scripted_send_override() {
+        for send in [false, true] {
+            let (mut app, ctx) = app();
+            let out = std::env::temp_dir().join(format!("pc-printui-state-{}-{send}.pdf", std::process::id())).to_string_lossy().into_owned();
+            app.session.execute("file.print", json!({"output": out, "send": send, "dryRun": true})).unwrap();
+            assert!(app.session.file_menu.last_print.as_ref().unwrap().get("send").is_none());
+            let r = crate::menus::invoke(&mut app, &ctx, "file.print", json!({})).unwrap();
+            let id = r["dialog"].as_u64().unwrap();
+            assert!(app.ui.dialog_mut(id).unwrap().fields.get("send").is_none());
+            std::fs::remove_file(out).unwrap();
+        }
+    }
 }
