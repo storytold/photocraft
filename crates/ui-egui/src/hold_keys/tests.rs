@@ -1,5 +1,5 @@
 //! #249 through the real canvas and key handling: Space repositions a marquee being drawn, Space
-//! and ⌘Space / ⌘⌥Space are temporary Hand / Zoom tools that give the tool back, D / X and the
+//! and ⌘Space / ⌥Space are temporary Hand / Zoom tools that give the tool back, D / X and the
 //! fill keys are commands whose Keyboard Shortcuts overrides replace the defaults.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
@@ -218,6 +218,79 @@ fn temporary_zoom_drag_is_a_scrubby_zoom() {
     assert!(!h.state().session.active().unwrap().history.can_undo(), "nothing was painted");
 }
 
+/// Changes only the held modifiers, as pressing or releasing ⌥ / ⌘ does with Space already down.
+fn hold_mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
+    h.event(Event::ModifiersChanged(platform(m)));
+    h.run_steps(1);
+}
+
+#[test]
+fn space_then_alt_zooms_out_as_in_photoshop() {
+    // Photoshop users hold Space first, then add ⌥ and click.
+    let mut h = harness(Tool::Brush);
+    h.state_mut().run("tools.setColors", json!({"foreground": "#ff0000", "background": "#00ff00"})).unwrap();
+    let colors = fg_bg(&h);
+    let z0 = h.state().ui.views[0].zoom;
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Hand));
+    hold_mods(&mut h, Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    click(&mut h, 200.0, 150.0, Modifiers::ALT);
+    let z1 = h.state().ui.views[0].zoom;
+    assert!(z1 < z0, "{z0} -> {z1}");
+    // Letting go of ⌥ with Space still down is the Hand again.
+    hold_mods(&mut h, Modifiers::NONE);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Hand));
+    key(&mut h, Key::Space, false, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(held_tool(h.state(), &h.ctx), None);
+    assert_eq!(h.state().ui.tool, Tool::Brush, "the brush is back");
+    assert_eq!(fg_bg(&h), colors, "the ⌥-click didn't reach the brush's eyedropper");
+    assert!(!h.state().session.active().unwrap().history.can_undo(), "nothing was painted");
+}
+
+#[test]
+fn space_then_cmd_zooms_in_and_adding_alt_zooms_out() {
+    let mut h = harness(Tool::RectMarquee);
+    let z0 = h.state().ui.views[0].zoom;
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    hold_mods(&mut h, Modifiers::COMMAND);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    click(&mut h, 200.0, 150.0, Modifiers::COMMAND);
+    let z1 = h.state().ui.views[0].zoom;
+    assert!(z1 > z0, "{z0} -> {z1}");
+    hold_mods(&mut h, Modifiers::COMMAND | Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    click(&mut h, 200.0, 150.0, Modifiers::COMMAND | Modifiers::ALT);
+    assert!(h.state().ui.views[0].zoom < z1);
+    hold_mods(&mut h, Modifiers::NONE);
+    key(&mut h, Key::Space, false, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.tool, Tool::RectMarquee);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "no click reached the marquee");
+}
+
+#[test]
+fn alt_turns_a_held_zoom_in_around_unless_the_key_includes_alt() {
+    let mut h = harness(Tool::Brush);
+    // With Zoom Out unbound, ⌘⌥Space still zooms out: ⌥ turns the held Zoom In around, as it
+    // does the Zoom tool.
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomOut": ""}})).unwrap();
+    key(&mut h, Key::Space, true, Modifiers::COMMAND | Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomOut));
+    key(&mut h, Key::Space, false, Modifiers::COMMAND | Modifiers::ALT);
+    hold_mods(&mut h, Modifiers::NONE);
+    // An ⌥ that is part of the Zoom In key doesn't.
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.temporary.zoomIn": "Alt+Z"}})).unwrap();
+    let z0 = h.state().ui.views[0].zoom;
+    key(&mut h, Key::Z, true, Modifiers::ALT);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    click(&mut h, 200.0, 150.0, Modifiers::ALT);
+    key(&mut h, Key::Z, false, Modifiers::ALT);
+    hold_mods(&mut h, Modifiers::NONE);
+    assert!(h.state().ui.views[0].zoom > z0);
+}
+
 #[test]
 fn rebound_temporary_zoom_uses_the_new_key_only() {
     let mut h = harness(Tool::RectMarquee);
@@ -316,7 +389,7 @@ fn keyboard_shortcuts_dialog_lists_the_keys_under_tools() {
     assert_eq!(find("edit.fillBackgroundPreserve"), Some((tools(), Some("Cmd+Shift+Backspace".into()))));
     let temp = vec!["Tools".to_string(), "Temporary".to_string()];
     assert_eq!(find("tools.temporary.hand"), Some((temp.clone(), Some("Space".into()))));
-    assert_eq!(find("tools.temporary.zoomOut"), Some((temp, Some("Cmd+Alt+Space".into()))));
+    assert_eq!(find("tools.temporary.zoomOut"), Some((temp, Some("Alt+Space".into()))));
     assert_eq!(crate::prefs_ui::default_shortcut("tools.temporary.zoomIn").as_deref(), Some("Cmd+Space"));
     // One contiguous Tools section (the dialog prints a header where the top level changes).
     let first = items.iter().position(|i| i.2.first().map(String::as_str) == Some("Tools")).unwrap();

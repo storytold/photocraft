@@ -3,8 +3,9 @@
 //! A group's height never follows its content: content taller than the group scrolls inside
 //! it. The last expanded group (Layers by default) fills what the others leave. Drag the gap
 //! between two groups to resize them, double-click a tab (or use the panel menu) to collapse a
-//! group to its tab strip, and drag a tab strip to move the group up or down the column
-//! (unless Window › Workspace › Lock Workspace is on).
+//! group to its tab strip, drag a tab strip (outside its tabs, or a tab dragged off the strip) to
+//! move the group up or down the column, and drag a tab along its strip to reorder the group's
+//! tabs (#2272); Window › Workspace › Lock Workspace stops all three moves.
 //!
 //! The layout is [`DockLayout`] in `UiState::dock` (serialisable, drivable with `ui.set`), saved
 //! with Window › Workspace › New Workspace…, reset by Reset Workspace, and remembered across
@@ -168,6 +169,23 @@ pub struct DockLayout {
     /// Names of tabs hidden by Close (not positions: Color/Swatches swap with the theme).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub hidden_tabs: BTreeMap<Group, Vec<String>>,
+    /// Tab order per group, left to right, by name like `hidden_tabs` (#2272). A group missing
+    /// here keeps its default order; unknown names are ignored and tabs missing from a list
+    /// follow it in their default order. Anything unreadable falls back to the defaults.
+    #[serde(rename = "tabOrder", alias = "tab_order", deserialize_with = "lenient_tab_order")]
+    pub tab_order: BTreeMap<Group, Vec<String>>,
+}
+
+/// Read `tabOrder` keeping what makes sense: unknown groups, non-list values and non-string names
+/// are dropped instead of failing the whole saved layout.
+fn lenient_tab_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<Group, Vec<String>>, D::Error> {
+    let v = Value::deserialize(d)?;
+    let mut out = BTreeMap::new();
+    for (k, names) in v.as_object().into_iter().flatten() {
+        let (Some(g), Some(names)) = (Group::from_key(k), names.as_array()) else { continue };
+        out.insert(g, names.iter().filter_map(Value::as_str).take(16).map(str::to_owned).collect());
+    }
+    Ok(out)
 }
 
 /// Gap between groups; it is also the splitter's grab area.
@@ -176,10 +194,49 @@ pub const GAP: f32 = 6.0;
 const MAX_HEIGHT: f32 = 4000.0;
 
 impl DockLayout {
-    /// Visible tabs, retaining their original indices for commands and panel bodies.
+    /// Every tab of `group` in the user's order (#2272), with its original index (the one
+    /// `dockTabs`, commands and panel bodies use).
+    pub fn ordered_tabs(&self, group: Group, pro: bool) -> Vec<(usize, &'static str)> {
+        let all: Vec<(usize, &'static str)> = group.tabs(pro).iter().copied().enumerate().collect();
+        let mut out: Vec<(usize, &'static str)> = Vec::with_capacity(all.len());
+        for name in self.tab_order.get(&group).into_iter().flatten() {
+            if let Some(&tab) = all.iter().find(|(_, n)| *n == name.as_str())
+                && !out.contains(&tab)
+            {
+                out.push(tab);
+            }
+        }
+        for tab in all {
+            if !out.contains(&tab) {
+                out.push(tab);
+            }
+        }
+        out
+    }
+
+    /// Visible tabs in display order, retaining their original indices for commands and panel
+    /// bodies.
     pub fn visible_tabs(&self, group: Group, pro: bool) -> Vec<(usize, &'static str)> {
         let hidden = self.hidden_tabs.get(&group);
-        group.tabs(pro).iter().copied().enumerate().filter(|(_, name)| !hidden.is_some_and(|xs| xs.iter().any(|x| x.as_str() == *name))).collect()
+        self.ordered_tabs(group, pro).into_iter().filter(|(_, name)| !hidden.is_some_and(|xs| xs.iter().any(|x| x.as_str() == *name))).collect()
+    }
+
+    /// Move tab `tab` (an original index) of `group` so it is drawn just before tab `before`
+    /// (or last when `None` or not a tab of the group). The default order is stored as no entry.
+    pub fn move_tab(&mut self, group: Group, tab: usize, before: Option<usize>, pro: bool) {
+        if before == Some(tab) {
+            return;
+        }
+        let mut order = self.ordered_tabs(group, pro);
+        let Some(at) = order.iter().position(|(i, _)| *i == tab) else { return };
+        let moved = order.remove(at);
+        let to = before.and_then(|b| order.iter().position(|(i, _)| *i == b)).unwrap_or(order.len());
+        order.insert(to, moved);
+        if order.iter().map(|(i, _)| *i).eq(0..order.len()) {
+            self.tab_order.remove(&group);
+        } else {
+            self.tab_order.insert(group, order.into_iter().map(|(_, n)| n.to_owned()).collect());
+        }
     }
 
     /// Hide one tab; it can be reopened through Window › Panel.
@@ -354,6 +411,7 @@ enum Action {
     Close(Group),
     CloseTab(Group, usize),
     Move(Group, Option<Group>),
+    MoveTab(Group, usize, Option<usize>),
 }
 
 /// Rects of the groups drawn last frame (screen points), for tests and automation.
@@ -412,7 +470,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         let indices: Vec<usize> = visible.iter().map(|(i, _)| *i).collect();
         let tabs: Vec<&str> = visible.iter().map(|(_, name)| *name).collect();
         let mut sel = indices.iter().position(|i| *i == before).unwrap_or(0);
-        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, |ui, shown_tab| {
+        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, !locked, |ui, shown_tab| {
             let Some(&tab) = indices.get(shown_tab) else { return };
             let inner = ui.available_height().max(0.0);
             if g.scrolls_itself(tab) {
@@ -455,12 +513,20 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if resp.strip.double_clicked() || resp.tab_double_clicked || (collapsed && resp.tab_clicked) {
             actions.push(Action::ToggleCollapse(g));
         }
-        if !locked && resp.strip.dragged() {
+        // The strip uses visible indices; reorder in original ones.
+        if !locked
+            && let Some((from, before)) = resp.tab_reorder
+            && let Some(&tab) = indices.get(from)
+        {
+            actions.push(Action::MoveTab(g, tab, before.and_then(|b| indices.get(b).copied())));
+        }
+        // A tab dragged off its strip moves the whole group, as the strip itself does.
+        if !locked && (resp.strip.dragged() || resp.tab_dragging_out) {
             dragging = Some(g);
         }
         if !locked
-            && resp.strip.drag_stopped()
-            && let Some(p) = ui.ctx().pointer_interact_pos()
+            && (resp.strip.drag_stopped() || resp.tab_dropped_out)
+            && let Some(p) = ui.ctx().pointer_interact_pos().or_else(|| ui.ctx().pointer_latest_pos())
         {
             actions.push(Action::Move(g, drop_before(&order, &rects, g, p.y)));
         }
@@ -532,18 +598,21 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             }
             Action::Close(g) => *g.shown_mut(&mut app.ui.panels) = false,
             Action::CloseTab(g, tab) => {
+                let shown_before = app.ui.dock.visible_tabs(g, t.pro);
                 app.ui.dock.hide_tab(g, tab, t.pro);
                 let remaining = app.ui.dock.visible_tabs(g, t.pro);
                 if remaining.is_empty() {
                     *g.shown_mut(&mut app.ui.panels) = false;
                 } else if *g.tab_mut(&mut app.ui.dock_tabs) == tab {
-                    // Prefer the next tab, or the previous one when closing the last.
-                    let next = remaining.iter().find(|(i, _)| *i > tab).or_else(|| remaining.last());
+                    // Prefer the next tab on the strip, or the previous one when closing the last.
+                    let at = shown_before.iter().position(|(i, _)| *i == tab).unwrap_or(0);
+                    let next = shown_before.iter().skip(at + 1).find(|x| remaining.contains(x)).or_else(|| remaining.last());
                     if let Some(&(next, _)) = next {
                         *g.tab_mut(&mut app.ui.dock_tabs) = next;
                     }
                 }
             }
+            Action::MoveTab(g, tab, before) => app.ui.dock.move_tab(g, tab, before, t.pro),
             Action::Move(g, before) => {
                 if before != Some(g) {
                     app.ui.dock.move_group(g, before);
