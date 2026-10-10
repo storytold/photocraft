@@ -1474,3 +1474,38 @@ fn remove_bad_params_are_errors() {
     let err = s.execute("paint.remove", json!({"points": [[48, 32]], "size": 3000})).unwrap_err().to_string();
     assert!(err.contains("nothing is left"), "{err}");
 }
+
+/// Flat (150, 120, 100) with Gaussian film grain of σ 12 levels (the #2104 test image).
+fn film_grain(x: i32, y: i32) -> [f32; 4] {
+    let u = |k: u32| {
+        let mut z = (x as u32).wrapping_mul(0x9E37_79B9) ^ (y as u32).wrapping_mul(0x85EB_CA6B) ^ k.wrapping_mul(0xC2B2_AE35);
+        z = (z ^ (z >> 16)).wrapping_mul(0x7FEB_352D);
+        z = (z ^ (z >> 15)).wrapping_mul(0x846C_A68B);
+        ((z ^ (z >> 16)) as f32 + 1.0) / (u32::MAX as f32 + 2.0)
+    };
+    let n = (-2.0 * u(1).ln()).sqrt() * (std::f32::consts::TAU * u(2)).cos() * 12.0;
+    [(150.0 + n) / 255.0, (120.0 + n) / 255.0, (100.0 + n) / 255.0, 1.0]
+}
+
+#[test]
+fn spot_healing_keeps_film_grain_through_overlapping_strokes() {
+    // #2104: on flat colour with grain the heal must carry the grain, not leave a smooth patch,
+    // and must not lose more with each overlapping stroke (each samples the ones before).
+    let red = |s: &Session, x0: i32, x1: i32, y0: i32, y1: i32| {
+        let v: Vec<f32> = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).map(|(x, y)| rgba(s, x, y)[0] * 255.0).collect();
+        let m = v.iter().sum::<f32>() / v.len() as f32;
+        (m, (v.iter().map(|a| (a - m).powi(2)).sum::<f32>() / v.len() as f32).sqrt())
+    };
+    for (depth, kind) in [(8u64, "contentAware"), (8, "proximityMatch"), (8, "createTexture"), (16, "createTexture")] {
+        let mut s = session(400, 300, depth, "rgb");
+        paint_layer(&mut s, film_grain);
+        let (m0, sd0) = red(&s, 0, 100, 0, 100);
+        for i in 0..8 {
+            let y = 100 + 10 * i;
+            s.execute("paint.spotHealing", json!({"points": [[140, y], [260, y]], "size": 30, "hardness": 100, "type": kind})).unwrap();
+            let (m, sd) = red(&s, 150, 250, y - 4, y + 5);
+            assert!(sd > 0.8 * sd0 && sd < 1.25 * sd0, "{kind} depth {depth} stroke {}: grain {sd} vs {sd0} around", i + 1);
+            assert!((m - m0).abs() < 3.0, "{kind} depth {depth} stroke {}: mean {m} vs {m0}", i + 1);
+        }
+    }
+}
