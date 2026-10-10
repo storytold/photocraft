@@ -21,6 +21,9 @@ pub struct Prompt {
     /// The document the command was aimed at (`document` param, else the active one), if it has one.
     target: Option<DocId>,
     docs: Vec<DocId>,
+    /// Explicit Don't Save answers, scoped to this action and the revision the user saw.
+    discarded: Vec<Value>,
+    answered: Vec<(DocId, u64)>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -65,7 +68,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
+    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, discarded: Vec::new(), answered: Vec::new() };
     match &app.discard {
         None => app.discard = Some(prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -117,14 +120,41 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Moves on to the next document, or runs the parked action once none are left.
 fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let answered = app.discard.as_ref().and_then(|p| p.docs.first()).and_then(|&id| {
+        index_of(app, id).map(|i| {
+            let state = &app.session.documents()[i];
+            (id, state.revision, !state.is_dirty())
+        })
+    });
     let Some(p) = app.discard.as_mut() else { return };
+    if let Some((id, revision, saved)) = answered {
+        p.answered.push((id, revision));
+        if saved {
+            p.discarded.retain(|entry| entry.get("document").and_then(Value::as_u64) != Some(id.0));
+        }
+    }
     if !p.docs.is_empty() {
         p.docs.remove(0);
     }
     if !p.docs.is_empty() {
         return;
     }
-    let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
+    // Saving contents may dirty previously clean mockups (including other open instances). Ask
+    // about those before Close All / Quit, rather than silently dropping their refreshed caches.
+    let (id, mut params, target, answered) = (p.id.clone(), p.params.clone(), p.target, p.answered.clone());
+    if let Some(index) = target.and_then(|id| index_of(app, id)) {
+        params = json!({"document": index});
+    }
+    let (_, newly_dirty) = discarded(app, &id, &params);
+    let newly_dirty: Vec<_> =
+        newly_dirty.into_iter().filter(|id| index_of(app, *id).is_some_and(|i| !answered.contains(&(*id, app.session.documents()[i].revision)))).collect();
+    if !newly_dirty.is_empty() {
+        if let Some(p) = app.discard.as_mut() {
+            p.docs = newly_dirty;
+        }
+        return;
+    }
+    let Some(Prompt { id, mut params, target, discarded, .. }) = app.discard.take() else { return };
     if id == EXIT {
         app.allow_close = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -135,10 +165,26 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let Some(i) = index_of(app, target) else { return };
         params = json!({"document": i});
     }
+    if !discarded.is_empty() {
+        if !params.is_object() {
+            params = json!({});
+        }
+        params["discardDocuments"] = json!(discarded);
+    }
     if let Err(e) = crate::menus::invoke_unguarded(app, ctx, &id, params) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+fn discard(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
+    if let Some(revision) = index_of(app, doc).map(|i| app.session.documents()[i].revision)
+        && let Some(prompt) = app.discard.as_mut()
+    {
+        prompt.discarded.retain(|entry| entry.get("document").and_then(Value::as_u64) != Some(doc.0));
+        prompt.discarded.push(json!({"document": doc.0, "revision": revision}));
+    }
+    advance(app, ctx);
 }
 
 /// Saves `doc`; true once it is saved. A document without a file to write back to asks where in
@@ -253,7 +299,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     match answer {
         Some(Answer::Cancel) => app.discard = None,
-        Some(Answer::Discard) => advance(app, ctx),
+        Some(Answer::Discard) => discard(app, ctx, doc),
         Some(Answer::Save) if save(app, ctx, doc) => advance(app, ctx),
         _ => {}
     }
@@ -449,6 +495,99 @@ mod tests {
 
     fn docs_left(h: &Prompted) -> Option<usize> {
         h.state().discard.as_ref().map(|p| p.docs.len())
+    }
+
+    fn smart_child(linked: bool) -> (PhotocraftApp, std::path::PathBuf) {
+        let mut app = app_with_docs(1);
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let path = std::env::temp_dir().join(format!("pcraft-discard-{}-{}.pcraft", std::process::id(), doc_id(&app, 0).0));
+        app.run("layer.smartObjects.convertToLinked", json!({"path": path})).unwrap();
+        if !linked {
+            app.run("layer.smartObjects.convertToEmbedded", json!({})).unwrap();
+        }
+        let state = app.session.active_mut().unwrap();
+        state.saved_revision = state.revision;
+        app.run("layer.smartObjects.editContents", json!({})).unwrap();
+        app.run("layer.setProps", json!({"opacity": 0.5})).unwrap();
+        (app, path)
+    }
+
+    #[test]
+    fn dont_save_discards_smart_contents_in_close_close_all_and_close_others() {
+        for linked in [false, true] {
+            for command in ["file.close", "file.closeAll", "file.closeOthers"] {
+                let (mut app, path) = smart_child(linked);
+                let original = std::fs::read(&path).unwrap();
+                let parent = app.session.documents()[0].doc.clone();
+                if command == "file.closeOthers" {
+                    app.session.set_active(0);
+                }
+                let mut h = prompt_for(app, command, egui::os::OperatingSystem::Mac);
+                h.key_press(Key::D);
+                h.run_steps(2);
+                assert!(h.state().discard.is_none());
+                assert_eq!(h.state().session.documents().len(), if command == "file.closeAll" { 0 } else { 1 });
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+                if command != "file.closeAll" {
+                    assert!(std::sync::Arc::ptr_eq(&parent, &h.state().session.documents()[0].doc));
+                }
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_after_dont_save_does_not_discard_or_mark_contents_saved() {
+        let (mut app, path) = smart_child(true);
+        let child_id = doc_id(&app, 1);
+        let original = std::fs::read(&path).unwrap();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let mut h = prompt_for(app, "file.closeAll", egui::os::OperatingSystem::Mac);
+        assert_eq!(h.state().discard.as_ref().unwrap().docs[0], child_id);
+        h.key_press(Key::D);
+        h.run_steps(2);
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().discard.is_none());
+        assert_eq!(h.state().session.documents().len(), 3);
+        assert!(h.state().session.documents()[1].is_dirty());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        // The cancelled discard doesn't survive into another close action: Save still commits.
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "file.close", json!({"document": 1})).unwrap();
+        h.run_steps(2);
+        h.key_press(Key::S);
+        h.run_steps(2);
+        assert!(h.state().discard.is_none());
+        assert_eq!(h.state().session.documents().len(), 2);
+        assert_ne!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn close_all_asks_about_mockups_dirtied_by_saving_shared_contents() {
+        let (mut app, path) = smart_child(true);
+        let mockup = (*app.session.documents()[0].doc).clone();
+        app.session.add_document(mockup, None);
+        app.session.set_active(1);
+        let original = std::fs::read(&path).unwrap();
+        let mut h = prompt_for(app, "file.closeAll", egui::os::OperatingSystem::Mac);
+        assert_eq!(docs_left(&h), Some(1), "only the child starts dirty");
+        h.key_press(Key::S);
+        h.run_steps(2);
+        assert_ne!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(h.state().session.documents().len(), 3, "newly dirty mockups must not close without an answer");
+        assert_eq!(docs_left(&h), Some(2));
+        h.key_press(Key::D);
+        h.run_steps(2);
+        h.key_press(Key::D);
+        h.run_steps(2);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -144,6 +144,18 @@ for Save Contents. Save the parent document to disk when the edits are complete.
 also apply to recorded actions and synthetic UI input; interactive desktop commands retain
 their usual file access. Source replacement, relinking and export commands remain restricted.
 
+On the interactive desktop, Save Contents writes an external linked source in its original
+format and keeps the link. It refuses to overwrite a source whose bytes changed since that
+contents editor opened or last saved; save a copy of conflicting edits before reopening the
+source. A successful save refreshes every open instance of that file, preserving each instance's
+placement and filters. Save the affected parent documents to keep those refreshed caches on disk.
+
+Don't Save closes contents without writing their source or updating their parent. Cancelling a
+later Close All prompt keeps those contents open and dirty. The `file.close*` commands accept
+`discardDocuments: [{document: id, revision: revision}]` for explicit discards; identities and
+revisions must match the documents being closed. Close All and Quit ask about mockups that become
+dirty while saving contents, including shared instances in other open documents.
+
 `type.editText` starts inline editing of the active type layer and selects all its text, like
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
 editing session; non-type layers return an error without changing the tool or document.

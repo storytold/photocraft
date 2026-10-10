@@ -1,5 +1,6 @@
 use super::*;
 
+mod linked_saves;
 mod selection;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];

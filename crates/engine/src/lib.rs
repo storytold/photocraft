@@ -406,10 +406,15 @@ impl Session {
     /// Close only after Edit Contents has saved successfully. A failed linked-file write must
     /// leave the edited child open, so callers can report the error and the user can retry.
     pub fn try_close(&mut self, index: usize) -> Result<DocState> {
+        self.close_contents(index, false)
+    }
+
+    /// A confirmed discard skips smart-content save-back without marking the child saved.
+    pub(crate) fn close_contents(&mut self, index: usize, discard: bool) -> Result<DocState> {
         if index >= self.docs.len() {
             return Err(EngineError::NoDocument);
         }
-        smart_cmds::on_close(self, index)?;
+        smart_cmds::on_close(self, index, discard)?;
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
         }

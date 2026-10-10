@@ -41,6 +41,9 @@ pub struct SmartLink {
     pub layer: LayerId,
     /// Actual file opened for an external linked source; absent for embedded PSD data.
     pub source_path: Option<std::path::PathBuf>,
+    /// Bytes read when this editor opened (or last saved). Independent editors must not overwrite
+    /// a source changed by another editor or application, even when its path stays the same.
+    pub source_hash: Option<blake3::Hash>,
 }
 
 /// PSD placed-layer keys that describe the smart object's source; stale once we change it.
@@ -97,7 +100,28 @@ fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, 
 /// Resolve relative links beside their owning document, including Edit Contents children.
 fn source_directory(s: &Session) -> Option<std::path::PathBuf> {
     let state = s.active()?;
+    state_source_directory(state)
+}
+
+fn state_source_directory(state: &crate::DocState) -> Option<std::path::PathBuf> {
     state.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(std::path::Path::to_path_buf).or_else(|| state.smart_source_dir.clone())
+}
+
+fn state_linked_path(state: &crate::DocState, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() { path.to_path_buf() } else { state_source_directory(state).map_or_else(|| path.to_path_buf(), |dir| dir.join(path)) }
+}
+
+/// Atomic saves replace the directory entry, so normalize its parent rather than following a
+/// symlink in the final component. Relative spellings and directory aliases identify one target.
+fn write_identity(path: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+        && let Ok(parent) = std::fs::canonicalize(parent)
+    {
+        return parent.join(name);
+    }
+    path.to_path_buf()
 }
 
 fn linked_path(s: &Session, path: &str) -> std::path::PathBuf {
@@ -785,7 +809,8 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
-    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, source_path: source.path });
+    let source_hash = source.path.as_ref().map(|_| blake3::hash(&source.bytes));
+    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, source_path: source.path, source_hash });
     Ok(json!({"document": index, "parentLayer": id.0}))
 }
 
@@ -808,23 +833,15 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
         let SmartSource::Linked { path: stored } = &original_source else {
             return Err(other("the smart object's source changed; reopen Edit Contents before saving"));
         };
-        let stored = std::path::Path::new(stored);
-        let resolved = if stored.is_absolute() {
-            stored.to_path_buf()
-        } else {
-            state
-                .path
-                .as_deref()
-                .and_then(|p| std::path::Path::new(p).parent())
-                .or(state.smart_source_dir.as_deref())
-                .map_or_else(|| stored.to_path_buf(), |dir| dir.join(stored))
-        };
-        if &resolved != path {
+        let resolved = state_linked_path(state, stored);
+        if write_identity(&resolved) != write_identity(path) {
             return Err(other("the smart object's linked file changed; reopen Edit Contents before saving"));
         }
         if let Some(gate) = s.authorize {
+            gate("layer.smartObjects.editContents", &json!({"path": path}))?;
             gate("layer.smartObjects.saveContents", &json!({"path": path}))?;
         }
+        check_source_version(&link)?;
         let path = path.to_str().ok_or_else(|| other("the linked file path is not valid UTF-8"))?;
         let (bytes, warnings) = crate::file_cmds::encode(&child, path, None)?;
         if !warnings.is_empty() {
@@ -841,36 +858,88 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
         };
         (format!("{stem}.pcraft"), Arc::new(encode_source(&child)?))
     };
-    // Render the exact bytes that will be saved before touching the file or parent. Using a
-    // temporary memory source also avoids resolving a relative link against the process cwd.
-    let LayerContent::Smart(sm) = &mut layer.content else { return Err(other("the layer is not a smart object")) };
-    sm.source = SmartSource::Embedded { file_name, bytes: bytes.clone() };
-    sm.cache = Some(render(doc, sm)?.ok_or_else(|| other("the smart object's contents are unavailable"))?);
+    // Prepare every open instance before writing. Each instance keeps its own transform, filters,
+    // depth and link spelling; a failed render or busy document leaves both disk and session alone.
+    let mut updates = Vec::new();
     if let Some(path) = &link.source_path {
-        sm.source = original_source;
+        for (index, state) in s.docs.iter().enumerate() {
+            let mut layers = Vec::new();
+            for (_, _, existing) in state.doc.walk() {
+                let LayerContent::Smart(sm) = &existing.content else { continue };
+                let SmartSource::Linked { path: stored } = &sm.source else { continue };
+                if embedded_source_bytes(&state.doc.metadata, &sm.source).is_none() && write_identity(&state_linked_path(state, stored)) == write_identity(path)
+                {
+                    if s.job_on(state.doc.id).is_some() {
+                        return Err(other("a document using this linked file is busy; save its contents again when the operation finishes"));
+                    }
+                    layers.push(refreshed_layer(&state.doc, existing.clone(), &file_name, &bytes, true)?);
+                }
+            }
+            if !layers.is_empty() {
+                updates.push((index, layers));
+            }
+        }
+    } else {
+        layer = refreshed_layer(doc, layer, &file_name, &bytes, false)?;
+        updates.push((parent, vec![layer]));
+    }
+    if let Some(path) = &link.source_path {
+        // Rendering can be expensive: recheck immediately before the atomic replacement too.
+        check_source_version(&link)?;
         let path = path.to_str().ok_or_else(|| other("the linked file path is not valid UTF-8"))?;
         crate::file_cmds::write_file(path, &bytes)?;
     }
-    detach_psd(&mut layer);
     let prev = s.active;
-    s.active = Some(parent);
-    let r = s.edit("Edit Contents", |doc, _| {
-        *doc.layer_mut(link.layer).ok_or(EngineError::NoLayer(link.layer))? = layer;
-        Ok(())
+    let r = updates.into_iter().try_for_each(|(index, layers)| {
+        s.active = Some(index);
+        s.edit(if index == parent { "Edit Contents" } else { "Update Linked Contents" }, |doc, _| {
+            for layer in layers {
+                let id = layer.id;
+                *doc.layer_mut(id).ok_or(EngineError::NoLayer(id))? = layer;
+            }
+            Ok(())
+        })
     });
     s.active = prev;
     r?;
+    if link.source_path.is_some()
+        && let Some(current) = s.smart_links.iter_mut().find(|l| l.child == child.id)
+    {
+        current.source_hash = Some(blake3::hash(&bytes));
+    }
     if let Some(st) = s.docs.get_mut(index) {
         st.saved_revision = st.revision;
     }
     Ok(true)
 }
 
+fn check_source_version(link: &SmartLink) -> Result<()> {
+    let Some(path) = &link.source_path else { return Ok(()) };
+    let path = path.to_str().ok_or_else(|| other("the linked file path is not valid UTF-8"))?;
+    let current = crate::file_cmds::read_file(path)?;
+    if link.source_hash != Some(blake3::hash(&current)) {
+        return Err(other("the linked file changed since Edit Contents opened or last saved; save a copy of your edits, then reopen Edit Contents"));
+    }
+    Ok(())
+}
+
+fn refreshed_layer(doc: &Document, mut layer: Layer, file_name: &str, bytes: &Arc<Vec<u8>>, keep_link: bool) -> Result<Layer> {
+    let LayerContent::Smart(sm) = &mut layer.content else { return Err(other("the layer is not a smart object")) };
+    let original = sm.source.clone();
+    sm.source = SmartSource::Embedded { file_name: file_name.into(), bytes: bytes.clone() };
+    sm.cache = Some(render(doc, sm)?.ok_or_else(|| other("the smart object's contents are unavailable"))?);
+    if keep_link {
+        sm.source = original;
+    }
+    detach_psd(&mut layer);
+    Ok(layer)
+}
+
 /// Called before a document closes: an edited Edit Contents document updates its parent.
-pub(crate) fn on_close(s: &mut Session, index: usize) -> Result<()> {
+pub(crate) fn on_close(s: &mut Session, index: usize, discard: bool) -> Result<()> {
     let Some(st) = s.docs.get(index) else { return Ok(()) };
     let id = st.doc.id;
-    if st.is_dirty() && s.smart_links.iter().any(|l| l.child == id) {
+    if !discard && st.is_dirty() && s.smart_links.iter().any(|l| l.child == id) {
         commit_child(s, index)?;
     }
     s.smart_links.retain(|l| l.child != id && l.parent != id);
