@@ -26,7 +26,8 @@ download_verified "file://$TMP/unavailable" "$cache" "$expected" true || fail "o
 # If a valid but non-executable cache cannot be chmod'd, fail here rather than at invocation.
 chmod 644 "$cache"
 chmod() { return 1; }
-if download_verified "file://$TMP/unavailable" "$cache" "$expected" true >/dev/null 2>&1; then fail "unfixable cache was accepted"; fi
+if err="$(download_verified "file://$TMP/unavailable" "$cache" "$expected" true 2>&1)"; then fail "unfixable cache was accepted"; fi
+case "$err" in *"verified asset is not executable and cannot be chmod'd"*) ;; *) fail "wrong cache error: $err" ;; esac
 unset -f chmod
 chmod 755 "$cache"
 
@@ -43,6 +44,13 @@ chmod() { fail "chmod called for a readable runtime cache"; }
 download_verified "file://$TMP/unavailable" "$runtime" "$expected" || fail "readable runtime was not reused"
 unset -f chmod
 [ ! -x "$runtime" ] || fail "runtime was needlessly made executable"
+
+# A fresh runtime download is verified, readable data rather than an executable program.
+fresh_runtime="$TMP/fresh-runtime"
+download_verified "file://$source_asset" "$fresh_runtime" "$expected" || fail "fresh runtime download failed"
+cmp -s "$source_asset" "$fresh_runtime" || fail "fresh runtime differs from verified asset"
+[ -r "$fresh_runtime" ] || fail "fresh runtime is not readable"
+[ ! -x "$fresh_runtime" ] || fail "fresh runtime was made executable"
 
 # A corrupt cache is replaced only by bytes with the pinned digest.
 printf 'corrupt' >"$cache"
