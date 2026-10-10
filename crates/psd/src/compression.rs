@@ -270,29 +270,54 @@ pub(crate) fn validate_planes(compression: Compression, data: &[u8], layout: &Pl
             Ok(())
         }
         Compression::Zip | Compression::ZipPrediction => {
-            // Decompress without keeping the output, through the end of the
-            // stream so the Adler-32 checksum is verified too.
-            let mut dec = flate2::read::ZlibDecoder::new(data);
-            let mut buf = [0u8; 8192];
-            let mut got: u64 = 0;
-            loop {
-                let n = dec.read(&mut buf).map_err(|e| PsdError::Decompress(e.to_string()))?;
-                if n == 0 {
-                    break;
-                }
-                got += n as u64;
-                if got > total.saturating_add(1 << 20) {
-                    // Far more output than needed; stop (bomb guard).
-                    break;
-                }
+            // Deflate expands at most ~1032:1, so a stream too short to hold
+            // `total` bytes fails before anything is inflated.
+            let most = (data.len() as u64).saturating_mul(1032).saturating_add(64);
+            if most < total {
+                return Err(PsdError::Decompress(format!("zlib stream of {} bytes cannot produce {total} bytes", data.len())));
             }
-            if got < total {
-                return Err(PsdError::Decompress(format!("zlib stream produced {got} of {total} bytes")));
+            // decode_planes rejects a layout past MAX_DECODED_BYTES without
+            // inflating anything, so validation does not inflate it either; the
+            // data is kept verbatim and decoding it reports the limit.
+            if total > MAX_DECODED_BYTES {
+                return Ok(());
             }
-            Ok(())
+            zip_validate(data, total).map(|_| ())
         }
         Compression::Unknown(_) => Ok(()),
     }
+}
+
+/// Output past the expected size that [`zip_validate`] still inflates while
+/// looking for the end of the stream (and its Adler-32 checksum).
+const ZIP_VALIDATE_SLACK: u64 = 1 << 20;
+
+/// Inflates `data` without keeping the output, requiring at least `total`
+/// bytes, and returns how many bytes were inflated. Reads through the end of
+/// the stream so the checksum is verified, but stops [`ZIP_VALIDATE_SLACK`]
+/// bytes past `total` (bomb guard).
+fn zip_validate(data: &[u8], total: u64) -> Result<u64> {
+    let limit = total.saturating_add(ZIP_VALIDATE_SLACK);
+    let mut dec = flate2::read::ZlibDecoder::new(data);
+    let mut buf = [0u8; 8192];
+    let mut got: u64 = 0;
+    loop {
+        let n = match dec.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(PsdError::Decompress(e.to_string())),
+        };
+        got += n as u64;
+        if got > limit {
+            // Far more output than needed; stop.
+            break;
+        }
+    }
+    if got < total {
+        return Err(PsdError::Decompress(format!("zlib stream produced {got} of {total} bytes")));
+    }
+    Ok(got)
 }
 
 fn read_count(r: &mut Reader<'_>, v: Version) -> Result<usize> {
@@ -674,6 +699,44 @@ mod tests {
             assert!(decode_planes(Compression::Zip, &enc[..cut], &l).is_err(), "cut {cut}");
             assert!(validate_planes(Compression::Zip, &enc[..cut], &l).is_err(), "cut {cut}");
         }
+    }
+
+    /// Parse-time ZIP validation stays inside the decode budget (#2898): a layout
+    /// decode_planes would reject is not inflated at parse time, and a stream that
+    /// inflates far past a small layout stops shortly after the expected size.
+    #[test]
+    fn zip_validation_respects_decode_budget() {
+        // Just over MAX_DECODED_BYTES, with enough (non-zlib) bytes that deflate's
+        // ratio cannot rule it out. Inflating would fail on the first byte; the
+        // budget check skips the inflate so the file still parses ...
+        let over = layout(1, 1 << 16, (MAX_DECODED_BYTES >> 16) as usize + 1, 8, Version::Psb);
+        let total = over.total_bytes().unwrap();
+        assert!(total > MAX_DECODED_BYTES);
+        let garbage = vec![0xffu8; (total / 1032) as usize + 1];
+        for c in [Compression::Zip, Compression::ZipPrediction] {
+            validate_planes(c, &garbage, &over).unwrap();
+            // ... and decoding reports the limit.
+            assert!(matches!(decode_planes(c, &garbage, &over), Err(PsdError::LimitExceeded(_))));
+        }
+        // A stream too short to hold the layout fails without inflating, over or
+        // under the budget.
+        let zeros = zip_compress(&vec![0u8; 8 << 20]);
+        assert!(validate_planes(Compression::Zip, &zeros, &over).is_err());
+        let under = layout(1, 1 << 16, 1 << 14, 8, Version::Psb);
+        assert!(validate_planes(Compression::Zip, &zeros, &under).is_err());
+        // In budget: 16 expected bytes, 8 MiB in the stream. Inflation stops one
+        // slack window past the expected size instead of running to the end.
+        let small = layout(1, 4, 4, 8, Version::Psd);
+        validate_planes(Compression::Zip, &zeros, &small).unwrap();
+        let inflated = zip_validate(&zeros, 16).unwrap();
+        assert!(inflated <= 16 + ZIP_VALIDATE_SLACK + 8192, "inflated {inflated}");
+        // A well-formed stream is still inflated to its end, checksum included.
+        let ok = zip_compress(&[5u8; 16]);
+        assert_eq!(zip_validate(&ok, 16).unwrap(), 16);
+        let mut bad = ok.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        assert!(validate_planes(Compression::Zip, &bad, &small).is_err());
     }
 
     #[test]
