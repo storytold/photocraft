@@ -918,6 +918,10 @@ pub struct Preferences {
     /// the footer slider's card scale, saved as the user changes them and restored at launch.
     /// JSON owned by the shell.
     pub brush_picker: Value,
+    /// The brush the tool was last using (settings and bitmap references, never the bitmaps
+    /// themselves; see `brush_cmds::remembered_brush`), restored at launch so the tool starts
+    /// where it was left. JSON owned by the shell.
+    pub last_brush: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
 }

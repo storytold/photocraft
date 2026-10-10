@@ -21,7 +21,7 @@ fn frame(ctx: &egui::Context, draw: impl FnMut(&mut egui::Ui)) -> egui::FullOutp
 fn bitmap_has_a_transparent_hotspot_and_the_correct_radius_at_each_dpi() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
         let radius = 20.0;
-        let image = rasterize(Shape::Circle { radius, centre: false }, scale).unwrap();
+        let image = rasterize(&Shape::Circle { radius, centre: false }, scale).unwrap();
         let [x, y] = image.hotspot;
         assert_eq!(image.size, [2 * x + 1, 2 * y + 1]);
         assert_eq!(image.rgba.len(), usize::from(image.size[0]).pow(2) * 4);
@@ -38,34 +38,34 @@ fn bitmap_has_a_transparent_hotspot_and_the_correct_radius_at_each_dpi() {
 
 #[test]
 fn precise_and_tip_centre_crosshairs_have_distinct_hotspots() {
-    let ring = rasterize(Shape::Circle { radius: 20.0, centre: true }, 1.0).unwrap();
+    let ring = rasterize(&Shape::Circle { radius: 20.0, centre: true }, 1.0).unwrap();
     assert!(alpha(&ring, ring.hotspot[0], ring.hotspot[1]) > 230);
-    let precise = rasterize(Shape::Crosshair { length: 8.0, gap: 2.0 }, 1.0).unwrap();
+    let precise = rasterize(&Shape::Crosshair { length: 8.0, gap: 2.0 }, 1.0).unwrap();
     let [x, y] = precise.hotspot;
     assert_eq!(alpha(&precise, x, y), 0);
     assert!(alpha(&precise, x + 5, y) > 230);
-    let solid = rasterize(Shape::Crosshair { length: 6.0, gap: 0.0 }, 1.0).unwrap();
+    let solid = rasterize(&Shape::Crosshair { length: 6.0, gap: 0.0 }, 1.0).unwrap();
     assert!(alpha(&solid, solid.hotspot[0], solid.hotspot[1]) > 230);
 }
 
 #[test]
 fn hostile_sizes_are_rejected_before_allocating() {
     for radius in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, f32::MAX, 2048.0] {
-        assert!(rasterize(Shape::Circle { radius, centre: false }, 1.0).is_none());
+        assert!(rasterize(&Shape::Circle { radius, centre: false }, 1.0).is_none());
     }
     for scale in [f32::NAN, f32::INFINITY, -1.0, 0.0, f32::MAX] {
-        assert!(rasterize(Shape::Circle { radius: 20.0, centre: false }, scale).is_none());
+        assert!(rasterize(&Shape::Circle { radius: 20.0, centre: false }, scale).is_none());
     }
     for (length, gap) in [(1.0, 2.0), (8.0, -1.0), (f32::NAN, 0.0), (8.0, f32::NAN)] {
-        assert!(rasterize(Shape::Crosshair { length, gap }, 1.0).is_none());
+        assert!(rasterize(&Shape::Crosshair { length, gap }, 1.0).is_none());
     }
 }
 
 #[test]
 fn hand_bitmaps_are_outlined_hands_around_a_centred_hotspot_at_each_dpi() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
-        let open = rasterize(Shape::Hand { closed: false }, scale).unwrap();
-        let fist = rasterize(Shape::Hand { closed: true }, scale).unwrap();
+        let open = rasterize(&Shape::Hand { closed: false }, scale).unwrap();
+        let fist = rasterize(&Shape::Hand { closed: true }, scale).unwrap();
         for image in [&open, &fist] {
             let [x, y] = image.hotspot;
             assert_eq!(image.size, [2 * x + 1, 2 * y + 1]);
@@ -83,7 +83,7 @@ fn hand_bitmaps_are_outlined_hands_around_a_centred_hotspot_at_each_dpi() {
 
 #[test]
 fn hand_bitmap_is_a_straight_rgba_silhouette_outlined_outside_the_hand() {
-    let image = rasterize(Shape::Hand { closed: false }, 1.0).unwrap();
+    let image = rasterize(&Shape::Hand { closed: false }, 1.0).unwrap();
     let side = usize::from(image.size[0]);
     let px = |x: usize, y: usize| <[u8; 4]>::try_from(&image.rgba[(y * side + x) * 4..][..4]).unwrap();
     let mid = side / 2;
@@ -113,8 +113,8 @@ fn hand_bitmap_is_a_straight_rgba_silhouette_outlined_outside_the_hand() {
 #[test]
 fn hostile_scales_get_no_hand_bitmap() {
     for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, f32::MAX, 500.0] {
-        assert!(rasterize(Shape::Hand { closed: false }, scale).is_none(), "{scale}");
-        assert!(rasterize(Shape::Hand { closed: true }, scale).is_none(), "{scale}");
+        assert!(rasterize(&Shape::Hand { closed: false }, scale).is_none(), "{scale}");
+        assert!(rasterize(&Shape::Hand { closed: true }, scale).is_none(), "{scale}");
     }
 }
 
@@ -135,7 +135,7 @@ fn the_hand_is_a_bitmap_only_where_the_os_has_none() {
             ui.ctx().set_cursor_icon(icon);
         });
         let image = bitmap.platform_output.cursor_image.expect("Windows has no stock hand");
-        assert_eq!(image.rgba, rasterize(Shape::Hand { closed }, 1.0).unwrap().rgba);
+        assert_eq!(image.rgba, rasterize(&Shape::Hand { closed }, 1.0).unwrap().rgba);
         assert_eq!(bitmap.platform_output.cursor_icon, CursorIcon::Crosshair, "visible fallback if the OS rejects a bitmap");
     }
     let open = hand_with(&ctx, false, true);
@@ -147,13 +147,13 @@ fn the_hand_is_a_bitmap_only_where_the_os_has_none() {
 fn unchanged_geometry_reuses_the_os_upload_and_dpi_invalidates_it() {
     let ctx = egui::Context::default();
     let shape = Shape::Circle { radius: 20.0, centre: false };
-    let a = cached_image(&ctx, shape, 1.0).unwrap();
-    let b = cached_image(&ctx, shape, 1.0).unwrap();
+    let a = cached_image(&ctx, &shape, 1.0).unwrap();
+    let b = cached_image(&ctx, &shape, 1.0).unwrap();
     assert!(Arc::ptr_eq(&a.rgba, &b.rgba));
-    let scaled = cached_image(&ctx, shape, 2.0).unwrap();
+    let scaled = cached_image(&ctx, &shape, 2.0).unwrap();
     assert!(!Arc::ptr_eq(&a.rgba, &scaled.rgba));
     assert!(scaled.size[0] > a.size[0]);
-    let larger = cached_image(&ctx, Shape::Circle { radius: 40.0, centre: false }, 2.0).unwrap();
+    let larger = cached_image(&ctx, &Shape::Circle { radius: 40.0, centre: false }, 2.0).unwrap();
     assert!(larger.size[0] > scaled.size[0]);
 }
 
@@ -161,7 +161,7 @@ fn unchanged_geometry_reuses_the_os_upload_and_dpi_invalidates_it() {
 fn lifecycle_clears_sticky_images_and_respects_later_widgets() {
     let ctx = egui::Context::default();
     ctx.add_plugin(CursorLifecycle);
-    let image = rasterize(Shape::Circle { radius: 20.0, centre: false }, 1.0).unwrap();
+    let image = rasterize(&Shape::Circle { radius: 20.0, centre: false }, 1.0).unwrap();
     let output = frame(&ctx, |ui| {
         ui.ctx().set_cursor_image(Some(image.clone()));
         ui.ctx().set_cursor_icon(CursorIcon::None);
@@ -223,8 +223,8 @@ fn write_cursor_preview() {
                 rgba[(y * width + x) * 4..(y * width + x) * 4 + 3].fill(background);
             }
         }
-        for (row, &(shape, scale)) in cases.iter().enumerate() {
-            let image = rasterize(shape, scale).unwrap();
+        for (row, (shape, scale)) in cases.iter().enumerate() {
+            let image = rasterize(shape, *scale).unwrap();
             let side = usize::from(image.size[0]);
             let x0 = col * 200 + 100 - usize::from(image.hotspot[0]);
             let y0 = row * 100 + 50 - usize::from(image.hotspot[1]);
@@ -294,7 +294,7 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
     h.state_mut().ui.tool = crate::Tool::Hand;
     h.run_steps(2);
     let hand = h.output().platform_output.cursor_image.clone().expect("the Hand's open hand reaches the OS as a bitmap");
-    assert_eq!(hand.rgba, rasterize(Shape::Hand { closed: false }, h.ctx.pixels_per_point()).unwrap().rgba);
+    assert_eq!(hand.rgba, rasterize(&Shape::Hand { closed: false }, h.ctx.pixels_per_point()).unwrap().rgba);
 
     h.state_mut().ui.tool = crate::Tool::Brush;
     h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": "standard"})).unwrap();

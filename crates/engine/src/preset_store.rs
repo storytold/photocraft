@@ -1084,6 +1084,11 @@ impl Session {
         }
         self.brush_presets_changed();
         self.sync_preset_store();
+        // A brush remembered from the previous run (or picked before the store loaded) may be
+        // painting with previews; load the full tips now (a missing one keeps its preview).
+        let mut brush = std::mem::take(&mut self.tools.brush);
+        let _ = self.load_brush_tips(&mut brush);
+        self.tools.brush = brush;
         if let Some(st) = self.preset_store.as_mut() {
             warnings.extend(st.take_warnings());
         }
