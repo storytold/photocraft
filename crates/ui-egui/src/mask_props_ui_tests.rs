@@ -116,3 +116,67 @@ fn uncommitted_mask_number_stays_with_its_layer() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_ne!(doc.layer(first).unwrap().mask.as_ref().unwrap().density, 0.5, "uncommitted expression is not applied on selection change");
 }
+
+/// Document-wide row of mask coverage (or of the layer's own red channel) across the middle.
+fn row(h: &Harness<'_, PhotocraftApp>, of_mask: bool) -> Vec<f32> {
+    let s = h.state().session.active().unwrap();
+    let layer = s.doc.layer(s.active_layer.unwrap()).unwrap();
+    let surface = if of_mask { &layer.mask.as_ref().unwrap().surface } else { layer.surface().unwrap() };
+    (0..64).map(|x| surface.sample_channel(x, 32, 0)).collect()
+}
+
+#[test]
+fn refine_row_offers_select_and_mask_color_range_and_invert() {
+    for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
+        for adjustment in [false, true] {
+            let mut h = harness(adjustment, theme);
+            for label in ["Refine", "Select and Mask…", "Color Range…", "Invert"] {
+                assert!(h.query_all_by_label(label).next().is_some(), "{theme:?}, adjustment={adjustment}: no {label}");
+            }
+            h.state_mut().ui.mask_target = false;
+            h.run_steps(4);
+            assert!(h.query_all_by_label("Select and Mask…").next().is_none(), "{theme:?}: the Refine row belongs to the mask target");
+            assert!(h.query_all_by_label("Refine").next().is_none());
+        }
+    }
+}
+
+#[test]
+fn refine_invert_inverts_the_mask_and_leaves_the_layer_alone() {
+    let mut h = harness(false, crate::theme::ThemeKind::Pro);
+    let gradient = |target: &str| json!({"from": [0, 0], "to": [63, 0], "colors": ["#000000", "#ffffff"], "target": target});
+    // Pixels and mask both vary, so inverting the wrong surface shows up either way (#1137).
+    h.state_mut().session.execute("paint.gradient", gradient("pixels")).unwrap();
+    h.state_mut().session.execute("paint.gradient", gradient("mask")).unwrap();
+    h.run_steps(3);
+    let (mask_before, pixels_before) = (row(&h, true), row(&h, false));
+    assert!(mask_before[8] < mask_before[56], "the mask must vary across the document");
+    let steps = h.state().session.active().unwrap().history.past_len();
+    h.get_by_label("Invert").click();
+    h.run_steps(3);
+    for (x, (before, after)) in mask_before.iter().zip(row(&h, true)).enumerate() {
+        assert!((1.0 - before - after).abs() < 0.01, "mask at x={x}: {before} should invert to {}, got {after}", 1.0 - before);
+    }
+    assert_eq!(row(&h, false), pixels_before, "the layer's pixels must not be touched");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one undoable step");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(row(&h, true), mask_before, "Undo restores the mask");
+}
+
+#[test]
+fn refine_row_opens_the_select_and_mask_and_color_range_dialogs() {
+    for (label, open) in [("Select and Mask…", "select.refineEdge"), ("Color Range…", crate::color_range_ui::COMMAND)] {
+        let mut h = harness(false, crate::theme::ThemeKind::Pro);
+        assert!(h.state().ui.dialogs.is_empty());
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        let dialogs = &h.state().ui.dialogs;
+        assert_eq!(dialogs.len(), 1, "{label} opens one dialog");
+        let fields = &dialogs[0].fields;
+        let opened = fields.get("__command").and_then(Value::as_str).unwrap_or(crate::color_range_ui::COMMAND);
+        assert_eq!(opened, open, "{label} opened {opened}");
+        if open == crate::color_range_ui::COMMAND {
+            assert!(crate::color_range_ui::owns(fields), "the Color Range dialog, not the generic one");
+        }
+    }
+}

@@ -14,7 +14,7 @@ use crate::{EngineError, Result, Session};
 /// The fill-key command ids (routed to the Channels panel target like `edit.fill`).
 pub const IDS: [&str; 4] = ["edit.fillForeground", "edit.fillBackground", "edit.fillForegroundPreserve", "edit.fillBackgroundPreserve"];
 
-const PARAMS: &str = r##"{"layer":id?,"target":"pixels"|{"channel":i}|"quickMask"?}"##;
+const PARAMS: &str = r##"{"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##;
 
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let edit_fill = crate::commands::find("edit.fill").ok_or_else(|| "Fill is unavailable".to_string())?;

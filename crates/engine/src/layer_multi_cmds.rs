@@ -1044,8 +1044,7 @@ fn lock_layers(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
-    let name =
-        p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
+    let name = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
@@ -1202,8 +1201,9 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
         let mut copies = Vec::new();
         let mut new_active = None;
         for id in top_level(doc, &sel) {
-            let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-            dup.name = doc.copy_name(&dup.name);
+            // Match the single-layer duplicate path: Background copies become
+            // ordinary layers, while normal copies retain their original locks.
+            let dup = crate::commands::layer_copy(doc, id)?;
             let nid = doc.insert_above(Some(id), dup);
             if !in_place {
                 crate::artboard_cmds::place_copy(doc, nid)?;
@@ -1250,7 +1250,7 @@ pub fn specs() -> Vec<CommandSpec> {
     const ALIGN: &str = r##"{"to":"auto|layers|selection|canvas"="auto"} (auto: the selection bounds with one layer and an active selection, else the selected layers' bounds)"##;
     vec![
         spec!("select.allLayers", "All Layers", &["Select"], Some("Cmd+Alt+A"), "{}", has_doc, |s, _| select_all_layers(s)),
-        spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_layer, |s, _| {
+        spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_doc, |s, _| {
             set_selection(s, Vec::new(), None, None)?;
             if let Some(st) = s.active_mut() {
                 st.active_layer = None;
@@ -1531,6 +1531,18 @@ mod tests {
         s.execute("select.deselectLayers", json!({})).unwrap();
         assert!(sel(&s).is_empty());
         assert_eq!(s.active().unwrap().history.entries().len(), history);
+        // Nothing selected: a no-op, not an error (#2457).
+        s.execute("select.deselectLayers", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().history.entries().len(), history);
+        // An explicit layer needs no active layer.
+        s.execute("layer.hideLayers", json!({"layer": a.0})).unwrap();
+        assert!(!s.active().unwrap().doc.layer(a).unwrap().visible);
+        s.execute("layer.renameLayer", json!({"layer": a.0, "name": "x"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layer(a).unwrap().name, "x");
+        s.execute("layer.showLayers", json!({"layer": a.0})).unwrap();
+        assert!(s.active().unwrap().doc.layer(a).unwrap().visible);
+        assert!(s.execute("layer.hideLayers", json!({"layer": 999_999})).is_err());
+        assert!(s.execute("layer.hideLayers", json!({})).is_err());
         assert!(!s.is_enabled("layer.align.topEdges"));
     }
 
@@ -1546,6 +1558,16 @@ mod tests {
         assert_eq!(r["selected"], json!([a.0, b.0]));
         assert!(s.execute("select.findLayers", json!({"name": "nothing"})).is_err());
         assert!(s.execute("layer.renameLayer", json!({})).is_err());
+    }
+
+    #[test]
+    fn rename_layer_keeps_surrounding_spaces() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        s.execute("layer.renameLayer", json!({"layer": a.0, "name": " black skin bw "})).unwrap();
+        assert_eq!(doc(&s).layer(a).unwrap().name, " black skin bw ");
+        assert!(s.execute("layer.renameLayer", json!({"layer": a.0, "name": "   "})).is_err());
+        assert_eq!(doc(&s).layer(a).unwrap().name, " black skin bw ");
     }
 
     #[test]
