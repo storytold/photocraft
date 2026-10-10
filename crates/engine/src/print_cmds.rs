@@ -389,6 +389,11 @@ fn do_print_with_spooler(s: &mut Session, p: &Value, cmd: &str, spooler: impl Fn
     if let Some(o) = remembered.as_object_mut() {
         o.remove("output");
         o.remove("dryRun");
+        // A non-sending export only made sense with its explicit output (or as a dry run).
+        // Neither is remembered, so replay and the next Print dialog must default to sending.
+        if o.get("send") == Some(&Value::Bool(false)) {
+            o.remove("send");
+        }
     }
     s.file_menu.last_print = Some(remembered);
     crate::automate_cmds::fire_event(s, "print");

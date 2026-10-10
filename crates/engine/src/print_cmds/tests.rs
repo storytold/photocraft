@@ -186,6 +186,21 @@ fn print_without_sending_requires_an_output_unless_dry_run() {
     assert!(err.to_string().contains("needs an output path"), "{err}");
     assert_eq!(s.file_menu.last_print, before, "a rejected print must not become a remembered successful print");
     assert!(do_print_with_spooler(&mut s, &json!({"send": false, "dryRun": true}), "file.print", |_| Err(other("dry run invoked spooler"))).is_ok());
+    assert!(s.file_menu.last_print.as_ref().unwrap().get("send").is_none());
+
+    let output = format!("{}/export.pdf", tmp("non-sending-export"));
+    do_print_with_spooler(&mut s, &json!({"output": output, "send": false}), "file.print", |_| Err(other("non-sending export invoked spooler"))).unwrap();
+    assert!(std::path::Path::new(&output).is_file());
+    let mut repeat = s.file_menu.last_print.clone().unwrap();
+    assert!(repeat.get("send").is_none(), "a removed output must not leave send: false in remembered settings");
+    repeat["copies"] = json!(1);
+    let replay = do_print_with_spooler(&mut s, &repeat, "file.printOneCopy", |argv| {
+        assert!(std::path::Path::new(argv.last().unwrap()).is_file());
+        Ok("request id 2".into())
+    })
+    .unwrap();
+    assert_eq!(replay["sent"], true);
+    assert_eq!(replay["copies"], 1);
 }
 
 #[test]
