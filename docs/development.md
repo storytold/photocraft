@@ -2,8 +2,15 @@
 
 ## Prerequisites
 
-- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
-- macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
+Run `cargo xtask doctor` to check your machine and `cargo xtask doctor --fix` to install what can be
+installed automatically. The full list — tools, rustup targets/components, data checkouts and Linux
+system libraries — is generated from the manifest in `xtask/src/prereqs.rs` into
+[docs/prerequisites.md](prerequisites.md).
+
+- Rust stable (1.95+). `cargo xtask doctor --fix` installs the `clippy`/`rustfmt` components and the
+  `wasm32-unknown-unknown` target the gates need; `cargo xtask ci` and `cargo xtask wasm` fail with
+  that hint if one is missing.
+- macOS, Windows or Linux. The Linux `lib*` packages are listed on the prerequisites page.
 
 ### Windows source builds
 

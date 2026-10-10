@@ -10,6 +10,7 @@ mod ico;
 mod layers;
 mod perf;
 mod pinned;
+mod prereqs;
 mod scorecard;
 mod sha256;
 mod stats;
@@ -42,6 +43,12 @@ commands:
                   check perf/budgets.toml and perf/baseline.json (non-zero on a broken budget or regression)
   scorecard [--check]
                   regenerate docs/scorecard.md (--check: fail if it is stale)
+  doctor [--check] [--json] [--fix [--all]] [--markdown]
+                  check the tools, rustup targets/components, data checkouts and system libraries
+                  the project needs (single source: xtask/src/prereqs.rs); --check fails if
+                  docs/prerequisites.md is stale; --fix installs the missing required ones (--all:
+                  also the optional workflow tooling); --markdown regenerates the page. `cargo xtask
+                  ci`/`wasm` use the same list to fail with the fix when a prerequisite is missing
   version [set X.Y.Z[-pre]]
                   print the workspace version, or set it (Cargo.toml + Cargo.lock)
   ico <out.ico> <in.png>...
@@ -62,6 +69,7 @@ fn main() -> ExitCode {
         Some("i18n-coverage") => i18n_coverage::run(&root()),
         Some("perf") => perf::run(&root(), &rest),
         Some("scorecard") => scorecard::run(&root(), &rest),
+        Some("doctor") => prereqs::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("-h" | "--help" | "help") | None => {
@@ -158,6 +166,8 @@ fn wasm_set() -> Result<Vec<String>, String> {
 const WASM_FEATURES: &[(&str, &str)] = &[("photocraft-codecs", "heif")];
 
 fn cmd_wasm() -> Result<(), String> {
+    // Fail with "run `cargo xtask doctor --fix`", not `E0463: can't find crate for core`.
+    prereqs::require(&root(), &["wasm32-unknown-unknown"])?;
     let set = wasm_set()?;
     let mut results = Vec::new();
     for pkg in &set {
@@ -187,6 +197,8 @@ fn cmd_parity() -> Result<(), String> {
 }
 
 fn cmd_ci() -> Result<(), String> {
+    // The `fmt` and `clippy` steps need these components; report the fix up front if they are gone.
+    prereqs::require(&root(), &["clippy", "rustfmt"])?;
     type Step = (&'static str, Box<dyn Fn() -> Result<(), String>>);
     let steps: Vec<Step> = vec![
         (
