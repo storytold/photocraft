@@ -19,6 +19,11 @@ pub fn configure_touch_ui(ctx: &Context) {
             style.spacing.interact_size.y = style.spacing.interact_size.y.max(44.0);
             style.spacing.interact_size.x = style.spacing.interact_size.x.max(44.0);
             style.spacing.button_padding = vec2(12.0, 9.0);
+            // egui's default 3 pt window-edge grab radius is intended for a mouse.
+            // Keep these Android-only so desktop hit testing is unchanged.
+            style.interaction.interact_radius = style.interaction.interact_radius.max(8.0);
+            style.interaction.resize_grab_radius_side = style.interaction.resize_grab_radius_side.max(18.0);
+            style.interaction.resize_grab_radius_corner = style.interaction.resize_grab_radius_corner.max(24.0);
         });
     }
 }
