@@ -1001,7 +1001,8 @@ fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Fill Path", |doc, _| {
         let area = doc.bounds();
         let r = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE);
-        let feather_pad = (feather.ceil() as i32).saturating_mul(2);
+        // The feather reaches 3σ = 3 × radius (σ = radius, as in Photoshop), plus a pixel.
+        let feather_pad = (feather.ceil() as i32).saturating_mul(3).saturating_add(1);
         let area = r.pixel_bounds().map_or(area, |b| b.inflate(feather_pad).intersect(&area));
         if area.is_empty() {
             return Ok(());

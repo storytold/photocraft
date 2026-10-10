@@ -741,7 +741,7 @@ pub fn smooth(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
     crate::selection_blur::smooth(m, w, h, r)
 }
 
-/// Feather: Gaussian blur of the mask with sigma = radius / 2 (kernel truncated at 3σ, zero
+/// Feather: Gaussian blur of the mask with sigma = radius, as in Photoshop (kernel truncated at 3σ, zero
 /// beyond the canvas). Parallel, confined to the selection's bounds, and independent of the
 /// radius (#211).
 pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
@@ -1105,7 +1105,8 @@ mod tests {
         let s = smooth(&m, 20, 20, 1.0);
         assert_eq!(s[2 * 20 + 2], 0.0);
         assert_eq!(s[10 * 20 + 10], 1.0);
-        let f = feather(&square(20, 20), 20, 20, 4.0);
+        // Radius 2 (σ 2) keeps the blur inside the 20×20 canvas, so no coverage is lost.
+        let f = feather(&square(20, 20), 20, 20, 2.0);
         let edge = f[10 * 20 + 5];
         assert!(edge > 0.3 && edge < 0.8, "{edge}");
         let sum: f32 = f.iter().sum();
