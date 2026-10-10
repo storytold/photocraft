@@ -3401,3 +3401,19 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Narzędzie Pędzel próbkowania
+	Sampling Area Overlay	Nakładka obszaru próbkowania
+	Show Sampling Area	Pokaż obszar próbkowania
+	Indicates	Wskazuje
+	Sampling Area	Obszar próbkowania
+	Excluded Area	Obszar wykluczony
+	Sampling Area Options	Opcje obszaru próbkowania
+	Rectangular	Prostokątny
+	Fill Settings	Ustawienia wypełnienia
+	Rotation Adaptation	Dopasowanie obrotu
+	Very High	Bardzo wysoka
+	Full	Pełna
+	Mirror	Odbicie lustrzane
+	Output Settings	Ustawienia wyjścia
+	Output To	Wyjście do

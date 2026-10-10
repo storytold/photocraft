@@ -2957,3 +2957,19 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	샘플링 브러시 도구
+	Sampling Area Overlay	샘플링 영역 오버레이
+	Show Sampling Area	샘플링 영역 표시
+	Indicates	표시 대상
+	Sampling Area	샘플링 영역
+	Excluded Area	제외 영역
+	Sampling Area Options	샘플링 영역 옵션
+	Rectangular	사각형
+	Fill Settings	채우기 설정
+	Rotation Adaptation	회전 적응
+	Very High	매우 높음
+	Full	전체
+	Mirror	미러
+	Output Settings	출력 설정
+	Output To	출력 위치

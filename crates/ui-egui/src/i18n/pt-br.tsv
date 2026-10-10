@@ -2807,3 +2807,22 @@ fontWeight	Italic	Itálico
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Ferramenta Pincel de amostragem
+	Sampling Area Overlay	Sobreposição da área de amostragem
+	Show Sampling Area	Mostrar área de amostragem
+	Indicates	Indica
+	Sampling Area	Área de amostragem
+	Excluded Area	Área excluída
+	Sampling Area Options	Opções da área de amostragem
+	Rectangular	Retangular
+	Fill Settings	Configurações de preenchimento
+	Rotation Adaptation	Adaptação de rotação
+	Very High	Muito alta
+	Full	Completa
+	Mirror	Espelhar
+	Output Settings	Configurações de saída
+	Output To	Saída para
+	New Layer	Nova camada
+	Duplicate Layer	Duplicar camada
+	Contract	Contrair

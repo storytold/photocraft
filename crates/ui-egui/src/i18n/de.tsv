@@ -2417,3 +2417,24 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Aufnahmepinsel-Werkzeug
+	Sampling Area Overlay	Überlagerung des Aufnahmebereichs
+	Show Sampling Area	Aufnahmebereich einblenden
+	Indicates	Kennzeichnet
+	Sampling Area	Aufnahmebereich
+	Excluded Area	Ausgeschlossener Bereich
+	Sampling Area Options	Optionen für Aufnahmebereich
+	Rectangular	Rechteckig
+	Fill Settings	Füllungseinstellungen
+	Rotation Adaptation	Drehungsanpassung
+	Very High	Sehr hoch
+	High	Hoch
+	Low	Niedrig
+	Full	Voll
+	Mirror	Spiegeln
+	Output Settings	Ausgabeeinstellungen
+	Output To	Ausgabe in
+	New Layer	Neue Ebene
+	Duplicate Layer	Ebene duplizieren
+	Contract	Verkleinern

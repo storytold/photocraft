@@ -3489,3 +3489,19 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Εργαλείο πινέλου δειγματοληψίας
+	Sampling Area Overlay	Επικάλυψη περιοχής δειγματοληψίας
+	Show Sampling Area	Εμφάνιση περιοχής δειγματοληψίας
+	Indicates	Υποδεικνύει
+	Sampling Area	Περιοχή δειγματοληψίας
+	Excluded Area	Εξαιρούμενη περιοχή
+	Sampling Area Options	Επιλογές περιοχής δειγματοληψίας
+	Rectangular	Ορθογώνια
+	Fill Settings	Ρυθμίσεις γεμίσματος
+	Rotation Adaptation	Προσαρμογή περιστροφής
+	Very High	Πολύ υψηλή
+	Full	Πλήρης
+	Mirror	Κατοπτρισμός
+	Output Settings	Ρυθμίσεις εξόδου
+	Output To	Έξοδος σε

@@ -3488,3 +3488,19 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Пензель області вибірки
+	Sampling Area Overlay	Накладання області вибірки
+	Show Sampling Area	Показати область вибірки
+	Indicates	Позначає
+	Sampling Area	Область вибірки
+	Excluded Area	Виключена область
+	Sampling Area Options	Параметри області вибірки
+	Rectangular	Прямокутна
+	Fill Settings	Параметри заливки
+	Rotation Adaptation	Адаптація повороту
+	Very High	Дуже висока
+	Full	Повна
+	Mirror	Віддзеркалення
+	Output Settings	Параметри виводу
+	Output To	Вивести в

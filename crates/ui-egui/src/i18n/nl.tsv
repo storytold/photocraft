@@ -3561,3 +3561,19 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Gereedschap Monsterpenseel
+	Sampling Area Overlay	Overlay van monstergebied
+	Show Sampling Area	Monstergebied tonen
+	Indicates	Geeft aan
+	Sampling Area	Monstergebied
+	Excluded Area	Uitgesloten gebied
+	Sampling Area Options	Opties voor monstergebied
+	Rectangular	Rechthoekig
+	Fill Settings	Vulinstellingen
+	Rotation Adaptation	Rotatieaanpassing
+	Very High	Zeer hoog
+	Full	Volledig
+	Mirror	Spiegelen
+	Output Settings	Uitvoerinstellingen
+	Output To	Uitvoer naar

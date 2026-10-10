@@ -219,6 +219,68 @@ fn delete_and_fill_selection_removes_the_object_in_one_step() {
 }
 
 #[test]
+fn content_aware_fill_samples_photoshops_window() {
+    // A 50 px selection samples the 200 px square centred on it (Photoshop 25.4's overlay);
+    // at the canvas edge the square slides inwards. Edit › Fill uses the same window.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "background": "white"})).unwrap();
+    for (x, y, want) in [(275, 175, [200, 100, 200, 200]), (10, 10, [0, 0, 200, 200])] {
+        s.execute("select.rect", json!({"x": x, "y": y, "width": 50, "height": 50})).unwrap();
+        for sampling in ["auto", "rectangular"] {
+            let r = s.execute("edit.contentAwareFill", json!({"sampling": sampling})).unwrap();
+            assert_eq!(r["window"], json!(want), "{sampling} at {x},{y}");
+            s.undo();
+        }
+    }
+}
+
+#[test]
+fn content_aware_fill_takes_the_workspace_edits() {
+    // The plan the workspace previews: lasso edits change the fill area (and the window follows),
+    // sampling-brush strokes change what may be copied, also outside the window.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "background": "white"})).unwrap();
+    s.execute("select.rect", json!({"x": 275, "y": 175, "width": 50, "height": 50})).unwrap();
+    let st = s.active().unwrap();
+    let (doc, id) = (st.doc.clone(), st.active_layer.unwrap());
+    let plan = |p: Value| content_aware_plan(&doc, id, &p, "edit.contentAwareFill");
+    let count = |m: &[bool]| m.iter().filter(|v| **v).count();
+    let base = plan(json!({"sampling": "rectangular"})).unwrap();
+    assert_eq!((base.window, count(&base.hole)), (Rect::new(200, 100, 400, 300), 2500));
+    assert_eq!(count(&base.source), 200 * 200 - 2500);
+    // A lasso square added beside the selection: a bigger fill area, a window around both.
+    let p = plan(json!({"sampling": "rectangular", "fillEdits": [{"op": "add", "points": [[340, 175], [390, 175], [390, 225], [340, 225]]}]})).unwrap();
+    assert_eq!(count(&p.hole), 5000);
+    assert!(p.window.width() > 200 && p.window.contains_rect(&Rect::new(275, 175, 390, 225)), "{:?}", p.window);
+    // Expand by 2 grows the 50 px square to about 54 px (rounded corners).
+    let p = plan(json!({"sampling": "rectangular", "fillEdits": [{"op": "expand", "by": 2}]})).unwrap();
+    assert!((54 * 54 - 20..=54 * 54).contains(&count(&p.hole)), "{}", count(&p.hole));
+    // Subtracting it all leaves nothing to fill.
+    assert!(plan(json!({"fillEdits": [{"op": "subtract", "points": [[0, 0], [600, 0], [600, 400], [0, 400]]}]})).is_err());
+    // A subtracting stroke takes a band out of the sampling area; an adding one far away reaches
+    // past the window, and the plan's rectangle grows to hold it.
+    let p = plan(json!({"sampling": "rectangular", "samplingStrokes": [{"mode": "subtract", "size": 10, "points": [[210, 110], [390, 110]]}]})).unwrap();
+    assert!((count(&base.source) - count(&p.source)).abs_diff(10 * 190) < 60);
+    let p = plan(json!({"sampling": "rectangular", "samplingStrokes": [{"mode": "add", "size": 20, "points": [[540, 350], [580, 350]]}]})).unwrap();
+    assert!(p.rect.contains(560, 350) && !p.window.contains(560, 350));
+    assert!(count(&p.source) > count(&base.source) + 600);
+    // Custom from strokes alone; bad edits are errors.
+    let p = plan(json!({"sampling": "custom", "samplingStrokes": [{"mode": "add", "size": 20, "points": [[100, 100], [160, 100]]}]})).unwrap();
+    assert!((1450..1600).contains(&count(&p.source)), "a 20 px brush along 60 px: {}", count(&p.source));
+    for bad in [
+        json!({"samplingStrokes": [{"mode": "paint", "size": 10, "points": [[0, 0]]}]}),
+        json!({"samplingStrokes": [{"size": 0, "points": [[0, 0]]}]}),
+        json!({"fillEdits": [{"op": "add", "points": [[0, "x"]]}]}),
+        json!({"fillEdits": [{"op": "expand", "by": -3}]}),
+    ] {
+        assert!(plan(bad.clone()).is_err(), "{bad}");
+    }
+    // The command fills with the same plan; `layer` names the layer even when another is active.
+    let r = s.execute("edit.contentAwareFill", json!({"sampling": "rectangular", "fillEdits": [{"op": "expand", "by": 2}], "layer": id.0})).unwrap();
+    assert!(r["filled"].as_u64().unwrap() > 2800);
+}
+
+#[test]
 fn content_aware_fill_outputs_and_sampling() {
     let mut s = blob_session(8);
     let base = s.active().unwrap().active_layer.unwrap();

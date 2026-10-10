@@ -2,22 +2,28 @@
 //! content-aware fill close the gaps.
 //!
 //! The selection is the content, `offset` how far the user dragged it. At the new place the content
-//! is pasted, its colour fitted to the new surroundings by `color` (0 keeps it, 10 is a full
-//! seamless clone as the Patch Tool's), and a band along its edge, inside the selection, is
-//! re-synthesised from the surroundings so that it merges in. `structure` sets that band: 7 keeps
-//! the content up to the selection's edge, lower values hand a wider band to the surroundings. In
-//! `move` mode the place the content left is then filled content-aware (`extend` keeps it). That
-//! fill never samples the moved content, so the object doesn't come back as a ghost; the edge band
-//! may sample it (it is the context the band blends towards), but not the content's old place.
-//! (`content_aware::fill` treats excluded pixels as unknown, so excluding the content there would
-//! turn the whole moved area into one hole and smear the band further.)
+//! is pasted, fitted to its new surroundings by `color`, and a band along its edge, inside the
+//! selection, is re-synthesised from the surroundings so that it merges in. In `move` mode the place
+//! the content left is then filled content-aware (`extend` keeps it). That fill never samples the
+//! moved content, so the object doesn't come back as a ghost; the edge band may sample it (it is the
+//! context the band blends towards), but not the content's old place.
+//!
+//! Measured on Photoshop 25.4 (a 60 px selection holding a ring-shaped object, dragged 150 px):
+//! * **Structure** 3 to 7 give the same result, bit for bit: the content is copied exactly up to
+//!   about 8 px from the selection's edge, and that band blends into the surroundings. 2 widens the
+//!   band; 1 re-synthesises the content too, so even its middle is no longer an exact copy.
+//! * **Color** 0 pastes the content as it is; higher values bring its level towards the new
+//!   surroundings by up to about `0.04 · color` (Patch Tool, content 42 and 102 levels brighter:
+//!   3 shifts it 32 and 31 levels, 10 shifts it 35 and 95), a limited gain and bias
+//!   ([`photocraft_algo::content_aware::color_amount`]).
 //!
 //! The selection moves with the content, as in Photoshop. A soft selection counts wherever it is
 //! above zero (as the Patch Tool's); the band does the blending. The fills are PatchMatch
 //! completions and can take seconds on large selections, so the command runs as a background job
-//! (#210): with progress, cancellable, and the document unchanged until it applies.
+//! (#210): with progress, cancellable, and the document unchanged until it applies. The Patch
+//! Tool's Content-Aware mode lands its content the same way ([`land`]).
 
-use photocraft_algo::content_aware::{FillOptions, fill_with};
+use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fill_with, level_transform};
 
 use super::patch::{coverage, offset, selection_area, target_layer};
 use super::*;
@@ -58,10 +64,18 @@ fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
     }
 }
 
+/// The pixels a step reads and writes: a layer (or, with `None`, the channel `p` targets), and
+/// whether reading samples the visible composite (Sample All Layers).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Target {
+    pub id: Option<LayerId>,
+    pub all_layers: bool,
+}
+
 /// What a move does, checked before any work starts.
 #[derive(Clone, Copy, Debug)]
 struct Plan {
-    id: Option<LayerId>,
+    target: Target,
     canvas: Rect,
     /// The selected area (where the content comes from).
     area: Rect,
@@ -69,7 +83,6 @@ struct Plan {
     mode: Mode,
     structure: u8,
     color: u8,
-    all_layers: bool,
 }
 
 fn plan(s: &Session, p: &Value) -> Result<Plan> {
@@ -101,19 +114,21 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
         return Err(bad(CMD, "the moved selection must stay inside the canvas"));
     }
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
-    Ok(Plan { id, canvas, area, offset: (dx, dy), mode, structure, color, all_layers })
+    Ok(Plan { target: Target { id, all_layers }, canvas, area, offset: (dx, dy), mode, structure, color })
 }
 
 /// Width in pixels of the edge band re-synthesised at the new place, for Structure 1..7 and content
-/// `min_side` pixels across. 7 keeps everything; the fractions grow the band roughly geometrically
-/// towards 1, so the default 4 blends about a tenth of the content into its surroundings.
-fn band_width(structure: u8, min_side: u32) -> usize {
-    const FRACTION: [f32; 7] = [0.30, 0.22, 0.15, 0.10, 0.06, 0.03, 0.0];
-    let f = FRACTION.get(usize::from(structure.saturating_sub(1))).copied().unwrap_or(0.0);
-    if f == 0.0 {
-        return 0;
-    }
-    ((min_side as f32 * f).round() as usize).clamp(2, 128)
+/// `min_side` pixels across. Photoshop gives the same result for 3 to 7: the band is about a patch
+/// wide whatever the content's size; 2 and 1 widen it (1 so far that the content itself is
+/// re-synthesised).
+pub(super) fn band_width(structure: u8, min_side: u32) -> usize {
+    let side = min_side as f32;
+    let w = match structure {
+        0 | 1 => (side * 0.3).max(12.0),
+        2 => (side * 0.18).max(9.0),
+        _ => 6.0,
+    };
+    (w.round() as usize).min(128)
 }
 
 /// The cells of a `w × h` mask whose whole `(2r+1)²` neighbourhood, as far as it lies on the grid,
@@ -147,17 +162,17 @@ fn erode(w: usize, h: usize, m: &[bool], r: usize) -> Vec<bool> {
     out
 }
 
-/// Where a fill samples from around `r`: as Edit › Content-Aware Fill's automatic sampling area,
-/// three quarters of the extent around it (at least 32, at most [`MAX_MARGIN`] pixels).
-fn window(r: Rect, canvas: Rect) -> Rect {
-    r.inflate(crate::fill_cmds::sampling_margin(r).min(MAX_MARGIN)).intersect(&canvas)
+/// Where a fill samples from around `r`: Photoshop's Content-Aware window
+/// ([`crate::fill_cmds::sampling_window`]), at most [`MAX_MARGIN`] pixels around `r`.
+pub(super) fn window(r: Rect, canvas: Rect) -> Rect {
+    crate::fill_cmds::sampling_window(r, canvas).intersect(&r.inflate(MAX_MARGIN))
 }
 
 /// The pixels a step works on: the targeted surface, or with Sample All Layers the visible
 /// composite (encoded in the target's format).
-fn read(doc: &mut Document, plan: &Plan, p: &Value, rect: Rect) -> Result<Region> {
-    let (surf, _) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
-    if plan.all_layers {
+pub(super) fn read(doc: &mut Document, t: Target, p: &Value, rect: Rect) -> Result<Region> {
+    let (surf, _) = crate::channel_cmds::target_surface(doc, t.id, p)?;
+    if t.all_layers {
         let fmt = surf.format();
         return Ok(composite_region(doc, None, SampleLayers::All, rect, fmt));
     }
@@ -167,15 +182,15 @@ fn read(doc: &mut Document, plan: &Plan, p: &Value, rect: Rect) -> Result<Region
 /// Write `out` over `mask` into the target, replacing the pixels (the result already holds what
 /// should show there). With the transparency lock, alpha is kept and transparent pixels stay as
 /// they are. Returns the written rectangle.
-fn replace(doc: &mut Document, plan: &Plan, p: &Value, out: &Region, mask: &[bool]) -> Result<Rect> {
-    let (surf, lock) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
+pub(super) fn replace(doc: &mut Document, t: Target, p: &Value, out: &Region, mask: &[bool]) -> Result<Rect> {
+    let (surf, lock) = crate::channel_cmds::target_surface(doc, t.id, p)?;
     let fmt = surf.format();
     let a = alpha_index(&fmt);
     let rect = out.rect;
     let mut px = surf.read_region(rect);
     let n = out.ch;
     if px.len() != out.data.len() || mask.len() * n != px.len() {
-        return Err(EngineError::Other("internal error: content-aware move buffers disagree in size".into()));
+        return Err(EngineError::Other("internal error: content-aware buffers disagree in size".into()));
     }
     for ((dst, src), m) in px.chunks_exact_mut(n).zip(out.data.chunks_exact(n)).zip(mask) {
         if !*m {
@@ -199,14 +214,78 @@ fn replace(doc: &mut Document, plan: &Plan, p: &Value, out: &Region, mask: &[boo
 }
 
 /// Selection coverage over `rect` as a mask (set wherever it is above zero).
-fn mask(sel: &Surface, rect: Rect) -> Vec<bool> {
+pub(super) fn mask(sel: &Surface, rect: Rect) -> Vec<bool> {
     coverage(sel, rect).into_iter().map(|c| c > 0.0).collect()
 }
 
 /// Fill options: the fill's own colour adaptation (Edit › Content-Aware Fill's default), seeded so
 /// the result is reproducible.
-fn fill_options() -> FillOptions {
+pub(super) fn fill_options() -> FillOptions {
     FillOptions { seed: 0x00ca_4e00, ..FillOptions::default() }
+}
+
+/// A ring of `w` pixels just outside `m` (within the grid).
+fn outer_ring(gw: usize, gh: usize, m: &[bool], w: usize) -> Vec<bool> {
+    let inside: Vec<bool> = m.iter().map(|v| !*v).collect();
+    erode(gw, gh, &inside, w).iter().zip(m).map(|(keep, sel)| !*keep && !*sel).collect()
+}
+
+/// Content landing at `dst_area`: the pixels of the window around it, with `selected` (the
+/// selection's shape there) to be replaced by the content found `shift` away (`content` = that
+/// window, so `content` pixel = window pixel + `shift`). The content's middle is copied, its level
+/// fitted to the new surroundings by `color`; a `band_width(structure)` band inside the selection's
+/// edge is re-synthesised from the surroundings and that middle, never sampling `avoid`. Writes the
+/// result into the target and returns the rectangle it changed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn land(
+    doc: &mut Document,
+    t: Target,
+    p: &Value,
+    win: Rect,
+    selected: &[bool],
+    content: &Region,
+    avoid: &[bool],
+    structure: u8,
+    color: u8,
+    stage: (f32, f32),
+    ctx: &crate::jobs::JobCtx,
+    label: &str,
+) -> Result<Rect> {
+    let (w, h) = (win.width() as usize, win.height() as usize);
+    let here = read(doc, t, p, win)?;
+    let n = here.ch;
+    let (sx0, sy0, sx1, sy1) = selected.iter().enumerate().filter(|(_, s)| **s).fold((w, h, 0, 0), |b, (i, _)| {
+        let (x, y) = (i % w, i / w);
+        (b.0.min(x), b.1.min(y), b.2.max(x + 1), b.3.max(y + 1))
+    });
+    let side = (sx1.saturating_sub(sx0)).min(sy1.saturating_sub(sy0)) as u32;
+    let core = erode(w, h, selected, band_width(structure, side));
+    ctx.check()?;
+    // Colour: the content's surroundings (where it came from) against the new ones, both just
+    // outside the selection's shape.
+    let ring = outer_ring(w, h, selected, 6);
+    let pick = |r: &Region| -> Vec<f32> { ring.iter().enumerate().filter(|(_, k)| **k).flat_map(|(i, _)| r.data[i * n..(i + 1) * n].to_vec()).collect() };
+    let gb = level_transform(n, &pick(content), &pick(&here), color_amount(color));
+    let fmt = crate::channel_cmds::target_surface(doc, t.id, p)?.0.format();
+    let alpha = alpha_index(&fmt);
+    let mut buf = here;
+    for (i, _) in core.iter().enumerate().filter(|(_, c)| **c) {
+        for (c, &(g, b)) in gb.iter().enumerate() {
+            let v = content.data[i * n + c];
+            // Colour channels are fitted; alpha is copied.
+            buf.data[i * n + c] = if Some(c) == alpha { v } else { g * v + b };
+        }
+    }
+    clamp_samples(&fmt, &mut buf.data);
+    // Structure: the band between the kept core and the selection's edge comes from the
+    // surroundings and the kept core, never from what `avoid` marks.
+    let band: Vec<bool> = selected.iter().zip(&core).map(|(m, c)| *m && !*c).collect();
+    if band.iter().any(|b| *b) {
+        let allowed: Vec<bool> = avoid.iter().map(|o| !*o).collect();
+        let opts = FillOptions { color_adaptation: if color == 0 { color_level("default") } else { color_amount(color) }, ..fill_options() };
+        buf.data = ctx.stage(stage.0, stage.1, label, |ctl| fill_with(w, h, n, &buf.data, &band, &allowed, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
+    }
+    replace(doc, t, p, &buf, selected)
 }
 
 /// The new target surface and the rectangle it changed: the content pasted at the offset, then
@@ -217,62 +296,30 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
     let split = if plan.mode == Mode::Move { 0.4 } else { 1.0 };
     let cancelled = |_| EngineError::Cancelled;
 
-    // 1. The content at its new place.
-    let dst_area = plan.area.translate(dx, dy);
-    let win = window(dst_area, plan.canvas);
-    let (w, h) = (win.width() as usize, win.height() as usize);
-    let here = read(doc, plan, p, win)?;
-    let fmt = crate::channel_cmds::target_surface(doc, plan.id, p)?.0.format();
-    let n = here.ch;
-    // The content with its original surroundings, laid over this window.
-    let mut src = read(doc, plan, p, win.translate(-dx, -dy))?;
-    src.rect = win;
+    // 1. The content at its new place: the content with its original surroundings laid over the
+    // window there; never sampling the content's old place.
+    let win = window(plan.area.translate(dx, dy), plan.canvas);
+    let mut content = read(doc, plan.target, p, win.translate(-dx, -dy))?;
+    content.rect = win;
     let moved = mask(sel, win.translate(-dx, -dy));
     let old_place = mask(sel, win);
-    let side = plan.area.width().min(plan.area.height());
-    let core = erode(w, h, &moved, band_width(plan.structure, side));
-    ctx.check()?;
-    // Colour: fit the kept content to the new surroundings (seamless clone), mixed in by `color`.
-    let fitted = if plan.color > 0 && core.iter().any(|c| *c) {
-        let healed = heal_region(&fmt, &src, &here, &core);
-        let k = f32::from(plan.color) / 10.0;
-        let mut f = src.clone();
-        f.data.iter_mut().zip(&healed.data).for_each(|(s, h)| *s += (h - *s) * k);
-        f
-    } else {
-        src
-    };
-    let mut buf = here;
-    for (i, _) in core.iter().enumerate().filter(|(_, c)| **c) {
-        let r = i * n..(i + 1) * n;
-        if let (Some(d), Some(s)) = (buf.data.get_mut(r.clone()), fitted.data.get(r)) {
-            d.copy_from_slice(s);
-        }
-    }
-    // Structure: the band between the kept core and the selection's edge comes from the surroundings
-    // and the kept core (see the module docs), never from the content's old place.
-    let band: Vec<bool> = moved.iter().zip(&core).map(|(m, c)| *m && !*c).collect();
-    if band.iter().any(|b| *b) {
-        let allowed: Vec<bool> = old_place.iter().map(|o| !*o).collect();
-        buf.data = ctx.stage(0.0, split, label, |ctl| fill_with(w, h, n, &buf.data, &band, &allowed, &opts, ctl)).map_err(cancelled)?;
-    }
-    let mut damage = replace(doc, plan, p, &buf, &moved)?;
+    let mut damage = land(doc, plan.target, p, win, &moved, &content, &old_place, plan.structure, plan.color, (0.0, split), ctx, label)?;
 
     // 2. Move: fill the place the content left (where the content didn't land on it).
     if plan.mode == Mode::Move {
         ctx.check()?;
         let win = window(plan.area, plan.canvas);
         let (w, h) = (win.width() as usize, win.height() as usize);
-        let img = read(doc, plan, p, win)?;
+        let img = read(doc, plan.target, p, win)?;
         let landed = mask(sel, win.translate(-dx, -dy));
         let hole: Vec<bool> = mask(sel, win).iter().zip(&landed).map(|(s, l)| *s && !*l).collect();
         if hole.iter().any(|h| *h) {
             let allowed: Vec<bool> = landed.iter().map(|l| !*l).collect();
             let data = ctx.stage(split, 1.0, label, |ctl| fill_with(w, h, img.ch, &img.data, &hole, &allowed, &opts, ctl)).map_err(cancelled)?;
-            damage = damage.union(&replace(doc, plan, p, &Region { rect: win, ch: img.ch, data }, &hole)?);
+            damage = damage.union(&replace(doc, plan.target, p, &Region { rect: win, ch: img.ch, data }, &hole)?);
         }
     }
-    let surf = crate::channel_cmds::target_surface(doc, plan.id, p)?.0.clone();
+    let surf = crate::channel_cmds::target_surface(doc, plan.target.id, p)?.0.clone();
     Ok((surf, damage))
 }
 
@@ -298,7 +345,7 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
         move |s, (surf, damage)| {
             let (dx, dy) = plan.offset;
             s.edit(label, |doc, _| {
-                *crate::channel_cmds::target_surface(doc, plan.id, &p)?.0 = surf;
+                *crate::channel_cmds::target_surface(doc, plan.target.id, &p)?.0 = surf;
                 // The selection follows the content, ready for another drag.
                 if let Some(sel) = doc.selection.as_ref() {
                     doc.selection = Some(crate::layer_multi_cmds::shift_surface(sel, dx, dy));

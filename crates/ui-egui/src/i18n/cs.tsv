@@ -2378,3 +2378,24 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Nástroj Štětec vzorkování
+	Sampling Area Overlay	Překrytí oblasti vzorkování
+	Show Sampling Area	Zobrazit oblast vzorkování
+	Indicates	Označuje
+	Sampling Area	Oblast vzorkování
+	Excluded Area	Vyloučená oblast
+	Sampling Area Options	Volby oblasti vzorkování
+	Rectangular	Obdélníková
+	Fill Settings	Nastavení výplně
+	Rotation Adaptation	Přizpůsobení otočení
+	Very High	Velmi vysoká
+	High	Vysoká
+	Low	Nízká
+	Full	Úplná
+	Mirror	Zrcadlit
+	Output Settings	Nastavení výstupu
+	Output To	Výstup do
+	New Layer	Nová vrstva
+	Duplicate Layer	Duplikovat vrstvu
+	Contract	Zúžit

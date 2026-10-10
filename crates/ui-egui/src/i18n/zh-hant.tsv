@@ -2355,3 +2355,24 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	取樣筆刷工具
+	Sampling Area Overlay	取樣區域覆蓋
+	Show Sampling Area	顯示取樣區域
+	Indicates	指示
+	Sampling Area	取樣區域
+	Excluded Area	排除區域
+	Sampling Area Options	取樣區域選項
+	Rectangular	矩形
+	Fill Settings	填色設定
+	Rotation Adaptation	旋轉調整
+	Very High	非常高
+	High	高
+	Low	低
+	Full	完全
+	Mirror	鏡像
+	Output Settings	輸出設定
+	Output To	輸出至
+	New Layer	新增圖層
+	Duplicate Layer	複製圖層
+	Contract	縮減

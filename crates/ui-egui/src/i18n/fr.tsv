@@ -2799,3 +2799,22 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Outil Pinceau d’échantillonnage
+	Sampling Area Overlay	Incrustation de la zone d’échantillonnage
+	Show Sampling Area	Afficher la zone d’échantillonnage
+	Indicates	Indique
+	Sampling Area	Zone d’échantillonnage
+	Excluded Area	Zone exclue
+	Sampling Area Options	Options de la zone d’échantillonnage
+	Rectangular	Rectangulaire
+	Fill Settings	Paramètres de remplissage
+	Rotation Adaptation	Adaptation de la rotation
+	Very High	Très élevée
+	Full	Totale
+	Mirror	Miroir
+	Output Settings	Paramètres de sortie
+	Output To	Sortie vers
+	New Layer	Nouveau calque
+	Duplicate Layer	Dupliquer le calque
+	Contract	Contracter
