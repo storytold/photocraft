@@ -22,10 +22,15 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     let img = codecs::decode(bytes)?;
     let mut r = image_to_document(name, &img)?;
     // OpenEXR and Radiance HDR hold linear, scene-referred values (Rec. 709 primaries unless
-    // stated otherwise): tag them linear sRGB so they display and convert correctly.
+    // stated otherwise, and an OpenEXR `Y` is linear luminance): tag them linear sRGB or linear
+    // gray so they display and convert correctly.
     let d = &mut r.document;
-    if d.icc_profile.is_none() && d.mode == ColorMode::Rgb && matches!(codecs::detect(bytes), Some(Format::OpenExr | Format::Hdr)) {
-        d.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    if d.icc_profile.is_none() && matches!(codecs::detect(bytes), Some(Format::OpenExr | Format::Hdr)) {
+        d.icc_profile = match d.mode {
+            ColorMode::Rgb => Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()),
+            ColorMode::Grayscale => Some(photocraft_cms::builtin::linear_gray().to_bytes()),
+            _ => None,
+        };
     }
     Ok(r)
 }
@@ -311,8 +316,11 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
         warnings.push(format!("CMYK converted to sRGB for {format:?} through the document's colour profile"));
     }
     if matches!(format, Format::OpenExr | Format::Hdr) {
-        // OpenEXR and Radiance HDR store linear light (read back as linear sRGB, see [`import_flat`]).
+        // OpenEXR and Radiance HDR store linear light (read back as linear sRGB or linear gray,
+        // see [`import_flat`]).
         if let Some(linear) = convert_rgb(&img, Builtin::LinearSrgb.profile(), Intent::RelativeColorimetric, false, CSample::F32)? {
+            img = linear;
+        } else if let Some(linear) = convert_gray(&img, photocraft_cms::builtin::linear_gray(), CSample::F32)? {
             img = linear;
         }
     } else if !format.caps().icc {
@@ -429,16 +437,40 @@ fn matte_over_white(img: &Image) -> Result<Image, IoError> {
 /// RGB pixels converted from their profile (sRGB when untagged) to `dst`, unclamped, untagged and
 /// stored as `sample`. `None` when the image isn't RGB or already holds `dst`'s colours.
 fn convert_rgb(img: &Image, dst: &photocraft_cms::Profile, intent: photocraft_cms::Intent, bpc: bool, sample: CSample) -> Result<Option<Image>, IoError> {
-    use photocraft_cms::{Builtin, ColorSpace, Profile, Transform};
+    use photocraft_cms::{Builtin, ColorSpace, Profile};
     if !img.layout().is_rgb() {
         return Ok(None);
     }
     let src =
         img.icc.as_ref().and_then(|b| Profile::parse(b).ok()).filter(|p| p.color_space == ColorSpace::Rgb).unwrap_or_else(|| Builtin::Srgb.profile().clone());
+    convert_from(img, &src, dst, intent, bpc, sample)
+}
+
+/// Gray pixels converted from their profile (sGray when untagged) to `dst`, unclamped, untagged
+/// and stored as `sample`. `None` when the image isn't gray or already holds `dst`'s colours.
+fn convert_gray(img: &Image, dst: &photocraft_cms::Profile, sample: CSample) -> Result<Option<Image>, IoError> {
+    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile};
+    if !matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA) {
+        return Ok(None);
+    }
+    let src =
+        img.icc.as_ref().and_then(|b| Profile::parse(b).ok()).filter(|p| p.color_space == ColorSpace::Gray).unwrap_or_else(|| Builtin::SGray.profile().clone());
+    convert_from(img, &src, dst, Intent::RelativeColorimetric, false, sample)
+}
+
+/// `img`'s pixels converted from `src` to `dst` (see [`convert_rgb`]).
+fn convert_from(
+    img: &Image,
+    src: &photocraft_cms::Profile,
+    dst: &photocraft_cms::Profile,
+    intent: photocraft_cms::Intent,
+    bpc: bool,
+    sample: CSample,
+) -> Result<Option<Image>, IoError> {
     if src.same_colors(dst) {
         return Ok(None);
     }
-    let t = Transform::new(&src, dst, intent, bpc).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let t = photocraft_cms::Transform::new(src, dst, intent, bpc).map_err(|e| IoError::Unsupported(e.to_string()))?;
     let stride = img.layout().channels();
     let out = map_bands(img, img.layout(), sample, |mut vals| {
         t.apply(&mut vals, stride);

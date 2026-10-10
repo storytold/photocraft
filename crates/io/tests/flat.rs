@@ -74,6 +74,53 @@ fn exr_rgba32() {
     assert!((a[3] - b[3]).abs() < 1e-6, "alpha kept");
 }
 
+/// An opaque document filled with `#808080`.
+fn mid_gray(mode: ColorMode, depth: SampleType) -> photocraft_doc::Document {
+    let mut d = photocraft_doc::Document::new("g", photocraft_geom::Size::new(4, 4), mode, depth);
+    let fmt = d.pixel_format();
+    let mut s = photocraft_raster::Surface::new(fmt);
+    let v = 128.0 / 255.0;
+    s.fill_rect(d.bounds(), &photocraft_raster::from_rgba(&fmt, [v, v, v, 1.0]));
+    d.layers.push(photocraft_doc::Layer::new("Background", photocraft_doc::LayerContent::Raster(s)));
+    d
+}
+
+/// OpenEXR and Radiance HDR store linear sRGB in every mode: an sGray `#808080` is written as
+/// its linear value, as an RGB `#808080` is, rather than as the display-encoded 0.5 (#2386).
+#[test]
+fn gray_exr_and_hdr_store_linear_light() {
+    let linear = photocraft_color::convert::srgb_to_linear(128.0 / 255.0);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (ext, tol) in [("exr", 2e-5), ("hdr", 2e-3)] {
+            for mode in [ColorMode::Grayscale, ColorMode::Rgb] {
+                let r = export(&mid_gray(mode, depth), ext, &ExportOptions::default()).expect("export");
+                let img = photocraft_codecs::decode(&r.bytes).expect("decode");
+                let samples = img.to_normalized();
+                let worst = samples.iter().map(|v| (v - linear).abs()).fold(0.0f32, f32::max);
+                assert!(worst <= tol, "{mode:?} {depth:?} .{ext}: stored samples differ from {linear} by {worst}");
+            }
+        }
+    }
+}
+
+/// A grayscale OpenEXR holds linear luminance, so it opens as grayscale tagged with a linear gray
+/// profile, in which its samples are the colours saved.
+#[test]
+fn gray_exr_round_trips() {
+    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let r = export(&mid_gray(ColorMode::Grayscale, depth), "exr", &ExportOptions::default()).expect("export");
+        let back = import("x.exr", &r.bytes).expect("import").document;
+        assert_eq!(back.mode, ColorMode::Grayscale, "{depth:?}");
+        let profile = Profile::parse(back.icc_profile.as_deref().expect("tagged")).expect("profile");
+        assert_eq!(profile.color_space, ColorSpace::Gray, "{depth:?}");
+        let t = Transform::new(&profile, Builtin::SGray.profile(), Intent::RelativeColorimetric, false).expect("transform");
+        let mut v = [back.layers[0].surface().expect("raster").pixel(1, 1)[0]];
+        t.apply(&mut v, 1);
+        assert!((v[0] - 128.0 / 255.0).abs() < 1e-4, "{depth:?}: reopened as {} in sGray", v[0]);
+    }
+}
+
 fn smooth(mode: ColorMode) -> photocraft_doc::Document {
     let mut d = photocraft_doc::Document::new("s", photocraft_geom::Size::new(32, 16), mode, SampleType::U8);
     let fmt = d.pixel_format();
