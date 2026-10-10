@@ -740,10 +740,10 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
                 match gradient_fill::render_cmyk_fill(f, native_rect, frame, cx.depth) {
                     Some(s) if matches!(f, Fill::Solid(_)) => Buffer::filled(rect, s.rgba(0, 0)),
                     Some(s) => surface_to_buffer(&s, rect),
-                    None => render_fill(f, rect, frame, cx.patterns),
+                    None => render_fill(f, rect, frame, cx.patterns, adjustment_quantum(cx.depth)),
                 }
             }
-            _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns),
+            _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns, adjustment_quantum(cx.depth)),
         },
         LayerContent::Adjustment(_) => return None,
         _ => match layer.surface() {
@@ -823,17 +823,19 @@ pub fn fill_frame(layer: &Layer, canvas: Rect) -> Rect {
 /// compositor does) but without applying the masks: the pixels a PSD fill layer stores.
 pub fn render_fill_content(layer: &Layer, f: &Fill, canvas: Rect, patterns: &[Pattern]) -> Buffer {
     let prepared = pattern::PreparedPatterns::new(patterns, pattern::PREPARED_PATTERN_BYTES);
-    render_fill(f, canvas, fill_frame(layer, canvas), &prepared)
+    render_fill(f, canvas, fill_frame(layer, canvas), &prepared, None)
 }
 
-fn render_fill(f: &Fill, rect: Rect, canvas: Rect, patterns: &pattern::PreparedPatterns<'_>) -> Buffer {
+/// `quantum`: the document depth's levels, which a dithered gradient is rounded to
+/// ([`gradient_fill::render_quantized`]); `None` keeps it in float.
+fn render_fill(f: &Fill, rect: Rect, canvas: Rect, patterns: &pattern::PreparedPatterns<'_>, quantum: Option<f32>) -> Buffer {
     match f {
         Fill::Solid(c) => {
             let rgb = c.to_rgb();
             Buffer::filled(rect, [rgb[0], rgb[1], rgb[2], c.alpha])
         }
         // Gradient geometry relative to the layer's frame, independent of the render rect.
-        Fill::Gradient { .. } => Buffer { rect, px: gradient_fill::render(f, rect, canvas) },
+        Fill::Gradient { .. } => Buffer { rect, px: gradient_fill::render_quantized(f, rect, canvas, quantum) },
         // Laid out from the layer's frame when linked; transparent if the pattern is missing.
         Fill::Pattern { name, scale, id, angle, link, phase } => match patterns.get(id, name) {
             Some(tile) => Buffer { rect, px: pattern::render(&tile, &pattern::Placement::new(canvas, *link, *phase, *scale, *angle), rect) },

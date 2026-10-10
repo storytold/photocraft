@@ -162,6 +162,18 @@ fn the_web_hands_over_contents_rather_than_paths() {
 }
 
 #[test]
+fn the_web_opens_every_selected_file() {
+    let files = vec![("one.png".into(), b"x".to_vec()), ("broken.png".into(), b"bad".to_vec()), ("two.jpg".into(), b"x".to_vec())];
+    let (mut app, _) = app_with(vec![Some(FileDialogAnswer::ContentsMany(files))]);
+    menus::invoke(&mut app, &egui::Context::default(), "file.open", json!({})).unwrap();
+    answer(&mut app);
+    // Each good file is its own tab; the broken one is reported without stopping the rest.
+    let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.as_str()).collect();
+    assert_eq!(names, ["one.png", "two.jpg"]);
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("broken.png")), "{:?}", app.ui.notices);
+}
+
+#[test]
 fn pcraft_documents_save_in_place_but_flat_files_ask() {
     let (mut app, written) = app_with(vec![None]);
     let ctx = egui::Context::default();

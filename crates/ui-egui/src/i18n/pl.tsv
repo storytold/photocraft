@@ -71,6 +71,8 @@
 	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
+	Remove from Recent	Usuń z ostatnich plików
+	Remove {name} from Recent	Usuń {name} z ostatnich plików
 	Close	Zamknij
 	Minimize	Minimalizuj
 	Maximize	Maksymalizuj
@@ -621,6 +623,10 @@
 	100%	100%
 	200%	200%
 	75%	75%
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
 	125%	125%
 	150%	150%
 	175%	175%
@@ -1552,6 +1558,7 @@
 	Blur Tool	Narzędzie Rozmycie
 	Bold	Pogrubiona
 	Brush	Pędzel
+	Block	Blok
 	Brush Pose	Pozycja pędzla
 	Brush Tip Shape	Kształt końcówki pędzla
 	Brush Tool	Narzędzie Pędzel
@@ -3383,6 +3390,7 @@ cameraRaw	Roughness	Chropowatość
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
+	PhotoCraft — Screen Color Picker	PhotoCraft — Próbnik kolorów ekranu
 
 	Rasterize svg groups deeper than	Rasteryzuj grupy SVG głębsze niż ten poziom
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 wyłącza ten próg; grupy SVG zagnieżdżone głębiej niż 100 poziomów są zawsze rasteryzowane.

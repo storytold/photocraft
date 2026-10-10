@@ -20,6 +20,7 @@ pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
 pub mod build_info;
 mod canvas_geom;
+mod channel_clip;
 pub mod channel_cmds;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;

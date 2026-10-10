@@ -35,7 +35,7 @@ commands:
                   --pixls (or -p raw) also fetches corpus/pixls and runs the raw corpus tests;
                   --local takes corpus/photoshop from the photocraft-corpus authoring clone
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
-  parity          Photoshop menu parity; rewrites docs/parity.md
+  parity          Photoshop menu parity; rewrites docs/parity-checklist.md
   i18n-coverage   report stable UI translation coverage for registered languages
   perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
                   run the release benches, merge them by scenario id into target/perf/results.json,
@@ -182,7 +182,7 @@ fn cmd_wasm() -> Result<(), String> {
 
 fn cmd_parity() -> Result<(), String> {
     let mut c = cargo();
-    c.args(["run", "-q", "-p", "photocraft-ui-egui", "--example", "parity", "--", "--write", "docs/parity.md"]);
+    c.args(["run", "-q", "-p", "photocraft-ui-egui", "--example", "parity", "--", "--write", "docs/parity-checklist.md"]);
     run(c, "cargo run -p photocraft-ui-egui --example parity")
 }
 

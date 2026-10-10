@@ -233,6 +233,20 @@ fn place_pdf_pages_as_separate_smart_objects_is_atomic_and_undoable() {
         assert_eq!(doc(&s), &before);
         assert!(s.redo());
         assert_eq!(doc(&s), &placed);
+        // PDF placement shares the image-placement preference; an explicit fit overrides it.
+        for (resize, fit, scale) in [(false, None, 1.0), (false, Some(true), 0.625), (true, Some(false), 1.0)] {
+            s.execute("prefs.set", json!({"path": "general.resizeImageDuringPlace", "value": resize})).unwrap();
+            let mut params = json!({"pages": [0], "resolution": 144});
+            if let Some(fit) = fit {
+                params["fit"] = json!(fit);
+            }
+            place_bytes(&mut s, "binder.pdf", bytes.clone(), None, &params).unwrap();
+            let layer = doc(&s).layers.last().unwrap();
+            let LayerContent::Smart(so) = &layer.content else { panic!("smart object required") };
+            assert!((so.transform.m[0] - scale).abs() < 1e-9, "resize={resize}, fit={fit:?}");
+            assert!(s.undo());
+            assert_eq!(doc(&s), &placed);
+        }
         for params in [
             json!({"pages": []}),
             json!({"pages": [-1]}),
@@ -252,6 +266,23 @@ fn place_pdf_pages_as_separate_smart_objects_is_atomic_and_undoable() {
     }
     assert_eq!(std::fs::read(path).unwrap(), bytes);
     assert!(place_bytes(&mut Session::new(), "binder.pdf", bytes, None, &json!({})).is_err());
+}
+
+/// Preferences ▸ General ▸ Resize Image During Place: off, a larger image keeps its natural size
+/// instead of being fitted to the canvas; an explicit `"fit"` still wins.
+#[test]
+fn resize_image_during_place_preference_controls_the_fit() {
+    let dir = tmp("place-fit-pref");
+    let big = png(&dir, "big.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    s.execute("prefs.set", json!({"path": "general.resizeImageDuringPlace", "value": false})).unwrap();
+    let r = s.execute("file.placeEmbedded", json!({"path": big})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 100.0).abs() < 1e-9, "natural size: {r}");
+    let b = r["bounds"].as_array().unwrap();
+    assert!(b[2].as_f64().unwrap() > 100.0, "wider than the canvas: {b:?}");
+    // An explicit "fit": true overrides the preference.
+    let r = s.execute("file.placeEmbedded", json!({"path": big, "fit": true})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 50.0).abs() < 1e-9, "fitted on request: {r}");
 }
 
 /// A 40×20 JPEG (left half red, right half blue) tagged EXIF Orientation = 6: shown upright it
