@@ -1,19 +1,20 @@
 //! Olympus ORF with uncompressed sensor data (older Four Thirds bodies such as
-//! the E-1 and E-400).
+//! the E-1 and E-400, and padded 12-bit storage on the E-300 / E-500 / E-330).
 //!
 //! The container is TIFF with an `IIRO` / `IIRS` / `MMOR` header; the sensor
-//! data is IFD0's strips, 16-bit samples whose top ValidBits bits are
-//! significant. The CFA
+//! data is IFD0's strips, either 16-bit samples whose top ValidBits bits are
+//! significant or ten little-endian 12-bit samples followed by one zero byte
+//! per 16-byte block. The latter layout is described in LightCraft PR #651
+//! and independently checked here against CC0 camera files. The CFA
 //! comes from the EXIF CFAPattern. Levels come from the publicly documented
 //! Olympus maker-note ImageProcessing tags (ExifTool's Olympus table):
 //! WB_RBLevels (0x0100), WB_GLevel (0x011F), BlackLevel2 (0x0600), ValidBits
 //! (0x0611) and CropLeft / CropTop / CropWidth / CropHeight (0x0612–0x0615).
 //!
-//! Later bodies store Olympus' own compressed data, which has no public
-//! description and is not decoded.
+//! Olympus' own compressed sensor data is not decoded.
 
 use crate::error::{RawError, Result};
-use crate::sensor::{BlackLevels, JpegLayout, Rect, Sensor, read_plane};
+use crate::sensor::{BlackLevels, JpegLayout, Plane, Rect, Sensor, read_plane};
 use crate::tiff::{Ifd, Tiff, tag};
 use crate::tiffep::{cfa, rggb_by_position};
 use crate::{Limits, RawFormat};
@@ -80,10 +81,18 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         return Err(RawError::malformed("ORF IFD0 has no readable strip byte counts"));
     }
     let stored: u64 = counts.iter().map(|&c| u64::from(c)).sum();
-    if t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1) != 1 || stored < width.saturating_mul(height).saturating_mul(2) {
+    if t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1) != 1 {
         return Err(RawError::unsupported("Olympus compressed (or packed) ORF is not decoded"));
     }
-    let plane = read_plane(t, &raw, limits, JpegLayout::Flat)?;
+    let padded_len = (width / 10).checked_mul(height).and_then(|blocks| blocks.checked_mul(16));
+    let plane = if t.le && width > 0 && width.is_multiple_of(10) && counts.len() == 1 && padded_len == Some(stored) {
+        read_padded12(t, &raw, limits, width, height, stored)?
+    } else {
+        if stored < width.saturating_mul(height).saturating_mul(2) {
+            return Err(RawError::unsupported("Olympus compressed (or packed) ORF is not decoded"));
+        }
+        read_plane(t, &raw, limits, JpegLayout::Flat)?
+    };
     if plane.samples != 1 {
         return Err(RawError::unsupported(format!("ORF with {} samples per pixel", plane.samples)));
     }
@@ -152,4 +161,34 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         tone_curve: Vec::new(),
         warnings,
     })
+}
+
+/// A single strip of ten 12-bit samples per 16-byte block. This is a storage
+/// signature, not a camera-model guess; other packed layouts stay unsupported.
+fn read_padded12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: u64, stored: u64) -> Result<Plane> {
+    let offsets = t.tag_uints(raw, tag::STRIP_OFFSETS);
+    let [offset] = offsets.as_slice() else {
+        return Err(RawError::unsupported("ORF padded 12-bit storage requires one strip"));
+    };
+    if !matches!(t.tag_uint(raw, tag::BITS_PER_SAMPLE), Some(12 | 16))
+        || t.tag_uint(raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1) != 1
+        || t.tag_uint(raw, tag::SAMPLE_FORMAT).unwrap_or(1) != 1
+    {
+        return Err(RawError::unsupported("ORF padded storage requires unsigned 12-bit samples"));
+    }
+    limits.check(width, height, 2)?;
+    let len = usize::try_from(stored).map_err(|_| RawError::malformed("ORF strip size overflow"))?;
+    let bytes = t.bytes(*offset as usize, len).ok_or_else(|| RawError::malformed("ORF padded strip truncated"))?;
+    let mut data = Vec::with_capacity(width as usize * height as usize);
+    for block in bytes.as_chunks::<16>().0 {
+        let [samples @ .., pad] = block;
+        if *pad != 0 {
+            return Err(RawError::malformed("ORF padded strip has nonzero padding"));
+        }
+        for &[a, b, c] in samples.as_chunks::<3>().0 {
+            data.push(u16::from(a) | (u16::from(b & 0x0f) << 8));
+            data.push(u16::from(b >> 4) | (u16::from(c) << 4));
+        }
+    }
+    Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data })
 }

@@ -1,5 +1,5 @@
-//! Real-camera corpus tests against `corpus/pixls` (raw.pixls.us, public domain): one file per
-//! decode path, oracle-checked against values measured when the corpus was pinned (the
+//! Real-camera corpus tests against `corpus/pixls` (raw.pixls.us, public domain): representative
+//! decode paths, oracle-checked against values measured when the corpus was pinned (the
 //! `inspect` example prints them). Opt-in like every real-file corpus:
 //! `cargo xtask corpus --pixls` fetches, `cargo xtask test-corpus` runs.
 #![cfg(feature = "corpus")]
@@ -95,6 +95,38 @@ const WANTS: &[Want] = &[
         black: &[65.0; 4],
         white: [4095.0; 3],
     },
+    // These bodies declare 16-bit uncompressed samples but store ten 12-bit values plus
+    // one padding byte in each 16-byte block. Their sensor-origin CFA is RGGB.
+    Want {
+        file: "P1252148.ORF",
+        format: RawFormat::Orf,
+        make: "OLYMPUS IMAGING CORP.",
+        model: "E-300",
+        size: (3360, 2504),
+        cfa: [0, 1, 1, 2],
+        black: &[63.0; 4],
+        white: [4095.0; 3],
+    },
+    Want {
+        file: "_1010010.ORF",
+        format: RawFormat::Orf,
+        make: "OLYMPUS IMAGING CORP.",
+        model: "E-500",
+        size: (3360, 2504),
+        cfa: [0, 1, 1, 2],
+        black: &[63.0; 4],
+        white: [4095.0; 3],
+    },
+    Want {
+        file: "P3307182.ORF",
+        format: RawFormat::Orf,
+        make: "OLYMPUS IMAGING CORP.",
+        model: "E-330",
+        size: (3280, 2450),
+        cfa: [0, 1, 1, 2],
+        black: &[69.0, 70.0, 69.0, 70.0],
+        white: [4095.0; 3],
+    },
 ];
 
 #[test]
@@ -134,8 +166,13 @@ fn developing_produces_the_crop_in_16bit_rgb() {
         // balance we read, so the grey-world estimate brightens these scenes (the PowerShot's
         // own DNG, with its file WB, develops blacks to ~0 — reading the maker-note WB of
         // Canon and Sony is the follow-up).
-        let estimated_wb = matches!(w.file, "IMG_4059.CR2" | "DSC00009.ARW");
-        let black_cap: u16 = if estimated_wb { 16384 } else { 4096 };
+        let black_cap: u16 = match w.file {
+            "IMG_4059.CR2" | "DSC00009.ARW" => 16384,
+            // These hazy scenes have no near-black developed pixels with the existing
+            // uncalibrated colour fallback: measured minima 6286 (E-500) and 5031 (E-330).
+            "_1010010.ORF" | "P3307182.ORF" => 8192,
+            _ => 4096,
+        };
         assert!(lo < black_cap, "{}: developed blacks at {lo}", w.file);
         assert!(hi > u16::MAX / 4, "{}: developed highlights at {hi}", w.file);
         // Deterministic: a second develop of the same sensor gives the same pixels.
@@ -144,8 +181,25 @@ fn developing_produces_the_crop_in_16bit_rgb() {
     }
 }
 
-/// The E-5 file is the documented known-unsupported case: later Olympus bodies store packed
-/// (compressed) sensor data. The error must say so, never panic, and the file still previews.
+/// Values read directly from the CC0 files' first two 16-byte blocks, including the padding
+/// boundary, using the byte layout documented in LightCraft #651's public prose. These are
+/// measurements of the files, not output copied from another RAW decoder.
+#[test]
+fn padded_orf_matches_measured_sensor_samples() {
+    let cases = [
+        ("P1252148.ORF", [621, 1252, 642, 1228, 672, 1314, 672, 1308, 662, 1202, 643, 1290, 661, 1277, 664, 1245, 654, 1245, 631, 1269]),
+        ("_1010010.ORF", [619, 1554, 698, 1514, 663, 1504, 725, 1503, 703, 1511, 691, 1495, 699, 1515, 681, 1462, 684, 1521, 665, 1467]),
+        ("P3307182.ORF", [2070, 3740, 2300, 4095, 2499, 4095, 2683, 4095, 2848, 4095, 3018, 4095, 3123, 4095, 3241, 4095, 3451, 4095, 3692, 4095]),
+    ];
+    for (file, expected) in cases {
+        let bytes = std::fs::read(pixls(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let sensor = photocraft_raw::decode(&bytes, &Limits::default()).unwrap_or_else(|e| panic!("{file}: {e}"));
+        assert_eq!(sensor.data.get(..expected.len()), Some(expected.as_slice()), "{file}");
+    }
+}
+
+/// The E-5 file is the documented known-unsupported case: later Olympus bodies store
+/// compressed sensor data. The error must say so, never panic, and the file still previews.
 #[test]
 fn packed_orf_reports_the_documented_gap() {
     let bytes = std::fs::read(pixls("_7061961_copy.ORF")).unwrap();

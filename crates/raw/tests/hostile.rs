@@ -1,7 +1,9 @@
 //! Truncated and corrupted raw files must fail cleanly, never panic, and
 //! never allocate beyond the limits.
 
-use photocraft_raw::testgen::{Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, orf, rw2, scene, sony_craw, tiff_ep};
+use photocraft_raw::testgen::{
+    Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, orf, orf_padded12, rw2, scene, sony_craw, tiff_ep,
+};
 use photocraft_raw::*;
 
 /// Losslessly encodes 16-bit RGB as a JPEG XL codestream.
@@ -63,6 +65,7 @@ fn samples() -> Vec<Vec<u8>> {
     out.push(sony_craw(64, 6, &codes, [8000, 10400, 12900, 14100]));
     out.push(rw2(30, 8, &mosaic(&scene(30, 8), 30, [0, 1, 1, 2], 128, 4095), 12));
     out.push(orf(w, h, &cfa));
+    out.push(orf_padded12(20, 12, &mosaic(&scene(20, 12), 20, [1, 0, 2, 1], 64, 4095)));
     let xt = mosaic_cfa(&scene(w, h), w, &XTRANS, 6, 256, 4000);
     for packing in [RafPacking::U16 { le: true }, RafPacking::Lsb12] {
         let raf =

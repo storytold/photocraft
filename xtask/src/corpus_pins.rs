@@ -239,8 +239,8 @@ pub const AFFINITY: PinnedCorpus = PinnedCorpus {
 pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &HEIF, &EXR, &AFFINITY];
 
 /// `corpus/pixls`: real camera raws from <https://raw.pixls.us> (released into the public
-/// domain / CC0 by their photographers; see ATTRIBUTION.md). One file per decode path
-/// `photocraft-raw` supports, plus the packed-ORF known-unsupported oracle. Fetched as single
+/// domain / CC0 by their photographers; see ATTRIBUTION.md). Representative supported decode
+/// paths, plus the compressed-ORF known-unsupported oracle. Fetched as single
 /// files (the server 301-redirects `/data/` to `/download/`), verified against
 /// `xtask/pixls.sha256`.
 pub const PIXLS_BASE: &str = "https://raw.pixls.us/data/";
@@ -252,5 +252,8 @@ pub const PIXLS_FILES: &[(&str, &str)] = &[
     ("Sony/DSC-RX0/DSC00009.ARW", "DSC00009.ARW"),
     ("Panasonic/DC-G9/P1000475.RW2", "P1000475.RW2"),
     ("Olympus/E-1/E_1__C106743_gredos.ORF", "E_1__C106743_gredos.ORF"),
+    ("Olympus/E-300/P1252148.ORF", "P1252148.ORF"),
+    ("Olympus/E-500/_1010010.ORF", "_1010010.ORF"),
+    ("Olympus/E-330/P3307182.ORF", "P3307182.ORF"),
     ("Olympus/E-5/_7061961_copy.ORF", "_7061961_copy.ORF"),
 ];

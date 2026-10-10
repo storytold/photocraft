@@ -2,7 +2,7 @@
 //! Sony compressed ARW (cRAW), Panasonic RW2 (RawFormat 5) and uncompressed
 //! Olympus ORF (with its maker-note preview).
 
-use photocraft_raw::testgen::{craw_block, mosaic, orf, rw2, scene, sony_craw};
+use photocraft_raw::testgen::{craw_block, mosaic, orf, orf_padded12, rw2, scene, sony_craw};
 use photocraft_raw::*;
 
 const CURVE: [u16; 4] = [8000, 10400, 12900, 14100];
@@ -257,4 +257,132 @@ fn orf_packed_or_compressed_falls_back() {
         }
     }
     assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Unsupported(_))));
+}
+
+/// Offset of an IFD0 entry in the synthetic little-endian ORFs.
+fn orf_entry(bytes: &[u8], tag: u16) -> usize {
+    let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let count = u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()) as usize;
+    (0..count).map(|i| ifd + 2 + i * 12).find(|&at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) == tag).unwrap()
+}
+
+fn orf_inline_u32(bytes: &[u8], tag: u16) -> u32 {
+    let at = orf_entry(bytes, tag) + 8;
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+}
+
+fn orf_set_u32(bytes: &mut [u8], tag: u16, value: u32) {
+    let at = orf_entry(bytes, tag) + 8;
+    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+#[test]
+fn orf_padded12_round_trip_preserves_samples_and_metadata() {
+    let (w, h) = (30, 8);
+    // Include both extrema and varying nibbles at every sample position, block and row boundary.
+    let data: Vec<u16> = (0..w * h)
+        .map(|i| match i % 17 {
+            0 => 0,
+            1 => 4095,
+            _ => ((i * 0x123) & 0xfff) as u16,
+        })
+        .collect();
+    let bytes = orf_padded12(w, h, &data);
+    let raw = orf_inline_u32(&bytes, 273) as usize;
+    assert_eq!(&bytes[raw..raw + 3], &[0x00, 0xf0, 0xff], "first pair is 0 and 4095");
+    assert_eq!(bytes[raw + 15], 0, "padding is not a sample");
+    let sensor = decode(&bytes, &Limits::default()).unwrap();
+    assert_eq!(sensor.data, data);
+    assert_eq!((sensor.width, sensor.height, sensor.samples), (w, h, 1));
+    assert_eq!(sensor.format, RawFormat::Orf);
+    assert_eq!(sensor.cfa.as_ref().unwrap().phase(0, 0), [1, 0, 2, 1]);
+    assert_eq!(sensor.black.values, vec![64.0; 4]);
+    assert_eq!(sensor.white, [4095.0; 3]);
+    assert_eq!(sensor.camera_wb, Some([2.0, 1.0, 1.5]));
+    assert_eq!(sensor.crop, Rect::new(2, 2, w - 4, h - 4));
+    assert!(sensor.warnings.is_empty(), "{:?}", sensor.warnings);
+    assert!(develop_sensor(&sensor, &DevelopOptions::default()).is_ok());
+    let preview = embedded_preview(&bytes).unwrap();
+    assert_eq!((preview.width, preview.height), (16, 8));
+    // The same storage layout is accepted with a 16-bit sample declaration.
+    let mut bits16 = bytes;
+    patch_ifd0_short(&mut bits16, 258, 16);
+    assert_eq!(decode(&bits16, &Limits::default()).unwrap().data, data);
+}
+
+#[test]
+fn orf_padded12_requires_the_exact_storage_layout() {
+    let bytes = orf_padded12(20, 8, &vec![1234; 160]);
+    let mut exact12 = bytes.clone();
+    orf_set_u32(&mut exact12, 279, 160 * 12 / 8);
+    assert!(matches!(decode(&exact12, &Limits::default()), Err(RawError::Unsupported(_))));
+    // Keep the total pixel count and strip size, but make each row end inside a block.
+    let mut partial_row = bytes.clone();
+    orf_set_u32(&mut partial_row, 256, 16);
+    orf_set_u32(&mut partial_row, 257, 10);
+    assert!(matches!(decode(&partial_row, &Limits::default()), Err(RawError::Unsupported(_))));
+    let mut compressed = bytes.clone();
+    patch_ifd0_short(&mut compressed, 259, 7);
+    assert!(matches!(decode(&compressed, &Limits::default()), Err(RawError::Unsupported(_))));
+    for (tag, value) in [(277, 2), (258, 8)] {
+        let mut wrong_samples = bytes.clone();
+        patch_ifd0_short(&mut wrong_samples, tag, value);
+        assert!(matches!(decode(&wrong_samples, &Limits::default()), Err(RawError::Unsupported(_))));
+    }
+    for format in [2, 3] {
+        let mut signed_or_float = bytes.clone();
+        // Replace the optional PhotometricInterpretation entry with SampleFormat.
+        let entry = orf_entry(&signed_or_float, 262);
+        signed_or_float[entry..entry + 2].copy_from_slice(&339u16.to_le_bytes());
+        patch_ifd0_short(&mut signed_or_float, 339, format);
+        assert!(matches!(decode(&signed_or_float, &Limits::default()), Err(RawError::Unsupported(_))));
+    }
+    // A valid big-endian ORF is not one of the measured little-endian padded layouts.
+    use photocraft_raw::testgen::{TiffBuilder, Val};
+    let mut tiff = TiffBuilder { big_endian: true, ..Default::default() };
+    let raw = orf_inline_u32(&bytes, 273) as usize;
+    let strip = tiff.blob(bytes[raw..raw + 256].to_vec());
+    let ifd = tiff.ifd(vec![
+        (256, Val::Long(vec![20])),
+        (257, Val::Long(vec![8])),
+        (258, Val::Short(vec![12])),
+        (259, Val::Short(vec![1])),
+        (273, Val::Blobs(vec![strip])),
+        (277, Val::Short(vec![1])),
+        (278, Val::Long(vec![8])),
+        (279, Val::Long(vec![256])),
+        (33421, Val::Short(vec![2, 2])),
+        (33422, Val::Byte(vec![1, 0, 2, 1])),
+    ]);
+    tiff.chain = vec![ifd];
+    let mut big_endian = tiff.build();
+    big_endian[2..4].copy_from_slice(b"OR");
+    assert_eq!(identify(&big_endian), Some(RawFormat::Orf));
+    assert!(matches!(decode(&big_endian, &Limits::default()), Err(RawError::Unsupported(_))));
+    // Two otherwise contiguous equal strips are not the observed single-strip layout.
+    let mut two_strips = bytes;
+    let start = orf_inline_u32(&two_strips, 273);
+    for (tag, values) in [(273, [start, start + 128]), (279, [128, 128])] {
+        let entry = orf_entry(&two_strips, tag);
+        let array_at = two_strips.len() as u32;
+        two_strips.extend(values.into_iter().flat_map(u32::to_le_bytes));
+        two_strips[entry + 4..entry + 8].copy_from_slice(&2u32.to_le_bytes());
+        orf_set_u32(&mut two_strips, tag, array_at);
+    }
+    orf_set_u32(&mut two_strips, 278, 4);
+    assert!(matches!(decode(&two_strips, &Limits::default()), Err(RawError::Unsupported(_))));
+}
+
+#[test]
+fn orf_padded12_rejects_damaged_payload_and_obeys_limits() {
+    let bytes = orf_padded12(20, 8, &vec![1234; 160]);
+    let raw = orf_inline_u32(&bytes, 273) as usize;
+    let len = orf_inline_u32(&bytes, 279) as usize;
+    let mut bad_pad = bytes.clone();
+    bad_pad[raw + 15] = 1;
+    assert!(matches!(decode(&bad_pad, &Limits::default()), Err(RawError::Malformed(_))));
+    assert!(matches!(decode(&bytes[..raw + len - 1], &Limits::default()), Err(RawError::Malformed(_))));
+    for limits in [Limits { max_pixels: 159, ..Limits::default() }, Limits { max_alloc: 319, ..Limits::default() }] {
+        assert!(matches!(decode(&bytes, &limits), Err(RawError::LimitExceeded(_))));
+    }
 }

@@ -1098,6 +1098,30 @@ fn shorts(v: &[u16]) -> Vec<u8> {
 /// maker note with ImageProcessing levels (black 64, WB 2.0 / 1.5, crop of a
 /// 2-pixel border) and CameraSettings pointing at a tiny preview JPEG.
 pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
+    orf_with_strip(width, height, data.iter().flat_map(|v| (v << 4).to_le_bytes()).collect(), 16)
+}
+
+/// Uncompressed ORF with ten 12-bit samples per 16-byte block and a zero final byte.
+/// Independently encoded from the byte-layout description in storytold/lightcraft#651.
+pub fn orf_padded12(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
+    assert_eq!(width % 10, 0);
+    assert_eq!(data.len(), width * height);
+    let mut strip = Vec::new();
+    for samples in data.chunks_exact(10) {
+        let mut block = [0u8; 16];
+        for (sample, &value) in samples.iter().enumerate() {
+            assert!(value < 4096);
+            for bit in 0..12 {
+                let at = sample * 12 + bit;
+                block[at / 8] |= (((value >> bit) & 1) as u8) << (at % 8);
+            }
+        }
+        strip.extend_from_slice(&block);
+    }
+    orf_with_strip(width, height, strip, 12)
+}
+
+fn orf_with_strip(width: usize, height: usize, data: Vec<u8>, bits: u16) -> Vec<u8> {
     let ip = relative_ifd(
         &[
             (0x0100, 3, 2, shorts(&[512, 384])),
@@ -1131,12 +1155,13 @@ pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
     note.extend_from_slice(&cs);
     note.extend_from_slice(&jpeg);
     let mut t = TiffBuilder::default();
-    let strip = t.blob(data.iter().flat_map(|v| (v << 4).to_le_bytes()).collect());
+    let byte_count = data.len() as u32;
+    let strip = t.blob(data);
     let exif = t.ifd(vec![(37500, Val::Undefined(note)), (41730, Val::Undefined(vec![2, 0, 2, 0, 1, 0, 2, 1]))]);
     let ifd0 = t.ifd(vec![
         (256, Val::Long(vec![width as u32])),
         (257, Val::Long(vec![height as u32])),
-        (258, Val::Short(vec![16])),
+        (258, Val::Short(vec![bits])),
         (259, Val::Short(vec![1])),
         (262, Val::Short(vec![1])),
         (271, Val::Ascii("OLYMPUS IMAGING CORP.".into())),
@@ -1144,7 +1169,7 @@ pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
         (273, Val::Blobs(vec![strip])),
         (277, Val::Short(vec![1])),
         (278, Val::Long(vec![height as u32])),
-        (279, Val::Long(vec![(data.len() * 2) as u32])),
+        (279, Val::Long(vec![byte_count])),
         (34665, Val::Ifds(vec![exif])),
     ]);
     t.chain = vec![ifd0];
