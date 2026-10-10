@@ -13,7 +13,7 @@
 
 use parley::{Affinity, Cursor, Layout};
 
-use crate::layout::{ClusterInfo, FORCED_LINE_BREAK, RunBrush, TextLayout};
+use crate::layout::{ClusterInfo, FORCED_LINE_BREAK, LineInfo, RunBrush, TextLayout};
 
 /// A paragraph's parley layout, kept for caret movement (hidden lines of an overflowing box
 /// included). parley's text equals the layer's `start..end` after a `prefix`-byte LRM/RLM (0 or 3
@@ -256,4 +256,116 @@ fn clamp(l: &TextLayout, text: &str, c: Caret) -> Caret {
     }
     let end = drawn_end(l);
     if b > end { Caret::new(end, end > 0) } else { Caret::new(b, c.upstream) }
+}
+
+/// Home (`end` false) or End of the caret's line: its logical start, or its logical end with the
+/// caret kept on this line (upstream). A forced line break ends a line before itself.
+pub fn home_end(l: &TextLayout, text: &str, from: Caret, end: bool) -> Caret {
+    let from = clamp(l, text, from);
+    let Some(ln) = l.lines.get(caret_geometry(l, text, from).line) else { return from };
+    if !end {
+        return Caret::new(ln.range.start, false);
+    }
+    if let Some(b) = break_after(text, ln).filter(|&b| b < ln.range.end) {
+        return Caret::new(b, false);
+    }
+    Caret::new(ln.range.end, ln.range.end > ln.range.start)
+}
+
+/// ↑ (`dir` < 0) or ↓: the caret at line-space `x` on the neighbouring drawn line, with the side
+/// it lands on. Above the first line: the text start; below the last drawn line: its end.
+pub fn adjacent_line(l: &TextLayout, text: &str, from: Caret, x: f32, dir: i32) -> Caret {
+    let from = clamp(l, text, from);
+    let line = caret_geometry(l, text, from).line;
+    let target = if dir < 0 { line.checked_sub(1) } else { line.checked_add(1).filter(|&i| i < l.lines.len()) };
+    match target {
+        Some(li) => {
+            let (byte, upstream) = l.hit_in_line(li, x);
+            not_after_break(l, text, li, Caret::new(byte, upstream))
+        }
+        None if dir < 0 => Caret::new(0, false),
+        None => {
+            let end = drawn_end(l);
+            Caret::new(end, end > 0)
+        }
+    }
+}
+
+/// Where ←/→ without Shift put the caret when text is selected from `anchor` to `focus`: the end
+/// lying further in `dir`. On one line, the one further left or right; across lines, the later
+/// line is further in its paragraph's flow (→ in LTR, ← in RTL).
+pub fn collapse(l: &TextLayout, text: &str, anchor: Caret, focus: Caret, dir: Dir) -> Caret {
+    let (ga, gf) = (caret_geometry(l, text, anchor), caret_geometry(l, text, focus));
+    let right = dir == Dir::Right;
+    if ga.line == gf.line {
+        return if (gf.x > ga.x) == right { focus } else { anchor };
+    }
+    let rtl = l.lines.get(gf.line).is_some_and(|ln| ln.rtl);
+    let (earlier, later) = if ga.line < gf.line { (anchor, focus) } else { (focus, anchor) };
+    if right != rtl { later } else { earlier }
+}
+
+/// One rectangle of a selection highlight, in line space: `x0..x1` across line `line`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectionSegment {
+    pub line: usize,
+    pub x0: f32,
+    pub x1: f32,
+    /// The marker for a selected line break after the line's text, not text itself.
+    pub line_break: bool,
+}
+
+/// The highlight of the selection between byte offsets `a` and `b` (either order). Per line, its
+/// selected clusters are sorted by x and merged where they touch, so a selection across a
+/// direction change shows as one rectangle per visual piece. A selected hard line break
+/// (paragraph or forced) adds a marker on the paragraph's end side: right of the line in LTR,
+/// left of it in RTL (spec 5.1.6).
+pub fn selection_segments(l: &TextLayout, text: &str, a: usize, b: usize) -> Vec<SelectionSegment> {
+    const TOUCH: f32 = 0.5;
+    let (lo, hi) = (a.min(b), a.max(b));
+    let mut out = Vec::new();
+    if lo == hi {
+        return out;
+    }
+    for (li, ln) in l.lines.iter().enumerate() {
+        let mut xs: Vec<(f32, f32)> = l
+            .clusters
+            .iter()
+            .filter(|c| c.line == li && c.range.start >= lo && c.range.end <= hi && !is_hard_break(text, c))
+            .map(|c| (c.x, c.x + c.advance))
+            .collect();
+        xs.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let mut merged: Vec<(f32, f32)> = Vec::new();
+        for (x0, x1) in xs {
+            match merged.last_mut() {
+                Some(m) if x0 <= m.1 + TOUCH => m.1 = m.1.max(x1),
+                _ => merged.push((x0, x1)),
+            }
+        }
+        out.extend(merged.into_iter().filter(|(x0, x1)| x1 > x0).map(|(x0, x1)| SelectionSegment { line: li, x0, x1, line_break: false }));
+        if let Some(brk) = break_after(text, ln)
+            && lo <= brk
+            && brk < hi
+        {
+            let w = (ln.ascent + ln.descent) * 0.25;
+            let on_line = l.clusters.iter().filter(|c| c.line == li);
+            if ln.rtl {
+                let edge = on_line.map(|c| c.x).fold(ln.x0, f32::min);
+                out.push(SelectionSegment { line: li, x0: edge - w, x1: edge, line_break: true });
+            } else {
+                let edge = on_line.map(|c| c.x + c.advance).fold(ln.x1, f32::max);
+                out.push(SelectionSegment { line: li, x0: edge, x1: edge + w, line_break: true });
+            }
+        }
+    }
+    out
+}
+
+/// Byte of the hard line break ending line `ln`: a forced line break as its last character, or
+/// the paragraph break after it. `None` for a soft wrap or the end of the text.
+fn break_after(text: &str, ln: &LineInfo) -> Option<usize> {
+    if text.get(ln.range.clone()).and_then(|s| s.chars().next_back()) == Some(FORCED_LINE_BREAK) {
+        return ln.range.end.checked_sub(FORCED_LINE_BREAK.len_utf8());
+    }
+    matches!(text.get(ln.range.end..).and_then(|s| s.chars().next()), Some('\n' | '\r')).then_some(ln.range.end)
 }

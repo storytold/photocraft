@@ -4,7 +4,7 @@
 use photocraft_doc::TextLayer;
 use photocraft_doc::text::{Orientation, ParagraphRun, ParagraphStyle, TextDirection, TextShape};
 
-use crate::navigate::{Caret, Dir, Unit, caret_geometry, caret_segment, hit, step};
+use crate::navigate::{Caret, Dir, Unit, adjacent_line, caret_geometry, caret_segment, collapse, hit, home_end, selection_segments, step};
 use crate::{TextEngine, TextLayout};
 
 fn point(text: &str) -> TextLayer {
@@ -342,4 +342,94 @@ fn vertical_type_steps_in_text_order() {
     assert_eq!(step(&l, s, Caret::new(0, false), Dir::Right, Unit::Grapheme), Caret::new(1, false));
     assert_eq!(step(&l, s, Caret::new(1, false), Dir::Left, Unit::Grapheme), Caret::new(0, false));
     assert_eq!(step(&l, s, Caret::new(0, false), Dir::Right, Unit::Word), Caret::new(2, false));
+}
+
+#[test]
+fn home_and_end_stay_on_the_carets_line() {
+    let mut e = TextEngine::new();
+    let t = "aaa bbb ccc ddd";
+    let l = e.layout(&boxed(t, 90.0, 1000.0), 72.0);
+    let (r0, r1) = (l.lines[0].range.clone(), l.lines[1].range.clone());
+    let end = home_end(&l, t, Caret::new(r0.start + 2, false), true);
+    assert_eq!(end, Caret::new(r0.end, true));
+    assert_eq!(caret_geometry(&l, t, end).line, 0, "End of a wrapped line stays on it");
+    assert_eq!(home_end(&l, t, end, false), Caret::new(r0.start, false));
+    // The same byte downstream is the next line's start: its End is that line's end.
+    assert_eq!(home_end(&l, t, Caret::new(r1.start, false), true).byte, r1.end);
+    // A line ended by a forced line break ends before it.
+    let t = "ab\u{3}cd";
+    let l = e.layout(&point(t), 72.0);
+    assert_eq!(home_end(&l, t, Caret::new(1, false), true), Caret::new(2, false));
+}
+
+#[test]
+fn up_and_down_keep_the_x_and_report_the_side() {
+    let mut e = TextEngine::new();
+    let t = "abcdef\nab";
+    let l = e.layout(&point(t), 72.0);
+    let from = Caret::new(6, true);
+    assert_eq!(adjacent_line(&l, t, from, caret_geometry(&l, t, from).x, 1), Caret::new(9, true), "past the short line's end");
+    let b = Caret::new(8, false);
+    assert_eq!(adjacent_line(&l, t, b, caret_geometry(&l, t, b).x, -1), Caret::new(1, false), "the same x on line 0");
+    assert_eq!(adjacent_line(&l, t, Caret::new(1, false), 0.0, -1), Caret::new(0, false), "above the first line: text start");
+    assert_eq!(adjacent_line(&l, t, b, 0.0, 1), Caret::new(t.len(), true), "below the last: text end");
+    // An overflowing box: never below its last drawn line.
+    let t = "aaa bbb ccc ddd eee fff ggg hhh";
+    let l = e.layout(&boxed(t, 90.0, 50.0), 72.0);
+    let end = l.lines[l.lines.len() - 1].range.end;
+    assert_eq!(adjacent_line(&l, t, Caret::new(end, true), 0.0, 1), Caret::new(end, true));
+}
+
+#[test]
+fn collapsing_a_selection_goes_to_its_end_in_the_arrows_direction() {
+    let mut e = TextEngine::new();
+    // In RTL text the logical start (byte 0) is on the right.
+    let t = "مرحبا";
+    let l = e.layout(&point(t), 72.0);
+    let (a, b) = (Caret::new(0, false), Caret::new(6, false));
+    assert_eq!(collapse(&l, t, a, b, Dir::Right), a);
+    assert_eq!(collapse(&l, t, a, b, Dir::Left), b);
+    let t = "abc";
+    let l = e.layout(&point(t), 72.0);
+    let (a, b) = (Caret::new(0, false), Caret::new(2, false));
+    assert_eq!(collapse(&l, t, a, b, Dir::Right), b);
+    assert_eq!(collapse(&l, t, b, a, Dir::Left), a);
+}
+
+#[test]
+fn a_selection_is_one_rectangle_per_visual_piece() {
+    let mut e = TextEngine::new();
+    let t = "abc مرحبا def";
+    let l = e.layout(&point(t), 72.0);
+    // "c ", then the first Arabic letter, which sits at the far end of the reversed run.
+    let s = selection_segments(&l, t, 2, 6);
+    assert_eq!(s.len(), 2, "{s:?}");
+    assert!(s.iter().all(|g| !g.line_break && g.line == 0));
+    let mim = l.clusters.iter().find(|k| k.range == (4..6)).unwrap();
+    assert!(s.iter().any(|g| (g.x0 - mim.x).abs() < 0.01 && (g.x1 - mim.x - mim.advance).abs() < 0.01), "{s:?}");
+    // The whole Arabic word is one piece; a reversed range is the same selection.
+    assert_eq!(selection_segments(&l, t, 4, 14).len(), 1);
+    assert_eq!(selection_segments(&l, t, 14, 4), selection_segments(&l, t, 4, 14));
+    assert!(selection_segments(&l, t, 5, 5).is_empty());
+}
+
+#[test]
+fn the_selected_line_break_shows_on_the_paragraphs_end_side() {
+    let mut e = TextEngine::new();
+    let t = "abc\nxyz";
+    let l = e.layout(&point(t), 72.0);
+    let s = selection_segments(&l, t, 1, 5);
+    let mark = s.iter().find(|g| g.line_break).unwrap();
+    assert_eq!(mark.line, 0);
+    assert!(mark.x0 >= edges(&l, 0).1 - 0.01, "right of the LTR line: {s:?}");
+    let t = "مرحبا\nxyz";
+    let l = e.layout(&point(t), 72.0);
+    let s = selection_segments(&l, t, 2, 12);
+    let mark = s.iter().find(|g| g.line_break).unwrap();
+    assert_eq!(mark.line, 0);
+    assert!(mark.x1 <= edges(&l, 0).0 + 0.01, "left of the RTL line: {s:?}");
+    // Neither a soft wrap nor the end of the text is a line break.
+    let t = "aaa bbb ccc ddd";
+    let l = e.layout(&boxed(t, 90.0, 1000.0), 72.0);
+    assert!(selection_segments(&l, t, 0, t.len()).iter().all(|g| !g.line_break));
 }
