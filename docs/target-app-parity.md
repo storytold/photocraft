@@ -17,7 +17,7 @@ the measured checklists are [`scorecard.md`](scorecard.md) (`cargo xtask scoreca
 | **Feature breadth** (does each Photoshop feature exist?) | **~76%** | partly measured (menus, tools, panels, formats), weights below |
 | **Ready for real work** (could a professional replace Photoshop with it?) | **~45%** (range 40–50%) | estimated, weights and evidence below |
 | **Mainstream practitioner** (typical pro, weekly areas only) | **~43%** (38–48%) | estimated, [method](#mainstream-practitioner-43) |
-| **Newbie user** (core features only) | **~61%** (55–67%) | estimated, [method](#newbie-user-61) |
+| **Essentials user** (core features only) | **~61%** (55–67%) | estimated, [method](#essentials-user-61) |
 | **Stage** | **alpha** | ready-for-real-work is inside the ~40–75% band and the [alpha gate](roadmap.md#alpha-gate) passes (six core workflows end to end); PSD exchange with Photoshop is not yet reliable enough for beta |
 | Remaining to **beta** (~75% ready, PSD reliable) | **~1,100–1,800 Opus 5.5 agent-hours** | estimated, calibrated below |
 | Remaining to **full parity** (~95–100%) | **~2,300–4,100 Opus 5.5 agent-hours** | estimated; includes AI and ecosystem, which need owner decisions |
@@ -119,9 +119,9 @@ feature requests and 443 bugs or reports, of which ~244 are on core paths (layer
 brush, transform, type, save/open, performance) by title. Users are trying it for real work,
 and most of what they report is core-path friction, not niche requests.
 
-## Newbie user: ~61%
+## Essentials user: ~61%
 
-A casual or beginner user who touches only the core: open or create a file, the most used tools
+An occasional user who touches only the essentials: open or create a file, the most used tools
 and commands, undo, save and export, default settings. Excluded: advanced options, pro
 workflows, PSD exchange edge cases, and everything excluded above.
 
@@ -488,7 +488,7 @@ See [method and results](octagonal-mask-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-10 | minor | Added mainstream-practitioner (~43%) and newbie-user (~61%) numbers with written weights and discounts; full ready-for-real-work rechecked against its written weights (46%, reported ~45%), unchanged |
+| 2026-10-10 | minor | Added mainstream-practitioner (~43%) and essentials-user (~61%) numbers with written weights and discounts; full ready-for-real-work rechecked against its written weights (46%, reported ~45%), unchanged |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate in `roadmap.md`: passes |
 | 2026-10-10 | major | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected); two numbers, weights, per-dimension and per-area hours calibrated from git history; merged `parity-estimate.md` and the roadmap's honest assessment into this file |
 | 2026-10-05 | major | Honest parity assessment in `docs/roadmap.md`: surface 60–70%, ready for real work 25–35% |
