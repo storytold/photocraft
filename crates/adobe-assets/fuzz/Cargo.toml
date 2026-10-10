@@ -1,0 +1,24 @@
+[package]
+name = "photocraft-adobe-assets-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace so the main workspace's `crates/*` glob and lints do
+# not apply (cargo-fuzz needs nightly + sanitizer flags).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-adobe-assets = { path = ".." }
+
+[[bin]]
+name = "atn"
+path = "fuzz_targets/atn.rs"
+test = false
+doc = false
+bench = false
