@@ -5,6 +5,7 @@
 //!   direction locks once the pointer has moved a few screen points.
 //! - ⇧-click after a stroke paints a straight line from the end of the previous stroke to the
 //!   click. The line is part of the new stroke, so it is one `paint.stroke` and one undo step.
+//!   The endpoint remembers pen pressure so size and opacity interpolate between the strokes.
 //! - The Gradient tool's ⇧ snaps the gradient angle to 45° increments.
 //!
 //! Points go through the normal drag/`LiveStroke`/commit path, so the live preview, pen dynamics
@@ -89,7 +90,7 @@ pub fn line_preview_start(app: &crate::PhotocraftApp, tool: Tool, shift: bool) -
         return None;
     }
     let active = app.session.active()?.doc.id;
-    app.last_stroke_end.filter(|(doc, _)| *doc == active).map(|(_, p)| p)
+    app.last_stroke_end.filter(|(doc, _)| *doc == active).map(|(_, p)| [p[0], p[1]])
 }
 
 /// Photoshop's rubber band: while ⇧ is held after a stroke, a thin line from where that stroke
@@ -239,6 +240,39 @@ mod tests {
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 100.0, pressure: 1.0 }, shift);
         tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 100.0 }, shift);
         assert!(alpha(&app, 20, 100) > 0.9 && alpha(&app, 40, 80) > 0.9 && alpha(&app, 90, 30) > 0.9);
+    }
+
+    #[test]
+    fn shift_click_interpolates_from_previous_strokes_endpoint_pressure() {
+        let mut app = app();
+        app.ui.tool = Tool::Brush;
+        app.session.tools.brush.pressure_size = true;
+        app.session.tools.brush.pressure_opacity = true;
+        let none = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 0.2 }, none);
+        tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 20.0, pressure: 0.35 }, none);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, none);
+        let before = app.session.documents()[0].history.past_len();
+
+        let shift = egui::Modifiers::SHIFT;
+        tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 0.85 }, shift);
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 100.0 }, shift);
+        let (_, stroke) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").expect("connecting stroke committed");
+        let points = stroke["points"].as_array().expect("stroke points array");
+        assert_eq!(points.len(), 2, "one connecting segment, one stroke");
+        assert_eq!(last_stroke_points(&app), vec![[20.0, 20.0], [100.0, 100.0]]);
+        let pressure = |i: usize| points[i][2].as_f64().expect("pen pressure in stroke point");
+        assert!((pressure(0) - 0.35).abs() < 1e-6, "line starts at previous pen pressure, not the new click's");
+        assert!((pressure(1) - 0.85).abs() < 1e-6, "line ends at the new click's pen pressure");
+        assert_eq!(app.session.documents()[0].history.past_len(), before + 1, "connecting line is one undo step");
+
+        // Another Shift-click uses the just-completed endpoint, not the first stroke's.
+        tool_event(&mut app, ToolEvent::Down { x: 80.0, y: 30.0, pressure: 0.55 }, shift);
+        tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 30.0 }, shift);
+        let (_, next) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").expect("next connecting stroke");
+        let next = next["points"].as_array().expect("next stroke points");
+        assert!((next[0][2].as_f64().unwrap() - 0.85).abs() < 1e-6);
+        assert!((next[1][2].as_f64().unwrap() - 0.55).abs() < 1e-6);
     }
 
     #[test]
