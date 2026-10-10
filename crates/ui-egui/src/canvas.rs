@@ -3453,7 +3453,12 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             let size = [st.doc.size.width, st.doc.size.height];
             let doc_rect = xf.doc_rect(st.doc.bounds());
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
-            trail.feed(&d.points, app.session.tools.brush.size);
+            if t == Tool::SpotHealing {
+                // What the heal covers, dab by dab: soft edges, pressure and shape dynamics (#2364).
+                trail.feed_dabs(&d.points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
+            } else {
+                trail.feed(&d.points, app.session.tools.brush.size);
+            }
             trail.draw(painter, doc_rect, xf.flip, col);
         }
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
@@ -5370,8 +5375,9 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 30}})).unwrap();
-        // Spot Healing: the dab tools draw their stroke live instead of a trail.
-        app.ui.tool = Tool::SpotHealing;
+        // Remove: the dab tools draw their stroke live instead of a trail, and Spot Healing's
+        // trail is its dabs' coverage.
+        app.ui.tool = Tool::Remove;
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         let mut pts = vec![[20.0, 30.0]];
         for i in 1..80 {
@@ -5401,6 +5407,38 @@ mod tests {
         tool_event(&mut app, ToolEvent::Up { x: 59.5, y: 30.0 }, egui::Modifiers::NONE);
         drag_preview_shapes(&mut app, &ctx, 12.0);
         assert!(app.trail.is_none(), "the trail ends with the drag");
+    }
+
+    #[test]
+    fn spot_healing_trail_is_the_coverage_the_heal_uses() {
+        // #2364: a soft brush with pen-pressure size showed as a hard footprint at full size.
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
+        let brush = json!({"size": 30, "hardness": 0.0, "shapeDynamics": {"enabled": true, "size": {"control": "penPressure"}}});
+        app.run("tools.setBrush", json!({ "brush": brush })).unwrap();
+        app.ui.tool = Tool::SpotHealing;
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 0.5 }, egui::Modifiers::NONE);
+        for x in [40.0, 60.0, 80.0] {
+            tool_event(&mut app, ToolEvent::Move { x, y: 30.0, pressure: 0.5 }, egui::Modifiers::NONE);
+            drag_preview_shapes(&mut app, &ctx, 12.0);
+        }
+        // The stroke the heal gets on release, and its coverage.
+        let points = app.drag.as_ref().unwrap().points.iter().map(|p| photocraft_paint::StrokePoint::new(p[0], p[1], p[2] as f32)).collect();
+        let brush = photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+        let (b, cov) = photocraft_paint::retouch::stroke_coverage(&photocraft_paint::Stroke { brush, points });
+        let trail = app.trail.as_ref().unwrap();
+        let mut soft = 0;
+        for y in 0..60 {
+            for x in 0..120 {
+                let want = if b.contains(x, y) { cov[(y - b.y0) as usize * b.width() as usize + (x - b.x0) as usize] } else { 0.0 };
+                let got = trail.coverage(x as usize, y as usize);
+                assert!((f32::from(got) - want * 255.0).abs() <= 1.0, "({x}, {y}): trail {got}, heal {want}");
+                soft += usize::from(got > 0 && got < 200);
+            }
+        }
+        assert!(soft > 50, "a soft brush shows a soft edge");
+        assert_eq!(trail.coverage(50, 30 + 10), 0, "half pressure halves the 30 px tip");
     }
 
     #[test]
