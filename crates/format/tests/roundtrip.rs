@@ -103,6 +103,24 @@ fn load_bytes_source_matches_the_path_load() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `read_entry` bounds the read itself, not the stat hint: a stream that ignores the hint
+/// and yields more than `max` errors instead of filling memory.
+#[test]
+fn read_entry_bounds_the_read_not_the_hint() {
+    struct Endless;
+    impl std::io::Read for Endless {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            buf.fill(b'x');
+            Ok(buf.len())
+        }
+    }
+    let mut endless = Endless;
+    let error = read_entry(&mut endless, 0, 100, "manifest.json").unwrap_err().to_string();
+    assert!(error.contains("exceeds"), "{error}");
+    let mut small = &b"hi"[..];
+    assert_eq!(read_entry(&mut small, 2, 100, "manifest.json").unwrap(), b"hi");
+}
+
 /// Reads the on-disk bundle shape for [`load_bytes_source_matches_the_path_load`].
 struct FsDir {
     root: std::path::PathBuf,
@@ -111,11 +129,12 @@ struct FsDir {
 impl ByteSource for FsDir {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         let p = self.root.join(path);
-        let len = std::fs::metadata(&p).map_err(|_| FormatError::Corrupt(format!("missing `{path}`")))?.len();
-        if len > max as u64 {
-            return Err(FormatError::LimitExceeded(format!("`{path}` is {len} bytes (max {max})")));
+        let metadata = std::fs::metadata(&p).map_err(|_| FormatError::Corrupt(format!("missing `{path}`")))?;
+        if !metadata.is_file() {
+            return Err(FormatError::Corrupt(format!("`{path}` is not a regular file")));
         }
-        Ok(std::fs::read(p)?)
+        let mut file = std::fs::File::open(&p).map_err(|_| FormatError::Corrupt(format!("missing `{path}`")))?;
+        read_entry(&mut file, metadata.len(), max, path)
     }
 }
 

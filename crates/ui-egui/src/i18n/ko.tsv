@@ -2038,6 +2038,7 @@
 	Developing {name}	{name} 현상 중
 	Cancelled {label}	{label} 작업을 취소했습니다
 	Esc to cancel	Esc 키로 취소
+	Opened {name}	{name} 열림
 	Opening {name}	{name} 여는 중
 	Saving {name}	{name} 저장 중
 	A save to {name} is still running; try again when it finishes	{name}에 저장하는 작업이 아직 진행 중입니다. 완료된 후 다시 시도하세요

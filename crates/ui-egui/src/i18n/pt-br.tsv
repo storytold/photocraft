@@ -2046,6 +2046,7 @@
 	Developing {name}	Revelando {name}
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
+	Opened {name}	Aberto: {name}
 	Opening {name}	Abrindo {name}
 	Saving {name}	Salvando {name}
 	A save to {name} is still running; try again when it finishes	Um salvamento em {name} ainda está em andamento; tente novamente quando terminar

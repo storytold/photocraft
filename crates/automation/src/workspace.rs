@@ -56,20 +56,18 @@ impl AuthorizedWorkspace {
     }
 
     /// Load one `.pcraft` document in directory form — the native on-disk layout — below the
-    /// read root. `read` serves regular files only (the zip form); a regular file at this
-    /// path is reported as such, so callers can fall back to the bytes path.
-    pub fn open_pcraft(&self, path: &str) -> Result<photocraft_doc::Document, AutomationError> {
+    /// read root. `read` serves regular files only (the zip form), so a regular file at the
+    /// path is reported as `Ok(None)` for the caller to fall back to.
+    pub fn open_pcraft(&self, path: &str) -> Result<Option<photocraft_doc::Document>, AutomationError> {
         let relative = request_path(path, self.read.as_ref())?;
         let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
-        let dir = root.dir.open_dir(&relative).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotADirectory {
-                AutomationError::BadRequest(format!("automation .pcraft path is not a directory: `{path}`"))
-            } else {
-                file_error("read", path, e)
-            }
-        })?;
+        let dir = match root.dir.open_dir(&relative) {
+            Ok(dir) => dir,
+            Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => return Ok(None),
+            Err(e) => return Err(file_error("read", path, e)),
+        };
         let source = DirHandle { dir };
-        Ok(photocraft_format::load_bytes_source(&source, &photocraft_format::LoadOptions::default())?)
+        Ok(Some(photocraft_format::load_bytes_source(&source, &photocraft_format::LoadOptions::default())?))
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -199,11 +197,12 @@ impl photocraft_format::ByteSource for DirHandle {
     fn get(&self, path: &str, max: usize) -> photocraft_format::Result<Vec<u8>> {
         let missing = || photocraft_format::FormatError::Corrupt(format!("missing `{path}`"));
         let mut file = self.dir.open(path).map_err(|_| missing())?;
-        let len = file.metadata().map_err(|_| missing())?.len();
-        if len > max as u64 {
-            return Err(photocraft_format::FormatError::LimitExceeded(format!("`{path}` is {len} bytes (max {max})")));
+        let metadata = file.metadata().map_err(|_| missing())?;
+        if !metadata.is_file() {
+            // A FIFO or device would block the open and stream without end.
+            return Err(photocraft_format::FormatError::Corrupt(format!("`{path}` is not a regular file")));
         }
-        photocraft_format::read::read_all(&mut file, len).map_err(photocraft_format::FormatError::from)
+        photocraft_format::read_entry(&mut file, metadata.len(), max, path)
     }
 }
 
@@ -470,7 +469,7 @@ mod tests {
         let (inside, _, workspace) = roots("pcraft-dir");
         let doc = photocraft_doc::Document::new("Native", photocraft_doc::Size::new(16, 12), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
         photocraft_format::PcraftWriter::new().save_dir(&doc, &inside.join("native.pcraft"), &photocraft_format::SaveOptions::default()).unwrap();
-        let loaded = workspace.open_pcraft("native.pcraft").unwrap();
+        let loaded = workspace.open_pcraft("native.pcraft").unwrap().expect("the directory form loads");
         assert_eq!(loaded.name, doc.name);
         assert_eq!((loaded.size.width, loaded.size.height), (16, 12));
     }
@@ -482,11 +481,26 @@ mod tests {
         let zip = inside.join("zipped.pcraft");
         photocraft_format::PcraftWriter::new().save_path(&doc, &zip, &photocraft_format::SaveOptions::default()).unwrap();
         assert!(zip.is_file());
-        let error = workspace.open_pcraft("zipped.pcraft").unwrap_err().to_string();
-        assert!(error.contains("not a directory"), "{error}");
+        assert!(workspace.open_pcraft("zipped.pcraft").unwrap().is_none(), "the zip form falls back to the bytes path");
         let error = workspace.open_pcraft("missing.pcraft").unwrap_err().to_string();
-        assert!(!error.contains("not a directory"), "a missing path is not a zip fallback: {error}");
+        assert!(error.contains("failed"), "a missing path propagates its io error: {error}");
         assert!(AuthorizedWorkspace::default().open_pcraft("x.pcraft").is_err(), "no read authority fails closed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_pcraft_rejects_non_regular_entries_and_escaping_symlinks() {
+        let (inside, _, workspace) = roots("pcraft-nonregular");
+        let bundle = inside.join("native.pcraft");
+        std::fs::create_dir_all(bundle.join("manifest.json")).unwrap();
+        let error = workspace.open_pcraft("native.pcraft").unwrap_err().to_string();
+        assert!(error.contains("not a regular file"), "a directory entry is refused, not streamed: {error}");
+
+        let (inside2, _, workspace2) = roots("pcraft-symlink");
+        let bundle2 = inside2.join("native.pcraft");
+        std::fs::create_dir(&bundle2).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", bundle2.join("manifest.json")).unwrap();
+        assert!(workspace2.open_pcraft("native.pcraft").is_err(), "an escaping symlink entry is refused");
     }
 
     fn temp_files(dir: &Path) -> Vec<String> {

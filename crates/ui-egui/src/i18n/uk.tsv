@@ -2340,6 +2340,7 @@
 	Developing {name}	Обробка {name}
 	Cancelled {label}	Скасовано: {label}
 	Esc to cancel	Esc для скасування
+	Opened {name}	Відкрито: {name}
 	Opening {name}	Відкриття {name}
 	Saving {name}	Збереження {name}
 	A save to {name} is still running; try again when it finishes	Збереження в {name} ще триває; спробуйте ще раз, коли воно завершиться

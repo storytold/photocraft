@@ -2082,6 +2082,7 @@
 	Developing {name}	{name} を現像中
 	Cancelled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
+	Opened {name}	{name} を開きました
 	Opening {name}	{name} を開いています
 	Saving {name}	{name} を保存しています
 	A save to {name} is still running; try again when it finishes	{name} への保存がまだ実行中です。完了してからもう一度お試しください

@@ -317,9 +317,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_open_pcraft = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
-            let doc = workspace.open_pcraft(path).map_err(|error| error.to_string())?;
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
-            Ok((name, doc))
+            let opened = crate::crash_guard::guard("Open", || workspace.open_pcraft(path).map_err(|e| e.to_string()))?;
+            Ok(opened.map(|doc| (name, doc)))
         }) as photocraft_ui_egui::AutomationOpenPcraftFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;

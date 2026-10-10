@@ -2097,6 +2097,7 @@
 	Developing {name}	Vyvolávání {name}
 	Cancelled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
+	Opened {name}	Otevřeno: {name}
 	Opening {name}	Otevírání {name}
 	Saving {name}	Ukládání {name}
 	A save to {name} is still running; try again when it finishes	Ukládání do {name} stále probíhá; zkuste to znovu, až skončí

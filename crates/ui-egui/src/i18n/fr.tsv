@@ -2046,6 +2046,7 @@
 	Developing {name}	Développement de {name}
 	Cancelled {label}	{label} : annulé
 	Esc to cancel	Échap pour annuler
+	Opened {name}	Ouvert : {name}
 	Opening {name}	Ouverture de {name}
 	Saving {name}	Enregistrement de {name}
 	A save to {name} is still running; try again when it finishes	Un enregistrement de {name} est encore en cours ; réessayez lorsqu’il sera terminé

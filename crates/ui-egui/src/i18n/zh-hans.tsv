@@ -2139,6 +2139,7 @@ cameraRaw	Blending	混合
 	Developing {name}	正在处理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
+	Opened {name}	已打开 {name}
 	Opening {name}	正在打开 {name}
 	Saving {name}	正在保存 {name}
 	A save to {name} is still running; try again when it finishes	仍在保存到 {name}；请在完成后重试

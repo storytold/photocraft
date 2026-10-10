@@ -2066,6 +2066,7 @@
 	Developing {name}	{name} wird entwickelt
 	Cancelled {label}	{label} abgebrochen
 	Esc to cancel	Esc zum Abbrechen
+	Opened {name}	Geöffnet: {name}
 	Opening {name}	Öffne {name}
 	Saving {name}	Speichere {name}
 	A save to {name} is still running; try again when it finishes	{name} wird noch gespeichert; versuchen Sie es erneut, wenn der Vorgang abgeschlossen ist

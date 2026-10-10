@@ -81,12 +81,26 @@ pub(crate) struct DirSource {
 impl ByteSource for DirSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         let p = self.root.join(path);
-        let len = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?.len();
-        if len > max as u64 {
-            return Err(FormatError::LimitExceeded(format!("`{path}` is {len} bytes (max {max})")));
+        let metadata = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?;
+        if !metadata.is_file() {
+            return Err(FormatError::corrupt(format!("`{path}` is not a regular file")));
         }
-        Ok(std::fs::read(p)?)
+        let mut file = std::fs::File::open(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?;
+        read_entry(&mut file, metadata.len(), max, path)
     }
+}
+
+/// Read one opened bundle entry under its `max` budget. The stat `len` is a buffer hint only
+/// (files can change while open, and a FIFO reports 0), so the bound is enforced on the read
+/// itself, never on the hint.
+pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &str) -> Result<Vec<u8>> {
+    let mut limited = file.take(max as u64 + 1);
+    let hint = len.min(max as u64 + 1);
+    let bytes = crate::read::read_all(&mut limited, hint)?;
+    if bytes.len() > max {
+        return Err(FormatError::LimitExceeded(format!("`{path}` exceeds {max} bytes")));
+    }
+    Ok(bytes)
 }
 
 // ---------------------------------------------------------------------------

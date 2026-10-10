@@ -2364,6 +2364,7 @@
 	Developing {name}	Обработка {name}
 	Cancelled {label}	{label}: отменено
 	Esc to cancel	Esc — отмена
+	Opened {name}	Открыто: {name}
 	Opening {name}	Открытие {name}
 	Saving {name}	Сохранение {name}
 	A save to {name} is still running; try again when it finishes	Сохранение в {name} ещё выполняется; повторите попытку после его завершения

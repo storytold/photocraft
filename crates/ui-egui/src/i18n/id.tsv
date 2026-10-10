@@ -2039,6 +2039,7 @@
 	Developing {name}	Mengembangkan {name}
 	Cancelled {label}	{label} dibatalkan
 	Esc to cancel	Esc untuk batal
+	Opened {name}	Dibuka: {name}
 	Opening {name}	Membuka {name}
 	Saving {name}	Menyimpan {name}
 	A save to {name} is still running; try again when it finishes	Penyimpanan ke {name} masih berjalan; coba lagi setelah selesai

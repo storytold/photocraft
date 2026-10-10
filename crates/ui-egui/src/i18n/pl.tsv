@@ -2072,6 +2072,7 @@
 	Cancelled opening {name}	Anulowano otwieranie {name}
 	Cancelled {label}	Anulowano: {label}
 	Esc to cancel	Esc, aby anulować
+	Opened {name}	Otworzono: {name}
 	Opening {name}	Otwieranie {name}
 	Saving {name}	Zapisywanie {name}
 	A save to {name} is still running; try again when it finishes	Zapisywanie do {name} wciąż trwa; spróbuj ponownie, gdy się zakończy

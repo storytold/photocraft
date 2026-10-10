@@ -2081,6 +2081,7 @@
 	Developing {name}	Revelando {name}
 	Cancelled {label}	Se canceló {label}
 	Esc to cancel	Esc para cancelar
+	Opened {name}	Se abrió {name}
 	Opening {name}	Abriendo {name}
 	Saving {name}	Guardando {name}
 	A save to {name} is still running; try again when it finishes	Todavía se está guardando {name}; inténtalo de nuevo cuando termine
