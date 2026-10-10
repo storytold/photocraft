@@ -28,6 +28,19 @@ about 1,230 issues have been filed since the first release (579 open on 2026-10-
 against features already counted as present. The 2026-10-05 honest assessment (feature surface 60–70%,
 ready for real work 25–35%) was closer; ~700 merged PRs since then moved both numbers up.
 
+### Readiness by audience
+
+| Audience | Ready % | Opus 5.5 agent-hours to ~95% | Work that dominates |
+|---|---:|---:|---|
+| Full target (ready for real work) | ~45% (additive weighted sum: 46%) | 2,300–4,100 | Everything below, plus AI tier, plug-in/scripting ecosystem, video, localization, hardware |
+| Mainstream practitioner | ~43% | 1,700–2,800 | Depth in the 11 weekly areas (1,180–2,000), performance budgets, stability on real machines, PSD exchange with Photoshop |
+| Essentials user | ~61% | 400–700 | Startup and GPU robustness, brush and transform responsiveness, Type tool, discoverability (flyouts, commit buttons), AVIF/PDF open |
+
+Hours calibrated as in [Remaining effort](#remaining-effort-and-calibration) (2–9 h per checklist
+item, 8–20 h per format or subsystem, from the repo's 1,004 merged PRs); each tier is a subset of
+the one above. About 80% parallelizes (independent crates and command modules); performance
+architecture and the PSD writer are the serial parts.
+
 ## Target measured
 
 - **Adobe Photoshop 2026, version 27.11.0** (build 20260929.r.26, macOS universal), installed at
@@ -488,6 +501,7 @@ See [method and results](octagonal-mask-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Readiness-by-audience table: percent and hours for full, mainstream and essentials; full number confirmed as the additive weighted sum over dimensions (46%, reported ~45%) |
 | 2026-10-10 | minor | Added mainstream-practitioner (~43%) and essentials-user (~61%) numbers with written weights and discounts; full ready-for-real-work rechecked against its written weights (46%, reported ~45%), unchanged |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate in `roadmap.md`: passes |
 | 2026-10-10 | major | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected); two numbers, weights, per-dimension and per-area hours calibrated from git history; merged `parity-estimate.md` and the roadmap's honest assessment into this file |

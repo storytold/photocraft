@@ -26,6 +26,19 @@ About 80% of the work parallelizes.
 | Remaining to **beta** | **~1,100–1,800 h** | estimated |
 | Remaining to **full parity** | **~2,300–4,100 h** | estimated; AI and plug-ins need owner decisions |
 
+### Readiness by audience
+
+| Audience | Ready % | Opus 5.5 agent-hours to ~95% | Work that dominates |
+|---|---:|---:|---|
+| Full target (ready for real work) | ~45% (additive weighted sum: 46%) | 2,300–4,100 | Everything below, plus AI tier, plug-in/scripting ecosystem, video, localization, hardware |
+| Mainstream practitioner | ~43% | 1,700–2,800 | Depth in the 11 weekly areas (1,180–2,000), performance budgets, stability on real machines, PSD exchange with Photoshop |
+| Essentials user | ~61% | 400–700 | Startup and GPU robustness, brush and transform responsiveness, Type tool, discoverability (flyouts, commit buttons), AVIF/PDF open |
+
+Hours calibrated as in [Remaining effort](docs/target-app-parity.md#remaining-effort-and-calibration) (2–9 h per checklist
+item, 8–20 h per format or subsystem, from the repo's 1,004 merged PRs); each tier is a subset of
+the one above. About 80% parallelizes (independent crates and command modules); performance
+architecture and the PSD writer are the serial parts.
+
 **Why alpha.** Core workflows (open, layer, select, paint, adjust, filter, type, save) work end to
 end, and breadth is high, but users of 0.5/0.6 have 579 open issues, 22 of 25 performance budgets
 are missed, and PSDs we write are not yet reliably accepted by Photoshop (#1281, #2469). Beta
@@ -122,6 +135,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Readiness by audience with hours per tier |
 | 2026-10-10 | minor | Mainstream-practitioner and essentials-user numbers added |
 | 2026-10-10 | minor | Alpha gate result (passes; stays alpha) in the stage explanation |
 | 2026-10-10 | major | First version, per craftrules `standards/progress-docs.md` |
