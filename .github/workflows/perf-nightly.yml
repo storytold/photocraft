@@ -3,7 +3,7 @@ name: Perf (nightly)
 # The performance scorecard (#221): `cargo xtask perf` every night and on demand, on three
 # GitHub-hosted runners (macOS Apple silicon/Metal, Linux x86-64, Windows x86-64), each a
 # separate matrix entry with its own baseline, perf/baseline-<os>.json, recorded on that runner.
-# It never runs on pull requests, so it can't block one. An entry fails when a bench fails or a
+# On pull requests it runs only when the perf setup itself changes (the paths below). An entry fails when a bench fails or a
 # scenario's p50 regresses more than 15 % against its baseline from the same machine class (other
 # classes are never compared). Budgets in perf/budgets.toml were set on a faster developer machine,
 # so here they are reported, not enforced (--advisory-budgets). Hosted Linux/Windows runners
@@ -17,6 +17,12 @@ name: Perf (nightly)
 on:
   schedule:
     - cron: "23 3 * * *"
+  # Only PRs that change the perf setup: a full run takes 30-60 min per OS.
+  pull_request:
+    paths:
+      - "perf/**"
+      - "xtask/src/perf.rs"
+      - ".github/workflows/perf-nightly.yml"
   workflow_dispatch:
     inputs:
       quick:
@@ -31,9 +37,10 @@ on:
 permissions:
   contents: read
 
+# A newer push to a PR cancels its older run; nightly and manual runs are never cancelled.
 concurrency:
-  group: perf-nightly
-  cancel-in-progress: false
+  group: perf-${{ github.event_name == 'pull_request' && github.ref || 'nightly' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -63,11 +70,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # Release builds only, one cache per OS; saved even when a bench fails (it holds compiled
-      # dependencies, not results). The job only runs on main, so it never evicts PR caches.
+      # dependencies, not results). PRs restore it but don't save, so they never evict main's.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: perf-release-${{ matrix.name }}
           cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Run benchmarks
         id: perf
