@@ -532,7 +532,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     install_fonts_with(ctx, crate::cjk_fonts::Sources::system());
 }
 
-/// [`install_fonts`] with the CJK/Thai fallback fonts taken from `cjk` (tests swap the sources).
+/// [`install_fonts`] with the CJK and other-script fallback fonts taken from `cjk` (tests swap the sources).
 pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     let mut fonts = FontDefinitions::default();
     // The bundled fonts are inflated on first use (photocraft_text::fonts). Should one ever fail
@@ -578,7 +578,7 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     {
         ctx.add_plugin(UiFontSizePlugin { applied: size, defer_after_install: true });
     }
-    // Japanese / Chinese / Korean / Thai fallback fonts (craft-fonts' Japanese ones if built in, then
+    // CJK, Thai, Arabic, Indic and other script fallback fonts (craft-fonts' Japanese ones if built in, then
     // the system's) are registered on demand (cjk_fonts.rs).
     crate::cjk_fonts::install_with(ctx, cjk);
 }

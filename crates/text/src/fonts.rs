@@ -499,7 +499,7 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -516,7 +516,7 @@ fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn system_font_dirs() -> Vec<std::path::PathBuf> {
+pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut v = Vec::new();
