@@ -21,9 +21,9 @@ note = "Engine has TextDirection (text.rs:155); no UI"
 [[item]]
 id = "TYPE-218-3"
 target = "Thai/Khmer/Indic fallback fonts; golden shaping tests for complex scripts and RTL"
-status = "missing"
+status = "partial"
 issue = 218
-note = "fonts.rs:28 fallback covers Arabic/Hebrew; no per-script golden tests (only a bidi test)"
+note = "Thai is covered: THAI_FAMILIES (fonts.rs) lists the Windows, macOS and Linux families and thai_in_latin_font_falls_back_to_installed_thai_font checks a sample with above and below marks (#1909); Arabic and Hebrew fall back too. Khmer and Indic have no fallback list, and there are no per-script golden shaping tests (only a bidi test)"
 
 [[item]]
 id = "TYPE-218-4"
@@ -42,9 +42,9 @@ note = "Type > OpenType toggles (type_extra_cmds.rs:512); no panel buttons or su
 [[item]]
 id = "TYPE-218-6"
 target = "Manual pair kerning (Alt+arrows), optical kerning rendered, both round-trip PSD (#206)"
-status = "missing"
+status = "done"
 issue = 218
-note = "Optical renders as Metrics (text.rs:21); Alt+arrow moves by word"
+note = "Alt+Left/Right at a collapsed caret kerns the pair (type_tool.rs kern_pair, 20 per step and 100 with Cmd; type_tool_alt_arrows_kern_the_pair). Optical kerning is computed from the glyph outlines in text/src/optical.rs and applied by layout.rs when the run's mode is Optical (optical_matches_photoshop, optical_kerning_tightens_open_pairs). Both modes and manual values round-trip through PSD (io/tests/psd_kerning.rs; the optical mode travels in Txt2, txt2_carries_optical_kerning)"
 
 [[item]]
 id = "TYPE-218-7"

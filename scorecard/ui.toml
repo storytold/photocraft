@@ -64,9 +64,9 @@ note = "paint_mouse.rs brush picker and canvas_tool_menu.rs selection actions; o
 [[item]]
 id = "UI-217-9"
 target = "UI scale presets 100/115/125/150/200 % through zoom_factor, remembered"
-status = "missing"
+status = "done"
 issue = 217
-note = "prefs.rs:61 UiScale unused; input_tests.rs:71 asserts zoom_factor stays 1.0"
+note = "prefs::UiScale offers Auto plus 75 to 300 percent (13 presets, more than the five this row lists); prefs_ui.rs display_scale resolves it (Auto follows the system scale and only jumps to 200 percent on an unscaled 4K display, #1072/#225) and sync_display_scale applies it with ctx.set_zoom_factor. It is a preference, so it is remembered. The zoom_factor assert in input_tests.rs is about canvas zoom not scaling the interface, not about this setting"
 
 [[item]]
 id = "UI-217-10"
@@ -80,7 +80,7 @@ id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
 status = "missing"
 issue = 217
-note = "theme.rs:28 five themes"
+note = "theme.rs ThemeKind has eight themes (Pro, ProMedium, Studio, StudioLight, Classic, Adwaita, AdwaitaDark, SolarizedDark); no Soft dark or Soft light, no previews in the picker and no outlined knobs in the light themes"
 
 [[item]]
 id = "UI-217-12"
@@ -155,13 +155,13 @@ note = "edit_menu_cmds.rs:714 covers brushes, custom shapes, patterns with reord
 [[item]]
 id = "UI-217-22"
 target = "Stamp Visible into a new layer keeping originals; Alt+Merge keeps originals"
-status = "missing"
+status = "partial"
 issue = 217
-note = "Only layer.mergeVisible (edit_cmds.rs:416)"
+note = "layer.stampVisible merges every visible layer into a new layer above the active one and leaves the originals (stamp_cmds.rs), and layer.stampDown is there too; neither has a menu entry yet, and Alt+Merge keeping the originals is still missing"
 
 [[item]]
 id = "UI-217-23"
 target = "Layer clipboard: copy/paste whole layers (masks, styles, type) between documents"
-status = "missing"
+status = "partial"
 issue = 217
-note = "Only copy/paste layer style (extra_cmds.rs:592)"
+note = "layer.copyToDocument copies layers into another open document keeping names, content, masks, styles and blending, converting to the destination's profile and depth, as one history step (layer_copy_cmds.rs, #589). It is the command a drag between documents dispatches; there is still no copy/paste layer clipboard"

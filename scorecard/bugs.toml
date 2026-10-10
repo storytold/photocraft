@@ -114,51 +114,51 @@ note = "targeted_unlinked_mask_transforms_alone and targeted_linked_mask_moves_w
 [[item]]
 id = "BUG-205-4"
 target = "Test: a linked raster mask with no selection moves with the pixels"
-status = "partial"
+status = "done"
 issue = 205
-note = "Implemented at transform_cmds.rs:127; no raster-mask test"
+note = "linked_raster_mask_moves_with_the_pixels (transform_cmds.rs): a reveal-all mask with a hidden half, linked, no selection; asserts the hidden half travels with the pixels and nothing hidden is left behind"
 
 [[item]]
 id = "BUG-205-5"
 target = "Tests: linked mask + selection stays aligned; unlinked stays; targeted mask only"
-status = "missing"
+status = "done"
 issue = 205
-note = "Unlinked case honoured (m.linked check, l.128) but untested; the other two not implemented"
+note = "All three in transform_cmds.rs: linked_mask_with_a_selection_moves_only_the_selected_region checks the mask value under each moved pixel, unlinked_mask_stays_put covers it with and without a selection, targeted_unlinked_mask_transforms_alone moves the mask while the layer bounds stay"
 
 [[item]]
 id = "BUG-206-1"
 target = "CharStyle models per-character manual kerning separately from the auto-kern mode"
-status = "missing"
+status = "done"
 issue = 206
-note = "doc/text.rs:76 only `kerning: Kerning` enum (Metrics/Optical/Off)"
+note = "doc/src/text.rs CharStyle carries both: kerning: Kerning for the automatic mode (Metrics/Optical/Off) and kern: f32 for manual kerning in 1/1000 em between this character and the next, added on top of the pair's automatic kerning"
 
 [[item]]
 id = "BUG-206-2"
 target = "PSD import keeps Optical and manual Kerning values"
-status = "missing"
+status = "done"
 issue = 206
-note = "text/psd.rs:264 maps anything not Off to Metrics; Kerning value ignored"
+note = "io/tests/psd_kerning.rs manual_and_off_kerning_round_trip_through_psd and optical_kerning_round_trips_through_psd import an exported layer and compare every character's (mode, kern) pair; the optical mode travels in the document Txt2 block (#1348)"
 
 [[item]]
 id = "BUG-206-3"
 target = "PSD export writes the real AutoKerning mode and Kerning values"
-status = "missing"
+status = "done"
 issue = 206
-note = "text/psd.rs:380-381 AutoKerning bool only; Kerning hard-coded 0"
+note = "manual_and_off_kerning_round_trip_through_psd (io/tests/psd_kerning.rs) reads the AutoKerning flag and Kerning value of every character back out of the written TySh: (false, 100) after A, (true, -50) after T, and automatic kerning off where the style says so"
 
 [[item]]
 id = "BUG-206-4"
 target = "Alt+Left/Right at a collapsed caret adjusts pair kerning; Character panel field"
-status = "missing"
+status = "done"
 issue = 206
-note = "type_tool.rs:896-912 only a mode combo"
+note = "type_tool.rs: Alt+Left/Right at a collapsed caret calls kern_pair (20 per step, 100 with Cmd); the Character panel field takes Metrics, Optical or a manual value (kerning_label / parse_kerning). Covered by type_tool_alt_arrows_kern_the_pair and kerning_field_values (input_tests.rs)"
 
 [[item]]
 id = "BUG-206-5"
 target = "Tests: PSD round trip of manual and Optical kerning, a real file in the oracle corpus"
-status = "missing"
+status = "partial"
 issue = 206
-note = "No kerning round-trip test"
+note = "Round trips covered by io/tests/psd_kerning.rs (manual, Off and Optical, plus hostile_kerning_values and txt2_extras_survive_a_resave_of_unchanged_text); corpus_text_layers reads real PSDs and applies their Txt2 optical kerning, but no oracle file is dedicated to kerning values"
 
 [[item]]
 id = "BUG-207-1"
@@ -184,9 +184,9 @@ note = "paint/src/retouch.rs premultiplies; smudge_into_transparency_leaves_no_d
 [[item]]
 id = "BUG-207-4"
 target = "edit.transform transforms a targeted alpha channel"
-status = "missing"
+status = "done"
 issue = 207
-note = "transform_cmds.rs transform() has no target handling"
+note = "edit.transform takes target (pixels, mask, quickMask or {channel: i}; see its params doc in transform_cmds.rs); targeted_alpha_channel_transforms_alone moves channel 0 and asserts the layer bounds are untouched"
 
 [[item]]
 id = "BUG-207-5"
