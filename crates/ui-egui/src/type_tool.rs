@@ -325,6 +325,48 @@ fn insert(app: &mut PhotocraftApp, s: &str) {
         // A typed character keeps the caret on its side where directions meet (spec 5.1.4).
         e.upstream = !s.is_empty();
     }
+    if !s.is_empty() {
+        auto_align(app);
+    }
+}
+
+/// Spec 5.1.1: new Arabic text right-aligns itself. After typing into a layer this session
+/// created, the caret's paragraph becomes right-aligned when three things hold: it is still at
+/// the default Left, nobody picked an alignment in the session, and its first strong character
+/// is right-to-left (or its direction is RTL). A paragraph whose first strong letter is Latin
+/// stays Left, so this happens at most once per paragraph, at its first strong character.
+fn auto_align(app: &mut PhotocraftApp) {
+    use photocraft_doc::text::{Orientation, TextAlign};
+    let Some(ed) = app.ui.text_edit.clone() else { return };
+    if !ed.created || ed.align_picked {
+        return;
+    }
+    let right = {
+        let Some(t) = app.session.active().and_then(|st| text_layer(&st.doc, LayerId(ed.layer))) else { return };
+        if t.orientation == Orientation::Vertical {
+            return;
+        }
+        let at = byte_of(&t.text, ed.caret);
+        let Some(pr) = photocraft_text::layout::split_paragraphs(&t.text).into_iter().rfind(|r| r.start <= at) else { return };
+        let runs = t.paragraph_runs();
+        let mut end = 0;
+        let Some(style) = runs
+            .iter()
+            .find(|r| {
+                end += r.len;
+                pr.start < end
+            })
+            .or(runs.last())
+            .map(|r| r.style.clone())
+        else {
+            return;
+        };
+        let content = t.text.get(pr).unwrap_or("").trim_end_matches(['\r', '\n']);
+        style.align == TextAlign::Left && photocraft_engine::type_cmds::natural_align(content, style.direction) == Some(TextAlign::Right)
+    };
+    if right {
+        let _ = app.run("type.setStyle", json!({"layer": ed.layer, "range": [ed.caret, ed.caret], "align": "right", "coalesce": ed.session}));
+    }
 }
 
 /// Alt+←/→: kern the pair before the caret by `by` (1/1000 em). No pair (caret at a text or line
@@ -372,6 +414,9 @@ fn ime_update(app: &mut PhotocraftApp, s: &str, commit: bool) {
         e.anchor = e.caret;
         e.upstream = len > 0;
         e.preedit = if commit || len == 0 { None } else { Some((start, len)) };
+    }
+    if len > 0 {
+        auto_align(app);
     }
 }
 
@@ -953,6 +998,12 @@ fn drag_key(ctx: &egui::Context) -> Option<String> {
 /// Apply only the supplied properties to the text-edit scope or selected type layers.
 fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
     let Some(mut p) = formatting_params(app) else { return };
+    // A picked alignment ends the session's automatic right alignment (spec 5.1.1).
+    if props.get("align").is_some()
+        && let Some(ed) = app.ui.text_edit.as_mut()
+    {
+        ed.align_picked = true;
+    }
     if let Some(props) = props.as_object() {
         for (key, value) in props {
             p[key] = value.clone();
@@ -1800,5 +1851,51 @@ two",
         assert_eq!(p.len(), 2, "{p:?}");
         assert_eq!((p[0].style.direction, p[1].style.direction), (TextDirection::Rtl, TextDirection::Ltr));
         assert_eq!(a.ui.tool_options.type_direction, "rtl", "the tool default is untouched while a layer is targeted");
+    }
+
+    /// Spec 5.1.1: in a layer this session created, the first strong Arabic letter typed into a
+    /// Left paragraph right-aligns it, once, unless an alignment was picked in the session.
+    #[test]
+    fn new_arabic_text_right_aligns_itself_once() {
+        use photocraft_doc::text::TextAlign;
+        let align = |a: &PhotocraftApp| {
+            let ed = a.ui.text_edit.as_ref().unwrap();
+            text_layer(&a.session.active().unwrap().doc, LayerId(ed.layer)).unwrap().paragraph_runs()[0].style.align
+        };
+        // Digits first decide nothing; the first Arabic letter does. Point text then ends at its
+        // anchor, so it grows leftward from the click.
+        let mut a = app();
+        pointer_up(&mut a, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut a, "١٢٣ ");
+        assert_eq!(align(&a), TextAlign::Left);
+        insert(&mut a, "مرحبا");
+        assert_eq!(align(&a), TextAlign::Right);
+        let id = LayerId(a.ui.text_edit.as_ref().unwrap().layer);
+        let (l, _, _) = layout(&mut a, id).unwrap();
+        assert!(l.lines[0].x1.abs() < 1.0, "ends at the anchor: {:?}", l.lines[0]);
+        assert_eq!(a.session.active().unwrap().history.entries(), ["Open", "New Type Layer"], "inside the typing step");
+        // Latin first: stays left.
+        let mut b = app();
+        pointer_up(&mut b, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut b, "Galaxy S24 شاشة");
+        assert_eq!(align(&b), TextAlign::Left);
+        // An alignment picked in the session wins.
+        let ctx = egui::Context::default();
+        let mut c = app();
+        pointer_up(&mut c, [200.0, 100.0], [200.0, 100.0]);
+        apply(&mut c, &ctx, json!({"align": "left"}));
+        insert(&mut c, "مرحبا");
+        assert_eq!(align(&c), TextAlign::Left);
+        // A layer this session didn't create, and vertical type: unchanged.
+        let mut d = app();
+        let id = d.run("type.create", json!({"x": 50, "y": 50, "text": "abc", "align": "left"})).unwrap()["layer"].as_u64().unwrap();
+        d.ui.text_edit = Some(TextEdit { layer: id, caret: 0, anchor: 3, session: "k".into(), ..Default::default() });
+        insert(&mut d, "مرحبا");
+        assert_eq!(align(&d), TextAlign::Left);
+        let mut v = app();
+        v.ui.tool = crate::state::Tool::VerticalType;
+        pointer_up(&mut v, [200.0, 100.0], [200.0, 100.0]);
+        insert(&mut v, "مرحبا");
+        assert_eq!(align(&v), TextAlign::Left);
     }
 }
