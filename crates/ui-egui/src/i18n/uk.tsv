@@ -3516,6 +3516,17 @@ cameraRaw	Masking	Маскування
 	Right-to-left	Справа наліво
 	Left-to-right	Зліва направо
 	Kashida	Кашида
-	Western 123	Західні 123
-	Arabic-Indic ١٢٣	Арабо-індійські ١٢٣
-	Persian ۱۲۳	Перські ۱۲۳
+	Western	Західні
+	Arabic-Indic	Арабо-індійські
+	Persian	Перські
+	Keep Selection Left-to-Right	Зберегти виділення зліва направо
+	Keep Selection Right-to-Left	Зберегти виділення справа наліво
+	Keep Selection in Its Own Direction	Зберегти виділення у власному напрямку
+	Insert End of Isolate	Вставити кінець ізоляту
+	Insert Left-to-Right Mark	Вставити позначку «зліва направо»
+	Insert Right-to-Left Mark	Вставити позначку «справа наліво»
+	Insert Arabic Letter Mark	Вставити арабську буквену позначку
+	Insert Zero-Width Joiner	Вставити з’єднувач нульової ширини
+	Insert Zero-Width Non-Joiner	Вставити роз’єднувач нульової ширини
+	Insert Tatweel	Вставити татвіль
+	Insert Control Character	Вставити керувальний символ

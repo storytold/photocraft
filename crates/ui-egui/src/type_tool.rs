@@ -1103,7 +1103,7 @@ fn digits_key(d: photocraft_doc::text::Digits) -> &'static str {
 /// The digit-shape dropdown of the Character panel (display only: the text keeps ASCII digits).
 fn digits_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str, width: f32, current: photocraft_doc::text::Digits) {
     let mut cur = digits_key(current).to_string();
-    let opts = [("western".to_string(), tl!("Western 123")), ("arabicIndic".to_string(), tl!("Arabic-Indic ١٢٣")), ("persian".to_string(), tl!("Persian ۱۲۳"))];
+    let opts = [("western".to_string(), tl!("Western")), ("arabicIndic".to_string(), tl!("Arabic-Indic")), ("persian".to_string(), tl!("Persian"))];
     if crate::widgets::dropdown(ui, id, &mut cur, &opts, width) {
         apply(app, ui.ctx(), json!({"digits": cur}));
     }

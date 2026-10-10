@@ -2410,6 +2410,17 @@ fontWeight	Italic	Kurzíva
 	Left-to-right	Zleva doprava
 	Kashida	Kašida
 	Digits	Číslice
-	Western 123	Západní 123
-	Arabic-Indic ١٢٣	Arabsko-indické ١٢٣
-	Persian ۱۲۳	Perské ۱۲۳
+	Western	Západní
+	Arabic-Indic	Arabsko-indické
+	Persian	Perské
+	Keep Selection Left-to-Right	Ponechat výběr zleva doprava
+	Keep Selection Right-to-Left	Ponechat výběr zprava doleva
+	Keep Selection in Its Own Direction	Ponechat výběr ve vlastním směru
+	Insert End of Isolate	Vložit konec izolace
+	Insert Left-to-Right Mark	Vložit značku zleva doprava
+	Insert Right-to-Left Mark	Vložit značku zprava doleva
+	Insert Arabic Letter Mark	Vložit arabskou značku písmene
+	Insert Zero-Width Joiner	Vložit spojovač nulové šířky
+	Insert Zero-Width Non-Joiner	Vložit nespojovač nulové šířky
+	Insert Tatweel	Vložit tatwíl
+	Insert Control Character	Vložit řídicí znak

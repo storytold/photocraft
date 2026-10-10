@@ -269,6 +269,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
+    use egui::{Event, Key, Modifiers, vec2};
+    use egui_kittest::Harness;
+    use serde_json::json;
+
+    use super::{fuzzy_score, push_recent};
+    use crate::PhotocraftApp;
 
     #[test]
     fn bidi_control_rows_name_every_control_once() {
@@ -281,12 +287,16 @@ mod tests {
             assert_eq!(needs_selection, matches!(name, "lri" | "rli" | "fsi"), "{label}");
         }
     }
-    use egui::{Event, Key, Modifiers, vec2};
-    use egui_kittest::Harness;
-    use serde_json::json;
 
-    use super::{fuzzy_score, push_recent};
-    use crate::PhotocraftApp;
+    #[test]
+    fn every_bidi_control_label_and_its_command_are_translated() {
+        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
+            for (label, ..) in super::BIDI_CONTROLS {
+                assert!(crate::i18n::has(lang, label), "{}: untranslated palette label {label:?}", lang.code());
+            }
+            assert!(crate::i18n::has(lang, "Insert Control Character"), "{}: untranslated command label", lang.code());
+        }
+    }
 
     #[test]
     fn open_palette_interrupts_the_ime_only_when_it_takes_focus() {

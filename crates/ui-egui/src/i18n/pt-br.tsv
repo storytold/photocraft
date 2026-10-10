@@ -2836,6 +2836,17 @@ fontWeight	Italic	Itálico
 	Right-to-left	Da direita para a esquerda
 	Left-to-right	Da esquerda para a direita
 	Kashida	Kashida
-	Western 123	Ocidentais 123
-	Arabic-Indic ١٢٣	Indo-arábicos ١٢٣
-	Persian ۱۲۳	Persas ۱۲۳
+	Western	Ocidentais
+	Arabic-Indic	Indo-arábicos
+	Persian	Persas
+	Keep Selection Left-to-Right	Manter a seleção da esquerda para a direita
+	Keep Selection Right-to-Left	Manter a seleção da direita para a esquerda
+	Keep Selection in Its Own Direction	Manter a seleção na própria direção
+	Insert End of Isolate	Inserir fim de isolamento
+	Insert Left-to-Right Mark	Inserir marca da esquerda para a direita
+	Insert Right-to-Left Mark	Inserir marca da direita para a esquerda
+	Insert Arabic Letter Mark	Inserir marca de letra árabe
+	Insert Zero-Width Joiner	Inserir junção de largura zero
+	Insert Zero-Width Non-Joiner	Inserir não junção de largura zero
+	Insert Tatweel	Inserir tatweel
+	Insert Control Character	Inserir caractere de controle

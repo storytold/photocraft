@@ -3517,6 +3517,17 @@ fontWeight	Thin	Πολύ λεπτά
 	Right-to-left	Από δεξιά προς αριστερά
 	Left-to-right	Από αριστερά προς δεξιά
 	Kashida	Κασίντα
-	Western 123	Δυτικά 123
-	Arabic-Indic ١٢٣	Αραβικά-ινδικά ١٢٣
-	Persian ۱۲۳	Περσικά ۱۲۳
+	Western	Δυτικά
+	Arabic-Indic	Αραβικά-ινδικά
+	Persian	Περσικά
+	Keep Selection Left-to-Right	Διατήρηση επιλογής από αριστερά προς δεξιά
+	Keep Selection Right-to-Left	Διατήρηση επιλογής από δεξιά προς αριστερά
+	Keep Selection in Its Own Direction	Διατήρηση επιλογής στη δική της κατεύθυνση
+	Insert End of Isolate	Εισαγωγή τέλους απομόνωσης
+	Insert Left-to-Right Mark	Εισαγωγή σήματος από αριστερά προς δεξιά
+	Insert Right-to-Left Mark	Εισαγωγή σήματος από δεξιά προς αριστερά
+	Insert Arabic Letter Mark	Εισαγωγή αραβικού σήματος γράμματος
+	Insert Zero-Width Joiner	Εισαγωγή συνδέτη μηδενικού πλάτους
+	Insert Zero-Width Non-Joiner	Εισαγωγή μη συνδέτη μηδενικού πλάτους
+	Insert Tatweel	Εισαγωγή Tatweel
+	Insert Control Character	Εισαγωγή χαρακτήρα ελέγχου

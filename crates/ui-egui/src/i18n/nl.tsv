@@ -3588,6 +3588,17 @@ cameraRaw	Whites	Witten
 	Right-to-left	Van rechts naar links
 	Left-to-right	Van links naar rechts
 	Kashida	Kashida
-	Western 123	Westers 123
-	Arabic-Indic ١٢٣	Arabisch-Indisch ١٢٣
-	Persian ۱۲۳	Perzisch ۱۲۳
+	Western	Westers
+	Arabic-Indic	Arabisch-Indisch
+	Persian	Perzisch
+	Keep Selection Left-to-Right	Selectie van links naar rechts houden
+	Keep Selection Right-to-Left	Selectie van rechts naar links houden
+	Keep Selection in Its Own Direction	Selectie in eigen richting houden
+	Insert End of Isolate	Einde van isolatie invoegen
+	Insert Left-to-Right Mark	Links-naar-rechts-teken invoegen
+	Insert Right-to-Left Mark	Rechts-naar-links-teken invoegen
+	Insert Arabic Letter Mark	Arabisch lettersteken invoegen
+	Insert Zero-Width Joiner	Verbinder zonder breedte invoegen
+	Insert Zero-Width Non-Joiner	Niet-verbinder zonder breedte invoegen
+	Insert Tatweel	Tatweel invoegen
+	Insert Control Character	Stuurteken invoegen

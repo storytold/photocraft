@@ -2815,6 +2815,17 @@ fontWeight	Italic	Miring
 	Right-to-left	Kanan ke kiri
 	Left-to-right	Kiri ke kanan
 	Kashida	Kashida
-	Western 123	Barat 123
-	Arabic-Indic ١٢٣	Arab-India ١٢٣
-	Persian ۱۲۳	Persia ۱۲۳
+	Western	Barat
+	Arabic-Indic	Arab-India
+	Persian	Persia
+	Keep Selection Left-to-Right	Pertahankan seleksi kiri ke kanan
+	Keep Selection Right-to-Left	Pertahankan seleksi kanan ke kiri
+	Keep Selection in Its Own Direction	Pertahankan seleksi pada arahnya sendiri
+	Insert End of Isolate	Sisipkan akhir isolasi
+	Insert Left-to-Right Mark	Sisipkan tanda kiri ke kanan
+	Insert Right-to-Left Mark	Sisipkan tanda kanan ke kiri
+	Insert Arabic Letter Mark	Sisipkan tanda huruf Arab
+	Insert Zero-Width Joiner	Sisipkan penyambung lebar nol
+	Insert Zero-Width Non-Joiner	Sisipkan bukan-penyambung lebar nol
+	Insert Tatweel	Sisipkan tatwil
+	Insert Control Character	Sisipkan karakter kontrol

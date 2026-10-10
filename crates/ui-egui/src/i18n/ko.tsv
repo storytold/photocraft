@@ -2988,6 +2988,17 @@ fontWeight	Italic	기울임
 	Left-to-right	왼쪽에서 오른쪽
 	Kashida	카시다
 	Digits	숫자
-	Western 123	서양식 123
-	Arabic-Indic ١٢٣	아랍-인도 숫자 ١٢٣
-	Persian ۱۲۳	페르시아 ۱۲۳
+	Western	서양식
+	Arabic-Indic	아랍-인도 숫자
+	Persian	페르시아
+	Keep Selection Left-to-Right	선택 영역을 왼쪽에서 오른쪽으로 유지
+	Keep Selection Right-to-Left	선택 영역을 오른쪽에서 왼쪽으로 유지
+	Keep Selection in Its Own Direction	선택 영역을 고유 방향으로 유지
+	Insert End of Isolate	격리 끝 삽입
+	Insert Left-to-Right Mark	왼쪽에서 오른쪽 표시 삽입
+	Insert Right-to-Left Mark	오른쪽에서 왼쪽 표시 삽입
+	Insert Arabic Letter Mark	아랍 문자 표시 삽입
+	Insert Zero-Width Joiner	폭 없는 연결자 삽입
+	Insert Zero-Width Non-Joiner	폭 없는 비연결자 삽입
+	Insert Tatweel	타트윌 삽입
+	Insert Control Character	제어 문자 삽입

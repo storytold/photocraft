@@ -2480,6 +2480,17 @@ fontWeight	Italic	Corsivo
 	Left-to-right	Da sinistra a destra
 	Kashida	Kashida
 	Digits	Cifre
-	Western 123	Occidentali 123
-	Arabic-Indic ١٢٣	Indo-arabe ١٢٣
-	Persian ۱۲۳	Persiane ۱۲۳
+	Western	Occidentali
+	Arabic-Indic	Indo-arabe
+	Persian	Persiane
+	Keep Selection Left-to-Right	Mantieni la selezione da sinistra a destra
+	Keep Selection Right-to-Left	Mantieni la selezione da destra a sinistra
+	Keep Selection in Its Own Direction	Mantieni la selezione nella sua direzione
+	Insert End of Isolate	Inserisci fine isolamento
+	Insert Left-to-Right Mark	Inserisci indicatore da sinistra a destra
+	Insert Right-to-Left Mark	Inserisci indicatore da destra a sinistra
+	Insert Arabic Letter Mark	Inserisci indicatore lettera araba
+	Insert Zero-Width Joiner	Inserisci unitore di larghezza zero
+	Insert Zero-Width Non-Joiner	Inserisci non-unitore di larghezza zero
+	Insert Tatweel	Inserisci tatweel
+	Insert Control Character	Inserisci carattere di controllo
