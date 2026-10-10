@@ -314,7 +314,9 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
             let mut v = [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
             if let Some(m) = &map {
                 let g = m.gain(i % w, b * band + i / w, lum(p));
-                v = v.map(|c| m.unblack(c * g));
+                // The black point first, as Camera Raw: lifting before it would flatten the
+                // deepest shadows' contrast.
+                v = v.map(|c| m.unblack(c) * g);
             }
             for k in 0..3 {
                 o[k] = lut.encode(v[k]);
