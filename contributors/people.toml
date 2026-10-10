@@ -74,3 +74,7 @@ sync_github_name = true
 real_name = "Ahmed Moussa"
 display_name = "Ahmed Moussa"
 sync_github_name = false
+
+[people.itrycodinganditsbad]
+real_name = "Fabio Lussi"
+sync_github_name = true
