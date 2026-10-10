@@ -27,6 +27,14 @@
 	Open EXR Parts…	EXR 파트 열기…
 	Add beauty precomp from the AOVs	AOV에서 뷰티 프리컴포지션 추가
 	Both	양쪽
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	상황별 작업 표시줄
+	Drag contextual task bar	상황별 작업 표시줄 드래그
+	Reset position	위치 초기화
+	Hide contextual task bar	상황별 작업 표시줄 숨기기
+	Contextual task bar options	상황별 작업 표시줄 옵션
+	Hide the background with an editable layer mask.	편집 가능한 레이어 마스크로 배경을 숨깁니다.
+
 	Left	왼쪽
 	Right	오른쪽
 	Open Recent	최근 파일 열기

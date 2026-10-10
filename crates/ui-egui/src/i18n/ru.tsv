@@ -40,6 +40,14 @@
 	New from Clipboard	Создать из буфера обмена
 	New	Создать
 	Open…	Открыть…
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	Контекстная панель задач
+	Drag contextual task bar	Перетащить контекстную панель задач
+	Reset position	Сбросить положение
+	Hide contextual task bar	Скрыть контекстную панель задач
+	Contextual task bar options	Параметры контекстной панели задач
+	Hide the background with an editable layer mask.	Скрыть фон с помощью редактируемой маски слоя.
+
 	Open	Открыть
 	Open As…	Открыть как…
 	Open EXR Parts…	Открыть части EXR…

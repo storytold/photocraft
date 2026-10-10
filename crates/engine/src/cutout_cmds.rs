@@ -18,10 +18,13 @@ const CMD: &str = "layer.removeBackground";
 /// edges and hair get partial coverage instead of a hard cut.
 const REFINE: RefineParams = RefineParams { radius: 2.0, smart_radius: true, smooth: 10.0, feather: 0.5, contrast: 10.0, shift_edge: 0.0 };
 
-/// Remove Background needs an unlocked pixel layer.
+/// Remove Background needs an unlocked pixel layer or a rendered Smart Object.
 fn check(doc: &Document, l: &Layer) -> std::result::Result<(), String> {
-    if !matches!(l.content, LayerContent::Raster(_)) {
+    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) {
         return Err(format!("the layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()));
+    }
+    if l.surface().is_none() {
+        return Err("the Smart Object has no rendered image; render it before removing the background".into());
     }
     let locks = doc.effective_locks(l.id);
     if locks.pixels || locks.all {
@@ -84,6 +87,9 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     }]
 }
+
+#[cfg(test)]
+mod smart_tests;
 
 #[cfg(test)]
 mod tests {

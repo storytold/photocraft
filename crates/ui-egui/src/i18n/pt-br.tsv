@@ -35,6 +35,14 @@
 	New…	Novo…
 	Open…	Abrir…
 	Open As…	Abrir como…
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	Barra de tarefas contextual
+	Drag contextual task bar	Arrastar a barra de tarefas contextual
+	Reset position	Redefinir posição
+	Hide contextual task bar	Ocultar barra de tarefas contextual
+	Contextual task bar options	Opções da barra de tarefas contextual
+	Hide the background with an editable layer mask.	Oculte o fundo com uma máscara de camada editável.
+
 	Open EXR Parts…	Abrir partes EXR…
 	Add beauty precomp from the AOVs	Adicionar a pré-composição da beleza a partir dos AOVs
 	Both	Ambas

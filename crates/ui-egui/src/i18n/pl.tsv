@@ -38,6 +38,14 @@
 	Open EXR Parts…	Otwórz części EXR…
 	Add beauty precomp from the AOVs	Dodaj wstępną kompozycję piękna z AOV-ów
 	Both	Obie
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	Kontekstowy pasek zadań
+	Drag contextual task bar	Przeciągnij kontekstowy pasek zadań
+	Reset position	Zresetuj położenie
+	Hide contextual task bar	Ukryj kontekstowy pasek zadań
+	Contextual task bar options	Opcje kontekstowego paska zadań
+	Hide the background with an editable layer mask.	Ukryj tło za pomocą edytowalnej maski warstwy.
+
 	Left	Lewa
 	Right	Prawa
 	Open Recent	Otwórz ostatnie

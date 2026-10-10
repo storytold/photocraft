@@ -39,6 +39,14 @@
 	New…	新增…
 	New from Clipboard	從剪貼簿新增
 	Open…	開啟…
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	情境工作列
+	Drag contextual task bar	拖曳情境工作列
+	Reset position	重設位置
+	Hide contextual task bar	隱藏情境工作列
+	Contextual task bar options	情境工作列選項
+	Hide the background with an editable layer mask.	使用可編輯的圖層遮色片隱藏背景。
+
 	Open As…	開啟為…
 	Open EXR Parts…	開啟 EXR 分段…
 	Add beauty precomp from the AOVs	從 AOV 預合成美麗通道

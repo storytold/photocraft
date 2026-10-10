@@ -34,6 +34,8 @@ fn harness(session: photocraft_engine::Session, ppp: f32, dock_width: f32) -> Ha
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::new(session, crate::Services::default())
     });
+    // This fixture measures the Properties panel's actions, independently of canvas overlays.
+    h.state_mut().ui.contextual_taskbar.visible = false;
     set(&mut h, json!({"dockWidth": dock_width, "dock": {"collapsed": ["color", "navigator", "history", "layers"]}}));
     h
 }

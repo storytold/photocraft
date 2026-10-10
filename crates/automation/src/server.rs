@@ -226,7 +226,9 @@ pub struct MenuParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UiSetParams {
-    /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
+    /// Fields for the control method `ui.set`: contextualTaskbar (an object patching visible:
+    /// bool and position: [x, y] in normalized 0..1 viewport coordinates, or null to reset),
+    /// tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark), brushSection, brushTab,

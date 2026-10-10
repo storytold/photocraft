@@ -31,6 +31,14 @@
 	New…	Baru…
 	Open…	Buka…
 	Open As…	Buka Sebagai…
+# Contextual task bar: original translations of the English UI labels.
+	Contextual Task Bar	Bilah tugas kontekstual
+	Drag contextual task bar	Seret bilah tugas kontekstual
+	Reset position	Atur ulang posisi
+	Hide contextual task bar	Sembunyikan bilah tugas kontekstual
+	Contextual task bar options	Opsi bilah tugas kontekstual
+	Hide the background with an editable layer mask.	Sembunyikan latar belakang dengan mask lapisan yang dapat diedit.
+
 	Open EXR Parts…	Buka bagian EXR…
 	Add beauty precomp from the AOVs	Tambahkan prakomposisi beauty dari AOV
 	Both	Keduanya
