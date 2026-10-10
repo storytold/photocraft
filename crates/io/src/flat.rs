@@ -21,6 +21,9 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     }
     let img = codecs::decode(bytes)?;
     let mut r = image_to_document(name, &img)?;
+    if codecs::detect(bytes) == Some(Format::Tga) && img.layout() == ChannelLayout::Rgba {
+        tga_alpha_to_channel(&mut r.document)?;
+    }
     // OpenEXR and Radiance HDR hold linear, scene-referred values (Rec. 709 primaries unless
     // stated otherwise): tag them linear sRGB so they display and convert correctly.
     let d = &mut r.document;
@@ -28,6 +31,72 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
         d.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
     }
     Ok(r)
+}
+
+/// Photoshop opens a 32-bit Targa as an opaque Background plus an "Alpha 1" channel holding the
+/// fourth byte, even when the header declares no alpha bits, and keeps the stored colours (#2225;
+/// measured on Photoshop 27.11). Layer transparency would hide those colours and lose the channel
+/// on the next save, where only an alpha channel becomes the Targa's alpha.
+fn tga_alpha_to_channel(doc: &mut Document) -> Result<(), IoError> {
+    let canvas = doc.bounds();
+    let depth = doc.depth;
+    let Some(layer) = doc.layers.first_mut() else { return Ok(()) };
+    let LayerContent::Raster(s) = &mut layer.content else { return Ok(()) };
+    let ch = s.format().channels();
+    if !s.format().alpha || ch < 2 {
+        return Ok(());
+    }
+    let mut alpha = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
+    // A band of rows at a time: no full-size float copy of the image.
+    let rows = (BAND_BYTES / (canvas.width().max(1) as usize * ch * 4)).max(1) as i32;
+    let mut y = canvas.y0;
+    while y < canvas.y1 {
+        let r = Rect::new(canvas.x0, y, canvas.x1, y.saturating_add(rows).min(canvas.y1));
+        let mut px = s.read_region(r);
+        let a: Vec<f32> = px.chunks_exact_mut(ch).map(|p| p.last_mut().map_or(1.0, |a| std::mem::replace(a, 1.0))).collect();
+        s.write_region(r, &px);
+        alpha.write_region(r, &a);
+        y = r.y1;
+    }
+    s.prune();
+    alpha.prune();
+    layer.name = "Background".into();
+    layer.locks.transparency = true;
+    layer.locks.position = true;
+    doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", alpha));
+    Ok(())
+}
+
+/// Undoes [`tga_alpha_to_channel`] for a document a Targa just opened as: the "Alpha 1" channel
+/// becomes the layer's transparency again. For image sequences, which treat a frame's alpha as
+/// transparency, as video footage does (Photoshop's Interpret Footage). Anything else is left
+/// alone.
+pub fn tga_alpha_channel_to_transparency(doc: &mut Document) {
+    let canvas = doc.bounds();
+    let ([layer], [channel]) = (&mut doc.layers[..], &doc.channels[..]) else { return };
+    let LayerContent::Raster(s) = &mut layer.content else { return };
+    let ch = s.format().channels();
+    if !s.format().alpha || ch < 2 || channel.spot.is_some() {
+        return;
+    }
+    let rows = (BAND_BYTES / (canvas.width().max(1) as usize * ch * 4)).max(1) as i32;
+    let mut y = canvas.y0;
+    while y < canvas.y1 {
+        let r = Rect::new(canvas.x0, y, canvas.x1, y.saturating_add(rows).min(canvas.y1));
+        let mut px = s.read_region(r);
+        for (p, a) in px.chunks_exact_mut(ch).zip(channel.surface.read_region(r)) {
+            if let Some(last) = p.last_mut() {
+                *last = a;
+            }
+        }
+        s.write_region(r, &px);
+        y = r.y1;
+    }
+    s.prune();
+    layer.name = "Layer 0".into();
+    layer.locks.transparency = false;
+    layer.locks.position = false;
+    doc.channels.clear();
 }
 
 /// Opens one page of a TIFF or BigTIFF file: `None` is the page Photoshop opens (the first
