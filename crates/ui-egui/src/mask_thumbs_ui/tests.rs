@@ -138,6 +138,19 @@ fn footer_trash_still_deletes_the_layer_when_its_content_is_targeted() {
     assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
 }
 
+/// Like Photoshop, ⌥/Alt-clicking the trash deletes the layer without asking.
+#[test]
+fn alt_click_on_the_footer_trash_deletes_without_confirmation() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::ALT);
+    assert!(h.state().ui.dialogs.is_empty(), "no confirmation");
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
 #[test]
 fn a_new_mask_is_targeted_so_the_next_footer_trash_keeps_its_layer() {
     let (s, _, shape) = session();

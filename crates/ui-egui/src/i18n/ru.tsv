@@ -18,17 +18,6 @@
 # the Russian typographic equivalent, with the space the source carries.
 
 # Menus
-
-# Layers-panel trash confirmation
-	Delete layer ‘{name}’?	Удалить слой «{name}»?
-	Delete {count} layers? {names}	Удалить слои ({count})? {names}
-	Delete layer?	Удалить слой?
-	The document is closed	Документ закрыт
-	The document or selected layers changed. Please request deletion again.	Документ или выбранные слои изменились. Повторите запрос на удаление.
-	Missing delete command	Отсутствует команда удаления
-	Invalid delete command	Недопустимая команда удаления
-	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
-
 	File	Файл
 	Edit	Редактирование
 	Image	Изображение
@@ -2655,3 +2644,13 @@ fontWeight	Italic	Курсив
 	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
 	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник
 	No subject found — try a rectangle around the object	Объект не найден — попробуйте прямоугольник вокруг объекта
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Удалить слой «{name}»?
+	Delete {count} layers? {names}	Удалить слои ({count})? {names}
+	Delete layer?	Удалить слой?
+	The document is closed	Документ закрыт
+	The document or selected layers changed. Please request deletion again.	Документ или выбранные слои изменились. Повторите запрос на удаление.
+	Missing delete command	Отсутствует команда удаления
+	Invalid delete command	Недопустимая команда удаления
+	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
