@@ -528,7 +528,7 @@ fn parse_guides(data: &[u8], doc: &mut Document) {
     for i in 0..count as usize {
         let at = 16 + i * 5;
         let (Some(loc), Some(&dir)) = (rd(at), data.get(at + 4)) else { break };
-        let pos = loc as i32 as f32 / 32.0;
+        let pos = f64::from(loc as i32) / 32.0;
         if dir == 1 {
             doc.guides.horizontal.push(pos);
         } else {

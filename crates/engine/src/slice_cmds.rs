@@ -283,8 +283,8 @@ fn from_guides(s: &mut Session) -> Result<Value> {
     let b = d.doc.bounds();
     let mut xs: Vec<i32> = vec![b.x0, b.x1];
     let mut ys: Vec<i32> = vec![b.y0, b.y1];
-    xs.extend(d.doc.guides.vertical.iter().map(|g| (*g as f64).round() as i32).filter(|x| *x > b.x0 && *x < b.x1));
-    ys.extend(d.doc.guides.horizontal.iter().map(|g| (*g as f64).round() as i32).filter(|y| *y > b.y0 && *y < b.y1));
+    xs.extend(d.doc.guides.vertical.iter().map(|g| g.round() as i32).filter(|x| *x > b.x0 && *x < b.x1));
+    ys.extend(d.doc.guides.horizontal.iter().map(|g| g.round() as i32).filter(|y| *y > b.y0 && *y < b.y1));
     if xs.len() == 2 && ys.len() == 2 {
         return Err(EngineError::Other("the document has no guides inside the canvas".into()));
     }

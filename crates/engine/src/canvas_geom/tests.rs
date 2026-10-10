@@ -146,7 +146,7 @@ fn turns_map_guides_paths_slices_and_live_shapes() {
     // A vertical guide at x=10 becomes a horizontal one at y=10; a horizontal one at y=5 becomes
     // a vertical one at x = H − 5.
     assert_eq!(d.guides.horizontal, vec![10.0]);
-    assert_eq!(d.guides.vertical, vec![(H - 5) as f32]);
+    assert_eq!(d.guides.vertical, vec![f64::from(H - 5)]);
     // Slice [1,2 10×6] → x' = H − y: [H−8, 1, 6×10].
     let sl = &d.slices.list[0];
     assert_eq!(sl.rect, Rect::new(H as i32 - 8, 1, H as i32 - 2, 11));

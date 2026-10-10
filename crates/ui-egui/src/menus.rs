@@ -460,7 +460,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 _ => &mut e.lock_guides,
             };
             *slot = !*slot;
-            Ok(json!(*slot))
+            let on = *slot;
+            if id == "view.rulers" {
+                crate::prefs_ui::remember_rulers(app, on);
+            }
+            Ok(json!(on))
         }
         "edit.freeTransform"
         | "edit.transform.scale"

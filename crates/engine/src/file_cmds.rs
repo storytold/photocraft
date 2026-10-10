@@ -1126,8 +1126,7 @@ fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- guides ----------
 
-fn push_unique(v: &mut Vec<f32>, x: f64) {
-    let x = x as f32;
+fn push_unique(v: &mut Vec<f64>, x: f64) {
     if !v.iter().any(|g| (g - x).abs() < 0.01) {
         v.push(x);
     }
@@ -1135,7 +1134,7 @@ fn push_unique(v: &mut Vec<f32>, x: f64) {
 
 /// Guide positions for `count` columns (or rows) across `[start, end]`, Photoshop-style: both
 /// edges of every column; a fixed `width` packs columns from `start` (or centres them).
-fn layout_lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, out: &mut Vec<f32>) {
+fn layout_lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, out: &mut Vec<f64>) {
     let avail = (end - start).max(0.0);
     if count == 0 {
         return;
@@ -1173,8 +1172,8 @@ fn new_guide_layout(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let (cols, rows) = (cols as u32, rows as u32);
-    let mut v: Vec<f32> = Vec::new();
-    let mut h: Vec<f32> = Vec::new();
+    let mut v: Vec<f64> = Vec::new();
+    let mut h: Vec<f64> = Vec::new();
     let has_margin = m.iter().any(|x| *x != 0.0);
     if has_margin {
         push_unique(&mut v, left);
@@ -1196,10 +1195,10 @@ fn new_guide_layout(s: &mut Session, p: &Value) -> Result<Value> {
             doc.guides.horizontal.clear();
         }
         for x in v {
-            push_unique(&mut doc.guides.vertical, x as f64);
+            push_unique(&mut doc.guides.vertical, x);
         }
         for y in h {
-            push_unique(&mut doc.guides.horizontal, y as f64);
+            push_unique(&mut doc.guides.horizontal, y);
         }
         Ok(())
     })?;
@@ -1229,9 +1228,9 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
     // Guides inside an artboard belong to it (View › Clear Selected Artboard Guides); the rest
     // are canvas guides. Without artboards every guide is a canvas guide.
     let boards: Vec<Rect> = d.doc.artboards().iter().map(|b| b.2.rect).collect();
-    let in_x = move |x: f32| boards.iter().any(|r| f64::from(x) > f64::from(r.x0) && f64::from(x) < f64::from(r.x1));
+    let in_x = move |x: f64| boards.iter().any(|r| x > f64::from(r.x0) && x < f64::from(r.x1));
     let boards_y: Vec<Rect> = d.doc.artboards().iter().map(|b| b.2.rect).collect();
-    let in_y = move |y: f32| boards_y.iter().any(|r| f64::from(y) > f64::from(r.y0) && f64::from(y) < f64::from(r.y1));
+    let in_y = move |y: f64| boards_y.iter().any(|r| y > f64::from(r.y0) && y < f64::from(r.y1));
     let n = d.doc.guides.vertical.iter().filter(|x| !in_x(**x)).count() + d.doc.guides.horizontal.iter().filter(|y| !in_y(**y)).count();
     if n == 0 {
         return Ok(json!({"cleared": 0}));

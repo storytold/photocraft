@@ -105,8 +105,8 @@ pub fn write_artboard(a: &Artboard, guides: &[i32]) -> Vec<u8> {
 /// Indices of the document guides (vertical first, then horizontal, as in resource 1032) that
 /// lie inside `r`.
 pub fn guides_in(guides: &Guides, r: Rect) -> Vec<i32> {
-    let v = guides.vertical.iter().map(|x| (*x as f64) > f64::from(r.x0) && (*x as f64) < f64::from(r.x1));
-    let h = guides.horizontal.iter().map(|y| (*y as f64) > f64::from(r.y0) && (*y as f64) < f64::from(r.y1));
+    let v = guides.vertical.iter().map(|x| *x > f64::from(r.x0) && *x < f64::from(r.x1));
+    let h = guides.horizontal.iter().map(|y| *y > f64::from(r.y0) && *y < f64::from(r.y1));
     v.chain(h).enumerate().filter(|(_, inside)| *inside).map(|(i, _)| i as i32).collect()
 }
 

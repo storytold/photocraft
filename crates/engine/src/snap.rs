@@ -107,10 +107,10 @@ impl SnapTargets {
         }
         if opts.guides {
             for g in &doc.guides.vertical {
-                t.x.push(Target { pos: *g as f64, kind: SnapKind::Guide, span: (0.0, h) });
+                t.x.push(Target { pos: *g, kind: SnapKind::Guide, span: (0.0, h) });
             }
             for g in &doc.guides.horizontal {
-                t.y.push(Target { pos: *g as f64, kind: SnapKind::Guide, span: (0.0, w) });
+                t.y.push(Target { pos: *g, kind: SnapKind::Guide, span: (0.0, w) });
             }
         }
         if opts.grid && opts.grid_step.iter().all(|step| step.is_finite() && *step > 0.0) {

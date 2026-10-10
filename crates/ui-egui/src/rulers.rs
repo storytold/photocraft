@@ -163,7 +163,7 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {
                     continue;
                 }
-                line(vertical, *p as f64, guide);
+                line(vertical, *p, guide);
             }
         }
     }
@@ -182,12 +182,12 @@ pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
     let doc = &app.session.active()?.doc;
     let tol = 4.0 / app.point_zoom().max(0.01) as f64;
     for (i, g) in doc.guides.vertical.iter().enumerate() {
-        if (*g as f64 - x).abs() <= tol {
+        if (*g - x).abs() <= tol {
             return Some((true, i));
         }
     }
     for (i, g) in doc.guides.horizontal.iter().enumerate() {
-        if (*g as f64 - y).abs() <= tol {
+        if (*g - y).abs() <= tol {
             return Some((false, i));
         }
     }
@@ -411,6 +411,37 @@ mod tests {
         // The context menu applies its pick exactly as the preference pane does.
         app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "cm"})).unwrap();
         assert_eq!(app.session.prefs().units_and_rulers.rulers, Unit::Centimeters);
+    }
+
+    /// View › Rulers is remembered: the next launch, and every document created or opened in it,
+    /// shows the rulers as last set, on or off (#2918).
+    #[test]
+    fn rulers_open_as_last_set_after_a_restart() {
+        use std::{cell::RefCell, rc::Rc};
+        let saved = Rc::new(RefCell::new(None::<String>));
+        let launch = |saved: &Rc<RefCell<Option<String>>>| {
+            let (load, store) = (saved.clone(), saved.clone());
+            PhotocraftApp::new(
+                photocraft_engine::Session::new(),
+                crate::Services {
+                    load_prefs: Some(Box::new(move || load.borrow().clone())),
+                    save_prefs: Some(Box::new(move |text| {
+                        *store.borrow_mut() = Some(text.to_string());
+                        Ok(())
+                    })),
+                    ..Default::default()
+                },
+            )
+        };
+        for on in [true, false] {
+            let mut app = launch(&saved);
+            assert_eq!(crate::menus::invoke(&mut app, &egui::Context::default(), "view.rulers", json!({})).unwrap(), json!(on));
+            crate::prefs_ui::save_preferences(&mut app).unwrap();
+            let mut next = launch(&saved);
+            next.session.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+            next.sync_views();
+            assert_eq!(next.ui.extras.rulers, on, "a new document after a restart shows the rulers as last set");
+        }
     }
 
     #[test]
