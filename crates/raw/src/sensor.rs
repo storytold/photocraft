@@ -225,6 +225,9 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         let s = &segments[i];
         let rows = s.h.min(height - s.y);
         let src = t.bytes(s.offset, s.len).ok_or_else(|| RawError::malformed("raw data lies outside the file"))?;
+        // Tile sizes come from their own tags (up to 65536 square, whatever the image size), so
+        // each segment's decode buffer is checked against the per-buffer limit on its own.
+        limits.check(s.w as u64, s.h as u64, samples as u64 * 2)?;
         match compression {
             1 => unpack(src, s.w, rows, samples, bits, le),
             8 => {
@@ -282,7 +285,10 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             }
             _ => {
                 let need = s.w * rows * samples;
-                let max = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4);
+                // The frame may be up to 4x the tile (padding), but never more 16-bit samples
+                // than one buffer may hold.
+                let budget = usize::try_from(limits.max_alloc / 2).unwrap_or(usize::MAX);
+                let max = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4).min(budget);
                 let (f, v) = ljpeg::decode(src, max)?;
                 if v.len() < need {
                     return Err(RawError::malformed("lossless JPEG tile is smaller than its tile"));
@@ -434,5 +440,20 @@ mod tests {
         // 12-bit data in 16-bit containers.
         assert_eq!(unpack(&[0xBC, 0x0A, 0x23, 0x01], 2, 1, 1, 12, true).unwrap(), vec![0xABC, 0x123]);
         assert!(unpack(&[0xAB], 2, 1, 1, 12, true).is_err());
+    }
+
+    /// #2897: a tiny image whose lossless-JPEG tile is far larger than the image passed the
+    /// image-plane check while the tile intermediate ignored `max_alloc`.
+    #[test]
+    fn lossless_jpeg_tile_respects_alloc_limit() {
+        use crate::testgen::{DngSpec, DngStorage};
+        let mut spec = DngSpec::cfa(8, 8, vec![1000; 64]);
+        spec.storage = DngStorage::Lj92Tiles { width: 256, height: 256 };
+        let file = spec.build();
+        // The 8x8 image fits in 4 KiB everywhere; the 256x256 tile needs 128 KiB.
+        let tight = Limits { max_alloc: 4096, ..Limits::default() };
+        assert!(matches!(crate::decode(&file, &tight), Err(RawError::LimitExceeded(_))));
+        let sensor = crate::decode(&file, &Limits::default()).unwrap();
+        assert_eq!((sensor.width, sensor.height), (8, 8));
     }
 }
