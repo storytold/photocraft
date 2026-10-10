@@ -1931,8 +1931,8 @@
 	Fade steps	Langkah pudar
 	Hide the layer's effects  ({key}-click: all layers)	Sembunyikan efek layer  ({key}-klik: semua layer)
 	Import Brushes… (.abr)	Impor Kuas… (.abr)
-	Move Group Down	Pindah Grup ke Bawah
-	Move Group Up	Pindah Grup ke Atas
+	Move Panel Group Down	Pindah Grup Panel ke Bawah
+	Move Panel Group Up	Pindah Grup Panel ke Atas
 	Reset the brush to the defaults	Reset kuas ke default
 	Restore original size	Pulihkan ukuran asli
 	Roundness:	Kebulatan:
@@ -2819,6 +2819,13 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+	Collapse to Icons	Ciutkan menjadi ikon
+	Add Panel	Tambah panel
+	Search panels	Cari panel
+	No panels match	Tidak ada panel yang cocok
+	Expand Panels	Bentangkan panel
+	Close Tab	Tutup tab
+	Add Tab	Tambah tab
 	Use Classic Mode	Gunakan Mode Klasik
 	Auto Center Preview	Pusatkan Pratinjau Otomatis
 	Next Document	Dokumen Berikutnya

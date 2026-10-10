@@ -77,7 +77,7 @@ fn gradient_and_adjustment_thumbnails_keep_their_properties_controls() {
         h.run_steps(4);
         let r = row(&h, id).row;
         double_click(&mut h, pos2(r.left() + 46.0, r.center().y));
-        assert!(h.state().ui.panels.properties);
+        assert!(h.state().ui.dock.is_front("properties"));
         assert!(!h.state().ui.dialogs.iter().any(|d| owns(&d.fields)));
     }
 }

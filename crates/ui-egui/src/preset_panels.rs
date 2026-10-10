@@ -48,22 +48,13 @@ impl PresetUi {
     }
 }
 
-const PANELS: [&str; 6] =
-    ["window.panel.gradients", "window.panel.patterns", "window.panel.styles", "window.panel.shapes", "window.panel.toolPresets", "window.panel.cloneSource"];
+/// Floating preset panels. Gradients and Patterns are dock modules (`modules/`).
+const PANELS: [&str; 4] = ["window.panel.styles", "window.panel.shapes", "window.panel.toolPresets", "window.panel.cloneSource"];
 const MIN_THUMB: f32 = 20.0;
 
 /// Window-menu ids handled here.
 pub fn handles(id: &str) -> bool {
     PANELS.contains(&id)
-}
-
-/// Color card tab of a Window › Gradients / Patterns id.
-fn color_tab(id: &str) -> Option<usize> {
-    match id {
-        "window.panel.gradients" => Some(2),
-        "window.panel.patterns" => Some(3),
-        _ => None,
-    }
 }
 
 fn float_flag<'a>(p: &'a mut PresetUi, id: &str) -> Option<&'a mut bool> {
@@ -76,32 +67,18 @@ fn float_flag<'a>(p: &'a mut PresetUi, id: &str) -> Option<&'a mut bool> {
     })
 }
 
-/// Window › <panel>: toggles the panel (Gradients and Patterns: the Color card tab).
+/// Window › <panel>: toggles a floating preset panel.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if !handles(id) {
         return None;
     }
     let want = params.get("show").and_then(Value::as_bool);
-    if let Some(tab) = color_tab(id) {
-        // A collapsed Color group counts as not showing: the item expands it (#129).
-        let showing = app.ui.panels.color && app.ui.dock_tabs.color == tab && !app.ui.dock.is_collapsed(crate::dock::Group::Color);
-        let show = want.unwrap_or(!showing);
-        app.ui.panels.color = show || (app.ui.panels.color && app.ui.dock_tabs.color != tab);
-        if show {
-            app.ui.dock_tabs.color = tab;
-            crate::dock::reveal(app, crate::dock::Group::Color);
-        }
-        return Some(Ok(json!({"visible": show})));
-    }
     let flag = float_flag(&mut app.ui.presets_ui, id)?;
     *flag = want.unwrap_or(!*flag);
     Some(Ok(json!({"visible": *flag})))
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    if let Some(tab) = color_tab(id) {
-        return Some(app.ui.panels.color && app.ui.dock_tabs.color == tab);
-    }
     let mut p = app.ui.presets_ui.clone();
     float_flag(&mut p, id).map(|f| *f)
 }
@@ -1119,14 +1096,14 @@ mod tests {
             assert!(crate::menus::is_live(id), "{id}");
         }
         invoke(&mut app, &ctx, "window.panel.gradients", Value::Null).unwrap();
-        assert!(app.ui.panels.color && app.ui.dock_tabs.color == 2);
-        assert_eq!(checked(&app, "window.panel.gradients"), Some(true));
-        assert_eq!(checked(&app, "window.panel.patterns"), Some(false));
+        assert!(app.ui.dock.is_front("gradients"));
+        assert_eq!(crate::view_cmds::checked(&app, "window.panel.gradients"), Some(true));
+        assert_eq!(crate::view_cmds::checked(&app, "window.panel.patterns"), Some(false));
         invoke(&mut app, &ctx, "window.panel.patterns", Value::Null).unwrap();
-        assert_eq!(app.ui.dock_tabs.color, 3);
-        // Choosing it again hides the card.
+        assert!(app.ui.dock.is_front("patterns"));
+        // Choosing it again closes its group, like Photoshop; the others stay.
         invoke(&mut app, &ctx, "window.panel.patterns", Value::Null).unwrap();
-        assert!(!app.ui.panels.color);
+        assert!(!app.ui.dock.visible("patterns") && !app.ui.dock.visible("gradients") && app.ui.dock.visible("layers"));
         for (id, f) in [("window.panel.styles", 0), ("window.panel.shapes", 1), ("window.panel.toolPresets", 2), ("window.panel.cloneSource", 3)] {
             invoke(&mut app, &ctx, id, Value::Null).unwrap();
             let p = &app.ui.presets_ui;

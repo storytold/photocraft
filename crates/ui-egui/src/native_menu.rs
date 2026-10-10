@@ -1017,7 +1017,7 @@ mod tests {
         let mut app = app(true);
         let ctx = egui::Context::default();
         app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("window.panel.layers".into())] })));
-        let before = app.ui.panels.layers;
+        let before = app.ui.dock.is_front("layers");
         let mut raw = egui::RawInput::default();
         if let Some(m) = app.services.native_menu.as_mut() {
             m.raw_input(&mut raw);
@@ -1026,7 +1026,7 @@ mod tests {
             run(&mut app, ui.ctx());
             sync(&mut app, ui.ctx());
         });
-        assert_eq!(app.ui.panels.layers, !before);
+        assert_eq!(app.ui.dock.is_front("layers"), !before);
         let bar = synced.borrow().last().cloned().unwrap();
         assert_eq!(bar.find("window.panel.layers").unwrap().checked, Some(!before));
     }

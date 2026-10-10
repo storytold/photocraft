@@ -257,7 +257,8 @@ fn the_pattern_is_picked_from_its_swatches() {
     let sky = ids[h.state().session.patterns.items.iter().position(|p| p.name == "Sky").unwrap()].clone();
     assert_ne!(pattern(&h), json!(sky), "starts on another pattern");
     assert!(h.query_by_label("Sky").is_none(), "the grid opens on a click");
-    h.get_by_label("Patterns").click();
+    // The dialog's button, not the dock's Patterns panel on Photoshop's icon rail to its right.
+    h.get_all_by_label("Patterns").min_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap().click();
     h.run_steps(3);
     h.get_by_label("Sky").click();
     h.run_steps(3);

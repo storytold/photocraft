@@ -1963,8 +1963,8 @@
 	Fade steps	Kroki zanikania
 	Hide the layer's effects  ({key}-click: all layers)	Ukryj efekty warstwy  (kliknięcie z {key}: wszystkie warstwy)
 	Import Brushes… (.abr)	Importuj pędzle… (.abr)
-	Move Group Down	Przesuń grupę w dół
-	Move Group Up	Przesuń grupę w górę
+	Move Panel Group Down	Przesuń grupę paneli w dół
+	Move Panel Group Up	Przesuń grupę paneli w górę
 	Reset the brush to the defaults	Przywróć domyślne ustawienia pędzla
 	Restore original size	Przywróć oryginalny rozmiar
 	Roundness:	Zaokrąglenie:
@@ -3433,6 +3433,13 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Collapse to Icons	Zwiń do ikon
+	Add Panel	Dodaj panel
+	Search panels	Szukaj paneli
+	No panels match	Brak pasujących paneli
+	Expand Panels	Rozwiń panele
+	Close Tab	Zamknij kartę
+	Add Tab	Dodaj kartę
 	Use Classic Mode	Użyj trybu klasycznego
 	Auto Center Preview	Automatycznie wyśrodkuj podgląd
 	Next Document	Następny dokument

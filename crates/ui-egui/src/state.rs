@@ -317,20 +317,12 @@ impl Tool {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Panels {
-    pub layers: bool,
-    pub history: bool,
-    pub properties: bool,
-    pub color: bool,
-    pub navigator: bool,
     pub toolbar: bool,
     pub options_bar: bool,
     pub status_bar: bool,
     /// Window › Brush Settings (F5): floating, like Photoshop's.
     #[serde(default)]
     pub brush_settings: bool,
-    /// Window › Character / Paragraph: the Character | Paragraph dock group (#150).
-    #[serde(default)]
-    pub character: bool,
     /// The toolbar's header chevron: two columns even when one fits (#1197).
     #[serde(default)]
     pub toolbar_double: bool,
@@ -357,16 +349,10 @@ pub struct Panels {
 impl Default for Panels {
     fn default() -> Self {
         Self {
-            layers: true,
-            history: false,
-            properties: true,
-            color: true,
-            navigator: false,
             toolbar: true,
             options_bar: true,
             status_bar: true,
             brush_settings: false,
-            character: false,
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
@@ -837,21 +823,6 @@ impl Default for Extras {
     }
 }
 
-/// Selected tab per dock card.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DockTabs {
-    pub properties: usize,
-    pub color: usize,
-    pub layers: usize,
-    /// Navigator | Histogram | Info.
-    pub navigator: usize,
-    /// History | Actions.
-    pub history: usize,
-    /// Character | Paragraph.
-    pub character: usize,
-}
-
 /// Color panel state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -975,8 +946,7 @@ pub struct UiState {
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
     pub palette_open: bool,
-    pub dock_tabs: DockTabs,
-    /// Right-dock group order, heights and collapsed groups (see `dock`).
+    /// Right-dock sections and their modules, heights and collapsed state (see `dock`).
     #[serde(default)]
     pub dock: crate::dock::DockLayout,
     /// Which chip the Color panel edits.
@@ -1084,7 +1054,6 @@ impl Default for UiState {
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
             palette_open: false,
-            dock_tabs: DockTabs::default(),
             dock: Default::default(),
             color_panel: Default::default(),
             brush_section: 0,

@@ -1937,8 +1937,8 @@
 	Fade steps	Étapes d'estompage
 	Hide the layer's effects  ({key}-click: all layers)	Masquer les effets du calque  ({key}-clic : tous les calques)
 	Import Brushes… (.abr)	Importer des pinceaux… (.abr)
-	Move Group Down	Descendre le groupe
-	Move Group Up	Monter le groupe
+	Move Panel Group Down	Descendre le groupe de panneaux
+	Move Panel Group Up	Monter le groupe de panneaux
 	Reset the brush to the defaults	Réinitialiser le pinceau aux valeurs par défaut
 	Restore original size	Rétablir la taille d'origine
 	Roundness:	Arrondi :
@@ -2832,6 +2832,13 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+	Collapse to Icons	Réduire en icônes
+	Add Panel	Ajouter un panneau
+	Search panels	Rechercher des panneaux
+	No panels match	Aucun panneau ne correspond
+	Expand Panels	Développer les panneaux
+	Close Tab	Fermer l'onglet
+	Add Tab	Ajouter un onglet
 	Use Classic Mode	Utiliser le mode classique
 	Auto Center Preview	Centrer automatiquement l'aperçu
 	Next Document	Document suivant

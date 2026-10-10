@@ -1968,8 +1968,8 @@
 	Fade steps	淡出步數
 	Hide the layer's effects  ({key}-click: all layers)	隱藏圖層效果 ({key}+按一下：所有圖層)
 	Import Brushes… (.abr)	匯入筆刷… (.abr)
-	Move Group Down	下移群組
-	Move Group Up	上移群組
+	Move Panel Group Down	下移面板群組
+	Move Panel Group Up	上移面板群組
 	Reset the brush to the defaults	將筆刷重設為預設值
 	Restore original size	還原原始大小
 	Roundness:	圓度：
@@ -2390,6 +2390,13 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Collapse to Icons	收合為圖示
+	Add Panel	新增面板
+	Search panels	搜尋面板
+	No panels match	沒有符合的面板
+	Expand Panels	展開面板
+	Close Tab	關閉標籤
+	Add Tab	新增分頁
 	Use Classic Mode	使用傳統模式
 	Auto Center Preview	自動置中預視
 	Next Document	下一個文件

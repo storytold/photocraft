@@ -100,6 +100,7 @@ pub mod mask_thumbs_ui;
 pub mod menu_catalog;
 pub mod menu_nav;
 pub mod menus;
+pub mod modules;
 pub mod monitor_status;
 pub mod move_lock;
 pub mod move_mods;
@@ -1415,7 +1416,6 @@ impl eframe::App for PhotocraftApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
             canvas::document_area(self, ui);
         });
-        panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);
@@ -1563,7 +1563,12 @@ impl PhotocraftApp {
     }
 
     pub(crate) fn apply_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
+        let was_pro = dock::is_pro(self);
         self.ui.theme = kind;
+        let pro = dock::is_pro(self);
+        if pro != was_pro {
+            self.ui.dock.follow_theme(pro);
+        }
         theme::apply(ctx, kind);
         self.checker = None;
     }

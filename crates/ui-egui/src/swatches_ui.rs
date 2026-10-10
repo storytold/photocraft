@@ -166,7 +166,7 @@ pub fn import_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8], replace: 
         Some(w) => format!("Imported {n} swatches from {shown} ({} notes: {w})", warnings.len()),
         None => format!("Imported {n} swatches from {shown}"),
     };
-    app.ui.panels.color = true;
+    crate::dock::reveal(app, "swatches");
     Ok(r)
 }
 

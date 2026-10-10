@@ -396,12 +396,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
                     return Err("cropShield.opacity must be 0..100".into());
                 }
-                let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
+                // `panels.<group>` flags (Layers, History…) show or hide a dock group; the rest are shell panels.
+                let shell_panels = p.get("panels").map(|v| match v.as_object() {
+                    Some(o) => {
+                        Value::Object(o.iter().filter(|(k, _)| !crate::dock::GROUPS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect())
+                    }
+                    None => v.clone(),
+                });
+                let panels = merged_object(&app.ui.panels, shell_panels.as_ref(), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
                 let selection_mode = uint_field(p, "selectionMode")?;
-                let dock_tabs = merged_object(&app.ui.dock_tabs, p.get("dockTabs"), "dockTabs")?;
-                let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
+                // Dock layout: `dock` (panes, or a pre-module layout), group flags in `panels`, `dockTabs`.
+                let dock = crate::dock::layout_from_control(app, p.get("panels"), p.get("dockTabs"), p.get("dock"))?;
                 // Which chip the Color panel edits.
                 let color_panel = whole_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
                 let dock_width = num_field(p, "dockWidth")?;
@@ -551,12 +558,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(m) = selection_mode {
                     app.ui.selection_mode = m.min(3) as u8;
                 }
-                if let Some(v) = dock_tabs {
-                    app.ui.dock_tabs = v;
-                }
-                // Dock group order, heights and collapsed groups (see `dock::DockLayout`).
-                if let Some(v) = dock {
-                    app.ui.dock = v;
+                // Dock panes, tabs, heights and collapsed panes (see `dock::DockLayout`).
+                if let Some(d) = dock {
+                    app.ui.dock = d;
                 }
                 if let Some(v) = color_panel {
                     app.ui.color_panel = v;

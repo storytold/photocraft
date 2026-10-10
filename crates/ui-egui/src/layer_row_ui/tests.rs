@@ -207,7 +207,7 @@ fn groups_open(s: &photocraft_engine::Session) -> Vec<bool> {
 fn collapse_all_groups_from_the_panel_menu_and_it_is_saved() {
     let mut h = harness(busy(), 1.0, "promedium", 290.0);
     assert!(groups_open(&h.state().session).iter().all(|o| *o));
-    let menu = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("layers group").1;
+    let menu = crate::dock::module_rect(h.state(), &h.ctx, "layers").expect("layers group");
     // The hamburger sits at the right end of the group's tab strip.
     click(&mut h, pos2(menu.right() - 14.0, menu.top() + 14.0));
     let item = h.get_by_label("Collapse All Groups").rect().center();
@@ -439,7 +439,7 @@ fn the_footer_is_a_bar_along_the_panel_bottom_with_its_buttons_centred() {
         s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         let h = harness(s, 1.0, theme, 290.0);
-        let group = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).unwrap().1;
+        let group = crate::dock::module_rect(h.state(), &h.ctx, "layers").unwrap();
         let delete = h.get_by_label("Delete layer").rect();
         let bar_middle = group.bottom() - crate::widgets::FOOTER_BAR / 2.0;
         assert!((delete.center().y - bar_middle).abs() <= 1.5, "{theme}: button at {delete:?}, bar middle {bar_middle}, group {group:?}");

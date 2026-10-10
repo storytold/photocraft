@@ -246,14 +246,22 @@ fn layers_opacity_and_fill_share_one_right_column() {
         set(&mut h, json!({"theme": theme}));
         select(&mut h, layers[0].1);
         // The popup-slider arrow is named after the field; its label is the text left of it on its row.
+        // Only the Layers panel's (Properties shows Opacity too).
+        let panel = crate::dock::module_rect(h.state(), &h.ctx, "layers").unwrap();
         let row = |name: &str| {
-            let arrow = h.query_all_by_label(name).find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button).unwrap().rect();
+            let arrow = h
+                .query_all_by_label(name)
+                .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button && panel.contains(n.rect().center()))
+                .unwrap()
+                .rect();
             let text = if theme == "pro" { format!("{name}:") } else { name.to_string() };
             let label = h
                 .query_all_by_label(&text)
                 .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
                 .map(|n| n.rect())
-                .find(|r| (r.center().y - arrow.center().y).abs() < 12.0 && r.right() <= arrow.left())
+                .filter(|r| (r.center().y - arrow.center().y).abs() < 12.0 && r.right() <= arrow.left())
+                // The nearest (scrolled-away Properties rows keep their rects too).
+                .max_by(|a, b| a.right().total_cmp(&b.right()))
                 .unwrap();
             (label, arrow)
         };

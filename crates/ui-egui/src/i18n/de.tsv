@@ -1958,8 +1958,8 @@
 	Fade steps	Verblassen-Schritte
 	Hide the layer's effects  ({key}-click: all layers)	Effekte der Ebene ausblenden  ({key}-Klick: alle Ebenen)
 	Import Brushes… (.abr)	Pinsel importieren… (.abr)
-	Move Group Down	Gruppe nach unten
-	Move Group Up	Gruppe nach oben
+	Move Panel Group Down	Bedienfeldgruppe nach unten
+	Move Panel Group Up	Bedienfeldgruppe nach oben
 	Reset the brush to the defaults	Pinsel auf Standardwerte zurücksetzen
 	Restore original size	Originalgröße wiederherstellen
 	Roundness:	Rundung:
@@ -2452,6 +2452,13 @@ fontWeight	Italic	Kursiv
 	Quick Selection found nothing there	Die Schnellauswahl hat dort nichts gefunden
 	Object Selection found nothing there — try a tighter rectangle	Die Objektauswahl hat dort nichts gefunden — versuchen Sie ein engeres Rechteck
 	No subject found — try a rectangle around the object	Kein Motiv gefunden — versuchen Sie ein Rechteck um das Objekt
+	Collapse to Icons	Auf Symbole minimieren
+	Add Panel	Bedienfeld hinzufügen
+	Search panels	Bedienfelder suchen
+	No panels match	Keine passenden Bedienfelder
+	Expand Panels	Bedienfelder erweitern
+	Close Tab	Registerkarte schließen
+	Add Tab	Registerkarte hinzufügen
 	Use Classic Mode	Classic-Modus verwenden
 	Auto Center Preview	Automatische zentrierte Vorschau
 	Next Document	Nächstes Dokument

@@ -1968,8 +1968,8 @@
 	Fade steps	Pasos de desvanecimiento
 	Hide the layer's effects  ({key}-click: all layers)	Ocultar los efectos de la capa  ({key}-clic: todas las capas)
 	Import Brushes… (.abr)	Importar pinceles… (.abr)
-	Move Group Down	Mover grupo abajo
-	Move Group Up	Mover grupo arriba
+	Move Panel Group Down	Mover grupo de paneles abajo
+	Move Panel Group Up	Mover grupo de paneles arriba
 	Reset the brush to the defaults	Restablecer el pincel a los valores predeterminados
 	Restore original size	Restaurar el tamaño original
 	Roundness:	Redondez:
@@ -2481,6 +2481,13 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+	Collapse to Icons	Contraer a iconos
+	Add Panel	Añadir panel
+	Search panels	Buscar paneles
+	No panels match	Ningún panel coincide
+	Expand Panels	Expandir paneles
+	Close Tab	Cerrar pestaña
+	Add Tab	Añadir pestaña
 
 # Add Noise, Reduce Noise and Smart Sharpen dialog controls (Filter > Noise, Filter > Sharpen).
 	Distribution	Distribución

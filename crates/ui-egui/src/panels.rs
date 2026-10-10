@@ -1420,42 +1420,61 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let p = app.ui.panels.clone();
+    let rail = app.ui.panels.rail;
     if t.pro {
-        dock_panels(app, ui, &p, &t);
-    }
-    // Narrow icon rail, unless an embedding app hides it: shows, expands or collapses panel groups.
-    if p.rail {
-        let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
-        egui::Panel::right("rail").resizable(false).exact_size(rw).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8))).show(
-            ui,
-            |ui| {
-                let r = ui.max_rect();
-                ui.painter().line_segment([r.left_top() - vec2(6.0, 8.0), r.left_bottom() + vec2(-6.0, 8.0)], Stroke::new(1.0, t.separator));
-                ui.spacing_mut().item_spacing.y = 4.0;
-                use crate::dock::Group;
-                let entries: [(&str, &str, Group); 5] = [
-                    ("sliders-horizontal", tl!("Properties"), Group::Properties),
-                    ("navigation", tl!("Navigator"), Group::Navigator),
-                    ("palette", tl!("Color & Swatches"), Group::Color),
-                    ("layers", tl!("Layers"), Group::Layers),
-                    ("clock", tl!("History"), Group::History),
-                ];
-                for (icon, name, g) in entries {
-                    // Studio floats Properties outside the dock.
-                    let docked = t.pro || g != Group::Properties;
-                    let on = g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g));
-                    if icons::rail_button(ui, icon, rb, on, name).clicked() {
-                        crate::dock::rail_click(app, g, docked);
-                    }
-                }
-            },
-        );
-    }
-    if !t.pro {
-        dock_panels(app, ui, &p, &t);
+        dock_panels(app, ui, &t);
+        // Photoshop's icon column beside the dock (an embedding app can hide it): shows, expands
+        // or collapses the panels it lists.
+        if rail {
+            pro_rail(app, ui, &t);
+        }
+    } else if app.ui.dock.rail && t.dock_inspector {
+        // Studio inspector collapsed to its icons; an icon opens its module as a flyout.
+        if rail {
+            let shown = egui::Panel::right("rail")
+                .resizable(false)
+                .exact_size(44.0)
+                .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    crate::dock::studio_rail(app, ui);
+                });
+            crate::dock::flyout(app, ui.ctx(), shown.response.rect);
+        }
+    } else {
+        dock_panels(app, ui, &t);
     }
     crate::dock::persist(app, ui.ctx());
+}
+
+fn pro_rail(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    egui::Panel::right("rail").resizable(false).exact_size(36.0).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8))).show(
+        ui,
+        |ui| {
+            let r = ui.max_rect();
+            ui.painter().line_segment([r.left_top() - vec2(6.0, 8.0), r.left_bottom() + vec2(-6.0, 8.0)], Stroke::new(1.0, t.separator));
+            ui.spacing_mut().item_spacing.y = 4.0;
+            // Like Photoshop's iconic panels: one icon per docked panel, a line between groups.
+            let panes = app.ui.dock.panes.clone();
+            for (i, pane) in panes.iter().enumerate() {
+                if i > 0 {
+                    let y = ui.cursor().top() + 1.0;
+                    ui.painter().line_segment([pos2(r.left() + 4.0, y), pos2(r.right() - 4.0, y)], Stroke::new(1.0, t.separator));
+                    ui.add_space(3.0);
+                }
+                for m in pane.tabs.iter().filter_map(|id| crate::modules::get(id)) {
+                    if icons::rail_button(ui, m.icon, 28.0, app.ui.dock.is_front(m.id), tl!(m.title)).clicked() {
+                        crate::dock::rail_click(app, m.id);
+                    }
+                }
+            }
+            // Add a panel group, at the bottom of the column like the rail's other icons.
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                let plus = icons::rail_button(ui, "plus", 28.0, false, tl!("Add Panel"));
+                crate::dock::picker(app, &plus);
+            });
+        },
+    );
 }
 
 /// The right dock's width range (points).
@@ -1471,21 +1490,9 @@ pub fn request_dock_width(ctx: &egui::Context, w: f32) {
     ctx.data_mut(|d| d.insert_temp(dock_width_id(), w));
 }
 
-fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Panels, t: &Tokens) {
-    use crate::dock::Group;
-    // Floating in Studio, Properties docks only in Pro (Photoshop).
-    let shown: Vec<Group> = [
-        (Group::Color, p.color),
-        (Group::Properties, t.pro && p.properties),
-        (Group::Character, p.character),
-        (Group::Navigator, p.navigator),
-        (Group::History, p.history),
-        (Group::Layers, p.layers),
-    ]
-    .into_iter()
-    .filter_map(|(g, on)| on.then_some(g))
-    .collect();
-    if shown.is_empty() {
+fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    // Studio keeps its header (collapse to icons, add a panel) even with every module closed.
+    if !t.dock_inspector && app.ui.dock.panes.is_empty() {
         return;
     }
     let margin = if t.pro { 2 } else { 8 };
@@ -1494,39 +1501,17 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
         panel = panel.exact_size(w);
     }
     panel.frame(egui::Frame::NONE.fill(t.dock).inner_margin(egui::Margin::same(margin))).show(ui, |ui| {
-        // Groups keep their heights whatever they show (#88): see `dock`.
-        crate::dock::show(app, ui, &shown, dock_body);
+        if t.dock_inspector {
+            crate::dock::inspector_header(app, ui);
+            ui.add_space(4.0);
+        }
+        // Panes keep their heights whatever they show (#88): see `dock`.
+        crate::dock::show(app, ui);
     });
 }
 
-/// One dock group's tab content; `dock` bounds it and scrolls it when it's taller.
-fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::dock::Group, tab: usize) {
-    use crate::dock::Group;
-    let pro = Tokens::get(ui.ctx()).pro;
-    match (group, tab) {
-        (Group::Color, 2) => crate::preset_panels::gradients_panel(app, ui),
-        (Group::Color, 3) => crate::preset_panels::patterns_panel(app, ui),
-        (Group::Color, 0) if pro => color_field(app, ui),
-        (Group::Color, _) if pro => crate::swatches_ui::panel(app, ui),
-        (Group::Color, 0) => crate::swatches_ui::panel(app, ui),
-        (Group::Color, _) => color_picker(app, ui),
-        (Group::Properties, 0) => properties_body(app, ui),
-        (Group::Properties, _) => adjustments_grid(app, ui),
-        (Group::Character, tab) => crate::type_tool::character_panel(app, ui, tab == 1),
-        (Group::Navigator, 0) => navigator(app, ui),
-        (Group::Navigator, 1) => crate::tone::histogram_panel(app, ui),
-        (Group::Navigator, _) => info_panel(app, ui),
-        (Group::History, 0) => history(app, ui),
-        (Group::History, 1) => crate::actions::panel(app, ui),
-        (Group::History, _) => crate::comps_ui::panel(app, ui),
-        (Group::Layers, 0) => layers(app, ui),
-        (Group::Layers, 1) => channels(app, ui),
-        (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),
-    }
-}
-
 /// Photoshop's Info panel: colour under the pointer (RGB and CMYK), position, selection size.
-fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No document"));
@@ -1597,7 +1582,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
 }
 
-fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(idx) = app.session.active_index() else {
         empty(ui, tl!("No document"));
@@ -1663,7 +1648,7 @@ fn empty(ui: &mut egui::Ui, s: &str) {
     ui.add_space(6.0);
 }
 
-fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let fg = app.session.tools.foreground;
     // Keep the last edited HSB while it still gives the foreground: black and greys have no hue or
     // saturation of their own, so recomputing them from RGB would reset what was just typed to 0.
@@ -1749,7 +1734,7 @@ fn layer_drag_edge_scroll(pointer: Option<Pos2>, viewport: Rect, dragging: bool,
     direction.signum() * velocity * dt.clamp(0.0, 0.05)
 }
 
-fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
     let Some(st) = app.session.active() else {
@@ -1876,85 +1861,81 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rows = crate::layer_tree_ui::display_rows(&doc, !app.ui.layer_filter.is_empty());
     let ctx = ui.ctx().clone();
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
-    egui::ScrollArea::vertical()
-        .id_salt("layer-rows")
-        .max_height(rows_h)
-        .min_scrolled_height(if fill { rows_h } else { 0.0 })
-        .auto_shrink([false, !fill])
-        .show(ui, |ui| {
-            // The drag keys are set only by actual layer-row and fx drags, not clicks or
-            // ordinary scrolling. The ScrollArea applies this to its own content.
-            // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
-            if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
-                ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+    // Even a short pane must reserve its footer; an unbounded list grows the card
+    // beyond the pane clip and cuts off both the footer and the bottom border.
+    let rows_h = (ui.available_height() - footer).max(0.0);
+    egui::ScrollArea::vertical().id_salt("layer-rows").max_height(rows_h).min_scrolled_height(rows_h).auto_shrink([false, false]).show(ui, |ui| {
+        // The drag keys are set only by actual layer-row and fx drags, not clicks or
+        // ordinary scrolling. The ScrollArea applies this to its own content.
+        // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
+        if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
+            ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+        }
+        let held = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag")).is_some() || d.get_temp::<FxDrag>(fx_drag_key()).is_some());
+        let dragging = held && ctx.input(|i| i.pointer.primary_down());
+        let pointer = ctx.input(|i| i.pointer.interact_pos());
+        let delta = layer_drag_edge_scroll(pointer, ui.clip_rect(), dragging, ctx.input(|i| i.stable_dt));
+        if delta != 0.0 {
+            ui.scroll_with_delta(vec2(0.0, delta));
+            ctx.request_repaint();
+        }
+        let filter = app.ui.layer_filter.clone();
+        let fx_collapsed = app.session.active().map(|d| d.fx_collapsed.clone()).unwrap_or_default();
+        crate::layer_row_ui::begin(ui.ctx());
+        // The drawn rows, top to bottom (#1721): the space between them and below the last
+        // one is a drop zone too.
+        let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
+        for &(depth, l) in &rows {
+            // Select › Isolate Layers.
+            if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
+                continue;
             }
-            let held = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag")).is_some() || d.get_temp::<FxDrag>(fx_drag_key()).is_some());
-            let dragging = held && ctx.input(|i| i.pointer.primary_down());
-            let pointer = ctx.input(|i| i.pointer.interact_pos());
-            let delta = layer_drag_edge_scroll(pointer, ui.clip_rect(), dragging, ctx.input(|i| i.stable_dt));
-            if delta != 0.0 {
-                ui.scroll_with_delta(vec2(0.0, delta));
-                ctx.request_repaint();
-            }
-            let filter = app.ui.layer_filter.clone();
-            let fx_collapsed = app.session.active().map(|d| d.fx_collapsed.clone()).unwrap_or_default();
-            crate::layer_row_ui::begin(ui.ctx());
-            // The drawn rows, top to bottom (#1721): the space between them and below the last
-            // one is a drop zone too.
-            let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
-            for &(depth, l) in &rows {
-                // Select › Isolate Layers.
-                if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
+            if !filter.is_empty() {
+                let kind = match &l.content {
+                    LayerContent::Raster(_) => "pixel",
+                    LayerContent::Adjustment(_) | LayerContent::Fill(_) => "adjustment",
+                    LayerContent::Text(_) => "type",
+                    LayerContent::Shape(_) => "shape",
+                    LayerContent::Smart(_) => "smart",
+                    LayerContent::Group(_) => "",
+                };
+                if !filter.iter().any(|k| k == kind) {
                     continue;
                 }
-                if !filter.is_empty() {
-                    let kind = match &l.content {
-                        LayerContent::Raster(_) => "pixel",
-                        LayerContent::Adjustment(_) | LayerContent::Fill(_) => "adjustment",
-                        LayerContent::Text(_) => "type",
-                        LayerContent::Shape(_) => "shape",
-                        LayerContent::Smart(_) => "smart",
-                        LayerContent::Group(_) => "",
-                    };
-                    if !filter.iter().any(|k| k == kind) {
-                        continue;
-                    }
-                }
-                let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
-                let top = ui.cursor().top();
-                drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
-                if reveal == Some(l.id) {
-                    crate::layer_reveal::scroll_to_row(ui, top);
-                }
-                if !l.effects.items.is_empty() && fx_collapsed.iter().all(|id| *id != l.id) {
-                    effect_rows(app, ui, l, depth, &mut actions);
-                }
-                crate::smart_ui::filter_rows(app, ui, l, depth, &mut actions);
             }
-            // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
-            // between two rows lands above the lower one, the empty space below the bottom-most
-            // row below it. Both copy with ⌥ held, move without.
-            for w in drawn.windows(2) {
-                let gap = Rect::from_min_max(pos2(w[0].1.left(), w[0].1.bottom()), pos2(w[0].1.right(), w[1].1.top()));
-                layer_drop_zone(app, &ctx, ui, gap, (w[1].0, w[1].1), "above", &mut actions);
+            let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
+            let top = ui.cursor().top();
+            drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
+            if reveal == Some(l.id) {
+                crate::layer_reveal::scroll_to_row(ui, top);
             }
-            if let Some(&(last, last_rect)) = drawn.last() {
-                let below = Rect::from_min_max(pos2(last_rect.left(), last_rect.bottom()), pos2(last_rect.right(), ui.clip_rect().bottom()));
-                layer_drop_zone(app, &ctx, ui, below, (last, last_rect), "below", &mut actions);
+            if !l.effects.items.is_empty() && fx_collapsed.iter().all(|id| *id != l.id) {
+                effect_rows(app, ui, l, depth, &mut actions);
             }
-            // ⌥-click the line between two layers: clip / release the upper one (#967).
-            crate::clip_line_ui::show(ui, &doc, &mut actions);
-            // A rename whose row is gone (deleted, filtered out, inside a closed group) ends,
-            // committed: nothing else could commit or cancel it.
-            if let Some(layer) = crate::layer_row_ui::renaming(ui.ctx())
-                && !crate::layer_row_ui::recorded(ui.ctx()).iter().any(|r| r.layer == layer)
-                && let Some(done) = crate::layer_row_ui::end_rename(ui.ctx(), true)
-            {
-                actions.push(done);
-            }
-        });
+            crate::smart_ui::filter_rows(app, ui, l, depth, &mut actions);
+        }
+        // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
+        // between two rows lands above the lower one, the empty space below the bottom-most
+        // row below it. Both copy with ⌥ held, move without.
+        for w in drawn.windows(2) {
+            let gap = Rect::from_min_max(pos2(w[0].1.left(), w[0].1.bottom()), pos2(w[0].1.right(), w[1].1.top()));
+            layer_drop_zone(app, &ctx, ui, gap, (w[1].0, w[1].1), "above", &mut actions);
+        }
+        if let Some(&(last, last_rect)) = drawn.last() {
+            let below = Rect::from_min_max(pos2(last_rect.left(), last_rect.bottom()), pos2(last_rect.right(), ui.clip_rect().bottom()));
+            layer_drop_zone(app, &ctx, ui, below, (last, last_rect), "below", &mut actions);
+        }
+        // ⌥-click the line between two layers: clip / release the upper one (#967).
+        crate::clip_line_ui::show(ui, &doc, &mut actions);
+        // A rename whose row is gone (deleted, filtered out, inside a closed group) ends,
+        // committed: nothing else could commit or cancel it.
+        if let Some(layer) = crate::layer_row_ui::renaming(ui.ctx())
+            && !crate::layer_row_ui::recorded(ui.ctx()).iter().any(|r| r.layer == layer)
+            && let Some(done) = crate::layer_row_ui::end_rename(ui.ctx(), true)
+        {
+            actions.push(done);
+        }
+    });
     // A layer being dragged can also be dropped on the footer's Delete, New Layer and Group
     // buttons (#736); read the drag before it ends.
     let footer_drag = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag"))).map(|id| {
@@ -2484,11 +2465,11 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
     crate::smart_ui::thumb_badge(ui, l, rect);
 }
 
-fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::channels_panel::show(app, ui);
 }
 
-fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No document"));
@@ -2516,8 +2497,8 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
-    let max_h = (ui.available_height() - footer).max(40.0);
-    egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
+    let max_h = (ui.available_height() - footer).max(0.0);
+    egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).min_scrolled_height(0.0).auto_shrink([false, false]).show(ui, |ui| {
         for (i, (e, is_redo)) in all.enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             if i == current {
@@ -2582,98 +2563,6 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------------------------------- properties
 
-/// Floating Properties card anchored to the canvas' top-right corner.
-pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Pro (Photoshop) docks Properties; Studio floats it over the canvas.
-    if !app.ui.panels.properties || Tokens::get(ctx).pro {
-        return;
-    }
-    let Some(st) = app.session.active() else { return };
-    let Some(id) = st.active_layer else { return };
-    let doc = st.doc.clone();
-    let Some(layer) = doc.layer(id) else { return };
-    // Pixel-mask controls also belong here when their thumbnail is targeted.
-    let mask_target = crate::mask_props_ui::targeted(app, layer);
-    if !mask_target && !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
-        return;
-    }
-    let t = Tokens::get(ctx);
-    let canvas = app.last_canvas_rect;
-    let width = 320.0;
-    let pos = pos2(canvas.right() - width - 12.0, canvas.top() + 44.0);
-    let frame = egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.card_border))
-        .corner_radius(CornerRadius::same(t.radius_lg as u8))
-        .shadow(egui::Shadow { offset: [0, 12], blur: 36, spread: 0, color: t.shadow })
-        .inner_margin(egui::Margin::same(14));
-    // A floating panel (Order::Middle like other panels, so menus, popups and dialogs stay above
-    // it), anchored to the canvas corner and dragged by its title off the part being worked on.
-    let card_id = egui::Id::new("properties-card");
-    let offset: egui::Vec2 = ctx.data(|m| m.get_temp(card_id)).unwrap_or_default();
-    let mut drag = egui::Vec2::ZERO;
-    let shown = egui::Area::new(card_id).order(egui::Order::Middle).fixed_pos(pos + offset).show(ctx, |ui| {
-        frame.show(ui, |ui| {
-            ui.set_width(width - 28.0);
-            let title = ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!("Properties")).font(theme::semibold(13.5)).color(t.text));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::button(ui, "minus", 22.0, false, tl!("Hide Properties")).clicked() {
-                        app.ui.panels.properties = false;
-                    }
-                });
-            });
-            let bar = title.response.rect.with_max_x(title.response.rect.right() - 28.0);
-            let grip = ui.interact(bar, card_id.with("title"), Sense::drag());
-            if grip.hovered() || grip.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
-            drag = grip.drag_delta();
-            ui.add_space(6.0);
-            let icon = match &layer.content {
-                LayerContent::Adjustment(_) => "sliders-horizontal",
-                LayerContent::Group(_) => "folder",
-                LayerContent::Fill(_) => "paint-bucket",
-                _ => "image",
-            };
-            ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
-                ui.painter().rect_filled(r, t.radius_sm, t.field);
-                icons::paint(ui, r, icon, 17.0, t.icon);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(&layer.name).font(theme::medium(13.0)).color(t.text));
-                    let kind = match &layer.content {
-                        LayerContent::Adjustment(a) => crate::i18n::fmt(tl!("{name} Properties"), &[("name", tl!(a.label()))]),
-                        // Whole phrases ("Type Layer"), as the Properties header translates them.
-                        other => tl!(&format!("{} Layer", other.kind_name())).to_string(),
-                    };
-                    ui.label(RichText::new(kind).small().color(t.text_faint));
-                });
-            });
-            ui.add_space(8.0);
-            widgets::hairline(ui);
-            ui.add_space(8.0);
-            // Per-layer ids, so text still being typed for one layer can't commit to the next.
-            ui.push_id(id, |ui| {
-                if mask_target {
-                    crate::mask_props_ui::properties(app, ui, layer);
-                } else if let LayerContent::Adjustment(adj) = &layer.content {
-                    adjustment_controls(app, ui, id, adj);
-                } else {
-                    layer_controls(app, ui, layer);
-                }
-            });
-        });
-    });
-    if drag != egui::Vec2::ZERO && canvas.is_positive() {
-        // Keep the title bar inside the canvas.
-        let r = shown.response.rect.translate(drag);
-        let dx = (canvas.left() - r.left()).max(0.0) - (r.right() - canvas.right()).max(0.0);
-        let dy = (canvas.top() - r.top()).max(0.0) - (r.top() + 40.0 - canvas.bottom()).max(0.0);
-        ctx.data_mut(|m| m.insert_temp(card_id, offset + drag + egui::vec2(dx, dy)));
-    }
-}
-
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
     crate::adjust_editors::layer_editor(app, ui, id, adj);
     ui.add_space(6.0);
@@ -2725,8 +2614,14 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     }
 }
 
-/// Docked Properties body (Pro theme).
-fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// The Properties module's body.
+pub(crate) fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Per-layer ids, so text still being typed for one layer can't commit to the next.
+    let layer = app.session.active().and_then(|st| st.active_layer);
+    ui.push_id(("properties-layer", layer), |ui| properties_for_layer(app, ui));
+}
+
+fn properties_for_layer(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No properties"));
@@ -2779,7 +2674,7 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// Photoshop's Adjustments panel: a grid of one-click adjustment layers.
-fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Add an adjustment")).color(t.text_dim));
     ui.add_space(4.0);
@@ -2812,7 +2707,7 @@ fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     if let Some(id) = run {
         let _ = app.run(&id, json!({}));
-        app.ui.dock_tabs.properties = 0;
+        crate::dock::reveal(app, "properties");
     }
 }
 
@@ -2858,7 +2753,7 @@ fn color_field_height(avail: Option<f32>, width: f32) -> f32 {
 }
 
 /// Photoshop Color panel: saturation/brightness field + hue strip, drawn as shaded meshes.
-fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let bg_active = app.ui.color_panel.background;
     let key = egui::Id::new(("color-field-hue", bg_active));
@@ -3981,12 +3876,11 @@ mod properties_card_tests {
         }
         // The layer selected next already shows 25, the value the edited one has when `25*` stops it.
         s.execute("layer.setProps", json!({"layer": ids[0].0, "opacity": 0.25})).unwrap();
-        let mut app = PhotocraftApp::new(s, crate::Services::default());
-        app.ui.panels.properties = true;
+        let app = PhotocraftApp::new(s, crate::Services::default());
         let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
-                    properties_window(app, ui.ctx());
+                    properties_body(app, ui);
                 }
             },
             app,

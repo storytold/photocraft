@@ -1947,8 +1947,8 @@
 	Fade steps	Afzwakstappen
 	Hide the layer's effects  ({key}-click: all layers)	De effecten van de laag verbergen  ({key}-klik: alle lagen)
 	Import Brushes… (.abr)	Penselen importeren… (.abr)
-	Move Group Down	Groep omlaag
-	Move Group Up	Groep omhoog
+	Move Panel Group Down	Paneelgroep omlaag
+	Move Panel Group Up	Paneelgroep omhoog
 	Reset the brush to the defaults	Het penseel terugzetten naar de standaardwaarden
 	Restore original size	Oorspronkelijke grootte herstellen
 	Roundness:	Rondheid:
@@ -3592,6 +3592,13 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+	Collapse to Icons	Samenvouwen tot pictogrammen
+	Add Panel	Paneel toevoegen
+	Search panels	Panelen zoeken
+	No panels match	Geen panelen gevonden
+	Expand Panels	Panelen uitvouwen
+	Close Tab	Tabblad sluiten
+	Add Tab	Tabblad toevoegen
 	Use Classic Mode	Klassieke modus gebruiken
 	Auto Center Preview	Voorvertoning automatisch centreren
 	Next Document	Volgend document

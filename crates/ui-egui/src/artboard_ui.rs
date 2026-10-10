@@ -216,8 +216,7 @@ mod tests {
         assert!(menu(&mut app, &ctx, "file.export.artboardsToFiles", json!({})).unwrap().get("dialog").is_some());
         // Window › Layer Comps shows the third History tab.
         menu(&mut app, &ctx, "window.panel.layerComps", json!({})).unwrap();
-        assert!(app.ui.panels.history);
-        assert_eq!(app.ui.dock_tabs.history, 2);
+        assert!(app.ui.dock.is_front("layerComps"));
     }
 
     #[test]

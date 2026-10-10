@@ -2037,8 +2037,8 @@
 	Mode:	Режим:
 	Monochrome	Монохромний
 	More Points	Більше точок
-	Move Group Down	Перемістити групу вниз
-	Move Group Up	Перемістити групу вгору
+	Move Panel Group Down	Перемістити групу панелей вниз
+	Move Panel Group Up	Перемістити групу панелей вгору
 	Move effect layer down	Перемістити шар ефекту вниз
 	Move effect layer up	Перемістити шар ефекту вгору
 	Move to	Перемістити до
@@ -3520,6 +3520,13 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+	Collapse to Icons	Згорнути до піктограм
+	Add Panel	Додати панель
+	Search panels	Пошук панелей
+	No panels match	Немає відповідних панелей
+	Expand Panels	Розгорнути панелі
+	Close Tab	Закрити вкладку
+	Add Tab	Додати вкладку
 	Use Classic Mode	Використовувати класичний режим
 	Auto Center Preview	Автоматично центрувати перегляд
 	Next Document	Наступний документ

@@ -75,13 +75,32 @@ pub struct CardResponse {
     pub tabs: Vec<(usize, Rect)>,
     /// The » overflow button, when some tabs didn't fit.
     pub chevron: Option<Rect>,
+    /// The tab being dragged this frame, and the one whose drag ended (dock panes).
+    pub tab_drag: Option<usize>,
+    pub tab_drag_stopped: Option<usize>,
+    /// Studio: the header's collapse chevron and close cross (Pro collapses on a double-click and
+    /// closes from the tab's context menu, like Photoshop).
+    pub collapse: Option<Response>,
+    pub close: Option<Response>,
+    /// Dock cards: the round + after the last tab.
+    pub add: Option<Response>,
 }
 
 /// [`card`] that can be collapsed to its tab strip and reports strip and menu interactions.
 pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
+    card_impl(ui, id, tabs, selected, collapsed, false, body)
+}
+
+/// A dock pane's [`card_ex`]: its tabs are modules, closed with a hover × or a middle-click,
+/// and a round + after them adds one (theme tokens `tab_close`, `tab_add`).
+pub fn dock_card(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
+    card_impl(ui, id, tabs, selected, collapsed, true, body)
+}
+
+fn card_impl(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, dock: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
     let t = Tokens::get(ui.ctx());
     if t.pro {
-        return pro_panel(ui, id, tabs, selected, collapsed, body);
+        return pro_panel(ui, id, tabs, selected, collapsed, dock, body);
     }
     let m = body_margin(false);
     let frame = egui::Frame::NONE
@@ -98,10 +117,20 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
             // Pill tabs left of the menu button; they elide or overflow into a chevron (#151).
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
             let tip = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!(tabs.get(*selected).copied().unwrap_or(id)))]);
-            let menu_rect = Rect::from_min_max(pos2(row.right() - 22.0, row.top() + 1.0), pos2(row.right(), row.bottom() - 1.0));
+            // Header actions, right to left: close and collapse (inspector themes), panel menu.
+            let slot = |k: f32| Rect::from_min_max(pos2(row.right() - 22.0 * (k + 1.0), row.top() + 1.0), pos2(row.right() - 22.0 * k, row.bottom() - 1.0));
+            let (close, collapse) = if t.dock_inspector {
+                let close = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(slot(0.0))), "x", 22.0, false, tl!("Close Tab Group"));
+                let fold = if collapsed { ("chevron-right", tl!("Expand Panel Group")) } else { ("chevron-down", tl!("Collapse Panel Group")) };
+                let collapse = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(slot(1.0))), fold.0, 22.0, false, fold.1);
+                (Some(close), Some(collapse))
+            } else {
+                (None, None)
+            };
+            let menu_rect = slot(if t.dock_inspector { 2.0 } else { 0.0 });
             let menu = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(menu_rect)), "ellipsis", 22.0, false, &tip);
             let area = Rect::from_min_max(row.min, pos2((menu_rect.left() - 4.0).max(row.left()), row.bottom()));
-            let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected);
+            let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected, dock);
             if !collapsed {
                 ui.add_space(6.0);
                 body(ui, *selected);
@@ -114,6 +143,11 @@ pub fn card_ex(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, colla
                 tab_context: tabs_out.context,
                 tabs: tabs_out.tabs,
                 chevron: tabs_out.chevron,
+                tab_drag: tabs_out.drag,
+                tab_drag_stopped: tabs_out.drag_stopped,
+                collapse,
+                close,
+                add: tabs_out.add,
             }
         })
         .inner;
@@ -152,7 +186,7 @@ pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 /// Photoshop-grammar panel group: dark tab strip with flat tabs, flat body, hamburger menu.
-fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
+fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collapsed: bool, dock: bool, body: impl FnOnce(&mut Ui, usize)) -> CardResponse {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width();
     // Tab strip. Its background senses drags (move the group) and double-clicks (collapse);
@@ -163,7 +197,7 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
     ui.painter().rect_filled(strip, rounding, t.tab_strip);
     // Panel menu (hamburger); the tabs stay left of it, eliding or overflowing (#151).
     let menu = Rect::from_center_size(pos2(strip.right() - 14.0, strip.center().y), vec2(20.0, 18.0));
-    let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed);
+    let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed, dock);
     let mresp = ui.interact(menu, ui.id().with((id, "menu")), Sense::click());
     let c = if mresp.hovered() { t.text } else { t.text_faint };
     for k in 0..3 {
@@ -186,6 +220,11 @@ fn pro_panel(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, collaps
         tab_context: tabs_out.context,
         tabs: tabs_out.tabs,
         chevron: tabs_out.chevron,
+        tab_drag: tabs_out.drag,
+        tab_drag_stopped: tabs_out.drag_stopped,
+        collapse: None,
+        close: None,
+        add: tabs_out.add,
     }
 }
 

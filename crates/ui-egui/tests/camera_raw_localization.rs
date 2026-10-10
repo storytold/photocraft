@@ -13,6 +13,8 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         let mut h = builder.build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            // The icon rail names its panels (Color…), which would shadow the dialog's section labels.
+            app.ui.panels.rail = false;
             app.run("file.new", json!({"width":64,"height":48})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
             app.run("edit.fill", json!({"color":"#80ff00"})).unwrap();

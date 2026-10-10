@@ -101,10 +101,20 @@ pub struct StripOut {
     pub tabs: Vec<(usize, Rect)>,
     /// The » overflow button, when some tabs didn't fit.
     pub chevron: Option<Rect>,
+    /// The tab being dragged this frame (to another dock section).
+    pub drag: Option<usize>,
+    /// The tab whose drag ended this frame.
+    pub drag_stopped: Option<usize>,
+    /// The round + after the last tab (dock strips).
+    pub add: Option<Response>,
 }
 
 /// Width of the » overflow button.
 pub const CHEVRON_W: f32 = 18.0;
+/// Width kept for the round + after the last tab.
+pub const ADD_W: f32 = 22.0;
+/// Room a dock tab keeps for its ×.
+pub const CLOSE_W: f32 = 14.0;
 
 /// Draw the » overflow button at `r`: hover tip `tip`, listing the tabs named by `labels` at the
 /// indices in `overflow`. A picked index is left in `picked`.
@@ -142,25 +152,77 @@ fn tabs_in(
     font: egui::FontId,
     pad: f32,
     min_w: f32,
+    dock: bool,
     active: impl Fn(usize) -> bool,
-    mut paint_tab: impl FnMut(&Ui, Rect, usize, std::sync::Arc<egui::Galley>, &Response, bool),
+    mut paint_tab: impl FnMut(&Ui, Rect, Rect, usize, std::sync::Arc<egui::Galley>, &Response, bool),
 ) -> StripOut {
     let t = Tokens::get(ui.ctx());
     // Panel names are English keys; draw them in the UI language.
     let names: Vec<&str> = tabs.iter().map(|n| tl!(n)).collect();
     let tabs = names.as_slice();
-    let natural: Vec<f32> = tabs.iter().map(|n| ui.painter().layout_no_wrap((*n).to_owned(), font.clone(), t.text).size().x + pad).collect();
-    let f = fit(&natural, *selected, area.width(), min_w, CHEVRON_W);
+    // Dock tabs keep room for their × right of the label, so it never covers the text.
+    let close_w = if dock && t.tab_close { CLOSE_W } else { 0.0 };
+    let natural: Vec<f32> = tabs.iter().map(|n| ui.painter().layout_no_wrap((*n).to_owned(), font.clone(), t.text).size().x + pad + close_w).collect();
+    let add = dock && t.tab_add;
+    let f = fit(&natural, *selected, area.width() - if add { ADD_W } else { 0.0 }, min_w, CHEVRON_W);
     let mut x = area.left();
-    let mut out = StripOut { clicked: false, double_clicked: false, context: None, tabs: Vec::with_capacity(f.shown.len()), chevron: None };
+    let mut out = StripOut {
+        clicked: false,
+        double_clicked: false,
+        context: None,
+        tabs: Vec::with_capacity(f.shown.len()),
+        chevron: None,
+        drag: None,
+        drag_stopped: None,
+        add: None,
+    };
     for &(i, w) in &f.shown {
         let Some(name) = tabs.get(i) else { continue };
         let r = Rect::from_min_size(pos2(x, area.top()), vec2(w, area.height()));
-        let resp = ui.interact(r, id.with(("tab", i)), Sense::click());
+        let resp = ui.interact(r, id.with(("tab", i)), Sense::click_and_drag());
+        if resp.dragged() {
+            out.drag = Some(i);
+        }
+        if resp.drag_stopped() {
+            out.drag_stopped = Some(i);
+        }
         // The padding gives way (down to a third) before the label is cut.
-        let galley = elided(ui, name, font.clone(), t.text, (w - pad / 3.0).max(1.0));
-        let cut = galley.size().x + pad + 0.5 < natural.get(i).copied().unwrap_or(0.0) && galley.size().x + pad / 3.0 >= w - 0.5;
-        paint_tab(ui, r, i, galley, &resp, active(i));
+        let galley = elided(ui, name, font.clone(), t.text, (w - close_w - pad / 3.0).max(1.0));
+        let cut = galley.size().x + pad + close_w + 0.5 < natural.get(i).copied().unwrap_or(0.0) && galley.size().x + close_w + pad / 3.0 >= w - 0.5;
+        // The label sits centred on the tab and slides left to make room while the × shows.
+        let shows_close = close_w > 0.0 && w >= 34.0 && ui.rect_contains_pointer(r);
+        let slide = ui.ctx().animate_bool_with_time(id.with(("tab-slide", i)), shows_close, 0.12);
+        let label = Rect::from_min_max(r.min, pos2((r.right() - close_w * slide).max(r.left()), r.bottom()));
+        paint_tab(ui, r, label, i, galley, &resp, active(i));
+        // Like a browser tab: a × while hovered, and a middle-click, close it.
+        if shows_close {
+            let x = Rect::from_center_size(pos2(r.right() - pad / 3.0 - CLOSE_W / 2.0 + 2.0, r.center().y), vec2(14.0, 14.0));
+            let close = ui.interact(x, id.with(("tab-close", i)), Sense::click());
+            let tint = match (close.hovered(), t.tab_close_danger) {
+                (true, true) => {
+                    ui.painter().rect_filled(x, t.radius_sm, t.danger);
+                    egui::Color32::WHITE
+                }
+                (true, false) => {
+                    ui.painter().rect_filled(x, t.radius_sm, t.hover);
+                    t.text
+                }
+                _ => t.text_dim,
+            };
+            // Two 1.5 pt strokes: the 10 px svg × thins to under a pixel and barely shows.
+            let arm = 3.5;
+            let c = x.center();
+            let stroke = Stroke::new(1.5, tint);
+            ui.painter().line_segment([c + vec2(-arm, -arm), c + vec2(arm, arm)], stroke);
+            ui.painter().line_segment([c + vec2(-arm, arm), c + vec2(arm, -arm)], stroke);
+            close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close Tab")));
+            if close.on_hover_text(tl!("Close Tab")).clicked() {
+                out.context = Some(TabContextAction::Close(i));
+            }
+        }
+        if dock && resp.middle_clicked() {
+            out.context = Some(TabContextAction::Close(i));
+        }
         let resp = if cut { resp.on_hover_text(*name) } else { resp };
         out.double_clicked |= resp.double_clicked();
         if resp.clicked() {
@@ -191,13 +253,25 @@ fn tabs_in(
             *selected = i;
         }
         out.chevron = Some(r);
+        x = r.right();
+    }
+    if add {
+        let r = Rect::from_center_size(pos2(x + ADD_W / 2.0, area.center().y), vec2(16.0, 16.0));
+        let resp = ui.interact(r, id.with("tab-add"), Sense::click());
+        if resp.hovered() {
+            ui.painter().circle_filled(r.center(), 8.0, t.hover);
+        }
+        crate::icons::paint(ui, r, "plus", 10.0, if resp.hovered() { t.text } else { t.text_faint });
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Add Tab")));
+        out.add = Some(resp.on_hover_text(tl!("Add Tab")));
     }
     out
 }
 
 /// Photoshop-grammar strip (Pro themes): flat tabs on the dark strip; `menu_left` is where the
 /// panel menu button starts.
-pub fn pro_tabs(ui: &mut Ui, id: egui::Id, strip: Rect, menu_left: f32, tabs: &[&str], selected: &mut usize, collapsed: bool) -> StripOut {
+#[allow(clippy::too_many_arguments)]
+pub fn pro_tabs(ui: &mut Ui, id: egui::Id, strip: Rect, menu_left: f32, tabs: &[&str], selected: &mut usize, collapsed: bool, dock: bool) -> StripOut {
     let t = Tokens::get(ui.ctx());
     let area = Rect::from_min_max(strip.min, pos2(menu_left.max(strip.left()), strip.bottom()));
     let sel = *selected;
@@ -210,8 +284,9 @@ pub fn pro_tabs(ui: &mut Ui, id: egui::Id, strip: Rect, menu_left: f32, tabs: &[
         egui::FontId::proportional(11.5),
         22.0,
         40.0,
+        dock,
         |i| i == sel && !collapsed,
-        |ui, r, i, galley, resp, active| {
+        |ui, r, label, i, galley, resp, active| {
             if active {
                 ui.painter().rect_filled(r, CornerRadius { nw: if i == 0 { 3 } else { 0 }, ne: 0, sw: 0, se: 0 }, t.card);
             } else if resp.hovered() {
@@ -224,13 +299,13 @@ pub fn pro_tabs(ui: &mut Ui, id: egui::Id, strip: Rect, menu_left: f32, tabs: &[
             } else {
                 t.text_faint
             };
-            ui.painter().galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, color);
+            ui.painter().galley_with_override_text_color(label.center() - galley.size() / 2.0, galley, color);
         },
     )
 }
 
 /// Studio strip: pill tabs in `area` (the row minus the menu button).
-pub fn pill_tabs(ui: &mut Ui, id: egui::Id, area: Rect, tabs: &[&str], selected: &mut usize) -> StripOut {
+pub fn pill_tabs(ui: &mut Ui, id: egui::Id, area: Rect, tabs: &[&str], selected: &mut usize, dock: bool) -> StripOut {
     let t = Tokens::get(ui.ctx());
     let sel = *selected;
     tabs_in(
@@ -242,8 +317,9 @@ pub fn pill_tabs(ui: &mut Ui, id: egui::Id, area: Rect, tabs: &[&str], selected:
         theme::medium(12.5),
         20.0,
         44.0,
+        dock,
         |i| i == sel,
-        |ui, r, _, galley, resp, active| {
+        |ui, r, label, _, galley, resp, active| {
             // 2 pt between pills, as the old horizontal layout had.
             let r = Rect::from_min_max(r.min, pos2((r.right() - 2.0).max(r.left()), r.bottom()));
             if active {
@@ -255,7 +331,7 @@ pub fn pill_tabs(ui: &mut Ui, id: egui::Id, area: Rect, tabs: &[&str], selected:
                 ui.painter().rect_filled(r, t.radius_sm, t.hover.gamma_multiply(0.6));
             }
             let color = if active { t.text } else { t.text_dim };
-            ui.painter().galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, color);
+            ui.painter().galley_with_override_text_color(label.center() - galley.size() / 2.0, galley, color);
         },
     )
 }

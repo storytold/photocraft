@@ -1975,8 +1975,8 @@
 	Fade steps	渐隐步数
 	Hide the layer's effects  (⌥-click: all layers)	隐藏图层效果  (⌥-单击：所有图层)
 	Import Brushes… (.abr)	导入画笔… (.abr)
-	Move Group Down	向下移动组
-	Move Group Up	向上移动组
+	Move Panel Group Down	向下移动面板组
+	Move Panel Group Up	向上移动面板组
 	Reset the brush to the defaults	将画笔重置为默认值
 	Restore original size	还原原始大小
 	Roundness:	圆度：
@@ -2421,6 +2421,13 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Collapse to Icons	折叠为图标
+	Add Panel	添加面板
+	Search panels	搜索面板
+	No panels match	没有匹配的面板
+	Expand Panels	展开面板
+	Close Tab	关闭标签
+	Add Tab	添加标签页
 	Use Classic Mode	使用经典模式
 	Auto Center Preview	自动居中预览
 	Next Document	下一个文档

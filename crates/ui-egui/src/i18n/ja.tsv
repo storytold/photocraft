@@ -1972,8 +1972,8 @@
 	Fade steps	フェードのステップ数
 	Hide the layer's effects  ({key}-click: all layers)	レイヤーの効果を隠す({key}+クリック: すべてのレイヤー)
 	Import Brushes… (.abr)	ブラシを読み込み…(.abr)
-	Move Group Down	グループを下へ移動
-	Move Group Up	グループを上へ移動
+	Move Panel Group Down	パネルグループを下へ移動
+	Move Panel Group Up	パネルグループを上へ移動
 	Reset the brush to the defaults	ブラシを既定に戻す
 	Restore original size	元のサイズに戻す
 	Roundness:	真円率:
@@ -3433,6 +3433,13 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Collapse to Icons	アイコンパネルに折りたたむ
+	Add Panel	パネルを追加
+	Search panels	パネルを検索
+	No panels match	一致するパネルはありません
+	Expand Panels	パネルを展開
+	Close Tab	タブを閉じる
+	Add Tab	タブを追加
 	Use Classic Mode	クラシックモードを使用
 	Auto Center Preview	プレビューを自動的に中央に配置
 	Next Document	次のドキュメント

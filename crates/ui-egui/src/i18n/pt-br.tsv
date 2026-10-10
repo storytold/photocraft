@@ -1936,8 +1936,8 @@
 	Fade steps	Etapas de atenuação
 	Hide the layer's effects  ({key}-click: all layers)	Ocultar os efeitos da camada  ({key}-clique: todas as camadas)
 	Import Brushes… (.abr)	Importar pincéis… (.abr)
-	Move Group Down	Mover grupo para baixo
-	Move Group Up	Mover grupo para cima
+	Move Panel Group Down	Mover grupo de painéis para baixo
+	Move Panel Group Up	Mover grupo de painéis para cima
 	Reset the brush to the defaults	Redefinir o pincel para os padrões
 	Restore original size	Restaurar tamanho original
 	Roundness:	Arredondamento:
@@ -2840,6 +2840,13 @@ fontWeight	Italic	Itálico
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+	Collapse to Icons	Recolher em ícones
+	Add Panel	Adicionar painel
+	Search panels	Pesquisar painéis
+	No panels match	Nenhum painel corresponde
+	Expand Panels	Expandir painéis
+	Close Tab	Fechar guia
+	Add Tab	Adicionar aba
 	Use Classic Mode	Usar modo clássico
 	Auto Center Preview	Centralizar visualização automaticamente
 	Next Document	Próximo documento

@@ -132,21 +132,30 @@ fn arrange_layouts_floating_windows_and_matching() {
 #[test]
 fn window_panels_select_dock_tabs() {
     let (mut app, ctx) = app_with(1);
+    let dock = |app: &PhotocraftApp, id: &str| app.ui.dock.pane_of(id).map(|i| app.ui.dock.panes[i].tabs.clone());
     menu(&mut app, &ctx, "window.panel.info", json!({})).unwrap();
-    assert!(app.ui.panels.navigator && app.ui.dock_tabs.navigator == 2);
+    assert!(app.ui.dock.is_front("info"));
+    assert_eq!(dock(&app, "info").unwrap(), ["navigator", "histogram", "info"], "the whole group comes back");
     assert_eq!(checked(&app, "window.panel.info"), Some(true));
     assert_eq!(checked(&app, "window.panel.histogram"), Some(false));
     menu(&mut app, &ctx, "window.panel.histogram", json!({})).unwrap();
-    assert_eq!(app.ui.dock_tabs.navigator, 1);
+    assert!(app.ui.dock.is_front("histogram"));
     menu(&mut app, &ctx, "window.panel.actions", json!({})).unwrap();
-    assert!(app.ui.panels.history && app.ui.dock_tabs.history == 1);
+    assert!(app.ui.dock.is_front("actions"));
     menu(&mut app, &ctx, "window.panel.paths", json!({})).unwrap();
-    assert_eq!(app.ui.dock_tabs.layers, 2);
-    // Again on the visible tab hides the panel.
+    assert!(app.ui.dock.is_front("paths"));
+    // Again on the front tab hides its group.
     menu(&mut app, &ctx, "window.panel.paths", json!({})).unwrap();
-    assert!(!app.ui.panels.layers);
+    assert!(!app.ui.dock.visible("layers") && !app.ui.dock.visible("paths"));
+    menu(&mut app, &ctx, "window.panel.layers", json!({})).unwrap();
+    assert_eq!(dock(&app, "layers").unwrap(), ["layers", "channels", "paths"]);
+    assert_eq!(app.ui.dock.panes.last().map(|s| s.front()), Some("layers"), "Layers is back at the bottom");
+    // Type › Panels only ever shows.
     menu(&mut app, &ctx, "type.panels.character", json!({})).unwrap();
-    assert!(app.ui.panels.properties && app.ui.dock_tabs.properties == 0);
+    menu(&mut app, &ctx, "type.panels.character", json!({})).unwrap();
+    assert!(app.ui.dock.is_front("character"));
+    menu(&mut app, &ctx, "window.panel.character", json!({"show": false})).unwrap();
+    assert!(!app.ui.dock.visible("character"));
     for id in ["window.panel.channels", "window.panel.swatches", "window.panel.adjustments", "window.panel.paragraph"] {
         assert!(is_live(id), "{id}");
     }

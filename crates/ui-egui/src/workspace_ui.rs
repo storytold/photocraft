@@ -174,7 +174,7 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         return Err(format!("\"{name}\" is a built-in workspace"));
     }
     let prefs = app.session.prefs().clone();
-    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open});
+    let mut ws = json!({"panels": app.ui.panels, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open});
     // The icon rail and menu bar flags belong to an embedding app's session, not to a saved
     // layout: a workspace never brings back a window without its menus.
     if let Some(panels) = ws.get_mut("panels").and_then(Value::as_object_mut) {
@@ -228,7 +228,7 @@ fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
 pub fn apply_custom(app: &mut PhotocraftApp) -> bool {
     let Some(ws) = app.session.prefs().workspaces.get(&app.ui.workspace).cloned() else { return false };
     // Workspaces saved before the dock layout existed get the default heights.
-    app.ui.dock = Default::default();
+    app.ui.dock = crate::dock::DockLayout::essentials(crate::dock::is_pro(app));
     crate::dock::apply(app, &ws);
     let (sc, menus, toolbar) = (ws.get("shortcuts").cloned(), ws.get("menus").cloned(), ws.get("toolbar").cloned());
     if sc.is_some() || menus.is_some() || toolbar.is_some() {
@@ -496,8 +496,8 @@ mod tests {
         let inv = |app: &mut PhotocraftApp, id: &str, p: Value| crate::menus::invoke(app, &ctx, id, p);
         assert!(!crate::menus::is_enabled(&app, "window.workspace.deleteWorkspace"));
         assert_eq!(inv(&mut app, "window.workspace.newWorkspace", json!({})).unwrap()["dialog"], "newWorkspace");
-        app.ui.panels.history = true;
-        app.ui.panels.navigator = true;
+        app.ui.dock.show("history");
+        app.ui.dock.show("navigator");
         app.session.prefs.edit(|p| {
             p.shortcuts.insert("filter.blur.gaussian".into(), "Cmd+Alt+G".into());
         });
@@ -510,16 +510,16 @@ mod tests {
         // The current workspace can't be deleted.
         assert!(inv(&mut app, "window.workspace.deleteWorkspace", json!({"name": "Retouch"})).is_err());
         inv(&mut app, "window.workspace.painting", json!({})).unwrap();
-        assert!(!app.ui.panels.history);
+        assert!(!app.ui.dock.visible("history"));
         app.session.prefs.edit(|p| p.shortcuts.clear());
         // Switching back restores the panels and the captured shortcuts.
         inv(&mut app, "window.workspace.select", json!({"name": "Retouch"})).unwrap();
-        assert!(app.ui.panels.history && app.ui.panels.navigator);
+        assert!(app.ui.dock.visible("history") && app.ui.dock.visible("navigator"));
         assert_eq!(app.session.prefs().shortcuts.get("filter.blur.gaussian").map(String::as_str), Some("Cmd+Alt+G"));
         // Reset Workspace re-applies the saved layout.
-        app.ui.panels.history = false;
+        app.ui.dock.close("history");
         inv(&mut app, "window.workspace.resetWorkspace", json!({})).unwrap();
-        assert!(app.ui.panels.history);
+        assert!(app.ui.dock.visible("history"));
         inv(&mut app, "window.workspace.essentials", json!({})).unwrap();
         assert!(crate::menus::is_enabled(&app, "window.workspace.deleteWorkspace"));
         inv(&mut app, "window.workspace.deleteWorkspace", json!({"name": "Retouch"})).unwrap();

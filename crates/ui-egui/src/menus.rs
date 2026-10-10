@@ -392,8 +392,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 return Ok(json!({"dialog": dialog}));
             }
             let r = app.run(id, params)?;
-            app.ui.panels.properties = true;
-            app.ui.dock_tabs.properties = 0;
+            crate::dock::reveal(app, "properties");
             Ok(r)
         }
         // Edit › Stroke…: open its full options dialog when called from menus/context
@@ -524,18 +523,23 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"document": to}))
         }
         t if t.starts_with("window.toggle.") => {
-            // A shown but collapsed dock group is expanded rather than hidden (#129).
-            if let Some(g) = crate::dock::Group::from_key(&t["window.toggle.".len()..]).filter(|g| g.shown(&app.ui.panels) && app.ui.dock.is_collapsed(*g)) {
-                crate::dock::reveal(app, g);
+            let key = &t["window.toggle.".len()..];
+            if crate::dock::GROUPS.contains(&key) {
+                // A dock group: hidden comes back, collapsed is expanded (#129), showing is hidden.
+                let pro = crate::dock::is_pro(app);
+                let dock = &mut app.ui.dock;
+                let collapsed =
+                    crate::dock::group_tabs(key, pro).iter().filter_map(|m| dock.pane_of(m)).any(|i| dock.panes.get(i).is_some_and(|s| s.collapsed));
+                if dock.group_shown(key) && !collapsed {
+                    dock.hide_group(key);
+                } else {
+                    dock.show_group(key, pro);
+                    app.ui.panels.dock = true;
+                }
                 return Ok(Value::Null);
             }
             let p = &mut app.ui.panels;
-            let slot = match &t["window.toggle.".len()..] {
-                "layers" => &mut p.layers,
-                "history" => &mut p.history,
-                "properties" => &mut p.properties,
-                "color" => &mut p.color,
-                "navigator" => &mut p.navigator,
+            let slot = match key {
                 "toolbar" => &mut p.toolbar,
                 "options" => &mut p.options_bar,
                 "brushSettings" => &mut p.brush_settings,
@@ -543,9 +547,6 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 _ => return Err(format!("unknown panel in {t}")),
             };
             *slot = !*slot;
-            if let Some(g) = crate::dock::Group::from_key(&t["window.toggle.".len()..]).filter(|g| g.shown(&app.ui.panels)) {
-                crate::dock::reveal(app, g);
-            }
             Ok(Value::Null)
         }
         // Layer › Layer Style › <effect>… opens the Layer Style dialog on that effect.
@@ -717,13 +718,11 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "view.lockGuides" => return Some(e.lock_guides),
         _ => {}
     }
+    if let Some(key) = id.strip_prefix("window.toggle.").filter(|k| crate::dock::GROUPS.contains(k)) {
+        return Some(app.ui.dock.group_shown(key));
+    }
     let p = &app.ui.panels;
     Some(match id {
-        "window.toggle.layers" => p.layers,
-        "window.toggle.history" => p.history,
-        "window.toggle.properties" => p.properties,
-        "window.toggle.color" => p.color,
-        "window.toggle.navigator" => p.navigator,
         "window.toggle.toolbar" => p.toolbar,
         "window.toggle.dock" => p.dock,
         "window.togglePanels" => p.toolbar || p.options_bar || p.dock,
@@ -1319,26 +1318,18 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     if crate::workspace_ui::apply_custom(app) {
         return;
     }
-    // Presets use the default group order, heights and tabs (Reset brings everything back).
-    app.ui.dock = Default::default();
-    app.ui.dock_tabs = Default::default();
-    let p = &mut app.ui.panels;
-    let (nav, color, layers, history, props) = match app.ui.workspace.as_str() {
-        "Photography" => (true, false, true, true, true),
-        "Painting" => (false, true, true, false, false),
+    // Presets use the default pane order, heights and tabs (Reset brings everything back).
+    let groups: &[&str] = match app.ui.workspace.as_str() {
+        "Photography" => &["properties", "navigator", "history", "layers"],
+        "Painting" => &["color", "layers"],
         // Leave room for typography alongside Properties and Layers.
-        "Graphic and Web" => (false, false, true, false, true),
+        "Graphic and Web" => &["properties", "character", "layers"],
         // Color includes Swatches; Navigator keeps the pixel canvas easy to inspect.
-        "Pixel Art" => (true, true, true, false, false),
-        "Motion" => (false, false, true, false, true),
-        _ => (false, true, true, false, true),
+        "Pixel Art" => &["color", "navigator", "layers"],
+        "Motion" => &["properties", "layers"],
+        _ => &["color", "properties", "layers"],
     };
-    p.navigator = nav;
-    p.color = color;
-    p.layers = layers;
-    p.history = history;
-    p.properties = props;
-    p.character = app.ui.workspace == "Graphic and Web";
+    app.ui.dock = crate::dock::DockLayout::preset(groups, crate::dock::is_pro(app));
     // Timeline is a floating panel, not a dock group. Showing it does not create or edit
     // a document timeline; changing away from Motion closes it just like its Close button.
     app.ui.timeline.open = app.ui.workspace == "Motion";
@@ -1752,16 +1743,16 @@ mod tests {
     fn window_panel_and_workspace_ids_drive_the_shell() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
-        assert!(!app.ui.panels.history);
+        assert!(!app.ui.dock.visible("history"));
         invoke(&mut app, &ctx, "window.panel.history", Value::Null).unwrap();
-        assert!(app.ui.panels.history);
+        assert!(app.ui.dock.is_front("history"));
         assert_eq!(checked(&app, "window.panel.history"), Some(true));
         invoke(&mut app, &ctx, "window.workspace.painting", Value::Null).unwrap();
         assert_eq!(app.ui.workspace, "Painting");
-        assert!(!app.ui.panels.properties);
+        assert!(!app.ui.dock.visible("properties"));
         assert_eq!(checked(&app, "window.workspace.painting"), Some(true));
         invoke(&mut app, &ctx, "window.workspace.essentials", Value::Null).unwrap();
-        assert!(app.ui.panels.properties);
+        assert!(app.ui.dock.visible("properties"));
         // Live in the menu, and no duplicate "Layers" entry from the window.toggle.* commands.
         let items = menu_items(&app);
         assert!(items.iter().any(|i| i.id == "window.panel.layers" && i.enabled));

@@ -290,35 +290,35 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     let first = app.session.active().unwrap().doc.id;
     app.session.active_mut().unwrap().path = Some("/proj/original.psd".into());
     let suggested = |open: &Open| match &open.borrow()[0].0 {
-        FileDialogRequest::Save { suggested } => suggested.clone(),
+        FileDialogRequest::Save { suggested } => std::path::PathBuf::from(suggested),
         other => panic!("save dialog expected, got {other:?}"),
     };
     // An export starts beside the document; the user saves it under /renders instead.
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/proj/result.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/proj/result.png"));
     answer(&open, Some(FileDialogAnswer::SaveTo("/renders/result.png".into())));
     app.poll_file_dialog(&ctx, None);
     // The next export starts in /renders; Save As still offers the document's own path.
     app.pick_save("again.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/renders/again.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/renders/again.png"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/proj/original.psd");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/proj/original.psd"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     // A cancelled dialog and an explicit directory change nothing.
     app.pick_save("/elsewhere/x.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/elsewhere/x.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/elsewhere/x.png"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     app.pick_save("third.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/renders/third.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/renders/third.png"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     // Another document has its own memory: untitled, it starts wherever the shell defaults.
@@ -327,26 +327,26 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     assert_ne!(first, second);
     app.pick_save("fresh.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "fresh.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("fresh.png"));
     answer(&open, Some(FileDialogAnswer::SaveTo("/other/fresh.png".into())));
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(app.save_dirs.get(&second).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/other"));
-    assert_eq!(app.save_dirs.get(&first).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/renders"));
+    assert_eq!(app.save_dirs.get(&second).map(std::path::PathBuf::as_path), Some(std::path::Path::new("/other")));
+    assert_eq!(app.save_dirs.get(&first).map(std::path::PathBuf::as_path), Some(std::path::Path::new("/renders")));
     // The folder is remembered for the document the dialog was asked for, not the active one.
     app.session.set_active(0);
     app.pick_save("swap.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/renders/swap.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/renders/swap.png"));
     app.session.set_active(1);
     answer(&open, Some(FileDialogAnswer::SaveTo("/moved/swap.png".into())));
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(app.save_dirs.get(&first).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/moved"));
-    assert_eq!(app.save_dirs.get(&second).map(|p| p.to_string_lossy().into_owned()).as_deref(), Some("/other"));
+    assert_eq!(app.save_dirs.get(&first).map(std::path::PathBuf::as_path), Some(std::path::Path::new("/moved")));
+    assert_eq!(app.save_dirs.get(&second).map(std::path::PathBuf::as_path), Some(std::path::Path::new("/other")));
     // Closing a document forgets its folder at the next dialog.
     app.run("file.close", json!({"document": 1})).unwrap();
     app.pick_save("last.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), "/moved/last.png");
+    assert_eq!(suggested(&open), std::path::PathBuf::from("/moved/last.png"));
     assert!(!app.save_dirs.contains_key(&second));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);

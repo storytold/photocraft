@@ -156,7 +156,7 @@ impl LangInfo {
         })
     }
 
-    fn catalog(&self) -> &Catalog {
+    pub(crate) fn catalog(&self) -> &Catalog {
         self.catalog.get_or_init(|| Catalog::parse(&self.text()))
     }
 }

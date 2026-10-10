@@ -112,7 +112,7 @@ fn put_focus(h: &mut Harness<'_, PhotocraftApp>, place: Place) {
         }
         Place::OpacityField => {
             // The Layers panel's Opacity field: the DragValue in the right dock reading 100.
-            let layers = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("Layers drawn").1;
+            let layers = crate::dock::module_rect(h.state(), &h.ctx, "layers").expect("Layers drawn");
             let at = h
                 .query_all_by_role(Role::SpinButton)
                 .map(|n| n.rect())
@@ -256,9 +256,9 @@ fn common_shortcuts_work_after_clicking_panels() {
         let rulers = h.state().ui.extras.rulers;
         press(&mut h, "Cmd+R");
         assert_ne!(h.state().ui.extras.rulers, rulers, "{place:?}: ⌘R toggles rulers");
-        let layers = h.state().ui.panels.layers;
+        let layers = h.state().ui.dock.is_front("layers");
         press(&mut h, "F7");
-        assert_ne!(h.state().ui.panels.layers, layers, "{place:?}: F7 toggles Layers");
+        assert_ne!(h.state().ui.dock.is_front("layers"), layers, "{place:?}: F7 toggles Layers");
         press(&mut h, "F7");
         // Dialogs: Image Size (⌥⌘I, shown in the menu but unbound before #127) and Levels (⌘L).
         for (sc, what) in [("Cmd+Alt+I", "Image Size"), ("Cmd+Alt+C", "Canvas Size"), ("Cmd+L", "Levels"), ("Cmd+M", "Curves")] {

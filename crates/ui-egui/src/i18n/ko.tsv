@@ -1932,8 +1932,8 @@
 	Fade steps	약화 단계
 	Hide the layer's effects  ({key}-click: all layers)	레이어 효과 숨기기  ({key} 키를 누른 채 클릭: 모든 레이어)
 	Import Brushes… (.abr)	브러시 가져오기… (.abr)
-	Move Group Down	그룹 아래로 이동
-	Move Group Up	그룹 위로 이동
+	Move Panel Group Down	패널 그룹 아래로 이동
+	Move Panel Group Up	패널 그룹 위로 이동
 	Reset the brush to the defaults	브러시를 기본값으로 초기화
 	Restore original size	원래 크기 복원
 	Roundness:	원형률:
@@ -2991,6 +2991,13 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+	Collapse to Icons	아이콘으로 축소
+	Add Panel	패널 추가
+	Search panels	패널 검색
+	No panels match	일치하는 패널 없음
+	Expand Panels	패널 확장
+	Close Tab	탭 닫기
+	Add Tab	탭 추가
 	Use Classic Mode	클래식 모드 사용
 	Auto Center Preview	미리 보기 자동 가운데 맞춤
 	Next Document	다음 문서

@@ -1473,8 +1473,8 @@
 	Delete brush	Διαγραφή πινέλου
 	Drag the arrow to set the angle, the dots to set the roundness	Σύρετε το βέλος για τη γωνία και τις κουκκίδες για τη στρογγυλότητα
 	Expand Panel Group	Ανάπτυξη ομάδας πλαισίων
-	Move Group Down	Μετακίνηση ομάδας προς τα κάτω
-	Move Group Up	Μετακίνηση ομάδας προς τα επάνω
+	Move Panel Group Down	Μετακίνηση ομάδας πλαισίων προς τα κάτω
+	Move Panel Group Up	Μετακίνηση ομάδας πλαισίων προς τα επάνω
 	Reset the brush to the defaults	Επαναφορά προεπιλεγμένων ρυθμίσεων πινέλου
 	Restore original size	Επαναφορά αρχικού μεγέθους
 	Search Brushes	Αναζήτηση πινέλων
@@ -3521,6 +3521,13 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	Collapse to Icons	Σύμπτυξη σε εικονίδια
+	Add Panel	Προσθήκη πίνακα
+	Search panels	Αναζήτηση πινάκων
+	No panels match	Κανένας πίνακας δεν ταιριάζει
+	Expand Panels	Ανάπτυξη πινάκων
+	Close Tab	Κλείσιμο καρτέλας
+	Add Tab	Προσθήκη καρτέλας
 	Use Classic Mode	Χρήση κλασικής λειτουργίας
 	Auto Center Preview	Αυτόματο κεντράρισμα προεπισκόπησης
 	Next Document	Επόμενο έγγραφο

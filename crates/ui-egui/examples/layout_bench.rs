@@ -202,7 +202,11 @@ fn main() {
         }
         app.session.open_document(doc, Some("layout.psd".into()));
         app.sync_views();
-        app.ui.panels.navigator = navigator;
+        if navigator {
+            app.ui.dock.show_group("navigator", true);
+        } else {
+            app.ui.dock.hide_group("navigator");
+        }
         app
     });
     settle(&mut h, 4);

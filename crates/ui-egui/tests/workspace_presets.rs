@@ -1,17 +1,17 @@
 //! #1120: workspace selection/reset must apply useful layouts, including saved layouts.
 
 use photocraft_engine::Session;
-use photocraft_ui_egui::dock::{self, Group};
+use photocraft_ui_egui::dock;
 use photocraft_ui_egui::{PhotocraftApp, menus};
 use serde_json::{Value, json};
 
-const PRESETS: [(&str, &str, &[Group], bool); 6] = [
-    ("essentials", "Essentials", &[Group::Color, Group::Properties, Group::Layers], false),
-    ("photography", "Photography", &[Group::Properties, Group::Navigator, Group::History, Group::Layers], false),
-    ("painting", "Painting", &[Group::Color, Group::Layers], false),
-    ("graphicAndWeb", "Graphic and Web", &[Group::Properties, Group::Character, Group::Layers], false),
-    ("pixelArt", "Pixel Art", &[Group::Color, Group::Navigator, Group::Layers], false),
-    ("motion", "Motion", &[Group::Properties, Group::Layers], true),
+const PRESETS: [(&str, &str, &[&str], bool); 6] = [
+    ("essentials", "Essentials", &["color", "properties", "layers"], false),
+    ("photography", "Photography", &["properties", "navigator", "history", "layers"], false),
+    ("painting", "Painting", &["color", "layers"], false),
+    ("graphicAndWeb", "Graphic and Web", &["properties", "character", "layers"], false),
+    ("pixelArt", "Pixel Art", &["color", "navigator", "layers"], false),
+    ("motion", "Motion", &["properties", "layers"], true),
 ];
 
 fn app() -> PhotocraftApp {
@@ -27,11 +27,21 @@ fn select(app: &mut PhotocraftApp, suffix: &str) {
 }
 
 fn layout(app: &PhotocraftApp) -> Value {
-    json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open})
+    json!({"panels": app.ui.panels, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open})
 }
 
-fn shown(app: &PhotocraftApp) -> Vec<Group> {
-    app.ui.dock.order().into_iter().filter(|g| g.shown(&app.ui.panels)).collect()
+/// The preset group of each pane, top to bottom.
+fn shown(app: &PhotocraftApp) -> Vec<&'static str> {
+    app.ui
+        .dock
+        .panes
+        .iter()
+        .filter_map(|s| dock::GROUPS.into_iter().find(|g| dock::group_tabs(g, true).iter().any(|m| s.tabs.iter().any(|t| t == m))))
+        .collect()
+}
+
+fn pane(app: &PhotocraftApp, id: &str) -> Option<usize> {
+    app.ui.dock.pane_of(id)
 }
 
 #[test]
@@ -60,14 +70,19 @@ fn presets_select_expected_panels_and_reset_every_dock_group() {
         let id = format!("window.workspace.{suffix}");
         assert_eq!(menus::menu_items(&app).iter().find(|item| item.id == id).unwrap().checked, Some(true));
         let expected = layout(&app);
-        app.ui.panels.character = !app.ui.panels.character;
-        app.ui.panels.navigator = !app.ui.panels.navigator;
+        for g in ["character", "navigator"] {
+            if app.ui.dock.group_shown(g) { app.ui.dock.hide_group(g) } else { app.ui.dock.show_group(g, true) }
+        }
         app.ui.timeline.open = !timeline;
-        app.ui.dock.move_group(Group::Layers, Some(Group::Color));
-        app.ui.dock.set_collapsed(Group::Layers, true);
-        app.ui.dock.heights.insert(Group::Properties, 99.0);
-        app.ui.dock_tabs.color = 2;
-        app.ui.dock_tabs.layers = 2;
+        let layers = pane(&app, "layers").unwrap();
+        app.ui.dock.move_pane(layers, Some(0));
+        let layers = pane(&app, "layers").unwrap();
+        app.ui.dock.set_collapsed(layers, true);
+        if let Some(i) = pane(&app, "properties") {
+            app.ui.dock.panes[i].height = Some(99.0);
+        }
+        app.ui.dock.show("paths");
+        app.ui.dock.drop_tab("gradients", dock::Drop::NewAt(0));
         invoke(&mut app, "window.workspace.resetWorkspace", json!({}));
         assert_eq!(layout(&app), expected, "reset {name}");
         assert_eq!(app.session.active().unwrap().doc, doc, "layout must not create/edit a timeline");
@@ -131,9 +146,12 @@ fn custom_workspaces_restore_timeline_visibility_and_dock_after_presets() {
     let mut app = app();
     for (name, suffix) in [("Custom still", "pixelArt"), ("Custom motion", "motion")] {
         select(&mut app, suffix);
-        app.ui.dock.move_group(Group::Navigator, Some(Group::Color));
-        app.ui.dock_tabs.color = 1;
-        app.ui.dock.set_collapsed(Group::Properties, true);
+        let moved = pane(&app, "navigator").or(pane(&app, "layers")).unwrap();
+        app.ui.dock.move_pane(moved, Some(0));
+        app.ui.dock.show("swatches");
+        if let Some(props) = app.ui.dock.pane_of("properties") {
+            app.ui.dock.set_collapsed(props, true);
+        }
         let expected = layout(&app);
         invoke(&mut app, "window.workspace.newWorkspace", json!({"name": name}));
         let mut session = Session::new();
@@ -143,7 +161,7 @@ fn custom_workspaces_restore_timeline_visibility_and_dock_after_presets() {
         invoke(&mut restored, "window.workspace.select", json!({"name": name}));
         assert_eq!(layout(&restored), expected, "custom select {name}");
         restored.ui.timeline.open = !restored.ui.timeline.open;
-        restored.ui.panels.color = !restored.ui.panels.color;
+        restored.ui.dock.hide("layers");
         invoke(&mut restored, "window.workspace.resetWorkspace", json!({}));
         assert_eq!(layout(&restored), expected, "custom reset {name}");
     }
@@ -158,7 +176,7 @@ fn legacy_workspace_without_timeline_visibility_still_loads() {
     app.session.prefs.edit(|p| p.workspaces.insert("Legacy".into(), legacy));
     select(&mut app, "motion");
     invoke(&mut app, "window.workspace.select", json!({"name": "Legacy"}));
-    assert_eq!(shown(&app), [Group::Color, Group::Layers]);
+    assert_eq!(shown(&app), ["color", "layers"]);
     assert!(!app.ui.timeline.open);
 }
 

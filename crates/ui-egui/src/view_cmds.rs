@@ -206,42 +206,6 @@ fn snap_slot<'a>(s: &'a mut SnapTo, key: &str) -> Option<&'a mut bool> {
     })
 }
 
-/// Window › <panel>: (panel, dock tab) for panels that live as tabs of a dock card.
-fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, usize)> {
-    let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
-    Some(match id {
-        "window.panel.info" => ("navigator", 2),
-        "window.panel.histogram" => ("navigator", 1),
-        "window.panel.navigator" => ("navigator", 0),
-        "window.panel.actions" => ("history", 1),
-        "window.panel.layerComps" => ("history", 2),
-        "window.panel.history" => ("history", 0),
-        "window.panel.channels" => ("layers", 1),
-        "window.panel.paths" => ("layers", 2),
-        "window.panel.layers" => ("layers", 0),
-        "window.panel.adjustments" => ("properties", 1),
-        "window.panel.properties" => ("properties", 0),
-        // Their own Character | Paragraph group, so Properties stays open (#150).
-        "window.panel.character" | "type.panels.character" => ("character", 0),
-        "window.panel.paragraph" | "type.panels.paragraph" => ("character", 1),
-        "window.panel.swatches" => ("color", usize::from(pro)),
-        "window.panel.color" => ("color", usize::from(!pro)),
-        _ => return None,
-    })
-}
-
-fn panel_state<'a>(app: &'a mut PhotocraftApp, panel: &str) -> (&'a mut bool, &'a mut usize) {
-    let (p, t) = (&mut app.ui.panels, &mut app.ui.dock_tabs);
-    match panel {
-        "navigator" => (&mut p.navigator, &mut t.navigator),
-        "history" => (&mut p.history, &mut t.history),
-        "layers" => (&mut p.layers, &mut t.layers),
-        "color" => (&mut p.color, &mut t.color),
-        "character" => (&mut p.character, &mut t.character),
-        _ => (&mut p.properties, &mut t.properties),
-    }
-}
-
 /// Ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
     if let Some(k) = id.strip_prefix("view.show.") {
@@ -277,37 +241,21 @@ pub fn handles(id: &str) -> bool {
                     | "matchAll"
             );
     }
-    matches!(
-        id,
-        "view.extras"
-            | "view.twoHundredPercent"
-            | "view.printSize"
-            | "view.fitLayersOnScreen"
-            | "view.fitArtboardOnScreen"
-            | "window.panel.layerComps"
-            | "view.flipHorizontal"
-            | "view.pixelAspectRatioCorrection"
-            | "view.patternPreview"
-            | "view.pixelArtPreview"
-            | "view.rotateView"
-            | "view.resetView"
-            | "window.panel.layers"
-            | "window.panel.history"
-            | "window.panel.navigator"
-            | "window.panel.properties"
-            | "window.panel.color"
-            | "window.panel.actions"
-            | "window.panel.channels"
-            | "window.panel.paths"
-            | "window.panel.character"
-            | "window.panel.paragraph"
-            | "window.panel.info"
-            | "window.panel.histogram"
-            | "window.panel.swatches"
-            | "window.panel.adjustments"
-            | "type.panels.character"
-            | "type.panels.paragraph"
-    )
+    crate::modules::by_menu_id(id).is_some()
+        || matches!(
+            id,
+            "view.extras"
+                | "view.twoHundredPercent"
+                | "view.printSize"
+                | "view.fitLayersOnScreen"
+                | "view.fitArtboardOnScreen"
+                | "view.flipHorizontal"
+                | "view.pixelAspectRatioCorrection"
+                | "view.patternPreview"
+                | "view.pixelArtPreview"
+                | "view.rotateView"
+                | "view.resetView"
+        )
 }
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
@@ -364,17 +312,10 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     {
         return Some(o.arrange == k);
     }
-    if let Some((panel, tab)) = panel_tab(app, id) {
-        let (p, t) = (&app.ui.panels, &app.ui.dock_tabs);
-        let (vis, cur) = match panel {
-            "navigator" => (p.navigator, t.navigator),
-            "history" => (p.history, t.history),
-            "layers" => (p.layers, t.layers),
-            "color" => (p.color, t.color),
-            "character" => (p.character, t.character),
-            _ => (p.properties, t.properties),
-        };
-        return Some(vis && cur == tab);
+    // A dock module is ticked while it is its pane's front tab.
+    if let Some(m) = crate::modules::by_menu_id(id) {
+        let dock = &app.ui.dock;
+        return Some(dock.pane_of(m.id).and_then(|i| dock.panes.get(i)).is_some_and(|s| s.front() == m.id));
     }
     if let Some(c) = type_checked(app, id) {
         return Some(c);
@@ -473,23 +414,22 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 }
 
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
-    if let Some((panel, tab)) = panel_tab(app, id) {
-        let group = crate::dock::Group::from_key(panel);
-        let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));
-        let (vis, cur) = panel_state(app, panel);
-        // Like Photoshop: choosing a visible panel's menu item again hides it. A collapsed
-        // group is expanded instead, so the menu item always brings the panel back (#129).
-        if *vis && *cur == tab && !collapsed && !id.starts_with("type.panels.") {
-            *vis = false;
+    if let Some(m) = crate::modules::by_menu_id(id) {
+        // Like Photoshop: choosing a showing panel's menu item hides it; a collapsed or
+        // background one is brought forward instead (#129). Type › Panels only ever shows, and
+        // `{"show": bool}` asks for one state.
+        let visible = match p.get("show").and_then(Value::as_bool) {
+            Some(true) => true,
+            Some(false) => false,
+            None if id.starts_with("type.panels.") => true,
+            None => !app.ui.dock.is_front(m.id),
+        };
+        if visible {
+            crate::dock::reveal(app, m.id);
         } else {
-            *vis = true;
-            *cur = tab;
+            app.ui.dock.hide(m.id);
         }
-        let visible = *vis;
-        if let Some(g) = group.filter(|_| visible) {
-            crate::dock::reveal(app, g);
-        }
-        return Ok(json!({"panel": panel, "tab": tab, "visible": visible}));
+        return Ok(json!({"panel": m.id, "visible": visible}));
     }
     if id == "view.rotateView" {
         return crate::rotate_view::command(app, p);

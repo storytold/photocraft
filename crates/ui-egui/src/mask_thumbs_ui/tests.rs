@@ -269,7 +269,7 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     let row = h.get_by_label("Masked Vector Mask").rect();
     let footer = crate::vector_ui::paths_footer(&h.ctx).expect("footer drawn");
     assert!(footer.top() > row.bottom(), "buttons below the rows");
-    let group = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).unwrap().1;
+    let group = crate::dock::module_rect(h.state(), &h.ctx, "layers").unwrap();
     assert!(group.bottom() - footer.bottom() < 16.0, "footer at the panel bottom: footer {footer:?}, group {group:?}");
     assert!(footer.bottom() - row.bottom() > 100.0, "the footer is pinned, not right below the rows");
     h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();

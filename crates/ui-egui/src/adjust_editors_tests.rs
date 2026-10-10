@@ -49,7 +49,9 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         // The default Properties group gives way to Layers (#147) and scrolls taller editors;
         // these tests drive every control without scrolling, so they size it like a user would.
-        app.ui.dock.heights.insert(crate::dock::Group::Properties, 560.0);
+        if let Some(s) = app.ui.dock.pane_of("properties").and_then(|i| app.ui.dock.panes.get_mut(i)) {
+            s.height = Some(560.0);
+        }
         app
     });
     h.run_steps(8);

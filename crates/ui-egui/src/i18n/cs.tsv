@@ -1984,8 +1984,8 @@
 	Fade steps	Kroky zeslabení
 	Hide the layer's effects  ({key}-click: all layers)	Skrýt efekty vrstvy  ({key}+kliknutí: všechny vrstvy)
 	Import Brushes… (.abr)	Importovat štětce… (.abr)
-	Move Group Down	Posunout skupinu dolů
-	Move Group Up	Posunout skupinu nahoru
+	Move Panel Group Down	Posunout skupinu panelů dolů
+	Move Panel Group Up	Posunout skupinu panelů nahoru
 	Reset the brush to the defaults	Obnovit výchozí nastavení štětce
 	Restore original size	Obnovit původní velikost
 	Roundness:	Kulatost:
@@ -2413,6 +2413,13 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+	Collapse to Icons	Sbalit na ikony
+	Add Panel	Přidat panel
+	Search panels	Hledat panely
+	No panels match	Žádné panely neodpovídají
+	Expand Panels	Rozbalit panely
+	Close Tab	Zavřít kartu
+	Add Tab	Přidat kartu
 	Use Classic Mode	Použít klasický režim
 	Auto Center Preview	Automaticky vystředit náhled
 	Next Document	Další dokument

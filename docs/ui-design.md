@@ -22,11 +22,14 @@ The toolbar's foreground and background colour chips follow the `Tokens::round_c
 ## Rules
 
 - **Colours and radii come from tokens.** Read them with `Tokens::get(ctx)`; never hard-code a colour in a widget.
-- **Shared widgets live in `widgets.rs`:** `card` (panel group; Pro renders a Photoshop tab strip), `value_field`, `slider`/`slider_row`, `toggle`/`checkbox`, `primary_button`/`secondary_button`, `dropdown` (with a chevron icon), `hairline`/`vline`.
+- **Shared widgets live in `widgets.rs`:** `card` (a panel group; Pro renders a Photoshop tab strip), `value_field`, `slider`/`slider_row`, `toggle`/`checkbox`, `primary_button`/`secondary_button`, `dropdown` (with a chevron icon), `hairline`/`vline`.
 - **Icons:** Lucide SVGs in `assets/icons` (ISC licence), embedded via `icon_data.rs`. Regenerate that file when you add icons.
 - **Fonts:** Inter (UI) and JetBrains Mono (numbers), both OFL. Named families `medium` and `semibold` are available via `theme::medium()` and `theme::semibold()`.
 - **Photoshop layout grammar (Pro):**
   - Essentials dock order: Color | Swatches, then Properties | Adjustments, then Layers | Channels | Paths (Layers fills the remaining height).
+  - The dock (`DockLayout`) holds panel groups (`Pane`); each panel group holds panels (`Module`, one file each in `crates/ui-egui/src/modules/`) as tabs, with one panel visible at a time. Any tab drags onto another group's strip or into a group of its own. Pro keeps Photoshop's tab strips and icon rail; the Studio themes draw panel groups as cards with ≡ ⌄ ✕, a header with » (fold to an icon rail whose icons open flyouts) and + (a searchable list that adds a panel as its own group; a strip's + or ≡ › Add Tab adds it as a tab there).
+  - **Names:** user-facing text uses Photoshop's words, the code keeps its own. Panel = `Module`, panel group = `Pane`, dock = `DockLayout`. A *preset group* (`dock::GROUPS`: Color, Properties, Character, Navigator, History, Layers) is the fixed set of panels a workspace preset or Window › <panel> brings back together; it is not a type. Never show "pane" or "module" in the UI.
+  - Splitters shrink expanded panel groups in the drag direction, nearest first, down to each minimum; the group on the other side grows and the last expanded group fills the remaining height. Collapsed groups keep only their tab strip.
   - Options-bar labels end with a colon ("Size:").
   - Document tabs read "name @ 12.5% (RGB/8)".
   - Toolbar tool groups carry a corner triangle.

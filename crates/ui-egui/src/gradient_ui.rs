@@ -635,7 +635,7 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         });
     if show_panel {
-        let _ = crate::preset_panels::menu(app, "window.panel.gradients", &Value::Null);
+        crate::dock::reveal(app, "gradients");
     }
     if !open {
         app.ui.panels.gradient_editor = false;
@@ -1095,8 +1095,7 @@ mod tests {
         // Quick preset picking lives in the editor: its Gradients button shows the Gradients panel.
         h.get_by_label("Gradients").click();
         h.run_steps(2);
-        assert!(h.state().ui.panels.color, "the Gradients panel opened");
-        assert_eq!(h.state().ui.dock_tabs.color, 2, "on the Gradients tab");
+        assert!(h.state().ui.dock.is_front("gradients"), "the Gradients panel opened in front");
         assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1, "no document layers edited");
     }
 

@@ -18,6 +18,8 @@ fn header_stays_fixed_and_resize_hover_scroll_before_do_not_rebuild_the_proxy() 
         let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, theme);
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            // The icon rail names its panels (Color…), which would shadow the dialog's section labels.
+            app.ui.panels.rail = false;
             app.set_theme(&cc.egui_ctx, theme);
             app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
@@ -52,6 +54,8 @@ fn histogram_matches_visible_preview_at_all_supported_depths_and_cancel_commit_a
         for depth in [8, 16, 32] {
             let ctx = egui::Context::default();
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            // The icon rail names its panels (Color…), which would shadow the dialog's section labels.
+            app.ui.panels.rail = false;
             app.run("file.new", json!({"width": 16, "height": 8, "mode": mode, "depth": depth})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
             app.run("edit.fill", json!({"color": "#808080"})).unwrap();
@@ -82,6 +86,8 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, theme);
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            // The icon rail names its panels (Color…), which would shadow the dialog's section labels.
+            app.ui.panels.rail = false;
             app.set_theme(&cc.egui_ctx, theme);
             app.run("file.new", json!({"width":64,"height":48})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
