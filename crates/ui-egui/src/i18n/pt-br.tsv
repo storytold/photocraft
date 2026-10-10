@@ -2785,3 +2785,16 @@ fontWeight	Italic	Itálico
 	XOR	XOR
 	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
 	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+
+# Art History Brush (#213).
+	Art History Brush Tool	Ferramenta Pincel do histórico da arte
+	Tight Short	Curto cerrado
+	Tight Medium	Médio cerrado
+	Tight Long	Longo cerrado
+	Loose Medium	Médio solto
+	Loose Long	Longo solto
+	Dab	Toque
+	Tight Curl	Curva cerrada
+	Loose Curl	Curva solta
+	Area	Área
+	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico

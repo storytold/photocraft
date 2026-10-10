@@ -3379,3 +3379,15 @@ cameraRaw	Roughness	Chropowatość
 	XOR	XOR
 	Color Burn (Paint.NET)	Wypalanie koloru (Paint.NET)
 	Color Dodge (Paint.NET)	Rozjaśnianie koloru (Paint.NET)
+
+# Art History Brush (#213).
+	Art History Brush Tool	Narzędzie Pędzel historii artystycznej
+	Tight Short	Ścisły krótki
+	Tight Medium	Ścisły średni
+	Tight Long	Ścisły długi
+	Loose Medium	Luźny średni
+	Loose Long	Luźny długi
+	Dab	Plama
+	Tight Curl	Ścisły lok
+	Loose Curl	Luźny lok
+	Stylized dabs from a history state	Stylizowane plamy ze stanu historii

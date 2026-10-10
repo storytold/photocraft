@@ -1,6 +1,6 @@
-//! UI for the retouching tools (healing, patch, clone, history brush, blur/sharpen/smudge,
-//! dodge/burn/sponge, Mixer Brush) and the smart selection tools (Quick Selection, Object
-//! Selection): gesture → engine command, options bars, and the clone-source marker.
+//! UI for the retouching tools (healing, patch, clone, history brush, art history brush,
+//! blur/sharpen/smudge, dodge/burn/sponge, Mixer Brush) and the smart selection tools
+//! (Quick Selection, Object Selection): gesture → engine command, options bars, and the clone-source marker.
 
 use egui::{Color32, Stroke, vec2};
 use serde_json::{Value, json};
@@ -95,6 +95,14 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
         Tool::HistoryBrush => ("paint.historyBrush", json!({})),
+        Tool::ArtHistoryBrush => (
+            "paint.artHistoryBrush",
+            json!({
+                "style": o.art_history_style,
+                "area": o.art_history_area,
+                "tolerance": o.art_history_tolerance,
+            }),
+        ),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
             Some(cp) => cp,
             None => return false,
@@ -350,6 +358,26 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::HistoryBrush => opt(ui, "Paints from the document's opening state"),
+        Tool::ArtHistoryBrush => {
+            opt(ui, tl!("Style"));
+            let styles = [
+                ("tightShort".to_string(), tl!("Tight Short")),
+                ("tightMedium".to_string(), tl!("Tight Medium")),
+                ("tightLong".to_string(), tl!("Tight Long")),
+                ("looseMedium".to_string(), tl!("Loose Medium")),
+                ("looseLong".to_string(), tl!("Loose Long")),
+                ("dab".to_string(), tl!("Dab")),
+                ("tightCurl".to_string(), tl!("Tight Curl")),
+                ("looseCurl".to_string(), tl!("Loose Curl")),
+            ];
+            crate::widgets::dropdown(ui, "art-history-style", &mut o.art_history_style, &styles, 130.0);
+            opt(ui, tl!("Area"));
+            crate::widgets::value_field(ui, &mut o.art_history_area, 0.0..=100.0, "", 50.0);
+            opt(ui, tl!("Tolerance"));
+            crate::widgets::value_field(ui, &mut o.art_history_tolerance, 0.0..=100.0, "", 50.0);
+            crate::widgets::vline(ui, 22.0);
+            opt(ui, tl!("Stylized dabs from a history state"));
+        }
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
@@ -718,5 +746,51 @@ mod tests {
         assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE));
         assert!(!app.ui.status_error, "{}", app.ui.status);
         assert!(app.ui.clone_source.is_none());
+    }
+
+    #[test]
+    fn art_history_is_in_the_y_flyout() {
+        let y = [Tool::HistoryBrush, Tool::ArtHistoryBrush];
+        assert_eq!(y[0], Tool::HistoryBrush);
+        assert_eq!(y[1], Tool::ArtHistoryBrush);
+        assert!(y.iter().all(|t| t.key() == 'Y'));
+        assert!(Tool::ArtHistoryBrush.is_brushlike());
+    }
+
+    #[test]
+    fn art_history_options_bar_defaults() {
+        use crate::theme::ThemeKind;
+        use egui::vec2;
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        app.ui.tool = Tool::ArtHistoryBrush;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Style");
+        h.get_by_label("Area");
+        h.get_by_label("Tolerance");
+        assert_eq!(h.state().ui.tool_options.art_history_style, "tightMedium");
+        assert_eq!(h.state().ui.tool_options.art_history_area, 50.0);
+        assert_eq!(h.state().ui.tool_options.art_history_tolerance, 50.0);
+    }
+
+    #[test]
+    fn art_history_stroke_runs_the_command() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 20, "color": "#3060c0"})).unwrap();
+        app.ui.tool = Tool::ArtHistoryBrush;
+        app.ui.tool_options.art_history_style = "tightMedium".into();
+        app.ui.tool_options.art_history_tolerance = 0.0;
+        drag(&mut app, Tool::ArtHistoryBrush);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
     }
 }
