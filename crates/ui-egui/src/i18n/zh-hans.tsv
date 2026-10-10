@@ -675,6 +675,9 @@
 	New Workspace…	新建工作区…
 	Delete Workspace…	删除工作区…
 	Reset Workspace	重置工作区
+	Reset Tool	重置工具
+	Reset All Tools	重置所有工具
+	Reset all tools to their default settings?	要将所有工具重置为默认设置吗？
 	Lock Workspace	锁定工作区
 	Theme	主题
 	Pro Theme	专业主题

@@ -669,6 +669,9 @@
 	New Workspace…	Neuer Arbeitsbereich…
 	Delete Workspace…	Arbeitsbereich löschen…
 	Reset Workspace	Arbeitsbereich zurücksetzen
+	Reset Tool	Werkzeug zurücksetzen
+	Reset All Tools	Alle Werkzeuge zurücksetzen
+	Reset all tools to their default settings?	Alle Werkzeuge auf ihre Standardeinstellungen zurücksetzen?
 	Lock Workspace	Arbeitsbereich sperren
 	Theme	Design
 	Pro Theme	Pro-Design

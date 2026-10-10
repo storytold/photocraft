@@ -663,6 +663,9 @@
 	New Workspace…	Nouvel espace de travail…
 	Delete Workspace…	Supprimer l'espace de travail…
 	Reset Workspace	Réinitialiser l'espace de travail
+	Reset Tool	Réinitialiser l'outil
+	Reset All Tools	Réinitialiser tous les outils
+	Reset all tools to their default settings?	Réinitialiser tous les outils à leurs paramètres par défaut ?
 	Lock Workspace	Verrouiller l'espace de travail
 	Theme	Thème
 	Pro Theme	Thème Pro

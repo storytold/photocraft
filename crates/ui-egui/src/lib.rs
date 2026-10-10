@@ -160,6 +160,7 @@ mod titlebar;
 pub mod tone;
 mod tool_cursor;
 pub mod tool_feedback;
+mod tool_reset;
 pub mod transform_tex;
 pub mod transform_tool;
 pub mod type_panels_ui;

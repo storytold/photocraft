@@ -660,6 +660,9 @@
 	New Workspace…	Novo espaço de trabalho…
 	Delete Workspace…	Excluir espaço de trabalho…
 	Reset Workspace	Redefinir espaço de trabalho
+	Reset Tool	Redefinir ferramenta
+	Reset All Tools	Redefinir todas as ferramentas
+	Reset all tools to their default settings?	Redefinir todas as ferramentas para as configurações padrão?
 	Lock Workspace	Bloquear espaço de trabalho
 	Theme	Tema
 	Pro Theme	Tema Pro

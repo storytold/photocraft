@@ -1398,6 +1398,9 @@
 	New Workspace…	Новая рабочая среда…
 	Delete Workspace…	Удалить рабочую среду…
 	Reset Workspace	Сбросить рабочую среду
+	Reset Tool	Сбросить инструмент
+	Reset All Tools	Сбросить все инструменты
+	Reset all tools to their default settings?	Сбросить все инструменты к настройкам по умолчанию?
 	Lock Workspace	Заблокировать рабочую среду
 	Photography	Фотография
 	Graphic and web	Графика и web

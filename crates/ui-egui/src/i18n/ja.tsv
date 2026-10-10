@@ -675,6 +675,9 @@
 	New Workspace…	新規ワークスペース…
 	Delete Workspace…	ワークスペースを削除…
 	Reset Workspace	ワークスペースをリセット
+	Reset Tool	ツールをリセット
+	Reset All Tools	すべてのツールをリセット
+	Reset all tools to their default settings?	すべてのツールを初期設定に戻しますか？
 	Lock Workspace	ワークスペースをロック
 	Theme	テーマ
 	Pro Theme	プロテーマ
