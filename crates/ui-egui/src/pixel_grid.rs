@@ -1,6 +1,6 @@
 //! The pixel grid of the CPU canvas path, matching the GPU canvas shader (`gpu_canvas.rs`):
-//! shown above 500% zoom, one device pixel wide, lightening a dark pixel by about a quarter
-//! (darkening a light one), and only over pixels that have content, never over empty checker.
+//! shown above 500% zoom, one device pixel wide, with a uniform quarter-white line,
+//! and only over pixels that have content, never over empty checker.
 //!
 //! The shader reads each pixel's alpha as it draws. Here the same rule runs on the composite of
 //! the part of the document in view, turned into merged line segments. Both the composite and
@@ -17,16 +17,8 @@ use crate::canvas::ViewXform;
 
 /// The grid shows above this zoom (1.0 = 100%). Shared with the GPU canvas.
 pub const MIN_ZOOM: f32 = 5.0;
-/// Opacity of the grid line over a fully opaque dark pixel. Shared with the GPU canvas.
+/// Opacity of the white grid line over a fully opaque pixel. Shared with the GPU canvas.
 pub const STRENGTH: f32 = 0.25;
-/// Light pixels get a black line this much weaker than the white one on dark pixels. The WGSL
-/// in `gpu_canvas.rs` spells the same number.
-pub const LIGHT_SCALE: f32 = 0.64;
-/// Luminance above which a pixel counts as light (same cut as the shader).
-const LIGHT_LUMA: f32 = 0.55;
-/// Luminance of the checker under a see-through pixel when deciding light or dark; between the
-/// default checker's two greys.
-const CHECKER_LUMA: f32 = 0.9;
 /// Cached regions snap to this many document pixels, so a small pan stays inside the cache.
 const REGION_SNAP: i32 = 64;
 /// Most segments kept. A document that is a fine lattice of transparent holes would otherwise
@@ -63,15 +55,13 @@ pub fn cell_color(rgba: [f32; 4]) -> Option<Color32> {
         return None;
     }
     let a = a.min(1.0);
-    let luma = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
-    let shown = luma * a + CHECKER_LUMA * (1.0 - a);
-    let light = shown > LIGHT_LUMA;
-    let strength = STRENGTH * a * if light { LIGHT_SCALE } else { 1.0 };
+    // Switching white/black at a luminance threshold draws false contours in smooth photos.
+    let strength = STRENGTH * a;
     let alpha = (strength * 255.0).round() as u8;
     if alpha == 0 {
         return None;
     }
-    Some(if light { Color32::from_black_alpha(alpha) } else { Color32::from_white_alpha(alpha) })
+    Some(Color32::from_white_alpha(alpha))
 }
 
 /// Merge consecutive cells of equal colour along one line into `emit(start, end, colour)` runs.
@@ -158,9 +148,10 @@ pub fn paint(app: &mut PhotocraftApp, painter: &Painter, xf: &ViewXform, idx: us
         cache.grid = Some(GridLines::build(&doc, revision, preview_key, cache_region(visible, doc.bounds())));
     }
     let Some(grid) = &cache.grid else { return };
+    let width = 1.0 / painter.ctx().pixels_per_point();
     for s in &grid.segs {
         let (a, b) = (xf.to_screen(s.from[0] as f32, s.from[1] as f32), xf.to_screen(s.to[0] as f32, s.to[1] as f32));
-        painter.line_segment([a, b], Stroke::new(1.0, s.color));
+        painter.line_segment([a, b], Stroke::new(width, s.color));
     }
 }
 
@@ -189,24 +180,26 @@ mod tests {
     }
 
     #[test]
-    fn dark_pixels_get_a_quarter_white_and_light_ones_less_black() {
+    fn grid_color_does_not_switch_at_luminance_boundaries() {
         assert_eq!(cell_color(OPAQUE_DARK), Some(Color32::from_white_alpha(64)));
-        assert_eq!(cell_color(OPAQUE_LIGHT), Some(Color32::from_black_alpha(41)));
+        assert_eq!(cell_color(OPAQUE_LIGHT), Some(Color32::from_white_alpha(64)));
+        for v in [0.54, 0.55, 0.56] {
+            assert_eq!(cell_color([v, v, v, 1.0]), Some(Color32::from_white_alpha(64)));
+        }
     }
 
     #[test]
     fn line_strength_follows_alpha_like_the_shader() {
-        // Half-clear black over the checker reads dark (0.45): a white line at half strength.
+        // Line opacity follows content alpha, regardless of its colour.
         assert_eq!(cell_color([0.0, 0.0, 0.0, 0.5]), Some(Color32::from_white_alpha(32)));
-        // Half-clear white reads light (0.95): a black line at half the light-pixel strength.
-        assert_eq!(cell_color([1.0, 1.0, 1.0, 0.5]), Some(Color32::from_black_alpha(20)));
+        assert_eq!(cell_color([1.0, 1.0, 1.0, 0.5]), Some(Color32::from_white_alpha(32)));
         let full = cell_color([0.0, 0.0, 0.0, 1.0]);
         assert_eq!(full, Some(Color32::from_white_alpha(64)));
     }
 
     #[test]
     fn out_of_range_values_do_not_panic() {
-        // NaN colour with a valid alpha reads as dark; alpha past 1 is clamped.
+        // Colour does not affect the grid; alpha past 1 is clamped.
         assert_eq!(cell_color([f32::INFINITY, f32::NEG_INFINITY, f32::NAN, 5.0]), Some(Color32::from_white_alpha(64)));
         assert_eq!(cell_color([0.0; 4]), None);
     }
@@ -258,13 +251,11 @@ mod tests {
     }
 
     #[test]
-    fn runs_split_where_the_colour_changes() {
+    fn runs_stay_continuous_where_the_colour_changes() {
         let rect = DRect::from_xywh(0, 0, 1, 4);
         let px = vec![OPAQUE_DARK, OPAQUE_DARK, OPAQUE_LIGHT, OPAQUE_LIGHT];
         let segs: Vec<_> = segments(&px, rect).into_iter().filter(|s| s.from[0] == s.to[0]).collect();
-        assert_eq!(segs.len(), 2);
-        assert!(segs.contains(&GridSeg { from: [0, 0], to: [0, 2], color: Color32::from_white_alpha(64) }));
-        assert!(segs.contains(&GridSeg { from: [0, 2], to: [0, 4], color: Color32::from_black_alpha(41) }));
+        assert_eq!(segs, vec![GridSeg { from: [0, 0], to: [0, 4], color: Color32::from_white_alpha(64) }]);
     }
 
     #[test]

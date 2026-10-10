@@ -1946,8 +1946,8 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     if (grid > 0.0) {
         let e = fract(d) * scale;
         if (e.x < 1.0 || e.y < 1.0) {
-            let on_light = dot(rgb, vec3(0.299, 0.587, 0.114)) > 0.55;
-            rgb = mix(rgb, select(vec3(1.0), vec3(0.0), on_light), select(grid, grid * 0.64, on_light));
+            // A luminance-dependent white/black switch creates false contours in photos.
+            rgb = mix(rgb, vec3(1.0), grid);
         }
     }
     if (view.d.w > 0.5) {
