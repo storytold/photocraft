@@ -1267,29 +1267,119 @@ fn toggle_vector_mask(s: &mut Session, p: &Value, key: &str) -> Result<Value> {
 
 /// Traces the exact coverage of the shape's path back into plain outlines.
 fn merge_components(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_id(s, p)?;
     let tol = f64p(p, "tolerance").unwrap_or(0.1).clamp(0.05, 10.0);
-    with_shape(s, id, "Merge Shape Components", |sh, _| {
-        // Trace at 4× resolution so the fitted outline follows the anti-aliased edge closely.
-        const K: f64 = 4.0;
-        let up = sh.path.transform(&Affine::scale(K));
-        let r = vector::fill_rasterizer(&up, vector::DEFAULT_TOLERANCE);
-        let Some(b) = r.pixel_bounds() else {
-            sh.path.subpaths.clear();
-            return Ok(());
-        };
-        let b = b.inflate(2);
-        if u64::from(b.width()) * u64::from(b.height()) > 400_000_000 {
-            return Err(EngineError::Other("shape too large to merge".into()));
+    if let Some(ids) = combine_targets(s, p, &["layer"])? {
+        return merge_shape_layers(s, &ids, None, "Merge Shape Components", Some(tol));
+    }
+    let id = layer_id(s, p)?;
+    with_shape(s, id, "Merge Shape Components", |sh, _| bake_components(sh, tol))?;
+    shape_info(s, id)
+}
+
+/// Bakes `sh`'s path operations into plain combined outlines, traced from the exact coverage.
+fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
+    // Trace at 4× resolution so the fitted outline follows the anti-aliased edge closely.
+    const K: f64 = 4.0;
+    let up = sh.path.transform(&Affine::scale(K));
+    let r = vector::fill_rasterizer(&up, vector::DEFAULT_TOLERANCE);
+    let Some(b) = r.pixel_bounds() else {
+        sh.path.subpaths.clear();
+        return Ok(());
+    };
+    let b = b.inflate(2);
+    if u64::from(b.width()) * u64::from(b.height()) > 400_000_000 {
+        return Err(EngineError::Other("shape too large to merge".into()));
+    }
+    let cov = r.render(b);
+    let traced = vector::trace::trace_mask(&cov, b, 0.0, tol * K);
+    sh.path = traced.transform(&Affine::scale(1.0 / K));
+    sh.live = None;
+    sh.psd_raw = None;
+    Ok(())
+}
+
+/// The shape layers Layer › Combine Shapes merges into one: with none of the `narrow` params
+/// given and two or more shape layers selected, those layers bottom-to-top (other selected layers
+/// are left alone). `None` keeps the single-layer behaviour (acting on one layer's components).
+fn combine_targets(s: &Session, p: &Value, narrow: &[&str]) -> Result<Option<Vec<LayerId>>> {
+    if narrow.iter().any(|k| p.get(*k).is_some()) {
+        return Ok(None);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let sel = d.selected_layers();
+    let ids = crate::layer_multi_cmds::top_level(&d.doc, &sel);
+    let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)))).collect();
+    Ok((ids.len() > 1).then_some(ids))
+}
+
+/// Layer › Combine Shapes with several shape layers selected: Photoshop merges them into the
+/// top-most one. The bottom layer's components keep their operations; every component of the
+/// layers above takes `op` (front shapes subtract, intersect… in stacking order), or, with no
+/// `op` (Merge Shape Components), keeps its own with each layer's first component combined, and
+/// the result is then baked with tolerance `bake`. The other layers are removed; one history step.
+fn merge_shape_layers(s: &mut Session, ids: &[LayerId], op: Option<PathOp>, label: &str, bake: Option<f64>) -> Result<Value> {
+    let (&keep, _) = ids.split_last().ok_or_else(|| EngineError::Other("Combine Shapes needs two or more shape layers".into()))?;
+    if let Some(st) = s.active() {
+        for id in ids {
+            let locks = st.doc.effective_locks(*id);
+            if locks.all || locks.pixels {
+                return Err(EngineError::Other("a selected shape layer is locked".into()));
+            }
         }
-        let cov = r.render(b);
-        let traced = vector::trace::trace_mask(&cov, b, 0.0, tol * K);
-        sh.path = traced.transform(&Affine::scale(1.0 / K));
-        sh.live = None;
-        sh.psd_raw = None;
+    }
+    s.edit(label, |doc, active| {
+        let mut path: Option<Path> = None;
+        for id in ids {
+            let l = doc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
+            let LayerContent::Shape(sh) = &l.content else {
+                return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
+            };
+            let Some(acc) = path.as_mut() else {
+                path = Some(sh.path.clone());
+                continue;
+            };
+            for (j, sp) in sh.path.subpaths.iter().enumerate() {
+                let mut sp = sp.clone();
+                sp.op = match op {
+                    Some(op) => op,
+                    None if j == 0 => PathOp::Combine,
+                    None => sp.op,
+                };
+                acc.subpaths.push(sp);
+            }
+        }
+        let path = path.ok_or_else(|| EngineError::Other("Combine Shapes needs two or more shape layers".into()))?;
+        let snapshot = doc.clone();
+        let l = doc.layer_mut(keep).ok_or(EngineError::NoLayer(keep))?;
+        let LayerContent::Shape(sh) = &mut l.content else {
+            return Err(EngineError::Other(format!("layer {} is not a shape layer", keep.0)));
+        };
+        let mut merged = ShapeLayer { path, live: None, psd_raw: None, cache: None, ..sh.clone() };
+        if let Some(tol) = bake {
+            bake_components(&mut merged, tol)?;
+        }
+        vector::flatten::validate_shape(&merged.path, merged.stroke.as_ref()).map_err(|e| bad(label, e))?;
+        refresh_shape(&snapshot, &mut merged);
+        *sh = merged;
+        for id in ids.iter().filter(|id| **id != keep) {
+            doc.remove(*id);
+        }
+        *active = Some(keep);
         Ok(())
     })?;
-    shape_info(s, id)
+    crate::layer_multi_cmds::reselect(s, vec![keep], Some(keep));
+    shape_info(s, keep)
+}
+
+/// Layer › Combine Shapes › Unite / Subtract Front Shape / Intersect / Exclude: merges the
+/// selected shape layers with `op` ([`merge_shape_layers`]), or with one layer (or an explicit
+/// `layer`/`subpath`) sets the operation of that layer's components (`shape.edit`'s `op`).
+fn combine_shapes(s: &mut Session, p: &Value, op: &str, label: &str) -> Result<Value> {
+    if let Some(ids) = combine_targets(s, p, &["layer", "subpath"])? {
+        let op = op_from(op).ok_or_else(|| EngineError::Other(format!("unknown op `{op}`")))?;
+        return merge_shape_layers(s, &ids, Some(op), label, None);
+    }
+    shape_edit(s, &with(p, "op", json!(op)))
 }
 
 fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1310,6 +1400,9 @@ fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------------------------------------------------------------------
 // Specs
 // ---------------------------------------------------------------------------
+
+/// Params of the Layer › Combine Shapes operations.
+const COMBINE_PARAMS: &str = r##"{"layer":id?,"subpath":index? (default all but the first)} (no layer/subpath and two or more shape layers selected: merges them into the top-most, whose components above the bottom layer's take the operation)"##;
 
 pub(crate) const PATH_FORM: &str = r##"path: {"subpaths":[{"closed":bool=true,"op":"combine|subtract|intersect|exclude","knots":[[x,y] | {"anchor":[x,y],"in":[x,y],"out":[x,y],"smooth":bool}]}],"fillRule":"nonzero|evenodd","inverted":bool}"##;
 
@@ -1517,30 +1610,29 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.rasterize.shape", "Rasterize Shape", [], r##"{"layer":id?} (no layer: every selected shape layer)"##, has_layer, |s, p| {
             if p.get("layer").is_some() { shape_rasterize(s, p) } else { crate::extra_cmds::rasterize(s, p, Some("shape")) }
         }),
-        spec!(
-            "layer.combineShapes.unite",
-            "Unite Shapes",
-            [],
-            r##"{"layer":id?,"subpath":index? (default all but the first)}"##,
-            has_layer,
-            |s, p| shape_edit(s, &with(p, "op", json!("combine")))
-        ),
-        spec!("layer.combineShapes.subtractFrontShape", "Subtract Front Shape", [], r##"{"layer":id?,"subpath":index?}"##, has_layer, |s, p| shape_edit(
+        // With two or more shape layers selected (and no `layer`/`subpath`), these merge them into
+        // the top-most one, as in Photoshop; with one, they set the operation of its components.
+        spec!("layer.combineShapes.unite", "Unite Shapes", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(s, p, "combine", "Unite Shapes")),
+        spec!("layer.combineShapes.subtractFrontShape", "Subtract Front Shape", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(
             s,
-            &with(p, "op", json!("subtract"))
+            p,
+            "subtract",
+            "Subtract Front Shape"
         )),
-        spec!("layer.combineShapes.intersectShapeAreas", "Intersect Shape Areas", [], r##"{"layer":id?,"subpath":index?}"##, has_layer, |s, p| shape_edit(
+        spec!("layer.combineShapes.intersectShapeAreas", "Intersect Shape Areas", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(
             s,
-            &with(p, "op", json!("intersect"))
+            p,
+            "intersect",
+            "Intersect Shape Areas"
         )),
-        spec!("layer.combineShapes.excludeOverlappingShapes", "Exclude Overlapping Shapes", [], r##"{"layer":id?,"subpath":index?}"##, has_layer, |s, p| {
-            shape_edit(s, &with(p, "op", json!("exclude")))
+        spec!("layer.combineShapes.excludeOverlappingShapes", "Exclude Overlapping Shapes", [], COMBINE_PARAMS, has_layer, |s, p| {
+            combine_shapes(s, p, "exclude", "Exclude Overlapping Shapes")
         }),
         spec!(
             "layer.combineShapes.mergeShapeComponents",
             "Merge Shape Components",
             [],
-            r##"{"layer":id?,"tolerance":px=0.1} (bakes the path operations into plain combined outlines, traced from the exact coverage)"##,
+            r##"{"layer":id?,"tolerance":px=0.1} (bakes the path operations into plain combined outlines, traced from the exact coverage; no layer and several shape layers selected: merges them into the top-most first)"##,
             has_layer,
             merge_components
         ),

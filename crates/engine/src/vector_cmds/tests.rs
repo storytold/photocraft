@@ -666,3 +666,108 @@ fn shape_info_bounds_of_curved_shapes_are_exact() {
         }
     }
 }
+
+/// Two overlapping 40×40 rectangle shape layers ("Rectangle 1" black below, "Rectangle 2" grey
+/// above, overlapping by 20×20) with both selected, like the Layers panel in #2400.
+fn two_selected_rects(depth: u32) -> (Session, u64, u64) {
+    let mut s = session(100, 100, depth);
+    let a = s.execute("shape.create", json!({"rect": [10, 10, 40, 40], "fill": "#000000"})).unwrap()["layer"].as_u64().unwrap();
+    let b = s.execute("shape.create", json!({"rect": [30, 30, 40, 40], "fill": "#808080"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": a})).unwrap();
+    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    assert_eq!(s.active().unwrap().selected_layers(), [LayerId(a), LayerId(b)]);
+    (s, a, b)
+}
+
+#[test]
+fn combine_shapes_merges_the_selected_shape_layers_into_the_top_one() {
+    for depth in [8, 16, 32] {
+        for (cmd, area) in [
+            ("layer.combineShapes.unite", 2800.0),
+            ("layer.combineShapes.subtractFrontShape", 1200.0),
+            ("layer.combineShapes.intersectShapeAreas", 400.0),
+            ("layer.combineShapes.excludeOverlappingShapes", 2400.0),
+            ("layer.combineShapes.mergeShapeComponents", 2800.0),
+        ] {
+            let (mut s, a, b) = two_selected_rects(depth);
+            let before = doc(&s).clone();
+            let top_fill = shape(&s, b).fill;
+            let history = s.active().unwrap().history.past_len();
+            let r = s.execute(cmd, json!({})).unwrap();
+            assert_eq!(r["layer"], b, "{cmd}");
+            let d = doc(&s);
+            assert!(d.layer(LayerId(a)).is_none(), "{cmd}: the lower shape layer is merged away");
+            assert_eq!(d.walk().len(), 2, "{cmd}: Background plus the merged shape");
+            let l = d.layer(LayerId(b)).unwrap();
+            assert_eq!(l.name, "Rectangle 2");
+            let sh = shape(&s, b);
+            assert!((alpha_sum(&sh) - area).abs() < 2.0, "{cmd} at {depth} bits: covers {} px, not {area}", alpha_sum(&sh));
+            assert_eq!(sh.fill, top_fill, "{cmd}: the top layer's fill");
+            assert_eq!(s.active().unwrap().active_layer, Some(LayerId(b)));
+            assert_eq!(s.active().unwrap().selected_layers(), [LayerId(b)]);
+            assert_eq!(s.active().unwrap().history.past_len(), history + 1, "{cmd}: one history step");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(*doc(&s), before, "{cmd}: undo restores both layers");
+        }
+    }
+}
+
+#[test]
+fn combine_shapes_keeps_the_single_layer_behaviour() {
+    let (mut s, a, b) = two_selected_rects(8);
+    // An explicit layer narrows it to that layer's components, as before.
+    s.execute("shape.create", json!({"addTo": b, "rect": [50, 50, 10, 10]})).unwrap();
+    s.execute("layer.combineShapes.subtractFrontShape", json!({"layer": b})).unwrap();
+    let d = doc(&s);
+    assert!(d.layer(LayerId(a)).is_some());
+    assert_eq!(shape(&s, b).path.subpaths[1].op, PathOp::Subtract);
+    assert!((alpha_sum(&shape(&s, b)) - 1500.0).abs() < 2.0);
+    // One selected shape layer: the operation applies to its own components.
+    s.execute("layer.select", json!({"layer": b})).unwrap();
+    s.execute("layer.combineShapes.unite", json!({})).unwrap();
+    assert!(doc(&s).layer(LayerId(a)).is_some());
+    assert!((alpha_sum(&shape(&s, b)) - 1600.0).abs() < 2.0);
+}
+
+#[test]
+fn combine_shapes_ignores_selected_non_shape_layers() {
+    let (mut s, a, b) = two_selected_rects(8);
+    let bg = doc(&s).walk()[0].2.id;
+    s.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
+    assert_eq!(s.active().unwrap().selected_layers().len(), 3);
+    s.execute("layer.combineShapes.unite", json!({})).unwrap();
+    let d = doc(&s);
+    assert!(d.layer(bg).is_some(), "the Background is left alone");
+    assert!(d.layer(LayerId(a)).is_none());
+    assert!((alpha_sum(&shape(&s, b)) - 2800.0).abs() < 2.0);
+}
+
+#[test]
+fn combine_shapes_fails_gracefully() {
+    let (mut s, a, _) = two_selected_rects(8);
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    let bad_params = [json!({"layer": 999_999}), json!({"layer": a, "subpath": 99}), json!({"subpath": 99}), json!({"tolerance": "x", "layer": 999_999})];
+    for cmd in [
+        "layer.combineShapes.unite",
+        "layer.combineShapes.subtractFrontShape",
+        "layer.combineShapes.intersectShapeAreas",
+        "layer.combineShapes.excludeOverlappingShapes",
+        "layer.combineShapes.mergeShapeComponents",
+    ] {
+        for p in &bad_params {
+            if cmd.ends_with("mergeShapeComponents") && p.get("subpath").is_some() {
+                continue; // `subpath` means nothing to Merge Shape Components
+            }
+            assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {p}");
+            assert_eq!(*doc(&s), before, "{cmd} {p}");
+        }
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    // Locked layers refuse the merge without touching the document.
+    s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+    assert!(doc(&s).effective_locks(LayerId(a)).all);
+    let before = doc(&s).clone();
+    assert!(s.execute("layer.combineShapes.unite", json!({})).is_err());
+    assert_eq!(*doc(&s), before);
+}
