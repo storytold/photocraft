@@ -159,9 +159,7 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: b
     }
     // ⇧⌥-click mask view (#196): the layer mask as Quick Mask's red over the hidden areas
     // (Photoshop's Layer Mask Display Options default).
-    if !solo_mask
-        && let Some((m, MaskViewMode::Overlay)) = layer_mask
-    {
+    if !solo_mask && let Some((m, MaskViewMode::Overlay)) = layer_mask {
         tint(sample(&m.surface, r, factor), AlphaChannel::DEFAULT_COLOR, 0.5, &|x| 1.0 - x);
     }
     Some(out.into_iter().map(|p| Color32::from_rgba_premultiplied(q(p[0]), q(p[1]), q(p[2]), q(p[3]))).collect())

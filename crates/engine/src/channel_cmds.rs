@@ -131,9 +131,7 @@ pub(crate) fn fix_view(st: &mut DocState) {
     let shown = {
         let doc = &st.doc;
         let v = &st.channel_view;
-        (0..n).any(|i| v.alpha_shown(i))
-            || (quick && !v.quick_mask_hidden)
-            || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
+        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
     };
     if st.channel_view.visible_colors(colors) == 0 && !shown {
         st.channel_view.color_hidden.clear();
