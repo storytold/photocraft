@@ -111,9 +111,21 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
+      # nextest runs the test binaries in parallel (cargo test runs them one at a time), with the
+      # GPU tests capped by the `gpu` group in .config/nextest.toml (#2204).
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-nextest@0.9.146
+
       # `--features heif`: official builds open HEIC photos via the optional photocraft-heif crate.
+      # `--lib --bins --tests` leaves out the examples, which cargo test would build and link but
+      # never run (Clippy's `--all-targets` still checks they compile). nextest skips doctests, so
+      # they get their own step.
       - name: Test
-        run: cargo test --workspace --locked --features heif
+        run: cargo nextest run --workspace --locked --features heif --lib --bins --tests
+
+      - name: Doctests
+        run: cargo test --workspace --locked --features heif --doc
 
       # The same codecs without the optional decoder: HEIC must stay a clear "not in this build"
       # error for distributors who leave it out.
@@ -123,9 +135,10 @@ jobs:
 
       # The same tests built with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run here. Linux only. Keep the exact `--workspace
-      # --features heif` of the Test step: any other package or feature selection resolves a
-      # different feature set, recompiles the whole dependency graph into the same target dir and
-      # runs the runner out of disk (as `-p photocraft-text -p photocraft-ui-egui` did after #800).
+      # --features heif --lib --bins --tests` of the Test step: any other package, target or
+      # feature selection resolves a different feature set, recompiles the whole dependency graph
+      # into the same target dir and runs the runner out of disk (as `-p photocraft-text -p
+      # photocraft-ui-egui` did after #800).
       - name: Check out craft-fonts
         if: runner.os == 'Linux'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -139,7 +152,7 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: cargo test --workspace --locked --features heif
+        run: cargo nextest run --workspace --locked --features heif --lib --bins --tests
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
