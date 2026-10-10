@@ -1454,7 +1454,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if n == 0 && !opening {
         // Auto show the Home Screen is off: an empty workspace, like Photoshop.
-        paint_document_background(app, ui, ui.available_rect_before_wrap());
+        paint_dots(ui, ui.available_rect_before_wrap());
         return;
     }
     if !app.ui.view.hides_tabs() || opening {
@@ -1965,29 +1965,12 @@ pub fn fmt_zoom(pct: f32) -> String {
     if (pct - pct.round()).abs() < 0.05 { format!("{}", pct.round() as i64) } else { format!("{pct:.1}") }
 }
 
-/// Document surrounds keep the saved dark-theme colours when interface appearance follows the
-/// system. Copying only these colours leaves layout, tool overlays and interface widgets on the
-/// resolved palette, and fixed appearance modes retain their chosen theme's surround.
-pub(crate) fn document_tokens(app: &PhotocraftApp, ctx: &egui::Context) -> crate::theme::Tokens {
-    use crate::theme::{ThemeKind, Tokens};
-    let mut t = Tokens::get(ctx);
-    let interface = &app.session.prefs().interface;
-    if interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto {
-        let dark = Tokens::for_kind(ThemeKind::from_name(interface.dark_theme.name()).unwrap_or(ThemeKind::ProMedium));
-        t.canvas = dark.canvas;
-        t.canvas_dot = dark.canvas_dot;
-    }
-    t
-}
-
 /// Repeating dot-grid texture for the canvas surround.
 fn dots(ctx: &egui::Context, t: &crate::theme::Tokens) -> Option<egui::TextureId> {
     if t.bevel {
         return None;
     }
-    // The same visible theme can use different document dots in Auto, and switching modes
-    // can change their colour without changing that visible theme.
-    let key = egui::Id::new(("canvas-dots", t.canvas_dot.to_array()));
+    let key = egui::Id::new(("canvas-dots", format!("{:?}", t.kind)));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
         return Some(tex.id());
     }
@@ -2009,31 +1992,12 @@ fn dots(ctx: &egui::Context, t: &crate::theme::Tokens) -> Option<egui::TextureId
     Some(id)
 }
 
-fn paint_dots(ui: &egui::Ui, rect: Rect, t: &crate::theme::Tokens) {
-    if let Some(id) = dots(ui.ctx(), t) {
+fn paint_dots(ui: &egui::Ui, rect: Rect) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    if let Some(id) = dots(ui.ctx(), &t) {
         let uv = Rect::from_min_max(Pos2::ZERO, pos2(rect.width() / 22.0, rect.height() / 22.0));
         ui.painter_at(rect).image(id, rect, uv, Color32::WHITE);
     }
-}
-
-fn paint_document_background(app: &PhotocraftApp, ui: &egui::Ui, rect: Rect) {
-    let t = document_tokens(app, ui.ctx());
-    if app.session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto
-        && !app.ui.view.hides_chrome()
-        && crate::prefs_ui::pasteboard_color(app).is_none()
-    {
-        ui.painter_at(rect).rect_filled(rect, 0.0, t.canvas);
-    }
-    paint_dots(ui, rect, &t);
-}
-
-fn paint_home_background(app: &PhotocraftApp, ui: &egui::Ui, rect: Rect) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    if app.session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto {
-        // Home text uses interface tokens, so its background must follow that same palette.
-        ui.painter_at(rect).rect_filled(rect, 0.0, t.chrome);
-    }
-    paint_dots(ui, rect, &t);
 }
 
 pub fn mode_label(doc: &Document) -> &'static str {
@@ -2052,7 +2016,7 @@ pub fn mode_label(doc: &Document) -> &'static str {
 fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
-    paint_home_background(app, ui, area);
+    paint_dots(ui, area);
     // File › Open Recent, newest first (on the web there are no paths to reopen).
     let recent: Vec<String> = if cfg!(target_arch = "wasm32") { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
     let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
@@ -2252,7 +2216,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         Some(c) => {
             ui.painter_at(rect).rect_filled(rect, 0.0, c);
         }
-        None => paint_document_background(app, ui, rect),
+        None => paint_dots(ui, rect),
     }
     let border = app.session.prefs().interface.canvas_border;
     let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
@@ -2370,7 +2334,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     crate::color_range_ui::paint_selection_preview(app, &ctx, &painter, doc.id, img_rect, flip);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
-        let t = document_tokens(app, &ctx);
+        let t = crate::theme::Tokens::get(&ctx);
         let pasteboard = crate::prefs_ui::pasteboard_color(app);
         let dot_tex = dots(&ctx, &t);
         for r in crate::artboard_ui::pasteboard_rects(&xf, &doc) {
@@ -4218,7 +4182,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if ui.ctx().input(|i| i.viewport().close_requested()) {
                 close = true;
             }
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(document_tokens(app, ui.ctx()).canvas)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 view = canvas_view(app, ui, w.document, rect, view.clone(), false);
             });
@@ -4335,190 +4299,6 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     // Viewing the mask (⌥-click its thumbnail, #196) paints the mask.
     let viewing = photocraft_engine::mask_view_cmds::current(st).is_some();
     json!(if (app.ui.mask_target || viewing) && has_mask { "mask" } else { "pixels" })
-}
-
-#[cfg(test)]
-mod appearance_surround_tests {
-    use super::*;
-    use crate::theme::{ThemeKind, Tokens};
-
-    fn auto_app() -> PhotocraftApp {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": "studio"}})).unwrap();
-        app
-    }
-
-    fn filled(output: &egui::FullOutput, rect: Rect, color: Color32) -> bool {
-        output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == rect && r.fill == color))
-    }
-
-    #[test]
-    fn auto_document_surround_stays_dark_while_interface_palette_changes() {
-        let mut app = auto_app();
-        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-        app.sync_views();
-        let ctx = egui::Context::default();
-        let dark = Tokens::for_kind(ThemeKind::Studio);
-        let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(300.0, 200.0));
-        for kind in [ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic, ThemeKind::Adwaita] {
-            PhotocraftApp::setup_context(&ctx, kind);
-            let interface = Tokens::get(&ctx);
-            let document = document_tokens(&app, &ctx);
-            assert_eq!((document.canvas, document.canvas_dot), (dark.canvas, dark.canvas_dot));
-            let mut expected = interface;
-            expected.canvas = dark.canvas;
-            expected.canvas_dot = dark.canvas_dot;
-            assert_eq!(document, expected, "only the surround colours change");
-            assert_eq!(Tokens::get(&ctx), interface, "document colours never replace interface tokens");
-            let view = app.ui.views[0].clone();
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                canvas_view(&mut app, ui, 0, rect, view.clone(), false);
-            });
-            assert!(filled(&output, rect, dark.canvas), "{kind:?}: the actual document view paints the stable surround");
-            output.textures_delta.clear();
-        }
-    }
-
-    #[test]
-    fn changed_saved_dark_theme_refreshes_dots_without_changing_visible_light_theme() {
-        let mut app = auto_app();
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, ThemeKind::StudioLight);
-        let visible = Tokens::get(&ctx);
-        let studio = document_tokens(&app, &ctx);
-        let studio_id = dots(&ctx, &studio).unwrap();
-        app.run("prefs.set", json!({"path": "interface.darkTheme", "value": "solarizedDark"})).unwrap();
-        let solarized = document_tokens(&app, &ctx);
-        assert_eq!((solarized.canvas, solarized.canvas_dot), {
-            let t = Tokens::for_kind(ThemeKind::SolarizedDark);
-            (t.canvas, t.canvas_dot)
-        });
-        assert_ne!(dots(&ctx, &solarized).unwrap(), studio_id, "a changed colour uploads new dots");
-        app.run("prefs.set", json!({"path": "interface.darkTheme", "value": "studio"})).unwrap();
-        assert_eq!(dots(&ctx, &document_tokens(&app, &ctx)), Some(studio_id), "the existing colour texture can be reused");
-        assert_eq!(Tokens::get(&ctx), visible);
-    }
-
-    #[test]
-    fn auto_and_fixed_light_have_distinct_surrounds_with_the_same_visible_palette() {
-        let mut app = auto_app();
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, ThemeKind::StudioLight);
-        let visible = Tokens::get(&ctx);
-        let automatic = document_tokens(&app, &ctx);
-        let automatic_id = dots(&ctx, &automatic).unwrap();
-        app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "light"})).unwrap();
-        assert_eq!(document_tokens(&app, &ctx), visible, "fixed Light keeps its original document palette");
-        assert_ne!(dots(&ctx, &visible).unwrap(), automatic_id);
-        app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
-        assert_eq!(document_tokens(&app, &ctx), automatic);
-        assert_eq!(dots(&ctx, &automatic), Some(automatic_id));
-        app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "dark"})).unwrap();
-        PhotocraftApp::setup_context(&ctx, ThemeKind::SolarizedDark);
-        assert_eq!(document_tokens(&app, &ctx), Tokens::get(&ctx), "fixed Dark also keeps its chosen palette");
-    }
-
-    #[test]
-    fn empty_workspace_paints_the_same_auto_surround() {
-        let mut app = auto_app();
-        app.run("prefs.set", json!({"path": "general.autoShowHomeScreen", "value": false})).unwrap();
-        let ctx = egui::Context::default();
-        for kind in [ThemeKind::Studio, ThemeKind::StudioLight] {
-            PhotocraftApp::setup_context(&ctx, kind);
-            let mut painted = None;
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                painted = Some(ui.available_rect_before_wrap());
-                document_area(&mut app, ui);
-            });
-            assert!(filled(&output, painted.unwrap(), Tokens::for_kind(ThemeKind::Studio).canvas));
-            output.textures_delta.clear();
-        }
-    }
-
-    #[test]
-    fn auto_keeps_explicit_pasteboard_and_transparency_preferences() {
-        let mut app = auto_app();
-        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-        app.sync_views();
-        app.run(
-            "prefs.set",
-            json!({"values": {
-                "interface.canvasColor": "custom", "interface.canvasCustomColor": "#193b5d",
-                "transparencyAndGamut.gridSize": "small", "transparencyAndGamut.gridColors": "custom",
-                "transparencyAndGamut.customLight": "#abcdef", "transparencyAndGamut.customDark": "#123456"
-            }}),
-        )
-        .unwrap();
-        let transparency = app.session.prefs().transparency_and_gamut.clone();
-        let style = crate::prefs_ui::canvas_style(&app);
-        let ctx = egui::Context::default();
-        let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(300.0, 200.0));
-        for kind in [ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic] {
-            PhotocraftApp::setup_context(&ctx, kind);
-            let view = app.ui.views[0].clone();
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                canvas_view(&mut app, ui, 0, rect, view.clone(), false);
-            });
-            assert!(filled(&output, rect, Color32::from_rgb(0x19, 0x3b, 0x5d)));
-            assert_eq!(app.session.prefs().transparency_and_gamut, transparency);
-            assert_eq!(crate::prefs_ui::canvas_style(&app), style);
-            output.textures_delta.clear();
-        }
-    }
-
-    #[test]
-    fn artboard_pasteboard_uses_stable_auto_colours_and_keeps_explicit_colour() {
-        let mut app = auto_app();
-        app.run("file.new", json!({"width": 40, "height": 24})).unwrap();
-        app.run("layer.new.artboard", json!({"rect": [0, 0, 8, 8]})).unwrap();
-        app.sync_views();
-        let ctx = egui::Context::default();
-        let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(300.0, 200.0));
-        let mut view = app.ui.views[0].clone();
-        view.zoom = 1.0;
-        view.center = [20.0, 12.0];
-        view.fit_pending = false;
-        view.fill_pending = false;
-        let doc = app.session.active().unwrap().doc.clone();
-        let xf = ViewXform { rect, zoom: 1.0, center: view.center, flip: false, rotation: 0.0 };
-        let pasteboard = crate::artboard_ui::pasteboard_rects(&xf, &doc);
-        assert!(!pasteboard.is_empty());
-        for explicit in [false, true] {
-            if explicit {
-                app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": "#193b5d"}})).unwrap();
-            }
-            let color = if explicit { Color32::from_rgb(0x19, 0x3b, 0x5d) } else { Tokens::for_kind(ThemeKind::Studio).canvas };
-            for kind in [ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic] {
-                PhotocraftApp::setup_context(&ctx, kind);
-                let mut output = ctx.run_ui(Default::default(), |ui| {
-                    canvas_view(&mut app, ui, 0, rect, view.clone(), false);
-                });
-                assert!(pasteboard.iter().all(|r| filled(&output, r.intersect(rect), color)), "{kind:?}: explicit={explicit}");
-                output.textures_delta.clear();
-            }
-        }
-    }
-
-    #[test]
-    fn auto_home_paints_interface_chrome_separately_from_document_surround() {
-        let mut app = auto_app();
-        let ctx = egui::Context::default();
-        for kind in [ThemeKind::StudioLight, ThemeKind::Classic, ThemeKind::Adwaita] {
-            PhotocraftApp::setup_context(&ctx, kind);
-            let visible = Tokens::get(&ctx);
-            let document = document_tokens(&app, &ctx);
-            assert_ne!(visible.chrome, document.canvas);
-            let mut area = None;
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                area = Some(ui.available_rect_before_wrap());
-                start_screen(&mut app, ui);
-            });
-            assert!(filled(&output, area.unwrap(), visible.chrome), "{kind:?}: Home matches its interface text palette");
-            assert!(!filled(&output, area.unwrap(), document.canvas));
-            assert_eq!(Tokens::get(&ctx), visible);
-            output.textures_delta.clear();
-        }
-    }
 }
 
 #[cfg(test)]
