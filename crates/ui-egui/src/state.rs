@@ -954,6 +954,9 @@ pub struct UiState {
     /// In-progress polygonal lasso vertices (document coordinates).
     #[serde(default)]
     pub polygon: Vec<[f64; 2]>,
+    /// The document owning the unfinished polygon; never restored across sessions.
+    #[serde(skip)]
+    pub polygon_document: Option<photocraft_doc::DocId>,
     /// The selection mode the polygonal lasso started in ("replace", "add", ...), set by the
     /// modifiers held at its first click.
     #[serde(default)]
@@ -1043,6 +1046,7 @@ impl Default for UiState {
             selection_mode: 0,
             tool_options: ToolOptions::default(),
             polygon: Vec::new(),
+            polygon_document: None,
             polygon_mode: String::new(),
             magnetic: Default::default(),
             crop_rect: None,
