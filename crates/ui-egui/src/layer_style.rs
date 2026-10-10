@@ -21,6 +21,8 @@ use serde_json::{Map, Value, json};
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, widgets};
 
+pub(crate) mod color_picker;
+
 #[derive(Clone, Copy)]
 enum P {
     Slider(f32, f32, &'static str),
@@ -494,6 +496,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<u64> {
     let mut f = initial_fields(&layer, select, light);
     // Channels and Blend If list the document's own colour channels.
     set_blending_fields(&mut f, &layer, mode);
+    f.insert("__document".into(), json!(st.doc.id));
     f.insert("patternList".into(), pattern_list(app));
     Some(app.ui.open_dialog(crate::state::DialogKind::LayerStyle, f))
 }
@@ -910,12 +913,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     P::Color => {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(tl!(&label)).color(t.text_dim));
-                            let hexs = disp.get(key).and_then(Value::as_str).unwrap_or("#000000").to_string();
-                            let mut c = parse_hex(&hexs);
-                            if crate::widgets::color_edit_button_srgba(ui, &mut c).changed() {
-                                let value = json!(format!("#{r:02x}{g:02x}{b:02x}", r = c.r(), g = c.g(), b = c.b()));
-                                disp[key] = value.clone();
-                                set_param(f, &selected, key, value);
+                            let color = disp.get(key).and_then(Value::as_str).unwrap_or("#000000");
+                            let response = widgets::color_swatch(ui, parse_hex(color)).on_hover_text(tl!("Color Picker (Layer Style Color)"));
+                            if response.clicked() {
+                                f.insert(color_picker::REQUEST.into(), json!({"effect": selected, "field": key}));
                             }
                         });
                     }
@@ -984,7 +985,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             // restores it (or the factory defaults before the first Make).
             let page_kind = sel_kind != BLENDING && entry(f, &selected).is_some();
             ui.add_space(4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            // Wrap: translated labels (ru, de) can be wider than the page column.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min).with_main_wrap(true), |ui| {
                 ui.add_enabled_ui(page_kind, |ui| {
                     if crate::widgets::secondary_button(ui, tl!("Reset to Default"), 130.0).clicked()
                         && let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": sel_kind}))
@@ -1082,7 +1084,9 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Blend Mode")).color(t.text_dim));
         let mut cur = p.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
-        let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
+        // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
+        let own = photocraft_color::BlendMode::PAINT_NET_MODES.into_iter().find(|m| m.label() == cur);
+        let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.into_iter().chain(own).map(|m| (m.label().to_string(), m.label())).collect();
         if widgets::dropdown(ui, "fx-blend-blendingOptions", &mut cur, &opts, 150.0) {
             p["blend"] = json!(cur);
         }
@@ -1312,7 +1316,7 @@ fn angle_row(ui: &mut egui::Ui, label: &str, angle: &mut f32) -> egui::Response 
                 dial.mark_changed();
             }
         }
-        let field = ui.add(egui::DragValue::new(angle).range(-180.0..=180.0).speed(1.0).suffix("°"));
+        let field = ui.add(egui::DragValue::new(angle).custom_parser(crate::widgets::parse_num).range(-180.0..=180.0).speed(1.0).suffix("°"));
         if field.changed() {
             dial.mark_changed();
         }

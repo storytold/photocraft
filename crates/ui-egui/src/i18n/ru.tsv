@@ -164,6 +164,8 @@
 	Rasterize	Растрировать
 	Rasterize Type	Растрировать текст
 	Rasterize Shape	Растрировать фигуру
+	Rasterize Layer	Растрировать слой
+	Rasterize Layers	Растрировать слои
 	New Adjustment Layer	Новый корректирующий слой
 	New Fill Layer	Новый слой-заливка
 	Layer Mask	Маска слоя
@@ -200,12 +202,21 @@
 	Inner Shadow…	Внутренняя тень…
 	Outer Glow…	Внешнее свечение…
 	Inner Glow…	Внутреннее свечение…
-	Bevel & Emboss…	Фаска и рельеф…
+	Bevel & Emboss…	Тиснение…
 	Use Global Light	Использовать глобальный свет
 	Satin…	Глянец…
 	Color Overlay…	Наложение цвета…
 	Gradient Overlay…	Наложение градиента…
-	Pattern Overlay…	Наложение паттерна…
+	Pattern Overlay…	Наложение узора…
+	Bevel & Emboss	Тиснение
+	Inner Shadow	Внутренняя тень
+	Inner Glow	Внутреннее свечение
+	Satin	Глянец
+	Color Overlay	Наложение цвета
+	Gradient Overlay	Наложение градиента
+	Pattern Overlay	Наложение узора
+	Outer Glow	Внешнее свечение
+	Drop Shadow	Тень
 	Copy Layer Style	Скопировать стиль слоя
 	Paste Layer Style	Вставить стиль слоя
 	Clear Layer Style	Очистить стиль слоя
@@ -532,6 +543,12 @@
 	Reset	Сброс
 	Reset Section	Сбросить раздел
 	Reset All to Defaults	Сбросить всё к значениям по умолчанию
+	Import Shortcuts…	Импортировать сочетания клавиш…
+	Load a keyboard shortcut set saved as .kys	Загрузить набор сочетаний клавиш, сохранённый как .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Импортировано сочетаний: {n} из {file}. Нажмите OK, чтобы сохранить их.
+	{n} commands are not in PhotoCraft.	Команд, которых нет в PhotoCraft: {n}.
+	Keyboard shortcuts imported	Сочетания клавиш импортированы
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Здесь используется ваш набор сочетаний клавиш {set}: сочетаний, отличных от стандартных: {n}. Их показывает Редактирование › Сочетания клавиш; «Сбросить всё к значениям по умолчанию» отменяет импорт.
 	Defaults restored.	Значения по умолчанию восстановлены.
 	Restore Defaults	Восстановить по умолчанию
 	Restore original size	Восстановить исходный размер
@@ -958,6 +975,7 @@
 	Brush Preset Options	Параметры наборов кистей
 	New Brush	Новая кисть
 	Create new brush from these settings	Создать новую кисть из этих параметров
+	Update the current brush with these settings	Обновить текущую кисть этими параметрами
 	Reset the brush to the defaults	Сбросить кисть к значениям по умолчанию
 	No brush presets	Нет наборов кистей
 	Override Pressure	Переопределить нажим
@@ -1357,8 +1375,12 @@
 	Switch theme	Сменить тему
 	Next Theme	Следующая тема
 	Classic Theme	Классическая тема
+	Solarized dark	Solarized тёмная
+	Solarized Dark Theme	Тёмная тема Solarized
 	Studio Theme	Тема Studio
 	Studio Light Theme	Светлая тема Studio
+	Adwaita Light Theme	Светлая тема Adwaita
+	Adwaita Dark Theme	Тёмная тема Adwaita
 	Pro Theme	Тема Pro
 	Pro Medium Gray Theme	Средне-серая тема Pro
 
@@ -1480,6 +1502,7 @@
 	Adjustment Layer	Корректирующий слой
 	{name} Properties	Свойства: {name}
 	Move Tool	Перемещение
+	Could not use the move tool because the layer is locked.	Не удалось использовать инструмент «Перемещение», потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
 	Brush Tool	Кисть
@@ -1637,6 +1660,7 @@
 	Add Pins	Добавить булавки
 	Delete Pins	Удалить булавки
 	Remove All Pins	Удалить все булавки
+	Remove Tool	Инструмент «Удаление»
 	Pin Depth:	Глубина булавки:
 	Bring the selected pin forward	Переместить выбранную булавку вперёд
 	Send the selected pin backward	Переместить выбранную булавку назад
@@ -2092,7 +2116,7 @@
 	Straighten	Выпрямить
 	Straighten Layer	Выпрямить слой
 	Strength:	Интенсивность:
-	Stroke	Мазок
+	Stroke	Обводка
 	Stroke Catch-up	Догонять мазком
 	Stroke:	Обводка:
 	Location:	Расположение:
@@ -2100,7 +2124,14 @@
 	Outside	Снаружи
 	Tetrahedral	Тетраэдрическая
 	Texture Each Tip	Текстура на каждый отпечаток
-	The current gradient (pick one in Window › Gradients)	Текущий градиент (выберите в Окно › Градиенты)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Редактор градиентов
+	Gradient picker	Выбор градиента
+	Save As Preset	Сохранить как набор
+	The gradient the Gradient tool paints with	Градиент, которым рисует инструмент «Градиент»
+	Adds the current gradient to the Gradients panel	Добавляет текущий градиент на панель «Градиенты»
+	Gradient stops	Точки градиента
+	Click to edit the gradient	Щёлкните, чтобы изменить градиент
 	Tilt X	Наклон X
 	Tilt Y	Наклон Y
 	Toggle count group visibility	Вкл/выкл видимость группы счёта
@@ -2281,6 +2312,8 @@
 	Standard	Стандартный
 	Studio	Studio
 	Studio light	Светлая Studio
+	Adwaita	Adwaita
+	Adwaita dark	Тёмная Adwaita
 	Subdivisions	Подделения
 	System	Системная
 	Text engine	Текстовый движок
@@ -2315,6 +2348,9 @@
 	Cancelled {label}	{label}: отменено
 	Esc to cancel	Esc — отмена
 	Opening {name}	Открытие {name}
+	Saving {name}	Сохранение {name}
+	A save to {name} is still running; try again when it finishes	Сохранение в {name} ещё выполняется; повторите попытку после его завершения
+	{label} is writing the file and can no longer be cancelled	{label}: идёт запись файла, отменить уже нельзя
 	Opening {name}…	Открытие {name}…
 	Opening…	Открытие…
 	Reading…	Чтение…
@@ -2556,6 +2592,9 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+
+	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 отключает этот порог; группы SVG с вложенностью более 100 уровней всегда растрируются.
 	Rule of Thirds	Правило третей
 	Triangle	Треугольник
 	Golden Ratio	Золотое сечение
@@ -2567,4 +2606,62 @@ fontWeight	Italic	Курсив
 	Cycle Orientation	Сменить ориентацию
 	Set the overlay options for the Crop tool	Задать параметры перекрытия для инструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+щелчок перехватило окружение рабочего стола: оно перемещает окна через Alt+перетаскивание. Назначьте для перемещения окон клавишу Super или зафиксируйте Alt в меню Окно › Клавиши-модификаторы.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Палитра цветов (цвет стиля слоя)
+	Auto Hide Notifications	Автоскрытие уведомлений
+	Notification Duration (seconds)	Длительность уведомления (секунды)
+	Appearance Mode	Режим оформления
+	Dark Theme	Тёмная тема
+	Light Theme	Светлая тема
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Следующий режим оформления
+	Sync with system	Синхронизировать с системой
+	Active	Активна
+	Color Picker (Solid Color)	Выбор цвета (сплошной цвет)
 	Straighten the image by drawing a line on it	Выровнять изображение, нарисовав на нем линию
+	Set additional Crop options	Задать дополнительные параметры кадрирования
+	Show Cropped Area	Показать отсекаемую область
+	Enable Crop Shield	Включить экран кадрирования
+	Match Canvas	Как у холста
+	Auto Adjust Opacity	Автоматически настраивать непрозрачность
+	Crop Shield color	Цвет экрана кадрирования
+	Color Picker (Crop Shield Color)	Палитра цветов (Цвет экрана кадрирования)
+	From Center	От центра
+	Link radii	Связать радиусы
+	Star Ratio:	Коэффициент звезды:
+	Create Rectangle	Создать прямоугольник
+	Create Ellipse	Создать эллипс
+	Create Triangle	Создать треугольник
+	Create Polygon	Создать многоугольник
+	Pressure curve	Кривая нажима
+	Click to add a point, right-click to remove	Щёлкните, чтобы добавить точку; щелчок правой кнопкой удаляет её
+	Soft	Мягкая
+	Hard	Жёсткая
+	Some brush presets could not be loaded	Не удалось загрузить некоторые наборы кистей
+	Retry saving presets	Повторить сохранение наборов
+	Brush preset changes are not saved: {error}	Изменения наборов кистей не сохранены: {error}
+	Keep this tab open to retain your brushes.	Не закрывайте эту вкладку, чтобы сохранить кисти.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	Хранилище браузера недоступно; кисти действуют только в этом сеансе. Не закрывайте эту вкладку, чтобы сохранить их.
+	Saving brush presets… Keep this tab open until saving finishes.	Сохранение наборов кистей… Не закрывайте эту вкладку, пока сохранение не завершится.
+	Reflect	Отражение
+	Glow	Свечение
+	Negation	Отрицание
+	XOR	XOR
+	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
+	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Объект не найден — попробуйте «Выделение объектов» или «Лассо»
+	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
+	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник
+	No subject found — try a rectangle around the object	Объект не найден — попробуйте прямоугольник вокруг объекта
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Удалить слой «{name}»?
+	Delete {count} layers? {names}	Удалить слои ({count})? {names}
+	Delete layer?	Удалить слой?
+	The document is closed	Документ закрыт
+	The document or selected layers changed. Please request deletion again.	Документ или выбранные слои изменились. Повторите запрос на удаление.
+	Missing delete command	Отсутствует команда удаления
+	Invalid delete command	Недопустимая команда удаления
+	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}

@@ -134,7 +134,7 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
     }
     with_language(Lang::EN, || {
         let mut h = harness();
-        let glyphs: std::collections::BTreeSet<_> = lang("ko").0.source.chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
+        let glyphs: std::collections::BTreeSet<_> = lang("ko").0.text().chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
         for code in ["zh-hans", "ja", "ko", "fr", "ko"] {
             h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("language");
             h.run_steps(12);
@@ -263,7 +263,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         dialog.fields.get_mut("values").expect("values")["interface"]["language"] = json!("fr");
         h.run_steps(3);
         let text = drawn_text(&h);
-        assert!(text.iter().any(|text| text == "Langue"), "the draft language must translate the actual dialog");
+        assert!(text.iter().any(|text| text == "Apparence"), "the draft language must translate the visible dialog");
         assert!(text.iter().any(|text| text == "Annuler"), "the dialog buttons must preview the language too");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
         assert_eq!(h.state().session.prefs().interface.language, "auto");

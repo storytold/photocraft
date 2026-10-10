@@ -63,12 +63,16 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
     ("window.toggle.options", "Options", &["Window"], None),
-    ("window.theme.toggle", "Next Theme", &["Window"], None),
+    ("window.theme.toggle", "Next Appearance Mode", &["Window"], None),
     ("window.theme.pro", "Pro Theme", &["Window", "Theme"], None),
     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
+    ("window.theme.solarizedDark", "Solarized Dark Theme", &["Window", "Theme"], None),
+    ("window.theme.adwaita", "Adwaita Light Theme", &["Window", "Theme"], None),
+    ("window.theme.adwaitaDark", "Adwaita Dark Theme", &["Window", "Theme"], None),
+    ("window.theme.system", "Sync with system", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
     ("help.website", "PhotoCraft Website", &["Help"], None),
@@ -301,11 +305,22 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"window": wid}))
         }
         "window.theme.toggle" => {
-            let next = app.ui.theme.next();
-            app.set_theme(ctx, next);
+            crate::prefs_ui::cycle_appearance(app, ctx);
             Ok(Value::Null)
         }
-        "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" | "window.theme.classic" => {
+        "window.theme.system" => {
+            app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"}))?;
+            crate::prefs_ui::sync_appearance(app, ctx);
+            Ok(Value::Null)
+        }
+        "window.theme.pro"
+        | "window.theme.proMedium"
+        | "window.theme.studio"
+        | "window.theme.studioLight"
+        | "window.theme.classic"
+        | "window.theme.solarizedDark"
+        | "window.theme.adwaita"
+        | "window.theme.adwaitaDark" => {
             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
             app.set_theme(ctx, k);
             Ok(Value::Null)
@@ -343,6 +358,24 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "layer.layerStyle.blendingOptions" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::layer_style::open(app, Some(crate::layer_style::BLENDING)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
         }
+        // Formatting menus follow an inline text selection when editing. Outside an edit,
+        // snapshot the selected type layers; explicit automation targets retain their scope.
+        t if (t.starts_with("type.antiAlias.")
+            || t.starts_with("type.orientation.")
+            || t.starts_with("type.openType.")
+            || matches!(t, "type.warpText" | "type.loadDefaultTypeStyles"))
+            && params.get("layer").is_none()
+            && params.get("layers").is_none()
+            && params.get("range").is_none() =>
+        {
+            let Some(mut p) = crate::type_tool::formatting_params(app) else { return app.run(id, params) };
+            if let Some(props) = params.as_object() {
+                for (key, value) in props {
+                    p[key] = value.clone();
+                }
+            }
+            app.run(id, p)
+        }
         "type.editText" => {
             crate::type_tool::edit_active(app)?;
             if let Some(focus) = ctx.memory(|m| m.focused()) {
@@ -350,8 +383,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(Value::Null)
         }
-        // Layer Content Options…: the adjustment / fill controls live in Properties.
+        // Solid Color uses the Color Picker; other adjustment / fill controls use Properties.
         "layer.layerContentOptions" => {
+            if let Some(dialog) = crate::solid_fill_ui::open(app) {
+                return Ok(json!({"dialog": dialog}));
+            }
             let r = app.run(id, params)?;
             app.ui.panels.properties = true;
             app.ui.dock_tabs.properties = 0;
@@ -599,7 +635,8 @@ const MODE_CHECKS: [&str; 11] = ["rgb", "grayscale", "cmyk", "lab", "multichanne
 fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     use photocraft_doc::{ColorMode, SampleType};
     if let Some(name) = id.strip_prefix("window.theme.").filter(|n| *n != "toggle") {
-        return Some(crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme));
+        let auto = app.session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto;
+        return Some(if name == "system" { auto } else { !auto && crate::theme::ThemeKind::from_name(name) == Some(app.ui.theme) });
     }
     if let Some(c) = crate::view_cmds::checked(app, id) {
         return Some(c);
@@ -786,6 +823,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     crate::plugin_ui::insert_menu_items(app, &mut items);
+    if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
+        && let Some(item) = items.iter_mut().find(|i| i.id == "layer.layerMask.enabled")
+    {
+        item.label = crate::layer_menu_ui::mask_toggle_label(mask.enabled).into();
+    }
     // The File quick-export command uses the format selected in Export Preferences.
     // On the web it intentionally downloads PNG until the quick-export service supports
     // the other formats; the Layer quick-export command also always produces PNG.
@@ -1255,6 +1297,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
+        use photocraft_engine::prefs::{AppearanceMode, DarkTheme, LightTheme};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
+        app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
+        invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
+        assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
+        assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
+        assert_eq!(app.ui.theme, crate::theme::ThemeKind::Classic);
+        for appearance in [egui::Theme::Dark, egui::Theme::Light] {
+            app.services.system_theme = Some(Box::new(move |_| Some(appearance)));
+            crate::prefs_ui::tick(&mut app, &ctx);
+            let items = menu_items(&app);
+            let item = items.iter().find(|i| i.id == "window.theme.system").unwrap();
+            assert_eq!(item.label, "Sync with system");
+            assert_eq!(item.path, ["Window", "Theme"]);
+            assert!(item.enabled);
+            assert_eq!(item.checked, Some(true));
+            for kind in crate::theme::ThemeKind::ALL {
+                assert_eq!(checked(&app, &format!("window.theme.{}", kind.id())), Some(false));
+            }
+        }
+        invoke(&mut app, &ctx, "window.theme.studio", json!({})).unwrap();
+        assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Dark);
+        assert_eq!(checked(&app, "window.theme.system"), Some(false));
+        assert_eq!(checked(&app, "window.theme.studio"), Some(true));
+    }
+
+    #[test]
     fn submenu_header_is_disabled_when_every_item_is() {
         let item = |label: &str, enabled: bool| MenuItem {
             id: label.into(),
@@ -1677,7 +1750,9 @@ mod open_recent_tests {
         use photocraft_color::{ColorMode, SampleType};
         use photocraft_geom::Size;
         let services = crate::Services {
-            import: Some(Box::new(|_n: &str, _b: &[u8]| Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))),
+            import: Some(Box::new(|_n: &str, _b: &[u8], _depth: usize| {
+                Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+            })),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);

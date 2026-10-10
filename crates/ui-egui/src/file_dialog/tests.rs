@@ -25,6 +25,135 @@ fn app() -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>) {
     (app, open, written)
 }
 
+#[test]
+fn pdn_save_requests_a_native_copy_without_overwriting_the_source() {
+    let (mut app, open, written) = app();
+    let st = app.session.active_mut().unwrap();
+    st.path = Some("/pics/layers.PDN".into());
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/layers.pcraft"));
+    answer(&open, Some(FileDialogAnswer::SaveTo("/pics/layers.pcraft".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/pics/layers.pcraft"]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/layers.pcraft"));
+}
+
+/// A real flat JPEG import, optionally edited to contain another layer. A filename without a
+/// path is the web/download case; desktop opens also retain their source location.
+fn jpeg_app(path: Option<&str>, layered: bool) -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>) {
+    let (mut app, open, written) = app();
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "My image.JPEG", &Default::default()).unwrap().bytes;
+    let doc = photocraft_io::import("My image.JPEG", &bytes).unwrap().document;
+    app.session.add_document(doc, path.map(str::to_string));
+    if layered {
+        app.run("layer.new.layer", json!({})).unwrap();
+    }
+    (app, open, written)
+}
+
+#[test]
+fn layered_flat_source_save_defaults_to_psd_without_overwriting_source() {
+    let ctx = egui::Context::default();
+    for command in ["file.save", "file.saveAs"] {
+        let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
+        menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(
+            matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/My image.psd"),
+            "{command}: {:?}",
+            open.borrow().first().map(|(r, _)| r.clone())
+        );
+        assert!(written.borrow().is_empty(), "asking where to save must not overwrite the JPEG");
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/My image.JPEG"));
+        answer(&open, Some(FileDialogAnswer::SaveTo("/pics/My image.psd".into())));
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(*written.borrow(), ["/pics/My image.psd"]);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/My image.psd"));
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), 2);
+    }
+}
+
+#[test]
+fn layered_filename_only_save_defaults_to_psd() {
+    let (mut app, open, written) = jpeg_app(None, true);
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "My image.psd"));
+    answer(&open, Some(FileDialogAnswer::SaveTo("My image.psd".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["My image.psd"]);
+}
+
+#[test]
+fn save_dialog_preserves_flat_and_existing_layered_format_defaults() {
+    let ctx = egui::Context::default();
+    for (path, layered) in [
+        ("/pics/My image.JPEG", false),
+        ("/pics/My image.PSD", true),
+        ("/pics/My image.psb", true),
+        ("/pics/My image.pcraft", true),
+        ("/pics/My image.TIF", true),
+        ("/pics/My image.tiff", true),
+    ] {
+        let (mut app, open, written) = jpeg_app(Some(path), layered);
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == path), "{path}");
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+        assert!(written.borrow().is_empty());
+    }
+}
+
+#[test]
+fn transparent_png_keeps_its_format_until_its_lone_layer_becomes_smart() {
+    let (mut app, open, written) = app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "transparent.PNG", &Default::default()).unwrap().bytes;
+    let doc = photocraft_io::import("transparent.PNG", &bytes).unwrap().document;
+    assert_eq!(doc.layers.len(), 1);
+    assert!(!doc.layers[0].locks.transparency, "transparent PNG imports as an unlocked raster layer");
+    assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0)[3], 0.0);
+    app.session.add_document(doc, Some("/pics/transparent.PNG".into()));
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/transparent.PNG"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 1);
+    assert!(matches!(app.session.active().unwrap().doc.layers[0].content, photocraft_doc::LayerContent::Smart(_)));
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/transparent.psd"));
+    assert!(written.borrow().is_empty());
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+#[test]
+fn layered_save_respects_explicit_jpeg_choices() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo("/exports/chosen.JPEG".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/exports/chosen.jpeg"]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/exports/chosen.jpeg"));
+    // Explicit command paths carry the same choice and bypass the picker.
+    for command in ["file.save", "file.saveAs"] {
+        let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
+        menus::invoke(&mut app, &ctx, command, json!({"path": "/exports/chosen.jpg"})).unwrap();
+        assert!(!app.file_dialog_open() && open.borrow().is_empty());
+        assert_eq!(*written.borrow(), ["/exports/chosen.jpg"]);
+    }
+}
+
 /// The user answers the open dialog, from the dialog's own thread.
 fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
     let (_, reply) = open.borrow_mut().pop().expect("a dialog is open");

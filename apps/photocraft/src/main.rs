@@ -22,8 +22,10 @@
 
 mod app_dirs;
 mod app_icon;
+mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod caps_lock;
 mod control_server;
 mod crash_guard;
 mod cursor;
@@ -37,6 +39,7 @@ mod mac_window;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod photoshop_settings;
 mod screen_color;
 mod services;
 // Windows gets pen pressure from winit (WM_POINTER); the web runner has its own listener.
@@ -444,6 +447,9 @@ fn main() -> eframe::Result {
             let _ = in_window_menus;
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
+            // precise crosshair for painting tools while it is toggled on (#1758).
+            app.services.caps_lock = caps_lock::service(cc);
             app.services.screen_pick = screen_color::service(cc, app.services.is_wayland);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:

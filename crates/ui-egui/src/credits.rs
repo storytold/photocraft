@@ -7,6 +7,8 @@ use std::cmp::Ordering;
 
 use egui::RichText;
 
+use crate::PhotocraftApp;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
     pub login: &'static str,
@@ -246,12 +248,12 @@ const CELL_PAD: f32 = 6.0;
 const NAME_MIN_W: f32 = 110.0;
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(ui: &mut egui::Ui) {
-    contributors_in(ui, CONTRIBUTORS, TOTAL_COMMITS);
+pub fn contributors_ui(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    contributors_in(app, ui, CONTRIBUTORS, TOTAL_COMMITS);
 }
 
 /// [`contributors_ui`] over a given list (tests pass their own).
-fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
+fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
     let id = egui::Id::new("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
@@ -293,7 +295,7 @@ fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commit
     if list.is_empty() {
         ui.label(tl!("No contributor data was built into this copy."));
     } else if v.table {
-        table(ui, &list, &mut v, height);
+        table(app, ui, &list, &mut v, height);
     } else {
         egui::ScrollArea::vertical().id_salt("credits_bag").auto_shrink([false, false]).max_height(height).show(ui, |ui| {
             // Spacing alone separates the names: a "·" between them started some lines.
@@ -306,7 +308,7 @@ fn contributors_in(ui: &mut egui::Ui, contributors: &[Contributor], total_commit
             ui.spacing_mut().interact_size.y = 0.0;
             ui.horizontal_wrapped(|ui| {
                 for c in &list {
-                    link(ui, c, v.names);
+                    link(app, ui, c, v.names);
                 }
             });
         });
@@ -322,8 +324,16 @@ fn table_height(ui: &egui::Ui, rows: usize) -> f32 {
     (TABLE_HEADER_H + body).min(LIST_HEIGHT)
 }
 
-fn link(ui: &mut egui::Ui, c: &Contributor, names: NameMode) -> egui::Response {
-    ui.hyperlink_to(c.name(names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary())
+/// A contributor's name, linking to their GitHub profile. Routes through [`crate::links::open`]
+/// (the platform browser service) rather than `ui.hyperlink_to`'s `ctx.open_url`, which the
+/// desktop build can't rely on (egui_winit needs its "links" feature, which we don't enable).
+fn link(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &Contributor, names: NameMode) -> egui::Response {
+    let url = format!("https://github.com/{}", c.login);
+    let r = ui.add(egui::Link::new(c.name(names))).on_hover_text(c.summary());
+    if r.clicked() {
+        crate::links::open(app, ui.ctx(), &url);
+    }
+    r
 }
 
 fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
@@ -379,7 +389,7 @@ fn credits_table(
 }
 
 /// The Contributors table; clicking a header sorts by it (again reverses it).
-fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, height: f32) {
+fn table(app: &mut PhotocraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, height: f32) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let names = v.names;
     let widths: Vec<Option<f32>> = SortKey::ALL
@@ -416,7 +426,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, height: f32) {
                 let Some(c) = list.get(row.index()) else { return };
                 row.col(|ui| {
                     ui.add_space(CELL_PAD);
-                    link(ui, c, names);
+                    link(app, ui, c, names);
                 });
                 for k in SortKey::ALL.into_iter().skip(1) {
                     row.col(|ui| cell(ui, k.numeric(), &k.cell(c)));
