@@ -1045,7 +1045,7 @@ fn lock_layers(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let name =
-        p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
+        p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
@@ -1546,6 +1546,16 @@ mod tests {
         assert_eq!(r["selected"], json!([a.0, b.0]));
         assert!(s.execute("select.findLayers", json!({"name": "nothing"})).is_err());
         assert!(s.execute("layer.renameLayer", json!({})).is_err());
+    }
+
+    #[test]
+    fn rename_layer_keeps_surrounding_spaces() {
+        let mut s = session(8);
+        let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+        s.execute("layer.renameLayer", json!({"layer": a.0, "name": " black skin bw "})).unwrap();
+        assert_eq!(doc(&s).layer(a).unwrap().name, " black skin bw ");
+        assert!(s.execute("layer.renameLayer", json!({"layer": a.0, "name": "   "})).is_err());
+        assert_eq!(doc(&s).layer(a).unwrap().name, " black skin bw ");
     }
 
     #[test]
