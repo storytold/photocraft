@@ -222,6 +222,17 @@ fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool) -> Resu
     }
     translate_doc(doc, cmd, dx, dy)?;
     doc.size = Size::new(r.width(), r.height());
+    // A single artboard is the page (including PDF pages opened in separate tabs).
+    // Keep its printable boundary in sync with Crop/Trim, rather than exporting the
+    // old sheet with the cropped pixels sitting in an oversized blank page.
+    // Multiple artboards have independent page boundaries and retain their layout.
+    if doc.artboards().len() == 1 {
+        let bounds = doc.bounds();
+        if let Some(board) = doc.layers.iter_mut().find_map(|layer| layer.artboard_mut()) {
+            board.rect = bounds;
+            board.preset.clear();
+        }
+    }
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     Ok(())
 }

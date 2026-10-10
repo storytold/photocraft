@@ -147,12 +147,15 @@ fn export_to_files_and_pdf() {
 fn raster_pdf_xref_offsets_point_at_objects() {
     let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])]);
     let text = String::from_utf8_lossy(&pdf).into_owned();
-    let xref = text.rfind("xref\n").unwrap();
-    let offsets: Vec<usize> = text[xref..].lines().skip(3).take(5).map(|l| l[..10].parse().unwrap()).collect();
+    let xref: usize = text.split("startxref\n").nth(1).unwrap().lines().next().unwrap().parse().unwrap();
+    let entries = std::str::from_utf8(&pdf[xref..]).unwrap();
+    let count: usize = entries.lines().nth(1).unwrap().split_whitespace().nth(1).unwrap().parse().unwrap();
+    let offsets: Vec<usize> = entries.lines().skip(3).take(count - 1).map(|l| l[..10].parse().unwrap()).collect();
+    assert_eq!(offsets.len(), 6);
     for (i, o) in offsets.iter().enumerate() {
-        assert!(text[*o..].starts_with(&format!("{} 0 obj", i + 1)));
+        assert!(pdf[*o..].starts_with(format!("{} 0 obj", i + 1).as_bytes()));
     }
-    assert!(text.contains("/MediaBox [0 0 2.000 3.000]"));
+    assert!(text.contains("/MediaBox [0 0 2.000000 3.000000]"));
 }
 
 #[test]

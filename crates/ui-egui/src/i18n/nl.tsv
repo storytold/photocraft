@@ -3585,3 +3585,25 @@ cameraRaw	Whites	Witten
 	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
 	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
 	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object
+
+	Export All Tabs to PDF…	Alle tabbladen naar PDF exporteren…
+	Drop an image, PSD or PDF anywhere to open it.	Sleep een afbeelding, PSD of PDF ergens naartoe om deze te openen.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Elk tekengebied wordt één PDF-pagina. Lagen worden samengevoegd; transparantie blijft behouden.
+
+	Open PDF pages	PDF-pagina’s openen
+	{count} pages • Each selected page opens in its own tab	{count} pagina’s • Elke geselecteerde pagina opent in een eigen tabblad
+	Click to select pages. Shift-click selects a range.	Klik om te selecteren. Shift-klik selecteert een bereik.
+	Page {number}	Pagina {number}
+	Page {number} — {width} × {height} in	Pagina {number} — {width} × {height} inch
+	Loading preview…	Voorbeeld laden…
+	Resolution (ppi)	Resolutie (ppi)
+	Preview page: {width} × {height} pixels	Voorbeeldpagina: {width} × {height} pixels
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Pagina’s openen als RGB-afbeeldingen van 8 bits. PDF-tekst en vectorobjecten worden gerasterd.
+	Open all {count} pages	Alle {count} pagina’s openen
+	Open selected ({count})	Selectie openen ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} tabbladen worden samengevoegd in hun volgorde van links naar rechts.
+	Current edits are included. Each page keeps its size and resolution.	Huidige wijzigingen worden opgenomen. Elke pagina behoudt haar formaat en resolutie.
+	Close exported tabs after successful export	Geëxporteerde tabbladen sluiten na succesvolle export
+	Canceled or failed exports leave every tab open.	Bij geannuleerde of mislukte exports blijven alle tabbladen open.
+	PDF saves the visible pages with flattened layers.	PDF slaat zichtbare pagina's op met samengevoegde lagen.

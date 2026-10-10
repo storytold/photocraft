@@ -2414,3 +2414,25 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+
+	Drop an image, PSD or PDF anywhere to open it.	将图像、PSD 或 PDF 拖放到任意位置即可打开。
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	每个画板成为一页 PDF。图层将合并，透明度会保留。
+	Export All Tabs to PDF…	将所有标签页导出为 PDF…
+
+	Open PDF pages	打开 PDF 页面
+	{count} pages • Each selected page opens in its own tab	{count} 页 • 每个选中的页面将在独立标签页中打开
+	Click to select pages. Shift-click selects a range.	单击选择页面。按住 Shift 单击可选择范围。
+	Page {number}	第 {number} 页
+	Page {number} — {width} × {height} in	第 {number} 页 — {width} × {height} 英寸
+	Loading preview…	正在加载预览…
+	Resolution (ppi)	分辨率 (ppi)
+	Preview page: {width} × {height} pixels	预览页面：{width} × {height} 像素
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	页面将作为 8 位 RGB 图像打开。PDF 文本和矢量对象将栅格化。
+	Open all {count} pages	打开全部 {count} 页
+	Open selected ({count})	打开所选页面 ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	将按从左到右的顺序合并 {count} 个标签页。
+	Current edits are included. Each page keeps its size and resolution.	包含当前编辑内容。每页保留其尺寸和分辨率。
+	Close exported tabs after successful export	成功导出后关闭已导出的标签页
+	Canceled or failed exports leave every tab open.	取消或失败的导出会保留所有标签页。
+	PDF saves the visible pages with flattened layers.	PDF 将可见页面以拼合图层的方式保存。

@@ -2476,3 +2476,25 @@ fontWeight	Italic	Corsivo
 	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
 	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
 	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto
+
+	Drop an image, PSD or PDF anywhere to open it.	Trascina un’immagine, PSD o PDF ovunque per aprirlo.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Ogni tavola da disegno diventa una pagina PDF. I livelli vengono uniti; la trasparenza viene mantenuta.
+	Export All Tabs to PDF…	Esporta tutte le schede in PDF…
+
+	Open PDF pages	Apri pagine PDF
+	{count} pages • Each selected page opens in its own tab	{count} pagine • Ogni pagina selezionata si apre in una scheda separata
+	Click to select pages. Shift-click selects a range.	Fai clic per selezionare. Maiusc-clic seleziona un intervallo.
+	Page {number}	Pagina {number}
+	Page {number} — {width} × {height} in	Pagina {number} — {width} × {height} pollici
+	Loading preview…	Caricamento anteprima…
+	Resolution (ppi)	Risoluzione (ppi)
+	Preview page: {width} × {height} pixels	Pagina di anteprima: {width} × {height} pixel
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Le pagine si aprono come immagini RGB a 8 bit. Testo e oggetti vettoriali PDF vengono rasterizzati.
+	Open all {count} pages	Apri tutte le {count} pagine
+	Open selected ({count})	Apri selezione ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} schede verranno unite nel loro ordine da sinistra a destra.
+	Current edits are included. Each page keeps its size and resolution.	Le modifiche attuali sono incluse. Ogni pagina mantiene dimensioni e risoluzione.
+	Close exported tabs after successful export	Chiudi le schede esportate dopo un'esportazione riuscita
+	Canceled or failed exports leave every tab open.	Le esportazioni annullate o non riuscite lasciano aperte tutte le schede.
+	PDF saves the visible pages with flattened layers.	Il PDF salva le pagine visibili con i livelli uniti.

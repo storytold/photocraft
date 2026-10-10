@@ -2406,3 +2406,25 @@ fontWeight	Italic	Kurzíva
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+
+	Drop an image, PSD or PDF anywhere to open it.	Přetáhněte sem obrázek, PSD nebo PDF a otevře se.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Každé kreslicí plátno se stane jednou stránkou PDF. Vrstvy se sloučí; průhlednost zůstane zachována.
+	Export All Tabs to PDF…	Exportovat všechny karty do PDF…
+
+	Open PDF pages	Otevřít stránky PDF
+	{count} pages • Each selected page opens in its own tab	{count} stránek • Každá vybraná stránka se otevře na vlastní kartě
+	Click to select pages. Shift-click selects a range.	Kliknutím vyberete stránky. Shift-kliknutí vybere rozsah.
+	Page {number}	Stránka {number}
+	Page {number} — {width} × {height} in	Stránka {number} — {width} × {height} palců
+	Loading preview…	Načítání náhledu…
+	Resolution (ppi)	Rozlišení (ppi)
+	Preview page: {width} × {height} pixels	Stránka náhledu: {width} × {height} pixelů
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Stránky se otevřou jako 8bitové obrázky RGB. Text a vektorové objekty PDF se rastrují.
+	Open all {count} pages	Otevřít všechny stránky ({count})
+	Open selected ({count})	Otevřít vybrané ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} karet bude spojeno v pořadí zleva doprava.
+	Current edits are included. Each page keeps its size and resolution.	Aktuální úpravy jsou zahrnuty. Každá stránka si zachová velikost a rozlišení.
+	Close exported tabs after successful export	Zavřít exportované karty po úspěšném exportu
+	Canceled or failed exports leave every tab open.	Zrušený nebo neúspěšný export ponechá všechny karty otevřené.
+	PDF saves the visible pages with flattened layers.	PDF ukládá viditelné stránky se sloučenými vrstvami.

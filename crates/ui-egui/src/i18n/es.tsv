@@ -2474,3 +2474,25 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+
+	Drop an image, PSD or PDF anywhere to open it.	Suelte una imagen, PSD o PDF en cualquier lugar para abrirlo.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Cada mesa de trabajo se convierte en una página PDF. Las capas se acoplan; se conserva la transparencia.
+	Export All Tabs to PDF…	Exportar todas las pestañas a PDF…
+
+	Open PDF pages	Abrir páginas PDF
+	{count} pages • Each selected page opens in its own tab	{count} páginas • Cada página seleccionada se abre en su propia pestaña
+	Click to select pages. Shift-click selects a range.	Haga clic para seleccionar. Mayús-clic selecciona un intervalo.
+	Page {number}	Página {number}
+	Page {number} — {width} × {height} in	Página {number} — {width} × {height} pulgadas
+	Loading preview…	Cargando vista previa…
+	Resolution (ppi)	Resolución (ppp)
+	Preview page: {width} × {height} pixels	Página de vista previa: {width} × {height} píxeles
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Las páginas se abren como imágenes RGB de 8 bits. El texto y los objetos vectoriales PDF se rasterizan.
+	Open all {count} pages	Abrir las {count} páginas
+	Open selected ({count})	Abrir selección ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	Se combinarán {count} pestañas en su orden de izquierda a derecha.
+	Current edits are included. Each page keeps its size and resolution.	Se incluyen los cambios actuales. Cada página conserva su tamaño y resolución.
+	Close exported tabs after successful export	Cerrar las pestañas exportadas tras una exportación correcta
+	Canceled or failed exports leave every tab open.	Las exportaciones canceladas o fallidas dejan todas las pestañas abiertas.
+	PDF saves the visible pages with flattened layers.	El PDF guarda las páginas visibles con las capas acopladas.

@@ -71,9 +71,9 @@ note = "io svg.rs: paths, groups, text outlines as shape layers (gradients appro
 [[item]]
 id = "FILE-215-10"
 target = "Multi-page PDF save, PDF presentation, layer comps to PDF, vector/text output, PDF import"
-status = "missing"
+status = "partial"
 issue = 215
-note = "Only print_cmds.rs:133 print_pdf (raster print page)"
+note = "io pdf.rs + ui pdf_import_ui.rs: desktop raster import with page selection/resolution, multipage raster save and tab binder export; shared pdf_writer.rs for print/artboards. Web import, PDF presentation, layer comps and vector/text output remain missing."
 
 [[item]]
 id = "FILE-215-11"

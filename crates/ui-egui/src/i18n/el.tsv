@@ -3514,3 +3514,25 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+
+	Drop an image, PSD or PDF anywhere to open it.	Σύρετε μια εικόνα, PSD ή PDF εδώ για να το ανοίξετε.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Κάθε πίνακας γραφικών γίνεται μία σελίδα PDF. Τα επίπεδα συγχωνεύονται· η διαφάνεια διατηρείται.
+	Export All Tabs to PDF…	Εξαγωγή όλων των καρτελών σε PDF…
+
+	Open PDF pages	Άνοιγμα σελίδων PDF
+	{count} pages • Each selected page opens in its own tab	{count} σελίδες • Κάθε επιλεγμένη σελίδα ανοίγει σε ξεχωριστή καρτέλα
+	Click to select pages. Shift-click selects a range.	Κλικ για επιλογή. Shift-κλικ επιλέγει εύρος.
+	Page {number}	Σελίδα {number}
+	Page {number} — {width} × {height} in	Σελίδα {number} — {width} × {height} ίντσες
+	Loading preview…	Φόρτωση προεπισκόπησης…
+	Resolution (ppi)	Ανάλυση (ppi)
+	Preview page: {width} × {height} pixels	Σελίδα προεπισκόπησης: {width} × {height} εικονοστοιχεία
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Οι σελίδες ανοίγουν ως εικόνες RGB 8 bit. Το κείμενο και τα διανυσματικά αντικείμενα PDF ραστεροποιούνται.
+	Open all {count} pages	Άνοιγμα όλων των σελίδων ({count})
+	Open selected ({count})	Άνοιγμα επιλεγμένων ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} καρτέλες θα συνδυαστούν με τη σειρά τους από αριστερά προς τα δεξιά.
+	Current edits are included. Each page keeps its size and resolution.	Περιλαμβάνονται οι τρέχουσες αλλαγές. Κάθε σελίδα διατηρεί το μέγεθος και την ανάλυσή της.
+	Close exported tabs after successful export	Κλείσιμο εξαγόμενων καρτελών μετά από επιτυχή εξαγωγή
+	Canceled or failed exports leave every tab open.	Οι ακυρωμένες ή αποτυχημένες εξαγωγές αφήνουν όλες τις καρτέλες ανοιχτές.
+	PDF saves the visible pages with flattened layers.	Το PDF αποθηκεύει τις ορατές σελίδες με συγχωνευμένα επίπεδα.

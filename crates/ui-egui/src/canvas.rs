@@ -2074,7 +2074,7 @@ fn start_screen_drop_hint(app: &PhotocraftApp) -> std::borrow::Cow<'static, str>
     if app.services.is_wayland {
         crate::i18n::fmt(tl!("Use File › Open, or paste a copied image with {paste}."), &[("paste", &crate::notices::paste_hint(app))]).into()
     } else {
-        tl!("Drop an image or PSD anywhere to open it.").into()
+        tl!("Drop an image, PSD or PDF anywhere to open it.").into()
     }
 }
 

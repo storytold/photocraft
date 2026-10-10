@@ -2825,3 +2825,25 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+
+	Drop an image, PSD or PDF anywhere to open it.	Déposez une image, un PSD ou un PDF n’importe où pour l’ouvrir.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Chaque plan de travail devient une page PDF. Les calques sont aplatis ; la transparence est conservée.
+	Export All Tabs to PDF…	Exporter tous les onglets en PDF…
+
+	Open PDF pages	Ouvrir les pages PDF
+	{count} pages • Each selected page opens in its own tab	{count} pages • Chaque page sélectionnée s’ouvre dans son propre onglet
+	Click to select pages. Shift-click selects a range.	Cliquez pour sélectionner. Maj-clic sélectionne une plage.
+	Page {number}	Page {number}
+	Page {number} — {width} × {height} in	Page {number} — {width} × {height} pouces
+	Loading preview…	Chargement de l’aperçu…
+	Resolution (ppi)	Résolution (ppp)
+	Preview page: {width} × {height} pixels	Page d’aperçu : {width} × {height} pixels
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Les pages s’ouvrent en images RVB 8 bits. Le texte et les objets vectoriels PDF sont pixellisés.
+	Open all {count} pages	Ouvrir les {count} pages
+	Open selected ({count})	Ouvrir la sélection ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} onglets seront combinés dans leur ordre de gauche à droite.
+	Current edits are included. Each page keeps its size and resolution.	Les modifications actuelles sont incluses. Chaque page conserve sa taille et sa résolution.
+	Close exported tabs after successful export	Fermer les onglets exportés après un export réussi
+	Canceled or failed exports leave every tab open.	Les exports annulés ou échoués laissent tous les onglets ouverts.
+	PDF saves the visible pages with flattened layers.	Le PDF enregistre les pages visibles avec les calques aplatis.

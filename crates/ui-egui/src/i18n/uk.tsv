@@ -3513,3 +3513,25 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+
+	Drop an image, PSD or PDF anywhere to open it.	Перетягніть зображення, PSD або PDF будь-куди, щоб відкрити його.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Кожна монтажна область стає сторінкою PDF. Шари об’єднуються; прозорість зберігається.
+	Export All Tabs to PDF…	Експортувати всі вкладки в PDF…
+
+	Open PDF pages	Відкрити сторінки PDF
+	{count} pages • Each selected page opens in its own tab	{count} сторінок • Кожна вибрана сторінка відкриється в окремій вкладці
+	Click to select pages. Shift-click selects a range.	Клацніть для вибору. Shift-клацання вибирає діапазон.
+	Page {number}	Сторінка {number}
+	Page {number} — {width} × {height} in	Сторінка {number} — {width} × {height} дюймів
+	Loading preview…	Завантаження попереднього перегляду…
+	Resolution (ppi)	Роздільність (ppi)
+	Preview page: {width} × {height} pixels	Сторінка перегляду: {width} × {height} пікселів
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Сторінки відкриваються як 8-бітні зображення RGB. Текст і векторні об’єкти PDF растеризуються.
+	Open all {count} pages	Відкрити всі сторінки ({count})
+	Open selected ({count})	Відкрити вибрані ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} вкладок буде об’єднано в порядку зліва направо.
+	Current edits are included. Each page keeps its size and resolution.	Поточні зміни враховуються. Кожна сторінка зберігає розмір і роздільність.
+	Close exported tabs after successful export	Закрити експортовані вкладки після успішного експорту
+	Canceled or failed exports leave every tab open.	У разі скасування або помилки експорту всі вкладки залишаються відкритими.
+	PDF saves the visible pages with flattened layers.	PDF зберігає видимі сторінки зі зведеними шарами.

@@ -2812,3 +2812,25 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+
+	Drop an image, PSD or PDF anywhere to open it.	Jatuhkan gambar, PSD, atau PDF di mana saja untuk membukanya.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Setiap artboard menjadi satu halaman PDF. Lapisan diratakan; transparansi dipertahankan.
+	Export All Tabs to PDF…	Ekspor Semua Tab ke PDF…
+
+	Open PDF pages	Buka halaman PDF
+	{count} pages • Each selected page opens in its own tab	{count} halaman • Setiap halaman terpilih dibuka di tab tersendiri
+	Click to select pages. Shift-click selects a range.	Klik untuk memilih. Shift-klik memilih rentang.
+	Page {number}	Halaman {number}
+	Page {number} — {width} × {height} in	Halaman {number} — {width} × {height} inci
+	Loading preview…	Memuat pratinjau…
+	Resolution (ppi)	Resolusi (ppi)
+	Preview page: {width} × {height} pixels	Halaman pratinjau: {width} × {height} piksel
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	Halaman dibuka sebagai gambar RGB 8-bit. Teks dan objek vektor PDF dirasterisasi.
+	Open all {count} pages	Buka semua {count} halaman
+	Open selected ({count})	Buka pilihan ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} tab akan digabungkan sesuai urutan dari kiri ke kanan.
+	Current edits are included. Each page keeps its size and resolution.	Perubahan saat ini disertakan. Setiap halaman mempertahankan ukuran dan resolusinya.
+	Close exported tabs after successful export	Tutup tab yang diekspor setelah ekspor berhasil
+	Canceled or failed exports leave every tab open.	Ekspor yang dibatalkan atau gagal membiarkan semua tab tetap terbuka.
+	PDF saves the visible pages with flattened layers.	PDF menyimpan halaman yang terlihat dengan lapisan yang diratakan.

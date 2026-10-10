@@ -2833,3 +2833,25 @@ fontWeight	Italic	Itálico
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+
+	Drop an image, PSD or PDF anywhere to open it.	Solte uma imagem, PSD ou PDF em qualquer lugar para abri-lo.
+	Each artboard becomes one PDF page. Layers are flattened; transparency is preserved.	Cada prancheta se torna uma página PDF. As camadas são achatadas; a transparência é preservada.
+	Export All Tabs to PDF…	Exportar todas as abas para PDF…
+
+	Open PDF pages	Abrir páginas PDF
+	{count} pages • Each selected page opens in its own tab	{count} páginas • Cada página selecionada abre em sua própria aba
+	Click to select pages. Shift-click selects a range.	Clique para selecionar. Shift-clique seleciona um intervalo.
+	Page {number}	Página {number}
+	Page {number} — {width} × {height} in	Página {number} — {width} × {height} pol.
+	Loading preview…	Carregando prévia…
+	Resolution (ppi)	Resolução (ppi)
+	Preview page: {width} × {height} pixels	Página de prévia: {width} × {height} pixels
+	Pages open as RGB 8-bit images. PDF text and vector objects are rasterized.	As páginas abrem como imagens RGB de 8 bits. Texto e objetos vetoriais PDF são rasterizados.
+	Open all {count} pages	Abrir todas as {count} páginas
+	Open selected ({count})	Abrir seleção ({count})
+
+	{count} tabs will be combined in left-to-right tab order.	{count} abas serão combinadas na ordem da esquerda para a direita.
+	Current edits are included. Each page keeps its size and resolution.	As alterações atuais são incluídas. Cada página mantém seu tamanho e resolução.
+	Close exported tabs after successful export	Fechar abas exportadas após uma exportação bem-sucedida
+	Canceled or failed exports leave every tab open.	Exportações canceladas ou malsucedidas deixam todas as abas abertas.
+	PDF saves the visible pages with flattened layers.	O PDF salva as páginas visíveis com as camadas achatadas.
