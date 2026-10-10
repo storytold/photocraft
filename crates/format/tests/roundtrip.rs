@@ -90,6 +90,54 @@ fn save_path_zip_file() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The public [`ByteSource`] entry loads a saved directory like `load_path` does.
+#[test]
+fn load_bytes_source_matches_the_path_load() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let dir = temp_dir("bytes-source");
+    let bundle = dir.join("a.pcraft");
+    PcraftWriter::new().save_dir(&doc, &bundle, &SaveOptions::default()).unwrap();
+    let loaded = load_bytes_source(&FsDir { root: bundle.clone() }, &LoadOptions::default()).unwrap();
+    assert_eq!(loaded, doc);
+    assert!(load_bytes_source(&FsDir { root: bundle.join("no-such-dir") }, &LoadOptions::default()).is_err(), "a missing bundle errors");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `read_entry` bounds the read itself, not the stat hint: a stream that ignores the hint
+/// and yields more than `max` errors instead of filling memory.
+#[test]
+fn read_entry_bounds_the_read_not_the_hint() {
+    struct Endless;
+    impl std::io::Read for Endless {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            buf.fill(b'x');
+            Ok(buf.len())
+        }
+    }
+    let mut endless = Endless;
+    let error = read_entry(&mut endless, 0, 100, "manifest.json").unwrap_err().to_string();
+    assert!(error.contains("exceeds"), "{error}");
+    let mut small = &b"hi"[..];
+    assert_eq!(read_entry(&mut small, 2, 100, "manifest.json").unwrap(), b"hi");
+}
+
+/// Reads the on-disk bundle shape for [`load_bytes_source_matches_the_path_load`].
+struct FsDir {
+    root: std::path::PathBuf,
+}
+
+impl ByteSource for FsDir {
+    fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        let p = self.root.join(path);
+        let metadata = std::fs::metadata(&p).map_err(|_| FormatError::Corrupt(format!("missing `{path}`")))?;
+        if !metadata.is_file() {
+            return Err(FormatError::Corrupt(format!("`{path}` is not a regular file")));
+        }
+        let mut file = std::fs::File::open(&p).map_err(|_| FormatError::Corrupt(format!("missing `{path}`")))?;
+        read_entry(&mut file, metadata.len(), max, path)
+    }
+}
+
 /// Deepest group nesting in `layers` (0 when there are no groups).
 fn group_depth(layers: &[Layer]) -> usize {
     layers.iter().map(|l| if let photocraft_doc::LayerContent::Group(g) = &l.content { 1 + group_depth(&g.children) } else { 0 }).max().unwrap_or(0)
