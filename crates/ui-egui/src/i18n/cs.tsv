@@ -2428,3 +2428,26 @@ fontWeight	Italic	Kurzíva
 	Previous Document	Předchozí dokument
 	W x H x Resolution	Š x V x Rozlišení
 	Front Image	Přední obraz
+# Generative Fill and Generative AI Settings (#41)
+	API key	Klíč API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Popište, co se má ve výběru vytvořit, nebo nechte prázdné a obraz bude výběrem plynule pokračovat.
+	Generative AI	Generativní AI
+	Generative AI Settings…	Nastavení generativní AI…
+	Generative AI needs the desktop app.	Generativní AI vyžaduje desktopovou aplikaci.
+	Generative Fill uses {name} ({model}).	Generativní výplň používá {name} ({model}).
+	Generative Fill…	Generativní výplň…
+	Get a Gemini API key from Google AI Studio	Získat klíč API Gemini v Google AI Studiu
+	No API key is saved for {provider}.	Pro {provider} není uložen žádný klíč API.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Nic se neodešle, dokud nespustíte generativní výplň. Pokaždé, když ji spustíte, odešle PhotoCraft společnosti Google (generativelanguage.googleapis.com) vybranou oblast i obraz kolem ní, černobílou masku výběru a váš popis spolu s vaším klíčem API. Platí podmínky a zásady ochrany soukromí rozhraní Gemini API společnosti Google a využití se účtuje na váš klíč. Výsledky nesou vodoznak SynthID od Googlu.
+	Off. Set up a provider with your own API key to use Generative Fill.	Vypnuto. Chcete-li používat generativní výplň, nastavte poskytovatele s vlastním klíčem API.
+	Paste your Gemini API key	Vložte svůj klíč API Gemini
+	Prompt (optional)	Popis (nepovinný)
+	Provider	Poskytovatel
+	Remove Key	Odebrat klíč
+	Saved (paste to replace)	Uložen (vložením nahradíte)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Vybraná oblast, obraz kolem ní a popis se odešlou do {name} ({model}).
+	What is sent, and to whom	Co se odesílá a komu
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Váš klíč je uložen v {store}, nikdy v souborech nastavení PhotoCraftu.
+	the macOS Keychain	klíčence macOS
+	Windows Credential Manager	Správci pověření Windows
+	memory until PhotoCraft quits	paměti, dokud se PhotoCraft neukončí

@@ -2712,3 +2712,26 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+# Generative Fill and Generative AI Settings (#41)
+	API key	Ключ API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Опишите, что нужно создать в выделенной области, или оставьте поле пустым, чтобы изображение продолжилось сквозь неё.
+	Generative AI	Генеративный ИИ
+	Generative AI Settings…	Настройки генеративного ИИ…
+	Generative AI needs the desktop app.	Генеративный ИИ доступен только в настольном приложении.
+	Generative Fill uses {name} ({model}).	Генеративная заливка использует {name} ({model}).
+	Generative Fill…	Генеративная заливка…
+	Get a Gemini API key from Google AI Studio	Получить ключ API Gemini в Google AI Studio
+	No API key is saved for {provider}.	Для {provider} не сохранён ключ API.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Ничего не отправляется, пока вы не запустите генеративную заливку. При каждом запуске PhotoCraft отправляет в Google (generativelanguage.googleapis.com) выделенную область вместе с окружающим изображением, чёрно-белую маску выделения и ваше описание, а также ваш ключ API. Действуют условия использования и политика конфиденциальности Gemini API от Google, а использование оплачивается по вашему ключу. На результатах есть водяной знак SynthID от Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Выключено. Чтобы пользоваться генеративной заливкой, настройте поставщика со своим ключом API.
+	Paste your Gemini API key	Вставьте ключ API Gemini
+	Prompt (optional)	Описание (необязательно)
+	Provider	Поставщик
+	Remove Key	Удалить ключ
+	Saved (paste to replace)	Сохранён (вставьте новый, чтобы заменить)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Выделенная область, окружающее её изображение и описание отправляются в {name} ({model}).
+	What is sent, and to whom	Что отправляется и кому
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Ваш ключ хранится в {store} и никогда не попадает в файлы настроек PhotoCraft.
+	the macOS Keychain	связке ключей macOS
+	Windows Credential Manager	диспетчере учётных данных Windows
+	memory until PhotoCraft quits	памяти до закрытия PhotoCraft

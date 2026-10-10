@@ -2833,3 +2833,26 @@ fontWeight	Italic	Miring
 	Previous Document	Dokumen Sebelumnya
 	W x H x Resolution	L x T x Resolusi
 	Front Image	Gambar Depan
+# Generative Fill and Generative AI Settings (#41)
+	API key	Kunci API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Jelaskan apa yang akan dibuat di dalam seleksi, atau biarkan kosong untuk melanjutkan gambar di dalamnya.
+	Generative AI	AI generatif
+	Generative AI Settings…	Pengaturan AI generatif…
+	Generative AI needs the desktop app.	AI generatif memerlukan aplikasi desktop.
+	Generative Fill uses {name} ({model}).	Isian generatif memakai {name} ({model}).
+	Generative Fill…	Isian generatif…
+	Get a Gemini API key from Google AI Studio	Dapatkan kunci API Gemini dari Google AI Studio
+	No API key is saved for {provider}.	Belum ada kunci API yang disimpan untuk {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Tidak ada yang dikirim sampai Anda menjalankan isian generatif. Setiap kali Anda menjalankannya, PhotoCraft mengirim area yang dipilih beserta gambar di sekitarnya, masker hitam-putih dari seleksi, dan deskripsi Anda ke Google (generativelanguage.googleapis.com) dengan kunci API Anda. Ketentuan dan kebijakan privasi Gemini API dari Google berlaku, dan penggunaannya ditagihkan ke kunci Anda. Hasilnya membawa tanda air SynthID dari Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Nonaktif. Siapkan penyedia dengan kunci API Anda sendiri untuk memakai isian generatif.
+	Paste your Gemini API key	Tempel kunci API Gemini Anda
+	Prompt (optional)	Deskripsi (opsional)
+	Provider	Penyedia
+	Remove Key	Hapus kunci
+	Saved (paste to replace)	Tersimpan (tempel untuk mengganti)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Area yang dipilih, gambar di sekitarnya, dan deskripsi dikirim ke {name} ({model}).
+	What is sent, and to whom	Apa yang dikirim, dan ke mana
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Kunci Anda disimpan di {store}, tidak pernah di file pengaturan PhotoCraft.
+	the macOS Keychain	Rantai Kunci macOS
+	Windows Credential Manager	Pengelola Kredensial Windows
+	memory until PhotoCraft quits	memori sampai PhotoCraft ditutup
