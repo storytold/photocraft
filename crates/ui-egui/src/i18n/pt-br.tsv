@@ -2854,3 +2854,21 @@ fontWeight	Italic	Itálico
 	Previous Document	Documento anterior
 	W x H x Resolution	L x A x Resolução
 	Front Image	Imagem frontal
+
+# Guide layout dialog
+	Rows	Linhas
+	Number	Número
+	Margin	Margem
+	Top:	Superior:
+	Left:	Esquerda:
+	Bottom:	Inferior:
+	Right:	Direita:
+	Target:	Destino:
+	Selected Artboards	Pranchetas selecionadas
+	Center Columns	Centralizar colunas
+	Clear Existing Guides	Limpar guias existentes
+	Invalid guide layout	Layout de guias inválido
+	Leave empty for automatic size	Deixe vazio para tamanho automático
+	5 Columns, 3 Rows	5 colunas, 3 linhas
+	8 Columns	8 colunas
+	12 Columns	12 colunas

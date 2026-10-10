@@ -3534,3 +3534,20 @@ cameraRaw	Masking	Маскування
 	W x H x Resolution	Ш x В x Роздільна здатність
 	Front Image	Зображення переднього плану
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+
+# Guide layout dialog
+	Rows	Рядки
+	Number	Кількість
+	Top:	Зверху:
+	Left:	Ліворуч:
+	Bottom:	Знизу:
+	Right:	Праворуч:
+	Target:	Ціль:
+	Selected Artboards	Вибрані монтажні області
+	Center Columns	Центрувати стовпці
+	Clear Existing Guides	Видалити наявні напрямні
+	Invalid guide layout	Неприпустимий макет напрямних
+	Leave empty for automatic size	Залиште порожнім для автоматичного розміру
+	5 Columns, 3 Rows	5 стовпців, 3 рядки
+	8 Columns	8 стовпців
+	12 Columns	12 стовпців

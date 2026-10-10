@@ -3006,3 +3006,21 @@ fontWeight	Italic	기울임
 	Previous Document	이전 문서
 	W x H x Resolution	폭 x 높이 x 해상도
 	Front Image	전면 이미지
+
+# Guide layout dialog
+	Columns	열
+	Rows	행
+	Number	개수
+	Top:	위:
+	Left:	왼쪽:
+	Bottom:	아래:
+	Right:	오른쪽:
+	Target:	대상:
+	Selected Artboards	선택한 아트보드
+	Center Columns	열 가운데 정렬
+	Clear Existing Guides	기존 안내선 지우기
+	Invalid guide layout	잘못된 안내선 레이아웃
+	Leave empty for automatic size	자동 크기를 사용하려면 비워 두세요
+	5 Columns, 3 Rows	5열, 3행
+	8 Columns	8열
+	12 Columns	12열

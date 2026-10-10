@@ -3447,3 +3447,20 @@ cameraRaw	Roughness	Chropowatość
 	Previous Document	Poprzedni dokument
 	W x H x Resolution	Szer. x Wys. x Rozdzielczość
 	Front Image	Obraz na wierzchu
+
+# Guide layout dialog
+	Rows	Wiersze
+	Number	Liczba
+	Top:	Góra:
+	Left:	Lewo:
+	Bottom:	Dół:
+	Right:	Prawo:
+	Target:	Cel:
+	Selected Artboards	Wybrane obszary kompozycji
+	Center Columns	Wyśrodkuj kolumny
+	Clear Existing Guides	Usuń istniejące linie pomocnicze
+	Invalid guide layout	Nieprawidłowy układ linii pomocniczych
+	Leave empty for automatic size	Pozostaw puste dla rozmiaru automatycznego
+	5 Columns, 3 Rows	5 kolumn, 3 wiersze
+	8 Columns	8 kolumn
+	12 Columns	12 kolumn

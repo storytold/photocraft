@@ -2428,3 +2428,22 @@ fontWeight	Italic	Kurzíva
 	Previous Document	Předchozí dokument
 	W x H x Resolution	Š x V x Rozlišení
 	Front Image	Přední obraz
+
+# Guide layout dialog
+	Columns	Sloupce
+	Rows	Řádky
+	Number	Počet
+	Margin	Okraj
+	Top:	Nahoře:
+	Left:	Vlevo:
+	Bottom:	Dole:
+	Right:	Vpravo:
+	Target:	Cíl:
+	Selected Artboards	Vybraná kreslicí plátna
+	Center Columns	Vystředit sloupce
+	Clear Existing Guides	Odstranit stávající vodítka
+	Invalid guide layout	Neplatné rozvržení vodítek
+	Leave empty for automatic size	Pro automatickou velikost ponechte prázdné
+	5 Columns, 3 Rows	5 sloupců, 3 řádky
+	8 Columns	8 sloupců
+	12 Columns	12 sloupců

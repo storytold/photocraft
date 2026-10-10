@@ -2973,7 +2973,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if app.ui.extras.grid && app.ui.view.extras {
             crate::rulers::draw_grid(app, &painter, &xf, &doc);
         }
-        if app.ui.view.shows(app.ui.view.show.canvas_guides) {
+        if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, &doc).is_some() {
             crate::rulers::draw_guides(app, &painter, &xf, &doc);
         }
         // The pending crop frame shows on its own document only, not on the other tiles (#1918).

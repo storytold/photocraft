@@ -3536,3 +3536,20 @@ fontWeight	Thin	Πολύ λεπτά
 	Previous Document	Προηγούμενο έγγραφο
 	W x H x Resolution	Π x Υ x Ανάλυση
 	Front Image	Μπροστινή εικόνα
+
+# Guide layout dialog
+	Rows	Γραμμές
+	Number	Πλήθος
+	Top:	Επάνω:
+	Left:	Αριστερά:
+	Bottom:	Κάτω:
+	Right:	Δεξιά:
+	Target:	Στόχος:
+	Selected Artboards	Επιλεγμένοι πίνακες γραφικών
+	Center Columns	Κεντράρισμα στηλών
+	Clear Existing Guides	Διαγραφή υπαρχόντων οδηγών
+	Invalid guide layout	Μη έγκυρη διάταξη οδηγών
+	Leave empty for automatic size	Αφήστε κενό για αυτόματο μέγεθος
+	5 Columns, 3 Rows	5 στήλες, 3 γραμμές
+	8 Columns	8 στήλες
+	12 Columns	12 στήλες

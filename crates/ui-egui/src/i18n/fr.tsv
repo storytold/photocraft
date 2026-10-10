@@ -2846,3 +2846,21 @@ fontWeight	Italic	Italique
 	Previous Document	Document précédent
 	W x H x Resolution	L x H x Résolution
 	Front Image	Image de premier plan
+
+# Guide layout dialog
+	Rows	Lignes
+	Number	Nombre
+	Margin	Marge
+	Top:	Haut :
+	Left:	Gauche :
+	Bottom:	Bas :
+	Right:	Droite :
+	Target:	Cible :
+	Selected Artboards	Plans de travail sélectionnés
+	Center Columns	Centrer les colonnes
+	Clear Existing Guides	Effacer les repères existants
+	Invalid guide layout	Disposition des repères non valide
+	Leave empty for automatic size	Laisser vide pour une taille automatique
+	5 Columns, 3 Rows	5 colonnes, 3 lignes
+	8 Columns	8 colonnes
+	12 Columns	12 colonnes

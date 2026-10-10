@@ -2833,3 +2833,21 @@ fontWeight	Italic	Miring
 	Previous Document	Dokumen Sebelumnya
 	W x H x Resolution	L x T x Resolusi
 	Front Image	Gambar Depan
+
+# Guide layout dialog
+	Rows	Baris
+	Number	Jumlah
+	Margin	Margin
+	Top:	Atas:
+	Left:	Kiri:
+	Bottom:	Bawah:
+	Right:	Kanan:
+	Target:	Target:
+	Selected Artboards	Artboard yang dipilih
+	Center Columns	Pusatkan kolom
+	Clear Existing Guides	Hapus panduan yang ada
+	Invalid guide layout	Tata letak panduan tidak valid
+	Leave empty for automatic size	Kosongkan untuk ukuran otomatis
+	5 Columns, 3 Rows	5 kolom, 3 baris
+	8 Columns	8 kolom
+	12 Columns	12 kolom

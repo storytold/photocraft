@@ -2436,3 +2436,22 @@ fontWeight	Italic	斜体
 	Previous Document	上一个文档
 	W x H x Resolution	宽 x 高 x 分辨率
 	Front Image	前面的图像
+
+# Guide layout dialog
+	Columns	列
+	Rows	行
+	Number	数量
+	Margin	边距
+	Top:	上:
+	Left:	左:
+	Bottom:	下:
+	Right:	右:
+	Target:	目标:
+	Selected Artboards	所选画板
+	Center Columns	列居中
+	Clear Existing Guides	清除现有参考线
+	Invalid guide layout	参考线布局无效
+	Leave empty for automatic size	留空以自动设置大小
+	5 Columns, 3 Rows	5列，3行
+	8 Columns	8列
+	12 Columns	12列

@@ -2466,3 +2466,22 @@ fontWeight	Italic	Kursiv
 	Previous Document	Vorheriges Dokument
 	W x H x Resolution	B x H x Auflösung
 	Front Image	Vorderes Bild
+
+# Guide layout dialog
+	Columns	Spalten
+	Rows	Zeilen
+	Number	Anzahl
+	Margin	Rand
+	Top:	Oben:
+	Left:	Links:
+	Bottom:	Unten:
+	Right:	Rechts:
+	Target:	Ziel:
+	Selected Artboards	Ausgewählte Zeichenflächen
+	Center Columns	Spalten zentrieren
+	Clear Existing Guides	Vorhandene Hilfslinien löschen
+	Invalid guide layout	Ungültiges Hilfslinien-Layout
+	Leave empty for automatic size	Für automatische Größe leer lassen
+	5 Columns, 3 Rows	5 Spalten, 3 Zeilen
+	8 Columns	8 Spalten
+	12 Columns	12 Spalten

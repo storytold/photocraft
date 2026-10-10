@@ -2507,3 +2507,22 @@ fontWeight	Italic	Cursiva
 	Previous Document	Documento anterior
 	W x H x Resolution	An. x Al. x Resolución
 	Front Image	Imagen frontal
+
+# Guide layout dialog
+	Columns	Columnas
+	Rows	Filas
+	Number	Número
+	Margin	Margen
+	Top:	Superior:
+	Left:	Izquierda:
+	Bottom:	Inferior:
+	Right:	Derecha:
+	Target:	Destino:
+	Selected Artboards	Mesas de trabajo seleccionadas
+	Center Columns	Centrar columnas
+	Clear Existing Guides	Eliminar guías existentes
+	Invalid guide layout	Disposición de guías no válida
+	Leave empty for automatic size	Dejar vacío para el tamaño automático
+	5 Columns, 3 Rows	5 columnas, 3 filas
+	8 Columns	8 columnas
+	12 Columns	12 columnas

@@ -1133,77 +1133,8 @@ fn push_unique(v: &mut Vec<f32>, x: f64) {
     }
 }
 
-/// Guide positions for `count` columns (or rows) across `[start, end]`, Photoshop-style: both
-/// edges of every column; a fixed `width` packs columns from `start` (or centres them).
-fn layout_lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, out: &mut Vec<f32>) {
-    let avail = (end - start).max(0.0);
-    if count == 0 {
-        return;
-    }
-    let n = count as f64;
-    let w = width.unwrap_or(((avail - (n - 1.0) * gutter) / n).max(0.0));
-    let total = n * w + (n - 1.0) * gutter;
-    let x0 = if center && width.is_some() { start + (avail - total) / 2.0 } else { start };
-    for i in 0..count {
-        let a = x0 + i as f64 * (w + gutter);
-        push_unique(out, a);
-        push_unique(out, a + w);
-    }
-}
-
 fn new_guide_layout(s: &mut Session, p: &Value) -> Result<Value> {
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let m = match p.get("margin") {
-        Some(Value::Array(a)) if a.len() == 4 => [0, 1, 2, 3].map(|i| a[i].as_f64().unwrap_or(0.0)),
-        Some(v) if v.is_number() => [v.as_f64().unwrap_or(0.0); 4],
-        _ => [0.0; 4],
-    };
-    let [top, left, bottom, right] = m;
-    let cols = p.get("columns").and_then(Value::as_u64).unwrap_or(0);
-    let rows = p.get("rows").and_then(Value::as_u64).unwrap_or(0);
-    // Each column/row costs a loop iteration plus a duplicate scan, so an
-    // absurd count from the caller would block the app for minutes (#704).
-    // Photoshop's own dialog caps at 32; 1000 is a generous ceiling that
-    // still finishes instantly.
-    const MAX_GUIDE_LINES: u64 = 1000;
-    for (n, what) in [(cols, "columns"), (rows, "rows")] {
-        if n > MAX_GUIDE_LINES {
-            return Err(EngineError::BadParams { cmd: "view.newGuideLayout".into(), msg: format!("{what} must be {MAX_GUIDE_LINES} or fewer (got {n})") });
-        }
-    }
-    let (cols, rows) = (cols as u32, rows as u32);
-    let mut v: Vec<f32> = Vec::new();
-    let mut h: Vec<f32> = Vec::new();
-    let has_margin = m.iter().any(|x| *x != 0.0);
-    if has_margin {
-        push_unique(&mut v, left);
-        push_unique(&mut v, cw - right);
-        push_unique(&mut h, top);
-        push_unique(&mut h, ch - bottom);
-    }
-    let center = p.get("centerColumns").and_then(Value::as_bool).unwrap_or(false);
-    layout_lines(left, cw - right, cols, size_param(p, "width"), f64_param(p, "gutter").unwrap_or(0.0), center, &mut v);
-    layout_lines(top, ch - bottom, rows, size_param(p, "height"), f64_param(p, "rowGutter").or_else(|| f64_param(p, "gutter")).unwrap_or(0.0), center, &mut h);
-    if v.is_empty() && h.is_empty() {
-        return Err(EngineError::BadParams { cmd: "view.newGuideLayout".into(), msg: "give \"columns\", \"rows\" or a \"margin\"".into() });
-    }
-    let clear = p.get("clearExisting").and_then(Value::as_bool).unwrap_or(false);
-    let (nv, nh) = (v.len(), h.len());
-    s.edit("New Guide Layout", |doc, _| {
-        if clear {
-            doc.guides.vertical.clear();
-            doc.guides.horizontal.clear();
-        }
-        for x in v {
-            push_unique(&mut doc.guides.vertical, x as f64);
-        }
-        for y in h {
-            push_unique(&mut doc.guides.horizontal, y as f64);
-        }
-        Ok(())
-    })?;
-    Ok(json!({"vertical": nv, "horizontal": nh}))
+    crate::guide_layout::apply(s, p)
 }
 
 fn guides_from_shape(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1404,7 +1335,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Guide Layout…",
             &["View"],
             None,
-            r##"{"columns":n=0,"width":px?,"gutter":px=0,"rows":n=0,"height":px?,"rowGutter":px=gutter,"margin":px|[top,left,bottom,right]=0,"centerColumns":bool=false,"clearExisting":bool=false}"##,
+            r##"{"columns":n=0,"width":px?,"gutter":px=0,"rows":n=0,"height":px?,"rowGutter":px=gutter,"margin":px|[top,left,bottom,right]=0,"centerColumns":bool=false,"clearExisting":bool=false,"target":"document|selectedArtboards"="document"}"##,
             has_doc,
             new_guide_layout
         ),
