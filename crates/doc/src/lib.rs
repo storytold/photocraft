@@ -937,7 +937,18 @@ impl Document {
     }
 
     pub fn path_of(&self, id: LayerId) -> Option<LayerPath> {
-        self.walk().into_iter().find(|(_, _, l)| l.id == id).map(|(p, _, _)| p)
+        fn rec(layers: &[Layer], id: LayerId, path: &mut LayerPath) -> bool {
+            for (i, l) in layers.iter().enumerate() {
+                path.push(i);
+                if l.id == id || l.children().is_some_and(|ch| rec(ch, id, path)) {
+                    return true;
+                }
+                path.pop();
+            }
+            false
+        }
+        let mut path = Vec::new();
+        rec(&self.layers, id, &mut path).then_some(path)
     }
 
     /// The locks in force on the layer at `path`: its own and those of every group around it,
@@ -952,8 +963,10 @@ impl Document {
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        let path = self.path_of(id)?;
-        self.layer_at(&path)
+        fn rec(layers: &[Layer], id: LayerId) -> Option<&Layer> {
+            layers.iter().find_map(|l| if l.id == id { Some(l) } else { l.children().and_then(|ch| rec(ch, id)) })
+        }
+        rec(&self.layers, id)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
@@ -1196,6 +1209,27 @@ mod tests {
         let n = d.insert_above(Some(inner_id), Layer::raster("n", d.pixel_format()));
         assert_eq!(d.path_of(n), Some(vec![1, 1]));
         assert_eq!(d.layer_count(), 4);
+    }
+
+    /// `layer` and `path_of` search the tree directly (no `walk`): they must agree with it at
+    /// every depth, and miss cleanly.
+    #[test]
+    fn layer_lookup_agrees_with_walk() {
+        let mut d = doc();
+        let format = d.pixel_format();
+        let leaf = |n: &str| Layer::raster(n, format);
+        let deep = Layer::group("A", vec![leaf("a0"), Layer::group("B", vec![leaf("b0"), Layer::group("C", vec![leaf("c0")]), leaf("b2")]), leaf("a2")]);
+        d.insert_above(None, deep);
+        d.insert_above(None, leaf("top"));
+        let walk: Vec<(LayerPath, LayerId)> = d.walk().into_iter().map(|(p, _, l)| (p, l.id)).collect();
+        assert_eq!(walk.len(), 10);
+        for (path, id) in &walk {
+            assert_eq!(d.path_of(*id).as_ref(), Some(path));
+            assert_eq!(d.layer(*id).map(|l| l.id), Some(*id));
+            assert_eq!(d.layer_mut(*id).map(|l| l.id), Some(*id));
+        }
+        let missing = Layer::raster("elsewhere", d.pixel_format()).id;
+        assert!(d.path_of(missing).is_none() && d.layer(missing).is_none() && d.layer_mut(missing).is_none());
     }
 
     #[test]

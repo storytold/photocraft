@@ -156,12 +156,12 @@ fn exif_focal(srcs: &[Source]) -> Option<f64> {
 
 /// Warps the content of `surf` inside `rect` by a placement shifted by `offset`; image
 /// coordinates are surface coordinates minus `origin`.
-pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &Placement, offset: (f64, f64), interp: Interp) -> Surface {
+pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &Placement, offset: (f64, f64), interp: Interp) -> Result<Surface> {
     let pl = pl.translated(offset.0, offset.1);
     if let Some(h) = plane_matrix(&pl, origin) {
-        return warp_surface(surf, rect, &h, interp);
+        return Ok(warp_surface(surf, rect, &h, interp)?);
     }
-    warp_mesh_surface(surf, rect, &|x, y| pl.forward(x - origin.0, y - origin.1), interp)
+    Ok(warp_mesh_surface(surf, rect, &|x, y| pl.forward(x - origin.0, y - origin.1), interp))
 }
 
 /// The projective matrix of a planar, distortion-free placement (surface px → panorama px).
@@ -447,7 +447,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     .map(|(k, (&i, pl))| {
                         ctx.check()?;
                         ctx.progress(0.35 + 0.25 * k as f32 / placed.len().max(1) as f32, "");
-                        Ok(warp_placed(&srcs[i].surf, Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32), (0.0, 0.0), pl, offset, Interp::Bicubic))
+                        warp_placed(&srcs[i].surf, Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32), (0.0, 0.0), pl, offset, Interp::Bicubic)
                     })
                     .collect::<Result<Vec<Surface>>>()?
             };
@@ -758,7 +758,7 @@ fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
         let corners = f.corners();
         let hq = Homography::rect_to_quad([0.0, 0.0, pw as f64, ph as f64], corners).and_then(|h| h.inverse());
         let Some(hm) = hq else { continue };
-        let warped = warp_surface(&flat, area, &hm, Interp::Bicubic);
+        let warped = warp_surface(&flat, area, &hm, Interp::Bicubic)?;
         let keep = Rect::new(0, 0, pw as i32, ph as i32);
         let mut px = Surface::new(fmt);
         px.write_region(keep, &warped.read_region(keep));

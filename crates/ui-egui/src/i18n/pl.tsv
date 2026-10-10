@@ -35,6 +35,11 @@
 	New from Clipboard	Nowy ze schowka
 	Open…	Otwórz…
 	Open As…	Otwórz jako…
+	Open EXR Parts…	Otwórz części EXR…
+	Add beauty precomp from the AOVs	Dodaj wstępną kompozycję piękna z AOV-ów
+	Both	Obie
+	Left	Lewa
+	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
 	Close	Zamknij
@@ -84,6 +89,8 @@
 	Import	Importuj
 	Browse…	Przeglądaj…
 	Reveal in Finder	Pokaż w Finderze
+	Show in Explorer	Pokaż w Eksploratorze
+	Show in Folder	Pokaż w folderze
 	File Info…	Informacje o pliku…
 	Print…	Drukuj…
 	Print One Copy	Drukuj jedną kopię
@@ -810,7 +817,6 @@
 	Blending Options	Opcje mieszania
 	Blue	Niebieski
 	Blue, Red, Yellow	Niebieski, czerwony, żółty
-	Both	Oba
 	Both Axes	Obie osie
 	Bottom	Dół
 	Brightness	Jasność
@@ -1127,7 +1133,6 @@
 	Leading	Interlinia
 	Leading (set to the font size × auto-leading when Auto)	Interlinia (przy ustawieniu Automatycznie: rozmiar czcionki × automatyczna interlinia)
 	Leave as is (don't color manage)	Pozostaw bez zmian (bez zarządzania kolorami)
-	Left	Lewo
 	Left align text	Wyrównaj tekst do lewej
 	Length:	Długość:
 	Level	Poziom
@@ -1337,7 +1342,6 @@
 	Restore All	Przywróć wszystko
 	Restore Defaults	Przywróć domyślne
 	Restrictive (Web)	Ograniczona (Internet)
-	Right	Prawo
 	Right align text	Wyrównaj tekst do prawej
 	Rigid	Sztywne
 	Rotate:	Obrót:
@@ -1625,6 +1629,7 @@
 	Mobile	Urządzenia mobilne
 	Move Tool	Narzędzie Przesunięcie
 	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
+	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -3242,6 +3247,7 @@ cameraRaw	Roughness	Chropowatość
 
 # Text Color Picker and screen sampling
 	Color Picker (Text Color)	Próbnik kolorów (Kolor tekstu)
+	Color Picker ({name})	Próbnik kolorów ({name})
 	Color Picker (Fill Color)	Próbnik kolorów (Kolor wypełnienia)
 	Fill color	Kolor wypełnienia
 	Color Picker (Stroke Color)	Próbnik kolorów (Kolor obrysu)
@@ -3427,3 +3433,9 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Use Classic Mode	Użyj trybu klasycznego
+	Auto Center Preview	Automatycznie wyśrodkuj podgląd
+	Next Document	Następny dokument
+	Previous Document	Poprzedni dokument
+	W x H x Resolution	Szer. x Wys. x Rozdzielczość
+	Front Image	Obraz na wierzchu
