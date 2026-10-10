@@ -1128,7 +1128,8 @@ pub enum RafPacking {
     Lsb12,
     /// 14-bit, most significant bit first in little-endian 32-bit words.
     Words14,
-    /// A short `IS…` strip standing in for Fujifilm's compressed data.
+    /// Fujifilm's lossless compression (`rafc.rs`), 12-column blocks for X-Trans and
+    /// 8-column blocks for Bayer; the height must be a multiple of 6.
     Compressed,
 }
 
@@ -1220,9 +1221,11 @@ impl RafSpec {
                 logical.chunks(4).flat_map(|w| w.iter().rev().copied().collect::<Vec<u8>>()).collect()
             }
             RafPacking::Compressed => {
-                let mut v = b"IS\x01\x00".to_vec();
-                v.resize(self.width * self.height / 2, 0x5A);
-                v
+                let xtrans = self.cfa.len() == 36;
+                let side = if xtrans { 6 } else { 2 };
+                let cfa = crate::sensor::Cfa { width: side, height: side, colors: self.cfa.clone(), origin_x: 0, origin_y: 0 };
+                crate::rafc::encode(&self.data, self.width, self.height, self.bits, &cfa, if xtrans { 12 } else { 8 })
+                    .unwrap_or_else(|_| b"IS\x01\x10".to_vec())
             }
         }
     }
