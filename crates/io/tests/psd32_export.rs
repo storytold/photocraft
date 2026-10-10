@@ -188,3 +188,18 @@ fn merged_oracle_preserves_signed_hdr_samples() {
         }
     }
 }
+
+#[test]
+fn merged_oracle_does_not_treat_extra_channels_as_transparency() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        let doc = Document::new("extra channel", Size::new(1, 1), mode, SampleType::F32);
+        let mut file = PsdFile::from_bytes(&export_psd(&doc)).unwrap();
+        let color_channels = if mode == ColorMode::Rgb { 3 } else { 1 };
+        file.header.channels = color_channels + 1;
+        file.layer_info = Some(photocraft_psd::LayerInfo { merged_alpha: false, layers: Vec::new(), padding: None });
+        file.image_data.compression = Compression::Raw;
+        file.image_data.data = (0..color_channels).flat_map(|_| 2.0_f32.to_be_bytes()).chain(0.0_f32.to_be_bytes()).collect();
+        assert!(!file.merged_has_alpha());
+        assert_eq!(merged_composite(&file).unwrap(), vec![[2.0, 2.0, 2.0, 1.0]], "{mode:?}");
+    }
+}

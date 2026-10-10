@@ -331,7 +331,10 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
             .collect());
     }
     // Generic path (Lab, CMYK and others) via the raster model conversion.
-    let (doc, _) = psd_to_document(&PsdFile { layer_info: None, ..file.clone() });
+    // Keep the merged-alpha marker while discarding layers: otherwise an extra
+    // spot/alpha channel in an opaque composite is mistaken for transparency.
+    let layer_info = Some(photocraft_psd::LayerInfo { merged_alpha: file.merged_has_alpha(), layers: Vec::new(), padding: None });
+    let (doc, _) = psd_to_document(&PsdFile { layer_info, ..file.clone() });
     // Multichannel documents keep their channels apart (no layer): composite them.
     if doc.layers.is_empty() && doc.mode == photocraft_color::ColorMode::Multichannel {
         return Ok(photocraft_compose::flatten(&doc).px);
