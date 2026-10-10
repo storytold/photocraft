@@ -7,6 +7,8 @@ use crate::theme::{self, Tokens};
 
 mod color_count;
 pub use color_count::color_count_row;
+mod type_ahead;
+pub use type_ahead::list_open as dropdown_list_open;
 
 /// Match the Spectrum application-menu padding and blue/white hover state in
 /// secondary menus (status bar, dock hamburger, layer context menus; #2187).
@@ -949,13 +951,22 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
     // The wheel's notches add up over the button and the open list alike.
     let wheel_id = ui.make_persistent_id(id).with("wheel");
     let wheel = wheel && ui.is_enabled();
-    let (mut over_list, mut wheeled) = (false, false);
+    let (mut over_list, mut wheeled, mut keyed) = (false, false, false);
     // A wheel step scrolls the open list to the new value: at once over the list, the next frame
     // after a step over the button.
     let reveal_id = wheel_id.with("reveal");
     let mut reveal = wheel && ui.data_mut(|d| d.remove_temp::<bool>(reveal_id)).unwrap_or(false);
     let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
         fit_widest_option(ui, options.iter().map(|(_, l)| tl!(l)));
+        // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
+        let labels: Vec<&str> = options.iter().map(|(_, l)| tl!(l)).collect();
+        let shown = options.iter().position(|(v, _)| v == current);
+        if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            *current = v.clone();
+            chosen.push(v.clone());
+            reveal = true;
+            keyed = true;
+        }
         // Over the open list the wheel steps the value too, instead of scrolling the list.
         over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
         if over_list {
@@ -1003,7 +1014,8 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
         }
         chosen.extend(stepped);
     }
-    if wheel && wheel_rests(ui, wheel_id, wheeled) {
+    // Nor is the option under a pointer resting where the keyboard picked another.
+    if wheel_rests(ui, wheel_id, wheeled || keyed) {
         hovered = None;
     }
     (chosen, hovered)
@@ -1140,6 +1152,12 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
     let mut changed = false;
     let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
         fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
+        let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
+        let shown = options.iter().position(|(v, _, _)| v == current);
+        if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            *current = v.clone();
+            changed = true;
+        }
         for (v, l, tip) in options {
             if ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip)).clicked() {
                 *current = v.clone();

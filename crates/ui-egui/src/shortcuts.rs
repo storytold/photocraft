@@ -285,8 +285,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.camera_raw.is_some() {
         return;
     }
-    // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu.
-    if crate::menu_nav::is_open(ctx) {
+    // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu; so does an open
+    // dropdown list, whose letters pick an option rather than a tool (#1481).
+    if crate::menu_nav::is_open(ctx) || crate::widgets::dropdown_list_open(ctx) {
         return;
     }
     let symmetry_editing = app.ui.symmetry_transform.is_some();
