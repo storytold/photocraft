@@ -268,6 +268,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         baseline_exposure: if baseline_exposure.is_finite() { baseline_exposure.clamp(-10.0, 10.0) } else { 0.0 },
         gain_maps,
         tone_curve: Vec::new(),
+        black_point: 0.0,
         warnings,
     })
 }
