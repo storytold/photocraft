@@ -158,7 +158,6 @@ pub fn step(l: &TextLayout, text: &str, from: Caret, dir: Dir, unit: Unit) -> Ca
     let Some(p) = l.paragraphs.iter().find(|p| (p.start..=p.end).contains(&from.byte)) else { return from };
     let content = text.get(p.start..p.end).unwrap_or("");
     let stops = crate::segment::grapheme_boundaries(content);
-    let end = drawn_end(l);
     let mut cur = p.cursor(from);
     // Each move passes at least one parley cluster; the bound only guards against a cycle.
     for _ in 0..content.len().saturating_add(p.prefix).saturating_add(8) {
@@ -172,28 +171,42 @@ pub fn step(l: &TextLayout, text: &str, from: Caret, dir: Dir, unit: Unit) -> Ca
             break;
         }
         cur = next;
-        // Inside the LRM/RLM prefix: not a layer position.
         let Some(c) = p.to_layer(cur) else { continue };
-        // A hidden line of an overflowing box.
-        if c.byte > end {
-            break;
+        match classify(l, text, p, &stops, start, c) {
+            Visit::Stop => return c,
+            Visit::Skip => {}
+            Visit::Leave => break,
         }
-        let g = caret_geometry(l, text, c);
-        // parley left the line: lines are crossed below, by paragraph direction.
-        if g.line != start.line {
-            break;
-        }
-        // Between a letter and its marks.
-        if stops.binary_search(&c.byte.saturating_sub(p.start)).is_err() {
-            continue;
-        }
-        // A zero-width stop at the same place.
-        if (g.x - start.x).abs() < SAME_X {
-            continue;
-        }
-        return c;
     }
     cross(l, text, from, start, dir)
+}
+
+/// What [`step`] does with the caret parley's cursor reached.
+enum Visit {
+    /// A caret stop: the step ends here.
+    Stop,
+    /// Not a stop for the user: keep moving.
+    Skip,
+    /// Past the line (or the drawn text): stop moving and cross the line instead.
+    Leave,
+}
+
+/// Classifies layer caret `c`, reached from `start` on the same paragraph `p` (whose grapheme
+/// boundaries are `stops`): hidden text and other lines leave; a position between a letter and its
+/// marks, or at the same x as `start` (a zero-width bidi control), is skipped.
+fn classify(l: &TextLayout, text: &str, p: &ParagraphNav, stops: &[usize], start: CaretGeom, c: Caret) -> Visit {
+    if c.byte > drawn_end(l) {
+        return Visit::Leave;
+    }
+    let g = caret_geometry(l, text, c);
+    if g.line != start.line {
+        return Visit::Leave;
+    }
+    let inside_grapheme = stops.binary_search(&c.byte.saturating_sub(p.start)).is_err();
+    if inside_grapheme || (g.x - start.x).abs() < SAME_X {
+        return Visit::Skip;
+    }
+    Visit::Stop
 }
 
 /// Vertical type keeps moving in text order (RTL in vertical type is a non-goal): → / ↓ forward.
