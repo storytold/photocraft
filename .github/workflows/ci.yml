@@ -41,7 +41,7 @@ jobs:
       os: ${{ steps.pick.outputs.os }}
       web: ${{ steps.pick.outputs.web }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: pick
@@ -81,7 +81,7 @@ jobs:
       matrix:
         os: ${{ fromJSON(needs.platforms.outputs.os) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Unused toolchains in the image (Android SDK, .NET, GHC, CodeQL) are deleted in the
       # background: the space is free before the craft-fonts build needs it, and nothing waits.
@@ -128,7 +128,7 @@ jobs:
       # runs the runner out of disk (as `-p photocraft-text -p photocraft-ui-egui` did after #800).
       - name: Check out craft-fonts
         if: runner.os == 'Linux'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: abb83316d96aa59c1cf64784289e378fe9fa5695
@@ -168,7 +168,7 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -176,7 +176,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Restore test corpora
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: corpus/
           key: corpus-${{ hashFiles('xtask/src/corpus_pins.rs', 'xtask/*.sha256') }}
@@ -189,7 +189,7 @@ jobs:
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -267,7 +267,7 @@ jobs:
           - { crate: affinity, name: import_preview, args: "--features io" }
           - { crate: format, name: load }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
@@ -279,7 +279,7 @@ jobs:
         run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time=${{ inputs.fuzz_seconds }}
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
           path: crates/${{ matrix.target.crate }}/fuzz/artifacts

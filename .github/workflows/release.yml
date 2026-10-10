@@ -45,7 +45,7 @@ jobs:
       date: ${{ steps.v.outputs.date }}
       prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         name: Resolve version
         run: |
@@ -73,9 +73,9 @@ jobs:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out craft-fonts (embedded fonts)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: ${{ env.CRAFT_FONTS_REF }}
@@ -112,7 +112,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: packaging/macos/verify.sh --arch universal
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: dist/release/*
@@ -140,9 +140,9 @@ jobs:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out craft-fonts (embedded fonts)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: ${{ env.CRAFT_FONTS_REF }}
@@ -176,7 +176,7 @@ jobs:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
         run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-windows-${{ matrix.arch }}
           path: dist/release/*
@@ -200,9 +200,9 @@ jobs:
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       NFPM_VERSION: 2.47.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out craft-fonts (embedded fonts)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: ${{ env.CRAFT_FONTS_REF }}
@@ -241,7 +241,7 @@ jobs:
             "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
             test -s "$appimage.zsync"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/release/*
@@ -264,8 +264,8 @@ jobs:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/linux
@@ -279,7 +279,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build the Flatpak bundle
         run: packaging/linux/flatpak-bundle.sh "dist/linux/photocraft-$PHOTOCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-flatpak-${{ matrix.arch }}
           path: dist/release/*.flatpak
@@ -297,9 +297,9 @@ jobs:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out craft-fonts (embedded fonts)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: ${{ env.CRAFT_FONTS_REF }}
@@ -331,7 +331,7 @@ jobs:
             bash packaging/freebsd/package.sh
             tar -tzf dist/release/photocraft-*-freebsd-x86_64.tar.gz \
               | grep -E '/bin/photocraft$|/bin/photocraft-cli$|/share/applications/ai\.storyteller\.photocraft\.desktop$|/share/doc/photocraft/LICENSE-MIT$'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-freebsd-x86_64
           path: dist/release/*
@@ -347,7 +347,7 @@ jobs:
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       TRUNK_VERSION: 0.21.14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -366,7 +366,7 @@ jobs:
       # one Japanese font takes the wasm over packaging/web/package.sh's 24 MiB gate.
       - name: Build and zip
         run: packaging/web/package.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-web
           path: dist/release/*
@@ -385,7 +385,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: artifacts
