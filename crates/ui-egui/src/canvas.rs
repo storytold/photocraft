@@ -1591,7 +1591,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             }
             crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
             let resp = if cut { resp.on_hover_text(name) } else { resp };
-            if xresp.clicked() {
+            if tab_close_clicked(&resp, &xresp) {
                 close = Some(i);
             } else if resp.clicked() {
                 activate = Some(i);
@@ -1677,6 +1677,14 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         app.ui.status_error = true;
     }
     TabStrip { rect: frame.response.rect, tabs: doc_tabs }
+}
+
+/// Whether a document tab was asked to close: its × was clicked (#619), or the tab was clicked
+/// with the middle button (#2570), as in a browser. A middle click over the × counts too, so the
+/// whole tab behaves the same way. Both strips share this rule; the caller routes it through the
+/// guarded `file.close`, so a document with unsaved changes still gets the save prompt.
+fn tab_close_clicked(resp: &egui::Response, xresp: &egui::Response) -> bool {
+    xresp.clicked() || xresp.middle_clicked() || resp.middle_clicked()
 }
 
 /// All tab actions go through the same guarded File commands as the menu bar, including the
@@ -1835,7 +1843,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
         let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
         let resp = if cut { resp.on_hover_text(title.as_str()) } else { resp };
-        if xresp.clicked() {
+        if tab_close_clicked(&resp, &xresp) {
             close = Some(i);
         } else if resp.clicked() {
             activate = Some(i);
@@ -4629,6 +4637,64 @@ mod tests {
             h.run_steps(2);
             assert!(h.state().0.session.documents().is_empty(), "{os:?}: the × closes the document");
         }
+    }
+
+    /// Middle-clicking a document tab closes it (#2570), in both tab strips, and the tab under the
+    /// pointer is the one that goes even when another document is active.
+    #[test]
+    fn middle_clicking_a_tab_closes_that_document() {
+        use egui_kittest::kittest::Queryable;
+        for kind in [crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::Pro] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            for name in ["keep", "doomed", "active"] {
+                app.run("file.new", json!({"width": 8, "height": 8, "name": name})).unwrap();
+            }
+            app.sync_views();
+            assert_eq!(app.session.active_index(), Some(2));
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(700.0, 40.0)).build_ui_state(
+                |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                    if *ready {
+                        tabs(app, ui);
+                    }
+                },
+                (app, false),
+            );
+            PhotocraftApp::setup_context(&h.ctx, kind);
+            h.state_mut().1 = true;
+            h.run_steps(2);
+            h.get_by_label_contains("doomed").click_button(egui::PointerButton::Middle);
+            h.run_steps(2);
+            let names: Vec<String> = h.state().0.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+            assert_eq!(names, ["keep", "active"], "{kind:?}: the middle-clicked tab closed");
+            // A clean document closes straight away; a dirty one would park in `discard`.
+            assert!(h.state().0.discard.is_none(), "{kind:?}: nothing to prompt about");
+        }
+    }
+
+    /// A middle click goes through the same guarded `file.close` as the ×, so unsaved changes
+    /// still get the Save / Don’t Save / Cancel prompt instead of being thrown away (#2570).
+    #[test]
+    fn middle_clicking_an_edited_tab_prompts_instead_of_discarding() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "edited"})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.sync_views();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(700.0, 40.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    tabs(app, ui);
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.state_mut().1 = true;
+        h.run_steps(2);
+        h.get_by_label_contains("edited").click_button(egui::PointerButton::Middle);
+        h.run_steps(2);
+        assert!(h.state().0.discard.is_some(), "the unsaved-changes prompt must come up");
+        assert_eq!(h.state().0.session.documents().len(), 1, "and the document is still open");
     }
 
     #[test]
