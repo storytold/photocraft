@@ -71,9 +71,9 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     }
     let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
     match &app.discard {
-        None => app.discard = Some(prompt),
+        None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
-        Some(open) if id == EXIT && open.id != EXIT => app.discard = Some(prompt),
+        Some(open) if id == EXIT && open.id != EXIT => ask(app, prompt),
         // Repeated quit requests (the X pressed again) keep the prompt, and the answers so far.
         Some(open) if open.id == id => {}
         Some(_) => {
@@ -82,6 +82,22 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         }
     }
     true
+}
+
+/// Puts up `prompt`. One over several documents shows the document it asks about first; each
+/// later one is shown as it comes up (see [`advance`]).
+fn ask(app: &mut PhotocraftApp, prompt: Prompt) {
+    if !matches!(reach(&prompt.id), Some(Reach::Target)) {
+        show_tab(app, prompt.docs.first().copied());
+    }
+    app.discard = Some(prompt);
+}
+
+/// Makes `doc` the active tab, if it is still open.
+fn show_tab(app: &mut PhotocraftApp, doc: Option<DocId>) {
+    if let Some(i) = doc.and_then(|d| index_of(app, d)) {
+        app.session.set_active(i);
+    }
 }
 
 impl PhotocraftApp {
@@ -134,9 +150,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
-        if let Some(i) = next.and_then(|d| index_of(app, d)) {
-            app.session.set_active(i);
-        }
+        show_tab(app, next);
     }
     if next.is_some() {
         return;
@@ -377,6 +391,7 @@ mod tests {
         (0..3).for_each(|i| make_dirty(&mut app, i));
         let kept = doc_id(&app, 1);
         crate::menus::invoke(&mut app, &ctx, "file.closeOthers", json!({"document": 1})).unwrap();
+        assert_eq!(app.session.active_index(), Some(0), "the first one asked about is shown");
         advance(&mut app, &ctx);
         assert_eq!(app.session.documents().len(), 2);
         assert_eq!(app.session.active().map(|d| d.doc.id), Some(doc_id(&app, 1)), "the next one asked about is shown");
@@ -523,8 +538,11 @@ mod tests {
             make_dirty(&mut app, 1);
             let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
             let second = doc_id(&app, 1);
+            let first = doc_id(&app, 0);
+            assert_eq!(app.session.active_index(), Some(1), "the last new document is active");
             let mut h = prompt_for(app, command, egui::os::OperatingSystem::Windows);
             assert!(asks_about(&h, &names[0]), "{command}");
+            assert_eq!(h.state().session.active().map(|d| d.doc.id), Some(first), "{command}: the first tab asked about is shown");
             h.key_press(Key::N);
             h.run_steps(2);
             assert_eq!(h.state().session.documents().len(), 1, "{command}: No closed the first document");
