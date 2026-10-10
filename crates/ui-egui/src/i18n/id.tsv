@@ -2042,6 +2042,7 @@
 	Cancelled {label}	{label} dibatalkan
 	Esc to cancel	Esc untuk batal
 	Opening {name}	Membuka {name}
+	Saved {name}	Tersimpan: {name}
 	Saving {name}	Menyimpan {name}
 	A save to {name} is still running; try again when it finishes	Penyimpanan ke {name} masih berjalan; coba lagi setelah selesai
 	{label} is writing the file and can no longer be cancelled	{label} sedang menulis berkas dan tidak dapat dibatalkan lagi

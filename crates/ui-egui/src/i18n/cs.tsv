@@ -2101,6 +2101,7 @@
 	Cancelled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
 	Opening {name}	Otevírání {name}
+	Saved {name}	Uloženo: {name}
 	Saving {name}	Ukládání {name}
 	A save to {name} is still running; try again when it finishes	Ukládání do {name} stále probíhá; zkuste to znovu, až skončí
 	{label} is writing the file and can no longer be cancelled	{label} zapisuje soubor a už ho nelze zrušit

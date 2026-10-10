@@ -2083,6 +2083,7 @@
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opening {name}	正在開啟 {name}
+	Saved {name}	已儲存 {name}
 	Saving {name}	正在儲存 {name}
 	A save to {name} is still running; try again when it finishes	仍在儲存到 {name}；請在完成後再試一次
 	{label} is writing the file and can no longer be cancelled	{label} 正在寫入檔案，已無法取消

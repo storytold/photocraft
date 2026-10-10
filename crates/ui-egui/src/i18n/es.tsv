@@ -2084,6 +2084,7 @@
 	Cancelled {label}	Se canceló {label}
 	Esc to cancel	Esc para cancelar
 	Opening {name}	Abriendo {name}
+	Saved {name}	Guardado: {name}
 	Saving {name}	Guardando {name}
 	A save to {name} is still running; try again when it finishes	Todavía se está guardando {name}; inténtalo de nuevo cuando termine
 	{label} is writing the file and can no longer be cancelled	{label} está escribiendo el archivo y ya no se puede cancelar
