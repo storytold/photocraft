@@ -121,7 +121,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if ui.input(|i| i.pointer.any_pressed()) {
                 ui.data_mut(|d| d.remove::<egui::Id>(held_id));
             }
-            egui::ScrollArea::vertical().id_salt("toolbar-rows").show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("toolbar-columns").show(ui, |ui| {
                 // Pro has no group dividers, so its two columns fill every row across groups.
                 let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
                 for (si, section) in sections.iter().enumerate() {
