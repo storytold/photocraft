@@ -141,9 +141,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let tip = if tool.key() == '\0' { tl!(tool.label()).to_string() } else { format!("{}  ({})", tl!(tool.label()), tool.key()) };
                             let resp = icons::button(ui, icons::tool_icon(tool), bx, sel, &tip);
                             if slot.len() > 1 {
-                                let r = resp.rect;
-                                let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
-                                ui.painter().add(egui::Shape::convex_polygon(tri, t.text_faint, Stroke::NONE));
+                                paint_toolbar_menu_indicator(ui, &resp);
                             }
                             if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
                                 app.ui.tool = tool;
@@ -270,6 +268,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
                     }
                     let sm = icons::button(ui, "app-window", bx, false, tl!("Change Screen Mode  (F)"));
+                    paint_toolbar_menu_indicator(ui, &sm);
+
                     if sm.clicked() {
                         let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
                     }
@@ -292,6 +292,13 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         },
     );
+}
+
+/// Paints a triangle on the bottom right corner of an icon button to indicate that a toolbar item has a submenu.
+pub fn paint_toolbar_menu_indicator(&mut ui: egui::Ui, resp: &egui::Response) {
+    let r = resp.rect;
+    let tri = vec![r.right_bottom() + vec2(-2.0, -2.0), r.right_bottom() + vec2(-6.0, -2.0), r.right_bottom() + vec2(-2.0, -6.0)];
+    ui.painter().add(egui::Shape::convex_polygon(tri, t.text_faint, Stroke::NONE));
 }
 
 /// Does the toolbar need two columns? Height of one column (header, tool slots, Edit Toolbar,
