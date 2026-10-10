@@ -43,6 +43,8 @@
 	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Remove from Recent	Verwijderen uit recente bestanden
+	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
 	Minimize	Minimaliseren
 	Maximize	Maximaliseren
@@ -1522,6 +1524,7 @@
 	Blur Tool	Vervagingsgereedschap
 	Bold	Vet
 	Brush	Penseel
+	Block	Blok
 	Brush Pose	Penseelhouding
 	Brush Tip Shape	Vorm penseelpunt
 	Brush Tool	Penseelgereedschap
@@ -3610,3 +3613,4 @@ cameraRaw	Whites	Witten
 	Previous Document	Vorig document
 	W x H x Resolution	B x H x Resolutie
 	Front Image	Voorste afbeelding
+	PhotoCraft — Screen Color Picker	PhotoCraft — Schermkleurkiezer

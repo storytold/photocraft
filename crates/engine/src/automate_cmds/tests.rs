@@ -114,6 +114,21 @@ fn droplets_are_written_and_run() {
 }
 
 #[test]
+fn batch_and_droplets_skip_recorded_view_steps() {
+    let dir = tmp("view-steps");
+    images(&dir, 1, 40, 20);
+    let steps = json!([["view.zoomIn", {}], ["image.imageRotation.90cw", {}], ["view.fitOnScreen", {}]]);
+    let mut s = Session::new();
+    let r = s.execute("file.automate.batch", json!({"steps": steps, "input": dir.clone(), "output": format!("{dir}/batch"), "format": "png"})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let out = photocraft_codecs::decode(&std::fs::read(format!("{dir}/batch/img0.png")).unwrap()).unwrap();
+    assert_eq!(out.dimensions(), (20, 40));
+    let r = s.execute("file.automate.createDroplet", json!({"path": format!("{dir}/Rotate"), "steps": steps})).unwrap();
+    let v: Value = serde_json::from_slice(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(v["action"]["steps"], json!([["image.imageRotation.90cw", {}]]));
+}
+
+#[test]
 fn statistics_makes_a_stack_mode_smart_object() {
     let dir = tmp("stats");
     let files = images(&dir, 3, 16, 12);

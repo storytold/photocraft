@@ -27,7 +27,8 @@
 //!   ring around the hole (sum of squared differences), i.e. an automatic Healing Brush source.
 //! * [`synthesize`], create texture: patch-based texture synthesis in the style of A. Efros,
 //!   W. Freeman, *Image Quilting for Texture Synthesis and Transfer*, SIGGRAPH 2001 (blocks picked from
-//!   random candidates by overlap error, feathered overlap instead of a min-cut seam).
+//!   random candidates by overlap error, joined along minimum-error boundary cuts, so the texture is
+//!   copied, never averaged).
 //!
 //! All functions take interleaved `w × h × ch` normalised floats (any colour model/depth) and a
 //! `w × h` hole mask, and return a full buffer equal to the input outside the hole. They are
@@ -971,20 +972,34 @@ pub fn synthesize(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], blo
                     }
                 }
                 let c = best.0;
-                for y in (by - ov)..(by + b + ov) {
-                    for x in (bx - ov)..(bx + b + ov) {
-                        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-                            continue;
-                        }
+                let (x0, y0) = ((bx - ov).max(0), (by - ov).max(0));
+                let (x1, y1) = ((bx + b + ov).min(w as i32), (by + b + ov).min(h as i32));
+                let src = |x: i32, y: i32| ((y - by + c.1) as usize * w + (x - bx + c.0) as usize) * ch;
+                // Squared difference between what is there and the block, where both exist.
+                let err = |x: i32, y: i32| {
+                    let i = y as usize * w + x as usize;
+                    if !(hole[i] && filled[i]) {
+                        return 0.0;
+                    }
+                    let (a, s) = (i * ch, src(x, y));
+                    (0..ch).map(|q| (out[a + q] - img[s + q]).powi(2)).sum::<f32>()
+                };
+                // Minimum-error boundary cuts through the overlaps with the blocks to the left and
+                // above: the block is copied right of and below them, untouched pixels are kept
+                // on the other side. Copying (rather than averaging) keeps the texture's grain.
+                let left = min_cut((x0..(bx + ov).min(x1)).len(), (y0..y1).len(), |u, v| err(x0 + u as i32, y0 + v as i32));
+                let top = min_cut((y0..(by + ov).min(y1)).len(), (x0..x1).len(), |u, v| err(x0 + v as i32, y0 + u as i32));
+                for y in y0..y1 {
+                    for x in x0..x1 {
                         let i = y as usize * w + x as usize;
                         if !hole[i] {
                             continue;
                         }
-                        let (a, s) = (i * ch, ((y - by + c.1) as usize * w + (x - bx + c.0) as usize) * ch);
-                        // Feather into already-synthesised overlap.
-                        let k = if filled[i] { 0.5 } else { 1.0 };
-                        for q in 0..ch {
-                            out[a + q] += (img[s + q] - out[a + q]) * k;
+                        let (u, v) = ((x - x0) as usize, (y - y0) as usize);
+                        let keep = filled[i] && (left.get(v).is_some_and(|s| u < *s) || top.get(u).is_some_and(|s| v < *s));
+                        if !keep {
+                            let (a, s) = (i * ch, src(x, y));
+                            out[a..a + ch].copy_from_slice(&img[s..s + ch]);
                         }
                         filled[i] = true;
                     }
@@ -995,6 +1010,39 @@ pub fn synthesize(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], blo
         by += b;
     }
     out
+}
+
+/// The minimum-error cut through a band `across` wide and `along` long (Efros & Freeman's
+/// boundary cut, by dynamic programming): for each step along the band, the offset across it
+/// where the cut runs (`err(across, along)` is the cost of a pixel). Pixels before the cut keep
+/// what is there. Empty when there is no cost anywhere (nothing to cut through).
+fn min_cut(across: usize, along: usize, err: impl Fn(usize, usize) -> f32) -> Vec<usize> {
+    if across == 0 || along == 0 {
+        return Vec::new();
+    }
+    // Cumulative cost, step by step along the band; the cut may move by one pixel per step.
+    let mut acc: Vec<f32> = (0..along).flat_map(|v| (0..across).map(move |u| (u, v))).map(|(u, v)| err(u, v)).collect();
+    if acc.iter().all(|x| *x == 0.0) {
+        return Vec::new();
+    }
+    for v in 1..along {
+        for u in 0..across {
+            let lo = u.saturating_sub(1);
+            let hi = (u + 1).min(across - 1);
+            let m = (lo..=hi).map(|k| acc[(v - 1) * across + k]).fold(f32::INFINITY, f32::min);
+            acc[v * across + u] += m;
+        }
+    }
+    let argmin = |v: usize, lo: usize, hi: usize| (lo..=hi).min_by(|a, b| acc[v * across + a].total_cmp(&acc[v * across + b])).unwrap_or(lo);
+    let mut cut = vec![0; along];
+    let mut u = argmin(along - 1, 0, across - 1);
+    for v in (0..along).rev() {
+        if v + 1 < along {
+            u = argmin(v, u.saturating_sub(1), (u + 1).min(across - 1));
+        }
+        cut[v] = u;
+    }
+    cut
 }
 
 #[cfg(test)]

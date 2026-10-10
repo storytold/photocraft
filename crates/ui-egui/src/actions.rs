@@ -1,7 +1,7 @@
 //! Actions panel: record and replay command sequences.
 //!
 //! The list and the recording flag live on the engine session (`actions.record` / `stop` /
-//! `play` / `list` / `get` / `delete` / `move`), so the panel, the CLI and MCP share them. This module
+//! `play` / `list` / `get` / `delete` / `move` / `rename`), so the panel, the CLI and MCP share them. This module
 //! keeps only which row is selected and which rows are expanded.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
@@ -23,6 +23,16 @@ pub struct ActionsUi {
     pub expanded: Vec<bool>,
     #[serde(skip)]
     reveal_recording: Option<(usize, usize)>,
+    /// The action whose name is being edited in place (double-click on its name).
+    #[serde(skip)]
+    renaming: Option<RenameAction>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RenameAction {
+    index: usize,
+    text: String,
+    focused: bool,
 }
 
 fn label_of(id: &str) -> String {
@@ -54,7 +64,7 @@ pub fn action_steps(action: &Action) -> Vec<Value> {
 
 /// Named action bindings use the existing persisted shortcut overrides. Keeping the
 /// name in the key means selecting or deleting another row cannot retarget F6.
-pub(crate) const SHORTCUT_PREFIX: &str = "actions.play:";
+pub(crate) const SHORTCUT_PREFIX: &str = actions_cmds::PLAY_SHORTCUT_PREFIX;
 
 pub(crate) fn shortcut_id(name: &str) -> String {
     format!("{SHORTCUT_PREFIX}{name}")
@@ -256,6 +266,42 @@ fn delete_selection(app: &mut PhotocraftApp) {
     }
 }
 
+/// The in-place name field of the action being renamed. Enter, Tab or clicking elsewhere
+/// returns the new name to commit; Escape cancels and keeps the old name.
+fn rename_field(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, rect: Rect) -> Option<String> {
+    let mut r = app.ui.actions.renaming.take().filter(|r| r.index == index)?;
+    let id = egui::Id::new(("action-rename-field", index));
+    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(egui::FontId::proportional(12.0)));
+    if !r.focused {
+        te.request_focus();
+        // Like Photoshop, the whole name starts selected so typing replaces it.
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(r.text.chars().count()));
+            state.cursor.set_char_range(Some(all));
+            state.store(ui.ctx(), id);
+        }
+        r.focused = true;
+        app.ui.actions.renaming = Some(r);
+        return None;
+    }
+    let (enter, tab, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Tab), i.key_pressed(egui::Key::Escape)));
+    if esc {
+        None
+    } else if enter || tab || te.lost_focus() || !te.has_focus() {
+        Some(r.text)
+    } else {
+        app.ui.actions.renaming = Some(r);
+        None
+    }
+}
+
+fn rename_action(app: &mut PhotocraftApp, index: usize, name: String) {
+    if let Err(e) = app.run("actions.rename", json!({"action": index, "name": name})) {
+        app.ui.status = format!("Could not rename the action: {e}");
+        app.ui.status_error = true;
+    }
+}
+
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
@@ -272,6 +318,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.actions.expanded.len() > rows.len() {
         app.ui.actions.expanded.truncate(rows.len());
     }
+    if app.ui.actions.renaming.as_ref().is_some_and(|r| r.index >= rows.len()) {
+        app.ui.actions.renaming = None;
+    }
+    let mut renamed = None;
     let max_h = (ui.available_height() - 70.0).clamp(80.0, 320.0);
     let mut play_idx = None;
     let mut moved = None;
@@ -327,7 +377,16 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::icons::paint(ui, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(16.0, 16.0)), "play", 11.0, t.icon);
             let recording_this = recording.is_some_and(|(_, r)| r == i);
             let nsteps = steps.len();
-            ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), t.text);
+            let name_rect = if app.ui.actions.renaming.as_ref().is_some_and(|r| r.index == i) {
+                let field =
+                    Rect::from_min_max(pos2(rect.left() + 40.0, rect.top() + 3.0), pos2((rect.right() - 80.0).max(rect.left() + 120.0), rect.bottom() - 3.0));
+                if let Some(text) = rename_field(app, ui, i, field) {
+                    renamed = Some((i, text));
+                }
+                field
+            } else {
+                ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), t.text)
+            };
             ui.painter().text(
                 pos2(rect.right() - 8.0, rect.center().y),
                 Align2::RIGHT_CENTER,
@@ -365,7 +424,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             });
             if resp.double_clicked() {
-                play_idx = Some(i);
+                // Photoshop renames in place when the name itself is double-clicked.
+                if resp.interact_pointer_pos().is_some_and(|p| name_rect.expand2(vec2(4.0, 13.0)).contains(p)) {
+                    app.ui.actions.renaming = Some(RenameAction { index: i, text: name.clone(), focused: false });
+                } else {
+                    play_idx = Some(i);
+                }
             }
             if expanded {
                 for (step, (id, params)) in steps.iter().enumerate() {
@@ -393,6 +457,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         }
     });
+    if let Some((index, name)) = renamed {
+        rename_action(app, index, name);
+    }
     if let Some((source, to)) = moved {
         move_row(app, source, to);
     }
@@ -442,6 +509,40 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_clicking_an_action_name_renames_it_in_place() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.session.actions.list.push(Action { name: "Action 1".into(), steps: vec![("layer.new.layer".into(), json!({}))] });
+        let layers = app.session.active().unwrap().doc.layers.len();
+        // 60 fps steps, so two clicks a frame apart count as a double-click.
+        let mut h = Harness::builder().with_size(vec2(320.0, 260.0)).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(3);
+        let rename = |h: &mut Harness<'_, PhotocraftApp>, text: &str| {
+            let name = h.get_by_label("Action 1").rect().left_center() + vec2(52.0, 0.0);
+            h.event(egui::Event::PointerMoved(name));
+            // Wait out the double-click window of the previous attempt.
+            h.run_steps(30);
+            for pressed in [true, false, true, false] {
+                h.event(egui::Event::PointerButton { pos: name, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.step();
+            }
+            h.run_steps(3);
+            h.event(egui::Event::Text(text.into()));
+            h.run_steps(1);
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+        };
+        // Whitespace keeps the old name and reports why.
+        rename(&mut h, "  ");
+        assert_eq!(h.state().session.actions.list[0].name, "Action 1");
+        assert!(h.state().ui.status_error);
+        rename(&mut h, "Sepia");
+        assert_eq!(h.state().session.actions.list[0].name, "Sepia");
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers, "renaming must not play the action");
+    }
 
     #[test]
     fn play_button_targets_first_action_if_nothing_is_selected() {

@@ -956,6 +956,13 @@ impl PhotocraftApp {
         self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
     }
 
+    /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
+    /// file stays on disk, and opening it again lists it again.
+    pub fn remove_recent(&mut self, path: &str) {
+        self.ui.recent_files.retain(|p| p != path);
+        self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
+    }
+
     /// How many recent files to remember ("Recent File List Contains", 0–100).
     pub fn recent_cap(&self) -> usize {
         self.session.prefs().file_handling.recent_file_count.min(100) as usize
@@ -1987,6 +1994,9 @@ mod pencil_tests;
 
 #[cfg(test)]
 mod transform_undo_tests;
+
+#[cfg(test)]
+mod transform_type_tests;
 
 #[cfg(test)]
 mod save_identity_tests;

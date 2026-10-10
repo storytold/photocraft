@@ -1125,15 +1125,11 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let buf = photocraft_compose::flatten(&solo);
         let fmt = doc.pixel_format();
         let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
         let mut merged = Layer::raster(top.name.clone(), fmt);
         merged.locks = top.locks;
-        let surf = crate::pixels_mut(&mut merged)?;
-        surf.write_region(doc.bounds(), &data);
-        surf.prune();
+        *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers(&solo, fmt, None);
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
         for id in &ids[..ids.len() - 1] {
@@ -1726,6 +1722,65 @@ mod tests {
             s.execute("layer.select", json!({"layer": c.0})).unwrap();
             s.execute("layer.mergeLayers", json!({})).unwrap();
             assert_eq!(doc(&s).layer_count(), before - 1);
+        }
+    }
+
+    #[test]
+    fn merging_group_children_preserves_their_composite() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let lower = rect_layer(&mut s, Rect::new(10, 12, 40, 42));
+            let upper = rect_layer(&mut s, Rect::new(25, 20, 55, 50));
+            select_all(&mut s, &[lower, upper]);
+            let group = LayerId(s.execute("layer.groupLayers", json!({"name": "Merge test group"})).unwrap()["layer"].as_u64().unwrap());
+            let doc_before = doc(&s);
+            let expected = photocraft_compose::render(doc_before, doc_before.bounds());
+            let children = doc_before.layer(group).unwrap().children().unwrap().iter().map(|layer| layer.id).collect::<Vec<_>>();
+
+            select_all(&mut s, &children);
+            s.execute("layer.mergeLayers", json!({})).unwrap();
+            let doc_after = doc(&s);
+            let actual = photocraft_compose::render(doc_after, doc_after.bounds());
+            assert_eq!(actual, expected, "depth {depth}: group merge changed rendered pixels");
+            assert_eq!(doc_after.layer(group).unwrap().children().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn merging_keeps_layer_effects_outside_the_pixels() {
+        // A drop shadow reaches past the layer's pixels; the merge must render that far.
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+            let upper = rect_layer(&mut s, Rect::new(40, 20, 60, 40));
+            s.execute("layer.layerStyle.dropShadow", json!({"layer": upper.0, "blend": "normal", "distance": 12, "size": 4})).unwrap();
+            let before = photocraft_compose::render(doc(&s), doc(&s).bounds());
+            select_all(&mut s, &[lower, upper]);
+            s.execute("layer.mergeLayers", json!({})).unwrap();
+            let after = photocraft_compose::render(doc(&s), doc(&s).bounds());
+            let worst = before.px.iter().zip(&after.px).map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
+            assert!(worst <= 1.5 / 255.0, "depth {depth}: merge layers dropped the shadow (off by {worst})");
+        }
+    }
+
+    #[test]
+    fn merging_a_group_down_preserves_the_composite() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            let lower = rect_layer(&mut s, Rect::new(10, 12, 50, 52));
+            let child_a = rect_layer(&mut s, Rect::new(24, 20, 64, 60));
+            let child_b = rect_layer(&mut s, Rect::new(35, 28, 75, 68));
+            select_all(&mut s, &[child_a, child_b]);
+            let group = LayerId(s.execute("layer.groupLayers", json!({"name": "Merge down group"})).unwrap()["layer"].as_u64().unwrap());
+            let doc_before = doc(&s);
+            let expected = photocraft_compose::render(doc_before, doc_before.bounds());
+
+            s.execute("layer.mergeDown", json!({"layer": group.0})).unwrap();
+            let doc_after = doc(&s);
+            let actual = photocraft_compose::render(doc_after, doc_after.bounds());
+            assert_eq!(actual, expected, "depth {depth}: group merge down changed rendered pixels");
+            assert!(doc_after.layer(lower).is_some());
+            assert!(doc_after.layer(group).is_none());
         }
     }
 

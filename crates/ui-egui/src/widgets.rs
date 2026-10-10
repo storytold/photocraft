@@ -1433,7 +1433,7 @@ mod tests {
                 if round {
                     *v = v.round();
                 }
-                if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if ui.button(tl!("OK")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     *ok = Some(*v);
                 }
             },

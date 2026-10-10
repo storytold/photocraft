@@ -569,6 +569,10 @@ pub struct ToolOptions {
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
+    /// Eraser › Mode: `brush` (soft, anti-aliased) or `pencil` (hard, aliased pixels, through
+    /// `paint.pencil`), as in Photoshop's options bar (#2662).
+    #[serde(default = "default_eraser_mode")]
+    pub eraser_mode: String,
     /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
     /// fastens points by itself (0..100), and whether pen pressure narrows the width.
     pub magnetic_width: f32,
@@ -604,6 +608,10 @@ fn default_crop_resolution_unit() -> String {
 
 fn default_move_target() -> String {
     "layer".into()
+}
+
+fn default_eraser_mode() -> String {
+    "brush".into()
 }
 
 fn default_marquee_style() -> String {
@@ -704,6 +712,7 @@ impl Default for ToolOptions {
             bg_protect_fg: false,
             zoom_scrubby: true,
             pencil_auto_erase: false,
+            eraser_mode: default_eraser_mode(),
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,
