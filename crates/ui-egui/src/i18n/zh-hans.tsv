@@ -2414,3 +2414,12 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Auto Erase	自动抹除
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	点按第一个点或按 {key} 闭合 · {del} 删除一个点 · Esc 取消
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	点按，然后沿边缘移动 · 点按固定一个点 · {alt}-点按画直线段 · 双击闭合
+	Follows only edges this close to the pointer ([ and ] change it)	只跟随离指针这么近的边缘（用 [ 和 ] 调整）
+	Higher values follow only edges that contrast sharply with their surroundings	数值越高，只跟随与周围对比强烈的边缘
+	How often fastening points are placed by themselves	自动放置紧固点的频率
+	Scrubby Zoom	细微缩放
+	{mode} Color · {bits} bit	{mode} 颜色 · {bits} 位
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移绘制裁剪框 · 在框内拖移以移动 · 拖移边缘调整大小（{ratio} 比例，{centre} 中心）· 绘制时按 Space 移动 · 方向键微移 · X 切换方向 · {commit} 确认 · Esc 取消

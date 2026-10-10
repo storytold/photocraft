@@ -3426,3 +3426,9 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Kliknij pierwszy punkt lub naciśnij {key}, aby zamknąć · {del} usuwa punkt · Esc anuluje
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Kliknij i prowadź wzdłuż krawędzi · kliknij, aby przypiąć punkt · {alt}-klik dla prostego odcinka · kliknij dwukrotnie, aby zamknąć
+	Fill Screen	Wypełnij ekran
+	Follows only edges this close to the pointer ([ and ] change it)	Podąża tylko za krawędziami tak blisko wskaźnika ([ i ] zmieniają wartość)
+	Higher values follow only edges that contrast sharply with their surroundings	Wyższe wartości podążają tylko za krawędziami mocno kontrastującymi z otoczeniem
+	How often fastening points are placed by themselves	Jak często punkty mocujące są stawiane automatycznie

@@ -3426,3 +3426,8 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	最初の点をクリックするか {key} を押して閉じる · {del} で点を削除 · Esc でキャンセル
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	クリックしてエッジに沿って動かす · クリックで固定ポイント · {alt}-クリックで直線セグメント · ダブルクリックで閉じる
+	Follows only edges this close to the pointer ([ and ] change it)	ポインターからこの距離内のエッジだけをたどる（[ と ] で変更）
+	Higher values follow only edges that contrast sharply with their surroundings	値を大きくすると、周囲とのコントラストが強いエッジだけをたどる
+	How often fastening points are placed by themselves	固定ポイントが自動で置かれる頻度

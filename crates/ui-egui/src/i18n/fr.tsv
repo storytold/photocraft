@@ -2825,3 +2825,8 @@ fontWeight	Italic	Italique
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Cliquez sur le premier point ou appuyez sur {key} pour fermer · {del} supprime un point · Échap annule
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Cliquez, puis suivez un contour · cliquez pour fixer un point · {alt}-clic pour un segment droit · double-cliquez pour fermer
+	Follows only edges this close to the pointer ([ and ] change it)	Ne suit que les contours aussi proches du pointeur ([ et ] le modifient)
+	Higher values follow only edges that contrast sharply with their surroundings	Plus la valeur est élevée, plus seuls les contours très contrastés sont suivis
+	How often fastening points are placed by themselves	Fréquence de pose automatique des points d’ancrage
