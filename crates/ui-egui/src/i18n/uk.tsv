@@ -3513,3 +3513,8 @@ cameraRaw	Masking	Маскування
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Клацніть першу точку або натисніть {key}, щоб замкнути · {del} видаляє точку · Esc скасовує
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Клацніть і ведіть уздовж краю · клацання закріплює точку · {alt}-клацання — прямий відрізок · подвійне клацання замикає
+	Follows only edges this close to the pointer ([ and ] change it)	Відстежує лише краї на такій відстані від вказівника ([ і ] змінюють її)
+	Higher values follow only edges that contrast sharply with their surroundings	Що більше значення, то лише краї з різким контрастом до оточення
+	How often fastening points are placed by themselves	Як часто точки прив’язки ставляться автоматично

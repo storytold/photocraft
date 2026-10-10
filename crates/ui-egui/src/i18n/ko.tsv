@@ -2984,3 +2984,12 @@ fontWeight	Italic	기울임
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+	Auto Erase	자동 지우기
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	첫 점을 클릭하거나 {key}를 눌러 닫기 · {del}로 점 제거 · Esc로 취소
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	클릭한 다음 가장자리를 따라 이동 · 클릭하여 고정점 추가 · {alt}-클릭으로 직선 구간 · 두 번 클릭하여 닫기
+	Follows only edges this close to the pointer ([ and ] change it)	포인터에서 이 거리 안의 가장자리만 따라감([ 및 ]로 변경)
+	Higher values follow only edges that contrast sharply with their surroundings	값이 높을수록 주변과 대비가 강한 가장자리만 따라감
+	How often fastening points are placed by themselves	고정점이 자동으로 놓이는 빈도
+	Scrubby Zoom	스크러비 확대/축소
+	{mode} Color · {bits} bit	{mode} 색상 · {bits}비트
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	드래그하여 자르기 상자 만들기 · 안쪽을 드래그하여 이동 · 가장자리로 크기 조절({ratio} 비율, {centre} 중심) · 그리는 중 Space로 이동 · 화살표로 미세 이동 · X로 방향 전환 · {commit} 적용 · Esc 취소

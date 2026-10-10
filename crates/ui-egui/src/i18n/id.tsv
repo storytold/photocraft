@@ -2812,3 +2812,8 @@ fontWeight	Italic	Miring
 	Quick Selection found nothing there	Seleksi Cepat tidak menemukan apa pun di sana
 	Object Selection found nothing there — try a tighter rectangle	Seleksi Objek tidak menemukan apa pun di sana — coba persegi panjang yang lebih rapat
 	No subject found — try a rectangle around the object	Subjek tidak ditemukan — coba persegi panjang di sekitar objek
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Klik titik pertama atau tekan {key} untuk menutup · {del} menghapus titik · Esc membatalkan
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Klik, lalu gerakkan di sepanjang tepi · klik untuk menancapkan titik · {alt}-klik untuk segmen lurus · klik dua kali untuk menutup
+	Follows only edges this close to the pointer ([ and ] change it)	Hanya mengikuti tepi sedekat ini dengan penunjuk ([ dan ] mengubahnya)
+	Higher values follow only edges that contrast sharply with their surroundings	Nilai lebih tinggi hanya mengikuti tepi yang kontras tajam dengan sekitarnya
+	How often fastening points are placed by themselves	Seberapa sering titik penambat ditempatkan sendiri

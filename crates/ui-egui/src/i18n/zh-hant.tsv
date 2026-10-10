@@ -2383,3 +2383,12 @@ fontWeight	Italic	斜體
 	Quick Selection found nothing there	快速選取在該處找不到任何內容
 	Object Selection found nothing there — try a tighter rectangle	物件選取在該處找不到任何內容 — 請嘗試更緊密的矩形
 	No subject found — try a rectangle around the object	找不到主體 — 請嘗試在物件周圍繪製矩形
+	Auto Erase	自動擦除
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	按一下第一個點或按 {key} 封閉 · {del} 刪除一個點 · Esc 取消
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	按一下，然後沿著邊緣移動 · 按一下固定一個點 · {alt}-按一下畫直線區段 · 按兩下封閉
+	Follows only edges this close to the pointer ([ and ] change it)	只追蹤離指標這麼近的邊緣（用 [ 和 ] 調整）
+	Higher values follow only edges that contrast sharply with their surroundings	數值越高，只追蹤與周圍對比強烈的邊緣
+	How often fastening points are placed by themselves	自動放置固定點的頻率
+	Scrubby Zoom	細微縮放
+	{mode} Color · {bits} bit	{mode} 色彩 · {bits} 位元
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移繪製裁切框 · 在框內拖移以移動 · 拖移邊緣調整大小（{ratio} 比例，{centre} 中心）· 繪製時按 Space 移動 · 方向鍵微移 · X 切換方向 · {commit} 確認 · Esc 取消

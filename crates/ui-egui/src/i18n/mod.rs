@@ -735,6 +735,45 @@ mod tests {
     /// Every `tl!("literal")` in the shell has an entry in each language that claims complete menus
     /// (so a new label can't ship untranslated by accident). Literals that are deliberately shown as
     /// they are (names, units) are listed in `KEEP_AS_IS`.
+    /// `text` with each `#[cfg(test)] mod … { … }` block removed, by brace counting (the test
+    /// modules in this crate are well formed).
+    fn without_test_modules(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find("#[cfg(test)]\nmod ") {
+            out.push_str(&rest[..at]);
+            let after = &rest[at..];
+            let Some(open) = after.find('{') else { return out };
+            let mut depth = 0usize;
+            let mut end = after.len();
+            for (i, c) in after[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn test_modules_are_cut_out_one_by_one() {
+        let text = "a\n#[cfg(test)]\nmod t { fn x() { tl!(\"hidden\"); } }\nb tl!(\"seen\")\n#[cfg(test)]\nmod u {}\nc";
+        let code = without_test_modules(text);
+        assert!(code.contains("tl!(\"seen\")"), "code after the first test module is scanned: {code}");
+        assert!(!code.contains("hidden"), "{code}");
+        assert!(code.starts_with("a\n") && code.ends_with("\nc"), "{code}");
+    }
+
     #[test]
     fn every_tl_literal_is_translated() {
         const KEEP_AS_IS: &[&str] = &[];
@@ -748,10 +787,12 @@ mod tests {
                     stack.push(path);
                 } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("lib.rs") {
                     let text = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
-                    // Test modules aside, scan every `tl!("…")`. Cut at the test *module*: a
-                    // `#[cfg(test)]` on a single item earlier in the file must not hide the rest.
-                    let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or("");
-                    let mut rest = code;
+                    // Test modules aside, scan every `tl!("…")`. Each test *module* is cut out
+                    // on its own: cutting the file at the first one hid everything after a small
+                    // test module early in a file (panels.rs has one at ~line 540). A
+                    // `#[cfg(test)]` on a single item doesn't count.
+                    let code = without_test_modules(&text);
+                    let mut rest = code.as_str();
                     while let Some(at) = rest.find("tl!(\"") {
                         rest = &rest[at + 5..];
                         let mut end = 0;

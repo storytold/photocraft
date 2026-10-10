@@ -2474,3 +2474,8 @@ fontWeight	Italic	Cursiva
 	Quick Selection found nothing there	Selección rápida no encontró nada ahí
 	Object Selection found nothing there — try a tighter rectangle	Selección de objeto no encontró nada ahí — pruebe un rectángulo más ajustado
 	No subject found — try a rectangle around the object	No se encontró ningún sujeto — pruebe un rectángulo alrededor del objeto
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Haz clic en el primer punto o pulsa {key} para cerrar · {del} elimina un punto · Esc cancela
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Haz clic y sigue un borde · haz clic para fijar un punto · {alt}-clic para un segmento recto · doble clic para cerrar
+	Follows only edges this close to the pointer ([ and ] change it)	Solo sigue bordes así de cerca del puntero ([ y ] lo cambian)
+	Higher values follow only edges that contrast sharply with their surroundings	Los valores altos solo siguen bordes con mucho contraste con su entorno
+	How often fastening points are placed by themselves	Con qué frecuencia se colocan puntos de fijación automáticamente
