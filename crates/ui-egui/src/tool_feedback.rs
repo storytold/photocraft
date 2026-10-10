@@ -95,8 +95,14 @@ pub fn document_selection_mode(app: &PhotocraftApp, tool: Tool, m: egui::Modifie
     }
 }
 
-/// The badge the cursor of `tool` shows with modifiers `m` (None for non-selection tools or New).
+/// The badge the cursor of `tool` shows with modifiers `m` (None for non-selection tools or New;
+/// the anchor point tools show theirs).
 pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badge> {
+    // Add / Delete Anchor Point: + or − beside the crosshair, as on Photoshop's pen cursors (⌥
+    // swaps them; ⌘ is Direct Selection, which shows none).
+    if let Some(t) = crate::anchor_tools::effective(tool, m) {
+        return (!m.command).then_some(if t == Tool::AddAnchorPoint { Badge::Add } else { Badge::Subtract });
+    }
     if !is_selection_tool(tool) {
         return None;
     }

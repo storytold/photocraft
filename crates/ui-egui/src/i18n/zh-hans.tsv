@@ -1664,6 +1664,10 @@
 	Paints from the document's opening state	从文档打开时的状态绘制
 	Path Selection Tool	路径选择工具
 	Direct Selection Tool	直接选择工具
+	Add Anchor Point Tool	添加锚点工具
+	Delete Anchor Point Tool	删除锚点工具
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	单击线段以添加锚点 · {alt}-单击锚点：删除锚点
+	Click an anchor point to delete it · {alt}-click a segment to add one	单击锚点将其删除 · {alt}-单击线段：添加锚点
 	Pattern Overlay	图案叠加
 	Pen Pressure	钢笔压力
 	Pen Tilt	钢笔倾斜

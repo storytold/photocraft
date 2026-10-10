@@ -1625,6 +1625,10 @@
 	Paints from the document's opening state	문서를 열었을 때의 상태로 칠하기
 	Path Selection Tool	패스 선택 도구
 	Direct Selection Tool	직접 선택 도구
+	Add Anchor Point Tool	기준점 추가 도구
+	Delete Anchor Point Tool	기준점 삭제 도구
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	세그먼트를 클릭하여 기준점 추가 · {alt}-클릭: 기준점 삭제
+	Click an anchor point to delete it · {alt}-click a segment to add one	기준점을 클릭하여 삭제 · {alt}-클릭: 세그먼트에 기준점 추가
 	Pattern Overlay	패턴 오버레이
 	Pen Pressure	펜 압력
 	Pen Tilt	펜 기울기

@@ -78,6 +78,8 @@ pub fn cmd_moves(t: Tool) -> bool {
                 | Tool::PathSelection
                 | Tool::DirectSelection
                 | Tool::Pen
+                | Tool::AddAnchorPoint
+                | Tool::DeleteAnchorPoint
                 | Tool::RectMarquee
                 | Tool::EllipseMarquee
                 | Tool::Lasso

@@ -1630,6 +1630,10 @@
 	Paints from the document's opening state	Peint à partir de l'état d'ouverture du document
 	Path Selection Tool	Outil Sélection de tracé
 	Direct Selection Tool	Outil Sélection directe
+	Add Anchor Point Tool	Outil Ajout de point d'ancrage
+	Delete Anchor Point Tool	Outil Suppression de point d'ancrage
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Cliquez sur un segment pour ajouter un point d'ancrage · {alt}-clic sur un point d'ancrage pour le supprimer
+	Click an anchor point to delete it · {alt}-click a segment to add one	Cliquez sur un point d'ancrage pour le supprimer · {alt}-clic sur un segment pour en ajouter un
 	Pattern Overlay	Superposition de motif
 	Pen Pressure	Pression du stylet
 	Pen Tilt	Inclinaison du stylet

@@ -1648,6 +1648,10 @@
 	Paints from the document's opening state	Maluje na podstawie stanu dokumentu z chwili otwarcia
 	Path Selection Tool	Narzędzie Zaznaczanie ścieżki
 	Direct Selection Tool	Narzędzie Zaznaczanie bezpośrednie
+	Add Anchor Point Tool	Narzędzie Dodaj punkt kontrolny
+	Delete Anchor Point Tool	Narzędzie Usuń punkt kontrolny
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Kliknij segment, aby dodać punkt kontrolny · {alt}-klik na punkcie kontrolnym usuwa go
+	Click an anchor point to delete it · {alt}-click a segment to add one	Kliknij punkt kontrolny, aby go usunąć · {alt}-klik na segmencie dodaje punkt
 	Pattern Overlay	Nakładka wzoru
 	Pen Pressure	Nacisk pióra
 	Pen Tilt	Nachylenie pióra

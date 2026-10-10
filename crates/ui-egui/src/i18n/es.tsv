@@ -1651,6 +1651,10 @@
 	Paints from the document's opening state	Pinta a partir del estado en que se abrió el documento.
 	Path Selection Tool	Herramienta Selección de trazado
 	Direct Selection Tool	Herramienta Selección directa
+	Add Anchor Point Tool	Herramienta Añadir punto de ancla
+	Delete Anchor Point Tool	Herramienta Eliminar punto de ancla
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Haz clic en un segmento para añadir un punto de ancla · {alt}-clic en un punto de ancla para eliminarlo
+	Click an anchor point to delete it · {alt}-click a segment to add one	Haz clic en un punto de ancla para eliminarlo · {alt}-clic en un segmento para añadir uno
 	Pattern Overlay	Superposición de patrón
 	Pen Pressure	Presión del lápiz
 	Pen Tilt	Inclinación del lápiz

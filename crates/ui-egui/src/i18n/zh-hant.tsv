@@ -1657,6 +1657,10 @@
 	Paints from the document's opening state	從文件開啟時的狀態繪製
 	Path Selection Tool	路徑選取工具
 	Direct Selection Tool	直接選取工具
+	Add Anchor Point Tool	增加錨點工具
+	Delete Anchor Point Tool	刪除錨點工具
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	按一下線段以增加錨點 · {alt}-按一下錨點：刪除錨點
+	Click an anchor point to delete it · {alt}-click a segment to add one	按一下錨點將其刪除 · {alt}-按一下線段：增加錨點
 	Pattern Overlay	圖樣覆蓋
 	Pen Pressure	筆壓
 	Pen Tilt	筆傾斜

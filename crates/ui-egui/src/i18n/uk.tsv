@@ -1530,6 +1530,10 @@
 	Pen Tool	Інструмент «Перо»
 	Path Selection Tool	Інструмент «Виділення контуру»
 	Direct Selection Tool	Інструмент «Пряме виділення»
+	Add Anchor Point Tool	Інструмент «Додати вузол»
+	Delete Anchor Point Tool	Інструмент «Видалити вузол»
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Клацніть сегмент, щоб додати вузол · {alt}+клацання по вузлу видаляє його
+	Click an anchor point to delete it · {alt}-click a segment to add one	Клацніть вузол, щоб видалити його · {alt}+клацання по сегменту додає вузол
 	Rectangle Tool	Інструмент «Прямокутник»
 	Ellipse Tool	Інструмент «Еліпс»
 	Triangle Tool	Інструмент «Трикутник»

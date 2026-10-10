@@ -1647,6 +1647,10 @@
 	Paints from the document's opening state	Malt aus dem Zustand beim Öffnen des Dokuments
 	Path Selection Tool	Pfadauswahl-Werkzeug
 	Direct Selection Tool	Direktauswahl-Werkzeug
+	Add Anchor Point Tool	Ankerpunkt-hinzufügen-Werkzeug
+	Delete Anchor Point Tool	Ankerpunkt-löschen-Werkzeug
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Klicke auf ein Segment, um einen Ankerpunkt hinzuzufügen · {alt}-Klick auf einen Ankerpunkt löscht ihn
+	Click an anchor point to delete it · {alt}-click a segment to add one	Klicke auf einen Ankerpunkt, um ihn zu löschen · {alt}-Klick auf ein Segment fügt einen hinzu
 	Pattern Overlay	Musterüberlagerung
 	Pen Pressure	Stiftdruck
 	Pen Tilt	Stiftneigung

@@ -1624,6 +1624,10 @@
 	Paints from the document's opening state	Melukis dari kondisi awal dokumen saat dibuka
 	Path Selection Tool	Alat Path Selection
 	Direct Selection Tool	Alat Direct Selection
+	Add Anchor Point Tool	Alat Tambah Titik Jangkar
+	Delete Anchor Point Tool	Alat Hapus Titik Jangkar
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Klik segmen untuk menambah titik jangkar · {alt}-klik titik jangkar untuk menghapusnya
+	Click an anchor point to delete it · {alt}-click a segment to add one	Klik titik jangkar untuk menghapusnya · {alt}-klik segmen untuk menambah titik
 	Pattern Overlay	Overlay Pola
 	Pen Pressure	Tekanan Pena
 	Pen Tilt	Kemiringan Pena
