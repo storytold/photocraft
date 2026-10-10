@@ -1505,7 +1505,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         Adjustment::BrightnessContrast { brightness, contrast, legacy: true } => {
             let c = contrast.clamp(-100.0, 99.0);
             let k = if c >= 0.0 { 1.0 / (1.0 - c / 100.0) } else { 1.0 + c / 100.0 };
-            p[0] = [brightness / 255.0, k, photocraft_compose::adjust::LEGACY_PIVOT, 0.0];
+            // Brightness before contrast when it is raised, after it when lowered (compose::adjust).
+            let (pre, post) = if c >= 0.0 { (brightness / 255.0, 0.0) } else { (0.0, brightness / 255.0) };
+            p[0] = [pre, k, photocraft_compose::adjust::LEGACY_PIVOT, post];
             (4, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {

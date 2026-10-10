@@ -85,15 +85,16 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
         }
         Adjustment::Posterize { levels } => map_rgb(buf, |c| c.map(|v| posterize(v, *levels))),
         Adjustment::BrightnessContrast { brightness, contrast, legacy: true } => {
-            // Legacy: brightness is added first, then contrast scales around 128/255 (each alone
-            // was exact on the corpus; measured together on Photoshop 27.11, brightness +40 with
-            // contrast +30 maps 128 to 185, which only this order gives: within 1 level on seven
-            // settings). Contrast used to come first, so combined settings came out up to 17
-            // levels darker.
+            // Legacy: contrast scales around 128/255, with brightness added before it when
+            // contrast is raised and after it when contrast is lowered. Measured on Photoshop
+            // 27.11, brightness +40 with contrast +30 maps 128 to 185 (brightness first), while
+            // the corpus's brightness -23 with contrast -26 (psd-tools) needs contrast first;
+            // contrast 80 keeps 128 at 128 (a 0.5 pivot moved it to 130).
             let b = brightness / 255.0;
             let c = contrast.clamp(-100.0, 99.0);
             let k = if c >= 0.0 { 1.0 / (1.0 - c / 100.0) } else { 1.0 + c / 100.0 };
-            map_rgb(buf, |px| px.map(|v| ((v + b - LEGACY_PIVOT) * k + LEGACY_PIVOT).clamp(0.0, 1.0)))
+            let (pre, post) = if c >= 0.0 { (b, 0.0) } else { (0.0, b) };
+            map_rgb(buf, |px| px.map(|v| ((v + pre - LEGACY_PIVOT) * k + LEGACY_PIVOT + post).clamp(0.0, 1.0)))
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {
             // Modern (CS3+) Brightness/Contrast, reverse-engineered from Photoshop ground truth
