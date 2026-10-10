@@ -130,12 +130,17 @@ fn can_float(s: &Session) -> std::result::Result<(), String> {
     if !matches!(l.content, LayerContent::Raster(_)) {
         return Err("the active layer has no pixels to move".into());
     }
-    let locks = st.doc.effective_locks(l.id);
-    // The Background is position-locked, but its selected pixels move (Photoshop).
-    if locks.all || (locks.position && !crate::extra_cmds::is_background(l)) {
+    if locked_for_float(&st.doc, l) {
         return Err(format!("layer \"{}\" is locked", l.name));
     }
     Ok(())
+}
+
+/// Do `l`'s locks (its own, or a locked group's: `effective_locks`) stop its selected pixels
+/// floating? The Background is position-locked, but its selected pixels move (Photoshop).
+pub fn locked_for_float(doc: &Document, l: &photocraft_doc::Layer) -> bool {
+    let locks = doc.effective_locks(l.id);
+    locks.all || (locks.position && !crate::extra_cmds::is_background(l))
 }
 
 fn float(s: &mut Session, p: &Value) -> Result<Value> {
