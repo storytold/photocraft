@@ -84,6 +84,25 @@ fn define_apply_visibility_and_text() {
 }
 
 #[test]
+fn listed_pixel_methods_can_be_used_to_redefine_variables() {
+    for method in ["fit", "fill", "asIs", "conform"] {
+        let (mut s, photo, _badge, _title) = session();
+        let defined = s
+            .execute(
+                "image.variables.define",
+                json!({"defs": [{"name": "photo", "layer": photo.0, "type": "pixelReplacement", "method": method, "align": "bottomRight", "clip": true}]}),
+            )
+            .unwrap();
+        let expected = doc(&s).variables.defs.clone();
+        let listed = s.execute("variables.list", json!({})).unwrap();
+        s.execute("image.variables.define", json!({"defs": listed["defs"]})).unwrap();
+        assert_eq!(doc(&s).variables.defs, expected, "{method}");
+        assert_eq!(defined["defs"][0]["method"], method);
+        assert_eq!(listed["defs"][0]["method"], method);
+    }
+}
+
+#[test]
 fn bad_params_are_errors() {
     let (mut s, _p, badge, _t) = session();
     assert!(s.execute("image.variables.define", json!({"defs": [{"name": "x", "layer": 999999, "type": "visibility"}]})).is_err());

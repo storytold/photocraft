@@ -62,7 +62,7 @@ fn kind_json(k: &VarKind) -> Value {
             let align = a[..1].to_lowercase() + &a[1..];
             json!({
                 "type": "pixelReplacement",
-                "method": format!("{method:?}").to_lowercase(),
+                "method": method,
                 "align": align,
                 "clip": clip,
             })
