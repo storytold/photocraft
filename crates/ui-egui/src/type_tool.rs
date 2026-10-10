@@ -330,6 +330,32 @@ fn insert(app: &mut PhotocraftApp, s: &str) {
     }
 }
 
+/// `type.insertControl` on the type being edited (spec 5.1.8): at the caret, or over the
+/// selection (an isolate wraps it), in the editing session's history step. The palette's bidi
+/// rows and `ui.menu.invoke` come here (see `menus::invoke_unguarded`).
+pub fn insert_control(app: &mut PhotocraftApp, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let ed = app.ui.text_edit.clone().ok_or_else(|| "Start editing type to insert a control character".to_string())?;
+    let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
+    let char_name = params.get("char").cloned().unwrap_or(serde_json::Value::Null);
+    let p = json!({"layer": ed.layer, "char": char_name, "range": [a, b], "coalesce": ed.session});
+    crate::type_transform::finish(app);
+    let v = app.run("type.insertControl", p)?;
+    let at = |i: usize| v.get("selection").and_then(|s| s.get(i)).and_then(serde_json::Value::as_u64).and_then(|n| usize::try_from(n).ok());
+    if let (Some(s0), Some(s1)) = (at(0), at(1))
+        && let Some(e) = app.ui.text_edit.as_mut()
+    {
+        // The caret stays at the end of the selection it was on.
+        if ed.caret < ed.anchor {
+            (e.caret, e.anchor) = (s0, s1);
+        } else {
+            (e.anchor, e.caret) = (s0, s1);
+        }
+        e.upstream = s0 == s1;
+        e.preedit = None;
+    }
+    Ok(v)
+}
+
 /// Spec 5.1.1: new Arabic text right-aligns itself. After typing into a layer this session
 /// created, the caret's paragraph becomes right-aligned when three things hold: it is still at
 /// the default Left, nobody picked an alignment in the session, and its first strong character
@@ -1705,6 +1731,31 @@ mod tests {
     fn layer_text(app: &PhotocraftApp) -> String {
         let ed = app.ui.text_edit.as_ref().unwrap();
         current_text(app, LayerId(ed.layer)).unwrap()
+    }
+
+    /// Spec 5.1.8: the palette's "Keep Selection Left-to-Right" wraps the selection in LRI…PDI in
+    /// one step and keeps the same text selected; at a caret the control goes in after it.
+    #[test]
+    fn insert_control_wraps_the_selection_and_moves_the_caret() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let id = a.run("type.create", json!({"x": 50, "y": 50, "text": "رقم 0551234567 فقط"})).unwrap()["layer"].as_u64().unwrap();
+        a.ui.text_edit = Some(TextEdit { layer: id, caret: 14, anchor: 4, session: "k".into(), ..Default::default() });
+        let steps = a.session.active().unwrap().history.entries().len();
+        crate::menus::invoke(&mut a, &ctx, "type.insertControl", json!({"char": "lri"})).unwrap();
+        assert_eq!(layer_text(&a), "رقم \u{2066}0551234567\u{2069} فقط");
+        let ed = a.ui.text_edit.clone().unwrap();
+        assert_eq!((ed.anchor, ed.caret), (5, 15), "the same digits stay selected");
+        assert_eq!(a.session.active().unwrap().history.entries().len(), steps + 1, "one step");
+        a.run("edit.undo", json!({})).unwrap();
+        assert_eq!(layer_text(&a), "رقم 0551234567 فقط");
+        a.ui.text_edit = Some(TextEdit { layer: id, caret: 3, anchor: 3, session: "k2".into(), ..Default::default() });
+        insert_control(&mut a, &json!({"char": "tatweel"})).unwrap();
+        assert_eq!(layer_text(&a), "رقم\u{640} 0551234567 فقط");
+        assert_eq!(a.ui.text_edit.as_ref().map(|e| (e.caret, e.anchor, e.upstream)), Some((4, 4, true)));
+        assert!(insert_control(&mut a, &json!(["not", "an", "object"])).is_err(), "no char: an error, not a crash");
+        a.ui.text_edit = None;
+        assert!(insert_control(&mut a, &json!({"char": "rlm"})).is_err(), "not editing");
     }
 
     #[test]

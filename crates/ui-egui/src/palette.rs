@@ -39,6 +39,24 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
 /// How many recently run commands the palette remembers.
 const RECENT_CAP: usize = 8;
 
+/// Palette-only rows for `type.insertControl` (spec 5.1.8), which has no Photoshop menu item:
+/// (label, `char` param, code shown, needs a selection). They act on the type being edited.
+pub(crate) const BIDI_CONTROLS: [(&str, &str, &str, bool); 10] = [
+    ("Keep Selection Left-to-Right", "lri", "LRI…PDI", true),
+    ("Keep Selection Right-to-Left", "rli", "RLI…PDI", true),
+    ("Keep Selection in Its Own Direction", "fsi", "FSI…PDI", true),
+    ("Insert End of Isolate", "pdi", "PDI", false),
+    ("Insert Left-to-Right Mark", "lrm", "LRM", false),
+    ("Insert Right-to-Left Mark", "rlm", "RLM", false),
+    ("Insert Arabic Letter Mark", "alm", "ALM", false),
+    ("Insert Zero-Width Joiner", "zwj", "ZWJ", false),
+    ("Insert Zero-Width Non-Joiner", "zwnj", "ZWNJ", false),
+    ("Insert Tatweel", "tatweel", "U+0640", false),
+];
+
+/// Hit id prefix of a [`BIDI_CONTROLS`] row.
+const BIDI_PREFIX: &str = "bidi:";
+
 /// The id of the palette's recently-run list (egui temp data: session-scoped, like the query).
 fn recent_id() -> egui::Id {
     egui::Id::new("palette-recent")
@@ -163,6 +181,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                                 hits.push((s + 2, format!("tool:{tool:?}"), tl!(tool.label()).into(), Some(format!("Tool   {}", tool.key())), true));
                             }
                         }
+                        // Bidi controls (spec 5.1.8): enabled while editing type; the
+                        // "Keep Selection" rows need a selection.
+                        let selected = app.ui.text_edit.as_ref().map(|e| e.caret != e.anchor);
+                        for (i, (label, _, code, needs_selection)) in BIDI_CONTROLS.iter().enumerate() {
+                            let shown = crate::i18n::tr(lang, label);
+                            if let Some(s) = fuzzy_score(&q, &format!("{shown} {label} {code}")) {
+                                let enabled = selected.is_some_and(|sel| sel || !needs_selection);
+                                let detail = format!("{}   {code}", crate::i18n::tr(lang, "Type"));
+                                hits.push((s, format!("{BIDI_PREFIX}{i}"), shown.to_string(), Some(detail), enabled));
+                            }
+                        }
                     }
                     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
                     hits.truncate(12);
@@ -228,6 +257,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(t) = crate::state::Tool::from_name(tool) {
                 app.ui.tool = t;
             }
+        } else if let Some(&(_, name, _, _)) = id.strip_prefix(BIDI_PREFIX).and_then(|i| i.parse::<usize>().ok()).and_then(|i| BIDI_CONTROLS.get(i)) {
+            if let Err(e) = crate::menus::invoke(app, ctx, "type.insertControl", serde_json::json!({ "char": name })) {
+                app.ui.status = e;
+            }
         } else if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
             app.ui.status = e;
         }
@@ -236,6 +269,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn bidi_control_rows_name_every_control_once() {
+        let mut names: Vec<&str> = super::BIDI_CONTROLS.iter().map(|e| e.1).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), photocraft_engine::type_control_cmds::CONTROLS.len());
+        for (label, name, _, needs_selection) in super::BIDI_CONTROLS {
+            assert!(photocraft_engine::type_control_cmds::control_char(name).is_some(), "{label}: {name}");
+            assert_eq!(needs_selection, matches!(name, "lri" | "rli" | "fsi"), "{label}");
+        }
+    }
     use egui::{Event, Key, Modifiers, vec2};
     use egui_kittest::Harness;
     use serde_json::json;
