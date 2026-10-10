@@ -1748,7 +1748,7 @@
 	Untagged {mode}	未标记的 {mode}
 	Invalid {mode} profile	无效的 {mode} 配置文件
 	Unnamed {mode} profile	未命名的 {mode} 配置文件
-	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	分辨率：{dpi} 像素/英寸
 	Doc: {w} × {h} px	文档：{w} × {h} px
 	Frame {current} / {total}	帧 {current} / {total}

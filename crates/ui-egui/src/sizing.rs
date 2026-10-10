@@ -14,7 +14,7 @@ const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
 /// Dialog unit for the Units & Rulers preference.
-fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
+pub fn pref_unit(u: photocraft_engine::prefs::Unit) -> &'static str {
     use photocraft_engine::prefs::Unit;
     match u {
         Unit::Pixels => "px",

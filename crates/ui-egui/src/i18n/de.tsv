@@ -1730,7 +1730,7 @@
 	Untagged {mode}	{mode} ohne Farbprofil
 	Invalid {mode} profile	Ungültiges {mode}-Profil
 	Unnamed {mode} profile	Unbenanntes {mode}-Profil
-	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Auflösung: {dpi} Pixel/Zoll
 	Doc: {w} × {h} px	Dok: {w} × {h} px
 	Frame {current} / {total}	Frame {current} / {total}

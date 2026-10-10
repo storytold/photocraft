@@ -1752,7 +1752,7 @@
 	Untagged {mode}	{mode} bez profilu
 	Invalid {mode} profile	Neplatný profil {mode}
 	Unnamed {mode} profile	Bezejmenný profil {mode}
-	{w} px x {h} px ({ppi} ppi)	{w} px × {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Rozlišení: {dpi} pixelů/palec
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
 	Frame {current} / {total}	Snímek {current} / {total}

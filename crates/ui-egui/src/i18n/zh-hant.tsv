@@ -1740,7 +1740,7 @@
 	Untagged {mode}	未標記的 {mode}
 	Invalid {mode} profile	無效的 {mode} 描述檔
 	Unnamed {mode} profile	未命名的 {mode} 描述檔
-	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	解析度：{dpi} 像素/英吋
 	Doc: {w} × {h} px	文件：{w} × {h} px
 	Frame {current} / {total}	影格 {current} / {total}

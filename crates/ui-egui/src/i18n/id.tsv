@@ -1705,7 +1705,7 @@
 	Doc: {flat}/{layered}	Dok: {flat}/{layered}
 	Scratch: {size}	Scratch: {size}
 	Untagged {mode}	{mode} Tanpa Tag
-	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Resolusi: {dpi} piksel/inci
 	Doc: {w} × {h} px	Dok: {w} × {h} px
 	Frame {current} / {total}	Frame {current} / {total}

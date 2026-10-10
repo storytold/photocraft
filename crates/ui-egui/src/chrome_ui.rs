@@ -1,10 +1,13 @@
 //! Photoshop 2026 window chrome details: the status bar's info field and its "Show" menu, and the
 //! Home button at the start of the options bar.
 
+use egui::emath::Numeric;
 use egui::{RichText, Sense, Stroke, vec2};
 use photocraft_doc::{Document, LayerContent};
+use photocraft_engine::prefs::UnitsAndRulers;
 use serde::{Deserialize, Serialize};
 
+use crate::sizing::pref_unit;
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -74,8 +77,24 @@ pub fn document_sizes(doc: &Document) -> (u64, u64) {
 }
 
 /// The status bar text for `key` (Photoshop wording).
-pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) -> String {
+pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str, units_rulers: &UnitsAndRulers) -> String {
     let bits = doc.depth.bits();
+    let unit_str = pref_unit(units_rulers.rulers);
+
+    let doc_width = units_rulers.rulers.from_px(
+        doc.size.width.to_f64(), 
+        doc.resolution_dpi.to_f64(),
+        doc.size.width.to_f64(), 
+        units_rulers.point_size.per_inch()
+    );
+
+    let doc_height = units_rulers.rulers.from_px(
+        doc.size.height.to_f64(), 
+        doc.resolution_dpi.to_f64(),
+        doc.size.height.to_f64(), 
+        units_rulers.point_size.per_inch()
+    );
+
     match key {
         "sizes" => {
             let (flat, layered) = document_sizes(doc);
@@ -94,9 +113,13 @@ pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) ->
             crate::i18n::trn(crate::i18n::current(), n as u64, "{n} Layer", "{n} Layers")
         }
         _ => crate::i18n::fmt(
-            tl!("{w} px x {h} px ({ppi} ppi)"),
-            &[("w", &doc.size.width.to_string()), ("h", &doc.size.height.to_string()), ("ppi", &widgets::fmt_num(doc.resolution_dpi as f64))],
-        ),
+            tl!("{w} {unit} x {h} {unit} ({ppi} ppi)"),
+            &[
+                ("w", &widgets::fmt_num(doc_width).to_string()), 
+                ("unit", unit_str),
+                ("h", &widgets::fmt_num(doc_height).to_string()), 
+                ("ppi", &widgets::fmt_num(doc.resolution_dpi as f64))
+            ]),
     }
 }
 
@@ -128,7 +151,7 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         status_message(app, ui, &t);
         return;
     };
-    let text = status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc));
+    let text = status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc), &app.session.prefs().units_and_rulers);
     let mut pct = app.ui.views[i].zoom * 100.0;
     if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 64.0).changed() {
         app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
@@ -232,21 +255,23 @@ mod tests {
 
     #[test]
     fn default_status_shows_dimensions_like_photoshop() {
+        let ruler = UnitsAndRulers::default();
         let d = doc();
         assert_eq!(ChromeState::default().status_info, "dimensions");
-        assert_eq!(status_info_text(&d, "dimensions", "", ""), "2400 px x 1500 px (72 ppi)");
-        assert_eq!(status_info_text(&d, "layers", "", ""), "1 Layer");
-        assert_eq!(status_info_text(&d, "tool", "Brush Tool", ""), "Brush Tool");
-        assert!(status_info_text(&d, "profile", "", "sRGB IEC61966-2.1").ends_with("(8bpc)"));
+        assert_eq!(status_info_text(&d, "dimensions", "", "", &ruler), "2400 px x 1500 px (72 ppi)");
+        assert_eq!(status_info_text(&d, "layers", "", "", &ruler), "1 Layer");
+        assert_eq!(status_info_text(&d, "tool", "Brush Tool", "", &ruler), "Brush Tool");
+        assert!(status_info_text(&d, "profile", "", "sRGB IEC61966-2.1", &ruler).ends_with("(8bpc)"));
     }
 
     #[test]
     fn status_profile_describes_rgb_gray_and_custom_profiles_without_mutating_the_document() {
         let mut rgb = doc();
+        let ruler = UnitsAndRulers::default();
         rgb.icc_profile = Some(photocraft_engine::color_cmds::working_profile(rgb.mode).to_bytes());
         let before = rgb.icc_profile.clone();
         assert_eq!(profile_name(&rgb), "sRGB IEC61966-2.1");
-        assert_eq!(status_info_text(&rgb, "profile", "", &profile_name(&rgb)), "sRGB IEC61966-2.1 (8bpc)");
+        assert_eq!(status_info_text(&rgb, "profile", "", &profile_name(&rgb), &ruler), "sRGB IEC61966-2.1 (8bpc)");
         assert_eq!(rgb.icc_profile, before);
 
         let mut gray = doc();
@@ -284,8 +309,10 @@ mod tests {
     #[test]
     fn document_sizes_match_photoshop_rounding() {
         let d = doc();
+        let ruler = UnitsAndRulers::default();
+
         // 2400 x 1500 x 3 bytes = 10.3M flattened, as Photoshop shows.
-        assert_eq!(status_info_text(&d, "sizes", "", ""), "Doc: 10.3M/13.7M");
+        assert_eq!(status_info_text(&d, "sizes", "", "", &ruler), "Doc: 10.3M/13.7M");
         assert_eq!(fmt_bytes(512 * 1024), "512.0K");
     }
 
@@ -343,8 +370,10 @@ mod tests {
     #[test]
     fn every_status_key_has_text() {
         let d = doc();
+        let ruler = UnitsAndRulers::default();
+
         for (k, _) in STATUS_INFO {
-            assert!(!status_info_text(&d, k, "x", "p").is_empty());
+            assert!(!status_info_text(&d, k, "x", "p", &ruler).is_empty());
         }
     }
 }

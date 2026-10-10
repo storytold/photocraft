@@ -1710,7 +1710,7 @@
 	Doc: {flat}/{layered}	Doc: {flat}/{layered}
 	Scratch: {size}	Trabalho: {size}
 	Untagged {mode}	{mode} sem marcação
-	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} × {h} {unit} ({ppi} ppi)
 	Resolution: {dpi} pixels/inch	Resolução: {dpi} pixels/polegada
 	Doc: {w} × {h} px	Doc: {w} × {h} px
 	Frame {current} / {total}	Quadro {current} / {total}
