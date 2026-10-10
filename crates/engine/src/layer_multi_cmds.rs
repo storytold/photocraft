@@ -1250,7 +1250,7 @@ pub fn specs() -> Vec<CommandSpec> {
     const ALIGN: &str = r##"{"to":"auto|layers|selection|canvas"="auto"} (auto: the selection bounds with one layer and an active selection, else the selected layers' bounds)"##;
     vec![
         spec!("select.allLayers", "All Layers", &["Select"], Some("Cmd+Alt+A"), "{}", has_doc, |s, _| select_all_layers(s)),
-        spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_layer, |s, _| {
+        spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_doc, |s, _| {
             set_selection(s, Vec::new(), None, None)?;
             if let Some(st) = s.active_mut() {
                 st.active_layer = None;
@@ -1531,6 +1531,18 @@ mod tests {
         s.execute("select.deselectLayers", json!({})).unwrap();
         assert!(sel(&s).is_empty());
         assert_eq!(s.active().unwrap().history.entries().len(), history);
+        // Nothing selected: a no-op, not an error (#2457).
+        s.execute("select.deselectLayers", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().history.entries().len(), history);
+        // An explicit layer needs no active layer.
+        s.execute("layer.hideLayers", json!({"layer": a.0})).unwrap();
+        assert!(!s.active().unwrap().doc.layer(a).unwrap().visible);
+        s.execute("layer.renameLayer", json!({"layer": a.0, "name": "x"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layer(a).unwrap().name, "x");
+        s.execute("layer.showLayers", json!({"layer": a.0})).unwrap();
+        assert!(s.active().unwrap().doc.layer(a).unwrap().visible);
+        assert!(s.execute("layer.hideLayers", json!({"layer": 999_999})).is_err());
+        assert!(s.execute("layer.hideLayers", json!({})).is_err());
         assert!(!s.is_enabled("layer.align.topEdges"));
     }
 
