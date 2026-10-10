@@ -89,8 +89,6 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui,
         |ui| {
             if t.pro {
-                let r = ui.max_rect();
-                ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
                 // Photoshop's toolbar header chevrons switch between one and two columns.
                 let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
                 icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
@@ -777,9 +775,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .exact_size(if t.pro { 36.0 } else { 42.0 })
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
-            let r = ui.max_rect();
-            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
-            ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
             ui.horizontal_centered(|ui| {
                 if t.pro {
                     crate::chrome_ui::home_button(app, ui);
@@ -806,6 +801,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)) || tool == Tool::QuickSelection {
                     brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
                     crate::brush_picker::settings_toggle(app, ui);
+                    widgets::vline(ui, 22.0);
+                }
+                if tool == Tool::CloneStamp {
+                    let before = app.session.tools.brush.clone();
+                    let mut brush = before.clone();
+                    let width = if t.pro { 62.0 } else { 66.0 };
+                    percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
+                    percent_field(ui, tl!("Flow"), &mut brush.flow, 1.0..=100.0, width);
+                    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                     widgets::vline(ui, 22.0);
                 }
                 if crate::eraser_ui::options_bar(app, ui, tool)
@@ -1009,7 +1013,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::checkbox(ui, &mut app.ui.tool_options.sample_all_layers, tl!("Sample All Layers"));
                         widgets::vline(ui, 22.0);
                         if widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                            let _ = app.run("select.subject", json!({}));
+                            let r = app.run("select.subject", json!({}));
+                            crate::retouch_ui::report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
                         }
                         if widgets::secondary_button(ui, tl!("Select and Mask…"), 0.0).clicked() {
                             let _ = crate::menus::invoke(app, ui.ctx(), "select.selectAndMask", json!({}));
@@ -1315,8 +1320,6 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .exact_size(if t.pro { 24.0 } else { 30.0 })
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
-            let r = ui.max_rect();
-            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
             ui.horizontal_centered(|ui| {
                 if t.pro {
                     crate::chrome_ui::status_bar_pro(app, ui);
@@ -1775,25 +1778,29 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // In a narrow panel with long translated labels, drop the "Lock:" text (the icons keep
             // their tooltips) rather than let the Fill label run over the lock icons.
             let gap = ui.spacing().item_spacing.x;
-            let icons_w = if t.pro { 5.0 * 20.0 } else { 22.0 + gap };
+            let icons_w = if t.pro { 5.0 * 20.0 + gap } else { 22.0 + gap };
             let fits = body_text_width(ui, lock_label) + icons_w + body_text_width(ui, fill_label) + LAYER_PCT_W + 2.0 * gap <= ui.available_width();
             if fits {
                 label(ui, lock_label);
             }
             if t.pro {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                let lk = l.locks;
-                for (key, icon, tip, on) in [
-                    ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
-                    ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
-                    ("position", "move", tl!("Lock position"), lk.position),
-                    ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
-                    ("all", "lock", tl!("Lock all"), lk.all),
-                ] {
-                    if icons::button(ui, icon, 20.0, on, tip).clicked() {
-                        actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "locks": { key: !on }})));
+                // The lock icons touch, but only they: the Fill label keeps the same gap before its
+                // field as Opacity's, so both stack in one right-aligned column (#2085).
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let lk = l.locks;
+                    for (key, icon, tip, on) in [
+                        ("transparency", "grid-3x3", tl!("Lock transparent pixels"), lk.transparency),
+                        ("pixels", "brush", tl!("Lock image pixels"), lk.pixels),
+                        ("position", "move", tl!("Lock position"), lk.position),
+                        ("artboard", "scan", tl!("Prevent auto-nesting in and out of Artboards and Frames"), lk.artboard),
+                        ("all", "lock", tl!("Lock all"), lk.all),
+                    ] {
+                        if icons::button(ui, icon, 20.0, on, tip).clicked() {
+                            actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "locks": { key: !on }})));
+                        }
                     }
-                }
+                });
             }
             if !t.pro {
                 let locked = l.locks.transparency || l.locks.position || l.locks.all;
@@ -1907,7 +1914,10 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         };
         let trash = icons::button(ui, "trash", 26.0, false, tl!(label));
         if trash.clicked() {
-            actions.push((delete.into(), json!({})));
+            // Like Photoshop, ⌥/Alt-click deletes without asking.
+            let confirm = delete == "layer.delete" && !ui.input(|i| i.modifiers.alt);
+            let params = if confirm { json!({"__trash": true}) } else { json!({}) };
+            actions.push((delete.into(), params));
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
         // A click follows the selected thumbnail; name that action for screen readers even
@@ -1924,22 +1934,20 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         actions.extend(footer_drop(ui, &group, footer_drag, "layer.groupLayers"));
         let adj = footer_menu_button(ui, "adjustment-layer", 26.0, tl!("Create new fill or adjustment layer"));
-        egui::Popup::menu(&adj).open_memory(footer_menu_right_click(&adj)).show(|ui| {
+        // Opens on the press like Photoshop's: drag onto an item and release to choose it (#2071).
+        crate::press_menu::show(&adj, |ui, menu| {
             ui.set_min_width(190.0);
             for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
-                if ui.button(tl!(c.label).trim_end_matches('…')).clicked() {
+                if menu.item(ui, tl!(c.label).trim_end_matches('…')) {
                     actions.push((c.id.into(), json!({})));
-                    ui.close();
                 }
             }
             ui.separator();
-            if ui.button(tl!("Solid Color…")).clicked() {
+            if menu.item(ui, tl!("Solid Color…")) {
                 actions.push(("layer.newFillLayer.solidColor".into(), json!({})));
-                ui.close();
             }
-            if ui.button(tl!("Gradient…")).clicked() {
+            if menu.item(ui, tl!("Gradient…")) {
                 actions.push(("layer.newFillLayer.gradient".into(), json!({})));
-                ui.close();
             }
         });
         // Like Photoshop the button never replaces a mask (#2075): with a layer mask it adds a
@@ -1959,17 +1967,15 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             actions.push((cmd.into(), json!({})));
         }
         let fx = fx_button(ui, 26.0, tl!("Add a layer style"));
-        egui::Popup::menu(&fx).open_memory(footer_menu_right_click(&fx)).show(|ui| {
+        crate::press_menu::show(&fx, |ui, menu| {
             ui.set_min_width(180.0);
-            if ui.button(tl!("Blending Options…")).clicked() {
+            if menu.item(ui, tl!("Blending Options…")) {
                 crate::layer_style::open(app, None);
-                ui.close();
             }
             ui.separator();
             for &(kind, label) in crate::layer_style::KINDS {
-                if ui.button(format!("{}…", tl!(label))).clicked() {
+                if menu.item(ui, format!("{}…", tl!(label))) {
                     crate::layer_style::open(app, Some(kind));
-                    ui.close();
                 }
             }
         });
@@ -2031,18 +2037,6 @@ fn footer_label(command: &str) -> &'static str {
     }
 }
 
-/// A secondary click opens a Layers footer popup, as in Photoshop; a primary click still toggles
-/// it (the `Popup::menu` default this replaces).
-fn footer_menu_right_click(response: &egui::Response) -> Option<egui::SetOpenCommand> {
-    if response.secondary_clicked() {
-        Some(egui::SetOpenCommand::Bool(true))
-    } else if response.clicked() {
-        Some(egui::SetOpenCommand::Toggle)
-    } else {
-        None
-    }
-}
-
 /// The small down-arrow makes it clear that the footer icon expands into a menu.
 fn footer_menu_arrow(ui: &egui::Ui, rect: Rect) {
     let t = Tokens::get(ui.ctx());
@@ -2052,6 +2046,8 @@ fn footer_menu_arrow(ui: &egui::Ui, rect: Rect) {
 
 fn footer_menu_button(ui: &mut egui::Ui, icon: &str, size: f32, tip: &str) -> egui::Response {
     let response = icons::button(ui, icon, size, false, tip);
+    // Named for screen readers (and tests) after its tooltip.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     footer_menu_arrow(ui, response.rect);
     response
 }
@@ -2068,6 +2064,7 @@ fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Response {
     let g = ui.painter().layout_job(job);
     ui.painter().galley(r.center() - g.size() / 2.0, g, t.icon);
     footer_menu_arrow(ui, r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     resp.on_hover_text(tip)
 }
 
@@ -4055,48 +4052,6 @@ mod layer_drag_edge_scroll_tests {
         assert!(layer_drag_edge_scroll(Some(pos2(10.0, 2.0)), viewport, true, 0.016) > 0.0);
         assert!(layer_drag_edge_scroll(Some(pos2(10.0, 38.0)), viewport, true, 0.016) < 0.0);
         assert_eq!(layer_drag_edge_scroll(Some(pos2(10.0, 20.0)), viewport, true, 0.016), 0.0);
-    }
-}
-
-#[cfg(test)]
-mod footer_menu_tests {
-    use super::*;
-
-    // Exercise the actual egui pointer path, not just a mocked click flag.
-    #[test]
-    fn right_click_opens_footer_menu_and_primary_click_still_works() {
-        let ctx = egui::Context::default();
-        let rect = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 100.0));
-        let pos = pos2(35.0, 20.0);
-        let frame = |events: Vec<egui::Event>| {
-            let mut opened = false;
-            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), events, ..Default::default() }, |ui| {
-                let response = ui.add_sized([100.0, 28.0], egui::Button::new("Footer menu"));
-                egui::Popup::menu(&response).open_memory(footer_menu_right_click(&response)).show(|ui| {
-                    opened = true;
-                    ui.label("Menu entry");
-                });
-            });
-            output.textures_delta.clear();
-            opened
-        };
-        frame(Vec::new());
-        frame(vec![
-            egui::Event::PointerMoved(pos),
-            egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE },
-        ]);
-        assert!(
-            frame(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE }]),
-            "secondary release opens the popup"
-        );
-
-        // A primary click also remains supported by egui::Popup::menu.
-        frame(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
-        frame(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]);
-        assert!(
-            frame(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
-            "primary release still opens the popup"
-        );
     }
 }
 

@@ -941,6 +941,17 @@
 	Delete current channel	Huidig kanaal verwijderen
 	Delete current state	Huidige staat verwijderen
 	Delete effect layer	Effectlaag verwijderen
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Laag ‘{name}’ verwijderen?
+	Delete {count} layers? {names}	{count} lagen verwijderen? {names}
+	Delete layer?	Laag verwijderen?
+	The document is closed	Het document is gesloten
+	The document or selected layers changed. Please request deletion again.	Het document of de geselecteerde lagen zijn gewijzigd. Vraag de verwijdering opnieuw aan.
+	Missing delete command	Verwijderopdracht ontbreekt
+	Invalid delete command	Ongeldige verwijderopdracht
+	Layer deleted, but confirmation preference could not be saved: {error}	De laag is verwijderd, maar de bevestigingsvoorkeur kon niet worden opgeslagen: {error}
+
 	Delete layer	Laag verwijderen
 	Delete layer comp	Laagcompositie verwijderen
 	Delete note	Notitie verwijderen
@@ -3492,6 +3503,7 @@ cameraRaw	Whites	Witten
 	Transform Symmetry	Symmetrie transformeren
 
 	Rasterize svg groups deeper than	SVG-groepen rasteriseren dieper dan deze grens
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 schakelt deze drempel uit; SVG-groepen die dieper dan 100 niveaus zijn genest, worden altijd gerasterd.
 	Rule of Thirds	Regel van derden
 	Golden Ratio	Gulden snede
 	Golden Spiral	Gulden spiraal
@@ -3541,3 +3553,7 @@ cameraRaw	Whites	Witten
 	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+	No subject found — try Object Selection or the Lasso	Geen onderwerp gevonden — probeer Objectselectie of de Lasso
+	Quick Selection found nothing there	Snelle selectie heeft daar niets gevonden
+	Object Selection found nothing there — try a tighter rectangle	Objectselectie heeft daar niets gevonden — probeer een krappere rechthoek
+	No subject found — try a rectangle around the object	Geen onderwerp gevonden — probeer een rechthoek rond het object

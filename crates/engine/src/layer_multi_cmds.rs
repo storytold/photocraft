@@ -1121,23 +1121,45 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
     Ok(json!({ "layer": mid.0 }))
 }
 
+/// Next visible layer row below the deleted target, then rows above in reverse order.
+/// Group headers precede their children in the UI, unlike Document::walk's storage order.
+pub(crate) fn deletion_neighbours(doc: &Document, target: LayerId) -> Vec<LayerId> {
+    let rows = |expand_all: bool| {
+        let mut stack: Vec<&Layer> = doc.layers.iter().collect();
+        let mut order = Vec::new();
+        while let Some(layer) = stack.pop() {
+            order.push(layer.id);
+            if let LayerContent::Group(group) = &layer.content
+                && (expand_all || group.expanded)
+            {
+                stack.extend(group.children.iter());
+            }
+        }
+        order
+    };
+    let mut order = rows(false);
+    if !order.contains(&target) {
+        order = rows(true);
+    }
+    let Some(index) = order.iter().position(|id| *id == target) else {
+        return Vec::new();
+    };
+    order.iter().skip(index + 1).chain(order.iter().take(index).rev()).copied().collect()
+}
+
 /// Delete Layer with several layers selected.
 pub fn delete_selected(s: &mut Session) -> Result<Value> {
     let sel = selected(s);
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
-        let below = ids.first().and_then(|id| {
-            let order: Vec<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
-            let i = order.iter().position(|x| x == id)?;
-            order[..i].iter().rev().find(|x| !sel.contains(x)).copied()
-        });
+        let neighbours = active.map(|id| deletion_neighbours(doc, id)).unwrap_or_default();
         for id in &ids {
             doc.remove(*id).ok_or(EngineError::NoLayer(*id))?;
         }
         if doc.layers.is_empty() {
             return Err(EngineError::Other("a document must keep at least one layer".into()));
         }
-        *active = below.filter(|b| doc.layer(*b).is_some()).or_else(|| doc.top_layer());
+        *active = neighbours.into_iter().find(|candidate| doc.layer(*candidate).is_some());
         Ok(())
     })?;
     Ok(json!({"deleted": sel.len()}))

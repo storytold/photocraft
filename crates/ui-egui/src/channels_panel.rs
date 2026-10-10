@@ -256,7 +256,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                         Row::LayerMask => {
                             let enabled = masked.as_ref().and_then(|l| l.mask.as_ref()).is_none_or(|m| m.enabled);
-                            item(ui, a, if enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }, "layer.layerMask.enabled", json!({}));
+                            item(ui, a, crate::layer_menu_ui::mask_toggle_label(enabled), "layer.layerMask.enabled", json!({}));
                             item(ui, a, "Delete Layer Mask", "layer.layerMask.delete", json!({}));
                         }
                     }

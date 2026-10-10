@@ -857,7 +857,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "interface.dynamicColorSliders",
     "workspace.autoCollapseIconPanels",
     "workspace.autoShowHiddenPanels",
-    "workspace.openDocumentsAsTabs",
     "workspace.enableFloatingDocumentWindowDocking",
     "workspace.enableNarrowOptionsBar",
     "tools.enableFlickPanning",

@@ -27,6 +27,10 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
     let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample});
+    if app.ui.tool == Tool::CloneStamp {
+        p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
+        p["flow"] = json!(app.session.tools.brush.flow * 100.0);
+    }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
     // the aligned pairing and applies the slot's scale/rotation/flip.
     let slot = app.session.presets.clone.active().source.is_some();
@@ -103,8 +107,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
-            let _ = app
-                .run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": o.enhance_edge, "sampleAllLayers": o.sample_all_layers}));
+            let (sample_all, enhance) = (o.sample_all_layers, o.enhance_edge);
+            let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
+            report_smart_result(app, r, tl!("Quick Selection found nothing there"));
             return true;
         }
         _ => return false,
@@ -203,11 +208,19 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     }
 }
 
-/// Object Selection: the dragged rectangle.
+/// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
+/// rectangle: like Photoshop's click-to-select, it falls back to a Quick Selection dab at
+/// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
+/// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
+    let sample_all = app.ui.tool_options.sample_all_layers;
     if w < 2.0 || h < 2.0 {
+        let size = app.session.tools.brush.size;
+        let mode = if mods.alt { "subtract" } else { "add" };
+        let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
+        report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
     let mode = if mods.alt {
@@ -217,10 +230,19 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     } else {
         "replace"
     };
-    let _ = app.run(
-        "select.object",
-        json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": app.ui.tool_options.sample_all_layers}),
-    );
+    let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
+    report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
+}
+
+/// Reports a smart-selection command result in the status bar. Engine errors are already
+/// reported by [`PhotocraftApp::run`], but an empty result (`changed: false`) is a silent
+/// success that looks like a dead button (Select Subject finding nothing on a busy photo,
+/// Object Selection missing its rectangle). `empty_msg` says what to try next.
+pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, empty_msg: &str) {
+    if matches!(res, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(false)) {
+        app.ui.status = empty_msg.into();
+        app.ui.status_error = false;
+    }
 }
 
 /// ⌥-click with Clone Stamp / Healing Brush sets the source.
@@ -356,7 +378,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                let _ = app.run("select.subject", json!({}));
+                let r = app.run("select.subject", json!({}));
+                report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
         }
         Tool::ObjectSelection => {
@@ -364,7 +387,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Drag a rectangle around the object"));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                let _ = app.run("select.subject", json!({}));
+                let r = app.run("select.subject", json!({}));
+                report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
             }
         }
         Tool::RedEye => {
@@ -463,6 +487,25 @@ mod tests {
     }
 
     #[test]
+    fn clone_stamp_brush_opacity_and_flow_reach_the_painted_pixels() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#ff0000"})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = Tool::CloneStamp;
+        app.ui.clone_source = Some([10.0, 10.0]);
+        app.ui.tool_options.clone_sample = "all".into();
+        app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
+        assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let pixel = active(&app).surface().unwrap().rgba(50, 30);
+        assert!(pixel[0] > 0.9 && pixel[3] > 0.0 && pixel[3] < 0.5, "partial-opacity, partial-flow red stamp: {pixel:?}");
+        let (id, params) = app.session.journal.last().unwrap();
+        assert_eq!(id, "paint.cloneStamp");
+        assert_eq!(params["opacity"], 50.0);
+        assert_eq!(params["flow"], 50.0);
+    }
+
+    #[test]
     fn clone_without_a_source_names_the_platform_modifier() {
         // Option-click on the Mac, Alt-click elsewhere (#251).
         for tool in [Tool::CloneStamp, Tool::Healing] {
@@ -509,6 +552,44 @@ mod tests {
                 assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
             }
         }
+    }
+
+    #[test]
+    fn object_selection_click_falls_back_to_quick_selection() {
+        // A click cannot be a rectangle: it selects at the cursor instead of looking dead.
+        let mut app = app();
+        app.ui.tool = Tool::ObjectSelection;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.quick"));
+    }
+
+    #[test]
+    fn object_selection_rect_runs_object_selection_and_reports() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[20, 10], [20, 50]], "size": 8, "color": "#ff0000"})).unwrap();
+        app.ui.tool = Tool::ObjectSelection;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 5.0, y: 5.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 55.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 55.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.object"));
+    }
+
+    #[test]
+    fn empty_smart_result_is_reported_without_error() {
+        // An empty smart selection (Select Subject missing on a busy photo) is an info, not
+        // an error and not silence: the button must visibly answer.
+        let mut app = app();
+        report_smart_result(&mut app, Ok(json!({"selected": false, "changed": false})), "nothing there");
+        assert_eq!(app.ui.status.as_str(), "nothing there");
+        assert!(!app.ui.status_error);
+        app.ui.status.clear();
+        report_smart_result(&mut app, Ok(json!({"selected": true, "changed": true})), "nothing there");
+        assert!(app.ui.status.is_empty());
     }
 
     #[test]

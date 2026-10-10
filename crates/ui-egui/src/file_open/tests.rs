@@ -675,3 +675,21 @@ fn notices_render_without_panicking() {
     out.textures_delta.clear();
     assert_eq!(app.ui.notices.len(), 2);
 }
+
+#[test]
+fn open_documents_as_tabs_preference_controls_floating_windows() {
+    let (mut app, _) = app_with(Vec::new());
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = false);
+    app.open_bytes("a.psd", b"x").unwrap();
+    assert_eq!(app.ui.windows.len(), 1);
+    assert_eq!(app.ui.windows[0].document, 0);
+
+    app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    assert_eq!(app.ui.windows.len(), 2);
+    assert_eq!(app.ui.windows[1].document, 1);
+
+    // Opening with preference true docks into tabs, creating no new floating window
+    app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = true);
+    app.open_bytes("b.psd", b"x").unwrap();
+    assert_eq!(app.ui.windows.len(), 2);
+}
