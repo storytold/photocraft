@@ -2961,6 +2961,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             response.hover_pos().and_then(|p| crate::transform_tool::cursor(app, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command)))
         {
             ui.ctx().set_cursor_icon(c);
+        } else if let Some(c) = response.hover_pos().and_then(|p| transform_controls_rect(app, &xf).and_then(|r| transform_controls_cursor(r, p))) {
+            // The Move tool draws handles without opening a Free Transform session.
+            // Give them their resize/rotate cursors before the first pointer press (#2871).
+            ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
             let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
             crate::type_transform::cursor(app, &ctx, &xf, p, mods)
@@ -3590,12 +3594,29 @@ fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> 
     Some(Rect::from_two_pos(xf.to_screen(b.x0 as f32, b.y0 as f32), xf.to_screen(b.x1 as f32, b.y1 as f32)))
 }
 
+/// The Move tool shows transform handles even before a Free Transform session exists.
+/// Use the same hit areas for pointer-down and hover, so a control never behaves like
+/// resize/rotate while showing the ordinary four-arrow Move cursor (#2871).
+fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::CursorIcon> {
+    let handles = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
+    let grab = crate::transform_tool::HANDLE_PX as f32;
+    for (i, handle) in handles.into_iter().enumerate() {
+        if handle.distance(p) <= grab {
+            return Some(match i {
+                0 | 4 => egui::CursorIcon::ResizeNwSe,
+                2 | 6 => egui::CursorIcon::ResizeNeSw,
+                1 | 5 => egui::CursorIcon::ResizeVertical,
+                _ => egui::CursorIcon::ResizeHorizontal,
+            });
+        }
+    }
+    (r.expand(18.0).contains(p) && !r.expand(5.0).contains(p)).then_some(egui::CursorIcon::Alias)
+}
+
 /// A visible handle starts scaling; the narrow band just outside the box starts rotation.
 /// The interior stays the normal Move-tool drag target.
 fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
-    let handles = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
-    let grab = crate::transform_tool::HANDLE_PX as f32;
-    handles.iter().any(|h| h.distance(p) <= grab) || (r.expand(18.0).contains(p) && !r.expand(5.0).contains(p))
+    transform_controls_cursor(r, p).is_some()
 }
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed.
@@ -6024,6 +6045,43 @@ mod transform_controls_tests {
         assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
         assert!(app.ui.transform.is_none());
         assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
+    }
+
+    #[test]
+    fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interaction() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_show_transform = true;
+        let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0 };
+
+        let r = transform_controls_rect(&app, &xf).expect("visible shape controls");
+        assert!(app.ui.transform.is_none(), "no transform session is needed for hover");
+        for (p, expected) in [
+            (r.left_top(), egui::CursorIcon::ResizeNwSe),
+            (r.right_bottom(), egui::CursorIcon::ResizeNwSe),
+            (r.right_top(), egui::CursorIcon::ResizeNeSw),
+            (r.left_bottom(), egui::CursorIcon::ResizeNeSw),
+            (r.center_top(), egui::CursorIcon::ResizeVertical),
+            (r.center_bottom(), egui::CursorIcon::ResizeVertical),
+            (r.right_center(), egui::CursorIcon::ResizeHorizontal),
+            (r.left_center(), egui::CursorIcon::ResizeHorizontal),
+            (pos2(r.center().x, r.top() - 12.0), egui::CursorIcon::Alias),
+        ] {
+            assert_eq!(transform_controls_cursor(r, p), Some(expected), "hover at {p:?}");
+            assert!(transform_controls_hit(r, p), "same region must start a transform");
+        }
+        assert_eq!(transform_controls_cursor(r, r.center()), None, "interior stays Move");
+        assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), None);
+
+        // Changing the active shape changes the hover bounds without requiring a drag first.
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [120, 100, 40, 50], "fill": "#00ff00"})).unwrap();
+        let next = transform_controls_rect(&app, &xf).expect("new active shape controls");
+        assert_ne!(r, next);
+        assert_eq!(transform_controls_cursor(next, next.right_bottom()), Some(egui::CursorIcon::ResizeNwSe));
+        assert_eq!(transform_controls_cursor(next, next.center()), None);
     }
 
     #[test]
