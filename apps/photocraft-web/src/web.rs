@@ -14,12 +14,12 @@ use wasm_bindgen::JsCast as _;
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
+/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
-    "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm",
+    "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco",
+    "ase", "af", "afdesign", "afphoto", "afpub",
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
 
@@ -424,6 +424,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
         Some("psd" | "psb") => "image/vnd.adobe.photoshop",
+        Some("ora") => "image/openraster",
         _ => "application/octet-stream",
     }
 }

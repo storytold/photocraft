@@ -987,7 +987,7 @@ impl PhotocraftApp {
         // Other files keep their format when writable, otherwise switch to .psd.
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
-            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
+            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "ora") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),

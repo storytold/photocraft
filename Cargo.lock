@@ -4438,6 +4438,7 @@ dependencies = [
  "photocraft-vector",
  "proptest",
  "resvg",
+ "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
 ]

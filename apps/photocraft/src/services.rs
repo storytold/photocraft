@@ -16,13 +16,13 @@ use std::sync::Arc;
 #[cfg(test)]
 mod recovery_tests;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
+/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
-    "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm",
+    "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco",
+    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
@@ -41,6 +41,7 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PSD Document", &["psd", "psb"]),
     ("PhotoCraft", &["pcraft"]),
+    ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg"]),
     ("WebP", &["webp"]),
@@ -91,6 +92,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 dialog
                     .add_filter("All Formats", &open_filter_extensions(OPEN_EXTS))
                     .add_filter("PhotoCraft", &open_filter_extensions(&["pcraft"]))
+                    .add_filter("OpenRaster", &open_filter_extensions(&["ora"]))
                     .add_filter("Paint.NET", &open_filter_extensions(&["pdn"]))
             };
             if multiple {
