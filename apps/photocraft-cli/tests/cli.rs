@@ -449,7 +449,9 @@ fn in_process_run_matches_binary() {
 
 #[test]
 fn mcp_stdio_handshake_and_tool_call() {
-    let mut child = bin().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    // The headless server is the default; an ambient PHOTOCRAFT_CONTROL_PORT (a running
+    // desktop app) would turn this child into a bridge, so the test pins the variable off.
+    let mut child = bin().arg("mcp").env("PHOTOCRAFT_CONTROL_PORT", "").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut send = |v: Value| {
