@@ -1137,9 +1137,14 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ui.horizontal(|ui| {
         label(ui, tl!("Preset:"));
         let mut picked = None;
-        egui::ComboBox::from_id_salt(cx.mem.with("gm-preset")).selected_text(tl!("Custom")).width(190.0).height(420.0).icon(widgets::chevron_icon).show_ui(
-            ui,
-            |ui| {
+        let (press, close) = crate::press_menu::PressCombo::before(ui, cx.mem.with("gm-preset"));
+        let combo = egui::ComboBox::from_id_salt(cx.mem.with("gm-preset"))
+            .selected_text(tl!("Custom"))
+            .width(190.0)
+            .height(420.0)
+            .icon(widgets::chevron_icon)
+            .close_behavior(close)
+            .show_ui(ui, |ui| {
                 for g in &cx.gradients {
                     ui.label(RichText::new(&g.name).color(t.text_faint));
                     for p in &g.items {
@@ -1149,14 +1154,15 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                             let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
                             crate::preset_panels::paint_gradient(ui, r, &rgba);
                             // Both, not short-circuited: the name is drawn either way.
-                            if swatch.clicked() | ui.selectable_label(false, &p.name).clicked() {
+                            let name = ui.selectable_label(false, &p.name);
+                            if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
                                 picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
                             }
                         });
                     }
                 }
-            },
-        );
+            });
+        press.after(&combo.response);
         if let Some(p) = picked {
             stops = p;
             write_stops(v, &stops);

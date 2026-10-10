@@ -265,14 +265,17 @@ fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[C
         }
         ui.separator();
         ui.label(tl!("Sort"));
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
+        let (press, close) = crate::press_menu::PressCombo::before(ui, "credits_sort");
+        let sort = egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).close_behavior(close).show_ui(ui, |ui| {
             for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, k.label().0).clicked() {
+                let item = ui.selectable_label(v.key == k, k.label().0);
+                if press.chosen(ui, &item) {
                     v.key = k;
                     v.ascending = k.default_ascending();
                 }
             }
         });
+        press.after(&sort.response);
         if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(tl!("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }

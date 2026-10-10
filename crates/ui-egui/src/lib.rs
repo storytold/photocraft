@@ -1966,6 +1966,9 @@ mod warp_text_dialog_tests;
 mod blend_dropdown_wheel_tests;
 
 #[cfg(test)]
+mod dropdown_press_tests;
+
+#[cfg(test)]
 mod marquee_tests;
 
 #[cfg(test)]
