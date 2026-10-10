@@ -329,6 +329,22 @@ fn mask_at(s: &Session, x: i32, y: i32) -> f32 {
     d.doc.layer(d.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0)
 }
 
+/// #2456: Edit > Fill (and the fill keys) fill the targeted mask of an adjustment layer.
+#[test]
+fn fill_works_on_an_adjustment_layers_mask() {
+    let mut s = session(8, "rgb");
+    s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let mask = json!({"target": "mask"});
+    assert!(!s.is_enabled("edit.fill"), "no pixels to fill without the mask target");
+    assert!(s.is_enabled_with("edit.fill", &mask));
+    assert!(s.is_enabled_with("edit.fillForeground", &mask));
+    s.execute("edit.fill", json!({"contents": "black", "target": "mask"})).unwrap();
+    assert_eq!(mask_at(&s, 3, 3), 0.0, "the mask is filled black");
+    s.execute("edit.fill", json!({"contents": "white", "target": "mask"})).unwrap();
+    assert_eq!(mask_at(&s, 3, 3), 1.0);
+}
+
 /// #780: with the layer mask targeted, Invert (⌘I) inverts the mask, past the canvas too, and
 /// leaves the layer's pixels alone; one history step.
 #[test]
