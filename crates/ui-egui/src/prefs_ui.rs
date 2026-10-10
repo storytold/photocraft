@@ -90,6 +90,7 @@ fn selected_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> 
             LightTheme::StudioLight => ThemeKind::StudioLight,
             LightTheme::Classic => ThemeKind::Classic,
             LightTheme::Adwaita => ThemeKind::Adwaita,
+            LightTheme::BreezeLight => ThemeKind::BreezeLight,
         }
     } else {
         match interface.dark_theme {
@@ -98,6 +99,7 @@ fn selected_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> 
             DarkTheme::Studio => ThemeKind::Studio,
             DarkTheme::SolarizedDark => ThemeKind::SolarizedDark,
             DarkTheme::AdwaitaDark => ThemeKind::AdwaitaDark,
+            DarkTheme::BreezeDark => ThemeKind::BreezeDark,
         }
     }
 }
@@ -1164,7 +1166,7 @@ fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut Strin
         .inner_margin(10.0)
         .show(ui, |ui| {
             ui.set_width(width - 20.0);
-            // Room for the longer list (five dark themes), so both cards line up.
+            // Room for the longer list (six dark themes), so both cards line up.
             ui.set_min_height(298.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tl!(title)).strong().color(t.text));
@@ -1207,7 +1209,12 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
                 "Light Theme",
                 light_active,
                 &mut light,
-                &[("studioLight", ThemeKind::StudioLight), ("classic", ThemeKind::Classic), ("adwaita", ThemeKind::Adwaita)],
+                &[
+                    ("studioLight", ThemeKind::StudioLight),
+                    ("classic", ThemeKind::Classic),
+                    ("adwaita", ThemeKind::Adwaita),
+                    ("breezeLight", ThemeKind::BreezeLight),
+                ],
                 width,
             );
         });
@@ -1224,6 +1231,7 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
                     ("studio", ThemeKind::Studio),
                     ("solarizedDark", ThemeKind::SolarizedDark),
                     ("adwaitaDark", ThemeKind::AdwaitaDark),
+                    ("breezeDark", ThemeKind::BreezeDark),
                 ],
                 width,
             );
@@ -1837,6 +1845,23 @@ mod tests {
         assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::Studio);
         interface.appearance_mode = AppearanceMode::Light;
         assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::Classic);
+    }
+
+    #[test]
+    fn breeze_themes_are_chosen_by_preference_and_fix_the_matching_mode() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for (id, kind, mode) in [("breezeLight", ThemeKind::BreezeLight, AppearanceMode::Light), ("breezeDark", ThemeKind::BreezeDark, AppearanceMode::Dark)] {
+            app.run("prefs.set", json!({"path": "interface.theme", "value": id})).unwrap();
+            tick(&mut app, &ctx);
+            let interface = app.session.prefs().interface.clone();
+            assert_eq!(interface.appearance_mode, mode, "{id}");
+            assert_eq!(selected_theme(&interface, None), kind, "{id}");
+            assert_eq!(app.ui.theme, kind, "{id}");
+        }
+        // The two slots are independent: choosing the dark one left the light choice alone.
+        assert_eq!(app.session.prefs().interface.light_theme, LightTheme::BreezeLight);
+        assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::BreezeDark);
     }
 
     #[test]

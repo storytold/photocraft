@@ -36,6 +36,7 @@ next to them.
 | `assets/app-icon/` (all files) | PhotoCraft app icon (nine-tailed kitsune) | The project owner (drawn in ArtCraft, vectorised) | Original work, see [`assets/app-icon/README.md`](assets/app-icon/README.md) | MIT OR Apache-2.0, [`assets/app-icon/LICENSE.txt`](assets/app-icon/LICENSE.txt) |
 | `packaging/macos/dmg/` (all files) | PhotoCraft DMG window background and layout | @XusBadia, from the PhotoCraft app icon | Original work, see [`packaging/macos/dmg/README.md`](packaging/macos/dmg/README.md) | MIT OR Apache-2.0, like the code |
 | `crates/ui-egui/src/theme.rs` (Solarized Dark palette) | Solarized colour scheme used by the Solarized Dark theme | Ethan Schoonover | <https://ethanschoonover.com/solarized/> | MIT, [`LICENSE-solarized.txt`](crates/ui-egui/src/LICENSE-solarized.txt) |
+| `crates/ui-egui/src/theme.rs` (Breeze Light and Breeze Dark themes) | The Breeze Light and Breeze Dark themes are original colour values on PhotoCraft's Studio layout, chosen to look close to KDE Plasma's Breeze (cool blue-greys, blue accent, 5 px frame radius) so the app blends into a Plasma desktop. None of Breeze's colour values, files or code are copied; the values are a few levels away from its schemes and tuned for text contrast | PhotoCraft contributors | Inspired by the look of KDE Breeze, <https://invent.kde.org/plasma/breeze> (its colour schemes are LGPL-2.0-or-later) | Original work |
 
 ### Optional build input: craft-fonts (not files in this repo)
 

@@ -9,6 +9,9 @@
 //!   with the rest of a GNOME desktop.
 //! - **Solarized Dark**: Ethan Schoonover's Solarized palette (base03/base02 surfaces, base0 text,
 //!   Solarized blue accent) with the Studio layout.
+//! - **Breeze** (Light and Dark): the Studio layout adapted to the look of KDE Plasma's Breeze
+//!   (blue-grey surfaces, Breeze blue accent, 5 px corners), so the app sits with the rest of a
+//!   Plasma desktop.
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
@@ -34,10 +37,14 @@ pub enum ThemeKind {
     /// Solarized Dark (Ethan Schoonover's palette): the base03 background, base02 panels and
     /// base0 body text, with the Solarized blue accent.
     SolarizedDark,
+    /// An adaptation of KDE Plasma's Breeze Light look.
+    BreezeLight,
+    /// An adaptation of KDE Plasma's Breeze Dark look.
+    BreezeDark,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 8] = [
+    pub const ALL: [ThemeKind; 10] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
         ThemeKind::Studio,
@@ -46,6 +53,8 @@ impl ThemeKind {
         ThemeKind::SolarizedDark,
         ThemeKind::Adwaita,
         ThemeKind::AdwaitaDark,
+        ThemeKind::BreezeLight,
+        ThemeKind::BreezeDark,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -57,6 +66,8 @@ impl ThemeKind {
             ThemeKind::Adwaita => "Adwaita (Light)",
             ThemeKind::AdwaitaDark => "Adwaita (Dark)",
             ThemeKind::SolarizedDark => "Solarized Dark",
+            ThemeKind::BreezeLight => "Breeze Light",
+            ThemeKind::BreezeDark => "Breeze Dark",
         }
     }
     /// The canonical name: `ui.set {theme}` accepts it and the Window › Theme commands are
@@ -71,6 +82,8 @@ impl ThemeKind {
             ThemeKind::Adwaita => "adwaita",
             ThemeKind::AdwaitaDark => "adwaitaDark",
             ThemeKind::SolarizedDark => "solarizedDark",
+            ThemeKind::BreezeLight => "breezeLight",
+            ThemeKind::BreezeDark => "breezeDark",
         }
     }
     pub fn next(self) -> Self {
@@ -87,6 +100,8 @@ impl ThemeKind {
             "adwaita" | "adwaitalight" | "gnome" | "gnomelight" => Some(ThemeKind::Adwaita),
             "adwaitadark" | "gnomedark" => Some(ThemeKind::AdwaitaDark),
             "solarizeddark" | "solarized" => Some(ThemeKind::SolarizedDark),
+            "breezelight" | "breeze" | "kde" | "kdelight" | "plasma" | "plasmalight" => Some(ThemeKind::BreezeLight),
+            "breezedark" | "kdedark" | "plasmadark" => Some(ThemeKind::BreezeDark),
             _ => None,
         }
     }
@@ -422,6 +437,102 @@ impl Tokens {
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
             },
+            // The light counterpart, adapted the same way: our own values, chosen a few levels
+            // from Breeze Light's surfaces so the app blends into a Plasma desktop without being a
+            // copy. Breeze's own inactive text and link blue are only about 2.8:1 on such
+            // surfaces, so the secondary and faint text, the accent and danger text and the status
+            // hues are darker to hold 4.5:1 (checked by the tests), and the primary button is a
+            // deeper blue that takes white text.
+            ThemeKind::BreezeLight => Tokens {
+                kind,
+                chrome: Color32::from_rgb(219, 222, 226),
+                canvas: Color32::from_rgb(219, 222, 226),
+                canvas_dot: Color32::from_rgb(219, 222, 226),
+                dock: Color32::from_rgb(224, 227, 231),
+                card: Color32::from_rgb(236, 238, 241),
+                card_border: Color32::from_rgb(203, 208, 213),
+                field: Color32::from_rgb(249, 250, 252),
+                field_border: Color32::from_rgb(184, 191, 198),
+                hover: Color32::from_rgb(226, 230, 235),
+                pressed: Color32::from_rgb(208, 214, 221),
+                text: Color32::from_rgb(33, 37, 42),
+                text_dim: Color32::from_rgb(54, 63, 72),
+                text_faint: Color32::from_rgb(81, 90, 100),
+                icon: Color32::from_rgb(52, 58, 64),
+                accent: Color32::from_rgb(58, 172, 232),
+                accent_soft: Color32::from_rgba_unmultiplied(58, 172, 232, 48),
+                accent_border: Color32::from_rgba_unmultiplied(58, 172, 232, 170),
+                accent_text: Color32::from_rgb(30, 94, 136),
+                separator: Color32::from_rgb(214, 218, 222),
+                shadow: Color32::from_black_alpha(45),
+                primary_bg: Color32::from_rgb(35, 122, 180),
+                primary_text: Color32::WHITE,
+                danger: Color32::from_rgb(170, 50, 64),
+                warning: Color32::from_rgb(153, 72, 0),
+                radius_sm: 5.0,
+                radius: 5.0,
+                radius_lg: 6.0,
+                bevel: false,
+                pro: false,
+                round_chips: true,
+                tab_strip: Color32::TRANSPARENT,
+                row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_rgb(33, 37, 42),
+                histogram_level: 240,
+                caption_close: Color32::from_rgb(213, 51, 60),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
+            },
+            // An adaptation of KDE Plasma's Breeze Dark look on the Studio layout, not a copy: our
+            // own values, chosen a few levels from Breeze Dark's surfaces (the darkest canvas, then
+            // the dock, the cards, and the chrome and controls) so the app blends into a Plasma
+            // desktop. Near-white text, the blue accent and the orange warning hue sit close to
+            // Breeze's, with its 5 px frame radius.
+            // Readability wins over fidelity: every text colour holds 4.5:1 on every surface and on
+            // the hover, pressed and selected states (checked by the tests), so the secondary and
+            // faint text, the accent and danger text and the status hues are lighter than Breeze's,
+            // hover and pressed are small steps, and the primary button is a deeper blue that takes
+            // white text. Outlines and those steps are our own tints.
+            ThemeKind::BreezeDark => Tokens {
+                kind,
+                chrome: Color32::from_rgb(38, 42, 48),
+                canvas: Color32::from_rgb(17, 20, 24),
+                canvas_dot: Color32::from_rgb(17, 20, 24),
+                dock: Color32::from_rgb(26, 29, 34),
+                card: Color32::from_rgb(29, 33, 38),
+                card_border: Color32::from_rgb(52, 56, 61),
+                field: Color32::from_rgb(38, 42, 48),
+                field_border: Color32::from_rgb(68, 73, 79),
+                hover: Color32::from_rgb(50, 54, 59),
+                pressed: Color32::from_rgb(58, 63, 69),
+                text: Color32::from_rgb(250, 251, 253),
+                text_dim: Color32::from_rgb(200, 206, 213),
+                text_faint: Color32::from_rgb(164, 170, 177),
+                icon: Color32::from_rgb(236, 238, 240),
+                accent: Color32::from_rgb(58, 172, 232),
+                accent_soft: Color32::from_rgba_unmultiplied(58, 172, 232, 40),
+                accent_border: Color32::from_rgba_unmultiplied(58, 172, 232, 160),
+                accent_text: Color32::from_rgb(80, 184, 238),
+                separator: Color32::from_rgb(46, 50, 54),
+                shadow: Color32::from_black_alpha(150),
+                primary_bg: Color32::from_rgb(30, 118, 176),
+                primary_text: Color32::WHITE,
+                danger: Color32::from_rgb(227, 111, 123),
+                warning: Color32::from_rgb(244, 120, 6),
+                radius_sm: 5.0,
+                radius: 5.0,
+                radius_lg: 6.0,
+                bevel: false,
+                pro: false,
+                round_chips: true,
+                tab_strip: Color32::TRANSPARENT,
+                row_selected: Color32::TRANSPARENT,
+                histogram_bg: Color32::from_rgb(17, 20, 24),
+                histogram_level: 225,
+                caption_close: Color32::from_rgb(213, 51, 60),
+                caption_close_text: Color32::WHITE,
+                scrim: Color32::from_black_alpha(110),
+            },
             // Ethan Schoonover's Solarized Dark palette: base03 canvas, base02 surfaces, base0
             // body text and the Solarized blue accent. https://ethanschoonover.com/solarized/
             // (MIT; see LICENSE-solarized.txt)
@@ -523,7 +634,10 @@ impl Tokens {
     }
 
     pub fn dark(&self) -> bool {
-        matches!(self.kind, ThemeKind::Studio | ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::SolarizedDark | ThemeKind::AdwaitaDark)
+        matches!(
+            self.kind,
+            ThemeKind::Studio | ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::SolarizedDark | ThemeKind::AdwaitaDark | ThemeKind::BreezeDark
+        )
     }
 }
 
@@ -933,6 +1047,68 @@ mod tests {
             assert!(contrast(t.primary_text, t.primary_bg) >= 3.0, "{kind:?}: suggested-action button label");
         }
         assert_eq!(ThemeKind::from_name("gnome dark"), Some(ThemeKind::AdwaitaDark));
+    }
+
+    #[test]
+    fn breeze_themes_parse_and_meet_text_contrast() {
+        for (kind, aliases) in [
+            (ThemeKind::BreezeLight, ["breeze", "Breeze Light", "breeze_light", "kde", "plasma"]),
+            (ThemeKind::BreezeDark, ["breeze dark", "Breeze Dark", "breeze_dark", "kde dark", "plasma-dark"]),
+        ] {
+            assert_eq!(ThemeKind::from_name(kind.id()), Some(kind));
+            assert_eq!(ThemeKind::from_name(kind.label()), Some(kind));
+            for alias in aliases {
+                assert_eq!(ThemeKind::from_name(alias), Some(kind), "{alias}");
+            }
+            assert!(ThemeKind::ALL.contains(&kind));
+            let t = Tokens::for_kind(kind);
+            assert_eq!(t.kind, kind);
+            assert_eq!(t.dark(), kind == ThemeKind::BreezeDark);
+            assert!(!t.pro && !t.bevel, "{kind:?} uses the Studio layout");
+            // The design intent, not exact values (the palette is an adaptation and may be tuned):
+            // the canvas is the most recessed surface, then the dock and the cards, and controls
+            // sit above the cards they are on; the accent is a blue.
+            let lum = |c: Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
+            assert!(lum(t.canvas) < lum(t.dock) && lum(t.dock) < lum(t.card) && lum(t.card) < lum(t.field), "{kind:?}: surface order");
+            assert!(t.accent.b() > t.accent.g() && t.accent.g() > t.accent.r(), "blue accent: {:?}", t.accent);
+            // Plasma's surfaces are cool blue-greys: dark ones stay below 64 per channel and light
+            // ones above 205, all with a little more blue than red (our own values, close to it).
+            for c in [t.chrome, t.canvas, t.dock, t.card, t.field] {
+                assert!(if t.dark() { c.r().max(c.g()).max(c.b()) < 64 } else { c.r().min(c.g()).min(c.b()) > 205 }, "{kind:?}: {c:?}");
+                assert!(c.b() > c.r(), "{kind:?}: blue-grey {c:?}");
+            }
+            // All text must read: AA (4.5:1) for every text colour on every surface it can sit on,
+            // including a hovered or pressed control and a selected (accent-tinted) row.
+            let tint = |under: Color32| {
+                let k = f32::from(t.accent_soft.a()) / 255.0;
+                let ch = |over: u8, under: u8| (f32::from(over) * k + f32::from(under) * (1.0 - k)).round() as u8;
+                Color32::from_rgb(ch(t.accent.r(), under.r()), ch(t.accent.g(), under.g()), ch(t.accent.b(), under.b()))
+            };
+            let resting = [t.chrome, t.canvas, t.dock, t.card, t.field];
+            let active = [t.hover, t.pressed, tint(t.chrome), tint(t.dock), tint(t.card), tint(t.field)];
+            for surface in resting.into_iter().chain(active) {
+                for (name, colour) in [("text", t.text), ("dim text", t.text_dim), ("faint text", t.text_faint), ("accent text", t.accent_text)] {
+                    assert!(contrast(colour, surface) >= 4.5, "{kind:?}: {name} on {surface:?}");
+                }
+            }
+            // The text must also keep a hierarchy, not collapse into one grey.
+            assert!(contrast(t.text, t.card) > contrast(t.text_dim, t.card) && contrast(t.text_dim, t.card) > contrast(t.text_faint, t.card), "{kind:?}");
+            // Danger and warning colours carry text on the resting surfaces; on hovered, pressed and
+            // selected ones they are status marks, held to the 3:1 of graphical objects.
+            for surface in resting {
+                assert!(contrast(t.danger, surface) >= 4.5, "{kind:?}: danger on {surface:?}");
+                assert!(contrast(t.warning, surface) >= 4.5, "{kind:?}: warning on {surface:?}");
+            }
+            for surface in active {
+                assert!(contrast(t.danger, surface) >= 3.0, "{kind:?}: danger on {surface:?}");
+                assert!(contrast(t.warning, surface) >= 3.0, "{kind:?}: warning on {surface:?}");
+            }
+            // A primary button darkens while hovered and pressed (button_impl), so check all three.
+            for k in [1.0, 0.93, 0.85] {
+                assert!(contrast(t.primary_text, t.primary_bg.gamma_multiply(k)) >= 4.5, "{kind:?}: primary button label at {k}");
+            }
+            assert!(contrast(t.caption_close_text, t.caption_close) >= 4.5, "{kind:?}: close button glyph");
+        }
     }
 }
 
