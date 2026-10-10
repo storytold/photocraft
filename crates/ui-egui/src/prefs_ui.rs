@@ -970,13 +970,10 @@ fn color_of(s: &str) -> Color32 {
     prefs::parse_hex(s).map_or(Color32::GRAY, |c| Color32::from_rgb(c[0], c[1], c[2]))
 }
 
-
-/** Search the same visible, editable preference labels used in the dialog. */
+/// Search the same visible, editable preference labels used in the dialog.
 fn preference_matches(section: &str, key: &str, query: &str) -> bool {
     let label = humanize(key);
-    format!("{section}.{key}").to_lowercase().contains(query)
-        || label.to_lowercase().contains(query)
-        || tl!(&label).to_lowercase().contains(query)
+    format!("{section}.{key}").to_lowercase().contains(query) || label.to_lowercase().contains(query) || tl!(&label).to_lowercase().contains(query)
 }
 
 fn preference_sections(values: &Value, search: &str) -> Vec<(&'static str, &'static str)> {
@@ -988,12 +985,10 @@ fn preference_sections(values: &Value, search: &str) -> Vec<(&'static str, &'sta
             query.is_empty()
                 || title.to_lowercase().contains(&query)
                 || tl!(title).to_lowercase().contains(&query)
-                || values.get(*id).and_then(Value::as_object).is_some_and(|fields| {
-                    fields.keys().any(|key| {
-                        !prefs::is_hidden(&format!("{id}.{key}"))
-                            && preference_matches(id, key, &query)
-                    })
-                })
+                || values
+                    .get(*id)
+                    .and_then(Value::as_object)
+                    .is_some_and(|fields| fields.keys().any(|key| !prefs::is_hidden(&format!("{id}.{key}")) && preference_matches(id, key, &query)))
         })
         .collect()
 }
@@ -1006,7 +1001,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     // The dialog follows the language being edited, so a change shows before OK.
     let lang = crate::i18n::Lang::from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto"));
     let mut search = f.get("__search").and_then(Value::as_str).unwrap_or("").to_string();
-    ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search settings…").desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(&mut search).hint_text(tl!("Search settings…")).desired_width(f32::INFINITY));
     let found = preference_sections(&values, &search);
     if !found.iter().any(|(id, _)| *id == section)
         && let Some((first, _)) = found.first()
@@ -1019,7 +1014,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
         ui.vertical(|ui| {
             ui.set_width(170.0);
             if found.is_empty() {
-                ui.label(RichText::new("No matching settings").color(t.text_dim));
+                ui.label(RichText::new(tl!("No matching settings")).color(t.text_dim));
             }
             for &(id, title) in &found {
                 let sel = section == id;
@@ -1295,10 +1290,19 @@ fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
 
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
 /// number fields with the preference's range, text fields.
-fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>, search: &str) {
+fn section_fields(
+    ui: &mut egui::Ui,
+    section: &str,
+    obj: &mut Map<String, Value>,
+    order: &[String],
+    lang: crate::i18n::Lang,
+    system: Option<egui::Theme>,
+    search: &str,
+) {
     let t = Tokens::get(ui.ctx());
     let query = search.to_lowercase();
-    if section == "interface" && (query.is_empty() || ["appearanceMode", "darkTheme", "lightTheme"].iter().any(|key| preference_matches(section, key, &query))) {
+    if section == "interface" && (query.is_empty() || ["appearanceMode", "darkTheme", "lightTheme"].iter().any(|key| preference_matches(section, key, &query)))
+    {
         appearance_rows(ui, obj, system);
     }
     if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", &query)) {
@@ -1880,9 +1884,7 @@ mod tests {
     #[test]
     fn preferences_search_matches_editable_fields_across_sections() {
         let values = prefs::Preferences::default().to_json();
-        let contains = |needle: &str, section: &str| {
-            preference_sections(&values, needle).iter().any(|(id, _)| *id == section)
-        };
+        let contains = |needle: &str, section: &str| preference_sections(&values, needle).iter().any(|(id, _)| *id == section);
         assert!(contains("UI Scale", "interface"));
         assert!(contains("font", "type"));
         assert!(contains("performance", "performance"));
