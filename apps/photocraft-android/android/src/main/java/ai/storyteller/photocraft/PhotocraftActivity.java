@@ -79,8 +79,10 @@ public final class PhotocraftActivity extends NativeActivity {
 
     private void emit(MotionEvent event, int pointer, int historyIndex) {
         int toolType = event.getToolType(pointer);
-        boolean eraser = toolType == MotionEvent.TOOL_TYPE_ERASER
-                || (event.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
+        // The S Pen side button is not the inverted eraser end. Android
+        // reports an actual eraser with TOOL_TYPE_ERASER; using the primary
+        // stylus button here unexpectedly changed Brush into Eraser.
+        boolean eraser = toolType == MotionEvent.TOOL_TYPE_ERASER;
         float pressure;
         float tilt;
         float orientation;
