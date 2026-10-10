@@ -2,7 +2,7 @@
 //! Sony compressed ARW (cRAW), Panasonic RW2 (RawFormat 5) and uncompressed
 //! Olympus ORF (with its maker-note preview).
 
-use photocraft_raw::testgen::{craw_block, mosaic, orf, orf_padded12, rw2, rw2_format4, scene, sony_craw};
+use photocraft_raw::testgen::{craw_block, mosaic, orf, orf_padded12, orf_two_field12, orf_word_packed12, rw2, rw2_format4, scene, sony_craw};
 use photocraft_raw::*;
 
 const CURVE: [u16; 4] = [8000, 10400, 12900, 14100];
@@ -365,6 +365,7 @@ fn orf_padded12_requires_the_exact_storage_layout() {
     let bytes = orf_padded12(20, 8, &vec![1234; 160]);
     let mut exact12 = bytes.clone();
     orf_set_u32(&mut exact12, 279, 160 * 12 / 8);
+    patch_ifd0_short(&mut exact12, 258, 16); // The word-packed variant requires a 12-bit declaration.
     assert!(matches!(decode(&exact12, &Limits::default()), Err(RawError::Unsupported(_))));
     // Keep the total pixel count and strip size, but make each row end inside a block.
     let mut partial_row = bytes.clone();
@@ -435,4 +436,109 @@ fn orf_padded12_rejects_damaged_payload_and_obeys_limits() {
     for limits in [Limits { max_pixels: 159, ..Limits::default() }, Limits { max_alloc: 319, ..Limits::default() }] {
         assert!(matches!(decode(&bytes, &limits), Err(RawError::LimitExceeded(_))));
     }
+}
+
+#[test]
+fn orf_two_field12_reconstructs_rows_and_reads_old_white_balance() {
+    let (width, height) = (8, 5);
+    let mut samples: Vec<u16> = (0..width * height).map(|i| ((i * 0x123) & 4095) as u16).collect();
+    samples[0] = 0;
+    samples[1] = 4095;
+    let bytes = orf_two_field12(width, height, &samples);
+    let sensor = decode(&bytes, &Limits::default()).unwrap();
+    assert_eq!((sensor.width, sensor.height), (width, height));
+    assert_eq!(sensor.data, samples, "even and odd stored fields must interleave");
+    assert_eq!(sensor.cfa.as_ref().unwrap().phase(0, 0), [2, 1, 1, 0]);
+    assert_eq!(sensor.camera_wb, Some([2.0, 1.0, 1.5]), "first gain values divided by 256");
+    assert_eq!(sensor.black.values, vec![0.0]);
+    // No ValidBits tag: the existing plateau heuristic reserves 0.5% below this fixture's maximum.
+    assert_eq!(sensor.white, [4095.0 * 0.995; 3]);
+    assert_eq!(sensor.crop, Rect::new(0, 0, width, height), "no crop location is guessed");
+    assert!(develop_sensor(&sensor, &DevelopOptions::default()).is_ok());
+}
+
+fn orf_array_value(bytes: &[u8], tag: u16, index: usize) -> u32 {
+    let at = orf_inline_u32(bytes, tag) as usize + 4 * index;
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+}
+
+fn orf_set_array_value(bytes: &mut [u8], tag: u16, index: usize, value: u32) {
+    let at = orf_inline_u32(bytes, tag) as usize + 4 * index;
+    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+#[test]
+fn orf_two_field12_requires_the_observed_field_seam() {
+    let bytes = orf_two_field12(8, 5, &[1234; 40]);
+    let offsets: Vec<u32> = (0..5).map(|i| orf_array_value(&bytes, 273, i)).collect();
+    for (index, offset) in [
+        (1, offsets[0]),      // overlapping strips
+        (2, offsets[2] + 4),  // gap before the last even row
+        (3, offsets[3] - 20), // no gap at the field seam
+        (4, offsets[4] + 4),  // a second gap
+    ] {
+        let mut changed = bytes.clone();
+        orf_set_array_value(&mut changed, 273, index, offset);
+        assert!(matches!(decode(&changed, &Limits::default()), Err(RawError::Unsupported(_))));
+    }
+    let mut partial_rows = bytes.clone();
+    orf_set_array_value(&mut partial_rows, 279, 0, 13);
+    orf_set_array_value(&mut partial_rows, 279, 4, 11);
+    assert!(matches!(decode(&partial_rows, &Limits::default()), Err(RawError::Unsupported(_))));
+    // Same pixel count, but these dimensions are not the observed even-width/odd-height shape.
+    for (width, height) in [(10, 4), (5, 8)] {
+        let mut changed = bytes.clone();
+        orf_set_u32(&mut changed, 256, width);
+        orf_set_u32(&mut changed, 257, height);
+        assert!(matches!(decode(&changed, &Limits::default()), Err(RawError::Unsupported(_))));
+    }
+}
+
+#[test]
+fn orf_two_field12_checks_declared_and_hidden_rows_and_limits() {
+    let bytes = orf_two_field12(8, 5, &[1234; 40]);
+    let last = orf_array_value(&bytes, 273, 4) as usize;
+    for cut in [last + 11, last + 12, last + 23] {
+        assert!(matches!(decode(&bytes[..cut], &Limits::default()), Err(RawError::Malformed(_))));
+    }
+    for limits in [Limits { max_pixels: 39, ..Limits::default() }, Limits { max_alloc: 79, ..Limits::default() }] {
+        assert!(matches!(decode(&bytes, &limits), Err(RawError::LimitExceeded(_))));
+    }
+}
+
+#[test]
+fn orf_word_packed12_round_trip_crosses_words_and_rows() {
+    let (width, height) = (16, 8);
+    let mut samples: Vec<u16> = (0..width * height).map(|i| ((i * 0x123) & 4095) as u16).collect();
+    samples[..3].copy_from_slice(&[0, 4095, 0x123]);
+    let bytes = orf_word_packed12(width, height, &samples);
+    let raw = orf_inline_u32(&bytes, 273) as usize;
+    assert_eq!(&bytes[raw..raw + 4], &[0x12, 0xff, 0x0f, 0]);
+    let sensor = decode(&bytes, &Limits::default()).unwrap();
+    assert_eq!(sensor.data, samples);
+    assert_eq!((sensor.width, sensor.height), (width, height));
+    assert_eq!(sensor.cfa.as_ref().unwrap().phase(0, 0), [1, 0, 2, 1]);
+    assert_eq!(sensor.black.values, vec![64.0; 4]);
+    assert_eq!(sensor.white, [4095.0; 3]);
+    assert_eq!(sensor.camera_wb, Some([2.0, 1.0, 1.5]));
+    assert_eq!(sensor.crop, Rect::new(2, 2, width - 4, height - 4));
+    assert!(develop_sensor(&sensor, &DevelopOptions::default()).is_ok());
+    assert!(matches!(decode(&bytes[..raw + width * height * 3 / 2 - 1], &Limits::default()), Err(RawError::Malformed(_))));
+    for limits in [Limits { max_pixels: 127, ..Limits::default() }, Limits { max_alloc: 255, ..Limits::default() }] {
+        assert!(matches!(decode(&bytes, &limits), Err(RawError::LimitExceeded(_))));
+    }
+}
+
+#[test]
+fn orf_word_packed12_requires_whole_word_rows_and_a_12_bit_declaration() {
+    let bytes = orf_word_packed12(16, 8, &[1234; 128]);
+    for (tag, value) in [(258, 16), (277, 2), (259, 7)] {
+        let mut changed = bytes.clone();
+        patch_ifd0_short(&mut changed, tag, value);
+        assert!(matches!(decode(&changed, &Limits::default()), Err(RawError::Unsupported(_))));
+    }
+    let mut partial_words = bytes;
+    orf_set_u32(&mut partial_words, 256, 4);
+    orf_set_u32(&mut partial_words, 257, 32);
+    assert!(matches!(decode(&partial_words, &Limits::default()), Err(RawError::Unsupported(_))));
 }

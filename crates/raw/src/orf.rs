@@ -3,9 +3,11 @@
 //!
 //! The container is TIFF with an `IIRO` / `IIRS` / `MMOR` header; the sensor
 //! data is IFD0's strips, either 16-bit samples whose top ValidBits bits are
-//! significant or ten little-endian 12-bit samples followed by one zero byte
-//! per 16-byte block. The latter layout is described in LightCraft PR #651
-//! and independently checked here against CC0 camera files. The CFA
+//! significant, ten little-endian 12-bit samples followed by one zero byte
+//! per 16-byte block, 12-bit samples in little-endian 32-bit words (XZ-2),
+//! or two fields of MSB-first 12-bit samples separated by a gap.
+//! The packed layouts are described in LightCraft PRs #651 / #600 and
+//! independently checked here against CC0 camera files. The CFA
 //! comes from the EXIF CFAPattern. Levels come from the publicly documented
 //! Olympus maker-note ImageProcessing tags (ExifTool's Olympus table):
 //! WB_RBLevels (0x0100), WB_GLevel (0x011F), BlackLevel2 (0x0600), ValidBits
@@ -29,11 +31,10 @@ const BLACK_LEVEL_2: u16 = 0x0600;
 const VALID_BITS: u16 = 0x0611;
 const CROP: [u16; 4] = [0x0612, 0x0613, 0x0614, 0x0615];
 
-/// A sub-IFD of the Olympus maker note (`sub`: 0x2020 CameraSettings, 0x2040
-/// ImageProcessing…), with the TIFF view its offsets are relative to and that
+/// The Olympus maker note, the TIFF view its offsets are relative to and that
 /// view's absolute position in the file. New-style notes (`OLYMPUS\0` + byte
 /// order) are relative to the note; old-style ones (`OLYMP\0`) to the file.
-fn maker_subifd<'a>(t: &Tiff<'a>, ifds: &[Ifd], sub: u16) -> Option<(Tiff<'a>, Ifd, usize)> {
+fn maker_note<'a>(t: &Tiff<'a>, ifds: &[Ifd]) -> Option<(Tiff<'a>, Ifd, usize)> {
     let e = ifds.iter().find_map(|i| i.get(tag::MAKER_NOTE).copied())?;
     let head = t.bytes(e.at, 12)?;
     let (view, main, base) = if head.starts_with(b"OLYMPUS\0") {
@@ -50,6 +51,11 @@ fn maker_subifd<'a>(t: &Tiff<'a>, ifds: &[Ifd], sub: u16) -> Option<(Tiff<'a>, I
     } else {
         return None;
     };
+    Some((view, main, base))
+}
+
+fn maker_subifd<'a>(t: &Tiff<'a>, ifds: &[Ifd], sub: u16) -> Option<(Tiff<'a>, Ifd, usize)> {
+    let (view, main, base) = maker_note(t, ifds)?;
     let ip = main.get(sub)?;
     let at = match ip.typ {
         4 | 13 => view.uint(ip, 0)? as usize,
@@ -85,8 +91,14 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         return Err(RawError::unsupported("Olympus compressed (or packed) ORF is not decoded"));
     }
     let padded_len = (width / 10).checked_mul(height).and_then(|blocks| blocks.checked_mul(16));
+    let packed_len = width.checked_mul(height).and_then(|pixels| pixels.checked_mul(3)).map(|bytes| bytes / 2);
+    let two_field = t.le && width > 0 && width.is_multiple_of(2) && counts.len() > 1 && packed_len == Some(stored);
     let plane = if t.le && width > 0 && width.is_multiple_of(10) && counts.len() == 1 && padded_len == Some(stored) {
         read_padded12(t, &raw, limits, width, height, stored)?
+    } else if t.le && width > 0 && width.is_multiple_of(8) && counts.len() == 1 && packed_len == Some(stored) {
+        read_word_packed12(t, &raw, limits, width, height, stored)?
+    } else if two_field {
+        read_two_field12(t, &raw, limits, width, height, &counts)?
     } else {
         if stored < width.saturating_mul(height).saturating_mul(2) {
             return Err(RawError::unsupported("Olympus compressed (or packed) ORF is not decoded"));
@@ -131,7 +143,14 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let camera_wb = match floats(WB_RB_LEVELS).as_slice() {
         [r, b, ..] => Some([r / g, 1.0, b / g]).filter(|m| m.iter().all(|v| (0.25..8.0).contains(v))),
         _ => None,
-    };
+    }
+    .or_else(|| {
+        // These older two-field files put as-shot gains directly in the maker note.
+        let (v, note, _) = two_field.then(|| maker_note(t, &ifds)).flatten()?;
+        let r = v.tag_floats(&note, 0x1017).first().copied()? / 256.0;
+        let b = v.tag_floats(&note, 0x1018).first().copied()? / 256.0;
+        Some([r, 1.0, b]).filter(|m| m.iter().all(|v| (0.25..8.0).contains(v)))
+    });
     let crop = match CROP.map(|tg| floats(tg).first().copied()) {
         [Some(x), Some(y), Some(w), Some(h)] if [x, y, w, h].iter().all(|v| (0.0..1e6).contains(v)) => {
             let r = Rect::new(x as usize, y as usize, w as usize, h as usize).intersect(&full);
@@ -190,6 +209,109 @@ fn read_padded12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: u64, 
             data.push(u16::from(a) | (u16::from(b & 0x0f) << 8));
             data.push(u16::from(b >> 4) | (u16::from(c) << 4));
         }
+    }
+    Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data })
+}
+
+/// The two-field layout observed in old Olympus compacts and described in
+/// LightCraft PR #600: MSB-first sample pairs, a gap between the even/odd row
+/// fields, and one undeclared row immediately after the last strip.
+fn read_two_field12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: u64, counts: &[u32]) -> Result<Plane> {
+    let unsupported = || RawError::unsupported("Olympus packed ORF does not match the two-field layout");
+    if height.is_multiple_of(2)
+        || t.tag_uint(raw, tag::BITS_PER_SAMPLE) != Some(12)
+        || t.tag_uint(raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1) != 1
+        || t.tag_uint(raw, tag::SAMPLE_FORMAT).unwrap_or(1) != 1
+    {
+        return Err(unsupported());
+    }
+    limits.check(width, height, 2)?;
+    let width = width as usize;
+    let height = height as usize;
+    let row_bytes = width.checked_mul(3).ok_or_else(unsupported)? / 2;
+    let offsets = t.tag_uints(raw, tag::STRIP_OFFSETS);
+    if offsets.len() != counts.len() {
+        return Err(unsupported());
+    }
+    let field_rows = height.div_ceil(2);
+    let mut rows = 0usize;
+    let mut end = None;
+    let mut gap = false;
+    for (&offset, &count) in offsets.iter().zip(counts) {
+        let offset = offset as usize;
+        let count = count as usize;
+        if count == 0 || !count.is_multiple_of(row_bytes) {
+            return Err(unsupported());
+        }
+        if let Some(previous_end) = end {
+            if offset < previous_end {
+                return Err(unsupported());
+            }
+            if offset != previous_end {
+                if gap || rows != field_rows {
+                    return Err(unsupported());
+                }
+                gap = true;
+            }
+        }
+        end = offset.checked_add(count);
+        if end.is_none() {
+            return Err(unsupported());
+        }
+        t.bytes(offset, count).ok_or_else(|| RawError::malformed("ORF two-field strip truncated"))?;
+        rows = rows.checked_add(count / row_bytes).ok_or_else(unsupported)?;
+    }
+    if !gap || rows != height {
+        return Err(unsupported());
+    }
+    // The omitted last row belongs just below the declared image. Its existence
+    // identifies this layout; it must not be appended to the visible image.
+    t.bytes(end.ok_or_else(unsupported)?, row_bytes).ok_or_else(|| RawError::malformed("ORF two-field final row truncated"))?;
+    let mut data = vec![0u16; width * height];
+    let mut stored_row = 0usize;
+    for (&offset, &count) in offsets.iter().zip(counts) {
+        let bytes = t.bytes(offset as usize, count as usize).ok_or_else(|| RawError::malformed("ORF two-field strip truncated"))?;
+        for row in bytes.chunks_exact(row_bytes) {
+            let y = if stored_row < field_rows { stored_row * 2 } else { (stored_row - field_rows) * 2 + 1 };
+            let start = y.checked_mul(width).ok_or_else(unsupported)?;
+            let output = data.get_mut(start..start.checked_add(width).ok_or_else(unsupported)?).ok_or_else(unsupported)?;
+            for ([first, second], &[a, b, c]) in output.as_chunks_mut::<2>().0.iter_mut().zip(row.as_chunks::<3>().0) {
+                *first = (u16::from(a) << 4) | u16::from(b >> 4);
+                *second = (u16::from(b & 15) << 8) | u16::from(c);
+            }
+            stored_row += 1;
+        }
+    }
+    Ok(Plane { width, height, samples: 1, bits: 12, data })
+}
+
+/// XZ-2: one exact 12-bit strip, MSB-first samples in little-endian 32-bit words.
+/// Observed directly on the CC0 sample; whole-word rows avoid guessing padding.
+fn read_word_packed12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: u64, stored: u64) -> Result<Plane> {
+    let offsets = t.tag_uints(raw, tag::STRIP_OFFSETS);
+    let [offset] = offsets.as_slice() else {
+        return Err(RawError::unsupported("ORF word-packed 12-bit storage requires one strip"));
+    };
+    if t.tag_uint(raw, tag::BITS_PER_SAMPLE) != Some(12)
+        || t.tag_uint(raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1) != 1
+        || t.tag_uint(raw, tag::SAMPLE_FORMAT).unwrap_or(1) != 1
+    {
+        return Err(RawError::unsupported("ORF word-packed storage requires unsigned 12-bit samples"));
+    }
+    limits.check(width, height, 2)?;
+    let len = usize::try_from(stored).map_err(|_| RawError::malformed("ORF strip size overflow"))?;
+    let bytes = t.bytes(*offset as usize, len).ok_or_else(|| RawError::malformed("ORF word-packed strip truncated"))?;
+    let mut data = Vec::with_capacity(width as usize * height as usize);
+    let mut buffer = 0u64;
+    let mut bits = 0u32;
+    for &word in bytes.as_chunks::<4>().0 {
+        buffer = (buffer << 32) | u64::from(u32::from_le_bytes(word));
+        bits += 32;
+        while bits >= 12 {
+            bits -= 12;
+            data.push(((buffer >> bits) & 4095) as u16);
+        }
+        buffer &= (1u64 << bits) - 1;
     }
     Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data })
 }
