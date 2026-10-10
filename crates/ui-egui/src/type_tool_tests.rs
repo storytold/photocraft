@@ -485,6 +485,24 @@ fn command_t_while_typing_toggles_the_character_panel() {
     assert_ne!(crate::view_cmds::checked(h.state(), "window.panel.character"), before, "the Character panel toggled");
 }
 
+/// #1881: Tab while typing inserts a tab character (laid out to the next tab stop), as in
+/// Photoshop, instead of moving keyboard focus or hiding the panels.
+#[test]
+fn tab_while_typing_inserts_a_tab() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHO", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = harness(1.0, app);
+    let p = glyph(&mut h, id, 1, 0.2);
+    click(&mut h, p);
+    assert_eq!(selection(&h), (1, 1));
+    let panels = h.state().ui.panels.dock;
+    key(&mut h, egui::Key::Tab);
+    assert_eq!(text(h.state(), id).text, "H\tOHO");
+    assert_eq!(selection(&h), (2, 2));
+    assert!(h.state().ui.text_edit.is_some(), "still editing");
+    assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
+}
+
 #[test]
 fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     let mut app = new_app();
