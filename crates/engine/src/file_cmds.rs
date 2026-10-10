@@ -772,22 +772,38 @@ impl OutputClaims {
 
 fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let steps =
+    let mut steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    // Each result goes to the destination folder, which overrides the action's recorded Save /
+    // Save As steps (Photoshop's "Override Action 'Save As' Commands").
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id));
     if let Some((id, _)) = steps.iter().find(|(id, _)| crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
     let inputs = batch_inputs(p, cmd)?;
     let output = str_param(p, "output", cmd)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
+    // Steps that call another action play it from the caller's actions; the playback stack comes
+    // along so an action that batches itself is caught as a recursive call.
+    let actions = crate::actions_cmds::ActionState {
+        list: s.actions.list.clone(),
+        playing: s.actions.playing,
+        playback_stack: s.actions.playback_stack.clone(),
+        ..Default::default()
+    };
     let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
+        scratch.actions = actions.clone();
         // Reuse a host-granted backend (and its resident model) across inputs. A default or
         // untrusted session still has no model-cache capability; nested steps retain its gate.
         scratch.model_backend = s.model_backend.clone();
         scratch.authorize = s.authorize;
         scratch.edit_prefs(|p| p.integrations = s.prefs().integrations.clone());
         for (id, params) in &steps {
-            scratch.execute(id, params.clone())?;
+            let r = scratch.execute(id, params.clone())?;
+            // A failed step inside a called action makes this file an error, not a saved result.
+            if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
+                return Err(EngineError::Other(error));
+            }
         }
         Ok(())
     });
@@ -845,10 +861,10 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let n = stack.layers.len();
     if p.get("createSmartObject").and_then(Value::as_bool).unwrap_or(false) {
         // "Create Smart Object after Loading Layers": the layers go inside one smart object, ready
-        // for Layer › Smart Objects › Stack Mode.
-        let children = std::mem::take(&mut stack.layers);
-        let group = Layer::new(stem(&paths[0]), LayerContent::Group(photocraft_doc::Group { children, expanded: true, artboard: None }));
-        let smart = crate::smart_cmds::layer_to_smart(&stack, &group)?;
+        // for Layer › Smart Objects › Stack Mode. Like Photoshop, they sit at the top level of the
+        // contents, with no wrapper group.
+        let layers = std::mem::take(&mut stack.layers);
+        let smart = crate::smart_cmds::layers_to_smart(&stack, &stem(&paths[0]), layers)?;
         stack.layers = vec![smart];
     }
     let i = s.add_document(stack, None);

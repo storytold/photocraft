@@ -474,11 +474,23 @@ mod tests {
         let result = s.execute("file.automate.runDroplet", json!({"droplet":droplet,"input":[input],"output":output})).unwrap();
         assert_eq!(result["errors"], json!([]));
         assert_eq!(fake.calls.lock().unwrap().len(), 1);
+        // Current upstream supports called actions in batch. Keep that action list alongside
+        // the host-granted backend and method preference; losing either breaks this call.
+        s.actions.list.push(crate::actions_cmds::Action { name: "Models".into(), steps: vec![("select.subject".into(), json!({}))] });
+        let called_action = json!({"steps":[["actions.play",{"action":"Models"}]],"input":[input],"output":output});
+        let result = s.execute("file.automate.batch", called_action.clone()).unwrap();
+        assert_eq!(result["errors"], json!([]), "{result}");
+        assert_eq!(result["files"].as_array().unwrap().len(), 1);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
         s.model_backend = None;
+        let result = s.execute("file.automate.batch", called_action).unwrap();
+        assert_eq!(result["files"], json!([]), "a called action cannot grant a model backend");
+        assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
         let result =
             s.execute("file.automate.batch", json!({"steps":[["select.subject",{"model":"birefnet-hr-matting"}]],"input":[input],"output":output})).unwrap();
         assert_eq!(result["errors"].as_array().unwrap().len(), 1);
-        assert_eq!(fake.calls.lock().unwrap().len(), 1);
+        assert_eq!(fake.calls.lock().unwrap().len(), 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

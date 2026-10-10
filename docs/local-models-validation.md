@@ -6,6 +6,19 @@ are included in this repository. The integration/performance checks below are su
 fixed 22-case evaluation. Its 20 labelled COCO targets are exploratory evidence, not a representative
 or held-out benchmark, a soft-alpha matting assessment, or evidence of a universal winner.
 
+## CI follow-up: 2026-10-11
+
+Integrated upstream `6ff2a03f33dbe84e726e9cc0c31787de8f91f50b`, including its
+platform-independent save-dialog regression fix. The batch merge keeps upstream's called-action
+state and nested-error handling alongside the explicit model backend, authorization and method
+preferences. The extended batch regression verifies model inference inside a called action and
+rejects the same call when the host has not granted a backend.
+
+Full native suites with the optional backend and HEIF passed on macOS: 1,179 engine / 1,733 UI /
+52 automation / 12 ML unit tests, plus CLI and integration tests (11 / 10 / 0 / 1 ignored).
+The extended batch regression also passed. Final lint/platform results are linked from the PR;
+this follow-up does not rerun or change the historical accuracy/performance evaluation.
+
 ## Review update: 2026-10-10
 
 Rebased on upstream 0.6.0 (`ab76c242a1225efc680dc88bd761cc202e1e29df`). The optional model

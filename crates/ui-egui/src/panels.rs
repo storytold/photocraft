@@ -859,7 +859,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "circle-dot", 24.0, b.pressure_size, tl!("Always use pressure for size")).clicked() {
                             b.pressure_size = !b.pressure_size;
                         }
-                        crate::symmetry_ui::menu(app, ui);
                     }
                     // Pencil: Photoshop's options (no hardness or flow: the pencil is always hard).
                     Tool::Pencil => {
@@ -1282,6 +1281,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     Tool::PaintBucket => hint(ui, tl!("Click to fill similar colours")),
                     // Retouching and smart-selection tools draw their bar in `retouch_ui::options_bar`.
                     _ => {}
+                }
+                // Painting symmetry is independent of visual theme. Keep the options-bar
+                // action available for Brush, Pencil and Eraser in every palette (#2659).
+                if matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) {
+                    crate::symmetry_ui::menu(app, ui);
                 }
                 crate::brush_panel::commit_gesture(app, ui.ctx(), &brush_before, &brush);
             });
@@ -3365,6 +3369,27 @@ fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.spacing_mut().item_spacing.x = 8.0;
+}
+
+#[cfg(test)]
+mod symmetry_theme_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn brush_pencil_and_eraser_expose_symmetry_menu_in_every_theme() {
+        for kind in crate::theme::ThemeKind::ALL {
+            for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+                app.ui.tool = tool;
+                let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).build_ui_state(|ui, app| options_bar(app, ui), app);
+                PhotocraftApp::setup_context(&h.ctx, kind);
+                h.run_steps(4);
+                assert!(h.query_by_label("Set painting symmetry options").is_some(), "missing symmetry menu in {:?} for {:?}", kind, tool);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
