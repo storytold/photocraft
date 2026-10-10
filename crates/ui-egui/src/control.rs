@@ -557,6 +557,37 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     };
                 }
                 "colorPicker" | "ColorPicker" => {
+                    if let Some(style) = p.get("textStyle") {
+                        if ["parent", "effect", "field", "target"].iter().any(|key| p.get(*key).is_some()) {
+                            return err("textStyle cannot be combined with another picker target");
+                        }
+                        let Some(style) = style.as_object().filter(|s| s.keys().all(|k| k == "kind" || k == "id")) else {
+                            return err("textStyle needs kind and id only");
+                        };
+                        let Some(kind) = style.get("kind").cloned().and_then(|v| serde_json::from_value::<crate::type_panels_ui::color_picker::Kind>(v).ok())
+                        else {
+                            return err("textStyle kind must be character or paragraph");
+                        };
+                        let Some(id) = style.get("id").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) else {
+                            return err("textStyle id must be a u32 integer");
+                        };
+                        return match crate::type_panels_ui::color_picker::open(app, kind, id) {
+                            Ok(id) => ok(json!({"dialog": id})),
+                            Err(error) => err(error),
+                        };
+                    }
+                    if p.get("parent").is_some() {
+                        let (Some(parent), Some(effect), Some(field)) = (u("parent"), s("effect"), s("field")) else {
+                            return err("need integer `parent` and string `effect` and `field`");
+                        };
+                        return match crate::layer_style::color_picker::open(app, parent, effect, field) {
+                            Ok(id) => ok(json!({"dialog": id})),
+                            Err(error) => err(error),
+                        };
+                    }
+                    if p.get("effect").is_some() || p.get("field").is_some() {
+                        return err("Layer Style color pickers need `parent`");
+                    }
                     let target = if s("target") == Some("background") { "background" } else { "foreground" };
                     return ok(json!({"dialog": crate::color_picker_ui::open(app, target)}));
                 }
@@ -632,9 +663,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             None => err("missing `dialog`"),
         },
-        "ui.dialog.cancel" => match u("dialog").and_then(|id| app.ui.close_dialog(id)) {
-            Some(_) => ok(Value::Null),
-            None => err("no such dialog"),
+        "ui.dialog.cancel" => match u("dialog") {
+            Some(id) => match crate::dialogs::cancel(app, id) {
+                Ok(value) => ok(value),
+                Err(error) => err(error),
+            },
+            None => err("missing `dialog`"),
         },
         "ui.window.open" => {
             if let Some(d) = u("document")
@@ -948,6 +982,87 @@ mod tests {
         match handle(app, ctx, &req) {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
+        }
+    }
+
+    #[test]
+    fn layer_style_picker_control_binds_previews_confirms_and_cancels() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        let parent = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"layerStyle","effect":"gradientOverlay"}))["result"]["dialog"].as_u64();
+        let parent = parent.unwrap();
+        let before = app.ui.dialogs[0].fields.clone();
+        for field in ["from", "to"] {
+            let reply = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":field}));
+            assert_eq!(reply["ok"], true, "{reply}");
+            let picker = app.ui.dialogs.last().unwrap().id;
+            let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
+            assert!(inspected.to_string().contains("__layerStyleColor"));
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":parent}))["ok"], false);
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":picker,"field":"color","value":"#123456"}))["ok"], true);
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":picker}))["ok"], true);
+            assert_eq!(app.ui.dialogs[0].fields["effects"][0]["params"][field], "#123456");
+        }
+        assert_ne!(app.ui.dialogs[0].fields, before);
+        call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":"to"}));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":parent}))["ok"], true);
+        assert!(app.ui.dialogs.is_empty());
+    }
+
+    #[test]
+    fn text_style_picker_control_uses_bound_target_and_rejects_invalid_requests_atomically() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        let id = app.run("type.characterStyle.new", json!({"fromSelection":false,"attrs":{"color":"#123456"}})).unwrap()["id"].as_u64().unwrap();
+        for style in [
+            Value::Null,
+            json!({"kind":"wrong","id":id}),
+            json!({"kind":"character","id":"bad"}),
+            json!({"kind":"paragraph","id":u64::MAX}),
+            json!({"kind":"character","id":0}),
+            json!({"kind":"character","id":id,"extra":1}),
+        ] {
+            let panels = app.ui.type_panels.clone();
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":style}))["ok"], false);
+            assert_eq!(app.ui.type_panels, panels);
+            assert!(app.ui.dialogs.is_empty());
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":{"kind":"character","id":id},"parent":1}))["ok"], false);
+        let doc = app.session.active().unwrap().doc.clone();
+        let r = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":{"kind":"character","id":id}}));
+        assert_eq!(r["ok"], true);
+        let picker = r["result"]["dialog"].as_u64().unwrap();
+        assert_eq!(app.ui.dialogs[0].fields["__textStyleColor"]["id"], id);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":picker,"field":"color","value":"#00ff00"}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":picker}))["ok"], true);
+        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+        let r = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"colorPicker","textStyle":{"kind":"character","id":id}}));
+        let picker = r["result"]["dialog"].as_u64().unwrap();
+        call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":picker,"field":"color","value":"#00ff00"}));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":picker}))["ok"], true);
+        assert_ne!(app.session.active().unwrap().doc.text_styles, doc.text_styles);
+    }
+
+    #[test]
+    fn layer_style_picker_control_rejects_bad_targets_without_opening_tool_picker() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        let parent = crate::layer_style::open(&mut app, Some("colorOverlay")).unwrap();
+        for params in [
+            json!({"kind":"colorPicker","parent":null,"effect":"fx1","field":"color"}),
+            json!({"kind":"colorPicker","parent":"bad","effect":"fx1","field":"color"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":3,"field":"color"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":"missing","field":"color"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":"opacity"}),
+            json!({"kind":"colorPicker","parent":parent,"effect":"fx1","field":"to"}),
+            json!({"kind":"colorPicker","effect":"fx1","field":"color"}),
+        ] {
+            let before = app.ui.dialogs.clone();
+            assert_eq!(call(&mut app, &ctx, "ui.dialog.open", params)["ok"], false);
+            assert_eq!(app.ui.dialogs, before);
         }
     }
 

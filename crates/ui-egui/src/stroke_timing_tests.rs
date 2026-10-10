@@ -139,3 +139,27 @@ fn spread_ms_spaces_a_frames_samples_after_the_last_point() {
     assert_eq!(spread_ms(120.0, 116.0, 0, 1), 116.0, "a clock that went back never goes below now");
     assert_eq!(spread_ms(f64::NAN, 116.0, 0, 1), 116.0);
 }
+
+#[test]
+fn moves_in_one_frame_take_the_pressures_the_pen_reported_between_them() {
+    use crate::stylus::PenSample;
+    let mut h = harness();
+    let pen = |p: f32| Some(PenSample { pressure: p, ..Default::default() });
+    h.state().stylus.feed.set(pen(0.2));
+    move_to(&mut h, 20.0, 50.0);
+    button(&mut h, 20.0, 50.0, true);
+    // One frame: three moves while the pen reported 0.4, 0.6 and 0.8. They go straight into the
+    // next frame's raw input, as moves piling up during a slow frame do (kittest's `event`
+    // delivers queued pointer moves one per frame).
+    for (x, p) in [(30.0, 0.4), (40.0, 0.6), (50.0, 0.8)] {
+        h.state().stylus.feed.set(pen(p));
+        let q = screen(&h, x, 50.0);
+        h.input_mut().events.push(egui::Event::PointerMoved(q));
+    }
+    h.run_steps(1);
+    button(&mut h, 50.0, 50.0, false);
+    h.run_steps(2);
+    let pts = committed_points(&h);
+    let tail: Vec<f64> = pts.iter().filter(|p| p[0] >= 29.0).map(|p| (p[2] * 100.0).round() / 100.0).collect();
+    assert_eq!(tail.get(..3), Some(&[0.4, 0.6, 0.8][..]), "each move keeps its own pressure: {pts:?}");
+}

@@ -919,7 +919,11 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let (mut nb, mut ns) = (0, 0);
             if want("brushes") {
-                for b in file.brushes {
+                for mut b in file.brushes {
+                    // Nested folders as the commands bound them (a hand-edited file can't build an
+                    // absurd tree).
+                    b.folder.retain(|f| !f.trim().is_empty());
+                    b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
                     match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
                         None => s.tools.presets.push(b),

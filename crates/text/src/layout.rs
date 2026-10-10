@@ -519,6 +519,9 @@ impl Layouter {
             }
             let first_style = &out.styles[style_at(prange.start)];
             let first_px = first_style.size_pt * k;
+            // Scripts the loaded fonts may lack (Arabic, Japanese, …): a host serving a font for them
+            // fetches it (`served`); it joins the fallback stack once it arrives.
+            crate::served::request_for_text(&ptext);
             let fallback: Vec<String> = fonts.fallback_stack().map(str::to_string).collect();
             let mut layout: Layout<RunBrush> = {
                 let mut b = self.lcx.ranged_builder(&mut fonts.fcx, &ptext, 1.0, false);

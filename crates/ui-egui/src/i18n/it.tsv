@@ -668,7 +668,11 @@
 	Pro Medium Gray Theme	Tema Pro grigio medio
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio chiaro
+	Adwaita Light Theme	Tema Adwaita chiaro
+	Adwaita Dark Theme	Tema Adwaita scuro
 	Classic Theme	Tema classico
+	Solarized dark	Solarized scuro
+	Solarized Dark Theme	Tema Solarized scuro
 	Next Theme	Tema successivo
 	Actions	Azioni
 	Brush Settings	Impostazioni pennello
@@ -1301,6 +1305,12 @@
 	Rename…	Rinomina…
 	Resample	Ricampiona
 	Reset All to Defaults	Ripristina tutto ai predefiniti
+	Import Shortcuts…	Importa scelte rapide…
+	Load a keyboard shortcut set saved as .kys	Carica un set di scelte rapide da tastiera salvato come .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Importate {n} scelte rapide da {file}. Fai clic su OK per conservarle.
+	{n} commands are not in PhotoCraft.	{n} comandi non esistono in PhotoCraft.
+	Keyboard shortcuts imported	Scelte rapide da tastiera importate
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Il tuo set di scelte rapide da tastiera {set} è in uso qui: {n} scelte rapide differiscono dai valori predefiniti. Modifica › Scelte rapide da tastiera le mostra; Ripristina tutto ai valori predefiniti annulla l'importazione.
 	Reset Section	Reimposta sezione
 	Reset Transform	Reimposta trasformazione
 	Reset to defaults	Ripristina predefiniti
@@ -1869,6 +1879,8 @@
 	Standard	Standard
 	Studio	Studio
 	Studio light	Studio chiaro
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita scuro
 	Subdivisions	Suddivisioni
 	System	Sistema
 	Text engine	Motore testo
@@ -1920,6 +1932,7 @@
 	Collapse group  ({key}-click: all groups)	Comprimi gruppo ({key}-click: tutti i gruppi)
 	Create new brush from the current settings	Crea nuovo pennello da impostazioni correnti
 	Create new brush from these settings	Crea nuovo pennello da queste impostazioni
+	Update the current brush with these settings	Aggiorna il pennello attuale con queste impostazioni
 	Delete brush	Elimina pennello
 	Drag the arrow to set the angle, the dots to set the roundness	Trascina la freccia per impostare l'angolo, i puntini per la rotondità
 	Expand	Espandi
@@ -1997,6 +2010,13 @@
 	Align with layer	Allinea con livello
 	Reset Alignment	Reimposta allineamento
 	Centre the gradient (offset 0, 0)	Centra sfumatura (offset 0,0)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	Editor sfumatura
+	Gradient picker	Selettore sfumatura
+	Gradient stops	Flag sfumatura
+	Save As Preset	Salva come preimpostazione
+	The gradient the Gradient tool paints with	La sfumatura con cui disegna lo strumento Sfumatura
+	Adds the current gradient to the Gradients panel	Aggiunge la sfumatura corrente al pannello Sfumature
 	The current gradient (pick one in Window › Gradients)	Sfumatura corrente (scegline una in Finestra › Sfumature)
 	Select a type layer to edit its character and paragraph settings.	Seleziona un livello testo per modificarne impostazioni carattere e paragrafo.
 	Text color	Colore testo
@@ -2029,6 +2049,9 @@
 	Cancelled {label}	{label} annullato
 	Esc to cancel	Esc per annullare
 	Opening {name}	Apertura {name}
+	Saving {name}	Salvataggio {name}
+	A save to {name} is still running; try again when it finishes	Un salvataggio in {name} è ancora in corso; riprova quando termina
+	{label} is writing the file and can no longer be cancelled	{label} sta scrivendo il file e non può più essere annullato
 	Opening {name}…	Apertura {name}…
 	Opening…	Apertura…
 	Reading…	Lettura…
@@ -2362,6 +2385,20 @@ fontWeight	Italic	Corsivo
 	Cycle Orientation	Cambia orientamento
 	Set the overlay options for the Crop tool	Imposta le opzioni di sovrapposizione dello strumento Taglierina
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	L’Alt-click è andato al desktop, che sposta le finestre con Alt-trascina. Imposta il suo tasto per spostare le finestre su Super, oppure blocca Alt in Finestra › Tasti modificatori.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Selettore colore (colore dello stile livello)
+	Auto Hide Notifications	Nascondi automaticamente le notifiche
+	Notification Duration (seconds)	Durata della notifica (secondi)
+	Appearance Mode	Modalità aspetto
+	Dark Theme	Tema scuro
+	Light Theme	Tema chiaro
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	Modalità aspetto successiva
+	Sync with system	Sincronizza con il sistema
+	Active	Attivo
+	Color Picker (Solid Color)	Selettore colore (tinta unita)
 	Straighten the image by drawing a line on it	Raddrizza l’immagine tracciando una linea
 	Set additional Crop options	Imposta opzioni di ritaglio aggiuntive
 	Show Cropped Area	Mostra area ritagliata
@@ -2377,3 +2414,19 @@ fontWeight	Italic	Corsivo
 	Create Ellipse	Crea ellisse
 	Create Triangle	Crea triangolo
 	Create Polygon	Crea poligono
+	Some brush presets could not be loaded	Impossibile caricare alcuni predefiniti pennello
+	Retry saving presets	Riprova a salvare i predefiniti
+	Brush preset changes are not saved: {error}	Le modifiche ai predefiniti pennello non sono salvate: {error}
+	Keep this tab open to retain your brushes.	Tieni aperta questa scheda per conservare i tuoi pennelli.
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	L'archiviazione del browser non è disponibile; i pennelli valgono solo per questa sessione. Tieni aperta questa scheda per conservarli.
+	Saving brush presets… Keep this tab open until saving finishes.	Salvataggio dei predefiniti pennello… Tieni aperta questa scheda finché il salvataggio non è completato.
+	Reflect	Riflesso
+	Glow	Bagliore
+	Negation	Negazione
+	XOR	XOR
+	Color Burn (Paint.NET)	Colore brucia (Paint.NET)
+	Color Dodge (Paint.NET)	Colore scherma (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Nessun soggetto trovato — prova Selezione oggetto o il Lazo
+	Quick Selection found nothing there	Selezione rapida non ha trovato nulla lì
+	Object Selection found nothing there — try a tighter rectangle	Selezione oggetto non ha trovato nulla lì — prova un rettangolo più stretto
+	No subject found — try a rectangle around the object	Nessun soggetto trovato — prova un rettangolo attorno all'oggetto

@@ -36,6 +36,13 @@ args = ["--no-cpu", "--reps", "5"]
 note = "36 MP document with layer effects, GPU compositor"
 
 [[bench]]
+name = "bevel_bench"
+package = "photocraft-ui-egui"
+args = ["--reps", "9"]
+quick_args = ["--size", "1200x800", "--reps", "3"]
+note = "chisel bevel size change (a dragged slider) on a 12 MP ellipse and a text paragraph, GPU canvas and CPU"
+
+[[bench]]
 name = "camera_raw_bench"
 package = "photocraft-ui-egui"
 quick_args = ["--quick"]
@@ -457,3 +464,51 @@ id = "P48"
 title = "Full refresh of a 14000×14000 document"
 bench = "large_image_bench"
 row = "full refresh"
+
+[[scenario]]
+id = "P52"
+title = "Chisel bevel size change, 12 MP ellipse, size 8 (GPU)"
+bench = "bevel_bench"
+row = "bevel size change to 8, ellipse (GPU)"
+
+[[scenario]]
+id = "P53"
+title = "Chisel bevel size change, 12 MP ellipse, size 50 (GPU)"
+bench = "bevel_bench"
+row = "bevel size change to 50, ellipse (GPU)"
+
+[[scenario]]
+id = "P54"
+title = "Chisel bevel size change, 12 MP ellipse, size 250 (GPU)"
+bench = "bevel_bench"
+row = "bevel size change to 250, ellipse (GPU)"
+
+[[scenario]]
+id = "P55"
+title = "Chisel bevel size change, 12 MP text paragraph, size 8 (GPU)"
+bench = "bevel_bench"
+row = "bevel size change to 8, text (GPU)"
+
+[[scenario]]
+id = "P56"
+title = "Chisel bevel size change, 12 MP text paragraph, size 50 (GPU)"
+bench = "bevel_bench"
+row = "bevel size change to 50, text (GPU)"
+
+[[scenario]]
+id = "P57"
+title = "Chisel bevel size change, 12 MP text paragraph, size 250 (GPU)"
+bench = "bevel_bench"
+row = "bevel size change to 250, text (GPU)"
+
+[[scenario]]
+id = "P58"
+title = "Chisel bevel size change, 12 MP ellipse, size 8 (CPU)"
+bench = "bevel_bench"
+row = "bevel size change to 8, ellipse (CPU)"
+
+[[scenario]]
+id = "P59"
+title = "Chisel bevel size change, 12 MP text paragraph, size 8 (CPU)"
+bench = "bevel_bench"
+row = "bevel size change to 8, text (CPU)"
