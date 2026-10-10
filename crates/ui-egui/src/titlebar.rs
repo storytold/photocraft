@@ -52,7 +52,7 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
     let right = bar.right().min(ui.ctx().content_rect().right());
     let mut clicked = None;
     for (i, c) in CAPTIONS.into_iter().enumerate() {
-        let r = Rect::from_min_size(pos2(right - WIDTH + i as f32 * BUTTON_WIDTH, bar.top()), vec2(BUTTON_WIDTH, bar.height()));
+        let r = Rect::from_min_size(pos2(right - WIDTH + i as f32 * BUTTON_WIDTH, bar.top()), vec2(BUTTON_WIDTH, bar.height() - 1.0));
         let resp = ui.interact(r, caption_id(c), Sense::click());
         let close = c == Caption::Close;
         let fill = match (resp.is_pointer_button_down_on(), resp.hovered()) {
