@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use photocraft_color::Color;
 use photocraft_doc::text::{
-    AntiAlias, Caps, CharStyle, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun, TextShape,
+    AntiAlias, Caps, CharStyle, Digits, FontFeature, FontVariation, Kerning, Orientation, ParagraphRun, ParagraphStyle, TextAlign, TextDirection, TextRun,
+    TextShape,
 };
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, TextLayer};
 use serde_json::{Value, json};
@@ -231,6 +232,11 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
         }
         _ => {}
     }
+    // An unknown name changes nothing, so a typo can't silently reset the digits.
+    if let Some(v) = p.get("digits").and_then(Value::as_str).and_then(parse_digits) {
+        s.digits = v;
+        hit(true);
+    }
     if let Some(v) = p.get("caps").and_then(Value::as_str) {
         s.caps = match v {
             "small" | "smallCaps" => Caps::SmallCaps,
@@ -303,7 +309,21 @@ pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
         s.hyphenate = v;
         any = true;
     }
+    if let Some(v) = p.get("kashida").and_then(Value::as_bool) {
+        s.kashida = v;
+        any = true;
+    }
     any
+}
+
+/// `"western" | "arabicIndic" | "persian"` (any case).
+fn parse_digits(v: &str) -> Option<Digits> {
+    match v.to_ascii_lowercase().as_str() {
+        "western" => Some(Digits::Western),
+        "arabicindic" => Some(Digits::ArabicIndic),
+        "persian" => Some(Digits::Persian),
+        _ => None,
+    }
 }
 
 fn push_merge<S: PartialEq>(out: &mut Vec<(usize, S)>, len: usize, st: S) {
@@ -623,7 +643,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
     }))
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str,"digits":"western|arabicIndic|persian" (display only; the text keeps ASCII digits)"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -632,7 +652,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Type Layer",
             menu: &["Layer", "New"],
             shortcut: None,
-            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"? (absent: right for text whose first strong character is right-to-left, or with "direction":"rtl"),"direction":"auto|ltr|rtl"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
+            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"align":"left|center|right|justify…"? (absent: right for text whose first strong character is right-to-left, or with "direction":"rtl"),"direction":"auto|ltr|rtl"?,"kashida":bool?,"digits":"western|arabicIndic|persian"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
@@ -819,7 +839,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: Box::leak(
-                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading include each layer's transform scale), {CHAR_PARAMS}, paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll" (absolute; for RTL paragraphs, justifyRight puts the last line at the start),"firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool}}"##)
+                format!(r##"{{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all),"metricsAsShown":bool=false (size/leading include each layer's transform scale), {CHAR_PARAMS}, paragraph keys: "align":"left|center|right|justify|justifyCenter|justifyRight|justifyAll" (absolute; for RTL paragraphs, justifyRight puts the last line at the start),"firstLineIndent":pt,"startIndent":pt,"endIndent":pt,"spaceBefore":pt,"spaceAfter":pt,"autoLeading":%,"direction":"auto|ltr|rtl","hyphenate":bool,"kashida":bool (stretch letter joins before word gaps on justified Arabic lines)}}"##)
                     .into_boxed_str(),
             ),
             enabled: has_doc,
@@ -943,6 +963,22 @@ mod tests {
         assert_eq!((para(&s, id).align, para(&s, id).direction), (TextAlign::Right, TextDirection::Rtl));
         let id = make(&mut s, json!({"x": 190, "y": 20, "text": "مرحبا", "orientation": "vertical"}));
         assert_eq!(para(&s, id).align, TextAlign::Left, "not in vertical type");
+    }
+
+    #[test]
+    fn kashida_and_digits_set_through_create_and_set_style_and_ignore_bad_values() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 10, "y": 20, "text": "a1", "kashida": true, "digits": "persian"})).unwrap()["layer"].as_u64().unwrap();
+        let t = text_layer(&s, id);
+        assert_eq!((t.paragraph_runs()[0].style.kashida, t.char_runs()[0].style.digits), (true, Digits::Persian));
+        s.execute("type.setStyle", json!({"layer": id, "digits": "arabicIndic", "kashida": false})).unwrap();
+        let t = text_layer(&s, id);
+        assert_eq!((t.paragraph_runs()[0].style.kashida, t.char_runs()[0].style.digits), (false, Digits::ArabicIndic));
+        s.execute("type.setStyle", json!({"layer": id, "digits": "klingon", "kashida": "yes", "size": 30})).unwrap();
+        let t = text_layer(&s, id);
+        assert_eq!((t.paragraph_runs()[0].style.kashida, t.char_runs()[0].style.digits), (false, Digits::ArabicIndic), "bad values change nothing");
+        s.execute("type.setStyle", json!({"layer": id, "digits": "western"})).unwrap();
+        assert_eq!(text_layer(&s, id).char_runs()[0].style.digits, Digits::Western);
     }
 
     fn text_layer(s: &Session, id: u64) -> TextLayer {
