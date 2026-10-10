@@ -115,6 +115,7 @@ pub mod point_curve;
 pub mod prefs_ui;
 pub mod preset_files_ui;
 pub mod preset_panels;
+pub mod press_menu;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
@@ -1501,9 +1502,14 @@ impl PhotocraftApp {
     }
 }
 
-/// Cheap identity of a surface's pixels: tile coordinates and `Arc` pointers.
+/// Cheap identity of a surface's pixels: its default (untouched) pixel, tile coordinates and
+/// `Arc` pointers. The default pixel matters: inverting or filling a tile-less mask only changes
+/// it (#2117).
 pub fn surface_fingerprint(s: &photocraft_raster::Surface) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ s.tile_count() as u64;
+    for &b in s.default_bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+    }
     for (c, t) in s.tiles() {
         let p = std::sync::Arc::as_ptr(t) as usize as u64;
         h = (h ^ p ^ ((c.tx as u64) << 32 | c.ty as u32 as u64)).wrapping_mul(0x100_0000_01b3);
@@ -1802,6 +1808,9 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod mask_thumb_refresh_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;

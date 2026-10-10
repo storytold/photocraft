@@ -200,12 +200,21 @@
 	Inner Shadow…	Внутренняя тень…
 	Outer Glow…	Внешнее свечение…
 	Inner Glow…	Внутреннее свечение…
-	Bevel & Emboss…	Фаска и рельеф…
+	Bevel & Emboss…	Тиснение…
 	Use Global Light	Использовать глобальный свет
 	Satin…	Глянец…
 	Color Overlay…	Наложение цвета…
 	Gradient Overlay…	Наложение градиента…
-	Pattern Overlay…	Наложение паттерна…
+	Pattern Overlay…	Наложение узора…
+	Bevel & Emboss	Тиснение
+	Inner Shadow	Внутренняя тень
+	Inner Glow	Внутреннее свечение
+	Satin	Глянец
+	Color Overlay	Наложение цвета
+	Gradient Overlay	Наложение градиента
+	Pattern Overlay	Наложение узора
+	Outer Glow	Внешнее свечение
+	Drop Shadow	Тень
 	Copy Layer Style	Скопировать стиль слоя
 	Paste Layer Style	Вставить стиль слоя
 	Clear Layer Style	Очистить стиль слоя
@@ -2103,7 +2112,7 @@
 	Straighten	Выпрямить
 	Straighten Layer	Выпрямить слой
 	Strength:	Интенсивность:
-	Stroke	Мазок
+	Stroke	Обводка
 	Stroke Catch-up	Догонять мазком
 	Stroke:	Обводка:
 	Location:	Расположение:
@@ -2631,3 +2640,7 @@ fontWeight	Italic	Курсив
 	XOR	XOR
 	Color Burn (Paint.NET)	Затемнение основы (Paint.NET)
 	Color Dodge (Paint.NET)	Осветление основы (Paint.NET)
+	No subject found — try Object Selection or the Lasso	Объект не найден — попробуйте «Выделение объектов» или «Лассо»
+	Quick Selection found nothing there	Быстрое выделение ничего здесь не нашло
+	Object Selection found nothing there — try a tighter rectangle	Выделение объектов ничего здесь не нашло — попробуйте более узкий прямоугольник
+	No subject found — try a rectangle around the object	Объект не найден — попробуйте прямоугольник вокруг объекта
