@@ -160,6 +160,7 @@ mod titlebar;
 pub mod tone;
 mod tool_cursor;
 pub mod tool_feedback;
+pub(crate) mod tool_memory;
 pub mod transform_tex;
 pub mod transform_tool;
 pub mod type_panels_ui;
@@ -1444,6 +1445,8 @@ impl eframe::App for PhotocraftApp {
         // remembered once the pointer is up. Here, after every panel, rather than in the
         // picker's own code: the control channel can set it while the picker is closed.
         brush_picker::persist(self, &ctx);
+        // Tool options are remembered between launches the same way (#2814).
+        tool_memory::persist(self, &ctx);
         self.automation_input = false;
         native_menu::sync(self, &ctx);
         if screen_picker::busy(&ctx) {
