@@ -73,6 +73,9 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
     let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
+    if photocraft_codecs::Format::Avif.caps().write {
+        v.push(("AVIF".into(), vec!["avif".into()]));
+    }
     match v.iter().position(|(_, exts)| exts.contains(&ext)) {
         Some(i) => {
             let f = v.remove(i);
@@ -596,6 +599,15 @@ mod tests {
             assert!(save_filters(name)[0].1.iter().any(|e| e == ext), "{name}: {:?}", save_filters(name)[0]);
         }
         assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
+    }
+
+    #[test]
+    fn save_as_offers_avif_only_with_an_encoder() {
+        let filters = save_filters("Untitled.psd");
+        assert_eq!(filters.iter().any(|(_, exts)| exts.iter().any(|e| e == "avif")), photocraft_codecs::Format::Avif.caps().write);
+        if photocraft_codecs::Format::Avif.caps().write {
+            assert_eq!(save_filters("image.avif")[0], ("AVIF".into(), vec!["avif".into()]));
+        }
     }
 
     #[test]

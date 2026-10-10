@@ -2815,6 +2815,9 @@ cameraRaw	Color	색상
 	Knockout	녹아웃
 	Apply At Canvas Bounds	캔버스 경계에 효과 적용
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF는 8비트 sRGB를 사용합니다. ICC, EXIF, XMP 메타데이터는 보존되지 않습니다.
+	File size is shown after export.	파일 크기는 내보낸 후 표시됩니다.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
 	Color Picker ({name})	색상 선택기 ({name})

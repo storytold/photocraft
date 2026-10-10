@@ -15,9 +15,9 @@ photocraft-cli: headless Photocraft
 
 USAGE:
   photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers]
-      Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
+      Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …); AVIF is export-only.
       TIFF output is flat unless --tiff-layers keeps the layers (Photoshop layer data).
-      --quality sets the JPEG or WebP quality; a WebP written with a quality is lossy, without one lossless.
+      --quality sets the JPEG, AVIF or WebP quality; a WebP written with a quality is lossy, without one lossless.
   photocraft-cli info <file> [--compact]
       Print the document as JSON (size, mode, depth, layer tree).
   photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers]

@@ -2245,6 +2245,10 @@
 	Channels:	Kanalen:
 	Knockout	Uitsparing
 	Apply At Canvas Bounds	Toepassen op canvasgrenzen
+
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF gebruikt 8-bits sRGB. ICC-, EXIF- en XMP-metagegevens worden niet bewaard.
+	File size is shown after export.	De bestandsgrootte wordt na het exporteren weergegeven.
+
 	Color Picker (Text Color)	Kleurkiezer (tekstkleur)
 	Color Picker ({name})	Kleurkiezer ({name})
 	Color Picker (Fill Color)	Kleurkiezer (vulkleur)

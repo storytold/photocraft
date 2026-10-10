@@ -2206,6 +2206,9 @@ cameraRaw	Color	カラー
 	Knockout	ノックアウト
 	Apply At Canvas Bounds	カンバスの境界に効果を適用
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF は 8 ビット sRGB を使用します。ICC、EXIF、XMP メタデータは保持されません。
+	File size is shown after export.	ファイルサイズは書き出し後に表示されます。
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	カラーピッカー（文字色）
 	Color Picker ({name})	カラーピッカー（{name}）

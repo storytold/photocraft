@@ -56,8 +56,8 @@ pub struct FormatCaps {
 pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     (
         Format::Avif,
-        "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
-         until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
+        "AVIF encoding uses ravif (pure Rust); this crate does not enable the `image` AVIF decoder, \
+         which requires dav1d (C). The `avif` feature is non-default in this crate.",
     ),
     (
         Format::Heif,
@@ -165,7 +165,7 @@ impl Format {
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Avif => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,

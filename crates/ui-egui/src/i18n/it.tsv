@@ -2301,6 +2301,9 @@ cameraRaw	Amount	Quantità
 	Convert to Layers	Converti in livelli
 	Apply At Canvas Bounds	Applica effetto ai limiti dell’area di lavoro
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF utilizza sRGB a 8 bit. I metadati ICC, EXIF e XMP non vengono conservati.
+	File size is shown after export.	Le dimensioni del file vengono mostrate dopo l’esportazione.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selettore colore (Colore del testo)
 	Color Picker ({name})	Selettore colore ({name})

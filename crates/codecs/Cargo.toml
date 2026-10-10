@@ -10,8 +10,8 @@ rust-version.workspace = true
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 default = []
-# AVIF *encode* via ravif (pure Rust). Decoding AVIF needs dav1d (C), so AVIF
-# stays read-unsupported and therefore asymmetric; it is off by default.
+# AVIF *encode* via ravif (pure Rust). The `image` AVIF decoder requires dav1d (C).
+# This crate enables encoding only; its `avif` feature is off by default.
 avif = ["image/avif"]
 # HEIC/HEIF decode via the optional photocraft-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time; official builds and CI enable it (`--features heif` on the
@@ -35,6 +35,8 @@ photocraft-heif = { path = "../heif", optional = true }
 
 # Orientation is applied a band of rows per task on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Native AVIF uses Rust threads; wasm keeps the sequential encoder.
+image = { workspace = true, features = ["rayon"] }
 rayon.workspace = true
 
 [dev-dependencies]

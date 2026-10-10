@@ -8,6 +8,9 @@ description = "Photocraft: an open-source, native image editor"
 build = "build.rs"
 
 [features]
+# Ship the pure-Rust AVIF encoder; distributors can opt out with --no-default-features.
+default = ["avif"]
+avif = ["photocraft-io/avif", "photocraft-ui-egui/avif"]
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]

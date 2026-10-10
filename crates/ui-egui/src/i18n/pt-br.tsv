@@ -2661,6 +2661,9 @@ cameraRaw	Whites	Brancos
 	Knockout	Vazado
 	Apply At Canvas Bounds	Aplicar efeito nos limites da tela
 
+	AVIF uses 8-bit sRGB. ICC, EXIF and XMP metadata are not preserved.	AVIF usa sRGB de 8 bits. Os metadados ICC, EXIF e XMP não são preservados.
+	File size is shown after export.	O tamanho do arquivo é exibido após a exportação.
+
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Seletor de cores (Cor do texto)
 	Color Picker ({name})	Seletor de cores ({name})
