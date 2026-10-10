@@ -910,16 +910,27 @@ fn drag_key(ctx: &egui::Context) -> Option<String> {
 /// Apply character/paragraph properties to the target (selection, else whole layer) and remember
 /// them as tool defaults.
 fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
-    let Some((layer, range)) = target(app) else { return };
-    let mut p = props;
-    p["layer"] = json!(layer);
-    if let Some(r) = range {
-        p["range"] = json!(r);
-    }
-    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
+    let Some(mut p) = with_target(app, props) else { return };
+    if p.get("coalesce").is_none()
+        && let Some(key) = drag_key(ctx)
+    {
         p["coalesce"] = json!(key);
     }
     let _ = app.run("type.setStyle", p);
+}
+
+/// `props` aimed at the type target: its layer, the selected characters while typing, and the
+/// typing session's undo step. `None` without a type target.
+pub(crate) fn with_target(app: &PhotocraftApp, mut props: serde_json::Value) -> Option<serde_json::Value> {
+    let (layer, range) = target(app)?;
+    props["layer"] = json!(layer);
+    if let Some(r) = range {
+        props["range"] = json!(r);
+    }
+    if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()) {
+        props["coalesce"] = json!(key);
+    }
+    Some(props)
 }
 
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling

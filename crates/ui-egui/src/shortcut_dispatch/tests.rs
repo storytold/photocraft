@@ -580,3 +580,37 @@ fn f6_while_recording_records_a_named_call_not_the_child_steps() {
     h.state_mut().run("actions.stop", json!({})).unwrap();
     assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R"}))]);
 }
+
+/// ⇧⌘> / ⇧⌘< follow the keys' position: a Nordic or German layout reports ⇧⌘. as `:`, which is
+/// also ⇧⌘; (View › Snap) on a US layout. While typing they size only the selected characters.
+#[test]
+fn type_size_keys_follow_key_position_and_the_typed_selection() {
+    let mut h = harness();
+    let st = h.state().session.active().unwrap();
+    let id = st.doc.walk().into_iter().find(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).unwrap().2.id.0;
+    h.state_mut().session.execute("layer.select", json!({"layer": id})).unwrap();
+    let sizes = |h: &Harness<'_, PhotocraftApp>| match &h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
+        LayerContent::Text(t) => t.char_runs().iter().map(|r| (r.len, r.style.size_pt)).collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let positional = |h: &mut Harness<'_, PhotocraftApp>, key, physical| {
+        let m = platform(Modifiers::COMMAND | Modifiers::SHIFT);
+        h.event(egui::Event::ModifiersChanged(m));
+        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: true, repeat: false, modifiers: m });
+        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: false, repeat: false, modifiers: m });
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+    };
+    let base = sizes(&h)[0].1;
+    positional(&mut h, egui::Key::Colon, egui::Key::Period);
+    assert_eq!(logged(&h), ["type.increaseSize"]);
+    assert_eq!(sizes(&h), [(5, base + 2.0)], "the whole layer grows from the canvas");
+
+    crate::type_tool::edit_active(h.state_mut()).unwrap();
+    if let Some(ed) = h.state_mut().ui.text_edit.as_mut() {
+        (ed.anchor, ed.caret) = (0, 2);
+    }
+    positional(&mut h, egui::Key::Semicolon, egui::Key::Comma);
+    assert_eq!(logged(&h), ["type.decreaseSize"]);
+    assert_eq!(sizes(&h), [(2, base), (3, base + 2.0)], "only the selected \"He\" shrinks");
+}
