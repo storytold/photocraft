@@ -181,6 +181,16 @@ Bounded halo tiles reduce the large-mask workspace allocation bound from 192/288
 to about 115/163 MB, including output and 16 workers' scratch, excluding the source.
 See [method and results](octagonal-mask-performance.md).
 
+2026-10-10: Pixelate's Facet shares exact 3x3 quadrant statistics and Color Halftone
+shares dot radii within each rotated screen grid. Full tiled CPU application at 24 MP
+on a 16-vCPU m7i.4xlarge improves Facet from 0.684 s to 0.312 s in RGB8
+(2.20x), and from 7.888 s to 0.574 s in CMYK8 (13.74x).
+Color Halftone improves from 1.137 s to 0.604 s in RGB8 (1.88x)
+and from 3.589 s to 0.718 s in Lab8 (5.00x).
+Three alternating paired release runs also cover 36 MP RGB, 16/32-bit storage,
+and screen radii 2/8/64. All 36 complete output comparisons match exactly.
+See [method, raw timings and checks](pixelate-performance.md).
+
 ### Where we're going (priority order)
 
 1. **Ship the fixes:** cut 0.2.1 once the current batch lands, so users validate them.
