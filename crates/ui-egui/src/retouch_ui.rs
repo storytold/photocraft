@@ -105,7 +105,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
             let (sample_all, enhance) = (o.sample_all_layers, o.enhance_edge);
             let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
-            report_smart_result(app, r, &tl!("Quick Selection found nothing there"));
+            report_smart_result(app, r, tl!("Quick Selection found nothing there"));
             return true;
         }
         _ => return false,
@@ -216,7 +216,7 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
         let size = app.session.tools.brush.size;
         let mode = if mods.alt { "subtract" } else { "add" };
         let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
-        report_smart_result(app, r, &tl!("Quick Selection found nothing there"));
+        report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
     let mode = if mods.alt {
@@ -227,7 +227,7 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
         "replace"
     };
     let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
-    report_smart_result(app, r, &tl!("Object Selection found nothing there — try a tighter rectangle"));
+    report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
 }
 
 /// Reports a smart-selection command result in the status bar. Engine errors are already
@@ -375,7 +375,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let r = app.run("select.subject", json!({}));
-                report_smart_result(app, r, &tl!("No subject found — try Object Selection or the Lasso"));
+                report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
         }
         Tool::ObjectSelection => {
@@ -384,7 +384,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let r = app.run("select.subject", json!({}));
-                report_smart_result(app, r, &tl!("No subject found — try a rectangle around the object"));
+                report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
             }
         }
         Tool::RedEye => {

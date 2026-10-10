@@ -3380,3 +3380,7 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
+	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
+	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
+	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
