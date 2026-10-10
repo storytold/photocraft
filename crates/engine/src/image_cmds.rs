@@ -757,7 +757,7 @@ mod tests {
         let surf = st.doc.layers[0].surface().unwrap();
         for (x, y) in [(0, 0), (1, 1), (2, 3)] {
             let v = surf.rgba(x, y)[0];
-            assert!(v < 0.01 || v > 0.99, "nearest produced an averaged value {v} at ({x},{y})");
+            assert!(v.is_finite() && !(0.01..=0.99).contains(&v), "nearest produced an averaged value {v} at ({x},{y})");
         }
     }
 

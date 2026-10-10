@@ -37,16 +37,19 @@ fn print_dry_run_renders_a_pdf_and_reports_lp() {
     let dir = tmp("print");
     for depth in [8, 16, 32] {
         let mut s = session("rgb", depth);
+        let out = format!("{dir}/rgb-{depth}.pdf");
         let r = s
             .execute(
                 "file.print",
-                json!({"dryRun": true, "printer": "Office", "copies": 2, "paper": "a4", "cornerCropMarks": true, "registrationMarks": true, "labels": true}),
+                json!({"output": out, "send": true, "dryRun": true, "printer": "Office", "copies": 2, "paper": "a4", "cornerCropMarks": true, "registrationMarks": true, "labels": true}),
             )
             .unwrap();
         let cmd: Vec<String> = serde_json::from_value(r["command"].clone()).unwrap();
         assert_eq!(&cmd[..5], &["lp", "-d", "Office", "-n", "2"]);
+        assert_eq!(cmd.last(), Some(&out));
         assert_eq!(r["sent"], false);
-        let pdf = std::fs::read(r["pdf"].as_str().unwrap()).unwrap();
+        assert_eq!(r["pdf"], out);
+        let pdf = std::fs::read(&out).unwrap();
         assert!(pdf.starts_with(b"%PDF-1.4"));
         assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 595.28 841.89]"));
         let (w, h, cs, data) = pdf_image(&pdf);
@@ -56,7 +59,6 @@ fn print_dry_run_renders_a_pdf_and_reports_lp() {
         // 300 px at 72 ppi = 300 pt, centred.
         let rect: Vec<f64> = serde_json::from_value(r["imageRect"].clone()).unwrap();
         assert!((rect[2] - 300.0).abs() < 1e-6 && (rect[0] - (595.28 - 300.0) / 2.0).abs() < 1e-6);
-        let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
     }
     // Print to PDF: no spooling by default.
     let mut s = session("gray", 8);
@@ -75,14 +77,15 @@ fn print_dry_run_renders_a_pdf_and_reports_lp() {
 #[test]
 fn photocraft_manages_colors_converts_to_the_printer_profile() {
     let mut s = session("rgb", 8);
+    let out = format!("{}/managed.pdf", tmp("managed"));
     let r = s
         .execute(
             "file.print",
-            json!({"dryRun": true, "colorHandling": "photocraftManages", "printerProfile": "coated-cmyk", "intent": "perceptual", "bpc": false}),
+            json!({"output": out, "dryRun": true, "colorHandling": "photocraftManages", "printerProfile": "coated-cmyk", "intent": "perceptual", "bpc": false}),
         )
         .unwrap();
     assert_eq!(r["color"]["intent"], "perceptual");
-    let pdf = std::fs::read(r["pdf"].as_str().unwrap()).unwrap();
+    let pdf = std::fs::read(&out).unwrap();
     let (_, _, cs, data) = pdf_image(&pdf);
     assert_eq!(cs, "[/ICCBased 7 0 R]");
     assert!(String::from_utf8_lossy(&pdf).contains("/N 4 /Alternate /DeviceCMYK"));
@@ -91,20 +94,117 @@ fn photocraft_manages_colors_converts_to_the_printer_profile() {
     assert!(data[0] > 150 && data[2] < 60, "{:?}", &data[..4]);
     // The document itself is untouched.
     assert_eq!(s.active().unwrap().doc.mode, ColorMode::Rgb);
-    let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
 }
 
 #[test]
 fn print_one_copy_repeats_the_last_settings() {
     let mut s = session("rgb", 8);
-    s.execute("file.print", json!({"dryRun": true, "copies": 3, "paper": "a5", "scale": 50})).unwrap();
+    let first = s.execute("file.print", json!({"dryRun": true, "copies": 3, "paper": "a5", "scale": 50})).unwrap();
+    assert!(first["pdf"].is_null());
     let r = s.execute("file.printOneCopy", json!({"dryRun": true})).unwrap();
     assert_eq!(r["copies"], 1);
     assert_eq!(r["paper"], json!([419.53, 595.28]));
     assert_eq!(r["scale"], 50.0);
     let cmd: Vec<String> = serde_json::from_value(r["command"].clone()).unwrap();
     assert!(!cmd.contains(&"-n".to_string()));
-    let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
+    assert_eq!(cmd.last().map(String::as_str), Some("<temporary PDF>"));
+    assert!(r["pdf"].is_null());
+}
+
+#[test]
+fn print_without_output_keeps_private_pdf_only_during_spooling() {
+    let mut s = session("rgb", 8);
+    let mut temporary_path = None;
+    let result = do_print_with_spooler(&mut s, &json!({}), "file.print", |argv| {
+        let path = std::path::PathBuf::from(argv.last().unwrap());
+        let data = std::fs::read(&path).unwrap();
+        assert!(data.starts_with(b"%PDF-1.4"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
+        }
+        temporary_path = Some(path);
+        Ok("request id 1".into())
+    })
+    .unwrap();
+    assert_eq!(result["sent"], true);
+    assert!(result["pdf"].is_null(), "the temporary path must not be advertised as a retained PDF");
+    assert!(!temporary_path.unwrap().exists(), "spool PDF survives after lp returns");
+}
+
+#[test]
+fn print_spool_error_removes_private_pdf() {
+    let mut s = session("rgb", 8);
+    let mut temporary_path = None;
+    let result = do_print_with_spooler(&mut s, &json!({}), "file.print", |argv| {
+        let path = std::path::PathBuf::from(argv.last().unwrap());
+        assert!(path.is_file());
+        temporary_path = Some(path);
+        Err(other("spooler unavailable"))
+    });
+    assert!(result.is_err());
+    assert!(!temporary_path.unwrap().exists(), "spool PDF survives a failed lp call");
+}
+
+#[cfg(unix)]
+#[test]
+fn private_spool_pdf_does_not_follow_a_guessed_symlink() {
+    let dir = tmp("symlink");
+    let dir = std::path::Path::new(&dir);
+    let victim = dir.join("victim.pdf");
+    let link = dir.join("photocraft-print-AAAAAA.pdf");
+    std::fs::write(&victim, b"keep this").unwrap();
+    std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+    let file = private_spool_pdf_in(b"%PDF-private", dir).unwrap();
+    assert_ne!(file.path(), link);
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep this");
+    assert_eq!(std::fs::read(file.path()).unwrap(), b"%PDF-private");
+    assert!(std::fs::symlink_metadata(file.path()).unwrap().file_type().is_file());
+    let path = file.path().to_path_buf();
+    drop(file);
+    assert!(!path.exists());
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+}
+
+#[test]
+fn print_dry_run_without_output_creates_no_spool_pdf() {
+    let mut s = session("rgb", 8);
+    let result = do_print_with_spooler(&mut s, &json!({"dryRun": true}), "file.print", |_| Err(other("dry run invoked spooler"))).unwrap();
+    assert!(result["pdf"].is_null());
+    assert_eq!(result["sent"], false);
+    assert_eq!(result["command"].as_array().unwrap().last().unwrap(), "<temporary PDF>");
+    assert!(result["bytes"].as_u64().unwrap() > 100);
+}
+
+#[test]
+fn print_without_sending_requires_an_output_unless_dry_run() {
+    let mut s = session("rgb", 8);
+    let before = s.file_menu.last_print.clone();
+    let err = do_print_with_spooler(&mut s, &json!({"send": false}), "file.print", |_| Err(other("unexpected spooler call"))).unwrap_err();
+    assert!(err.to_string().contains("needs an output path"), "{err}");
+    assert_eq!(s.file_menu.last_print, before, "a rejected print must not become a remembered successful print");
+    assert!(do_print_with_spooler(&mut s, &json!({"send": false, "dryRun": true}), "file.print", |_| Err(other("dry run invoked spooler"))).is_ok());
+    assert!(s.file_menu.last_print.as_ref().unwrap().get("send").is_none());
+
+    let output = format!("{}/export.pdf", tmp("non-sending-export"));
+    do_print_with_spooler(&mut s, &json!({"output": output, "send": false}), "file.print", |_| Err(other("non-sending export invoked spooler"))).unwrap();
+    assert!(std::path::Path::new(&output).is_file());
+    let mut repeat = s.file_menu.last_print.clone().unwrap();
+    assert!(repeat.get("send").is_none(), "a removed output must not leave send: false in remembered settings");
+    repeat["copies"] = json!(1);
+    let replay = do_print_with_spooler(&mut s, &repeat, "file.printOneCopy", |argv| {
+        assert!(std::path::Path::new(argv.last().unwrap()).is_file());
+        Ok("request id 2".into())
+    })
+    .unwrap();
+    assert_eq!(replay["sent"], true);
+    assert_eq!(replay["copies"], 1);
+
+    let both = format!("{}/print-and-export.pdf", tmp("sending-export"));
+    do_print_with_spooler(&mut s, &json!({"output": both, "send": true, "dryRun": true}), "file.print", |_| Err(other("dry run invoked spooler"))).unwrap();
+    assert!(s.file_menu.last_print.as_ref().unwrap().get("send").is_none(), "a removed output must not leave send: true in remembered settings");
 }
 
 #[test]

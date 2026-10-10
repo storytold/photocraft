@@ -68,7 +68,7 @@ pub fn script_order(locale: Option<&str>) -> [CjkScript; 4] {
         "zh" | "yue" => {
             let hant = rest.iter().any(|p| matches!(*p, "hant" | "tw" | "hk" | "mo"));
             let hans = rest.iter().any(|p| matches!(*p, "hans" | "cn" | "sg"));
-            if hant && !hans || lang == "yue" && !hans {
+            if (hant || lang == "yue") && !hans {
                 [TraditionalChinese, SimplifiedChinese, Japanese, Korean]
             } else {
                 [SimplifiedChinese, TraditionalChinese, Japanese, Korean]

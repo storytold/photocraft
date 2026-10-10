@@ -1,6 +1,6 @@
 //! Capability-based filesystem policy for untrusted automation paths.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -51,8 +51,7 @@ impl AuthorizedWorkspace {
         if !metadata.is_file() {
             return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
         }
-        // Bounded reads, and a clear error for a file larger than memory (#375).
-        photocraft_format::read::read_all(&mut file, metadata.len()).map_err(|e| file_error("read", path, e))
+        read_to_observed_length(&mut file, metadata.len())
     }
 
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
@@ -90,6 +89,34 @@ impl AuthorizedWorkspace {
             }
         }
         Ok(())
+    }
+}
+
+fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
+    // Do not reserve from a potentially stale or attacker-controlled metadata length. Read in
+    // chunks, and reject growth beyond the length observed on the opened file before appending.
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 64 << 10];
+    loop {
+        let remaining = observed_length.saturating_sub(bytes.len() as u64);
+        let ask = chunk.len().min(usize::try_from(remaining.saturating_add(1)).unwrap_or(chunk.len()));
+        let n = match reader.read(&mut chunk[..ask]) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(AutomationError::Io(format!("automation read failed: {e}"))),
+        };
+        if n == 0 {
+            return Ok(bytes);
+        }
+        if n as u64 > remaining {
+            return Err(AutomationError::BadRequest(format!("automation file grew beyond its observed length of {observed_length} bytes")));
+        }
+        let needed = bytes.len().checked_add(n).ok_or_else(|| AutomationError::BadRequest("automation file is too large to read".into()))?;
+        if needed > bytes.capacity() {
+            let target = bytes.capacity().saturating_add(bytes.capacity() / 2).max(needed).min(usize::try_from(observed_length).unwrap_or(usize::MAX));
+            bytes.try_reserve_exact(target - bytes.len()).map_err(|e| AutomationError::Io(format!("automation read allocation failed: {e}")))?;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
     }
 }
 
@@ -429,6 +456,23 @@ mod tests {
         assert_eq!(workspace.read("read.txt").unwrap(), b"canary");
         workspace.write("new-output.txt", b"created").unwrap();
         assert_eq!(std::fs::read(inside.join("new-output.txt")).unwrap(), b"created");
+    }
+
+    #[test]
+    fn large_observed_length_does_not_trigger_a_fixed_limit_or_upfront_reservation() {
+        let mut shortened = std::io::Cursor::new(b"psb");
+        assert_eq!(read_to_observed_length(&mut shortened, (1 << 30) + 1).unwrap(), b"psb");
+    }
+
+    #[test]
+    fn read_growth_is_rejected_at_the_observed_length() {
+        let mut growing = std::io::repeat(b'x').take(65);
+        let error = read_to_observed_length(&mut growing, 64).unwrap_err().to_string();
+        assert!(error.contains("grew beyond its observed length of 64 bytes"), "{error}");
+        let mut allowed = std::io::repeat(b'x').take(64);
+        assert_eq!(read_to_observed_length(&mut allowed, 64).unwrap().len(), 64);
+        let mut empty = std::io::Cursor::new(b"x");
+        assert!(read_to_observed_length(&mut empty, 0).is_err());
     }
 
     fn temp_files(dir: &Path) -> Vec<String> {

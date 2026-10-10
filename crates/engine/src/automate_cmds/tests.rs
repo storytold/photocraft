@@ -113,6 +113,43 @@ fn droplets_are_written_and_run() {
     assert!(s.execute("file.automate.createDroplet", json!({"path": path, "steps": [["bogus", {}]]})).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn droplet_shim_passes_shell_metacharacters_as_a_literal_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tmp("droplet-shell-quote");
+    let path = format!("{dir}/Droplet's \"quote\" $HOME `printf expanded` $(touch shim-injected) \\\nline");
+    let mut session = Session::new();
+    let result = session.execute("file.automate.createDroplet", json!({"path": path, "steps": [["file.new", {}]]})).unwrap();
+    let droplet = result["path"].as_str().unwrap();
+    let shim = result["shim"].as_str().unwrap();
+
+    let cli = format!("{dir}/cli stub");
+    let capture = format!("{dir}/captured path");
+    let marker = format!("{dir}/shim-injected");
+    let input = format!("{dir}/input file");
+    std::fs::write(
+        &cli,
+        "#!/bin/sh\nif [ \"$#\" -ne 3 ] || [ \"$1\" != droplet ] || [ \"$3\" != \"$PHOTOCRAFT_EXPECTED_INPUT\" ]; then exit 90; fi\nprintf '%s' \"$2\" > \"$PHOTOCRAFT_CAPTURE\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = std::process::Command::new(shim)
+        .arg(&input)
+        .current_dir(&dir)
+        .env("PHOTOCRAFT_CLI", &cli)
+        .env("PHOTOCRAFT_CAPTURE", &capture)
+        .env("PHOTOCRAFT_EXPECTED_INPUT", &input)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "shim exited {:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert!(!std::path::Path::new(&marker).exists(), "filename command substitution ran");
+    let expected = std::fs::canonicalize(droplet).unwrap();
+    assert_eq!(std::fs::read(&capture).unwrap(), expected.to_string_lossy().as_bytes());
+}
+
 #[test]
 fn statistics_makes_a_stack_mode_smart_object() {
     let dir = tmp("stats");

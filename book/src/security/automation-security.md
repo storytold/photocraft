@@ -7,10 +7,15 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - Desktop control binds to `127.0.0.1` and uses one JSON request/reply per line.
 - Headless TCP refuses a successfully bound non-loopback address.
 - Every desktop-control and headless-TCP connection must authenticate with a 256-bit bearer token before method dispatch.
-- Encoded request lines are limited to 1 MiB on desktop and headless TCP and on the headless
-  JSON-lines stdio server (`photocraft-cli serve`). MCP over stdio has no request-byte cap: the
-  MCP SDK reads its own lines, and only MCP tool results are size-checked. Active TCP connections
-  are limited to 16, and headless/MCP batches to 256 steps.
+- Encoded request lines are limited to 1 MiB on desktop and headless TCP, the headless
+  JSON-lines stdio server (`photocraft-cli serve`), and MCP stdio. The MCP line limit is
+  enforced before rmcp's line buffer; an oversized MCP line closes that stdio session because
+  its request ID cannot safely be parsed. Active TCP connections are limited to 16, and
+  headless/MCP batches to 256 steps.
+- Capability-scoped automation file opens read in chunks without reserving from the file's
+  metadata length. A read rejects data beyond the length observed on the opened file, so growth
+  after the metadata check cannot expand the read. Large PSB files have no fixed automation file
+  size ceiling; their materialized bytes and decoded document still require available memory.
 - JSON-lines replies and encoded MCP tool results are limited to 8 MiB; retained batch replies
   have an aggregate budget and stop later steps when exhausted. The headless stdio JSON-lines
   transport enforces the same request/reply ceilings as TCP.
@@ -47,8 +52,9 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - no general per-client or per-tool capability model beyond filesystem read/write authority;
 - no automated bulk apply of the Preferences dialog; agents can change individual safe keys with
   `prefs.set`;
-- no explicit JSON-depth policy, aggregate document/session-memory accounting, compositor
-  scratch-space accounting, or command-duration/cancellation budget;
+- no application-specific JSON-depth policy (serde_json's parser has its default finite recursion
+  limit), aggregate document/session-memory accounting, compositor scratch-space accounting,
+  or command-duration/cancellation budget;
 - one thread per accepted TCP connection;
 - no structured security audit event stream;
 - desktop screenshot capture/encoding and document import/export have no automation-specific
