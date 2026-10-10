@@ -120,6 +120,11 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   When either value is missing, the build disables in-app updates and emits a warning. Never
   commit or share the private key.
 
+  The optional desktop `macos-updater` feature links Sparkle; ordinary macOS development and CI
+  builds leave it disabled and use installer downloads. `packaging/macos/package.sh` enables
+  `heif,macos-updater`, downloads and verifies the pinned framework, and includes its complete
+  distribution license and third-party notices in `Contents/Resources/Licenses/Sparkle.txt`.
+
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization.
 That's enough to check the bundle and the DMG on your own Mac:
 

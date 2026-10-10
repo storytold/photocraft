@@ -335,7 +335,7 @@ fn main() -> eframe::Result {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "macos-updater"))]
             {
                 // Sparkle is AppKit-bound and must stay on the main thread for the app's lifetime.
                 // Discovery and its timing stay with `update_check` (the startup preference and
@@ -532,7 +532,7 @@ fn main() -> eframe::Result {
 }
 
 /// Initialize Sparkle after eframe has created the native AppKit application, on its main thread.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-updater"))]
 fn initialize_macos_updater() -> Option<sparkle_updater::SparkleUpdater> {
     // Update signing is release-maintainer configuration; development bundles should not
     // contact the release feed or expose a menu item that cannot verify an update.

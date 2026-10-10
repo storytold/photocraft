@@ -81,7 +81,7 @@ echo "==> PhotoCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: 
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif,macos-updater "${args[@]}")
 fi
 
 rm -rf "$WORK"
@@ -128,6 +128,8 @@ cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
 mkdir -p "$APP/Contents/Frameworks"
 ditto "$SPARKLE_ROOT/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+mkdir -p "$APP/Contents/Resources/Licenses"
+cp "$SPARKLE_ROOT/LICENSE" "$APP/Contents/Resources/Licenses/Sparkle.txt"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
   mkdir -p "$APP/Contents/Resources/Licenses"
@@ -152,7 +154,7 @@ fi
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PhotoCraft"
 # Sparkle contains nested XPC services and helper apps; sign those with the same Developer ID.
-codesign --force --deep --sign "$IDENTITY" --options runtime "${ts[@]}" ${kc[@]+"${kc[@]}"} "$APP/Contents/Frameworks/Sparkle.framework"
+sign --deep --options runtime "$APP/Contents/Frameworks/Sparkle.framework"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 

@@ -37,6 +37,8 @@ jobs:
         run: shellcheck packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
       - name: AppImage AppRun desktop integration
         run: bash packaging/linux/apprun-test.sh
+      - name: Sparkle framework signing
+        run: bash packaging/macos/tests/sparkle-signing.sh
       - name: PowerShell
         shell: pwsh
         run: |
