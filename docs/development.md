@@ -103,7 +103,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 
 | Variable | Effect |
 |---|---|
-| `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>` |
+| `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the bridge/serve port for headless `photocraft-cli mcp` / `serve` when `--bridge` / `--port` is absent |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
 | `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |

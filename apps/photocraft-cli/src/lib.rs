@@ -35,12 +35,13 @@ USAGE:
   photocraft-cli mcp [--bridge <127.0.0.1:port>] [--control-token <64-hex> | --control-token-file <path>]
       [--automation-read-root <dir>] [--automation-write-root <dir>]
       Run the MCP server on stdio (headless engine, or bridge to a running `photocraft --control <port>`).
+      With no --bridge, PHOTOCRAFT_CONTROL_PORT selects the bridge port (127.0.0.1:<port>).
   photocraft-cli serve [--port <port>] [--control-token <64-hex> | --control-token-file <path>]
       [--automation-read-root <dir>] [--automation-write-root <dir>]
       Keep one headless session open and answer JSON lines ({\"id\",\"method\",\"params\"}) on stdio,
-      or on 127.0.0.1:<port>. Methods: engine.execute, jobs.list/cancel, engine.commands,
-      doc.open/new/save/inspect/render/select/close, session.list, batch, methods
-      (docs/control-protocol.md#headless-server).
+      or on 127.0.0.1:<port> (--port, else PHOTOCRAFT_CONTROL_PORT). Methods: engine.execute,
+      jobs.list/cancel, engine.commands, doc.open/new/save/inspect/render/select/close,
+      session.list, batch, methods (docs/control-protocol.md#headless-server).
 
   photocraft-cli <subcommand> --help (or -h) prints this text. A flag the subcommand doesn't take is
   an error.
@@ -121,6 +122,22 @@ impl Args {
     fn has(&self, k: &str) -> bool {
         self.flags.iter().any(|(f, _)| f == k)
     }
+}
+
+/// A control-port value ("50494"), from a flag or PHOTOCRAFT_CONTROL_PORT. `source` names where
+/// the value came from so a typo names its origin instead of silently dropping the server (#701).
+fn parse_control_port(value: &str, source: &str) -> Result<u16, String> {
+    value.trim().parse().map_err(|_| format!("{source}: `{value}` is not a port (expected a number 0-65535)"))
+}
+
+/// PHOTOCRAFT_CONTROL_PORT, as `mcp --bridge` / `serve --port` fallback, like the desktop app's
+/// `--control` (apps/photocraft/src/main.rs). Empty means "not given".
+fn env_control_port() -> Result<Option<u16>, String> {
+    control_port_from_env(std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().as_deref())
+}
+
+fn control_port_from_env(value: Option<&str>) -> Result<Option<u16>, String> {
+    value.filter(|v| !v.trim().is_empty()).map(|v| parse_control_port(v, "PHOTOCRAFT_CONTROL_PORT")).transpose()
 }
 
 type R = Result<(), String>;
@@ -449,9 +466,20 @@ fn commands(a: &Args, out: &mut dyn Write) -> R {
 fn serve(a: &Args, err: &mut dyn Write) -> R {
     use std::sync::{Arc, Mutex};
     let h = Arc::new(Mutex::new(Headless::with_workspace(automation_workspace(a)?)));
-    match a.get("--port") {
+    let port = match a.get("--port") {
+        Some(port) => Some(parse_control_port(port, "--port")?),
+        None => match env_control_port()? {
+            // Name the mode switch: an exported variable silently changes what this
+            // command does, and unset (or empty) is the only way back to stdio.
+            Some(port) => {
+                let _ = writeln!(err, "photocraft-cli: PHOTOCRAFT_CONTROL_PORT={port} is set; serving on TCP instead of stdio (unset it to serve stdio)");
+                Some(port)
+            }
+            None => None,
+        },
+    };
+    match port {
         Some(port) => {
-            let port: u16 = port.parse().map_err(|_| format!("bad --port `{port}`"))?;
             let addr = format!("127.0.0.1:{port}");
             let (supplied, token_file) = security::token_inputs(a.get("--control-token").map(str::to_owned), a.get("--control-token-file").map(PathBuf::from));
             let token = security::server_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
@@ -473,11 +501,26 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
 }
 
 fn mcp(a: &Args) -> R {
-    let server = match a.get("--bridge") {
+    let bridge = match a.get("--bridge") {
+        Some(addr) => Some(addr.to_owned()),
+        None => match env_control_port()? {
+            // Name the mode switch: an exported variable silently changes what this
+            // command does, and unset (or empty) is the only way back to headless.
+            Some(port) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "photocraft-cli: PHOTOCRAFT_CONTROL_PORT={port} is set; bridging to the running app instead of a headless engine (unset it to run headless)"
+                );
+                Some(format!("127.0.0.1:{port}"))
+            }
+            None => None,
+        },
+    };
+    let server = match bridge {
         Some(addr) => {
             let (supplied, token_file) = security::token_inputs(a.get("--control-token").map(str::to_owned), a.get("--control-token-file").map(PathBuf::from));
             let token = security::client_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
-            PhotocraftMcp::bridge(addr, &token).map_err(|e| e.to_string())?
+            PhotocraftMcp::bridge(&addr, &token).map_err(|e| e.to_string())?
         }
         None => PhotocraftMcp::headless_with_workspace(automation_workspace(a)?),
     };
@@ -587,5 +630,35 @@ mod missing_font_warning_tests {
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod env_control_port_tests {
+    use super::{control_port_from_env, parse_control_port};
+
+    #[test]
+    fn control_port_parsing_accepts_valid_numbers() {
+        assert_eq!(parse_control_port("50494", "PHOTOCRAFT_CONTROL_PORT"), Ok(50494));
+        assert_eq!(parse_control_port(" 8080 ", "PHOTOCRAFT_CONTROL_PORT"), Ok(8080));
+        assert_eq!(parse_control_port("0", "PHOTOCRAFT_CONTROL_PORT"), Ok(0));
+    }
+
+    #[test]
+    fn control_port_parsing_names_the_source_on_bad_values() {
+        let error = parse_control_port("nope", "PHOTOCRAFT_CONTROL_PORT").unwrap_err();
+        assert!(error.contains("PHOTOCRAFT_CONTROL_PORT") && error.contains("`nope`"), "{error}");
+        assert!(parse_control_port("", "PHOTOCRAFT_CONTROL_PORT").is_err());
+        assert!(parse_control_port("65536", "PHOTOCRAFT_CONTROL_PORT").is_err());
+        assert!(parse_control_port("-1", "PHOTOCRAFT_CONTROL_PORT").is_err());
+    }
+
+    #[test]
+    fn unset_or_empty_env_means_no_port() {
+        assert_eq!(control_port_from_env(None), Ok(None));
+        assert_eq!(control_port_from_env(Some("")), Ok(None));
+        assert_eq!(control_port_from_env(Some("  ")), Ok(None));
+        assert_eq!(control_port_from_env(Some("50494")), Ok(Some(50494)));
+        assert!(control_port_from_env(Some("nope")).is_err());
     }
 }
