@@ -73,7 +73,8 @@ fn stat(v: &mut [f32], s: Stat) -> f32 {
     }
 }
 
-/// Combines `layers` (each `len` pixels) with statistic `s`.
+/// Combines `layers` (each `len` pixels) with statistic `s`. Colour results retain their float
+/// range; quantisation/clipping belongs to the destination surface, not the statistic.
 pub fn combine(layers: &[Vec<[f32; 4]>], s: Stat) -> Vec<[f32; 4]> {
     let len = layers.iter().map(Vec::len).max().unwrap_or(0);
     let mut out = vec![[0.0f32; 4]; len];
@@ -97,7 +98,7 @@ pub fn combine(layers: &[Vec<[f32; 4]>], s: Stat) -> Vec<[f32; 4]> {
             continue;
         }
         for c in 0..3 {
-            o[c] = stat(&mut samples[c], s).clamp(0.0, 1.0);
+            o[c] = stat(&mut samples[c], s);
         }
         o[3] = alpha;
     }
@@ -121,12 +122,37 @@ mod tests {
         assert_eq!(at(Stat::Minimum), 0.1);
         assert_eq!(at(Stat::Maximum), 0.9);
         assert!((at(Stat::Range) - 0.8).abs() < 1e-6);
-        assert_eq!(at(Stat::Summation), 1.0); // clamped
+        assert!((at(Stat::Summation) - 1.6).abs() < 1e-6);
         let var = at(Stat::Variance);
         assert!((at(Stat::StandardDeviation) - var.sqrt()).abs() < 1e-6);
         assert!(at(Stat::Skewness) > 0.5, "right-skewed");
         assert!(at(Stat::Entropy) > 0.0 && at(Stat::Entropy) <= 1.0);
         assert!(at(Stat::Kurtosis) > 0.0);
+    }
+
+    #[test]
+    fn statistics_preserve_hdr_and_signed_samples() {
+        let layers = vec![px(-2.0), px(4.0)];
+        for (mode, expected) in [
+            (Stat::Mean, 1.0),
+            (Stat::Median, 1.0),
+            (Stat::Minimum, -2.0),
+            (Stat::Maximum, 4.0),
+            (Stat::Range, 6.0),
+            (Stat::Summation, 2.0),
+            (Stat::Variance, 9.0),
+            (Stat::StandardDeviation, 3.0),
+        ] {
+            assert_eq!(combine(&layers, mode)[0], [expected, expected, expected, 1.0], "{mode:?}");
+        }
+        for mode in [Stat::Mean, Stat::Median] {
+            assert_eq!(combine(&[px(2.0), px(4.0)], mode)[0], [3.0, 3.0, 3.0, 1.0]);
+            assert_eq!(combine(&[px(-2.0), px(-4.0)], mode)[0], [-3.0, -3.0, -3.0, 1.0]);
+        }
+        // These display-oriented statistics still apply their own normalisation.
+        for mode in [Stat::Entropy, Stat::Skewness, Stat::Kurtosis] {
+            assert!((0.0..=1.0).contains(&combine(&layers, mode)[0][0]), "{mode:?}");
+        }
     }
 
     #[test]

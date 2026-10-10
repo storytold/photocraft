@@ -29,6 +29,39 @@ struct Gpu {
 /// Simulated texture limit (pages and chunks of 256 px).
 const PAGED_LIMIT: u32 = 256;
 
+#[test]
+fn hdr_adjustments_preserve_range_and_cpu_parity() {
+    let Some(mut g) = gpu() else { return };
+    let identity = vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }];
+    let channel = LevelsChannel { in_black: 0.25, in_white: 0.75, gamma: 2.0, out_black: -0.1, out_white: 1.5 };
+    for adj in [
+        Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: 1.0 },
+        Adjustment::Exposure { exposure: 1.0, offset: 0.1, gamma: 1.3 },
+        Adjustment::Levels { master: Default::default(), per_channel: Default::default(), space: Default::default(), black: Default::default() },
+        Adjustment::Levels {
+            master: channel.clone(),
+            per_channel: [channel.clone(), Default::default(), channel],
+            space: Default::default(),
+            black: Default::default(),
+        },
+        Adjustment::Curves { master: identity.clone(), per_channel: std::array::from_fn(|_| identity.clone()), space: Default::default(), black: Vec::new() },
+        Adjustment::Curves {
+            master: Vec::new(),
+            per_channel: [Vec::new(), identity.clone(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 0.5 }]],
+            space: Default::default(),
+            black: Vec::new(),
+        },
+    ] {
+        let mut d = Document::new("HDR adjustments", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
+        let mut layer = Layer::raster("pixels", PixelFormat::RGBA32F);
+        layer.surface_mut().unwrap().write_region(Rect::new(0, 0, 3, 1), &[4.0, 2.0, 0.5, 1.0, -0.1, 3.0, 0.25, 0.75, 0.0, 0.0, 0.0, 1.0]);
+        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
+        let cpu = photocraft_compose::flatten(&d);
+        assert!(cpu.px[0][0] > 1.0, "HDR reference unexpectedly clipped: {adj:?}");
+        check(&mut g, &d, &format!("HDR {adj:?}"));
+    }
+}
+
 fn gpu() -> Option<Gpu> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let instance = wgpu::Instance::default();

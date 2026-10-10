@@ -48,12 +48,14 @@ impl Transfer {
     fn decode(self, v: f32) -> f32 {
         match self {
             Transfer::Srgb => photocraft_color::convert::srgb_to_linear(v.max(0.0)),
+            Transfer::Gamma(1.0) => v.max(0.0),
             Transfer::Gamma(g) => v.max(0.0).powf(g),
         }
     }
     fn encode(self, v: f32) -> f32 {
         match self {
             Transfer::Srgb => photocraft_color::convert::linear_to_srgb(v.max(0.0)),
+            Transfer::Gamma(1.0) => v.max(0.0),
             Transfer::Gamma(g) => v.max(0.0).powf(1.0 / g),
         }
     }
@@ -112,17 +114,34 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
             let m = 2f32.powf(*exposure);
             let g = gamma.max(0.01);
             let transfer = transfer.for_exposure();
+            let hdr = depth == Some(SampleType::F32);
             map_rgb(buf, |c| {
                 c.map(|v| {
-                    let lin = (transfer.decode(v) * m + offset).max(0.0).powf(1.0 / g);
-                    transfer.encode(lin).clamp(0.0, 1.0)
+                    let lin = (transfer.decode(v) * m + offset).max(0.0);
+                    let lin = if g == 1.0 { lin } else { lin.powf(1.0 / g) };
+                    let encoded = transfer.encode(lin);
+                    if hdr { encoded } else { encoded.clamp(0.0, 1.0) }
                 })
             })
         }
+        Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. } if depth == Some(SampleType::F32) => {
+            // A 0..1 lookup table cannot represent signed, unbounded float samples.
+            let master_identity = *master == LevelsChannel::default();
+            let channel_identity = per_channel.each_ref().map(|ch| *ch == LevelsChannel::default());
+            if !master_identity || channel_identity.iter().any(|&v| !v) {
+                map_rgb(buf, |c| {
+                    std::array::from_fn(|i| {
+                        let v = if channel_identity[i] { c[i] } else { levels_float(&per_channel[i], c[i]) };
+                        if master_identity { v } else { levels_float(master, v) }
+                    })
+                });
+            }
+        }
         Adjustment::Levels { space, .. } | Adjustment::Curves { space, .. } => {
             let luts = tone_luts_depth(adj, depth);
+            let identity = float_tone_identity(adj, depth);
             match space {
-                ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| lut(&luts[i], c[i]))),
+                ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| if identity[i] { c[i] } else { lut(&luts[i], c[i]) })),
                 ToneSpace::Cmyk | ToneSpace::Lab => map_rgb(buf, |c| tone_in_space(*space, &luts, c)),
             }
         }
@@ -218,6 +237,17 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
     }
 }
 
+/// Float RGB curve channels with no edit must preserve samples outside the LUT domain.
+/// Edited curves retain the existing spline/LUT behaviour until HDR extrapolation has an oracle.
+pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool; 3] {
+    match adj {
+        Adjustment::Curves { master, per_channel, space: ToneSpace::Rgb, .. } if depth == Some(SampleType::F32) => {
+            std::array::from_fn(|i| photocraft_doc::adjust::is_identity_curve(master) && photocraft_doc::adjust::is_identity_curve(&per_channel[i]))
+        }
+        _ => [false; 3],
+    }
+}
+
 /// Per-channel LUTs of a Levels or Curves adjustment: each channel's record first, then the
 /// master (composite) record, as Photoshop does (psd-tools levels_rgb.psd and curves_rgb.psd,
 /// #975). Four rows: the three `per_channel` channels then black
@@ -247,7 +277,8 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
 }
 
 /// [`tone_luts_q`] in a document of `depth` (`None`: unrounded). 32-bit Levels use
-/// [`levels_float`], sampled on 0..1 and kept in 0..1 like every adjustment result here.
+/// [`levels_float`], sampled on 0..1 and kept in 0..1 for LUT consumers. Float RGB rendering
+/// evaluates the formula directly instead, so samples and results outside that domain survive.
 pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>; 4] {
     match (adj, depth) {
         (Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. }, Some(SampleType::F32)) => {
@@ -643,7 +674,7 @@ pub fn levels_q(ch: &LevelsChannel, v: f32, quantum: Option<f32>) -> f32 {
 /// the clipped curve).
 pub fn levels_float(ch: &LevelsChannel, v: f32) -> f32 {
     let t = (v - ch.in_black) / (ch.in_white - ch.in_black).max(1e-6);
-    let t = t.signum() * t.abs().powf(1.0 / ch.gamma.max(0.01));
+    let t = if ch.gamma == 1.0 { t } else { t.signum() * t.abs().powf(1.0 / ch.gamma.max(0.01)) };
     ch.out_black + t * (ch.out_white - ch.out_black)
 }
 

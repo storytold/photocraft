@@ -1431,9 +1431,11 @@ fn levels_dont_clip_in_32_bit() {
         adjust::apply_depth(&adj, &mut b, adjust::Transfer::Srgb, Some(depth));
         (b.px[0][0] * 255.0).round()
     };
-    for (v, want) in [(0.0, 0.0), (0.0497, 3.0), (0.0976, 32.0), (0.4508, 140.0), (0.9473, 255.0), (1.0, 255.0)] {
+    for (v, want) in [(0.0497, 3.0), (0.0976, 32.0), (0.4508, 140.0), (0.9473, 255.0)] {
         assert_eq!(level(SampleType::F32, v), want, "{v}");
     }
+    assert!(level(SampleType::F32, 0.0) < 0.0);
+    assert!(level(SampleType::F32, 1.0) > 255.0);
     assert_eq!(level(SampleType::U8, 0.0), 10.0);
     assert_eq!(level(SampleType::U8, 1.0), 245.0);
 }
@@ -1463,6 +1465,68 @@ fn exposure_scales_32_bit_samples_as_stored() {
     }
     for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
         assert_eq!(adjust::Transfer::for_document(mode, SampleType::F32), adjust::Transfer::Gamma(1.0));
+    }
+}
+
+#[test]
+fn float_adjustments_preserve_hdr_range() {
+    let identity = vec![photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 }, photocraft_doc::adjust::CurvePoint { input: 1.0, output: 1.0 }];
+    let levels = LevelsChannel { in_black: 0.25, in_white: 0.75, gamma: 2.0, out_black: -0.1, out_white: 1.5 };
+    let adjustments = [
+        (Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: 1.0 }, [4.0, 2.0, 0.5]),
+        (Adjustment::Exposure { exposure: 1.0, offset: 0.0, gamma: 1.0 }, [8.0, 4.0, 1.0]),
+        (
+            Adjustment::Levels { master: Default::default(), per_channel: Default::default(), space: Default::default(), black: Default::default() },
+            [4.0, 2.0, 0.5],
+        ),
+        (
+            Adjustment::Levels { master: levels, per_channel: Default::default(), space: Default::default(), black: Default::default() },
+            [4.0, 2.0, 0.5].map(|v| -0.1 + ((v - 0.25_f32) / 0.5).sqrt() * 1.6),
+        ),
+        (
+            Adjustment::Curves {
+                master: identity.clone(),
+                per_channel: std::array::from_fn(|_| identity.clone()),
+                space: Default::default(),
+                black: Vec::new(),
+            },
+            [4.0, 2.0, 0.5],
+        ),
+        (Adjustment::Curves { master: Vec::new(), per_channel: Default::default(), space: Default::default(), black: Vec::new() }, [4.0, 2.0, 0.5]),
+    ];
+    for (adj, want) in adjustments {
+        let mut d = Document::new("HDR", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        let mut l = Layer::raster("pixels", PixelFormat::RGBA32F);
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &[4.0, 2.0, 0.5, 0.75]);
+        d.layers = vec![l, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
+        let got = px(&d, 0, 0);
+        for (a, b) in got[..3].iter().zip(want) {
+            assert!((a - b).abs() < 1e-5, "{adj:?}: {got:?} vs {want:?}");
+        }
+        assert_eq!(got[3], 0.75);
+    }
+}
+
+#[test]
+fn float_tone_adjustments_preserve_negative_and_untouched_channels() {
+    let identity = vec![photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 }, photocraft_doc::adjust::CurvePoint { input: 1.0, output: 1.0 }];
+    let edited = vec![photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 }, photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.5 }];
+    for (adj, want) in [
+        (
+            Adjustment::Levels { master: Default::default(), per_channel: Default::default(), space: Default::default(), black: Default::default() },
+            [-0.1, 4.0, 0.5],
+        ),
+        (
+            Adjustment::Curves { master: identity.clone(), per_channel: [identity.clone(), Vec::new(), edited], space: Default::default(), black: Vec::new() },
+            [-0.1, 4.0, 0.25],
+        ),
+    ] {
+        let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), [-0.1, 4.0, 0.5, 0.75]);
+        adjust::apply_depth(&adj, &mut b, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+        for (a, b) in b.px[0][..3].iter().zip(want) {
+            assert!((a - b).abs() < 1e-5, "{adj:?}: {:?} vs {want:?}", b);
+        }
+        assert_eq!(b.px[0][3], 0.75);
     }
 }
 
