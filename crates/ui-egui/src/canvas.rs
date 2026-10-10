@@ -3010,7 +3010,20 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                         egui::CursorIcon::ZoomIn
                     }
                 }
-                Tool::Pen | Tool::DirectSelection | Tool::PathSelection => {
+                Tool::Pen => {
+                    let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+                    if let Some(kind) = crate::vector_ui::path_cursor(app, xf.to_doc(p), mods) {
+                        crate::icons::cursor_badge(ui.ctx(), kind.icon(), p);
+                    }
+                    // ⇪ is the precise crosshair, as for the painting tools. Otherwise the pen
+                    // nib is the hotspot.
+                    if app.caps_lock {
+                        crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0)
+                    } else {
+                        pen_cursor(ui.ctx(), p)
+                    }
+                }
+                Tool::DirectSelection | Tool::PathSelection => {
                     let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
                     if let Some(kind) = crate::vector_ui::path_cursor(app, xf.to_doc(p), mods) {
                         crate::icons::cursor_badge(ui.ctx(), kind.icon(), p);
@@ -3653,6 +3666,15 @@ pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
     crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
+    egui::CursorIcon::None
+}
+
+/// The Pen's pointer: the nib of `pen-tool.svg` sits on the pixel a click places. Caps Lock
+/// uses the precise crosshair instead (`tool_cursor::crosshair`).
+pub(crate) fn pen_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    // The drawing tip is the upper-left point of the pen, at (2.3, 2.3) of the 24-unit box.
+    // The diamond at the lower right is the other end.
+    crate::icons::cursor(ctx, "pen-tool", p, vec2(2.3, 2.3) / 24.0, 22.0);
     egui::CursorIcon::None
 }
 

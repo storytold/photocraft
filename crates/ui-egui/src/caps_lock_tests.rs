@@ -1,9 +1,9 @@
 //! Caps Lock swaps the painting tools' cursor to the precise crosshair, exactly like Photoshop,
 //! whatever the Cursors › Painting preference is (#1758). The override changes only painting
-//! tools (Brush, Pencil, Clone Stamp, Healing, Eraser, …): Move, Marquee, Crop and Zoom keep
-//! their own cursors. Tests drive the real canvas (`document_area`) and compare the painted
-//! cursor that caps lock produces with the one the Precise preference draws — they must match,
-//! and the Standard preference (off) must not.
+//! tools (Brush, Pencil, Clone Stamp, Healing, Eraser, …) and the Pen: Move, Marquee, Crop and
+//! Zoom keep their own cursors. Tests drive the real canvas (`document_area`) and compare the
+//! painted cursor that caps lock produces with the one the Precise preference draws — they must
+//! match, and the Standard preference (off) must not.
 
 use egui::CursorIcon;
 use egui_kittest::Harness;
@@ -98,6 +98,20 @@ fn caps_lock_forces_the_precise_crosshair_for_painting_tools_whatever_the_prefer
         caps(&mut h, false);
         assert_eq!(fp(&h), off, "{tool:?}: releasing caps lock restores the preference cursor");
     }
+}
+
+#[test]
+fn caps_lock_swaps_the_pen_cursor_for_the_precise_crosshair() {
+    let mut h = capslock_harness();
+    h.state_mut().ui.tool = Tool::Pen;
+    h.run_steps(2);
+    let off = fp(&h);
+    assert_ne!(off.icon, CursorIcon::Crosshair, "the Pen draws its nib, not the OS crosshair");
+    caps(&mut h, true);
+    let on = fp(&h);
+    assert_ne!(off, on, "caps lock replaces the pen icon with the crosshair");
+    caps(&mut h, false);
+    assert_eq!(fp(&h), off, "releasing caps lock restores the pen icon");
 }
 
 #[test]
