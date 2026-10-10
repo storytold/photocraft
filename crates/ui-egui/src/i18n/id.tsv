@@ -13,6 +13,26 @@
 # resource, string table or product UI was consulted or copied; add entries the same way.
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
+# Optional local selection models.
+	Subject / background removal	Subjek / penghapusan latar belakang
+	Object selection	Seleksi objek
+	Classical (built in)	Metode klasik (bawaan)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Unduh
+	Download a model before choosing it. Downloads do not change the current method.	Unduh model sebelum memilihnya. Unduhan tidak mengubah metode saat ini.
+	Downloaded	Sudah diunduh
+	In use…	Sedang digunakan…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Model besar dapat membutuhkan waktu dan beberapa GB memori. Progres dan Batal muncul di bilah status.
+	Local models aren't available in this build or session.	Model lokal tidak tersedia dalam build atau sesi ini.
+	Local selection models	Model seleksi lokal
+	Model details	Detail model
+	Models run on this device. Images stay on this device.	Model dijalankan di perangkat ini. Gambar tetap berada di perangkat ini.
+	Not downloaded	Belum diunduh
+	Remove download	Hapus unduhan
+	Select Subject and Remove Background; detailed, soft edges	Pilih Subjek dan Hapus Latar Belakang; tepi halus dan terperinci
+	Object Selection; drag a box around the object	Pemilihan Objek; seret kotak di sekitar objek
+
 	File	Berkas
 	Edit	Edit
 	Image	Gambar

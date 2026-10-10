@@ -21,6 +21,26 @@
 # (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin letters; the trailing "…" of
 # dialog commands is kept.
 
+# Optional local selection models.
+	Subject / background removal	Výběr subjektu / odstranění pozadí
+	Object selection	Výběr objektu
+	Classical (built in)	Klasická metoda (vestavěná)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Stáhnout
+	Download a model before choosing it. Downloads do not change the current method.	Před výběrem model stáhněte. Stažení nemění aktuální metodu.
+	Downloaded	Staženo
+	In use…	Používá se…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Velké modely mohou trvat déle a použít několik GB paměti. Průběh a Zrušit se zobrazují na stavovém řádku.
+	Local models aren't available in this build or session.	Místní modely nejsou v tomto sestavení nebo relaci dostupné.
+	Local selection models	Místní modely výběru
+	Model details	Podrobnosti modelu
+	Models run on this device. Images stay on this device.	Modely běží na tomto zařízení. Obrázky zůstávají na tomto zařízení.
+	Not downloaded	Nestaženo
+	Remove download	Odstranit stažený model
+	Select Subject and Remove Background; detailed, soft edges	Vybrat objekt a odstranit pozadí; podrobné, měkké okraje
+	Object Selection; drag a box around the object	Výběr objektu; nakreslete rámeček kolem objektu
+
 	File	Soubor
 	Edit	Úpravy
 	Image	Obraz

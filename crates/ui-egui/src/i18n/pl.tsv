@@ -20,6 +20,26 @@
 # Conventions: menus are nouns (Plik, Edycja, Obraz ...), commands are infinitives (Otwórz…,
 # Zapisz jako…), sentence case as in the English source. Quotes: „…”.
 
+# Optional local selection models.
+	Subject / background removal	Temat / usuwanie tła
+	Object selection	Zaznaczanie obiektów
+	Classical (built in)	Metoda klasyczna (wbudowana)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Pobierz
+	Download a model before choosing it. Downloads do not change the current method.	Pobierz model przed jego wybraniem. Pobieranie nie zmienia bieżącej metody.
+	Downloaded	Pobrano
+	In use…	W użyciu…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Duże modele mogą potrzebować czasu i kilku GB pamięci. Postęp i przycisk Anuluj są wyświetlane na pasku stanu.
+	Local models aren't available in this build or session.	Modele lokalne nie są dostępne w tej wersji lub sesji.
+	Local selection models	Lokalne modele zaznaczania
+	Model details	Szczegóły modelu
+	Models run on this device. Images stay on this device.	Modele działają na tym urządzeniu. Obrazy pozostają na tym urządzeniu.
+	Not downloaded	Nie pobrano
+	Remove download	Usuń pobrany model
+	Select Subject and Remove Background; detailed, soft edges	Zaznacz temat i Usuń tło; szczegółowe, miękkie krawędzie
+	Object Selection; drag a box around the object	Zaznaczanie obiektów; przeciągnij prostokąt wokół obiektu
+
 	File	Plik
 	Edit	Edycja
 	Image	Obraz

@@ -4,6 +4,26 @@
 # Columns separated by TAB: context, English source, Greek translation.
 # Original translations based on general Greek graphics/computing terminology.
 # Covers every source label the i18n coverage check lists.
+# Optional local selection models.
+	Subject / background removal	Θέμα / αφαίρεση φόντου
+	Object selection	Επιλογή αντικειμένου
+	Classical (built in)	Κλασική μέθοδος (ενσωματωμένη)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Λήψη
+	Download a model before choosing it. Downloads do not change the current method.	Κάντε λήψη ενός μοντέλου πριν το επιλέξετε. Οι λήψεις δεν αλλάζουν την τρέχουσα μέθοδο.
+	Downloaded	Έγινε λήψη
+	In use…	Σε χρήση…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Τα μεγάλα μοντέλα μπορεί να χρειαστούν χρόνο και αρκετά GB μνήμης. Η πρόοδος και η Ακύρωση εμφανίζονται στη γραμμή κατάστασης.
+	Local models aren't available in this build or session.	Τα τοπικά μοντέλα δεν είναι διαθέσιμα σε αυτή την έκδοση ή συνεδρία.
+	Local selection models	Τοπικά μοντέλα επιλογής
+	Model details	Λεπτομέρειες μοντέλου
+	Models run on this device. Images stay on this device.	Τα μοντέλα εκτελούνται σε αυτή τη συσκευή. Οι εικόνες παραμένουν σε αυτή τη συσκευή.
+	Not downloaded	Δεν έχει γίνει λήψη
+	Remove download	Διαγραφή λήψης
+	Select Subject and Remove Background; detailed, soft edges	Επιλογή θέματος και αφαίρεση φόντου· λεπτομερή, απαλά όρια
+	Object Selection; drag a box around the object	Επιλογή αντικειμένου· σύρετε ένα πλαίσιο γύρω από το αντικείμενο
+
 	File	Αρχείο
 	Edit	Επεξεργασία
 	Image	Εικόνα

@@ -17,6 +17,26 @@
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 
+# Optional local selection models.
+	Subject / background removal	被写体選択 / 背景の削除
+	Object selection	オブジェクト選択
+	Classical (built in)	従来の方法（内蔵）
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	ダウンロード
+	Download a model before choosing it. Downloads do not change the current method.	モデルをダウンロードしてから選択してください。ダウンロードだけでは現在の方法は変わりません。
+	Downloaded	ダウンロード済み
+	In use…	使用中…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	大きなモデルは時間と数GBのメモリを使う場合があります。進捗とキャンセルはステータスバーに表示されます。
+	Local models aren't available in this build or session.	このビルドまたはセッションではローカルモデルを利用できません。
+	Local selection models	ローカル選択モデル
+	Model details	モデルの詳細
+	Models run on this device. Images stay on this device.	モデルはこのデバイス上で実行されます。画像はこのデバイス上に留まります。
+	Not downloaded	未ダウンロード
+	Remove download	ダウンロードを削除
+	Select Subject and Remove Background; detailed, soft edges	被写体を選択して背景を削除。細部を保った柔らかなエッジ
+	Object Selection; drag a box around the object	オブジェクト選択。オブジェクトを囲む矩形をドラッグ
+
 	File	ファイル
 	Edit	編集
 	Image	画像

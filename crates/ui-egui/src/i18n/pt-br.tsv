@@ -17,6 +17,26 @@
 # entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
 # stay as they are; the trailing "…" of dialog commands is kept.
 
+# Optional local selection models.
+	Subject / background removal	Assunto / remoção de fundo
+	Object selection	Seleção de objetos
+	Classical (built in)	Método clássico (incluído)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Baixar
+	Download a model before choosing it. Downloads do not change the current method.	Baixe um modelo antes de escolhê-lo. O download não altera o método atual.
+	Downloaded	Baixado
+	In use…	Em uso…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Modelos grandes podem demorar e usar vários GB de memória. O progresso e Cancelar aparecem na barra de status.
+	Local models aren't available in this build or session.	Modelos locais não estão disponíveis nesta versão ou sessão.
+	Local selection models	Modelos de seleção locais
+	Model details	Detalhes do modelo
+	Models run on this device. Images stay on this device.	Os modelos são executados neste dispositivo. As imagens permanecem neste dispositivo.
+	Not downloaded	Não baixado
+	Remove download	Remover download
+	Select Subject and Remove Background; detailed, soft edges	Selecionar assunto e remover fundo; bordas suaves e detalhadas
+	Object Selection; drag a box around the object	Seleção de objeto; arraste uma caixa ao redor do objeto
+
 	File	Arquivo
 	Edit	Editar
 	Image	Imagem

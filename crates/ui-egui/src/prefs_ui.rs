@@ -1323,7 +1323,15 @@ fn model_choice_available(status: &Value, option: &str) -> bool {
             && status["models"].as_array().into_iter().flatten().any(|m| m["id"].as_str() == Some(option) && m["installed"].as_bool() == Some(true)))
 }
 
-fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, order: &[String], lang: crate::i18n::Lang, system: Option<egui::Theme>, models: &Value) {
+fn section_fields(
+    ui: &mut egui::Ui,
+    section: &str,
+    obj: &mut Map<String, Value>,
+    order: &[String],
+    lang: crate::i18n::Lang,
+    system: Option<egui::Theme>,
+    models: &Value,
+) {
     let t = Tokens::get(ui.ctx());
     if section == "interface" {
         appearance_rows(ui, obj, system);
@@ -1920,6 +1928,38 @@ mod tests {
     }
 
     #[test]
+    fn local_model_labels_cover_every_complete_language() {
+        let labels = [
+            "Subject / background removal",
+            "Object selection",
+            "Classical (built in)",
+            "BiRefNet HR Matting",
+            "SAM 2.1 Large",
+            "Download",
+            "Download a model before choosing it. Downloads do not change the current method.",
+            "Downloaded",
+            "In use…",
+            "Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.",
+            "Local models aren't available in this build or session.",
+            "Local selection models",
+            "Model details",
+            "Models run on this device. Images stay on this device.",
+            "Not downloaded",
+            "Remove download",
+            "Select Subject and Remove Background; detailed, soft edges",
+            "Object Selection; drag a box around the object",
+        ];
+        for info in &crate::i18n::LANGUAGES {
+            if !info.complete_menus {
+                continue;
+            }
+            let lang = crate::i18n::Lang::from_pref(info.code);
+            let missing: Vec<_> = labels.iter().filter(|label| !crate::i18n::has(lang, label)).collect();
+            assert!(missing.is_empty(), "{}: missing model labels: {missing:?}", info.code);
+        }
+    }
+
+    #[test]
     fn local_model_choices_need_a_backend_and_a_download() {
         assert!(model_choice_available(&json!({"available":false}), "classical"));
         assert!(!model_choice_available(&json!({"available":false}), "sam2.1-large"));
@@ -2493,9 +2533,7 @@ mod tests {
         assert!(has_visible_fields(&values, "integrations"));
         assert!(has_visible_fields(&values, "enhancedControls"));
         // Every setting of these sections is still unimplemented.
-        for section in ["scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        assert!(!has_visible_fields(&values, "scratchDisks"));
         // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
@@ -2698,8 +2736,10 @@ mod tests {
     fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
         use egui_kittest::{Harness, kittest::Queryable};
         let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
-        let mut h =
-            Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None), obj);
+        let mut h = Harness::new_ui_state(
+            |ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None, &json!({"available":false})),
+            obj,
+        );
         h.run_steps(4);
         assert!(h.query_by_label("Applies at next launch.").is_none());
         h.get_by_label("Show tooltips").click();

@@ -101,6 +101,31 @@ decision, and this change does not enable the feature in official release workfl
 
 ## Provenance and review
 
+### Why these community exports
+
+Source review on 2026-10-10 found no ONNX files in the exact official checkpoint trees:
+[BiRefNet HR Matting at `5d6b6f8`](https://huggingface.co/ZhengPeng7/BiRefNet_HR-matting/tree/5d6b6f8adcb5b417c871b1d84ceaae9871355b7f)
+publishes Safetensors; [Meta SAM 2.1 Large at `665f8e2`](https://huggingface.co/facebook/sam2.1-hiera-large/tree/665f8e2ad61cf5f53d65644ff27c8ee525124610)
+publishes Safetensors and a PyTorch checkpoint. This Rust backend needs ONNX graphs, so it
+retains the already evaluated FP32 exports below rather than introducing Python/PyTorch or
+changing the benchmarked model variant. No Hugging Face Python or `trust_remote_code` runs.
+
+The [pinned PinkPixel card](https://huggingface.co/PinkPixel/birefnet-hr-matting-onnx/blob/792518b9d4dfe9793891712677de25e554f948c6/README.md)
+identifies the original BiRefNet checkpoint and documents its 2048-pixel input/alpha contract.
+The [pinned onnx-community configuration](https://huggingface.co/onnx-community/sam2.1-hiera-large-ONNX/blob/3c23431f721e69cae82dbfd0c28fd692cc714021/config.json)
+specifies FP32 SAM 2 at 1024 pixels; that revision has no model card or conversion recipe.
+Our review therefore relies on graph/IO inspection, actual CPU execution of both downloaded
+models and the published 22-case output evidence, with failures retained. It does not claim
+independent verification of the conversion's equivalence to Meta's checkpoint.
+
+Every selected artifact's LFS byte count and SHA-256 was rechecked against its immutable
+export revision on 2026-10-10 and still matches the catalog. Exact pins, streaming integrity
+checks, explicit opt-in, original-model licences and evaluated outputs make these
+community artifacts reviewable; hashes establish identity, not training provenance or
+upstream endorsement. A compatible author-published ONNX export can replace one through a
+future reviewed catalog/adapter update and new output comparisons.
+
+
 All URLs, exact byte counts and SHA-256 hashes are in
 [`crates/ml/src/catalog.rs`](../crates/ml/src/catalog.rs), derived from the pinned exports' Hugging
 Face LFS metadata. A model update requires a code change and review; there is no mutable remote
@@ -124,8 +149,9 @@ cargo test -p photocraft-engine -p photocraft-cli --features local-ml
 cargo clippy -p photocraft-ml -p photocraft-engine --features photocraft-ml/onnx,local-ml --all-targets -- -D warnings
 ```
 
-`.github/workflows/local-models.yml` exercises CPU runtime contracts, commands and native build
-paths on Windows, Linux and macOS without downloading learned weights. The opt-in full-model
+`.github/workflows/local-models.yml` is **manual-only** (`workflow_dispatch`): no push or
+pull-request trigger. An explicit run exercises CPU runtime contracts, commands, Preferences,
+catalogs and native build paths on Windows, Linux and macOS without downloading learned weights. The opt-in full-model
 smoke test is separate; the download flag is explicit and transfers about 1.8 GB:
 
 ```sh

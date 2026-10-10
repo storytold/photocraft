@@ -13,6 +13,26 @@
 # Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
+# Optional local selection models.
+	Subject / background removal	主体选择 / 移除背景
+	Object selection	对象选择
+	Classical (built in)	传统方法（内置）
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	下载
+	Download a model before choosing it. Downloads do not change the current method.	请先下载模型再选择。下载不会改变当前方法。
+	Downloaded	已下载
+	In use…	使用中…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	大型模型可能耗时并占用数 GB 内存。进度和取消按钮显示在状态栏中。
+	Local models aren't available in this build or session.	此版本或会话无法使用本地模型。
+	Local selection models	本地选择模型
+	Model details	模型详情
+	Models run on this device. Images stay on this device.	模型在此设备上运行。图像保留在此设备上。
+	Not downloaded	未下载
+	Remove download	删除下载
+	Select Subject and Remove Background; detailed, soft edges	选择主体和移除背景；精细、柔和的边缘
+	Object Selection; drag a box around the object	对象选择；拖动矩形框以包围对象
+
 	File	文件
 	Edit	编辑
 	Image	图像

@@ -1,27 +1,7 @@
 name: Optional local models
 
+# This optional, native-only gate runs solely on an explicit maintainer/contributor request.
 on:
-  # Let contributors verify native platforms in their fork before maintainer approval of PR CI.
-  push:
-    paths:
-      - "crates/ml/**"
-      - "crates/engine/**"
-      - "crates/ui-egui/**"
-      - "apps/photocraft/**"
-      - "apps/photocraft-cli/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/local-models.yml"
-  pull_request:
-    paths:
-      - "crates/ml/**"
-      - "crates/engine/**"
-      - "crates/ui-egui/**"
-      - "apps/photocraft/**"
-      - "apps/photocraft-cli/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/local-models.yml"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +13,6 @@ concurrency:
 
 jobs:
   cpu:
-    if: ${{ github.event_name != 'push' || github.event.repository.fork }}
     name: CPU (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45

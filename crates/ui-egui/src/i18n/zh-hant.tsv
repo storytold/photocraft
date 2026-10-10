@@ -21,6 +21,26 @@
 # kept. Full-width punctuation (，。：) inside sentences; half-width parentheses and the " · "
 # separators as in the English.
 
+# Optional local selection models.
+	Subject / background removal	主體選取 / 移除背景
+	Object selection	物件選取
+	Classical (built in)	傳統方法（內建）
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	下載
+	Download a model before choosing it. Downloads do not change the current method.	請先下載模型再選擇。下載不會變更目前的方法。
+	Downloaded	已下載
+	In use…	使用中…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	大型模型可能耗時並使用數 GB 記憶體。進度與取消按鈕顯示在狀態列中。
+	Local models aren't available in this build or session.	此版本或工作階段無法使用本機模型。
+	Local selection models	本機選取模型
+	Model details	模型詳細資訊
+	Models run on this device. Images stay on this device.	模型在此裝置上執行。影像保留在此裝置上。
+	Not downloaded	尚未下載
+	Remove download	刪除下載
+	Select Subject and Remove Background; detailed, soft edges	選取主體和移除背景；精細、柔和的邊緣
+	Object Selection; drag a box around the object	物件選取；拖曳矩形框以包圍物件
+
 	File	檔案
 	Edit	編輯
 	Image	影像

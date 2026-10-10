@@ -50,6 +50,14 @@ Optional CPU models for Object Selection, Select Subject and Remove Background a
 `--features local-ml`. Weights remain separate, explicit downloads. See [local models](local-models.md)
 for Preferences, CLI, provenance and native runtime packaging details.
 
+The native `local-ml` feature also enables `ort`'s `download-binaries` feature. Its pinned
+ONNX Runtime 1.28 redistribution is fetched at **build time**, separately from Cargo crates
+and the optional learned weights. A fresh `local-ml` build therefore requires network access
+and is **not reproducible offline from Cargo.lock alone**. `cargo --offline` controls Cargo
+resolution; it does not supply that runtime archive. Default builds and wasm omit this
+dependency. Enabled distributors must ship the runtime licence and third-party notices;
+see [native runtime packaging](local-models.md#build-and-use).
+
 The dev profile builds with `debug = "line-tables-only"`: panic backtraces keep file and line, and test binaries link about twice as fast. To inspect local variables in a debugger, build with `CARGO_PROFILE_DEV_DEBUG=true`.
 
 ### Faster test loops

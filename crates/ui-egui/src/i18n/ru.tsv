@@ -20,6 +20,26 @@
 # the Russian typographic equivalent, with the space the source carries.
 
 # Menus
+# Optional local selection models.
+	Subject / background removal	Выделение объекта / удаление фона
+	Object selection	Выделение объектов
+	Classical (built in)	Классический метод (встроенный)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Скачать
+	Download a model before choosing it. Downloads do not change the current method.	Скачайте модель перед выбором. Скачивание не меняет текущий метод.
+	Downloaded	Скачано
+	In use…	Используется…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Большие модели могут требовать времени и нескольких ГБ памяти. Прогресс и отмена доступны в строке состояния.
+	Local models aren't available in this build or session.	Локальные модели недоступны в этой сборке или сеансе.
+	Local selection models	Локальные модели выделения
+	Model details	Подробнее о модели
+	Models run on this device. Images stay on this device.	Модели работают на этом устройстве. Изображения остаются на этом устройстве.
+	Not downloaded	Не скачано
+	Remove download	Удалить скачанное
+	Select Subject and Remove Background; detailed, soft edges	Выделение объекта и удаление фона; детализированные мягкие края
+	Object Selection; drag a box around the object	Выделение объекта; обведите объект прямоугольником
+
 	File	Файл
 	Edit	Редактирование
 	Image	Изображение
