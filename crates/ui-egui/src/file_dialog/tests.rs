@@ -6,6 +6,11 @@ use std::rc::Rc;
 /// The requests the fake dialog service was given, with their replies: dialogs the user is still in.
 type Open = Rc<RefCell<Vec<(FileDialogRequest, FileDialogReply)>>>;
 
+/// Match the platform's separators in suggestions built with `Path::join`.
+fn joined(dir: &str, name: &str) -> String {
+    std::path::Path::new(dir).join(name).to_string_lossy().into_owned()
+}
+
 /// An app with an untitled document, whose file dialogs stay open until the test answers them, and
 /// whose writer records the paths it wrote.
 fn app() -> (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>) {
