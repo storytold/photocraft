@@ -46,6 +46,26 @@ pub struct LangInfo {
     catalog: OnceLock<Catalog>,
 }
 
+/// Arabic: 0 → zero, 1 → one, 2 → two, 3–10 → few, 11–99 → many, 100+ → other.
+fn plural_arabic(n: u64) -> usize {
+    if n == 0 {
+        0
+    } else if n == 1 {
+        1
+    } else if n == 2 {
+        2
+    } else {
+        let mod100 = n % 100;
+        if (3..=10).contains(&mod100) {
+            3
+        } else if (11..=99).contains(&mod100) {
+            4
+        } else {
+            5
+        }
+    }
+}
+
 fn plural_one_other(n: u64) -> usize {
     usize::from(n != 1)
 }
@@ -122,7 +142,7 @@ fn inflate(source: &[u8]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 17] = [
+pub static LANGUAGES: [LangInfo; 18] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -145,6 +165,7 @@ pub static LANGUAGES: [LangInfo; 17] = [
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
     LangInfo { code: "nl", name: "Nederlands", source: catalog!("nl"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "it", name: "Italiano", source: catalog!("it"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -351,10 +372,32 @@ mod tests {
     use super::catalog::{parse_entries, placeholders};
     use super::*;
 
+    const AR: fn() -> Lang = || Lang::from_code("ar").expect("ar registered");
     const JA: fn() -> Lang = || Lang::from_code("ja").expect("ja registered");
     const ZH: fn() -> Lang = || Lang::from_code("zh-hant").expect("zh-hant registered");
     const CS: fn() -> Lang = || Lang::from_code("cs").expect("cs registered");
     const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
+
+    #[test]
+    fn arabic_plural_rule() {
+        let forms: Vec<usize> = [0, 1, 2, 3, 5, 10, 11, 99, 100, 101, 111, 112].into_iter().map(plural_arabic).collect();
+        assert_eq!(forms, [0, 1, 2, 3, 3, 3, 4, 4, 5, 5, 5, 5]);
+    }
+
+    #[test]
+    fn arabic_resolves_locales_and_preferences() {
+        let ar = AR();
+        assert_eq!(ar.name(), "العربية");
+        assert!(ar.complete_menus());
+        for tag in ["ar", "AR", "ar-SA", "ar_EG", "ar_MA", "ar-AE"] {
+            assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+            assert_eq!(Lang::from_pref(tag), ar, "{tag}");
+        }
+        assert_eq!(tr(ar, "File"), "ملف");
+        assert_eq!(tr(ar, "Layer"), "طبقة");
+        assert_eq!(tr(ar, "New document…"), "مستند جديد…");
+        assert_eq!(tr(ar, "No properties"), "لا خصائص");
+    }
 
     #[test]
     fn indonesian_tags_resolve() {

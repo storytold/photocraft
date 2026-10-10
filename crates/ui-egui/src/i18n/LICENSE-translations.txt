@@ -2,6 +2,9 @@ PhotoCraft's Korean, German, Brazilian Portuguese, Italian, Ukrainian and Dutch 
 licensed under MIT OR Apache-2.0, at your option. The full license texts are in ../../../../LICENSE-MIT
 and ../../../../LICENSE-APACHE.
 
+Arabic translations: PhotoCraft contributors, original translations of
+PhotoCraft's English labels; no proprietary translation resources were used.
+
 Korean translations: PhotoCraft contributors, original translations of
 PhotoCraft's English labels; no proprietary translation resources were used.
 
