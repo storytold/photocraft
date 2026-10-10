@@ -1017,6 +1017,15 @@ pub(crate) struct Gesture {
     pub(crate) pivot0: [f64; 2],
 }
 
+/// A click outside the box accepts the transform; a drag outside still rotates it.
+/// Keep the rotation-cursor band near corners interactive rather than treating it as an
+/// acceptance click. Use screen-sized tolerance so tiny pointer jitter still counts as a click.
+fn accepts_outside_click(t: &TransformSession, g: Gesture, end: [f64; 2], tol: f64) -> bool {
+    g.hit == Hit::Outside
+        && !near_rotate_corner(t, g.start, tol)
+        && (end[0] - g.start[0]).hypot(end[1] - g.start[1]) <= 2.0 * tol / HANDLE_PX
+}
+
 /// Pointer input while transforming. Returns false when no transform is active.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let Some(t) = app.ui.transform.clone() else { return false };
@@ -1038,15 +1047,26 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 h = Hit::Pivot;
             }
             // Distort only moves corners (and the whole box from inside): no rotating, no edges.
-            pv.gesture = distort_allows(t.mode, h).then_some(Gesture { hit: h, start: [x, y], quad0: t.quad, pivot0: t.pivot });
+            // Even in Distort mode, remember an outside press so a plain click can
+            // accept the transform. A drag outside remains inert in that mode.
+            pv.gesture = (distort_allows(t.mode, h) || h == Hit::Outside).then_some(Gesture { hit: h, start: [x, y], quad0: t.quad, pivot0: t.pivot });
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
             let g = pv.gesture;
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.gesture = None;
             }
+            // Clicking an empty spot commits instead of silently arming rotation (#2851).
+            // A dragged gesture, a near-corner rotation click, and Option-click to move the
+            // pivot keep their existing behavior.
+            if matches!(ev, ToolEvent::Up { .. }) && g.is_some_and(|g| accepts_outside_click(&t, g, [x, y], tol)) {
+                commit(app);
+                return true;
+            }
             let legacy = app.session.prefs().general.use_legacy_free_transform;
-            if let (Some(g), Some(s)) = (g, app.ui.transform.as_mut()) {
+            if let (Some(g), Some(s)) = (g, app.ui.transform.as_mut())
+                && distort_allows(t.mode, g.hit)
+            {
                 apply_drag(s, g, [x, y], mode_mods(t.mode, g.hit, legacy_mods(legacy, g.hit, mods)));
             }
         }
@@ -2195,6 +2215,57 @@ mod tests {
             made: None,
             mode: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_plain_click_far_outside_accepts_transform_but_a_rotation_drag_does_not() {
+        let context = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        begin(&mut app, &context).unwrap();
+        let before = app.session.active().unwrap().history.past_len();
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+        let outside = [44.0, 44.0];
+        let none = egui::Modifiers::NONE;
+        assert!(pointer(&mut app, ToolEvent::Down { x: outside[0], y: outside[1], pressure: 1.0 }, none));
+        assert!(app.ui.transform.is_some(), "press alone does not accept");
+        assert!(pointer(&mut app, ToolEvent::Up { x: outside[0], y: outside[1] }, none));
+        assert!(app.ui.transform.is_none(), "a release without a drag commits");
+        assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "one undo step for the transform");
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(layer.surface().unwrap().content_bounds(), photocraft_geom::Rect::new(14, 8, 30, 24));
+
+        // An outside drag remains a rotation gesture; releasing it does not commit.
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        begin(&mut app, &context).unwrap();
+        let start = [44.0, 44.0];
+        let end = [44.0, 54.0];
+        let original = app.ui.transform.as_ref().unwrap().quad;
+        pointer(&mut app, ToolEvent::Down { x: start[0], y: start[1], pressure: 1.0 }, none);
+        pointer(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, none);
+        pointer(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, none);
+        assert!(app.ui.transform.is_some(), "rotation stays active after an outside drag");
+        assert_ne!(app.ui.transform.as_ref().unwrap().quad, original);
+    }
+
+    #[test]
+    fn outer_click_does_not_steal_rotation_handles_or_option_pivot() {
+        let t = session();
+        let tol = 12.0;
+        let near = Gesture { hit: Hit::Outside, start: [-18.0, -18.0], quad0: t.quad, pivot0: t.pivot };
+        assert!(!accepts_outside_click(&t, near, near.start, tol), "corner rotation zone remains interactive");
+        let far = Gesture { start: [500.0, 500.0], ..near };
+        assert!(accepts_outside_click(&t, far, far.start, tol));
+        assert!(!accepts_outside_click(&t, far, [512.0, 500.0], tol), "drag does not commit");
+
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        begin(&mut app, &egui::Context::default()).unwrap();
+        let p = [44.0, 44.0];
+        pointer(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::ALT);
+        pointer(&mut app, ToolEvent::Up { x: p[0], y: p[1] }, egui::Modifiers::ALT);
+        assert!(app.ui.transform.is_some(), "Option-click moves the pivot, never accepts");
+        assert_eq!(app.ui.transform.as_ref().unwrap().pivot, p);
     }
 
     #[test]
