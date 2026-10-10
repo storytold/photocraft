@@ -156,7 +156,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_screen: impl Fn([f6
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let deg = (-dy).atan2(dx).to_degrees();
     if let Some(h) = hover.filter(|_| deg.is_finite() && (dx != 0.0 || dy != 0.0)) {
-        crate::canvas::draw_readout(painter.ctx(), "crop-straighten-readout", h, ["Angle:"], [format!("{deg:.1}°")]);
+        crate::canvas::draw_value_readout(app, painter.ctx(), "crop-straighten-readout", h, ["Angle:"], [format!("{deg:.1}°")]);
     }
 }
 

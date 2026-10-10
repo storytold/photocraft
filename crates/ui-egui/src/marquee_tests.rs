@@ -147,6 +147,23 @@ fn shift_during_the_drag_draws_a_square_and_the_readout_follows() {
     assert!(h.query_by_label("W:").is_none() && h.query_by_label_contains(" px").is_none(), "the readout goes away with the drag");
 }
 
+/// #204: Preferences › Tools › Show Transformation Values off hides the readout, not the marquee.
+#[test]
+fn show_transformation_values_off_hides_the_readout() {
+    for shown in [false, true] {
+        let mut h = harness(Tool::RectMarquee);
+        h.state_mut().run("prefs.set", json!({"path": "tools.showTransformationValues", "value": shown})).unwrap();
+        press_at(&mut h, 50.0, 50.0, Modifiers::NONE);
+        move_to(&mut h, 150.0, 90.0);
+        assert_eq!(readout(&h, 100, 40), shown, "shown: {shown}");
+        if !shown {
+            assert!(h.query_by_label("W:").is_none() && h.query_by_label_contains(" px").is_none());
+        }
+        release_at(&mut h, 150.0, 90.0, Modifiers::NONE);
+        assert_eq!(selection(&h), Rect::new(50, 50, 150, 90), "the marquee still selects");
+    }
+}
+
 #[test]
 fn alt_draws_from_the_centre_and_shift_alt_a_centred_circle() {
     let mut h = harness(Tool::RectMarquee);
