@@ -1372,6 +1372,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 // ----------------------------------------------------------------------------- dock
 
 pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::panel_docking::begin(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let p = app.ui.panels.clone();
     if t.pro {
@@ -1396,8 +1397,12 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ];
                 for (icon, name, g) in entries {
                     // Studio floats Properties outside the dock.
-                    let docked = t.pro || g != Group::Properties;
-                    let on = g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g));
+                    let docked = t.pro || app.ui.dock.arrangement.groups.is_some() || g != Group::Properties;
+                    let default_on = g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g));
+                    let mut tabs = app.ui.dock_tabs;
+                    let on = crate::panel_docking::PanelTab::from_source(g, *g.tab_mut(&mut tabs), t.pro)
+                        .and_then(|panel| crate::panel_docking::visible(app, panel))
+                        .unwrap_or(default_on);
                     if icons::rail_button(ui, icon, rb, on, name).clicked() {
                         crate::dock::rail_click(app, g, docked);
                     }
@@ -1408,6 +1413,8 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if !t.pro {
         dock_panels(app, ui, &p, &t);
     }
+    crate::panel_docking::floating(app, ui.ctx());
+    crate::panel_docking::finish(app, ui.ctx());
     crate::dock::persist(app, ui.ctx());
 }
 
@@ -1429,14 +1436,14 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
     // Floating in Studio, Properties docks only in Pro (Photoshop).
     let shown: Vec<Group> = [
         (Group::Color, p.color),
-        (Group::Properties, t.pro && p.properties),
+        (Group::Properties, (t.pro || app.ui.dock.arrangement.groups.is_some()) && p.properties),
         (Group::Character, p.character),
         (Group::Navigator, p.navigator),
         (Group::History, p.history),
         (Group::Layers, p.layers),
     ]
     .into_iter()
-    .filter_map(|(g, on)| on.then_some(g))
+    .filter_map(|(g, on)| (on && !app.ui.dock.arrangement.tabs(g, t.pro).is_empty()).then_some(g))
     .collect();
     if shown.is_empty() {
         return;
@@ -1453,7 +1460,7 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
 }
 
 /// One dock group's tab content; `dock` bounds it and scrolls it when it's taller.
-fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::dock::Group, tab: usize) {
+pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate::dock::Group, tab: usize) {
     use crate::dock::Group;
     let pro = Tokens::get(ui.ctx()).pro;
     match (group, tab) {
@@ -1829,8 +1836,8 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rows = crate::layer_tree_ui::display_rows(&doc, !app.ui.layer_filter.is_empty());
     let ctx = ui.ctx().clone();
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
+    let fill = true;
+    let rows_h = (ui.available_height() - footer).max(0.0);
     egui::ScrollArea::vertical()
         .id_salt("layer-rows")
         .max_height(rows_h)
@@ -2447,7 +2454,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
-    let max_h = (ui.available_height() - footer).max(40.0);
+    let max_h = (ui.available_height() - footer).max(0.0);
     egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
         for (i, (e, is_redo)) in all.enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
@@ -2516,7 +2523,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Floating Properties card anchored to the canvas' top-right corner.
 pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Pro (Photoshop) docks Properties; Studio floats it over the canvas.
-    if !app.ui.panels.properties || Tokens::get(ctx).pro {
+    if !app.ui.panels.properties || Tokens::get(ctx).pro || app.ui.dock.arrangement.groups.is_some() {
         return;
     }
     let Some(st) = app.session.active() else { return };

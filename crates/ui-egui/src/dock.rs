@@ -115,7 +115,7 @@ impl Group {
         matches!((self, tab), (Group::Layers, 0) | (Group::History, 0))
     }
 
-    fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
+    pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
         match self {
             Group::Color => &mut tabs.color,
             Group::Properties => &mut tabs.properties,
@@ -142,7 +142,7 @@ impl Group {
         }
     }
 
-    fn shown_mut(self, panels: &mut Panels) -> &mut bool {
+    pub(crate) fn shown_mut(self, panels: &mut Panels) -> &mut bool {
         match self {
             Group::Color => &mut panels.color,
             Group::Properties => &mut panels.properties,
@@ -158,6 +158,7 @@ impl Group {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockLayout {
+    pub arrangement: crate::panel_docking::Arrangement,
     /// Top-to-bottom order; a group missing here (say one added after the layout was saved)
     /// goes just below the nearest group that precedes it by default (or last).
     pub order: Vec<Group>,
@@ -326,6 +327,9 @@ impl DockLayout {
 /// Show `g` and expand it (Window › <panel>, the icon rail): a panel asked for is always
 /// brought back, whatever state it was left in (#129).
 pub fn reveal(app: &mut PhotocraftApp, g: Group) {
+    if crate::panel_docking::reveal(app, g) {
+        return;
+    }
     *g.shown_mut(&mut app.ui.panels) = true;
     let selected = *g.tab_mut(&mut app.ui.dock_tabs);
     let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
@@ -338,6 +342,9 @@ pub fn reveal(app: &mut PhotocraftApp, g: Group) {
 /// toggle visibility, so one stray click made a panel vanish: #129); `docked` is false for
 /// Studio's floating Properties card, which the rail shows and hides.
 pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
+    if crate::panel_docking::rail_click(app, g) {
+        return;
+    }
     if !g.shown(&app.ui.panels) {
         reveal(app, g);
     } else if !docked {
@@ -354,6 +361,7 @@ enum Action {
     Close(Group),
     CloseTab(Group, usize),
     Move(Group, Option<Group>),
+    Float(Vec<crate::panel_docking::PanelTab>, egui::Pos2),
 }
 
 /// Rects of the groups drawn last frame (screen points), for tests and automation.
@@ -391,7 +399,8 @@ fn strips_id() -> egui::Id {
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut body: impl FnMut(&mut PhotocraftApp, &mut egui::Ui, Group, usize)) {
     let t = Tokens::get(ui.ctx());
     let strip = if t.pro { 28.0 } else { 40.0 };
-    let order: Vec<Group> = app.ui.dock.order().into_iter().filter(|g| shown.contains(g)).collect();
+    let order: Vec<Group> =
+        app.ui.dock.order().into_iter().filter(|g| shown.contains(g) && !crate::panel_docking::visible_tabs(app, *g, t.pro).is_empty()).collect();
     let area = ui.available_rect_before_wrap();
     let heights = app.ui.dock.heights_for(&order, area.height(), strip);
     let locked = app.session.prefs().workspace_locked;
@@ -404,45 +413,67 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("dock-group", g.key())).max_rect(rect));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         child.spacing_mut().item_spacing.y = if t.pro { 0.0 } else { 6.0 };
-        let before = *g.tab_mut(&mut app.ui.dock_tabs);
-        let visible = app.ui.dock.visible_tabs(g, t.pro);
-        if visible.is_empty() {
+        let panels = crate::panel_docking::visible_tabs(app, g, t.pro);
+        if panels.is_empty() {
             continue;
         }
-        let indices: Vec<usize> = visible.iter().map(|(i, _)| *i).collect();
-        let tabs: Vec<&str> = visible.iter().map(|(_, name)| *name).collect();
-        let mut sel = indices.iter().position(|i| *i == before).unwrap_or(0);
-        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, |ui, shown_tab| {
-            let Some(&tab) = indices.get(shown_tab) else { return };
+        let before = crate::panel_docking::selected(app, g, &panels, t.pro);
+        let mut sel = before;
+        let tabs: Vec<_> = panels.iter().filter_map(|p| p.label()).collect();
+        let mut content_before = None;
+        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, |ui, tab| {
+            let Some(panel) = panels.get(tab).copied() else { return };
+            let source_tab = panel.source_index(t.pro);
+            content_before = Some((panel, source_tab));
+            *panel.group.tab_mut(&mut app.ui.dock_tabs) = source_tab;
             let inner = ui.available_height().max(0.0);
-            if g.scrolls_itself(tab) {
+            if panel.group.scrolls_itself(source_tab) {
                 ui.set_min_height(inner);
-                body(app, ui, g, tab);
+                body(app, ui, panel.group, source_tab);
             } else {
                 egui::ScrollArea::vertical()
                     .id_salt(("dock-scroll", g.key(), tab))
                     .max_height(inner)
                     .auto_shrink([false, false])
-                    .show(ui, |ui| body(app, ui, g, tab));
+                    .show(ui, |ui| body(app, ui, panel.group, source_tab));
             }
         });
+        crate::panel_docking::register(ui.ctx(), crate::panel_docking::Location::Dock(g), rect, &panels, &resp);
+        crate::panel_docking::track(app, ui.ctx(), crate::panel_docking::Location::Dock(g), &panels, &resp);
         strips.push(StripRects {
             group: g,
-            tabs: resp.tabs.iter().filter_map(|(i, r)| indices.get(*i).map(|original| (*original, *r))).collect(),
+            tabs: resp
+                .tabs
+                .iter()
+                .filter_map(|(i, r)| panels.get(*i).map(|p| (if app.ui.dock.arrangement.groups.is_none() { p.source_index(t.pro) } else { *i }, *r)))
+                .collect(),
             menu: resp.menu.rect,
             chevron: resp.chevron,
         });
-        // The strip uses visible indices; dockTabs and the panel bodies use original indices.
-        if let Some(&picked) = indices.get(sel)
-            && picked != before
+        // The body may switch tabs itself (Adjustments jumps back to Properties).
+        let mut switched_elsewhere = false;
+        if sel == before
+            && let Some((panel, old_tab)) = content_before
         {
-            *g.tab_mut(&mut app.ui.dock_tabs) = picked;
+            let current = *panel.group.tab_mut(&mut app.ui.dock_tabs);
+            if current != old_tab
+                && let Some(requested) = crate::panel_docking::PanelTab::from_source(panel.group, current, t.pro)
+            {
+                if let Some(index) = panels.iter().position(|p| *p == requested) {
+                    sel = index;
+                } else {
+                    switched_elsewhere = crate::panel_docking::reveal(app, panel.group);
+                }
+            }
+        }
+        if !switched_elsewhere && let Some(panel) = panels.get(sel) {
+            crate::panel_docking::select(app, g, *panel, t.pro);
         }
         if let Some(context) = resp.tab_context {
             match context {
                 crate::tab_strip::TabContextAction::Close(i) => {
-                    if let Some(&tab) = indices.get(i) {
-                        actions.push(Action::CloseTab(g, tab));
+                    if let Some(panel) = panels.get(i) {
+                        actions.push(Action::CloseTab(panel.group, panel.source_index(t.pro)));
                     }
                 }
                 crate::tab_strip::TabContextAction::CloseGroup => actions.push(Action::Close(g)),
@@ -457,6 +488,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if !locked
             && resp.strip.drag_stopped()
             && let Some(p) = ui.ctx().pointer_interact_pos()
+            && area.contains(p)
         {
             actions.push(Action::Move(g, drop_before(&order, &rects, g, p.y)));
         }
@@ -484,6 +516,16 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             }
             if ui.add_enabled(!locked && pos + 1 < order.len(), egui::Button::new(tl!("Move Group Down"))).clicked() {
                 actions.push(Action::Move(g, order.get(pos + 2).copied()));
+                ui.close();
+            }
+            if ui.add_enabled(!locked, egui::Button::new(tl!("Float Panel"))).clicked() {
+                if let Some(panel) = panels.get(sel) {
+                    actions.push(Action::Float(vec![*panel], rect.left_top() - vec2(320.0, 0.0)));
+                }
+                ui.close();
+            }
+            if ui.add_enabled(!locked, egui::Button::new(tl!("Float Panel Group"))).clicked() {
+                actions.push(Action::Float(panels.clone(), rect.left_top() - vec2(320.0, 0.0)));
                 ui.close();
             }
             ui.separator();
@@ -528,6 +570,22 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             Action::Close(g) => *g.shown_mut(&mut app.ui.panels) = false,
             Action::CloseTab(g, tab) => {
                 app.ui.dock.hide_tab(g, tab, t.pro);
+                if let Some(panel) = crate::panel_docking::PanelTab::from_source(g, tab, t.pro)
+                    && let Some(groups) = &app.ui.dock.arrangement.groups
+                {
+                    let host = groups.iter().find_map(|(host, tabs)| tabs.contains(&panel).then_some(*host));
+                    if let Some(host) = host {
+                        let remaining = crate::panel_docking::visible_tabs(app, host, t.pro);
+                        if remaining.is_empty() {
+                            *host.shown_mut(&mut app.ui.panels) = false;
+                        } else if app.ui.dock.arrangement.selected.get(&host) == Some(&panel)
+                            && let Some(next) = remaining.first()
+                        {
+                            crate::panel_docking::select(app, host, *next, t.pro);
+                        }
+                    }
+                    continue;
+                }
                 let remaining = app.ui.dock.visible_tabs(g, t.pro);
                 if remaining.is_empty() {
                     *g.shown_mut(&mut app.ui.panels) = false;
@@ -544,6 +602,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                     app.ui.dock.move_group(g, before);
                 }
             }
+            Action::Float(panels, at) => app.ui.dock.arrangement.place(&panels, None, None, at, t.pro),
         }
     }
 }
@@ -637,7 +696,8 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     if let Some(t) = v.get("dockTabs").and_then(|t| serde_json::from_value(t.clone()).ok()) {
         app.ui.dock_tabs = t;
     }
-    if let Some(d) = v.get("dock").and_then(|d| serde_json::from_value(d.clone()).ok()) {
+    if let Some(mut d) = v.get("dock").and_then(|d| serde_json::from_value::<DockLayout>(d.clone()).ok()) {
+        d.arrangement.preserve_ids(&app.ui.dock.arrangement);
         app.ui.dock = d;
     }
     app.ui.timeline.open = v.get("timelineOpen").and_then(Value::as_bool).unwrap_or(false);

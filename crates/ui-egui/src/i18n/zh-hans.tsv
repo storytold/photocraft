@@ -2409,3 +2409,6 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Float Panel	浮动面板
+	Float Panel Group	浮动面板组
+	Dock Panel Group	停靠面板组
