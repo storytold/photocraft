@@ -134,9 +134,9 @@ note = "Fuzziness-0 tests cover midtones/shadows only (selection_cmds.rs:444-447
 [[item]]
 id = "TOOL-214-4"
 target = "Move tool: box-select layers, Auto-Select hover outline, double-click fit, drag to a tab"
-status = "missing"
+status = "partial"
 issue = 214
-note = "move_mods.rs covers Shift/Alt/arrows only"
+note = "Auto-Select hover outline done (Preferences › Tools › Show Highlight on Rollover, #2834); box-select layers, double-click fit and drag to a tab open"
 
 [[item]]
 id = "TOOL-214-5"

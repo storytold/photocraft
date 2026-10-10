@@ -1915,6 +1915,7 @@
 	Show only crosshair while painting	Při malování zobrazit jen nitkový kříž
 	Show slice numbers	Zobrazit čísla řezů
 	Show tooltips	Zobrazit popisky nástrojů
+	Show highlight on rollover	Zobrazit zvýraznění při přejetí
 	Show bounding box when dragging layer	Při přetahování vrstvy zobrazit ohraničovací rámeček
 	System title bar	Systémové záhlaví okna
 	Show transformation values	Zobrazit hodnoty transformace

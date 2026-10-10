@@ -81,22 +81,28 @@ fn top_group(doc: &Document, id: LayerId) -> LayerId {
     path.get(..depth).and_then(|p| doc.layer_at(p)).map_or(id, |l| l.id)
 }
 
+/// The layer an Auto-Select click at (x, y) picks (with `group`, its outermost group): the topmost
+/// hit, a type layer by its text bounds. Like Photoshop, it clicks through a fully locked layer
+/// (its own Lock All or a locked group's) to the layer under it (#1641); the right-click list
+/// still shows it. The click (`layer.pickAt`) and the Move tool's rollover highlight both ask
+/// here, so the outline always names the layer a click takes.
+pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
+    let hit = layers_hit(doc, x, y, true).into_iter().find(|id| !doc.effective_locks(*id).all)?;
+    Some(if group { top_group(doc, hit) } else { hit })
+}
+
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `x`".into() })?.floor() as i32;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let list = p.get("list").and_then(Value::as_bool).unwrap_or(false);
-    // The right-click list names the layers with pixels under the pointer; Auto-Select also takes
-    // a type layer by its text bounds.
-    let hits = layers_hit(&doc, x, y, !list);
-    if list {
+    // The right-click list names the layers with pixels under the pointer.
+    if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
+        let hits = layers_hit(&doc, x, y, false);
         let names: Vec<Value> = hits.iter().filter_map(|id| doc.layer(*id)).map(|l| json!({"layer": l.id.0, "name": l.name})).collect();
         return Ok(json!({ "layers": names }));
     }
-    // Like Photoshop, Auto-Select clicks through a fully locked layer (its own Lock All or a
-    // locked group's) to the layer under it (#1641). The right-click list above still shows it.
-    let Some(&hit) = hits.iter().find(|id| !doc.effective_locks(**id).all) else { return Ok(json!({ "layer": null })) };
-    let target = if p.get("target").and_then(Value::as_str) == Some("group") { top_group(&doc, hit) } else { hit };
+    let group = p.get("target").and_then(Value::as_str) == Some("group");
+    let Some(target) = auto_select_target(&doc, x, y, group) else { return Ok(json!({ "layer": null })) };
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
         // Like Photoshop, a plain click on one of several selected layers keeps them all
