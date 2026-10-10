@@ -37,6 +37,14 @@ pub fn psd_style(id: &str) -> Option<&'static str> {
     STYLES.iter().find(|(psd, short)| psd.to_ascii_lowercase() == l || short.to_ascii_lowercase() == l).map(|(psd, _)| *psd)
 }
 
+/// Short id (`flag`, `none`) for a PSD style name (`warpFlag`, `warpNone`): the reverse of [`psd_style`].
+pub fn short_style(psd: &str) -> Option<&'static str> {
+    if psd == "warpNone" {
+        return Some("none");
+    }
+    STYLES.iter().find(|(p, _)| *p == psd).map(|(_, short)| *short)
+}
+
 /// A warp prepared for one layout: the shared style math of
 /// [`photocraft_geom::warp::StyleWarp`] (also used by Edit › Transform › Warp) over the text box.
 #[derive(Clone, Copy, Debug)]
@@ -69,6 +77,18 @@ mod tests {
     fn warp(style: &str, value: f32) -> Warp {
         let w = TextWarp { style: psd_style(style).unwrap().into(), value, horizontal_distortion: 0.0, vertical_distortion: 0.0, horizontal: true };
         Warp::new(&w, [0.0, -40.0, 200.0, 10.0]).unwrap()
+    }
+
+    /// #218: the Warp Text dialog shows a layer's PSD style by its short id.
+    #[test]
+    fn short_ids_round_trip_with_psd_styles() {
+        assert_eq!(short_style("warpFlag"), Some("flag"));
+        assert_eq!(short_style("warpNone"), Some("none"));
+        assert_eq!(short_style("warpCustom"), None);
+        for (psd, short) in STYLES {
+            assert_eq!(short_style(psd), Some(short));
+            assert_eq!(psd_style(short_style(psd).unwrap()), Some(psd));
+        }
     }
 
     #[test]

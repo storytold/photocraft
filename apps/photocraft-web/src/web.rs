@@ -14,12 +14,12 @@ use wasm_bindgen::JsCast as _;
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
+/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
-    "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm",
+    "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco",
+    "ase", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 const CANVAS_ID: &str = "photocraft_canvas";
@@ -353,17 +353,30 @@ fn services(inbox: Inbox) -> Services {
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
         file_dialog: Some(Box::new(|request, _parent, reply| match request {
-            // The browser's file picker hands over the file's contents, not a path.
-            FileDialogRequest::Open { extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
+            // The browser's file picker hands over the files' contents, not paths. File › Open
+            // asks for several files (`multiple`), each opened in its own tab.
+            FileDialogRequest::Open { multiple, extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
                 let dialog = if let Some(exts) = extensions {
                     rfd::AsyncFileDialog::new().add_filter("Supported Files", &exts)
                 } else {
                     rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("SVG", SVG_EXTS)
                 };
-                let picked = dialog.pick_file().await;
-                let answer = match picked {
-                    Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
-                    None => None,
+                let answer = if multiple {
+                    match dialog.pick_files().await {
+                        Some(picked) if !picked.is_empty() => {
+                            let mut files = Vec::with_capacity(picked.len());
+                            for file in picked {
+                                files.push((file.file_name(), file.read().await));
+                            }
+                            Some(FileDialogAnswer::ContentsMany(files))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    match dialog.pick_file().await {
+                        Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
+                        None => None,
+                    }
                 };
                 reply.send(answer);
             }),
@@ -427,6 +440,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
         Some("psd" | "psb") => "image/vnd.adobe.photoshop",
+        Some("ora") => "image/openraster",
         _ => "application/octet-stream",
     }
 }

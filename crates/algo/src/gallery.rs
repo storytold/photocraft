@@ -8,9 +8,13 @@
 
 use photocraft_geom::Rect;
 
-use crate::fxutil::{MAXC, add_sample_premul, gauss_blur_n, premul_window, smoothstep, unpremul_px, xy};
-use crate::image::Image;
+use crate::fxutil::{MAXC, add_sample_premul, gauss_blur_n, gauss_box_radii, premul_window, smoothstep, unpremul_px, xy};
+use crate::image::{Image, premultiply};
 use crate::{BlurPath, Ctx, FieldPin, IrisPin, SpinPin};
+
+#[cfg(test)]
+#[path = "tests_iris.rs"]
+mod tests;
 
 /// Gaussian σ for a gallery blur amount in px.
 fn sigma_of(blur: f32) -> f32 {
@@ -25,17 +29,27 @@ pub(crate) fn reach(blur: f32) -> f32 {
 const LEVELS: usize = 6;
 
 /// Blurs `src` over `out` with a per-pixel σ (`sigma(x, y)`, ≤ `smax`).
-fn variable_blur(src: &Image, out: Rect, ctx: &Ctx, smax: f32, sigma: impl Fn(f32, f32) -> f32) -> Vec<f32> {
+fn variable_blur(src: &Image, out: Rect, ctx: &Ctx, smax: f32, trim_levels: bool, sigma: impl Fn(f32, f32) -> f32) -> Vec<f32> {
     let n = src.ch;
+    if n == 0 || out.is_empty() {
+        return Vec::new();
+    }
     if smax < 0.3 {
         return src.crop(out);
     }
     let win = src.rect;
     let (ww, wh) = (win.width() as usize, win.height() as usize);
     let (ow, oh) = (out.width() as usize, out.height() as usize);
+    let Some(row_len) = ww.checked_mul(n).filter(|&len| len > 0) else { return Vec::new() };
+    let Some(source_len) = row_len.checked_mul(wh) else { return Vec::new() };
+    let Some(pixels) = ow.checked_mul(oh) else { return Vec::new() };
+    let Some(samples) = pixels.checked_mul(n) else { return Vec::new() };
+    if trim_levels && src.data.len() != source_len {
+        return Vec::new();
+    }
     // Level σs: 0, then smax / 2^(LEVELS-1) … smax.
     let lv: Vec<f32> = std::iter::once(0.0).chain((0..LEVELS).map(|k| smax / 2f32.powi((LEVELS - 1 - k) as i32))).collect();
-    let sig: Vec<f32> = (0..ow * oh)
+    let sig: Vec<f32> = (0..pixels)
         .map(|i| {
             let (x, y) = xy(out, i);
             sigma(x as f32 + 0.5, y as f32 + 0.5).clamp(0.0, smax)
@@ -54,20 +68,49 @@ fn variable_blur(src: &Image, out: Rect, ctx: &Ctx, smax: f32, sigma: impl Fn(f3
             0.0
         }
     };
-    let p = premul_window(src, win, ctx.alpha);
-    let mut acc = vec![0.0f32; ow * oh * n];
+    let p = if trim_levels {
+        // The window is exactly src.rect: read interleaved channels together,
+        // retaining the same multiplication and alpha order as premul_window.
+        let mut p = src.data.clone();
+        premultiply(&mut p, n, ctx.alpha);
+        p
+    } else {
+        premul_window(src, win, ctx.alpha)
+    };
+    let mut acc = vec![0.0f32; samples];
     let mut buf = Vec::new();
     for (k, &lvk) in lv.iter().enumerate() {
         if !sig.iter().any(|&s| weight(k, s) > 0.0) {
             continue;
         }
-        let level: &[f32] = if k == 0 {
-            &p
+        let (level, lw): (&[f32], usize) = if k == 0 {
+            (&p, ww)
         } else {
+            // Only Iris opts in. Each level needs its own box-cascade reach,
+            // not the maximum blur's trailing halo. Keep the original top/left:
+            // moving the running sums' start changes floating-point cancellation.
+            let trim = trim_levels && win.intersect(&out) == out;
+            let reach = if !trim || lvk < 0.3 { 0 } else { gauss_box_radii(lvk).iter().sum::<usize>() };
+            let reach = i32::try_from(reach).unwrap_or(i32::MAX);
+            let lw = if trim { (i64::from(out.x1.saturating_add(reach).min(win.x1)) - i64::from(win.x0)) as usize } else { ww };
+            let lh = if trim { (i64::from(out.y1.saturating_add(reach).min(win.y1)) - i64::from(win.y0)) as usize } else { wh };
             buf.clear();
-            buf.extend_from_slice(&p);
-            gauss_blur_n(&mut buf, ww, wh, n, lvk);
-            &buf
+            if buf.capacity() == 0 {
+                // Match the old single full-window allocation. Row appends must
+                // not geometrically grow the capacity beyond that window.
+                buf.reserve_exact(p.len());
+            }
+            if trim {
+                for row in p.chunks_exact(row_len).take(lh) {
+                    if let Some(row) = row.get(..lw * n) {
+                        buf.extend_from_slice(row);
+                    }
+                }
+            } else {
+                buf.extend_from_slice(&p);
+            }
+            gauss_blur_n(&mut buf, lw, lh, n, lvk);
+            (&buf, lw)
         };
         for (i, &s) in sig.iter().enumerate() {
             let wk = weight(k, s);
@@ -75,9 +118,11 @@ fn variable_blur(src: &Image, out: Rect, ctx: &Ctx, smax: f32, sigma: impl Fn(f3
                 continue;
             }
             let (x, y) = xy(out, i);
-            let o = (((y - win.y0) as usize) * ww + (x - win.x0) as usize) * n;
-            for c in 0..n {
-                acc[i * n + c] += level[o + c] * wk;
+            let o = (((y - win.y0) as usize) * lw + (x - win.x0) as usize) * n;
+            if let (Some(dst), Some(px)) = (acc.get_mut(i * n..(i + 1) * n), level.get(o..o + n)) {
+                for (dst, px) in dst.iter_mut().zip(px) {
+                    *dst += px * wk;
+                }
             }
         }
     }
@@ -103,7 +148,7 @@ pub(crate) fn tilt_shift(src: &Image, out: Rect, ctx: &Ctx, blur: f32, centre: (
     let (nx, ny) = (s, c);
     let smax = sigma_of(blur);
     let (f0, f1) = (focus.max(0.0), focus.max(0.0) + transition.max(1e-3));
-    variable_blur(src, out, ctx, smax, |x, y| {
+    variable_blur(src, out, ctx, smax, false, |x, y| {
         let d = ((x - cx) * nx + (y - cy) * ny).abs() / ss;
         smax * smoothstep(f0, f1, d)
     })
@@ -128,18 +173,72 @@ fn pin_distance(x: f32, y: f32, b: Rect, px: f32, py: f32, rx: f32, ry: f32, ang
 pub(crate) fn iris(src: &Image, out: Rect, ctx: &Ctx, pins: &[IrisPin]) -> Vec<f32> {
     let b = ctx.bounds;
     let smax = pins.iter().map(|p| sigma_of(p.blur)).fold(0.0, f32::max);
-    if pins.is_empty() {
+    if pins.is_empty() || smax < 0.3 {
         return src.crop(out);
     }
-    variable_blur(src, out, ctx, smax, |x, y| {
-        pins.iter()
-            .map(|p| {
-                let m = 2.0 + p.roundness.clamp(0.0, 100.0) / 100.0 * 6.0;
-                let (e, _, _) = pin_distance(x, y, b, p.x, p.y, p.radius_x, p.radius_y, p.angle, m);
-                sigma_of(p.blur) * smoothstep(p.feather.clamp(0.0, 0.999), 1.0, e)
-            })
-            .fold(f32::MAX, f32::min)
+    // Small immutable per-tile preparation; allocation failure retains the
+    // same arithmetic without the table. No additional image-sized cache.
+    let mut prepared = Vec::new();
+    let prepared = if prepared.try_reserve_exact(pins.len()).is_ok() {
+        prepared.extend(pins.iter().map(|p| PreparedIris::new(p, b)));
+        Some(prepared)
+    } else {
+        None
+    };
+    variable_blur(src, out, ctx, smax, true, |x, y| {
+        if let Some(prepared) = &prepared {
+            prepared.iter().map(|p| p.sigma(x, y)).fold(f32::MAX, f32::min)
+        } else {
+            pins.iter().map(|p| PreparedIris::new(p, b).sigma(x, y)).fold(f32::MAX, f32::min)
+        }
     })
+}
+
+struct PreparedIris {
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    sin: f32,
+    cos: f32,
+    exponent: f32,
+    feather: f32,
+    blur: f32,
+}
+
+impl PreparedIris {
+    fn new(p: &IrisPin, b: Rect) -> Self {
+        let ss = short_side(b);
+        let angle = if p.angle.is_finite() { p.angle } else { 0.0 };
+        let (sin, cos) = angle.to_radians().sin_cos();
+        Self {
+            cx: b.x0 as f32 + p.x * b.width() as f32,
+            cy: b.y0 as f32 + p.y * b.height() as f32,
+            rx: p.radius_x.max(1e-3) * ss,
+            ry: p.radius_y.max(1e-3) * ss,
+            sin,
+            cos,
+            exponent: 2.0 + p.roundness.clamp(0.0, 100.0) / 100.0 * 6.0,
+            feather: p.feather.clamp(0.0, 0.999),
+            blur: sigma_of(p.blur),
+        }
+    }
+
+    fn sigma(&self, x: f32, y: f32) -> f32 {
+        let (dx, dy) = (x - self.cx, y - self.cy);
+        let (u, v) = ((dx * self.cos + dy * self.sin) / self.rx, (-dx * self.sin + dy * self.cos) / self.ry);
+        // Outside the normalized bounding square, the superellipse distance
+        // is at least one. The falloff is saturated: no sqrt/powf is needed.
+        let e = if u.abs() >= 1.0 || v.abs() >= 1.0 {
+            f32::INFINITY
+        } else if (self.exponent - 2.0).abs() < 1e-3 {
+            (u * u + v * v).sqrt()
+        } else {
+            (u.abs().powf(self.exponent) + v.abs().powf(self.exponent)).powf(1.0 / self.exponent)
+        };
+        let e = if e.is_finite() { e } else { f32::INFINITY };
+        self.blur * smoothstep(self.feather, 1.0, e)
+    }
 }
 
 /// Field Blur: blur amounts at pins, interpolated by inverse squared distance.
@@ -151,7 +250,7 @@ pub(crate) fn field(src: &Image, out: Rect, ctx: &Ctx, pins: &[FieldPin]) -> Vec
     let smax = pins.iter().map(|p| sigma_of(p.blur)).fold(0.0, f32::max);
     let pts: Vec<(f32, f32, f32)> =
         pins.iter().map(|p| (b.x0 as f32 + p.x * b.width() as f32, b.y0 as f32 + p.y * b.height() as f32, sigma_of(p.blur))).collect();
-    variable_blur(src, out, ctx, smax, |x, y| {
+    variable_blur(src, out, ctx, smax, false, |x, y| {
         let (mut ws, mut s) = (0.0f32, 0.0f32);
         for &(px, py, sg) in &pts {
             let w = 1.0 / ((x - px).powi(2) + (y - py).powi(2) + 1.0);

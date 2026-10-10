@@ -20,6 +20,10 @@ fn app_with(kind: Kind) -> PhotocraftApp {
         Kind::Fill => app.run("layer.newFillLayer.solidColor", json!({"color": "#00ff00"})).map(|_| ()),
     }
     .unwrap();
+    // A new fill layer targets its mask (Photoshop); painting its content means targeting the
+    // layer itself, as a click on its thumbnail does.
+    app.ui.mask_target = false;
+    app.sync_mask_targets();
     app.run("tools.setColors", json!({"foreground": "#0000ff"})).unwrap();
     app
 }

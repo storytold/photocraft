@@ -121,7 +121,9 @@ fn editing_a_crop_frame_shows_the_pixels_past_the_canvas() {
         app.ui.extras.rulers = false;
         app.ui.extras.snap = false;
     }
-    control(&mut h, "ui.set", json!({"tool": "crop", "zoom": 1.0, "center": [100, 50]}));
+    // Classic Mode: the edge drag below moves only that edge (Auto Center Preview in the default
+    // mode would keep the box centred, growing it on both sides).
+    control(&mut h, "ui.set", json!({"tool": "crop", "zoom": 1.0, "center": [100, 50], "cropShield": {"classic_mode": true}}));
     h.run_steps(3);
     assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]), "the default frame");
     let (red, blue, white, beyond) = ([-25.0, 50.0], [225.0, 50.0], [100.0, 110.0], [-80.0, 50.0]);
