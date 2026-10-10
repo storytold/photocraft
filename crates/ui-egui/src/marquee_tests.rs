@@ -687,7 +687,7 @@ fn size_readout_follows_the_ruler_unit() {
     ur.rulers = Unit::Pixels;
     assert_eq!(crate::canvas::readout_in(&ur, 72.0, [1644.0, 2659.0], r), ["1644 px".to_string(), "2659 px".to_string()]);
     ur.rulers = Unit::Centimeters;
-    assert_eq!(crate::canvas::readout_in(&ur, 72.0, [1644.0, 2659.0], r), ["58.00 cm".to_string(), "93.80 cm".to_string()]);
+    assert_eq!(crate::canvas::readout_in(&ur, 72.0, [1644.0, 2659.0], r), ["58 cm".to_string(), "93.8 cm".to_string()]);
     ur.rulers = Unit::Millimeters;
-    assert_eq!(crate::canvas::readout_in(&ur, 150.0, [1644.0, 2659.0], [0.0, 0.0, 3425.0, 100.0])[0], "580.0 mm");
+    assert_eq!(crate::canvas::readout_in(&ur, 150.0, [1644.0, 2659.0], [0.0, 0.0, 3425.0, 100.0])[0], "579.97 mm");
 }
