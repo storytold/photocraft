@@ -38,6 +38,8 @@ pub enum FileDialogAnswer {
     Paths(Vec<String>),
     /// A chosen file's name and contents (the web, where a page gets contents rather than paths).
     Contents(String, Vec<u8>),
+    /// Several chosen files' names and contents, in order (the web's multi-select File › Open).
+    ContentsMany(Vec<(String, Vec<u8>)>),
     /// The path to save to (desktop), or the download's name (web).
     SaveTo(String),
 }
@@ -182,15 +184,21 @@ impl PhotocraftApp {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);
                 }
-                FileDialogAnswer::Contents(name, bytes) => {
-                    if let Err(e) = app.open_bytes(&name, &bytes) {
-                        app.open_failed(&name, &e);
-                    }
-                }
+                FileDialogAnswer::Contents(name, bytes) => app.open_contents(vec![(name, bytes)]),
+                FileDialogAnswer::ContentsMany(files) => app.open_contents(files),
                 FileDialogAnswer::SaveTo(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
         })
+    }
+
+    /// Opens each picked file's contents as its own document, reporting each failure.
+    fn open_contents(&mut self, files: Vec<(String, Vec<u8>)>) {
+        for (name, bytes) in files {
+            if let Err(e) = self.open_bytes(&name, &bytes) {
+                self.open_failed(&name, &e);
+            }
+        }
     }
 
     /// Run `next` on the result of the open dialog's action once it is answered; its result
@@ -267,6 +275,7 @@ fn last_used_dir(recent: &[String]) -> Option<String> {
 fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
     match answer {
         FileDialogAnswer::Contents(name, bytes) => Ok((name, bytes)),
+        FileDialogAnswer::ContentsMany(files) => files.into_iter().next().ok_or_else(|| CANCELLED.into()),
         FileDialogAnswer::Paths(paths) => {
             let path = paths.into_iter().next().ok_or(CANCELLED)?;
             let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
