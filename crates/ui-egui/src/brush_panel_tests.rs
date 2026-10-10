@@ -239,6 +239,44 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftA
 }
 
 #[test]
+fn clone_stamp_opacity_and_flow_are_journaled_per_gesture() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = options_bar_harness(crate::state::Tool::CloneStamp);
+    for (label, field) in [("Opacity", "opacity"), ("Flow", "flow")] {
+        let n = h.state().session.journal.len();
+        let rect = h.get_by_label(label).rect();
+        let start = egui::pos2(rect.right() + 40.0, rect.center().y);
+        h.hover_at(start);
+        h.run();
+        h.drag_at(start);
+        h.run();
+        for k in 1..=8 {
+            h.hover_at(start - vec2(5.0 * k as f32, 0.0));
+            h.run();
+        }
+        h.drop_at(start - vec2(40.0, 0.0));
+        h.run_steps(2);
+        let brush = &h.state().session.tools.brush;
+        let value = if field == "opacity" { brush.opacity } else { brush.flow };
+        assert!(value < 0.95, "the drag lowered {field}: {value}");
+        let journal = &h.state().session.journal;
+        assert_eq!(journal.len(), n + 1, "one command per gesture");
+        let (id, params) = journal.last().unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"][field].as_f64().map(|v| v as f32), Some(value));
+    }
+    h.state_mut().ui.clone_source = Some([0.0, 0.0]);
+    let params = crate::retouch_ui::clone_params(h.state()).unwrap();
+    assert_eq!(params["opacity"], json!(h.state().session.tools.brush.opacity * 100.0));
+    assert_eq!(params["flow"], json!(h.state().session.tools.brush.flow * 100.0));
+    let mut replay = photocraft_engine::Session::new();
+    for (id, params) in &h.state().session.journal {
+        replay.execute(id, params.clone()).unwrap();
+    }
+    assert_eq!(replay.tools.brush, h.state().session.tools.brush);
+}
+
+#[test]
 fn options_bar_edits_are_one_set_brush_per_gesture() {
     use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::Brush);
@@ -697,6 +735,49 @@ fn f5_edits_the_default_brush_with_every_section() {
 }
 
 #[test]
+fn update_current_brush_button_overwrites_the_picked_preset_in_place() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(0, 0);
+    // Nothing picked yet: the button is disabled and clicking it does nothing.
+    assert!(h.state().session.tools.current_preset.is_none());
+    h.get_by_label("Update the current brush with these settings").click();
+    h.run_steps(3);
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "brush.presets.update"));
+    // Pick a preset, then turn a section on.
+    h.state_mut().run("tools.setBrush", json!({ "preset": "Chalk" })).unwrap();
+    h.run_steps(2);
+    let n = h.state().session.tools.presets.len();
+    let at = h.state().session.tools.presets.iter().position(|p| p.name == "Chalk").unwrap();
+    h.get_by_label("Enable Scattering").click();
+    h.run_steps(3);
+    assert!(h.state().session.tools.brush.scattering.enabled);
+    // The update button overwrites the picked preset in place: no new preset, position kept.
+    h.get_by_label("Update the current brush with these settings").click();
+    h.run_steps(3);
+    assert!(h.state().session.journal.iter().any(|(id, p)| id == "brush.presets.update" && p["brush"]["scattering"]["enabled"] == json!(true)));
+    assert_eq!(h.state().session.tools.presets.len(), n);
+    let chalk = h.state().session.tools.presets.get(at).unwrap();
+    assert_eq!(chalk.name, "Chalk");
+    assert!(chalk.brush.scattering.enabled);
+    assert!(!chalk.builtin, "an updated built-in becomes the user's preset");
+}
+
+/// Each painting tool keeps its own brush (#218): the preset picked for one tool is not the
+/// current preset of the next, so Update can't overwrite it with the other tool's brush.
+#[test]
+fn switching_tools_forgets_the_picked_preset() {
+    let mut app = app();
+    app.ui.tool = crate::state::Tool::Brush;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({ "preset": "Chalk" })).unwrap();
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some("Chalk"));
+    app.ui.tool = crate::state::Tool::Eraser;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    assert_eq!(app.session.tools.current_preset, None);
+    assert!(app.run("brush.presets.update", json!({})).is_err());
+}
+
+#[test]
 fn options_bar_reaches_brush_settings_and_the_preset_library() {
     use egui_kittest::kittest::Queryable;
     let mut h = app_harness();
@@ -719,11 +800,11 @@ fn options_bar_reaches_brush_settings_and_the_preset_library() {
         assert!(h.query_by_label(&group).is_some(), "group {group}");
     }
     let target = presets.iter().find(|p| p.group == "Dry Media").or(presets.last()).unwrap().name.clone();
-    assert!(!is_current(&paint::presets::find(&presets, &target).unwrap().brush, &h.state().session.tools.brush));
+    assert_ne!(h.state().session.tools.current_preset.as_deref(), Some(target.as_str()));
     h.get_by_label(&target).click();
     h.run_steps(3);
     assert_eq!(last_journal(h.state()).unwrap(), ("tools.setBrush".to_string(), json!({ "preset": target })));
-    assert!(is_current(&paint::presets::find(&presets, &target).unwrap().brush, &h.state().session.tools.brush));
+    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(target.as_str()));
     // A click picks and keeps the picker open; the chip's click closes it again.
     assert!(h.state().ui.brush_picker.is_some());
     h.get_by_label("Brush Preset picker").click();

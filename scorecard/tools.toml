@@ -71,9 +71,9 @@ note = "eyedropper_ring (canvas.rs): the sampled colour on the upper arc, the fo
 [[item]]
 id = "TOOL-213-10"
 target = "Ctrl+Alt drag resizes brush size/hardness with an on-canvas readout"
-status = "missing"
+status = "done"
 issue = 213
-note = "Only [ ] resize (shortcuts.rs:270)"
+note = "brush_resize.rs (#297, #370): Alt+right-drag, or Control+Option-drag on macOS (Control+Alt everywhere), sets diameter horizontally and hardness vertically, circle plus Diameter/Hardness readout, one coalesced tools.setBrush, no paint or history; 9 tests there"
 
 [[item]]
 id = "TOOL-213-11"
@@ -120,9 +120,9 @@ note = "Opens the generic select.refineEdge dialog (menus.rs:308)"
 [[item]]
 id = "TOOL-214-2"
 target = "Marquee: Shift square, Alt from centre, live W x H readout"
-status = "partial"
+status = "done"
 issue = 214
-note = "marquee_end supports shift (chrome_ui.rs:167) but canvas.rs passes false (#208)"
+note = "canvas.rs marquee_corners: Shift square or circle, Alt from the centre, live W x H readout beside the cursor (marquee_readout); marquee_tests.rs"
 
 [[item]]
 id = "TOOL-214-3"

@@ -336,6 +336,18 @@ pub struct Panels {
     /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_by_tab: Option<[bool; 3]>,
+    /// The right dock's icon rail. An app that embeds PhotoCraft's UI can hide it for a simpler view.
+    #[serde(default = "yes")]
+    pub rail: bool,
+    /// The title bar with the in-window menus. An app that embeds PhotoCraft's UI and draws its own
+    /// bar can hide it; the caption buttons of a custom title bar go with it.
+    #[serde(default = "yes")]
+    pub menu_bar: bool,
+    /// The Gradient tool's options-bar swatch opened the Gradient Editor window (`gradient_ui`).
+    /// Photoshop opens its Gradient Editor from that swatch; this is the same idea, drawn as a
+    /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
+    #[serde(default)]
+    pub gradient_editor: bool,
 }
 
 impl Default for Panels {
@@ -354,6 +366,9 @@ impl Default for Panels {
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
+            rail: true,
+            menu_bar: true,
+            gradient_editor: false,
         }
     }
 }

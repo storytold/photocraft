@@ -408,3 +408,41 @@ fn alt_with_nothing_selected_draws_a_new_selection() {
     let after = h.state().session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
     assert!(after.is_none_or(|r| r.is_empty() || r != before), "⌥ subtracted: {before:?} -> {after:?}");
 }
+
+/// Photoshop's cursor over a selection: the move cursor where a marquee press moves the outline,
+/// scissors where ⌘ (or the Move tool) cuts the selected pixels, a double arrow where ⌥ copies
+/// them, a hollow arrowhead while they are dragged, and a plain arrow over the floating piece.
+#[test]
+fn selection_cursor_follows_the_modifiers_and_the_floating_piece() {
+    use crate::canvas::{SelCursor, selection_cursor};
+    let (mut app, _) = painted();
+    let (inside, outside) = ([20.0, 20.0], [60.0, 50.0]);
+    let none = Modifiers::NONE;
+    let cmd_alt = Modifiers::COMMAND | Modifiers::ALT;
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, none), Some(SelCursor::Outline));
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, outside, none), None);
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, Modifiers::SHIFT), None);
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, Modifiers::COMMAND), Some(SelCursor::Cut));
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, cmd_alt), Some(SelCursor::Copy));
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, Modifiers::ALT), None, "⌥ alone subtracts");
+    assert_eq!(selection_cursor(&app, Tool::Move, inside, none), Some(SelCursor::Cut));
+    assert_eq!(selection_cursor(&app, Tool::Move, outside, none), Some(SelCursor::Cut), "the Move tool moves them from anywhere");
+    assert_eq!(selection_cursor(&app, Tool::Move, inside, Modifiers::ALT), Some(SelCursor::Copy));
+    assert_eq!(selection_cursor(&app, Tool::Brush, inside, none), None);
+    // While the selected pixels are dragged, then once they float.
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, Modifiers::COMMAND);
+    tool_event(&mut app, ToolEvent::Move { x: 35.0, y: 20.0, pressure: 1.0 }, Modifiers::COMMAND);
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], Modifiers::COMMAND), Some(SelCursor::Dragging));
+    tool_event(&mut app, ToolEvent::Up { x: 35.0, y: 20.0 }, Modifiers::COMMAND);
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], none), Some(SelCursor::Piece));
+    assert_eq!(selection_cursor(&app, Tool::Move, [35.0, 20.0], none), Some(SelCursor::Piece));
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], cmd_alt), Some(SelCursor::Copy), "a copy of the piece");
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, none), None, "where it was cut from");
+    assert_eq!(selection_cursor(&app, Tool::Brush, [35.0, 20.0], none), None);
+    // The outline drag keeps the move cursor (#1428).
+    let (mut app, _) = painted();
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, none);
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [30.0, 20.0], none), Some(SelCursor::Outline));
+}

@@ -4,8 +4,8 @@
 //! data, and PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
@@ -17,20 +17,43 @@ pub const DEFAULT_FAMILY: &str = "Inter";
 /// Bundled monospace family.
 pub const MONO_FAMILY: &str = "JetBrains Mono";
 
+/// An `assets/fonts` file as deflated by build.rs.
+macro_rules! bundled_font {
+    ($file:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/fonts/", $file, ".deflate"))
+    };
+}
+
 // The font files are embedded once, here. The UI (`ui-egui` theme) uses these same statics:
 // a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the wasm.
-pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
-pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
-pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+// They are stored deflated by build.rs (0.73 MB instead of 1.5 MB: the web build's 24 MiB size
+// gate, packaging/web/package.sh) and inflated on first use, once per process.
+pub static INTER_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Regular.ttf")));
+pub static INTER_MEDIUM: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Medium.ttf")));
+pub static INTER_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-SemiBold.ttf")));
+pub static JETBRAINS_MONO_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("JetBrainsMono-Regular.ttf")));
 
 /// Fonts shipped with Photocraft (OFL; licences in `assets/fonts`).
-pub static BUNDLED: &[(&str, &[u8])] = &[
-    ("Inter-Regular.ttf", INTER_REGULAR),
-    ("Inter-Medium.ttf", INTER_MEDIUM),
-    ("Inter-SemiBold.ttf", INTER_SEMIBOLD),
-    ("JetBrainsMono-Regular.ttf", JETBRAINS_MONO_REGULAR),
+pub static BUNDLED: [(&str, &LazyLock<Vec<u8>>); 4] = [
+    ("Inter-Regular.ttf", &INTER_REGULAR),
+    ("Inter-Medium.ttf", &INTER_MEDIUM),
+    ("Inter-SemiBold.ttf", &INTER_SEMIBOLD),
+    ("JetBrainsMono-Regular.ttf", &JETBRAINS_MONO_REGULAR),
 ];
+
+/// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.
+const MAX_BUNDLED_FONT_BYTES: u64 = 16 << 20;
+
+/// Inflate a bundled font. Data that doesn't inflate gives no font (empty bytes, which every
+/// consumer skips), never a panic; `bundled_fonts_inflate_to_their_files` keeps it from happening.
+fn inflate_font(deflated: &[u8]) -> Vec<u8> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    match flate2::read::DeflateDecoder::new(deflated).take(MAX_BUNDLED_FONT_BYTES + 1).read_to_end(&mut out) {
+        Ok(_) if out.len() as u64 <= MAX_BUNDLED_FONT_BYTES => out,
+        _ => Vec::new(),
+    }
+}
 
 /// Families tried (if installed) after the requested one, for missing glyphs. The Thai and CJK
 /// families ([`THAI_FAMILIES`], [`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
@@ -124,7 +147,7 @@ impl FontDb {
             face_aliases: HashMap::new(),
         };
         for (_, bytes) in BUNDLED {
-            db.register_font_data(bytes.to_vec());
+            db.register_static_font(bytes.as_slice());
         }
         // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
         // wasm32), before any system font.
@@ -218,6 +241,12 @@ impl FontDb {
         }
         let order = crate::cjk::ui_script_order();
         self.fallbacks = fallback_candidates(&order).into_iter().filter(|f| c.family_id(f).is_some()).map(str::to_string).collect();
+        // Served fonts that are a script's fallback (the manifest's `scripts`), once they arrived.
+        for f in crate::served::script_fallback_families() {
+            if c.family_id(&f).is_some() && !self.fallbacks.contains(&f) {
+                self.fallbacks.push(f);
+            }
+        }
     }
 
     /// Families available after the requested one (bundled default + installed coverage fonts).
@@ -554,7 +583,7 @@ mod tests {
         let czech = "aábcčdďeéěfghiíjklmnňoópqrřsštťuúůvwxyýzž„“";
         let letters: String = czech.chars().chain(czech.chars().flat_map(char::to_uppercase)).collect();
         for (name, bytes) in super::BUNDLED {
-            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let font = skrifa::FontRef::new(bytes.as_slice()).expect("bundled font parses");
             let cmap = font.charmap();
             let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
             assert!(missing.is_empty(), "{name} lacks Czech glyphs: {missing}");
@@ -569,11 +598,29 @@ mod tests {
         let french = "àâæçéèêëîïôœùûüÿ";
         let letters: String = french.chars().chain(french.chars().flat_map(char::to_uppercase)).chain("«»\u{a0}’".chars()).collect();
         for (name, bytes) in super::BUNDLED {
-            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let font = skrifa::FontRef::new(bytes.as_slice()).expect("bundled font parses");
             let cmap = font.charmap();
             let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
             assert!(missing.is_empty(), "{name} lacks French glyphs: {missing:?}");
         }
+    }
+
+    /// The deflated fonts in the binary inflate to exactly the files in `assets/fonts`.
+    #[test]
+    fn bundled_fonts_inflate_to_their_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+        for (name, bytes) in super::BUNDLED {
+            assert_eq!(bytes.as_slice(), std::fs::read(dir.join(name)).unwrap(), "{name}");
+        }
+    }
+
+    /// Corrupt or oversized font data gives no font, not a panic.
+    #[test]
+    fn corrupt_bundled_font_data_gives_no_font() {
+        assert!(super::inflate_font(b"\xff\xff not deflate").is_empty());
+        assert!(super::inflate_font(b"").is_empty());
+        let mut db = super::FontDb::new();
+        assert!(db.register_font_data(super::inflate_font(b"\x00garbage")).is_empty());
     }
 
     #[test]

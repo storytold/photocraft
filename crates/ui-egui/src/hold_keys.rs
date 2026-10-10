@@ -5,6 +5,13 @@
 //! - ⌘⌥Space: Zoom Out while held.
 //! - Space while a marquee, lasso or shape is being dragged repositions it; releasing Space
 //!   goes back to sizing it (the Crop tool does the same for its frame, `crop_ui`).
+//! - ⌘ (Ctrl off the Mac): the Move tool while held, with the painting, retouching, eraser,
+//!   gradient, eyedropper and other non-selection tools ([`cmd_moves`]); so ⌘-drag with the
+//!   Brush moves the layer, ⌘⌥-drag duplicates it first (`move_mods`), and a ⌘-click picks the
+//!   layer under the pointer, as with the Move tool itself. The selection tools do their own ⌘
+//!   handling in `canvas` (⌘ inside the selection cuts the selected pixels, outside it moves the
+//!   layer, #896), and the Hand, Zoom, Crop, Slice, Path Selection, shape, Pen and Type tools
+//!   keep ⌘ for themselves.
 //!
 //! The current tool is never changed, so releasing the key gives the previous tool back. A
 //! temporary tool that started a drag lasts until the button is released, as in Photoshop.
@@ -25,6 +32,8 @@ pub enum Temporary {
     Hand,
     ZoomIn,
     ZoomOut,
+    /// ⌘ held with a tool that [`cmd_moves`]: a modifier, not a rebindable key.
+    Move,
 }
 
 impl Temporary {
@@ -33,6 +42,7 @@ impl Temporary {
             Temporary::Hand => "tools.temporary.hand",
             Temporary::ZoomIn => "tools.temporary.zoomIn",
             Temporary::ZoomOut => "tools.temporary.zoomOut",
+            Temporary::Move => "tools.temporary.move",
         }
     }
 
@@ -40,10 +50,45 @@ impl Temporary {
         match self {
             Temporary::Hand => Tool::Hand,
             Temporary::ZoomIn | Temporary::ZoomOut => Tool::Zoom,
+            Temporary::Move => Tool::Move,
         }
     }
 
-    const ALL: [Temporary; 3] = [Temporary::Hand, Temporary::ZoomIn, Temporary::ZoomOut];
+    /// The key-bound temporary tools (`prefs::TEMPORARY_TOOLS`).
+    const BOUND: [Temporary; 3] = [Temporary::Hand, Temporary::ZoomIn, Temporary::ZoomOut];
+}
+
+/// Tools on which holding ⌘ (Ctrl off the Mac) is the Move tool. Photoshop excepts the Hand,
+/// Rotate View, Zoom, Slice, Path Selection, shape, Pen and Type tools (⌘ means something else to
+/// each) and the Crop tool's frame; a Free Transform in progress keeps ⌘ for its distort handles. The
+/// selection tools are left out too: for them ⌘ is handled per press in `canvas::tool_event`
+/// (`selection_drag_kind`, `command_moves_layer`), which needs the selection tool to stay in
+/// effect.
+pub fn cmd_moves(t: Tool) -> bool {
+    !t.is_type()
+        && !matches!(
+            t,
+            Tool::Move
+                | Tool::Hand
+                | Tool::RotateView
+                | Tool::Zoom
+                | Tool::Crop
+                | Tool::Slice
+                | Tool::SliceSelect
+                | Tool::PathSelection
+                | Tool::Pen
+                | Tool::RectMarquee
+                | Tool::EllipseMarquee
+                | Tool::Lasso
+                | Tool::PolygonLasso
+                | Tool::MagicWand
+        )
+        && !crate::vector_ui::is_shape_tool(t)
+}
+
+/// Is ⌘ alone (no other temporary key) making the Move tool now?
+fn cmd_move_held(app: &PhotocraftApp, i: &InputState) -> bool {
+    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
 }
 
 /// Is `id` a held temporary tool rather than a command?
@@ -80,8 +125,9 @@ pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> 
         m.alt as u8 + m.shift as u8 + (m.command || m.mac_cmd) as u8 + (m.ctrl && !m.command) as u8
     };
     let mut best: Option<(u8, Temporary)> = None;
+    let mut cmd_move = false;
     ctx.input(|i| {
-        for t in Temporary::ALL {
+        for t in Temporary::BOUND {
             if let Some(sc) = binding(app, t)
                 && held(i, &sc)
                 && best.is_none_or(|(n, _)| count(&sc) > n)
@@ -89,8 +135,10 @@ pub fn held_tool(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Temporary> 
                 best = Some((count(&sc), t));
             }
         }
+        cmd_move = cmd_move_held(app, i);
     });
-    best.map(|(_, t)| t)
+    // A bound key (⌘Space is Zoom In) wins over ⌘ alone.
+    best.map(|(_, t)| t).or(cmd_move.then_some(Temporary::Move))
 }
 
 /// Is the reposition key (the Hand key, any modifiers) down?
@@ -109,11 +157,12 @@ fn latch_id() -> egui::Id {
 
 /// The temporary tool for this canvas frame: the held one, except while a selection is being
 /// drawn (the key repositions it instead); a temporary tool that was in effect when the button
-/// went down stays until the button comes up.
+/// went down stays until the button comes up, release included (the Move tool's release is
+/// what commits the move).
 pub fn for_frame(app: &PhotocraftApp, ctx: &egui::Context, drawing: bool) -> Option<Temporary> {
-    let down = ctx.input(|i| i.pointer.primary_down());
+    let (down, released) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.primary_released()));
     let latched = ctx.data(|d| d.get_temp::<Option<Temporary>>(latch_id())).flatten();
-    let t = if down && latched.is_some() {
+    let t = if (down || released) && latched.is_some() {
         latched
     } else if drawing {
         None

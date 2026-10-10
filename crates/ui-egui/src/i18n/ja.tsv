@@ -674,7 +674,11 @@
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
+	Adwaita Light Theme	Adwaita(ライト)テーマ
+	Adwaita Dark Theme	Adwaita(ダーク)テーマ
 	Classic Theme	クラシックテーマ
+	Solarized dark	Solarized ダーク
+	Solarized Dark Theme	Solarized ダークテーマ
 	Next Theme	次のテーマ
 	Actions	アクション
 	Brush Settings	ブラシ設定
@@ -949,6 +953,17 @@
 	Delete current channel	現在のチャンネルを削除
 	Delete current state	現在の状態を削除
 	Delete effect layer	効果レイヤーを削除
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	レイヤー「{name}」を削除しますか？
+	Delete {count} layers? {names}	{count} 個のレイヤーを削除しますか？ {names}
+	Delete layer?	レイヤーを削除しますか？
+	The document is closed	ドキュメントは閉じられています
+	The document or selected layers changed. Please request deletion again.	ドキュメントまたは選択したレイヤーが変更されました。もう一度削除してください。
+	Missing delete command	削除コマンドがありません
+	Invalid delete command	無効な削除コマンドです
+	Layer deleted, but confirmation preference could not be saved: {error}	レイヤーは削除されましたが、確認設定を保存できませんでした: {error}
+
 	Delete layer	レイヤーを削除
 	Delete layer comp	レイヤーカンプを削除
 	Delete note	注釈を削除
@@ -1307,6 +1322,12 @@
 	Rename…	名前を変更…
 	Resample	再サンプル
 	Reset All to Defaults	すべて既定に戻す
+	Import Shortcuts…	ショートカットを読み込む…
+	Load a keyboard shortcut set saved as .kys	.kys として保存されたキーボードショートカットセットを読み込みます
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file} から {n} 個のショートカットを読み込みました。OK をクリックすると保持されます。
+	{n} commands are not in PhotoCraft.	{n} 個のコマンドは PhotoCraft にありません。
+	Keyboard shortcuts imported	キーボードショートカットを読み込みました
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	キーボードショートカットセット {set} をここで使用しています。{n} 個のショートカットが既定と異なります。編集 › キーボードショートカットで確認でき、「すべて既定に戻す」で元に戻せます。
 	Reset Section	セクションをリセット
 	Reset Transform	変形をリセット
 	Reset to defaults	既定に戻す
@@ -1876,6 +1897,8 @@
 	Standard	標準
 	Studio	スタジオ
 	Studio light	スタジオ(ライト)
+	Adwaita	Adwaita
+	Adwaita dark	Adwaita(ダーク)
 	Subdivisions	分割数
 	System	システム
 	Text engine	テキストエンジン
@@ -1928,6 +1951,7 @@
 	Create new brush from the current settings	現在の設定から新規ブラシを作成
 	Create new brush from these settings	この設定から新規ブラシを作成
 	Delete brush	ブラシを削除
+	Update the current brush with these settings	この設定で現在のブラシを更新
 	Drag the arrow to set the angle, the dots to set the roundness	矢印をドラッグして角度、点をドラッグして真円率を設定
 	Expand	展開
 	Expand Panel Group	パネルグループを展開
@@ -2004,7 +2028,13 @@
 	Align with layer	レイヤーに揃える
 	Reset Alignment	位置をリセット
 	Centre the gradient (offset 0, 0)	グラデーションを中央に配置(オフセット 0, 0)
-	The current gradient (pick one in Window › Gradients)	現在のグラデーション(ウィンドウ › グラデーション で選択)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+	Gradient Editor	グラデーションエディター
+	Gradient picker	グラデーションピッカー
+	Save As Preset	プリセットとして保存
+	The gradient the Gradient tool paints with	グラデーションツールで描画されるグラデーション
+	Adds the current gradient to the Gradients panel	現在のグラデーションをグラデーション パネルに追加します
+	Gradient stops	グラデーション ストップ
 	Select a type layer to edit its character and paragraph settings.	文字レイヤーを選択すると、文字と段落の設定を編集できます。
 	Text color	文字色
 	Type Options	文字オプション
@@ -3320,6 +3350,20 @@ fontWeight	Italic	斜体
 	Cycle Orientation	方向を切り替え
 	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	カラーピッカー（レイヤースタイルの色）
+	Auto Hide Notifications	通知を自動的に隠す
+	Notification Duration (seconds)	通知の表示時間（秒）
+	Appearance Mode	外観モード
+	Dark Theme	ダークテーマ
+	Light Theme	ライトテーマ
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	次の外観モード
+	Sync with system	システムと同期
+	Active	適用中
+	Color Picker (Solid Color)	カラーピッカー（べた塗り）
 	Straighten the image by drawing a line on it	画像上に線を描いて角度を補正
 	Set additional Crop options	切り抜きの追加オプションを設定
 	Show Cropped Area	切り抜かれた領域を表示
@@ -3337,3 +3381,19 @@ fontWeight	Italic	斜体
 	Create Polygon	多角形を作成
 	Pressure curve	筆圧カーブ
 	Click to add a point, right-click to remove	クリックでポイントを追加、右クリックで削除
+	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
+	Retry saving presets	プリセットの保存を再試行
+	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}
+	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
+	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。
+	Reflect	反射
+	Glow	グロー
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
+	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
+	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
+	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
+	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
