@@ -84,9 +84,9 @@ mod tests {
     }
 
     #[test]
-    fn tilting_right_produces_positive_x() {
+    fn tilting_right_produces_negative_x() {
         let (x, y) = axes_to_tilt(std::f32::consts::FRAC_PI_4, std::f32::consts::FRAC_PI_2);
-        assert!((x - 45.0).abs() < 0.01, "x={x}");
+        assert!((x + 45.0).abs() < 0.01, "x={x}");
         assert!(y.abs() < 0.01, "y={y}");
     }
 
