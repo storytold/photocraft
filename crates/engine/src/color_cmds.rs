@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use photocraft_cms::{Builtin, ColorSpace, GamutCheck, Intent, Lut3d, Profile, SampleKind, Transform};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{DocId, Document, Effect, Fill, FxPaint, Layer, LayerContent};
+use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -574,23 +574,24 @@ fn convert_color(c: &mut Color, from: ColorMode, to: ColorMode, t: &Transform) {
     c.c = nc;
 }
 
-fn convert_fill(f: &mut Fill, from: ColorMode, to: ColorMode, t: &Transform) {
+fn convert_fill(f: &mut Fill, cc: &mut dyn FnMut(&mut Color)) {
     match f {
-        Fill::Solid(c) => convert_color(c, from, to, t),
-        Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|s| convert_color(&mut s.1, from, to, t)),
+        Fill::Solid(c) => cc(c),
+        Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|s| cc(&mut s.1)),
         Fill::Pattern { .. } => {}
     }
 }
 
-fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Transform) {
-    let mut cc = |c: &mut Color| convert_color(c, from, to, t);
+/// Applies `cc` to every colour value of `l` (fill, text, shape and effect colours), recursing
+/// into groups.
+fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
     let mut touched_fx = false;
     for e in &mut l.effects.items {
         touched_fx = true;
         match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => cc(&mut s.color),
-            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint_colors(&mut g.paint, &mut cc),
-            Effect::Stroke(s) => paint_colors(&mut s.paint, &mut cc),
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint_colors(&mut g.paint, cc),
+            Effect::Stroke(s) => paint_colors(&mut s.paint, cc),
             Effect::ColorOverlay { color, .. } => cc(color),
             Effect::GradientOverlay { gradient, .. } => gradient.stops.iter_mut().for_each(|s| cc(&mut s.1)),
             Effect::Satin(s) => cc(&mut s.color),
@@ -603,7 +604,7 @@ fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Trans
     }
     let _ = touched_fx;
     match &mut l.content {
-        LayerContent::Fill(f) => convert_fill(f, from, to, t),
+        LayerContent::Fill(f) => convert_fill(f, cc),
         LayerContent::Text(tx) => {
             cc(&mut tx.color);
             for r in &mut tx.runs {
@@ -612,22 +613,22 @@ fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Trans
         }
         LayerContent::Shape(sh) => {
             if let Some(f) = &mut sh.fill {
-                convert_fill(f, from, to, t);
+                convert_fill(f, cc);
             }
             if let Some(s) = &mut sh.stroke {
-                convert_fill(&mut s.paint, from, to, t);
+                convert_fill(&mut s.paint, cc);
             }
         }
         LayerContent::Group(g) => {
             for c in &mut g.children {
-                convert_layer_colors(c, from, to, t);
+                convert_layer_colors(c, cc);
             }
         }
         _ => {}
     }
 }
 
-fn paint_colors(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color)) {
+fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
     match p {
         FxPaint::Color(c) => cc(c),
         FxPaint::Gradient(g) => g.stops.iter_mut().for_each(|s| cc(&mut s.1)),
@@ -638,9 +639,13 @@ fn paint_colors(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color)) {
 /// Converts every pixel layer (and cached text/shape/smart pixels and fill caches) of `doc`
 /// from its profile to `dst`, switching the mode to `dst`'s colour space. Masks, alpha
 /// channels and the selection are untouched; fill, text, shape and effect colours are
-/// converted. The document is tagged with `dst`.
+/// converted. A Duotone document going to a colour space starts from its ink colours
+/// ([`ink_duotone`]). The document is tagged with `dst`.
 pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
     let to_mode = space_mode(dst.color_space).ok_or_else(|| EngineError::Other(format!("cannot convert to a {:?} profile", dst.color_space)))?;
+    if to_mode != ColorMode::Grayscale {
+        ink_duotone(doc);
+    }
     let src = document_profile(doc);
     let from_mode = doc.pixel_format().mode;
     let t = Transform::new(&src, dst, intent, bpc).map_err(cms_err)?;
@@ -650,7 +655,7 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
         *surf = convert_surface(surf, from_mode, f, &t);
     });
     for l in &mut doc.layers {
-        convert_layer_colors(l, from_mode, to_mode, &t);
+        convert_layer_colors(l, &mut |c| convert_color(c, from_mode, to_mode, &t));
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
     doc.mode = to_mode;
@@ -659,6 +664,76 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
     doc.color_table = None;
     doc.duotone = None;
     Ok(())
+}
+
+/// Turns a Duotone document into the sRGB document it displays as: every gray pixel and colour
+/// value becomes its printed ink colour ([`Duotone::render`], sRGB like the inks), so converting
+/// to a colour mode keeps the inks' look, as Photoshop converts them to their equivalents.
+/// Other documents (and Duotone without inks) are left alone.
+fn ink_duotone(doc: &mut Document) {
+    if doc.mode != ColorMode::Duotone {
+        return;
+    }
+    let Some(d) = doc.duotone.take_if(|d| !d.inks.is_empty()) else { return };
+    crate::image_cmds::for_each_surface(&mut doc.layers, false, &mut |surf, _| *surf = ink_surface(surf, &d));
+    for l in &mut doc.layers {
+        convert_layer_colors(l, &mut |c| {
+            if matches!(c.mode, ColorMode::Grayscale | ColorMode::Duotone) {
+                let [r, g, b] = d.render(c.c[0]);
+                *c = Color::rgba(r, g, b, c.alpha);
+            }
+        });
+    }
+    doc.mode = ColorMode::Rgb;
+    doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+}
+
+/// The RGB surface of a gray surface's ink colours (same depth and alpha), one parallel pass
+/// over the tiles. Non-gray surfaces are returned unchanged.
+fn ink_surface(s: &Surface, d: &Duotone) -> Surface {
+    use rayon::prelude::*;
+    let sf = s.format();
+    if sf.mode != ColorMode::Grayscale {
+        return s.clone();
+    }
+    let to = PixelFormat { mode: ColorMode::Rgb, ..sf };
+    let (ss, ds) = (sf.channels(), to.channels());
+    let ink = |src: &[f32], out: &mut [f32]| {
+        let [r, g, b] = d.render(src.first().copied().unwrap_or(0.0));
+        for (o, v) in out.iter_mut().zip([r, g, b].into_iter().chain(src.get(1).copied())) {
+            *o = v;
+        }
+    };
+    let mut dp = vec![0.0f32; ds];
+    ink(&s.default_pixel(), &mut dp);
+    let mut out = Surface::with_default(to, &dp);
+    let tiles: Vec<_> = s.tiles().map(|(c, t)| (*c, t.clone())).collect();
+    let inked: Vec<Vec<u8>> = tiles
+        .par_iter()
+        .map(|(_, t)| {
+            let src = t.bytes();
+            let n = src.len() / sf.bytes_per_pixel().max(1);
+            let mut dst = vec![0u8; n * to.bytes_per_pixel()];
+            let (mut px, mut o) = ([0.0f32; 2], [0.0f32; 4]);
+            for i in 0..n {
+                for (k, v) in px.iter_mut().enumerate().take(ss) {
+                    *v = photocraft_color::read_sample(src, sf.sample, i * ss + k);
+                }
+                ink(&px[..ss], &mut o[..ds]);
+                for (k, v) in o.iter().enumerate().take(ds) {
+                    photocraft_color::write_sample(&mut dst, to.sample, i * ds + k, *v);
+                }
+            }
+            dst
+        })
+        .collect();
+    for ((c, _), bytes) in tiles.iter().zip(inked) {
+        let tile = out.tile_mut(*c).bytes_mut();
+        if tile.len() == bytes.len() {
+            tile.copy_from_slice(&bytes);
+        }
+    }
+    out
 }
 
 /// Image › Mode › RGB/Grayscale/CMYK/Lab through the CMS. Params: `profile` (destination,
