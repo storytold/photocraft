@@ -114,6 +114,55 @@ fn droplets_are_written_and_run() {
 }
 
 #[test]
+fn droplets_carry_the_actions_their_play_steps_call() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("droplet-called");
+    let inputs = images(&dir, 2, 40, 20);
+    let mut s = Session::new();
+    let act = |name: &str, steps: Value| Action { name: name.into(), steps: serde_json::from_value(steps).unwrap() };
+    s.actions.list = vec![
+        act("Unrelated", json!([["image.imageRotation.180", {}]])),
+        act("Rotate", json!([["image.imageRotation.90cw", {}]])),
+        // Calls Rotate by index (as the panel records it) and itself (caught at run time).
+        act("Outer", json!([["actions.play", {"action": 1}]])),
+        act("Loop", json!([["actions.play", {"action": "Loop"}]])),
+    ];
+    let make = |s: &mut Session, name: &str, steps: Value| {
+        let path = format!("{dir}/{name}");
+        let out = format!("{dir}/out-{name}");
+        s.execute("file.automate.createDroplet", json!({"path": path, "steps": steps, "format": "png", "output": out, "shim": false})).unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let dp = make(&mut s, "Outer", json!([["actions.play", {"action": "Outer"}]]));
+    let looping = make(&mut s, "Loop", json!([["actions.play", {"action": "Loop"}]]));
+    let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
+    assert!(v.get("actions").is_none(), "the CLI reads `actions` as an action set");
+    let names: Vec<&str> = v["calledActions"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Rotate", "Outer"], "only the called actions, transitively");
+
+    // A fresh session, as `photocraft-cli droplet` and the droplet shim use.
+    let mut fresh = Session::new();
+    let r = fresh.execute("file.automate.runDroplet", json!({"droplet": dp, "input": [dir.clone()]})).unwrap();
+    assert_eq!(r["files"].as_array().unwrap().len(), inputs.len(), "{r}");
+    let out = photocraft_codecs::decode(&std::fs::read(format!("{dir}/out-Outer/img0.png")).unwrap()).unwrap();
+    assert_eq!(out.dimensions(), (20, 40));
+    let r = fresh.execute("file.automate.runDroplet", json!({"droplet": looping, "input": [dir.clone()]})).unwrap();
+    assert_eq!(r["errors"].as_array().unwrap().len(), inputs.len(), "a self-call fails instead of looping: {r}");
+
+    // Droplets written before `calledActions` still run.
+    let old = format!("{dir}/old.pcdroplet");
+    std::fs::write(
+        &old,
+        json!({"photocraftDroplet": 1, "action": {"steps": [["image.imageRotation.90cw", {}]]}, "options": {"output": format!("{dir}/out-old")}}).to_string(),
+    )
+    .unwrap();
+    let r = fresh.execute("file.automate.runDroplet", json!({"droplet": old, "input": [dir.clone()]})).unwrap();
+    assert_eq!(r["files"].as_array().unwrap().len(), inputs.len(), "{r}");
+}
+
+#[test]
 fn statistics_makes_a_stack_mode_smart_object() {
     let dir = tmp("stats");
     let files = images(&dir, 3, 16, 12);
@@ -161,4 +210,33 @@ fn contact_sheet_places_thumbnails_with_captions() {
         let d = &s.documents()[r["documents"][0].as_u64().unwrap() as usize].doc;
         assert_eq!(d.layers.len(), 1);
     }
+}
+
+#[test]
+fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("nested-failure");
+    images(&dir, 1, 8, 4);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.actions.list.push(Action { name: "Rotate".into(), steps: vec![("image.imageRotation.90cw".into(), json!({}))] });
+    s.actions.list.push(Action { name: "Bad".into(), steps: vec![("layer.delete".into(), json!({"layer": 999_999}))] });
+    // A script stops at the failed call and reports it.
+    let r = s.execute("file.scripts.browse", json!({"steps": [["actions.play", {"action": "Bad"}], ["image.imageRotation.90cw", {}]]})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(r["results"].as_array().unwrap().len(), 1);
+    // Batch plays called actions, and a failure inside one is a file error, not a saved result.
+    let batch = |s: &mut Session, action: &str| {
+        let p = json!({"steps": [["actions.play", {"action": action}]], "input": dir.clone(), "output": format!("{dir}/{action}"), "format": "png"});
+        s.execute("file.automate.batch", p).unwrap()
+    };
+    let r = batch(&mut s, "Rotate");
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let r = batch(&mut s, "Bad");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("no such layer"), "{r}");
+    // An action that batches itself stops as a recursive call instead of overflowing the stack.
+    let inner = json!({"steps": [["actions.play", {"action": "Loop"}]], "input": dir.clone(), "output": format!("{dir}/inner"), "format": "png"});
+    s.actions.list.push(Action { name: "Loop".into(), steps: vec![("file.automate.batch".into(), inner)] });
+    batch(&mut s, "Loop");
 }
