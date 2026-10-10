@@ -2856,3 +2856,5 @@ fontWeight	Italic	Italique
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Les objets dynamiques contiennent des pages pixellisées à cette résolution. Le texte et les vecteurs PDF restent pixellisés.
 	Place all {count} pages	Importer les {count} pages
 	Place selected ({count})	Importer la sélection ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Impossible de peindre directement sur les objets dynamiques. Pixellisez le calque manuellement ou peignez sur un nouveau calque de pixels.

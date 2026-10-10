@@ -30,6 +30,9 @@ Each source is a raster page stored as an embedded .pcraft document, so Smart Ob
 Edit Contents and transformations retain its original pixels. Original PDF vectors
 are not embedded or rerendered at higher zoom. The target canvas, color mode, bit depth
 and save path remain unchanged. Save .pcraft to retain the smart objects.
+Pixel painting does not convert smart objects. Rasterize the layer explicitly through
+Layer > Rasterize > Smart Object (or the layer context menu) before painting its pixels.
+Painting a smart object's mask remains available without rasterizing its contents.
 
 Without an open document, or when dropping onto the tab strip, Open selected and
 Open all pages create separate named RGB 8-bit tabs in binder order. Choose

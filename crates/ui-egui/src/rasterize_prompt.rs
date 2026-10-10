@@ -1,4 +1,4 @@
-//! "Rasterize?" prompt: painting the pixels of a type, shape, Smart Object or fill layer with a
+//! "Rasterize?" prompt: painting the pixels of a type, shape or fill layer with a
 //! pixel tool asks first, as Photoshop does ("This type layer must be rasterized before
 //! proceeding. Its text will no longer be editable. Rasterize the type?"), instead of failing
 //! with a status-bar message.
@@ -7,6 +7,7 @@
 //! and `ui.dialog.cancel` answer it). OK runs the matching `layer.rasterize.*` command, then paints
 //! where the click was, so rasterizing and painting are two history states, as in Photoshop.
 //! Cancel does nothing.
+//! Smart Objects refuse pixel painting; users must rasterize them explicitly first.
 
 use serde_json::{Map, Value, json};
 
@@ -52,7 +53,7 @@ impl Kind {
         match self {
             Kind::Type => "This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?",
             Kind::Shape => "This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?",
-            Kind::SmartObject => "This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?",
+            Kind::SmartObject => "Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.",
             Kind::Fill => "This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?",
         }
     }
@@ -101,6 +102,11 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
         return false;
     }
     let Some((kind, layer)) = needed(app) else { return false };
+    if kind == Kind::SmartObject {
+        app.ui.status = smart_object_message().into();
+        app.ui.status_error = true;
+        return true;
+    }
     if !app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
         open(app, kind, layer, tool, [x, y, f64::from(pressure)]);
     }
@@ -140,6 +146,9 @@ pub fn body(ui: &mut egui::Ui, f: &Map<String, Value>) {
 /// OK: rasterize, then paint at the click (two history states).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let kind = f.get(MARK).and_then(Value::as_str).and_then(Kind::from_key).ok_or("not a rasterize prompt")?;
+    if kind == Kind::SmartObject {
+        return Err(smart_object_message().into());
+    }
     let layer = f.get("layer").and_then(Value::as_u64).ok_or("the prompt has no layer")?;
     let r = app.run(kind.command(), json!({ "layer": layer }))?;
     let tool = f.get("tool").and_then(Value::as_str).and_then(Tool::from_name);
@@ -157,6 +166,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     }
     let painted = app.session.active().map(|st| st.history.past_len()) != before;
     Ok(json!({ "rasterized": r, "painted": painted }))
+}
+
+fn smart_object_message() -> &'static str {
+    tl!("Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.")
 }
 
 #[cfg(test)]

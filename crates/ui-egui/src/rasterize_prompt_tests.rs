@@ -43,8 +43,45 @@ fn prompt(app: &PhotocraftApp) -> Option<&crate::state::Dialog> {
 }
 
 #[test]
+fn pdf_smart_object_requires_manual_rasterization_before_painting() {
+    let mut app = app_with(Kind::SmartObject);
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "pdf", &Default::default()).unwrap().bytes;
+    app.open_file("placed.pdf", &bytes).unwrap();
+    app.confirm_pdf_pages(&[0]).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let history = past(&app);
+    assert!(app.run("paint.stroke", json!({"points": [[30, 20]], "color": "#0000ff"})).is_err());
+    assert_eq!(app.session.active().unwrap().doc, before);
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser, Tool::CloneStamp, Tool::PaintBucket, Tool::Smudge, Tool::Gradient] {
+        app.ui.tool = tool;
+        app.ui.tool_options.gradient_classic = true;
+        click(&mut app, 30.0, 20.0);
+        assert!(prompt(&app).is_none(), "{tool:?}: painting must not offer to rasterize a smart object");
+        assert_eq!(app.session.active().unwrap().doc, before);
+        assert_eq!(past(&app), history);
+        assert!(app.drag.is_none() && app.live_stroke.is_none());
+        assert!(app.ui.status_error);
+    }
+    // A retained/automation-created prompt must not bypass the explicit rasterize command.
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let id = open(&mut app, Kind::SmartObject, layer, Tool::Brush, [30.0, 20.0, 1.0]);
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!(app.session.active().unwrap().doc, before);
+    assert_eq!(past(&app), history);
+    app.ui.close_dialog(id);
+    app.run("layer.rasterize.smartObject", json!({})).unwrap();
+    assert_eq!(active_content(&app), "Pixel");
+    assert_eq!(past(&app), history + 1);
+    app.ui.tool = Tool::Brush;
+    click(&mut app, 30.0, 20.0);
+    assert_eq!(past(&app), history + 2);
+    assert!(app.session.undo() && app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc, before);
+}
+
+#[test]
 fn ok_rasterizes_then_paints_as_two_history_states() {
-    for kind in Kind::ALL {
+    for kind in Kind::ALL.into_iter().filter(|kind| *kind != Kind::SmartObject) {
         for tool in [Tool::Brush, Tool::Pencil] {
             let mut app = app_with(kind);
             app.ui.tool = tool;
@@ -68,6 +105,25 @@ fn ok_rasterizes_then_paints_as_two_history_states() {
             assert_eq!(active_content(&app), kind_name(kind));
         }
     }
+}
+
+#[test]
+fn smart_object_masks_remain_paintable_without_rasterizing_contents() {
+    let mut app = app_with(Kind::SmartObject);
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    let state = app.session.active().unwrap();
+    let layer = state.active_layer.unwrap();
+    let before = state.doc.layer(layer).unwrap().content.clone();
+    let history = past(&app);
+    app.ui.tool = Tool::Brush;
+    app.ui.mask_target = true;
+    app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
+    click(&mut app, 30.0, 20.0);
+    assert!(prompt(&app).is_none());
+    assert_eq!(past(&app), history + 1);
+    let state = app.session.active().unwrap();
+    assert_eq!(state.doc.layer(layer).unwrap().content, before);
+    assert!(state.doc.layer(layer).unwrap().mask.as_ref().unwrap().surface.rgba(30, 20)[0] < 0.5);
 }
 
 fn kind_name(k: Kind) -> &'static str {

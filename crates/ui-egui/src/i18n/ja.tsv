@@ -3457,3 +3457,5 @@ fontWeight	Italic	斜体
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	スマートオブジェクトにはこの解像度でラスタライズしたページが含まれます。PDFのテキストとベクトルはラスタライズされたままです。
 	Place all {count} pages	全{count}ページを配置
 	Place selected ({count})	選択を配置 ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	スマートオブジェクトには直接描画できません。レイヤーを手動でラスタライズするか、新しいピクセルレイヤーに描画してください。

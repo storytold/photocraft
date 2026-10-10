@@ -3015,3 +3015,5 @@ fontWeight	Italic	기울임
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	스마트 오브젝트에는 이 해상도로 래스터화된 페이지가 포함됩니다. PDF 텍스트와 벡터는 래스터화된 상태로 유지됩니다.
 	Place all {count} pages	모든 {count}페이지 배치
 	Place selected ({count})	선택 항목 배치 ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	스마트 오브젝트에는 직접 그릴 수 없습니다. 레이어를 수동으로 래스터화하거나 새 픽셀 레이어에 그리세요.

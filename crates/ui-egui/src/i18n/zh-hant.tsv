@@ -2414,3 +2414,5 @@ fontWeight	Italic	斜體
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	智慧型物件包含依此解析度點陣化的頁面。PDF 文字和向量仍維持點陣化。
 	Place all {count} pages	置入全部 {count} 頁
 	Place selected ({count})	置入選取頁面 ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	無法直接在智慧型物件上繪畫。請手動點陣化圖層，或在新的像素圖層上繪畫。

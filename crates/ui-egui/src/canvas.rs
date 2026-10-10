@@ -3770,7 +3770,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     match ev {
         ToolEvent::Down { x, y, pressure } => {
-            // Painting a type, shape, Smart Object or fill layer asks to rasterize it first
+            // Smart Objects require manual rasterization. Type, shape and fill layers ask first
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
             // Painting on or moving a hidden layer is refused at the press, as in Photoshop (#571).

@@ -3544,3 +3544,5 @@ cameraRaw	Masking	Маскування
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-об’єкти містять растрові сторінки з цією роздільністю. Текст і вектори PDF залишаються растровими.
 	Place all {count} pages	Розмістити всі сторінки ({count})
 	Place selected ({count})	Розмістити вибрані ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Не можна малювати безпосередньо на смарт-об’єктах. Раструйте шар вручну або малюйте на новому піксельному шарі.

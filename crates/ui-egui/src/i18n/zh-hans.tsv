@@ -2445,3 +2445,5 @@ fontWeight	Italic	斜体
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	智能对象包含按此分辨率栅格化的页面。PDF 文本和矢量仍保持栅格化。
 	Place all {count} pages	置入全部 {count} 页
 	Place selected ({count})	置入选中页面 ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	无法直接在智能对象上绘画。请手动栅格化图层，或在新的像素图层上绘画。

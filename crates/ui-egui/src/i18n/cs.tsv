@@ -2437,3 +2437,5 @@ fontWeight	Italic	Kurzíva
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Inteligentní objekty obsahují rastrové stránky v tomto rozlišení. Text a vektory PDF zůstávají rastrové.
 	Place all {count} pages	Vložit všech {count} stránek
 	Place selected ({count})	Vložit vybrané ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Inteligentní objekty nelze přímo malovat. Ručně rastrujte vrstvu nebo malujte na nové pixelové vrstvě.

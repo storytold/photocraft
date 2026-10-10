@@ -3457,3 +3457,5 @@ cameraRaw	Roughness	Chropowatość
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Obiekty inteligentne zawierają zrasteryzowane strony w tej rozdzielczości. Tekst i wektory PDF pozostają zrasteryzowane.
 	Place all {count} pages	Umieść wszystkie strony ({count})
 	Place selected ({count})	Umieść wybrane ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Nie można malować bezpośrednio na obiektach inteligentnych. Zrasteryzuj warstwę ręcznie lub maluj na nowej warstwie pikseli.

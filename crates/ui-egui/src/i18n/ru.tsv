@@ -2721,3 +2721,5 @@ fontWeight	Italic	Курсив
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Смарт-объекты содержат растрированные страницы в этом разрешении. Текст и векторы PDF остаются растрированными.
 	Place all {count} pages	Поместить все страницы ({count})
 	Place selected ({count})	Поместить выбранные ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Нельзя рисовать непосредственно на смарт-объектах. Растрируйте слой вручную или рисуйте на новом пиксельном слое.

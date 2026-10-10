@@ -2864,3 +2864,5 @@ fontWeight	Italic	Itálico
 	Smart objects contain rasterized pages at this resolution. PDF text and vectors remain rasterized.	Os objetos inteligentes contêm páginas rasterizadas nesta resolução. Textos e vetores PDF permanecem rasterizados.
 	Place all {count} pages	Inserir todas as {count} páginas
 	Place selected ({count})	Inserir seleção ({count})
+
+	Smart Objects cannot be painted directly. Rasterize the layer manually or paint on a new pixel layer.	Não é possível pintar diretamente em objetos inteligentes. Rasterize a camada manualmente ou pinte em uma nova camada de pixels.
