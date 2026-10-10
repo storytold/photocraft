@@ -8,9 +8,9 @@
 //! - Holding ⌘ (Ctrl off the Mac) with the Crop tool is a temporary Straighten: a ⌘-drag draws the
 //!   line; releasing ⌘ gives the normal crop gestures back.
 //!
-//! While the line is drawn its angle shows beside the pointer. As the Crop tool works in
-//! Photoshop's Classic Mode (the frame turns over a fixed image, `crop_ui`), Straighten sets the
-//! frame's angle and fits the frame to the image ([`fitted`]). It is only a pending frame edit:
+//! While the line is drawn its angle shows beside the pointer. Straighten sets the frame's angle
+//! and fits the frame to the image ([`fitted`]); in Classic Mode the frame then shows turned over
+//! the image, in the default mode the image turns behind the upright box (`crop_mode`). It is only a pending frame edit:
 //! ↵ commits it and Esc cancels it as any crop. A line shorter than [`MIN_LINE_PX`] screen points
 //! does nothing.
 
@@ -183,6 +183,9 @@ mod tests {
         s.add_document(doc, None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::Crop;
+        // Classic Mode: the frame turns over the image (the default mode's Straighten is tested in
+        // `crop_mode`).
+        app.ui.tool_options.crop_shield.classic_mode = true;
         app.ui.extras.snap = false;
         app.ui.view.show.smart_guides = false;
         ensure_frame(&mut app);

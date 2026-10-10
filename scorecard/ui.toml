@@ -134,9 +134,9 @@ note = "canvas.rs:1107-1125 no Alt handling"
 [[item]]
 id = "UI-217-19"
 target = "Shortcut hints rendered per platform; Reveal label per OS"
-status = "missing"
+status = "done"
 issue = 217
-note = "~33 hard-coded modifier glyph strings in ui-egui; menu_catalog.rs:341 one label"
+note = "hints and tooltips go through shortcuts::pretty (6266b7a9, #262; pretty_uses_the_platform_notation); menus::reveal_label names Reveal in Finder per OS (Show in Explorer / Show in Folder) in the Smart Objects menu and the tab menu; reveal_label_names_the_platform_file_manager + smart_objects_reveal_item_names_the_platform_file_manager"
 
 [[item]]
 id = "UI-217-20"

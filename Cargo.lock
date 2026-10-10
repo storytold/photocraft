@@ -4339,6 +4339,7 @@ name = "photocraft-engine"
 version = "0.6.0"
 dependencies = [
  "blake3",
+ "exr",
  "flate2",
  "photocraft-affinity",
  "photocraft-algo",
@@ -4359,6 +4360,7 @@ dependencies = [
  "photocraft-text",
  "photocraft-vector",
  "rayon",
+ "roxmltree",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4439,6 +4441,7 @@ dependencies = [
  "photocraft-vector",
  "proptest",
  "resvg",
+ "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -4502,11 +4505,13 @@ name = "photocraft-raw"
 version = "0.6.0"
 dependencies = [
  "flate2",
+ "image",
  "jxl-oxide",
  "photocraft-raw",
  "png 0.18.1",
  "rayon",
  "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
  "zune-jpegxl",
 ]
 
@@ -4578,7 +4583,6 @@ dependencies = [
  "photocraft-text",
  "photocraft-vector",
  "rayon",
- "roxmltree",
  "serde",
  "serde_json",
  "sys-locale",

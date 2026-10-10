@@ -35,6 +35,11 @@
 	New…	Novo…
 	Open…	Abrir…
 	Open As…	Abrir como…
+	Open EXR Parts…	Abrir partes EXR…
+	Add beauty precomp from the AOVs	Adicionar a pré-composição da beleza a partir dos AOVs
+	Both	Ambas
+	Left	Esquerda
+	Right	Direita
 	Open Recent	Abrir recentes
 	Clear Recent Files	Limpar arquivos recentes
 	Close	Fechar
@@ -84,6 +89,8 @@
 	Import	Importar
 	Browse…	Procurar…
 	Reveal in Finder	Mostrar no Finder
+	Show in Explorer	Mostrar no Explorador
+	Show in Folder	Mostrar na pasta
 	File Info…	Informações do arquivo…
 	Print…	Imprimir…
 	Print One Copy	Imprimir uma cópia
@@ -795,7 +802,6 @@
 	Blending Options	Opções de mesclagem
 	Blue	Azul
 	Blue, Red, Yellow	Azul, vermelho, amarelo
-	Both	Ambos
 	Both Axes	Ambos os eixos
 	Bottom	Inferior
 	Brightness	Brilho
@@ -1110,7 +1116,6 @@
 	Leading	Entrelinha
 	Leading (set to the font size × auto-leading when Auto)	Entrelinha (no modo Automático, é o tamanho da fonte × entrelinha automática)
 	Leave as is (don't color manage)	Deixar como está (não gerenciar cores)
-	Left	Esquerda
 	Left align text	Alinhar texto à esquerda
 	Length:	Comprimento:
 	Level	Nível
@@ -1282,6 +1287,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Grave ● uma sequência de edições e depois reproduza-a ▶ em qualquer documento.
 	Red	Vermelho
 	Redefine style by current selection	Redefinir o estilo pela seleção atual
+	Refine	Refinar
 	Reflected Gradient	Degradê refletido
 	Registration Marks	Marcas de registro
 	Regular	Regular
@@ -1307,6 +1313,11 @@
 	{n} commands are not in PhotoCraft.	{n} comandos não existem no PhotoCraft.
 	Keyboard shortcuts imported	Atalhos de teclado importados
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Seu conjunto de atalhos de teclado {set} está em uso aqui: {n} atalhos diferem dos padrões. Editar › Atalhos de teclado os mostra; Redefinir tudo para o padrão desfaz isso.
+	Import keyboard shortcuts?	Importar atalhos de teclado?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	O PhotoCraft encontrou neste computador seu conjunto de atalhos de teclado {set} de outro editor de imagens: {n} de seus atalhos diferem dos do PhotoCraft. Importá-lo?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Editar › Atalhos de teclado › Redefinir tudo para o padrão desfaz uma importação.
+	Don't Import	Não importar
+	The keyboard shortcut set was not imported: {error}	O conjunto de atalhos de teclado não foi importado: {error}
 	Reset Section	Redefinir seção
 	Reset Transform	Redefinir transformação
 	Reset to defaults	Redefinir para os padrões
@@ -1315,7 +1326,6 @@
 	Restore All	Restaurar tudo
 	Restore Defaults	Restaurar padrões
 	Restrictive (Web)	Restritiva (Web)
-	Right	Direita
 	Right align text	Alinhar texto à direita
 	Rigid	Rígido
 	Rotate:	Girar:
@@ -1600,6 +1610,7 @@
 	Mobile	Dispositivos móveis
 	Move Tool	Ferramenta Mover
 	Could not use the move tool because the layer is locked.	Não foi possível usar a ferramenta Mover porque a camada está bloqueada.
+	Could not complete the Free Transform command because the layer is locked.	Não foi possível concluir o comando Transformação livre porque a camada está bloqueada.
 	Multiply	Multiplicação
 	My Brushes	Meus pincéis
 	Neutrals	Neutros
@@ -1971,8 +1982,8 @@
 	Brush Preset Options	Opções de predefinições de pincel
 	Group name	Nome do grupo
 	Brush name	Nome do pincel
-	Grid view	Visualização em grade
-	List view	Visualização em lista
+	Brush Name	Nome do pincel
+	Brush Stroke	Traçado do pincel
 	Off: the speed of the pointer sets the spacing	Desativado: a velocidade do ponteiro define o espaçamento
 	Tilt Scale	Escala de inclinação
 	Brush Projection	Projeção do pincel
@@ -2652,6 +2663,7 @@ cameraRaw	Whites	Brancos
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Seletor de cores (Cor do texto)
+	Color Picker ({name})	Seletor de cores ({name})
 	Color Picker (Fill Color)	Seletor de cores (Cor de preenchimento)
 	Fill color	Cor de preenchimento
 	Color Picker (Stroke Color)	Seletor de cores (Cor do traçado)
@@ -2804,7 +2816,33 @@ fontWeight	Italic	Itálico
 	XOR	XOR
 	Color Burn (Paint.NET)	Superexposição de cores (Paint.NET)
 	Color Dodge (Paint.NET)	Subexposição de cores (Paint.NET)
+	Stroke Options	Opções de traçado
+	Solid	Contínuo
+	Dashed	Tracejado
+	Dotted	Pontilhado
+	Caps	Pontas
+	Butt / Flat	Plano
+	Corners	Cantos
+	Miter	Junção em ângulo
+	Round	Redondo
+	Bevel	Chanfrado
+	Miter limit	Limite da junção
+	Dashed line	Linha tracejada
+	Dash	Traço
+	Gap	Espaço
+	Dash / gap lengths × stroke width	Comprimentos de traço / espaço × largura do traçado
+	Add pair	Adicionar par
+	Remove pair	Remover par
+	Dash offset	Deslocamento do tracejado
+	Open paths use centered strokes	Caminhos abertos usam traçados centralizados
+	Use finite lengths and a positive pattern total	Use comprimentos finitos e um total de padrão positivo
 	No subject found — try Object Selection or the Lasso	Nenhum assunto encontrado — tente Seleção de objeto ou o Laço
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+	Use Classic Mode	Usar modo clássico
+	Auto Center Preview	Centralizar visualização automaticamente
+	Next Document	Próximo documento
+	Previous Document	Documento anterior
+	W x H x Resolution	L x A x Resolução
+	Front Image	Imagem frontal

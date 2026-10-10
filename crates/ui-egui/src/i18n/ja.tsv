@@ -36,6 +36,11 @@
 	New from Clipboard	クリップボードから新規作成
 	Open…	開く…
 	Open As…	形式を指定して開く…
+	Open EXR Parts…	EXRパートを開く…
+	Add beauty precomp from the AOVs	AOVからビューティーをプリコンポーズして追加
+	Both	両方
+	Left	左
+	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
 	Close	閉じる
@@ -85,6 +90,8 @@
 	Import	読み込み
 	Browse…	参照…
 	Reveal in Finder	Finder で表示
+	Show in Explorer	エクスプローラーで表示
+	Show in Folder	フォルダーで表示
 	File Info…	ファイル情報…
 	Print…	プリント…
 	Print One Copy	1 部プリント
@@ -813,7 +820,6 @@
 	Blending Options	描画オプション
 	Blue	青
 	Blue, Red, Yellow	青、赤、黄
-	Both	両方
 	Both Axes	両方の軸
 	Bottom	下
 	Brightness	明るさ
@@ -1132,7 +1138,6 @@
 	Leading	行送り
 	Leading (set to the font size × auto-leading when Auto)	行送り(自動のときはフォントサイズ × 自動行送り)
 	Leave as is (don't color manage)	そのまま(カラーマネジメントしない)
-	Left	左
 	Left align text	左揃え
 	Length:	長さ:
 	Level	レベル
@@ -1304,6 +1309,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	一連の編集を記録 ● し、任意のドキュメントで再生 ▶ できます。
 	Red	赤
 	Redefine style by current selection	現在の選択でスタイルを再定義
+	Refine	調整
 	Reflected Gradient	反射形グラデーション
 	Registration Marks	見当合わせマーク
 	Regular	レギュラー
@@ -1328,6 +1334,11 @@
 	{n} commands are not in PhotoCraft.	{n} 個のコマンドは PhotoCraft にありません。
 	Keyboard shortcuts imported	キーボードショートカットを読み込みました
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	キーボードショートカットセット {set} をここで使用しています。{n} 個のショートカットが既定と異なります。編集 › キーボードショートカットで確認でき、「すべて既定に戻す」で元に戻せます。
+	Import keyboard shortcuts?	キーボードショートカットを読み込みますか？
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	このコンピューターで、別の画像編集アプリのキーボードショートカットセット {set} が見つかりました。{n} 個のショートカットが PhotoCraft と異なります。読み込みますか？
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	編集 › キーボードショートカット › 「すべて既定に戻す」で読み込みを元に戻せます。
+	Don't Import	読み込まない
+	The keyboard shortcut set was not imported: {error}	キーボードショートカットセットは読み込まれませんでした: {error}
 	Reset Section	セクションをリセット
 	Reset Transform	変形をリセット
 	Reset to defaults	既定に戻す
@@ -1336,7 +1347,6 @@
 	Restore All	すべて復元
 	Restore Defaults	既定に戻す
 	Restrictive (Web)	制限(Web)
-	Right	右
 	Right align text	右揃え
 	Rigid	剛体
 	Rotate:	回転:
@@ -1626,6 +1636,7 @@
 	Mobile	モバイル
 	Move Tool	移動ツール
 	Could not use the move tool because the layer is locked.	レイヤーがロックされているため、移動ツールを使用できません。
+	Could not complete the Free Transform command because the layer is locked.	レイヤーがロックされているため、自由変形コマンドを完了できません。
 	Multiply	乗算
 	My Brushes	マイブラシ
 	Neutrals	中間色系
@@ -2009,8 +2020,7 @@
 	Brush Preset Options	ブラシプリセットのオプション
 	Group name	グループ名
 	Brush name	ブラシ名
-	Grid view	グリッド表示
-	List view	リスト表示
+	Brush Name	ブラシ名
 	Off: the speed of the pointer sets the spacing	オフ: ポインターの速度で間隔が決まります
 	Tilt Scale	傾きの比率
 	Brush Projection	ブラシの投影
@@ -2198,6 +2208,7 @@ cameraRaw	Color	カラー
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	カラーピッカー（文字色）
+	Color Picker ({name})	カラーピッカー（{name}）
 	Color Picker (Fill Color)	カラーピッカー（塗りつぶしカラー）
 	Fill color	塗りつぶしカラー
 	Color Picker (Stroke Color)	カラーピッカー（線のカラー）
@@ -3399,7 +3410,32 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	Stroke Options	線のオプション
+	Solid	実線
+	Dashed	破線
+	Dotted	点線
+	Caps	線端
+	Butt / Flat	平端
+	Miter	マイター
+	Round	丸型
+	Bevel	ベベル
+	Miter limit	マイター制限
+	Dashed line	破線
+	Dash	線分
+	Gap	間隔
+	Dash / gap lengths × stroke width	線分 / 間隔の長さ × 線幅
+	Add pair	組を追加
+	Remove pair	組を削除
+	Dash offset	破線のオフセット
+	Open paths use centered strokes	開いたパスの線は中央に配置されます
+	Use finite lengths and a positive pattern total	有限の長さと正のパターン合計を使用してください
 	No subject found — try Object Selection or the Lasso	被写体が見つかりません — オブジェクト選択ツールまたはなげなわツールを試してください
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Use Classic Mode	クラシックモードを使用
+	Auto Center Preview	プレビューを自動的に中央に配置
+	Next Document	次のドキュメント
+	Previous Document	前のドキュメント
+	W x H x Resolution	幅 x 高さ x 解像度
+	Front Image	前面の画像

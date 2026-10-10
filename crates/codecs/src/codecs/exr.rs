@@ -181,6 +181,77 @@ pub(crate) fn decode_part(bytes: &[u8], index: usize, limits: &Limits) -> Result
     layer_to_image(&read_layer(bytes, index)?)
 }
 
+/// Decodes the named channels of one flat part (exact names as the file stores them, e.g.
+/// `diffuse.R`) into an image: R/G/B (plus A when named) give Rgba, a lone Y gives Gray. This
+/// is how a channel group renders without the part's other channels in the way.
+pub(crate) fn decode_channels(bytes: &[u8], index: usize, names: &[&str], limits: &Limits) -> Result<Image, CodecError> {
+    let meta = read_meta(bytes, limits)?;
+    if meta.requirements.has_deep_data {
+        return Err(CodecError::unsupported(F, "this file has deep parts; the deep decoder composites those (mixing flat and deep parts is not supported)"));
+    }
+    if index >= meta.headers.len() {
+        return Err(err(format!("part index {index} is out of range ({} parts)", meta.headers.len())));
+    }
+    let layer = read_layer(bytes, index)?;
+    let (w, h) = (layer.size.0, layer.size.1);
+    let channels = &layer.channel_data.list;
+    let npx = w * h;
+    let mut picked: Vec<&AnyChannel<FlatSamples>> = Vec::with_capacity(names.len());
+    for name in names {
+        let c = channels.iter().find(|c| c.name.to_string() == *name).ok_or_else(|| err(format!("the part has no channel {name}")))?;
+        if c.sample_data.len() != npx {
+            return Err(err("channel sample count mismatch (subsampled channels are unsupported)"));
+        }
+        picked.push(c);
+    }
+    let base = |c: &AnyChannel<FlatSamples>| -> String { base_channel_name(&c.name.to_string()).to_string() };
+    let has = |n: &str| picked.iter().any(|c| base(c) == n);
+    let (layout, order): (ChannelLayout, Vec<Option<usize>>) = if has("R") && has("G") && has("B") {
+        let at = |n: &str| picked.iter().position(|c| base(c) == n);
+        match has("A").then(|| at("A")) {
+            Some(a) => (ChannelLayout::Rgba, vec![at("R"), at("G"), at("B"), a]),
+            None => (ChannelLayout::Rgb, vec![at("R"), at("G"), at("B"), None]),
+        }
+    } else if has("Y") {
+        let y = picked.iter().position(|c| base(c) == "Y");
+        match picked.iter().position(|c| base(c) == "A") {
+            Some(a) => (ChannelLayout::GrayA, vec![y, Some(a)]),
+            None => (ChannelLayout::Gray, vec![y]),
+        }
+    } else if picked.len() == 1 {
+        (ChannelLayout::Gray, vec![Some(0)])
+    } else {
+        return Err(CodecError::unsupported(F, "the named channels are no R/G/B or Y set"));
+    };
+    let all_f16 = picked.iter().all(|c| matches!(c.sample_data, FlatSamples::F16(_)));
+    let nc = layout.channels();
+    let (w32, h32) = (w as u32, h as u32);
+    // The None slots sit past the layout's own channels (the absent A of an RGB pick) and
+    // are skipped, so the buffer keeps its pixel stride.
+    let img = if all_f16 {
+        let mut out = vec![f16::ZERO; npx * nc];
+        for (ci, pick) in order.iter().enumerate() {
+            let Some(idx) = pick else { continue };
+            let Some(FlatSamples::F16(v)) = picked.get(*idx).map(|c| &c.sample_data) else { continue };
+            for (i, s) in v.iter().enumerate() {
+                out[i * nc + ci] = *s;
+            }
+        }
+        Image::from_f16(w32, h32, layout, &out)
+    } else {
+        let mut out = vec![0f32; npx * nc];
+        for (ci, pick) in order.iter().enumerate() {
+            let Some(idx) = pick else { continue };
+            let Some(c) = picked.get(*idx) else { continue };
+            for (i, s) in c.sample_data.values_as_f32().enumerate() {
+                out[i * nc + ci] = s;
+            }
+        }
+        Image::from_f32(w32, h32, layout, &out)
+    };
+    img.map_err(|e| CodecError::encode(F, e))
+}
+
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = (img.width() as usize, img.height() as usize);
