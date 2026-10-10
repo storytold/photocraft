@@ -2267,6 +2267,21 @@ cameraRaw	Color	Barvy
 	Domed	Kopule
 	Domed (Inverted)	Kopule (obrácená)
 	Diagonal (Descending)	Diagonála (sestupná)
+	Contour Editor	Editor kontury
+	Anti-aliased	Vyhlazení
+	Corner	Roh
+	Gloss Contour	Kontura lesku
+	Contour	Kontura
+	Cone - Inverted	Kužel - obrácený
+	Cove - Deep	Zátoka - hluboká
+	Cove - Shallow	Zátoka - mělká
+	Gaussian	Gaussovský
+	Half Round	Půlkruh
+	Ring	Prstenec
+	Ring - Double	Prstenec - dvojitý
+	Rolling Slope - Descending	Zvlněný svah - sestupný
+	Rounded Steps	Zaoblené stupně
+	Sawtooth 1	Pila 1
 
 	Red Eye Tool	Nástroj červené oči
 	Red Eye	Červené oči

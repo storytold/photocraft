@@ -106,9 +106,9 @@ note = "engine presets/swatches.rs (RGB/HSB/CMYK/Lab/Gray + verbatim colour book
 [[item]]
 id = "FILE-215-15"
 target = "Layer Style contour picker, curve editor, presets, .shc import/export"
-status = "missing"
-issue = 215
-note = "doc effects.rs:57 Contour model only"
+status = "partial"
+issue = 2912
+note = "Layer Style dialog: contour thumbnail + preset picker (12 standard shapes, own control points) and Anti-aliased on Drop/Inner Shadow, Outer/Inner Glow, Satin, Bevel Gloss Contour and Contour element; Contour Editor (add/drag/delete, Corner, Input/Output, Preset, Load…/Save… .shc per Adobe's public spec, psd shc.rs); corner points render (compose contour_curve_lut) and map to PSD Cnty. Missing: a user contour library (New…, picker Load/Save/Replace Contours), Anti-aliased doesn't change the render yet, .shc not yet checked against a Photoshop-written file"
 
 [[item]]
 id = "FILE-215-16"

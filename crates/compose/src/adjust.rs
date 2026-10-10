@@ -706,6 +706,41 @@ pub fn curve_lut(points: &[CurvePoint]) -> Vec<f32> {
         .collect()
 }
 
+/// A layer-style contour curve: [`curve_lut`], except that the curve bends sharply at corner
+/// points (`corners[i]` true; Photoshop's Contour Editor "Corner"): each run between corners is
+/// its own natural spline, so all-corner points make a polyline. Missing flags are smooth.
+pub fn contour_curve_lut(points: &[CurvePoint], corners: &[bool]) -> Vec<f32> {
+    let mut pts: Vec<(CurvePoint, bool)> = points.iter().enumerate().map(|(i, p)| (p.clone(), corners.get(i).copied().unwrap_or(false))).collect();
+    if !pts.iter().any(|p| p.1) {
+        return curve_lut(points);
+    }
+    pts.sort_by(|a, b| a.0.input.partial_cmp(&b.0.input).unwrap_or(std::cmp::Ordering::Equal));
+    pts.dedup_by(|a, b| (a.0.input - b.0.input).abs() < 1e-6);
+    let mut out: Vec<f32> = Vec::new();
+    let mut start = 0usize;
+    let last = pts.len().saturating_sub(1);
+    for i in 1..=last {
+        let corner = pts.get(i).is_some_and(|p| p.1);
+        if !(corner || i == last) {
+            continue;
+        }
+        let Some(seg) = pts.get(start..=i) else { break };
+        let from = seg.first().map_or(0.0, |p| p.0.input);
+        let lut = curve_lut(&seg.iter().map(|p| p.0.clone()).collect::<Vec<_>>());
+        if out.is_empty() {
+            out = lut;
+        } else {
+            for (k, (o, v)) in out.iter_mut().zip(lut).enumerate() {
+                if k as f32 / (LUT_SIZE - 1) as f32 >= from {
+                    *o = v;
+                }
+            }
+        }
+        start = i;
+    }
+    if out.is_empty() { curve_lut(points) } else { out }
+}
+
 fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
     match stops {
         [] => [t; 3],

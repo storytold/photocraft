@@ -2539,6 +2539,21 @@ cameraRaw	Roughness	Неровность
 	Domed	Купол
 	Domed (Inverted)	Купол (инвертированный)
 	Diagonal (Descending)	Диагональ (нисходящая)
+	Contour Editor	Редактор контура
+	Anti-aliased	Сглаживание
+	Corner	Угол
+	Gloss Contour	Контур глянца
+	Contour	Контур
+	Cone - Inverted	Конус - инвертированный
+	Cove - Deep	Бухта - глубокая
+	Cove - Shallow	Бухта - мелкая
+	Gaussian	Гауссова
+	Half Round	Полукруг
+	Ring	Кольцо
+	Ring - Double	Кольцо - двойное
+	Rolling Slope - Descending	Волнистый склон - нисходящий
+	Rounded Steps	Скруглённые ступени
+	Sawtooth 1	Пила 1
 	Linear	Линейный
 
 	Red Eye Tool	Инструмент «Красные глаза»

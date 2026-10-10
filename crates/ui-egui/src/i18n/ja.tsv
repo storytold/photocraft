@@ -2244,6 +2244,19 @@ cameraRaw	Color	カラー
 	Domed	ドーム
 	Domed (Inverted)	ドーム (反転)
 	Diagonal (Descending)	斜め (下降)
+	Contour Editor	輪郭エディター
+	Anti-aliased	アンチエイリアス
+	Corner	コーナー
+	Gloss Contour	光沢輪郭
+	Contour	輪郭
+	Cone - Inverted	円錐 - 反転
+	Cove - Deep	入り江 - 深
+	Cove - Shallow	入り江 - 浅
+	Half Round	半円
+	Ring - Double	リング - ダブル
+	Rolling Slope - Descending	ローリングスロープ - 下降
+	Rounded Steps	丸い階段
+	Sawtooth 1	のこぎり波 1
 
 	Red Eye Tool	赤目ツール
 	Red Eye	赤目

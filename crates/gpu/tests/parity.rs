@@ -807,7 +807,11 @@ fn fx_doc(w: u32, h: u32, depth: SampleType) -> Document {
 }
 
 fn contour() -> Contour {
-    Contour::Custom { name: "cove".into(), points: vec![Cp { input: 0.0, output: 0.1 }, Cp { input: 0.4, output: 0.8 }, Cp { input: 1.0, output: 0.6 }] }
+    Contour::Custom {
+        name: "cove".into(),
+        points: vec![Cp { input: 0.0, output: 0.1 }, Cp { input: 0.4, output: 0.8 }, Cp { input: 1.0, output: 0.6 }],
+        corners: vec![],
+    }
 }
 
 fn shadow(blend: BlendMode, opacity: f32, angle: f32, distance: f32, size: f32, spread: f32) -> Shadow {
