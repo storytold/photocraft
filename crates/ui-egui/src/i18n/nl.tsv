@@ -8,6 +8,26 @@
 # stay as they are; the trailing "…" of dialog commands is kept. UI text addresses the user
 # informally ("je") and uses sentence case.
 
+# Optional local selection models.
+	Subject / background removal	Onderwerp / achtergrond verwijderen
+	Object selection	Objectselectie
+	Classical (built in)	Klassiek (ingebouwd)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Downloaden
+	Download a model before choosing it. Downloads do not change the current method.	Download een model voordat u het kiest. Downloads wijzigen de huidige methode niet.
+	Downloaded	Gedownload
+	In use…	In gebruik…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Grote modellen kunnen lang duren en meerdere GB geheugen gebruiken. Voortgang en Annuleren verschijnen in de statusbalk.
+	Local models aren't available in this build or session.	Lokale modellen zijn niet beschikbaar in deze build of sessie.
+	Local selection models	Lokale selectiemodellen
+	Model details	Modeldetails
+	Models run on this device. Images stay on this device.	Modellen draaien op dit apparaat. Afbeeldingen blijven op dit apparaat.
+	Not downloaded	Niet gedownload
+	Remove download	Download verwijderen
+	Select Subject and Remove Background; detailed, soft edges	Onderwerp selecteren en achtergrond verwijderen; gedetailleerde, zachte randen
+	Object Selection; drag a box around the object	Objectselectie; sleep een kader rond het object
+
 	File	Bestand
 	Edit	Bewerken
 	Image	Afbeelding

@@ -9,6 +9,26 @@
 # Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
 
 # Menus
+# Optional local selection models.
+	Subject / background removal	Об’єкт / видалення тла
+	Object selection	Вибір об’єкта
+	Classical (built in)	Класичний (вбудований)
+	BiRefNet HR Matting	BiRefNet HR Matting
+	SAM 2.1 Large	SAM 2.1 Large
+	Download	Завантажити
+	Download a model before choosing it. Downloads do not change the current method.	Завантажте модель перед вибором. Завантаження не змінюють поточний метод.
+	Downloaded	Завантажено
+	In use…	Використовується…
+	Large models can take time and use several GB of memory. Progress and Cancel appear in the status bar.	Великі моделі можуть працювати довго та використовувати кілька ГБ пам’яті. Прогрес і Скасувати з’являються в рядку стану.
+	Local models aren't available in this build or session.	Локальні моделі недоступні в цій збірці або сеансі.
+	Local selection models	Локальні моделі вибору
+	Model details	Відомості про модель
+	Models run on this device. Images stay on this device.	Моделі працюють на цьому пристрої. Зображення залишаються на цьому пристрої.
+	Not downloaded	Не завантажено
+	Remove download	Видалити завантаження
+	Select Subject and Remove Background; detailed, soft edges	Вибір об’єкта та видалення тла; докладні, м’які краї
+	Object Selection; drag a box around the object	Вибір об’єкта; перетягніть рамку навколо об’єкта
+
 	File	Файл
 	Edit	Редагування
 	Image	Зображення

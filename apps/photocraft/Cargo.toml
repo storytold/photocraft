@@ -11,6 +11,7 @@ build = "build.rs"
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
+local-ml = ["photocraft-engine/local-ml"]
 
 [lints]
 workspace = true

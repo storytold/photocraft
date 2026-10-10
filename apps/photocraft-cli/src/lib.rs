@@ -232,11 +232,28 @@ fn print_json(out: &mut dyn Write, v: &Value, compact: bool) -> R {
     writeln!(out, "{s}").map_err(|e| e.to_string())
 }
 
+/// Only explicit, trusted CLI invocations receive a model-cache capability. MCP sessions keep
+/// their existing filesystem authority; merely starting the CLI never downloads a model.
+fn local_headless() -> Headless {
+    let mut h = Headless::trusted_local();
+    configure_cli_models(&mut h.session);
+    h
+}
+
+fn configure_cli_models(session: &mut photocraft_engine::Session) {
+    #[cfg(all(feature = "local-ml", not(target_arch = "wasm32")))]
+    if let Some(dir) = std::env::var_os("PHOTOCRAFT_MODEL_DIR") {
+        session.configure_local_models(dir.into());
+    }
+    #[cfg(any(not(feature = "local-ml"), target_arch = "wasm32"))]
+    let _ = session;
+}
+
 fn info(a: &Args, out: &mut dyn Write) -> R {
     let [file] = a.positional.as_slice() else {
         return Err("info needs <file>".into());
     };
-    let mut h = Headless::trusted_local();
+    let mut h = local_headless();
     let opened = h.open(Path::new(file)).map_err(|e| e.to_string())?;
     let mut doc = h.inspect(None).map_err(|e| e.to_string())?;
     let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
@@ -272,7 +289,7 @@ fn command_list(a: &Args) -> Result<Vec<(String, Value)>, String> {
 
 fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let opts = export_opts(a)?;
-    let mut h = Headless::trusted_local();
+    let mut h = local_headless();
     match (a.positional.as_slice(), a.get("--new")) {
         ([file], None) => {
             let o = h.open(Path::new(file)).map_err(|e| e.to_string())?;
@@ -368,6 +385,9 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     inputs.sort();
     let (mut ok, mut failed) = (0, 0);
     let mut written = photocraft_engine::file_cmds::OutputClaims::default();
+    // Keep only model weights resident across files, rather than retaining their documents or
+    // loading a new native session for each image in the same explicit batch invocation.
+    let model_backend = local_headless().session.model_backend;
     // `--format .jpg` names outputs `<stem>.jpg`, as `--format jpg` does (#490).
     let format = a.get("--format").map(|f| f.strip_prefix('.').unwrap_or(f));
     for input in &inputs {
@@ -378,6 +398,7 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         let r = (|| -> Result<Vec<String>, String> {
             written.check(&target_text)?;
             let mut h = Headless::trusted_local();
+            h.session.model_backend = model_backend.clone();
             h.open(input).map_err(|e| e.to_string())?;
             for (id, p) in &actions {
                 h.command_run(id, p.clone()).map_err(|e| format!("`{id}`: {e}"))?;
@@ -412,6 +433,7 @@ fn droplet(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         p["output"] = json!(o);
     }
     let mut s = photocraft_engine::Session::new();
+    configure_cli_models(&mut s);
     let r = s.execute("file.automate.runDroplet", p).map_err(|e| e.to_string())?;
     for f in r["files"].as_array().into_iter().flatten() {
         let _ = writeln!(out, "ok    {}", f.as_str().unwrap_or_default());

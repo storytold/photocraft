@@ -41,17 +41,26 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     check(doc, doc.layer(id).ok_or(EngineError::NoLayer(id))?).map_err(EngineError::Other)?;
     let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
     let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
+    let model = crate::model_cmds::subject_model(s, p)?;
+    let backend = model.map(|_| crate::model_cmds::backend(s)).transpose()?;
     crate::jobs::edit_job(
         s,
         "Remove Background",
         move |doc, _, ctx| {
             ctx.progress(0.1, "Finding subject");
-            let found = with_doc_sampler(doc, Some(id), sample_all, |smp, d| subject::select_subject(smp, d.bounds()));
+            let found = match (model, backend.as_ref()) {
+                (Some(model), Some(backend)) => with_doc_sampler(doc, Some(id), sample_all, |smp, d| {
+                    crate::model_cmds::infer_region(backend.as_ref(), model, smp, d, photocraft_ml::Prompt::Subject, ctx)
+                })?,
+                _ => with_doc_sampler(doc, Some(id), sample_all, |smp, d| subject::select_subject(smp, d.bounds())),
+            };
             let mut region = found.ok_or_else(|| EngineError::Other("no subject found".into()))?;
             if ctx.cancelled() {
                 return Err(EngineError::Cancelled);
             }
-            if refine {
+            // BiRefNet already estimates a soft alpha matte. Classical edge refinement would
+            // threshold or change those opacities, so it applies only to the classical selector.
+            if refine && model.is_none() {
                 ctx.progress(0.6, "Refining edge");
                 let refined = with_doc_sampler(doc, Some(id), sample_all, |smp, d| {
                     matting::refine_mask(smp, &matting::region_reader(&region), region.bbox, d.bounds(), &REFINE)
@@ -67,7 +76,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let b = region.bbox;
             Ok([b.x0, b.y0, b.width() as i32, b.height() as i32])
         },
-        move |bounds| json!({ "layer": id.0, "bounds": bounds }),
+        move |bounds| json!({ "layer": id.0, "bounds": bounds, "model": model.map_or("classical", |m| m.name()) }),
     )
 }
 
@@ -78,7 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Remove Background",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true} → {layer,bounds} (adds a layer mask from Select Subject; the Background becomes a normal layer)"##,
+        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true,"model":"classical|birefnet-hr-matting"?} → {layer,bounds,model} (model defaults to Preferences; refine applies to classical only; replaces the layer mask; the Background becomes a normal layer)"##,
         enabled,
         run,
         journal: true,

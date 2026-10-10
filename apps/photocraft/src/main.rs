@@ -348,7 +348,16 @@ fn main() -> eframe::Result {
                         services::xwayland_command(var("FLATPAK_ID").as_deref(), var("APPIMAGE").as_deref(), std::env::var_os("DISPLAY").is_some());
                 }
             }
-            let mut app = PhotocraftApp::new(Session::new(), services);
+            let session = Session::new();
+            #[cfg(feature = "local-ml")]
+            let session = {
+                let mut session = session;
+                if let Some(dir) = services::config_dir() {
+                    session.configure_local_models(dir.join("Models"));
+                }
+                session
+            };
+            let mut app = PhotocraftApp::new(session, services);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).

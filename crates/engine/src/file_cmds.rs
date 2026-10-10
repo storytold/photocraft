@@ -797,6 +797,11 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = process_files(&inputs, &output, &format, SaveOpts::from_params(p), "", &|scratch| {
         scratch.actions = actions.clone();
+        // Reuse a host-granted backend (and its resident model) across inputs. A default or
+        // untrusted session still has no model-cache capability; nested steps retain its gate.
+        scratch.model_backend = s.model_backend.clone();
+        scratch.authorize = s.authorize;
+        scratch.edit_prefs(|p| p.integrations = s.prefs().integrations.clone());
         for (id, params) in &steps {
             let r = scratch.execute(id, params.clone())?;
             // A failed step inside a called action makes this file an error, not a saved result.

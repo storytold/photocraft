@@ -11,6 +11,8 @@
 | `photocraft-transform.jpg` | Photocraft UI screenshot (offscreen snapshot) with *The Tetons and the Snake River*, Ansel Adams, 1942 (U.S. National Archives) | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Adams_The_Tetons_and_the_Snake_River.jpg). UI: this project. |
 | `photocraft-type.jpg` | Photocraft UI screenshot (offscreen snapshot) with *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg). UI: this project. |
 | `photocraft-export-light.jpg` | Photocraft UI screenshot (offscreen snapshot) with *The Kiss*, Gustav Klimt, 1907–1908 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg). UI: this project. |
+| `local-models-before.png`, `local-models-preferences.png` | PhotoCraft Preferences, offscreen snapshots before / after optional local models | Original project UI, MIT OR Apache-2.0; [licence](LICENSE-local-models.txt). |
+| `local-models-comparison.png` | Actual exported classical / BiRefNet / SAM masks over a checkerboard, using *Girl with a Pearl Earring*, Johannes Vermeer, c. 1665 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:1665_Girl_with_a_Pearl_Earring.jpg); original layout: MIT OR Apache-2.0; [licence](LICENSE-local-models.txt). |
 
 Screenshots must use famous public-domain artwork (or content made in the app), never personal photos.
 
