@@ -48,7 +48,7 @@ fn print_dry_run_renders_a_pdf_and_reports_lp() {
         assert_eq!(r["sent"], false);
         let pdf = std::fs::read(r["pdf"].as_str().unwrap()).unwrap();
         assert!(pdf.starts_with(b"%PDF-1.4"));
-        assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 595.28 841.89]"));
+        assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 595.280000 841.890000]"));
         let (w, h, cs, data) = pdf_image(&pdf);
         assert_eq!((w, h), (300, 150));
         assert_eq!(cs, "/DeviceRGB");

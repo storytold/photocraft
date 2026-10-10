@@ -87,6 +87,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn binder_export_is_available_without_inflating_photoshop_parity() {
+        assert!(!CATALOG.iter().any(|(_, _, _, id)| *id == "file.export.allTabsPdf"));
+        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let items = crate::menus::menu_items(&app);
+        let binder = items.iter().find(|item| item.id == "file.export.allTabsPdf").unwrap();
+        assert_eq!(binder.path, ["File", "Export"]);
+    }
+
+    #[test]
     fn parity_does_not_regress() {
         let p = compute();
         assert!(p.total > 500, "catalog shrank: {}", p.total);

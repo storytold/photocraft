@@ -272,7 +272,7 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
     let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
         ctx.progress(0.0, "Reading");
         let bytes = match source {
-            photocraft_engine::jobs::OpenSource::Bytes(b) => b,
+            photocraft_engine::jobs::OpenSource::Bytes(b) | photocraft_engine::jobs::OpenSource::PdfPages { bytes: b, .. } => b,
             #[cfg(not(target_arch = "wasm32"))]
             photocraft_engine::jobs::OpenSource::Path(p) => {
                 std::sync::Arc::new(std::fs::read(&p).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?)

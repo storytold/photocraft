@@ -48,6 +48,10 @@ impl PhotocraftApp {
     /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
     /// warnings (also shown to the user).
     pub fn open_file(&mut self, path: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
+        if crate::pdf_import_ui::is_pdf(path, bytes) {
+            crate::pdf_import_ui::queue(self, &display_name(path), Some(path.into()), bytes)?;
+            return Ok(Vec::new());
+        }
         // Brushes/gradients go to the preset libraries (no document, no Open Recent entry).
         if let Some(r) = crate::preset_files_ui::open(self, path, bytes) {
             return r.map(|()| Vec::new());
@@ -89,7 +93,7 @@ impl PhotocraftApp {
         // Documents opening in the background are read on the worker too (a 2 GB PSB read
         // would block the window). Preset files (brushes, gradients) go the usual way.
         let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        if self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
+        if self.background_jobs && ext != "pdf" && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))?;
             return Ok(Vec::new());
         }
@@ -139,7 +143,8 @@ impl PhotocraftApp {
         };
         for f in files {
             let name = dropped_name(&f);
-            if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
+            // PDFs first show page selection; confirmation places separate smart objects.
+            if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) && !name.to_ascii_lowercase().ends_with(".pdf") {
                 self.drop_places.push_back(f);
                 continue;
             }
@@ -170,13 +175,18 @@ impl PhotocraftApp {
     /// background opens). True when it took the slot.
     fn open_dropped_file(&mut self, f: &egui::DroppedFileHandle, name: &str, slot: Option<usize>) -> Result<bool, String> {
         // Opens append: a background open's tab, or a document.
-        let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
+        let (docs, opens, pickers) = (self.session.documents().len(), self.jobs.opens.len(), self.pdf_pickers.len());
         if f.path().is_absolute() {
             self.open_path(&f.path().to_string_lossy())?;
         } else {
             self.open_bytes(name, &crate::read_dropped(&**f)?)?;
         }
         let Some(slot) = slot else { return Ok(false) };
+        if let Some(picker) = self.pdf_pickers.get_mut(pickers) {
+            picker.slot = Some(slot);
+            picker.target = None;
+            return Ok(true);
+        }
         if let Some(tab) = self.jobs.opens.get_mut(opens) {
             tab.slot = Some(slot);
             return Ok(true);
@@ -195,6 +205,7 @@ impl PhotocraftApp {
                 crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&dropped_name(&f), bytes, None))
             };
             match placed {
+                Ok(result) if result.get("pdfPicker").and_then(serde_json::Value::as_bool) == Some(true) => return,
                 Ok(_) => {
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
@@ -208,6 +219,11 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read.
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
+        if linked.is_none() && crate::pdf_import_ui::is_pdf(name, &bytes) {
+            self.active_doc_id()?;
+            crate::pdf_import_ui::queue(self, name, None, &bytes)?;
+            return Ok(serde_json::json!({"pdfPicker": true}));
+        }
         let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string());
         self.sync_views();
         r

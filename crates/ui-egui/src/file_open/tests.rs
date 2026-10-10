@@ -394,6 +394,23 @@ fn app_with_canvas() -> PhotocraftApp {
     app
 }
 
+#[test]
+fn pdf_drop_on_canvas_selects_then_places_a_smart_object() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "pdf", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+    app.open_dropped(&ctx, vec![dropped("pages.PDF", Ok(bytes))], Some(egui::pos2(400.0, 300.0)));
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.pending_pdf_pages(), Some(1));
+    assert!(app.drop_places.is_empty());
+    let before = app.session.active().unwrap().doc.layers.len();
+    app.confirm_pdf_pages(&[0]).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), before + 1);
+    let state = app.session.active().unwrap();
+    assert!(matches!(state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Smart(_)));
+}
+
 fn layer_count(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
