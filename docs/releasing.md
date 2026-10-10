@@ -103,6 +103,24 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   them it only checks signature integrity and warns, like `package.sh`. Run it locally after a
   build: `packaging/macos/verify.sh --arch aarch64`.
 
+- **In-app updates:** the app checks once when it launches and on *Help › Check for Updates*.
+  The macOS packaging script enables the `macos-updater` Cargo feature and supplies the pinned
+  Sparkle framework. Ordinary `cargo check` / `cargo test` builds omit that optional dependency,
+  so development and CI do not require a system-wide Sparkle installation. To check the updater
+  integration directly, set `SPARKLE_FRAMEWORK_PATH` to the directory containing the verified
+  `Sparkle.framework` and run `cargo check -p photocraft --features macos-updater --locked`.
+  Sparkle downloads updates in the background and installs them when PhotoCraft quits, so an open
+  editing session is not interrupted. The menu command opens Sparkle's native
+  macOS update window, including the current-version message and an Update action. There is no
+  scheduled polling or resident updater process; Sparkle starts its helper only while checking or
+  installing. To enable updates in release builds, create a
+  Sparkle EdDSA key pair on a maintainer-controlled Mac with the pinned Sparkle `generate_keys`
+  tool. Store the exported private key as the `SPARKLE_EDDSA_PRIVATE_KEY` Actions secret and the
+  matching base64 public key as the `SPARKLE_PUBLIC_KEY` Actions variable in the `release`
+  environment. The workflow signs `appcast.xml` with the private key and uploads it with the DMG.
+  When either value is missing, the build disables in-app updates and emits a warning. Never
+  commit or share the private key.
+
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization.
 That's enough to check the bundle and the DMG on your own Mac:
 

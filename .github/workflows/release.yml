@@ -72,6 +72,9 @@ jobs:
     env:
       PHOTOCRAFT_VERSION: ${{ needs.version.outputs.version }}
       PHOTOCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      # Only embed the public key when its matching private signing key is configured too.
+      PHOTOCRAFT_SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY != '' && vars.SPARKLE_PUBLIC_KEY != '' && vars.SPARKLE_PUBLIC_KEY || '' }}
     steps:
       - uses: actions/checkout@v4
       - name: Check out craft-fonts (embedded fonts)
@@ -103,6 +106,27 @@ jobs:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
         run: packaging/macos/package.sh --arch universal
+      - name: Generate signed Sparkle appcast
+        env:
+          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          if [ "$PRERELEASE" = true ]; then
+            echo "Skipping the stable Sparkle appcast for a pre-release"
+            exit 0
+          fi
+          if [ -z "$PHOTOCRAFT_SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_EDDSA_PRIVATE_KEY" ]; then
+            echo "::warning::Sparkle signing keys are not configured; this build has in-app updates disabled"
+            exit 0
+          fi
+          . packaging/env.sh
+          appcast_dir="$(mktemp -d)"
+          cp "dist/release/photocraft-$PHOTOCRAFT_VERSION-macos-universal.dmg" "$appcast_dir/"
+          printf '%s' "$SPARKLE_EDDSA_PRIVATE_KEY" | \
+            "$CARGO_TARGET_DIR/macos-deps/sparkle-2.9.6/bin/generate_appcast" \
+              --ed-key-file - \
+              --download-url-prefix "https://github.com/storytold/photocraft/releases/download/v$PHOTOCRAFT_VERSION/" \
+              "$appcast_dir"
+          cp "$appcast_dir/appcast.xml" dist/release/appcast.xml
       # Unpacks the CLI zip and checks the binary users get: Developer ID, hardened runtime,
       # timestamp, and Gatekeeper's notarization lookup (codesign --verify, spctl). Also the DMG's
       # stapled ticket. Strict when the signing secrets are present, warnings otherwise.

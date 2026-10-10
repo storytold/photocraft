@@ -72,6 +72,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn update_check_is_disabled_without_a_platform_updater() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(!crate::menus::is_enabled(&app, "help.checkUpdates"));
+        let result = crate::menus::invoke(&mut app, &egui::Context::default(), "help.checkUpdates", json!({}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_check_dispatches_each_manual_request_to_the_platform() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let checks = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&checks);
+        let services = crate::Services {
+            check_for_updates: Some(Box::new(move || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        assert!(crate::menus::is_enabled(&app, "help.checkUpdates"));
+        for _ in 0..2 {
+            assert_eq!(crate::menus::invoke(&mut app, &egui::Context::default(), "help.checkUpdates", json!({})).unwrap(), Value::Null);
+        }
+        assert_eq!(checks.load(Ordering::Relaxed), 2);
+        assert!(app.session.documents().is_empty());
+    }
+
+    #[test]
+    fn update_check_returns_platform_errors_without_mutating_documents() {
+        let services = crate::Services { check_for_updates: Some(Box::new(|| Err("test updater unavailable".into()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let result = crate::menus::invoke(&mut app, &egui::Context::default(), "help.checkUpdates", json!({}));
+        assert_eq!(result.unwrap_err(), "test updater unavailable");
+        assert!(app.session.documents().is_empty());
+    }
+
+    #[test]
     fn links_open_through_the_platform_service() {
         // Issue #14: links (Help menu, Discord button, start-page links) must open in the browser.
         // They route through the `open_url` service rather than the unreliable `ctx.open_url`.
@@ -101,7 +142,20 @@ mod tests {
     fn help_menu_lists_links_then_separator_then_system_info_and_about() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         let help: Vec<String> = crate::menus::menu_items(&app).into_iter().filter(|i| i.path == ["Help"]).map(|i| i.id).collect();
-        assert_eq!(help, ["help.discord", "help.website", "help.artcraftWebsite", "help.github", "help.reportIssue", "---", "help.systemInfo", "help.about"]);
+        assert_eq!(
+            help,
+            [
+                "help.discord",
+                "help.website",
+                "help.artcraftWebsite",
+                "help.github",
+                "help.reportIssue",
+                "help.checkUpdates",
+                "---",
+                "help.systemInfo",
+                "help.about"
+            ]
+        );
         for (id, _) in COMMANDS {
             assert!(crate::menus::is_live(id) && crate::menus::is_enabled(&app, id), "{id}");
         }

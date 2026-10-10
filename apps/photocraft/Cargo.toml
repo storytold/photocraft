@@ -11,6 +11,9 @@ build = "build.rs"
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
+# Release bundles provide the verified Sparkle framework. Plain macOS development/CI builds
+# must remain usable without downloading or installing a native updater framework.
+macos-updater = ["dep:sparkle-updater"]
 
 [lints]
 workspace = true
@@ -61,6 +64,8 @@ muda = { version = "=0.21.1", default-features = false }
 # Quit with `terminate:` from the main queue, outside winit's event handler (mac_window.rs).
 # Already in Cargo.lock (winit, objc2-app-kit); pinned exactly to the same version.
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
+# Native macOS updater (Sparkle 2). The release bundle supplies Sparkle.framework.
+sparkle-updater = { version = "=0.1.0", optional = true }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
