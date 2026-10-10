@@ -683,8 +683,7 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// every command's enabled state, so it doesn't run on frames that only animate or scroll.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_ref() else { return };
-    let input = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })));
-    let state = state_hash(app, input.then_some(app.frame));
+    let state = state_hash(app, had_input(ctx).then_some(app.frame));
     if menu.state == Some(state) && !menu.dirty {
         return;
     }
@@ -706,16 +705,23 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     menu.dirty = false;
 }
 
+/// A click or key press this frame: it may have changed state [`state_hash`] doesn't list.
+pub(crate) fn had_input(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })))
+}
+
 /// What the menus' rows depend on, cheaply: commands run, the documents and their revisions,
 /// selection, recent files, panels and view state, the language. `input` forces a change on
 /// frames with a click or key press, which covers state the hash doesn't list.
-fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
+pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
     input.hash(&mut h);
     let s = &app.session;
     s.journal.len().hash(&mut h);
     s.active_index().hash(&mut h);
     s.clipboard.is_some().hash(&mut h);
+    // A running job greys the commands that would change its document.
+    s.has_jobs().hash(&mut h);
     if let Some(d) = s.active() {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }

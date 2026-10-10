@@ -383,6 +383,8 @@ pub struct PhotocraftApp {
     live_stroke: Option<canvas::LiveStroke>,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
     trail: Option<stroke_trail::Trail>,
+    /// The open menus' items, reused between frames (`menus::ItemCache`).
+    pub(crate) menu_cache: Option<menus::ItemCache>,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// A blend mode hovered in the Layers panel, shown live (`blend_preview`).
@@ -580,6 +582,7 @@ impl PhotocraftApp {
             tool_override: None,
             live_stroke: None,
             trail: None,
+            menu_cache: None,
             move_preview: None,
             blend_preview: None,
             patch_preview: None,
