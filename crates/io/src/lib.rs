@@ -235,9 +235,15 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
-/// Plain SVG is recognized by its XML content; the `.svgz` extension disambiguates gzip streams.
+/// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
+/// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
 fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
-    svg::is_svg(bytes) || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
+    // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
+    // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
+    // suffix (for example, a WebP downloaded as Firefox_logo.svg).
+    svg::is_svg(bytes)
+        || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none())
+        || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
 }
 
 fn extension(name_or_ext: &str) -> String {

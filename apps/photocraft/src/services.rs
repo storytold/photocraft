@@ -95,10 +95,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             let dialog = if let Some(exts) = extensions {
                 dialog.add_filter("Supported Files", &open_filter_extensions(&exts.iter().map(String::as_str).collect::<Vec<_>>()))
             } else {
-                open_filters().into_iter().fold(dialog, |dialog, (name, extensions)| dialog.add_filter(name, &extensions)).add_filter(
-                    "Paint.NET",
-                    &open_filter_extensions(&["pdn"]),
-                )
+                open_filters()
+                    .into_iter()
+                    .fold(dialog, |dialog, (name, extensions)| dialog.add_filter(name, &extensions))
+                    .add_filter("Paint.NET", &open_filter_extensions(&["pdn"]))
             };
             if multiple {
                 let picked = dialog.pick_files();
