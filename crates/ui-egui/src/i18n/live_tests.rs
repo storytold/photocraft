@@ -134,7 +134,7 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
     }
     with_language(Lang::EN, || {
         let mut h = harness();
-        let glyphs: std::collections::BTreeSet<_> = lang("ko").0.source.chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
+        let glyphs: std::collections::BTreeSet<_> = lang("ko").0.text().chars().filter(|c| cjk::classify(*c) == Some(CjkChar::Hangul)).collect();
         for code in ["zh-hans", "ja", "ko", "fr", "ko"] {
             h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("language");
             h.run_steps(12);

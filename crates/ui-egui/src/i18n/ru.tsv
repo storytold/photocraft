@@ -532,6 +532,12 @@
 	Reset	Сброс
 	Reset Section	Сбросить раздел
 	Reset All to Defaults	Сбросить всё к значениям по умолчанию
+	Import Shortcuts…	Импортировать сочетания клавиш…
+	Load a keyboard shortcut set saved as .kys	Загрузить набор сочетаний клавиш, сохранённый как .kys
+	Imported {n} shortcuts from {file}. Click OK to keep them.	Импортировано сочетаний: {n} из {file}. Нажмите OK, чтобы сохранить их.
+	{n} commands are not in PhotoCraft.	Команд, которых нет в PhotoCraft: {n}.
+	Keyboard shortcuts imported	Сочетания клавиш импортированы
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Здесь используется ваш набор сочетаний клавиш {set}: сочетаний, отличных от стандартных: {n}. Их показывает Редактирование › Сочетания клавиш; «Сбросить всё к значениям по умолчанию» отменяет импорт.
 	Defaults restored.	Значения по умолчанию восстановлены.
 	Restore Defaults	Восстановить по умолчанию
 	Restore original size	Восстановить исходный размер
@@ -2584,6 +2590,9 @@ fontWeight	Italic	Курсив
 	Cycle Orientation	Сменить ориентацию
 	Set the overlay options for the Crop tool	Задать параметры перекрытия для инструмента «Рамка»
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+щелчок перехватило окружение рабочего стола: оно перемещает окна через Alt+перетаскивание. Назначьте для перемещения окон клавишу Super или зафиксируйте Alt в меню Окно › Клавиши-модификаторы.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Палитра цветов (цвет стиля слоя)
 	Auto Hide Notifications	Автоскрытие уведомлений
 	Notification Duration (seconds)	Длительность уведомления (секунды)
 	Appearance Mode	Режим оформления

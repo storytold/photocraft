@@ -1513,6 +1513,13 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                 overrides.clear();
                 message = tl!("All shortcuts reset to PhotoCraft defaults.").into();
             }
+            // A Photoshop set (`.kys`) fills the overrides; the file arrives after this frame
+            // and `kys_import` writes the dialog's fields then (#1163).
+            if ui.button(tl!("Import Shortcuts…")).on_hover_text(tl!("Load a keyboard shortcut set saved as .kys")).clicked()
+                && let Err(e) = crate::kys_import::import_dialog(app)
+            {
+                message = e;
+            }
         });
     } else if ui.button(tl!("Show All Menu Items")).clicked() {
         hidden.clear();

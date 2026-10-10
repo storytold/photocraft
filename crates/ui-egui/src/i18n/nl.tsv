@@ -1299,6 +1299,12 @@
 	Rename…	Hernoemen…
 	Resample	Opnieuw bemonsteren
 	Reset All to Defaults	Alles terugzetten naar standaardwaarden
+	Import Shortcuts…	Sneltoetsen importeren…
+	Load a keyboard shortcut set saved as .kys	Een als .kys opgeslagen sneltoetsenset laden
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} sneltoetsen geïmporteerd uit {file}. Klik op OK om ze te behouden.
+	{n} commands are not in PhotoCraft.	{n} opdrachten bestaan niet in PhotoCraft.
+	Keyboard shortcuts imported	Sneltoetsen geïmporteerd
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Je sneltoetsenset {set} wordt hier gebruikt: {n} sneltoetsen wijken af van de standaardwaarden. Bewerken › Sneltoetsen toont ze; Alles terugzetten naar standaard maakt dit ongedaan.
 	Reset Section	Sectie herstellen
 	Reset Transform	Transformatie herstellen
 	Reset to defaults	Terugzetten naar standaardwaarden
@@ -3494,9 +3500,11 @@ cameraRaw	Whites	Witten
 	Cycle Orientation	Oriëntatie wisselen
 	Set the overlay options for the Crop tool	Overlay-opties voor het gereedschap Uitsnijden instellen
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	De Alt-klik ging naar het bureaublad, dat vensters verplaatst met Alt-slepen. Stel daar de toets voor het verplaatsen van vensters in op Super, of vergrendel Alt via Venster › Wijzigingstoetsen.
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	Kleurkiezer (kleur van laagstijl)
 	Auto Hide Notifications	Meldingen automatisch verbergen
 	Notification Duration (seconds)	Duur van melding (seconden)
-
 	Appearance Mode	Weergavemodus
 	Next Appearance Mode	Volgende weergavemodus
 	Sync with system	Synchroniseren met systeem

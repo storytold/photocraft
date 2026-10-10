@@ -17,11 +17,12 @@ use std::sync::Arc;
 mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
+/// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
+/// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
-    "afdesign", "afphoto", "afpub",
+    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
+    "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
@@ -358,6 +359,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             })
         }),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
+        photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
         system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
