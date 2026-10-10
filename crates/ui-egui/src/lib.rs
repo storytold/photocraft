@@ -272,6 +272,9 @@ pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 /// Whether Caps Lock is toggled on, read from the OS. `None` where the platform cannot
 /// report it (native Wayland): the cursor then follows the cursor preference (#1758).
 pub type CapsLockFn = Box<dyn FnMut() -> bool>;
+/// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
+/// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
+pub type WindowFrameFn = Box<dyn FnMut()>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -337,6 +340,10 @@ pub struct Services {
     /// Caps Lock toggled on (desktop; `None` on Wayland and the web). Read once per frame, so
     /// the canvas can show the precise crosshair for painting tools, whatever the preference.
     pub caps_lock: Option<CapsLockFn>,
+    /// Keeps the undecorated window borderless, so the content and the pointer stay aligned
+    /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
+    /// decorated or the platform needs no fixing.
+    pub window_frame: Option<WindowFrameFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
@@ -1287,6 +1294,11 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // An undecorated window gets its caption back when the toolkit changes its flags
+        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
+        if let Some(window_frame) = self.services.window_frame.as_mut() {
+            window_frame();
+        }
         // Native menu key equivalents become the key presses they were (see `native_menu`).
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
@@ -1911,6 +1923,9 @@ mod stroke_timing_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;
+
+#[cfg(test)]
+mod window_frame_tests;
 
 #[cfg(test)]
 mod clipboard_tests {
