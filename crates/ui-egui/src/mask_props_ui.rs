@@ -64,14 +64,14 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 /// mask. Invert names its target itself (`"target":"mask"`) rather than leaning on the shell's
 /// target routing, so it edits the mask and never the layer's pixels (#1137).
 fn refine_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    const REFINE: [(&str, &str); 3] = [("Select and Mask…", "select.selectAndMask"), ("Color Range…", "select.colorRange"), ("Invert", INVERT)];
+    let refine: [(&str, &str); 3] = [(tl!("Select and Mask…"), "select.selectAndMask"), (tl!("Color Range…"), "select.colorRange"), (tl!("Invert"), INVERT)];
     ui.add_space(theme::ROW_GAP / 2.0);
     ui.label(egui::RichText::new(tl!("Refine")).color(Tokens::get(ui.ctx()).text_dim));
     ui.add_space(theme::ROW_GAP / 2.0);
     let avail = ui.available_width();
     // Two buttons to a row in a wide panel, as Quick Actions do; a narrow one stacks them.
     let cols = if avail >= 360.0 { 2 } else { 1 };
-    for row in REFINE.chunks(cols) {
+    for row in refine.chunks(cols) {
         // A short last row (or a lone button) still spans the panel.
         let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
         ui.horizontal(|ui| {
