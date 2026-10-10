@@ -561,6 +561,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(Path::new("."));
         let keys = source_keys(root).unwrap_or_default();
         for (code, path) in [
+            ("ar", "ar.tsv"),
             ("ja", "ja.tsv"),
             ("zh-hant", "zh-hant.tsv"),
             ("es", "es.tsv"),
