@@ -446,3 +446,17 @@ fn selection_cursor_follows_the_modifiers_and_the_floating_piece() {
     tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 20.0, pressure: 1.0 }, none);
     assert_eq!(selection_cursor(&app, Tool::RectMarquee, [30.0, 20.0], none), Some(SelCursor::Outline));
 }
+
+#[test]
+fn size_readout_follows_the_ruler_unit() {
+    use photocraft_engine::prefs::{Unit, UnitsAndRulers};
+    let mut ur = UnitsAndRulers::default();
+    // 1644 × 2659 px at 72 dpi: 58 cm wide
+    let r = [0.0, 0.0, 1644.0, 2659.0];
+    ur.rulers = Unit::Pixels;
+    assert_eq!(crate::canvas::readout_in(&ur, 72.0, [1644.0, 2659.0], r), ["1644 px".to_string(), "2659 px".to_string()]);
+    ur.rulers = Unit::Centimeters;
+    assert_eq!(crate::canvas::readout_in(&ur, 72.0, [1644.0, 2659.0], r), ["58.00 cm".to_string(), "93.80 cm".to_string()]);
+    ur.rulers = Unit::Millimeters;
+    assert_eq!(crate::canvas::readout_in(&ur, 150.0, [1644.0, 2659.0], [0.0, 0.0, 3425.0, 100.0])[0], "580.0 mm");
+}

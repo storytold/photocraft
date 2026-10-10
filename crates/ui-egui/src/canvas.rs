@@ -218,6 +218,20 @@ pub fn marquee_readout(r: [f64; 4]) -> [String; 2] {
     [format!("{} px", r[2] - r[0]), format!("{} px", r[3] - r[1])]
 }
 
+/// [`marquee_readout`] in the Units & Rulers unit, as Photoshop shows it (cm when the rulers are in
+/// centimeters), from the active document's resolution; pixels without a document.
+pub fn size_readout(app: &PhotocraftApp, r: [f64; 4]) -> [String; 2] {
+    let Some(d) = app.session.active() else { return marquee_readout(r) };
+    let (dpi, size) = (f64::from(d.doc.resolution_dpi), d.doc.size);
+    readout_in(&app.session.prefs().units_and_rulers, dpi, [size.width as f64, size.height as f64], r)
+}
+
+/// `r`'s width and height formatted in `ur`'s ruler unit at `dpi` (percent of `extent`).
+pub fn readout_in(ur: &photocraft_engine::prefs::UnitsAndRulers, dpi: f64, extent: [f64; 2], r: [f64; 4]) -> [String; 2] {
+    let s = ur.rulers.suffix();
+    [format!("{} {s}", ur.format(r[2] - r[0], dpi, extent[0])), format!("{} {s}", ur.format(r[3] - r[1], dpi, extent[1]))]
+}
+
 /// Draw the marquee size readout below-right of the cursor (kept on screen), like Photoshop's:
 /// two rows, `W:` / `H:` labels on the left and the values right-aligned.
 fn draw_marquee_readout(ctx: &egui::Context, cursor: Pos2, values: [String; 2]) {
@@ -3355,7 +3369,7 @@ fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
             draw_readout(painter.ctx(), "crop-angle-readout", h, ["Angle:"], [format!("{a:.1}°")]);
         } else if let (Some([w, h]), Some(at)) = (crate::crop_ui::sizing(app), hover) {
             // Its W × H while it is drawn or resized (#1919), like the marquee's.
-            draw_marquee_readout(painter.ctx(), at, marquee_readout([0.0, 0.0, w, h]));
+            draw_marquee_readout(painter.ctx(), at, size_readout(app, [0.0, 0.0, w, h]));
         }
     }
 }
@@ -3425,7 +3439,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
     let last = d.points.last().map(|p| [p[0], p[1]]).unwrap_or(d.start);
     let marquee = marquee_preview_px(&app.ui.tool_options, d);
     if let Some(r) = marquee {
-        draw_marquee_readout(painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), marquee_readout(r));
+        draw_marquee_readout(painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), size_readout(app, r));
     }
     match d.tool {
         // The canvas shows the live stroke itself (`LiveStroke`); a stroke that couldn't start one
