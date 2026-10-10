@@ -496,7 +496,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let left = if cfg!(target_os = "macos") && app.integrated_titlebar { 78 } else { 10 };
     let right = if custom { 0 } else { 10 };
     let bar = egui::Panel::top("title_bar")
-        .exact_size(if t.pro { 32.0 } else { 38.0 })
+        // The 32 pt desktop Pro bar clipped the 44 pt Android touch targets.
+        // Its buttons must fit *inside* the panel, not overlap the bar below.
+        .exact_size(if cfg!(target_os = "android") { 56.0 } else if t.pro { 32.0 } else { 38.0 })
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
