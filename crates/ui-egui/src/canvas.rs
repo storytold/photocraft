@@ -5773,6 +5773,9 @@ mod transform_controls_tests {
 }
 
 #[cfg(test)]
+mod layer_edges_tests;
+
+#[cfg(test)]
 mod rotation_preview_isolation_tests {
     use super::*;
     use serde_json::json;
