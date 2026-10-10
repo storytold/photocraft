@@ -2503,3 +2503,8 @@ fontWeight	Italic	Cursiva
 	Previous Document	Documento anterior
 	W x H x Resolution	An. x Al. x Resolución
 	Front Image	Imagen frontal
+	Freeform Pen Tool	Herramienta Pluma de forma libre
+	Curvature Pen Tool	Herramienta Pluma de curvatura
+	Curve Fit:	Ajuste de curva:
+	Drag: draw freehand · Release on the start point: close	Arrastrar: dibujar a mano alzada · Soltar en el punto inicial: cerrar
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Clic: punto suave · Doble clic: esquina · Arrastrar un punto: mover · Clic en el primer punto: cerrar · {key}: terminar

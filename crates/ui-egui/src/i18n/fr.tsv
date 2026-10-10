@@ -2842,3 +2842,8 @@ fontWeight	Italic	Italique
 	Previous Document	Document précédent
 	W x H x Resolution	L x H x Résolution
 	Front Image	Image de premier plan
+	Freeform Pen Tool	Outil Plume libre
+	Curvature Pen Tool	Outil Plume de courbure
+	Curve Fit:	Ajustement de courbe :
+	Drag: draw freehand · Release on the start point: close	Glisser : dessin à main levée · Relâcher sur le point de départ : fermer
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Clic : point lisse · Double-clic : angle · Glisser un point : déplacer · Clic sur le premier point : fermer · {key} : terminer

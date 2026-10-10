@@ -26,6 +26,20 @@ pub struct PenPath {
     /// Re-dragging the final anchor changes its outgoing control only; the incoming curve stays put.
     #[serde(skip)]
     pub adjusting_last: bool,
+    /// Drawn with the Curvature Pen: handles follow the anchors (`curvature_refresh`) and
+    /// `unlinked` lists its corner points.
+    #[serde(default)]
+    pub curvature: bool,
+    /// Curvature Pen: the anchor being dragged.
+    #[serde(skip)]
+    pub moving: Option<usize>,
+}
+
+impl PenPath {
+    /// Does `tool` keep drawing this path? Another tool finishes it.
+    pub fn drawn_with(&self, tool: Tool) -> bool {
+        tool == if self.curvature { Tool::CurvaturePen } else { Tool::Pen }
+    }
 }
 
 pub fn is_shape_tool(t: Tool) -> bool {
@@ -220,6 +234,11 @@ pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
     if pen.knots.pop().is_none() {
         return false;
     }
+    pen.unlinked.retain(|&i| i < pen.knots.len());
+    if pen.curvature {
+        pen.moving = None;
+        curvature_refresh(pen, false);
+    }
     pen.dragging = false;
     if pen.knots.is_empty() {
         app.ui.pen = None;
@@ -236,11 +255,20 @@ pub fn pen_up(app: &mut PhotocraftApp) {
 
 /// Finish the pen path: a work path (Path mode) or a new shape layer (Shape mode).
 pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
-    let Some(pen) = app.ui.pen.take() else { return };
+    let Some(mut pen) = app.ui.pen.take() else { return };
+    if pen.curvature {
+        curvature_refresh(&mut pen, closed);
+    }
+    commit_path(app, &pen, closed);
+}
+
+/// Commit a finished Pen, Freeform Pen or Curvature Pen path, as one History step: a new shape
+/// layer (Shape mode), else a subpath of the targeted vector mask, else the work path.
+fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
     if pen.knots.len() < 2 {
         return;
     }
-    let path = pen_to_json(&pen, closed);
+    let path = pen_to_json(pen, closed);
     let r = if app.ui.tool_options.vector_mode == "shape" {
         let fill = if closed && app.ui.tool_options.shape_fill { json!(hex(app.session.tools.foreground)) } else { Value::Null };
         let stroke = if closed {
@@ -267,6 +295,90 @@ pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Freeform Pen and Curvature Pen
+
+/// Freeform Pen release: fit the drag's trace within the options bar's Curve Fit and commit it
+/// as the Pen does. Releasing on the start point closes the path; a click draws nothing.
+pub fn freeform_finish(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
+    let trace: Vec<[f64; 2]> = points.iter().map(|p| [p[0], p[1]]).collect();
+    let (Some(first), Some(last)) = (trace.first(), trace.last()) else { return };
+    let tol = 6.0 / app.point_zoom().max(0.01) as f64;
+    let length: f64 = trace.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+    let closed = (first[0] - last[0]).hypot(first[1] - last[1]) < tol && length > 4.0 * tol;
+    let Some(sub) = photocraft_vector::trace::fit_trace(&trace, f64::from(app.ui.tool_options.curve_fit), closed) else { return };
+    let knots = sub.knots.iter().map(|k| [[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]]).collect();
+    let unlinked = sub.knots.iter().enumerate().filter(|(_, k)| !k.smooth).map(|(i, _)| i).collect();
+    commit_path(app, &PenPath { knots, unlinked, ..Default::default() }, sub.closed);
+}
+
+/// Recompute a Curvature Pen path's handles from its anchors and corner points.
+fn curvature_refresh(pen: &mut PenPath, closed: bool) {
+    let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
+    let corners: Vec<bool> = (0..anchors.len()).map(|i| pen.unlinked.contains(&i)).collect();
+    pen.knots = photocraft_vector::edit::curvature_knots(&anchors, &corners, closed);
+}
+
+/// The Curvature Pen's anchor within a few screen pixels of (x, y).
+fn curvature_hit(app: &PhotocraftApp, x: f64, y: f64) -> Option<usize> {
+    let tol = 6.0 / app.point_zoom().max(0.01) as f64;
+    let pen = app.ui.pen.as_ref().filter(|p| p.curvature)?;
+    pen.knots
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (i, (k[0][0] - x).hypot(k[0][1] - y)))
+        .filter(|(_, d)| *d < tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// Curvature Pen press: clicking the first anchor closes the path, pressing another anchor
+/// grabs it to move, anywhere else adds a smooth anchor (still draggable until the release).
+pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if app.ui.pen.as_ref().is_some_and(|p| !p.curvature) {
+        pen_commit(app, false);
+    }
+    let hit = curvature_hit(app, x, y);
+    if hit == Some(0) && app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 3) {
+        pen_commit(app, true);
+        return;
+    }
+    let pen = app.ui.pen.get_or_insert_with(|| PenPath { curvature: true, ..Default::default() });
+    if hit.is_none() {
+        pen.knots.push([[x, y]; 3]);
+    }
+    pen.moving = hit.or(pen.knots.len().checked_sub(1));
+    curvature_refresh(pen, false);
+}
+
+pub fn curvature_move(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if let Some(pen) = app.ui.pen.as_mut().filter(|p| p.curvature)
+        && let Some(k) = pen.moving.and_then(|i| pen.knots.get_mut(i))
+    {
+        k[0] = [x, y];
+        curvature_refresh(pen, false);
+    }
+}
+
+pub fn curvature_up(app: &mut PhotocraftApp) {
+    if let Some(pen) = app.ui.pen.as_mut() {
+        pen.moving = None;
+    }
+}
+
+/// Curvature Pen double-click: toggle the anchor under the pointer between smooth and corner
+/// (double-clicking empty canvas therefore places a corner point, as in Photoshop).
+pub fn curvature_toggle(app: &mut PhotocraftApp, x: f64, y: f64) {
+    let Some(i) = curvature_hit(app, x, y) else { return };
+    let Some(pen) = app.ui.pen.as_mut() else { return };
+    if let Some(at) = pen.unlinked.iter().position(|&c| c == i) {
+        pen.unlinked.remove(at);
+    } else {
+        pen.unlinked.push(i);
+    }
+    curvature_refresh(pen, false);
 }
 
 /// The path that path commands act on without a name: the one selected in the Paths panel, else
@@ -469,7 +581,7 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 /// Work path / active shape path outlines, anchors, and the pen path in progress.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
-    let vector_tool = matches!(tool, Tool::Pen | Tool::PathSelection) || is_shape_tool(tool);
+    let vector_tool = matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection) || is_shape_tool(tool);
     let accent = Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let draw_path = |p: &Path, anchors: bool| {
@@ -514,13 +626,25 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         painter.add(egui::Shape::line(pts, Stroke::new(1.5, accent)));
         if let (Some(last), Some(h)) = (pen.knots.last(), app.hover_doc)
             && !pen.dragging
+            && pen.moving.is_none()
         {
-            painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
+            if pen.curvature && pen.knots.len() >= 2 {
+                // The Curvature Pen previews the curve the next click makes through the pointer.
+                let mut next = pen.clone();
+                next.knots.push([h; 3]);
+                curvature_refresh(&mut next, false);
+                if let [.., a, b] = next.knots.as_slice() {
+                    let pts: Vec<Pos2> = (0..=24).map(|k| to_scr(bezier(a[0], a[2], b[1], b[0], k as f64 / 24.0))).collect();
+                    painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, accent), 4.0, 3.0));
+                }
+            } else {
+                painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
+            }
         }
         for (i, k) in pen.knots.iter().enumerate() {
             let c = to_scr(k[0]);
             let last = i + 1 == pen.knots.len();
-            if last && k[2] != k[0] {
+            if last && k[2] != k[0] && !pen.curvature {
                 for hnd in [k[1], k[2]] {
                     draw_handle(painter, c, to_scr(hnd), accent);
                 }
@@ -535,7 +659,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !(is_shape_tool(tool) || matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)) {
+    if !(is_shape_tool(tool) || matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection | Tool::DirectSelection)) {
         return false;
     }
     let t = Tokens::get(ui.ctx());
@@ -558,7 +682,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         );
         return true;
     }
-    if tool == Tool::Pen {
+    if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
         crate::widgets::dropdown(ui, "pen-mode", &mut o.vector_mode, &opts, 80.0);
         crate::widgets::vline(ui, 22.0);
@@ -568,13 +692,23 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 o.shape_stroke = style;
             }
         }
-        lbl(
-            ui,
-            &crate::i18n::fmt(
-                tl!("Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel"),
-                &[("key", &crate::shortcuts::pretty("Enter"))],
+        let enter = crate::shortcuts::pretty("Enter");
+        match tool {
+            Tool::FreeformPen => {
+                crate::widgets::vline(ui, 22.0);
+                lbl(ui, tl!("Curve Fit:"));
+                crate::widgets::value_field(ui, &mut o.curve_fit, 0.5..=10.0, "px", 58.0);
+                lbl(ui, tl!("Drag: draw freehand · Release on the start point: close"));
+            }
+            Tool::CurvaturePen => lbl(
+                ui,
+                &crate::i18n::fmt(
+                    tl!("Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish"),
+                    &[("key", &enter)],
+                ),
             ),
-        );
+            _ => lbl(ui, &crate::i18n::fmt(tl!("Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel"), &[("key", &enter)])),
+        }
         return true;
     }
     let mut mode = "shape".to_string();

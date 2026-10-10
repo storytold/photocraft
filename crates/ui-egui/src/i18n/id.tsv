@@ -2829,3 +2829,8 @@ fontWeight	Italic	Miring
 	Previous Document	Dokumen Sebelumnya
 	W x H x Resolution	L x T x Resolusi
 	Front Image	Gambar Depan
+	Freeform Pen Tool	Alat Pen Bebas
+	Curvature Pen Tool	Alat Pen Kelengkungan
+	Curve Fit:	Penyesuaian Kurva:
+	Drag: draw freehand · Release on the start point: close	Seret: gambar bebas · Lepas di titik awal: tutup
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Klik: titik halus · Klik ganda: sudut · Seret titik: pindahkan · Klik titik pertama: tutup · {key} selesai

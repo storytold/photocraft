@@ -135,6 +135,8 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::QuickSelection => "circle-dashed",
         Tool::ObjectSelection => "square-dashed-mouse-pointer",
         Tool::Pen => "pen-tool",
+        Tool::FreeformPen => "pen-freeform",
+        Tool::CurvaturePen => "pen-curvature",
         Tool::PathSelection => "mouse-pointer-2",
         Tool::DirectSelection => "direct-select",
         Tool::Rectangle => "rectangle-horizontal",

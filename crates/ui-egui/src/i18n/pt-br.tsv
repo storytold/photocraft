@@ -2850,3 +2850,8 @@ fontWeight	Italic	Itálico
 	Previous Document	Documento anterior
 	W x H x Resolution	L x A x Resolução
 	Front Image	Imagem frontal
+	Freeform Pen Tool	Ferramenta Caneta de forma livre
+	Curvature Pen Tool	Ferramenta Caneta de curvatura
+	Curve Fit:	Ajuste de curva:
+	Drag: draw freehand · Release on the start point: close	Arrastar: desenhar à mão livre · Soltar no ponto inicial: fechar
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Clique: ponto suave · Clique duplo: canto · Arrastar um ponto: mover · Clique no primeiro ponto: fechar · {key}: concluir

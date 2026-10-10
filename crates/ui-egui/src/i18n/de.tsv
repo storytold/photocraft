@@ -2462,3 +2462,8 @@ fontWeight	Italic	Kursiv
 	Previous Document	Vorheriges Dokument
 	W x H x Resolution	B x H x Auflösung
 	Front Image	Vorderes Bild
+	Freeform Pen Tool	Freiform-Stift-Werkzeug
+	Curvature Pen Tool	Rundungsstift-Werkzeug
+	Curve Fit:	Kurvenanpassung:
+	Drag: draw freehand · Release on the start point: close	Ziehen: frei zeichnen · Am Startpunkt loslassen: schließen
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Klick: weicher Punkt · Doppelklick: Ecke · Punkt ziehen: verschieben · Ersten Punkt klicken: schließen · {key} fertig

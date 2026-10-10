@@ -2708,3 +2708,8 @@ fontWeight	Italic	Курсив
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
 	Swaps height and width	Меняет местами высоту и ширину
+	Freeform Pen Tool	Свободное перо
+	Curvature Pen Tool	Перо кривизны
+	Curve Fit:	Точность кривой:
+	Drag: draw freehand · Release on the start point: close	Перетаскивание: рисовать от руки · отпустить на начальной точке: замкнуть
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Клик: гладкая точка · двойной клик: угол · перетаскивание точки: переместить · клик по первой точке: замкнуть · {key} завершить
