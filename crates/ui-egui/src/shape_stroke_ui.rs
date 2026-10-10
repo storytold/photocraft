@@ -311,14 +311,20 @@ pub fn button(
 fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, label: &str, value: &mut T, choices: &[(T, &str)]) {
     ui.horizontal(|ui| {
         ui.label(tl!(label));
-        egui::ComboBox::from_id_salt(label).width(140.0).selected_text(choices.iter().find(|(v, _)| v == value).map_or("", |(_, n)| tl!(*n))).show_ui(
-            ui,
-            |ui| {
+        let (press, close) = crate::press_menu::PressCombo::before(ui, label);
+        let combo = egui::ComboBox::from_id_salt(label)
+            .width(140.0)
+            .selected_text(choices.iter().find(|(v, _)| v == value).map_or("", |(_, n)| tl!(*n)))
+            .close_behavior(close)
+            .show_ui(ui, |ui| {
                 for (v, n) in choices {
-                    ui.selectable_value(value, *v, tl!(*n));
+                    let item = ui.selectable_label(*value == *v, tl!(*n));
+                    if press.chosen(ui, &item) {
+                        *value = *v;
+                    }
                 }
-            },
-        );
+            });
+        press.after(&combo.response);
     });
 }
 
