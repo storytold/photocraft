@@ -94,7 +94,7 @@ Use `ui.click {x,y}`, `ui.move`, `ui.key` and `ui.type` (synthetic input in scre
 
 The Type options bar, Character panel, Character/Paragraph Style editors and Glyphs panel
 share a searchable family picker. Each visible row shows an `AaBbCc` sample rendered by
-PhotoCraft's text engine in that family (script/symbol fonts use characters they support).
+PhotoCraft's text engine in that family (script/symbol fonts use characters they support). A family whose face also covers Arabic (alef, lam, meem, ain and the sample letters) shows a short `أبجد هوز` sample left of it, shaped right-to-left by the same engine; its row reserves the extra width once that row has been painted, and Latin-only families are unchanged.
 Samples are cached with a bounded cache and follow display scale and theme text colour.
 Builds without system fonts preview the bundled fonts.
 While the menu is open, Up/Down applies the previous/next matching family and scrolls it into
