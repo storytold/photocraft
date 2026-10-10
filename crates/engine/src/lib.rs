@@ -11,6 +11,7 @@ pub mod actions_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
 pub mod align_cmds;
+mod allocation;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
 pub mod automate_cmds;
@@ -31,6 +32,7 @@ pub mod document_preset_cmds;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
 pub mod eraser_cmds;
+pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
 pub mod fill_cmds;
@@ -49,8 +51,10 @@ pub mod history_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod jobs;
+pub mod kys;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
+pub mod layer_mask_props_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
@@ -137,6 +141,12 @@ pub enum EngineError {
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+impl From<photocraft_raster::AllocationError> for EngineError {
+    fn from(error: photocraft_raster::AllocationError) -> Self {
+        Self::Other(format!("not enough memory for this operation ({error}); the document was not changed"))
+    }
+}
 
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
@@ -257,6 +267,33 @@ pub struct ToolState {
     /// preset stays "the current brush" so `brush.presets.update` can overwrite it); cleared when
     /// the brush is reset or the preset is gone.
     pub current_preset: Option<String>,
+    /// A layer mask is the edit target ([`ToolState::target_mask`]).
+    pub mask_targeted: bool,
+    /// The foreground/background pair of the edit target that isn't current: the layer pixels'
+    /// colours while a mask is targeted, the mask's while the pixels are (#2166).
+    pub other_colors: [[f32; 4]; 2],
+}
+
+impl ToolState {
+    /// Photoshop's colour pair for a layer mask that has none yet: white foreground, black
+    /// background (reveal-paint first).
+    pub const MASK_COLORS: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
+
+    /// Switch the edit target between layer pixels and a layer mask. Like Photoshop, the mask and
+    /// the pixels keep separate app-wide foreground/background pairs: changing the target puts
+    /// the current pair aside and brings back the other one, so colours picked while a mask is
+    /// targeted are remembered for masks (#2166). The mask pair starts at [`Self::MASK_COLORS`].
+    /// Returns whether the target changed.
+    pub fn target_mask(&mut self, mask: bool) -> bool {
+        if self.mask_targeted == mask {
+            return false;
+        }
+        self.mask_targeted = mask;
+        let [fg, bg] = std::mem::replace(&mut self.other_colors, [self.foreground, self.background]);
+        self.foreground = fg;
+        self.background = bg;
+        true
+    }
 }
 
 impl Default for ToolState {
@@ -274,6 +311,8 @@ impl Default for ToolState {
             mixer: Default::default(),
             brush_gesture: None,
             current_preset: None,
+            mask_targeted: false,
+            other_colors: Self::MASK_COLORS,
         }
     }
 }
@@ -458,7 +497,17 @@ impl Session {
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        if self.names_existing_layer(spec.id, params) {
+            return Ok(());
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
+    }
+
+    /// Whether `id` is a layer command whose `"layer"` param names an existing layer, so it needs no
+    /// active layer (#2457). Matches how `layer_param` resolves the layer when the command runs.
+    fn names_existing_layer(&self, id: &str, params: &Value) -> bool {
+        matches!(id, "layer.hideLayers" | "layer.showLayers" | "layer.renameLayer")
+            && params.get("layer").and_then(Value::as_u64).is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()))
     }
 
     /// Apply an undoable edit to the active document.

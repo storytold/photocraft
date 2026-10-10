@@ -393,7 +393,7 @@ fn build() -> Vec<CommandSpec> {
             "Fill…",
             ["Edit"],
             Some("Shift+F5"),
-            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":index? (contents=history; default the oldest state),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|{"channel":i}|"quickMask"?}"##,
+            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":index? (contents=history; default the oldest state),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##,
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
@@ -568,12 +568,13 @@ fn build() -> Vec<CommandSpec> {
             }
             let id = layer_param(s, p)?;
             s.edit("Delete Layer", |doc, active| {
+                let neighbours = crate::layer_multi_cmds::deletion_neighbours(doc, id);
                 doc.remove(id).ok_or(EngineError::NoLayer(id))?;
                 if doc.layers.is_empty() {
                     return Err(EngineError::Other("a document must keep at least one layer".into()));
                 }
-                if *active == Some(id) {
-                    *active = doc.top_layer();
+                if active.is_some_and(|current| doc.layer(current).is_none()) {
+                    *active = neighbours.into_iter().find(|candidate| doc.layer(*candidate).is_some());
                 }
                 Ok(())
             })?;
@@ -681,23 +682,37 @@ fn build() -> Vec<CommandSpec> {
             has_layer,
             |s, p| set_clipped(s, p, false)
         ),
-        cmd!("layer.layerMask.revealAll", "Reveal All", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
-            s,
-            p,
-            "Add Layer Mask",
-            Some(LayerMask::reveal_all())
-        )),
-        cmd!("layer.layerMask.hideAll", "Hide All", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
-            s,
-            p,
-            "Add Layer Mask",
-            Some(LayerMask::hide_all())
-        )),
-        cmd!("layer.layerMask.revealSelection", "Reveal Selection", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_selection, |s, p| {
-            let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
-            let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
-            set_mask(s, p, "Add Layer Mask", Some(mask))
-        }),
+        cmd!(
+            "layer.layerMask.revealAll",
+            "Reveal All",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_layer,
+            |s, p| set_mask(s, p, "Add Layer Mask", Some(LayerMask::reveal_all()))
+        ),
+        cmd!(
+            "layer.layerMask.hideAll",
+            "Hide All",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_layer,
+            |s, p| set_mask(s, p, "Add Layer Mask", Some(LayerMask::hide_all()))
+        ),
+        cmd!(
+            "layer.layerMask.revealSelection",
+            "Reveal Selection",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_selection,
+            |s, p| {
+                let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
+                let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
+                set_mask(s, p, "Add Layer Mask", Some(mask))
+            }
+        ),
         cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
             s,
             p,
@@ -876,8 +891,13 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         cmd!("tools.defaultColors", "Default Foreground and Background Colors", [], Some("D"), "{}", always, |s, _| {
-            s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
-            s.tools.background = [1.0, 1.0, 1.0, 1.0];
+            if s.tools.mask_targeted {
+                s.tools.foreground = crate::ToolState::MASK_COLORS[0];
+                s.tools.background = crate::ToolState::MASK_COLORS[1];
+            } else {
+                s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+                s.tools.background = [1.0, 1.0, 1.0, 1.0];
+            }
             Ok(Value::Null)
         }),
         // Queries (not journaled)
@@ -1078,7 +1098,7 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: has_pixel_or_channel,
+            enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 let eyedropped = if kind == "curves" { crate::adjust_params::curves_eyedropper_from_params(s, p)? } else { None };
@@ -1087,6 +1107,11 @@ fn build() -> Vec<CommandSpec> {
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
                 };
                 let label = adj.label().to_string();
+                // A smart object records the adjustment as a smart filter (Photoshop), which
+                // re-runs from the source instead of baking into a copy of the pixels.
+                if crate::adjust_cmds::adjust_as_smart_filter(s, &kind, &label, p)? {
+                    return Ok(Value::Null);
+                }
                 destructive_adjust(s, &label, adj, p)
             },
             journal: true,
@@ -1123,6 +1148,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::paint_cmds::specs());
     v.extend(crate::extra_cmds::specs());
     v.extend(crate::file_cmds::specs());
+    v.extend(crate::exr_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());
     v.extend(crate::type_styles_cmds::specs());
     v.extend(crate::type_spell_cmds::specs());
@@ -1177,6 +1203,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::fx_view_cmds::specs());
     v.extend(crate::fx_visibility_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
+    v.extend(crate::layer_mask_props_cmds::specs());
     v.extend(crate::actions_cmds::specs());
     // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
     #[cfg(test)]
@@ -1250,13 +1277,17 @@ fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Add (`Some`) or remove (`None`) a layer mask. Adding acts on every selected layer that can take
+/// one ([`crate::layer_multi_cmds::mask_targets`]), in one history step.
 fn set_mask(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>) -> Result<Value> {
-    let id = layer_param(s, p)?;
+    let ids = if mask.is_some() { crate::layer_multi_cmds::mask_targets(s, p)? } else { vec![layer_param(s, p)?] };
     s.edit(label, |doc, _| {
-        if mask.is_some() {
-            crate::extra_cmds::background_to_layer_for_mask(doc, id);
+        for id in &ids {
+            if mask.is_some() {
+                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            }
+            doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = mask.clone();
         }
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = mask;
         Ok(())
     })?;
     Ok(Value::Null)

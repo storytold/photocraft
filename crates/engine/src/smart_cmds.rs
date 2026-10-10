@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use photocraft_algo::resample::translate_surface;
 use photocraft_algo::transform::Homography;
 use photocraft_color::{BlendMode, PixelFormat};
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, SmartObject, SmartSource};
+use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, SmartContentsId, SmartObject, SmartSource};
 use photocraft_geom::{Affine, Rect, Size};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -33,12 +33,13 @@ use serde_json::{Value, json};
 use crate::commands::{CommandSpec, blend_from_str, layer_param};
 use crate::{EngineError, Result, Session};
 
-/// An open Edit Contents document and the smart object it updates when saved or closed.
+/// An open Edit Contents document and the shared contents it updates when saved or closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SmartLink {
     pub child: DocId,
     pub parent: DocId,
     pub layer: LayerId,
+    pub contents_id: SmartContentsId,
 }
 
 /// PSD placed-layer keys that describe the smart object's source; stale once we change it.
@@ -358,12 +359,12 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
                 let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
-                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)
+                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
             }
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
-                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)
+                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
             }
         };
         return Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())));
@@ -374,8 +375,8 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     };
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     let placed = match &sm.perspective {
-        Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref()),
-        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref()),
+        Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())?,
+        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
     };
     Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())))
 }
@@ -686,6 +687,7 @@ fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
         copy.name = doc.copy_name(&src.name);
         if let LayerContent::Smart(sm) = &mut copy.content {
             // Independent contents: resolve to embedded bytes and drop the shared PSD uuid.
+            sm.contents_id = SmartContentsId::fresh();
             if let Some((file_name, bytes)) = source_bytes(&doc.metadata, &sm.source) {
                 sm.source = SmartSource::Embedded { file_name, bytes };
             }
@@ -703,33 +705,60 @@ fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
     p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "pass `path`"))
 }
 
-/// Swaps a smart object's source, keeping its transform and filters, and re-renders.
+/// Instances sharing contents in this document, including those inside groups.
+fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
+    doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents_id).then_some(l.id)).collect()
+}
+
+/// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
 fn set_source(s: &mut Session, p: &Value, label: &str, keep_psd: bool, make: impl FnOnce(&Metadata, &SmartSource) -> Result<SmartSource>) -> Result<Value> {
     let id = layer_param(s, p)?;
-    s.edit(label, |doc, _| {
-        let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-        smart_mut(doc, id)?.source = new;
-        if !keep_psd {
-            detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let new = make(&doc.metadata, &smart(doc, id)?.source)?;
+    set_shared_source(s, id, label, keep_psd, new)
+}
+
+// Keep the shared-instance transaction out of the per-command source-builder instantiations.
+fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
+    let (parent, contents_id) = s.edit(label, |doc, _| {
+        let contents_id = smart(doc, id)?.contents_id;
+        for instance in instances(doc, contents_id) {
+            smart_mut(doc, instance)?.source = new.clone();
+            if !keep_psd {
+                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
+            }
+            refresh_or_fail(doc, instance)?;
         }
-        refresh_or_fail(doc, id)?;
-        Ok(json!({"layer": id.0}))
-    })
+        Ok((doc.id, contents_id))
+    })?;
+    // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
+    // document open, but the next Edit Contents opens the replacement source.
+    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
+    Ok(json!({"layer": id.0}))
 }
 
 fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.replaceContents", p)?.to_string();
     let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| other(format!("can't read {path}: {e}")))?;
-    let name = base_name(&path);
-    decode_source(&name, &bytes)?; // fail before touching the document
-    set_source(s, p, "Replace Contents", false, |_, _| Ok(SmartSource::Embedded { file_name: name, bytes: Arc::new(bytes) }))
+    let id = layer_param(s, p)?;
+    replace_contents_bytes(s, id, &base_name(&path), bytes)
+}
+
+/// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
+pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
+    decode_source(file_name, &bytes)?; // fail before touching the document
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+}
+
+/// The file name and bytes of smart object `id`'s contents.
+pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)> {
+    source_bytes(&doc.metadata, &smart(doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))
 }
 
 fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.exportContents", p)?;
     let id = layer_param(s, p)?;
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (name, bytes) = source_bytes(&st.doc.metadata, &smart(&st.doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    let (name, bytes) = contents_of(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     crate::file_cmds::write_file(path, &bytes)?;
     Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
 }
@@ -738,8 +767,10 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
+    let contents_id = smart(&st.doc, id)?.contents_id;
     // Already open for editing: switch to that document rather than opening another copy.
-    if let Some(index) = s.smart_links.iter().find(|l| l.parent == parent && l.layer == id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
+    if let Some(index) =
+        s.smart_links.iter().find(|l| l.parent == parent && l.contents_id == contents_id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
     {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
@@ -755,11 +786,11 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
-    s.smart_links.push(SmartLink { child: child_id, parent, layer: id });
+    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id });
     Ok(json!({"document": index, "parentLayer": id.0}))
 }
 
-/// Writes an Edit Contents document back into its parent smart object (one undoable step in the
+/// Writes an Edit Contents document back into all its parent instances (one undoable step in the
 /// parent) and marks it saved. Returns false if `index` isn't an Edit Contents document.
 pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     let Some(st) = s.docs.get(index) else { return Ok(false) };
@@ -770,14 +801,22 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     let prev = s.active;
     s.active = Some(parent);
     let r = s.edit("Edit Contents", |doc, _| {
-        let sm = smart_mut(doc, link.layer)?;
-        let stem = match &sm.source {
-            SmartSource::Embedded { file_name, .. } => file_name.rsplit_once('.').map_or(file_name.as_str(), |(a, _)| a).to_string(),
-            SmartSource::Linked { .. } => child.name.rsplit_once('.').map_or(child.name.as_str(), |(a, _)| a).to_string(),
-        };
-        sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
-        detach_psd(doc.layer_mut(link.layer).ok_or(EngineError::NoLayer(link.layer))?);
-        refresh_or_fail(doc, link.layer)
+        let ids = instances(doc, link.contents_id);
+        if ids.is_empty() {
+            return Err(other("the smart object's instances were removed"));
+        }
+        for id in ids {
+            let sm = smart_mut(doc, id)?;
+            let name = match &sm.source {
+                SmartSource::Embedded { file_name, .. } => file_name.as_str(),
+                SmartSource::Linked { .. } => child.name.as_str(),
+            };
+            let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+            sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
+            detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
+            refresh_or_fail(doc, id)?;
+        }
+        Ok(())
     });
     s.active = prev;
     r?;

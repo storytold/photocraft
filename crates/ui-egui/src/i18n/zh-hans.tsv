@@ -32,6 +32,11 @@
 	New from Clipboard	从剪贴板新建
 	Open…	打开…
 	Open As…	打开为…
+	Open EXR Parts…	打开 EXR 分段…
+	Add beauty precomp from the AOVs	从 AOV 预合成美丽通道
+	Both	两者
+	Left	左
+	Right	右
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
 	Close	关闭
@@ -81,6 +86,8 @@
 	Import	导入
 	Browse…	浏览…
 	Reveal in Finder	在 Finder 中显示
+	Show in Explorer	在文件资源管理器中显示
+	Show in Folder	在文件夹中显示
 	File Info…	文件信息…
 	Print…	打印…
 	Print One Copy	打印一份
@@ -812,7 +819,6 @@
 	Blending Options	混合选项
 	Blue	蓝色
 	Blue, Red, Yellow	蓝色、红色、黄色
-	Both	两者
 	Both Axes	双轴
 	Bottom	底部
 	Brightness	亮度
@@ -953,6 +959,17 @@
 	Delete current channel	删除当前通道
 	Delete current state	删除当前状态
 	Delete effect layer	删除效果图层
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	删除图层“{name}”？
+	Delete {count} layers? {names}	删除 {count} 个图层？{names}
+	Delete layer?	删除图层？
+	The document is closed	文档已关闭
+	The document or selected layers changed. Please request deletion again.	文档或所选图层已更改。请重新请求删除。
+	Missing delete command	缺少删除命令
+	Invalid delete command	无效的删除命令
+	Layer deleted, but confirmation preference could not be saved: {error}	图层已删除，但无法保存确认设置：{error}
+
 	Delete layer	删除图层
 	Delete layer comp	删除图层复合
 	Delete note	删除注释
@@ -1123,7 +1140,6 @@
 	Leading	行距
 	Leading (set to the font size × auto-leading when Auto)	行距（自动时为字号 × 自动行距系数）
 	Leave as is (don't color manage)	保持原样（不进行色彩管理）
-	Left	左
 	Left align text	文字左对齐
 	Length:	长度：
 	Level	级别
@@ -1297,6 +1313,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	录制 ● 一系列编辑，然后在任意文档上播放 ▶。
 	Red	红色
 	Redefine style by current selection	用当前选区重新定义样式
+	Refine	调整
 	Reflected Gradient	对称渐变
 	Registration Marks	套准标记
 	Regular	常规
@@ -1306,6 +1323,7 @@
 	Remove All Pins	移除所有控制点
 	Remove Background	移除背景
 	Remove Planes	移除平面
+	Remove Tool	移除工具
 	Remove stop	移除色标
 	Remove variable	移除变量
 	Rename	重命名
@@ -1321,6 +1339,11 @@
 	{n} commands are not in PhotoCraft.	{n} 个命令在 PhotoCraft 中不存在。
 	Keyboard shortcuts imported	已导入键盘快捷键
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此处正在使用你的键盘快捷键集 {set}：{n} 个快捷键与默认值不同。可在“编辑 › 键盘快捷键”中查看；“全部重置为默认值”可撤销。
+	Import keyboard shortcuts?	导入键盘快捷键？
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft 在这台电脑上找到了你在其他图像编辑器中的键盘快捷键集 {set}：其中 {n} 个快捷键与 PhotoCraft 不同。要导入吗？
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	“编辑 › 键盘快捷键 › 全部重置为默认值”可撤销导入。
+	Don't Import	不导入
+	The keyboard shortcut set was not imported: {error}	未导入键盘快捷键集：{error}
 	Reset Section	重置此部分
 	Reset Transform	重置变换
 	Reset to defaults	重置为默认值
@@ -1329,7 +1352,6 @@
 	Restore All	全部还原
 	Restore Defaults	还原默认值
 	Restrictive (Web)	限定（Web）
-	Right	右
 	Right align text	文字右对齐
 	Rigid	刚性
 	Rotate:	旋转：
@@ -1622,6 +1644,8 @@
 	Millimeters	毫米
 	Mobile	移动设备
 	Move Tool	移动工具
+	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
+	Could not complete the Free Transform command because the layer is locked.	无法完成“自由变换”命令，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -1666,6 +1690,7 @@
 	Quick Selection Tool	快速选择工具
 	Radial	径向
 	Rasterize Layer	栅格化图层
+	Rasterize Layers	栅格化图层
 	Ratio	比例
 	Recent	最近使用
 	Rectangle Tool	矩形工具
@@ -2050,8 +2075,9 @@ cameraRaw	Blending	混合
 	Brush Preset Options	画笔预设选项
 	Group name	组名称
 	Brush name	画笔名称
-	Grid view	网格视图
-	List view	列表视图
+	Brush Name	画笔名称
+	Brush Stroke	画笔描边
+	Brush Tip	画笔笔尖
 	Off: the speed of the pointer sets the spacing	关闭：由指针移动速度决定间距
 	Tilt Scale	倾斜缩放
 	Brush Projection	画笔投影
@@ -2212,6 +2238,7 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	拾色器（文字颜色）
+	Color Picker ({name})	拾色器（{name}）
 	Color Picker (Fill Color)	拾色器（填充颜色）
 	Fill color	填充颜色
 	Color Picker (Stroke Color)	拾色器（描边颜色）
@@ -2312,6 +2339,9 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
+
+	Rasterize svg groups deeper than	栅格化超过此深度的 SVG 组
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	设为 0 可关闭此阈值；嵌套超过 100 层的 SVG 组始终会被栅格化。
 	Rule of Thirds	三等分
 	Triangle	三角形
 	Golden Ratio	黄金比例
@@ -2352,6 +2382,8 @@ fontWeight	Italic	斜体
 	Create Ellipse	创建椭圆
 	Create Triangle	创建三角形
 	Create Polygon	创建多边形
+	Pressure curve	压感曲线
+	Click to add a point, right-click to remove	单击添加点，右键单击删除点
 	Some brush presets could not be loaded	部分画笔预设无法加载
 	Retry saving presets	重试保存预设
 	Brush preset changes are not saved: {error}	画笔预设的更改未保存：{error}
@@ -2364,7 +2396,34 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	颜色加深 (Paint.NET)
 	Color Dodge (Paint.NET)	颜色减淡 (Paint.NET)
+	Stroke Options	描边选项
+	Solid	实线
+	Dashed	虚线
+	Dotted	点线
+	Alignment	对齐
+	Caps	端点
+	Butt / Flat	平头
+	Corners	拐角
+	Miter	斜接
+	Round	圆角
+	Bevel	斜角
+	Miter limit	斜接限制
+	Dashed line	虚线
+	Dash	线段
+	Gap	间隔
+	Dash / gap lengths × stroke width	线段 / 间隔长度 × 描边宽度
+	Add pair	添加一对
+	Remove pair	移除一对
+	Dash offset	虚线偏移
+	Open paths use centered strokes	开放路径使用居中描边
+	Use finite lengths and a positive pattern total	请使用有限长度和正数图案总长度
 	No subject found — try Object Selection or the Lasso	未找到主体 — 请尝试对象选择工具或套索工具
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Use Classic Mode	使用经典模式
+	Auto Center Preview	自动居中预览
+	Next Document	下一个文档
+	Previous Document	上一个文档
+	W x H x Resolution	宽 x 高 x 分辨率
+	Front Image	前面的图像

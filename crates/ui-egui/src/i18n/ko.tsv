@@ -24,6 +24,11 @@
 	New from Clipboard	클립보드에서 새로 만들기
 	Open…	열기…
 	Open As…	형식을 지정하여 열기…
+	Open EXR Parts…	EXR 파트 열기…
+	Add beauty precomp from the AOVs	AOV에서 뷰티 프리컴포지션 추가
+	Both	양쪽
+	Left	왼쪽
+	Right	오른쪽
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
 	Close	닫기
@@ -73,6 +78,8 @@
 	Import	가져오기
 	Browse…	찾아보기…
 	Reveal in Finder	Finder에서 보기
+	Show in Explorer	파일 탐색기에서 보기
+	Show in Folder	폴더에서 보기
 	File Info…	파일 정보…
 	Print…	인쇄…
 	Print One Copy	한 부 인쇄
@@ -787,7 +794,6 @@
 	Blending Options	혼합 옵션
 	Blue	파랑
 	Blue, Red, Yellow	파랑, 빨강, 노랑
-	Both	둘 다
 	Both Axes	양쪽 축
 	Bottom	아래쪽
 	Brightness	밝기
@@ -930,6 +936,17 @@
 	Delete current channel	현재 채널 삭제
 	Delete current state	현재 상태 삭제
 	Delete effect layer	효과 레이어 삭제
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	레이어 ‘{name}’을(를) 삭제하시겠습니까?
+	Delete {count} layers? {names}	레이어 {count}개를 삭제하시겠습니까? {names}
+	Delete layer?	레이어를 삭제하시겠습니까?
+	The document is closed	문서가 닫혔습니다
+	The document or selected layers changed. Please request deletion again.	문서 또는 선택한 레이어가 변경되었습니다. 삭제를 다시 요청하세요.
+	Missing delete command	삭제 명령이 없습니다
+	Invalid delete command	잘못된 삭제 명령입니다
+	Layer deleted, but confirmation preference could not be saved: {error}	레이어가 삭제되었지만 확인 설정을 저장할 수 없습니다: {error}
+
 	Delete layer	레이어 삭제
 	Delete layer comp	레이어 구성 요소 삭제
 	Delete note	메모 삭제
@@ -1092,7 +1109,6 @@
 	Leading	행간
 	Leading (set to the font size × auto-leading when Auto)	행간(자동일 때 글꼴 크기 × 자동 행간으로 설정)
 	Leave as is (don't color manage)	그대로 두기(색상 관리 안 함)
-	Left	왼쪽
 	Left align text	텍스트 왼쪽 정렬
 	Length:	길이:
 	Level	레벨
@@ -1264,6 +1280,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	연속된 편집을 ● 기록한 다음 원하는 문서에서 ▶ 재생하세요.
 	Red	빨강
 	Redefine style by current selection	현재 선택으로 스타일 재정의
+	Refine	다듬기
 	Reflected Gradient	반사 그레이디언트
 	Registration Marks	맞춤 표시
 	Regular	보통
@@ -1288,6 +1305,11 @@
 	{n} commands are not in PhotoCraft.	명령 {n}개는 PhotoCraft에 없습니다.
 	Keyboard shortcuts imported	키보드 단축키를 가져왔습니다
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	키보드 단축키 세트 {set}을(를) 여기서 사용합니다. 단축키 {n}개가 기본값과 다릅니다. 편집 › 키보드 단축키에서 확인할 수 있고, 모두 기본값으로 재설정으로 되돌릴 수 있습니다.
+	Import keyboard shortcuts?	키보드 단축키를 가져올까요?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft가 이 컴퓨터에서 다른 이미지 편집기의 키보드 단축키 세트 {set}을(를) 찾았습니다. 단축키 {n}개가 PhotoCraft와 다릅니다. 가져올까요?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	편집 › 키보드 단축키 › 모두 기본값으로 재설정으로 가져오기를 되돌릴 수 있습니다.
+	Don't Import	가져오지 않음
+	The keyboard shortcut set was not imported: {error}	키보드 단축키 세트를 가져오지 못했습니다: {error}
 	Reset Section	섹션 초기화
 	Reset Transform	변형 초기화
 	Reset to defaults	기본값으로 초기화
@@ -1296,7 +1318,6 @@
 	Restore All	모두 복원
 	Restore Defaults	기본값 복원
 	Restrictive (Web)	제한됨(웹)
-	Right	오른쪽
 	Right align text	텍스트 오른쪽 정렬
 	Rigid	고정
 	Rotate:	회전:
@@ -1584,6 +1605,8 @@
 	Millimeters	밀리미터
 	Mobile	모바일
 	Move Tool	이동 도구
+	Could not use the move tool because the layer is locked.	레이어가 잠겨 있어 이동 도구를 사용할 수 없습니다.
+	Could not complete the Free Transform command because the layer is locked.	레이어가 잠겨 있어 자유 변형 명령을 완료할 수 없습니다.
 	Multiply	곱하기
 	My Brushes	내 브러시
 	Neutrals	중립색
@@ -1628,6 +1651,7 @@
 	Quick Selection Tool	빠른 선택 도구
 	Radial	방사형
 	Rasterize Layer	레이어 래스터화
+	Rasterize Layers	레이어 래스터화
 	Ratio	비율
 	Recent	최근 항목
 	Rectangle Tool	사각형 도구
@@ -1954,8 +1978,9 @@
 	Brush Preset Options	브러시 사전 설정 옵션
 	Group name	그룹 이름
 	Brush name	브러시 이름
-	Grid view	격자 보기
-	List view	목록 보기
+	Brush Name	브러시 이름
+	Brush Stroke	브러시 획
+	Brush Tip	브러시 끝
 	Off: the speed of the pointer sets the spacing	끔: 포인터 속도에 따라 간격 설정
 	Tilt Scale	기울기 비율
 	Brush Projection	브러시 투영
@@ -2186,6 +2211,7 @@ cameraRaw	Color	색상
 	Reduce Color Noise	색상 노이즈 감소
 	Sharpen Details	세부 묘사 선명하게
 	Remove Jpeg Artifact	JPEG 가공물 제거
+	Remove Tool	제거 도구
 	Blade Curvature	조리개 날 곡률
 	Depth Map	깊이 맵
 	Focal Distance	초점 거리
@@ -2791,6 +2817,7 @@ cameraRaw	Color	색상
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
+	Color Picker ({name})	색상 선택기 ({name})
 	Color Picker (Fill Color)	색상 선택기 (채우기 색상)
 	Fill color	채우기 색상
 	Color Picker (Stroke Color)	색상 선택기 (획 색상)
@@ -2884,6 +2911,9 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
+
+	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.
 	Rule of Thirds	삼등분 법칙
 	Golden Ratio	황금 비율
 	Golden Spiral	황금 나선
@@ -2923,6 +2953,8 @@ fontWeight	Italic	기울임
 	Create Ellipse	타원 만들기
 	Create Triangle	삼각형 만들기
 	Create Polygon	다각형 만들기
+	Pressure curve	필압 곡선
+	Click to add a point, right-click to remove	클릭하여 점 추가, 마우스 오른쪽 클릭으로 제거
 	Some brush presets could not be loaded	일부 브러시 사전 설정을 불러오지 못했습니다
 	Retry saving presets	사전 설정 저장 다시 시도
 	Brush preset changes are not saved: {error}	브러시 사전 설정 변경 내용이 저장되지 않았습니다: {error}
@@ -2935,7 +2967,33 @@ fontWeight	Italic	기울임
 	XOR	XOR
 	Color Burn (Paint.NET)	색상 번 (Paint.NET)
 	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+	Stroke Options	획 옵션
+	Solid	실선
+	Dashed	파선
+	Dotted	점선
+	Alignment	정렬
+	Caps	끝 모양
+	Butt / Flat	평평한 끝
+	Miter	마이터
+	Round	원형
+	Bevel	베벨
+	Miter limit	마이터 한도
+	Dashed line	파선
+	Dash	선
+	Gap	간격
+	Dash / gap lengths × stroke width	선 / 간격 길이 × 획 너비
+	Add pair	쌍 추가
+	Remove pair	쌍 제거
+	Dash offset	파선 오프셋
+	Open paths use centered strokes	열린 패스는 가운데 획을 사용합니다
+	Use finite lengths and a positive pattern total	유한한 길이와 양수 패턴 합계를 사용하세요
 	No subject found — try Object Selection or the Lasso	피사체를 찾을 수 없습니다 — 개체 선택 또는 올가미를 사용해 보세요
 	Quick Selection found nothing there	빠른 선택으로 해당 위치에서 아무것도 찾지 못했습니다
 	Object Selection found nothing there — try a tighter rectangle	개체 선택으로 해당 위치에서 아무것도 찾지 못했습니다 — 더 좁은 사각형을 사용해 보세요
 	No subject found — try a rectangle around the object	피사체를 찾을 수 없습니다 — 개체 주위에 사각형을 그려 보세요
+	Use Classic Mode	클래식 모드 사용
+	Auto Center Preview	미리 보기 자동 가운데 맞춤
+	Next Document	다음 문서
+	Previous Document	이전 문서
+	W x H x Resolution	폭 x 높이 x 해상도
+	Front Image	전면 이미지

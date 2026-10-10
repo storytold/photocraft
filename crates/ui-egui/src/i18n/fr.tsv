@@ -38,6 +38,11 @@
 	New…	Nouveau…
 	Open…	Ouvrir…
 	Open As…	Ouvrir en tant que…
+	Open EXR Parts…	Ouvrir les parties EXR…
+	Add beauty precomp from the AOVs	Ajouter la précomposition de la beauté depuis les AOV
+	Both	Les deux
+	Left	Gauche
+	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
 	Close	Fermer
@@ -87,6 +92,8 @@
 	Import	Importer
 	Browse…	Parcourir…
 	Reveal in Finder	Afficher dans le Finder
+	Show in Explorer	Afficher dans l'Explorateur
+	Show in Folder	Afficher dans le dossier
 	File Info…	Informations sur le fichier…
 	Print…	Imprimer…
 	Print One Copy	Imprimer un exemplaire
@@ -798,7 +805,6 @@
 	Blending Options	Options de fusion
 	Blue	Bleu
 	Blue, Red, Yellow	Bleu, rouge, jaune
-	Both	Les deux
 	Both Axes	Deux axes
 	Bottom	Bas
 	Brightness	Luminosité
@@ -938,6 +944,17 @@
 	Delete current channel	Supprimer le canal actif
 	Delete current state	Supprimer l'état actuel
 	Delete effect layer	Supprimer le calque d'effet
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Supprimer le calque « {name} » ?
+	Delete {count} layers? {names}	Supprimer {count} calques ? {names}
+	Delete layer?	Supprimer le calque ?
+	The document is closed	Le document est fermé
+	The document or selected layers changed. Please request deletion again.	Le document ou les calques sélectionnés ont changé. Demandez à nouveau la suppression.
+	Missing delete command	Commande de suppression manquante
+	Invalid delete command	Commande de suppression non valide
+	Layer deleted, but confirmation preference could not be saved: {error}	Le calque a été supprimé, mais la préférence de confirmation n’a pas pu être enregistrée : {error}
+
 	Delete layer	Supprimer le calque
 	Delete layer comp	Supprimer la composition de calques
 	Delete note	Supprimer la note
@@ -1100,7 +1117,6 @@
 	Leading	Interlignage
 	Leading (set to the font size × auto-leading when Auto)	Interlignage (en Auto : taille de police × interlignage automatique)
 	Leave as is (don't color manage)	Laisser tel quel (sans gestion des couleurs)
-	Left	Gauche
 	Left align text	Aligner le texte à gauche
 	Length:	Longueur :
 	Level	Niveau
@@ -1272,6 +1288,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Enregistrez ● une suite de modifications, puis rejouez-la ▶ sur n'importe quel document.
 	Red	Rouge
 	Redefine style by current selection	Redéfinir le style d'après la sélection actuelle
+	Refine	Affiner
 	Reflected Gradient	Dégradé réfléchi
 	Registration Marks	Repères de montage
 	Regular	Normal
@@ -1281,6 +1298,7 @@
 	Remove All Pins	Retirer toutes les épingles
 	Remove Background	Supprimer l'arrière-plan
 	Remove Planes	Supprimer les plans
+	Remove Tool	Outil Retirer
 	Remove stop	Retirer le point
 	Remove variable	Retirer la variable
 	Rename	Renommer
@@ -1296,6 +1314,11 @@
 	{n} commands are not in PhotoCraft.	{n} commandes n'existent pas dans PhotoCraft.
 	Keyboard shortcuts imported	Raccourcis clavier importés
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Votre jeu de raccourcis clavier {set} est utilisé ici : {n} raccourcis diffèrent des valeurs par défaut. Édition › Raccourcis clavier les affiche ; Tout rétablir par défaut annule l'import.
+	Import keyboard shortcuts?	Importer les raccourcis clavier ?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft a trouvé sur cet ordinateur votre jeu de raccourcis clavier {set} provenant d'un autre éditeur d'images : {n} de ses raccourcis diffèrent de ceux de PhotoCraft. L'importer ?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Édition › Raccourcis clavier › Tout rétablir par défaut annule un import.
+	Don't Import	Ne pas importer
+	The keyboard shortcut set was not imported: {error}	Le jeu de raccourcis clavier n'a pas été importé : {error}
 	Reset Section	Réinitialiser la section
 	Reset Transform	Réinitialiser la transformation
 	Reset to defaults	Réinitialiser aux valeurs par défaut
@@ -1304,7 +1327,6 @@
 	Restore All	Tout restaurer
 	Restore Defaults	Rétablir les valeurs par défaut
 	Restrictive (Web)	Restrictive (Web)
-	Right	Droite
 	Right align text	Aligner le texte à droite
 	Rigid	Rigide
 	Rotate:	Rotation :
@@ -1588,6 +1610,8 @@
 	Millimeters	Millimètres
 	Mobile	Mobile
 	Move Tool	Outil Déplacement
+	Could not use the move tool because the layer is locked.	Impossible d'utiliser l'outil Déplacement, car le calque est verrouillé.
+	Could not complete the Free Transform command because the layer is locked.	Impossible d'exécuter la commande Transformation libre, car le calque est verrouillé.
 	Multiply	Produit
 	My Brushes	Mes pinceaux
 	Neutrals	Neutres
@@ -1632,6 +1656,7 @@
 	Quick Selection Tool	Outil Sélection rapide
 	Radial	Radial
 	Rasterize Layer	Rastériser le calque
+	Rasterize Layers	Rastériser les calques
 	Ratio	Proportions
 	Recent	Récent
 	Rectangle Tool	Outil Rectangle
@@ -1958,8 +1983,8 @@
 	Brush Preset Options	Options des préréglages de pinceau
 	Group name	Nom du groupe
 	Brush name	Nom du pinceau
-	Grid view	Vue en grille
-	List view	Vue en liste
+	Brush Name	Nom du pinceau
+	Brush Stroke	Trace de pinceau
 	Off: the speed of the pointer sets the spacing	Désactivé : la vitesse du pointeur détermine l'espacement
 	Tilt Scale	Échelle d'inclinaison
 	Brush Projection	Projection du pinceau
@@ -2630,6 +2655,7 @@ cameraRaw	Blending	Fusion
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
+	Color Picker ({name})	Sélecteur de couleurs ({name})
 	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)
 	Fill color	Couleur de remplissage
 	Color Picker (Stroke Color)	Sélecteur de couleurs (Couleur du contour)
@@ -2725,6 +2751,9 @@ fontWeight	Italic	Italique
 	Color to Alpha…	Couleur vers alpha…
 	Transparency Threshold	Seuil de transparence
 	Opacity Threshold	Seuil d'opacité
+
+	Rasterize svg groups deeper than	Pixelliser les groupes SVG au-delà de cette profondeur
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 désactive ce seuil ; les groupes SVG imbriqués sur plus de 100 niveaux sont toujours pixellisés.
 	Rule of Thirds	Règle des tiers
 	Triangle	Triangle
 	Golden Ratio	Nombre d’or
@@ -2765,6 +2794,8 @@ fontWeight	Italic	Italique
 	Create Ellipse	Créer une ellipse
 	Create Triangle	Créer un triangle
 	Create Polygon	Créer un polygone
+	Pressure curve	Courbe de pression
+	Click to add a point, right-click to remove	Cliquez pour ajouter un point, clic droit pour le supprimer
 	Some brush presets could not be loaded	Certains paramètres prédéfinis de forme n'ont pas pu être chargés
 	Retry saving presets	Réessayer d'enregistrer les paramètres prédéfinis
 	Brush preset changes are not saved: {error}	Les modifications des paramètres prédéfinis de forme ne sont pas enregistrées : {error}
@@ -2777,7 +2808,33 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+	Stroke Options	Options du contour
+	Solid	Continu
+	Dashed	Tirets
+	Dotted	Pointillé
+	Caps	Extrémités
+	Butt / Flat	Plat
+	Corners	Angles
+	Miter	Pointe
+	Round	Arrondi
+	Bevel	Biseau
+	Miter limit	Limite de pointe
+	Dashed line	Ligne en tirets
+	Dash	Tiret
+	Gap	Espace
+	Dash / gap lengths × stroke width	Longueurs des tirets / espaces × largeur du contour
+	Add pair	Ajouter une paire
+	Remove pair	Retirer une paire
+	Dash offset	Décalage des tirets
+	Open paths use centered strokes	Les tracés ouverts utilisent des contours centrés
+	Use finite lengths and a positive pattern total	Utiliser des longueurs finies et un total de motif positif
 	No subject found — try Object Selection or the Lasso	Aucun sujet trouvé — essayez la Sélection d'objet ou le Lasso
 	Quick Selection found nothing there	La Sélection rapide n'a rien trouvé à cet endroit
 	Object Selection found nothing there — try a tighter rectangle	La Sélection d'objet n'a rien trouvé à cet endroit — essayez un rectangle plus serré
 	No subject found — try a rectangle around the object	Aucun sujet trouvé — essayez un rectangle autour de l'objet
+	Use Classic Mode	Utiliser le mode classique
+	Auto Center Preview	Centrer automatiquement l'aperçu
+	Next Document	Document suivant
+	Previous Document	Document précédent
+	W x H x Resolution	L x H x Résolution
+	Front Image	Image de premier plan

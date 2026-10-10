@@ -424,6 +424,9 @@ fn wraps(id: &str) -> bool {
             | "file.saveACopy"
             | "file.placeEmbedded"
             | "file.placeLinked"
+            | "layer.smartObjects.replaceContents"
+            | "layer.smartObjects.exportContents"
+            | "layer.smartObjects.convertToLinked"
             | "file.closeAll"
             | "file.closeOthers"
             | "file.fileInfo"
@@ -617,7 +620,7 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"zoom": v.zoom, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
-fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
+pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize) -> u64 {
     let wid = app.ui.alloc_id();
     let mut view = app.ui.views.get(doc).cloned().unwrap_or_default();
     view.fit_pending = offset > 0 || view.fit_pending;
@@ -711,6 +714,59 @@ pub fn cells(layout: &str, rect: egui::Rect, n: usize) -> Option<Vec<egui::Rect>
 // ---------- dialogs and pickers in front of engine commands ----------
 
 /// A generic form dialog that runs `command` with its fields on OK (rendered by [`form_body`]).
+/// File › Open EXR Parts…: pick an EXR, then choose the parts and channel groups that become
+/// the layers of one document (a Maya/Arnold render writes one part per AOV). The dialog is
+/// a plain command form, so the control channel can drive the same selection headlessly.
+fn open_exr_parts_dialog(app: &mut PhotocraftApp) -> Option<Result<Value, String>> {
+    Some(app.pick_file_bytes_filtered(&["exr"], |app, name, _bytes| {
+        let info = app.run("file.exrParts", json!({"path": name})).map_err(|e| e.to_string())?;
+        let entries = info.as_array().cloned().unwrap_or_default();
+        let mut fields = Map::new();
+        fields.insert("path".into(), json!(name));
+        fields.insert("view".into(), json!("both"));
+        fields.insert("precomp".into(), json!(false));
+        let mut labels = Map::new();
+        // The path field shows the picked file's name (data, verbatim); the rest translate.
+        if let Some(file) = name.rsplit(['/', '\\']).next() {
+            labels.insert("path".into(), json!(file));
+        }
+        labels.insert("view".into(), json!(crate::i18n::t("View")));
+        labels.insert("both".into(), json!(crate::i18n::t("Both")));
+        labels.insert("left".into(), json!(crate::i18n::t("Left")));
+        labels.insert("right".into(), json!(crate::i18n::t("Right")));
+        labels.insert("precomp".into(), json!(crate::i18n::t("Add beauty precomp from the AOVs")));
+        let mut any = false;
+        for e in &entries {
+            let kind = e["kind"].as_str().unwrap_or_default().to_string();
+            let ename = e["name"].as_str().unwrap_or_default().to_string();
+            let channels = e["channels"].as_u64().unwrap_or(0);
+            let key = format!("{kind}/{ename}");
+            match kind.as_str() {
+                "part" => {
+                    labels.insert(key.clone(), json!(format!("{ename} ({}×{}, {channels} ch)", e["width"], e["height"])));
+                    let on = !any && channels >= 3;
+                    any |= on;
+                    fields.insert(key, json!(on));
+                }
+                "group" => {
+                    labels.insert(key.clone(), json!(format!("{ename} ({channels} ch)")));
+                    fields.insert(key, json!(false));
+                }
+                _ => {}
+            }
+        }
+        // Cryptomatte layers are information here (the picker comes separately); the array is
+        // not rendered but rides along for the control channel.
+        let crypto: Vec<Value> = entries.iter().filter(|e| e["kind"] == "cryptomatte").cloned().collect();
+        if !crypto.is_empty() {
+            fields.insert("cryptomatte".into(), Value::Array(crypto));
+        }
+        fields.insert("__labels".into(), Value::Object(labels));
+        let choices = json!({"view": ["both", "left", "right"]});
+        Ok(json!({"dialog": form(app, "file.openExrParts", "Open EXR Parts…", Value::Object(fields), choices)}))
+    }))
+}
+
 fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: Value, choices: Value) -> u64 {
     let mut f = Map::new();
     f.insert("__command".into(), json!(command));
@@ -761,6 +817,10 @@ mod label_tests {
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
+    // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
+    // come from `__labels` verbatim; everything else goes through the catalogue.
+    let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
+    let label = |k: &str| labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string);
     let keys: Vec<String> = f.keys().filter(|k| !k.starts_with("__")).cloned().collect();
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
@@ -770,11 +830,11 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    ui.checkbox(&mut b, label_of(&k));
+                    ui.checkbox(&mut b, label(&k));
                     json!(b)
                 }
                 Value::String(s) => {
-                    ui.label(label_of(&k));
+                    ui.label(label(&k));
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
                         Some(opts) => {
@@ -789,7 +849,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     json!(s)
                 }
                 Value::Number(n) => {
-                    ui.label(label_of(&k));
+                    ui.label(label(&k));
                     if let Some(mut i) = n.as_i64() {
                         ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num));
                         json!(i)
@@ -846,6 +906,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
     let dialog = |app: &mut PhotocraftApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
+        "file.openExrParts" => open_exr_parts_dialog(app),
         "file.saveACopy" => Some(save_a_copy(app)),
         "file.placeEmbedded" | "file.placeLinked" => {
             let doc = match app.active_doc_id() {
@@ -857,6 +918,29 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
                 app.refocus(doc)?;
                 let linked = linked.then(|| name.clone());
                 app.place_bytes(&name, bytes, linked)
+            }))
+        }
+        "layer.smartObjects.replaceContents" => {
+            let st = app.session.active()?;
+            let (doc, layer) = (st.doc.id, st.active_layer?);
+            Some(app.pick_file_bytes(move |app, name, bytes| {
+                app.with_document(doc, |app| {
+                    let r = photocraft_engine::smart_cmds::replace_contents_bytes(&mut app.session, layer, &name, bytes).map_err(|e| e.to_string());
+                    app.sync_views();
+                    r
+                })
+            }))
+        }
+        "layer.smartObjects.exportContents" => Some(export_contents(app)),
+        "layer.smartObjects.convertToLinked" => {
+            let st = app.session.active()?;
+            let (doc, layer) = (st.doc.id, st.active_layer?);
+            let (name, _) = match photocraft_engine::smart_cmds::contents_of(&st.doc, layer) {
+                Ok(c) => c,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            Some(app.pick_save(&name, move |app, path| {
+                app.with_document(doc, |app| app.run("layer.smartObjects.convertToLinked", json!({"layer": layer.0, "path": path})))
             }))
         }
         "file.fileInfo" => {
@@ -881,14 +965,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             let fields = app.ui.view.guide_layout.clone();
             dialog(app, fields, json!({}))
         }
-        "type.warpText" => {
-            let styles: Vec<&str> = std::iter::once("none").chain(photocraft_text::warp::STYLES.iter().map(|(_, s)| *s)).collect();
-            dialog(
-                app,
-                json!({"style": "arc", "orientation": "horizontal", "bend": 50.0, "horizontalDistortion": 0.0, "verticalDistortion": 0.0}),
-                json!({"style": styles, "orientation": ["horizontal", "vertical"]}),
-            )
-        }
+        "type.warpText" => Some(Ok(json!({"dialog": crate::dialogs::open_command_dialog(app, id, label)}))),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             dialog(
@@ -1052,6 +1129,21 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.status_error = false;
         crate::notices::io_warnings(app, &format!("Saved a copy as {}", crate::file_open::display_name(&path)), &warnings);
         Ok(json!({"path": path, "warnings": warnings}))
+    })
+}
+
+/// Layer › Smart Objects › Export Contents: saves the contents file under its own name by default.
+fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document")?;
+    let layer = st.active_layer.ok_or("no layer selected")?;
+    // The contents as they were when asked, like Save a Copy.
+    let (name, bytes) = photocraft_engine::smart_cmds::contents_of(&st.doc, layer).map_err(|e| e.to_string())?;
+    app.pick_save(&name.clone(), move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status = format!("Exported contents to {path}");
+        app.ui.status_error = false;
+        Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
 

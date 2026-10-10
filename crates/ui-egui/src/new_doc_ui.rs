@@ -243,20 +243,23 @@ pub fn apply_saved_preset(f: &mut Map<String, Value>, preset: &photocraft_engine
     f.remove(&typed_key("height"));
 }
 
-fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let presets = app.session.presets.documents.clone();
     if presets.is_empty() {
         ui.label(tl!("No saved presets yet."));
-        return;
+        return false;
     }
+    let mut create = false;
     egui::ScrollArea::vertical().id_salt("saved-document-presets").max_height(320.0).show(ui, |ui| {
         for preset in &presets {
             ui.push_id(&preset.name, |ui| {
                 ui.horizontal(|ui| {
                     let selected = get_s(f, "__savedPreset", "") == preset.name;
                     let label = egui::Button::new(&preset.name).selected(selected).truncate();
-                    if ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name).clicked() {
+                    let response = ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name);
+                    if response.clicked() {
                         apply_saved_preset(f, preset);
+                        create |= response.double_clicked() || response.triple_clicked();
                     }
                     if widgets::secondary_button(ui, tl!("Delete"), 76.0).clicked() {
                         match app.run("document.presets.delete", json!({"name":preset.name})) {
@@ -278,6 +281,7 @@ fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
             });
         }
     });
+    create
 }
 
 fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -326,9 +330,12 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     }
 }
 
-pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// Returns whether a preset double-click requested creation, after applying its settings.
+/// A recent category click can make egui count the preset double-click as a triple-click.
+pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let t = Tokens::get(ui.ctx());
     let cat = get_s(f, "__category", "Recent");
+    let mut create = false;
     // Category tabs.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
@@ -356,7 +363,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
         ui.vertical(|ui| {
             ui.set_width(520.0);
             if cat == "Saved" {
-                saved_presets(app, ui, f);
+                create |= saved_presets(app, ui, f);
                 return;
             }
             ui.label(RichText::new(crate::i18n::fmt(tl!("BLANK DOCUMENT PRESETS ({n})"), &[("n", &presets.len().to_string())])).size(11.0).color(t.text_faint));
@@ -401,6 +408,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                         let resp = if elided { resp.on_hover_text(tl!(p.0)) } else { resp };
                         if resp.clicked() {
                             apply_preset(f, p);
+                            create |= resp.double_clicked() || resp.triple_clicked();
                         }
                     }
                 });
@@ -414,8 +422,19 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
             ui.add_space(4.0);
             let mut name = get_s(f, "name", tl!("Untitled-1"));
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).changed() {
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0)));
+            if r.changed() {
                 f.insert("name".into(), json!(name));
+            }
+            crate::field_tab::register(ui.ctx(), r.id);
+            // Photoshop opens the dialog with the name selected, so typing replaces it and Tab goes
+            // straight on to Width. (`__focused` marks that this instance has had its turn.)
+            if !f.contains_key("__focused") {
+                f.insert("__focused".into(), json!(true));
+                crate::field_tab::focus(ui.ctx(), r.id);
+            }
+            if r.gained_focus() {
+                crate::field_tab::select_all(ui.ctx(), r.id, &name);
             }
             ui.add_space(8.0);
             let ppi = get_f(f, "resolution", 72.0);
@@ -423,7 +442,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
                 let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
-                if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
+                if widgets::value_field_prec(ui, &mut w, 0.01..=300_000.0, "", 110.0, widgets::unit_decimals(&unit)).changed() {
                     set_size(f, "width", w, &unit, ppi);
                 }
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
@@ -435,7 +454,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
                 let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
-                if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
+                if widgets::value_field_prec(ui, &mut h, 0.01..=300_000.0, "", 110.0, widgets::unit_decimals(&unit)).changed() {
                     set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);
@@ -507,6 +526,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             save_preset(app, ui, f);
         });
     });
+    create
 }
 
 #[cfg(test)]
@@ -781,7 +801,10 @@ mod tests {
 
         fn harness() -> Harness<'static, PhotocraftApp> {
             let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(1400.0, 900.0))
+                .with_step_dt(1.0 / 60.0)
+                .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
             PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
             h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
             h.run_steps(3);
@@ -830,6 +853,123 @@ mod tests {
             assert!(h.state().ui.dialogs.is_empty(), "the dialog closed");
             let d = &h.state().session.active().expect("a new document").doc;
             (d.size.width, d.size.height, d.resolution_dpi)
+        }
+
+        /// Preset cards paint their titles directly, without an accessibility label.
+        fn preset_title_at(h: &Harness<'static, PhotocraftApp>, title: &str) -> egui::Pos2 {
+            fn find(shape: &egui::Shape, title: &str) -> Option<egui::Pos2> {
+                match shape {
+                    egui::Shape::Text(text) if text.galley.job.text == title => Some(text.visual_bounding_rect().center()),
+                    egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, title)),
+                    _ => None,
+                }
+            }
+            h.output().shapes.iter().find_map(|shape| find(&shape.shape, title)).expect("visible preset title")
+        }
+
+        fn second_click_creates_once(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2) {
+            assert!(h.state().session.documents().is_empty(), "the first click only selects the preset");
+            assert_eq!(h.state().ui.dialogs.len(), 1);
+            // Two real pointer press/release pairs within egui's double-click interval.
+            click_at(h, at);
+            h.run_steps(3);
+            assert_eq!(h.state().session.documents().len(), 1, "the second click creates exactly one document");
+            assert!(h.state().ui.dialogs.is_empty(), "double-click closes the New Document dialog");
+            assert!(h.state().ui.views[0].fit_pending, "the normal Create path fits the new document");
+        }
+
+        fn assert_pixel(h: &mut Harness<'static, PhotocraftApp>, expected: [f64; 4]) {
+            let pixel = h.state_mut().session.execute("document.pixel", serde_json::json!({"x":0,"y":0})).unwrap();
+            for (actual, expected) in pixel.as_array().unwrap().iter().zip(expected) {
+                assert!((actual.as_f64().unwrap() - expected).abs() < 0.001, "background pixel: {pixel}");
+            }
+        }
+
+        #[test]
+        fn double_click_builtin_preset_creates_its_size_and_current_details() {
+            let mut h = harness();
+            let mut f = fields(&h);
+            f.extend(serde_json::json!({"name":"Portrait proof","mode":"cmyk","depth":16,"background":"transparent"}).as_object().unwrap().clone());
+            set_fields(&mut h, f);
+            h.get_by_label("Photo").click();
+            h.run_steps(2);
+            let at = preset_title_at(&h, "Portrait, 4 x 6");
+            click_at(&mut h, at);
+            assert_eq!(fields(&h)["__preset"], "Portrait, 4 x 6");
+            assert_eq!(
+                super::super::command_params(&fields(&h)),
+                serde_json::json!({"name":"Portrait proof","width":1200,"height":1800,"resolution":300.0,
+                    "mode":"cmyk","depth":16,"background":"transparent"})
+            );
+            second_click_creates_once(&mut h, at);
+            assert_eq!(created(&h), (1200, 1800, 300.0));
+            let doc = &h.state().session.active().unwrap().doc;
+            assert_eq!(doc.name, "Portrait proof");
+            assert_eq!((doc.mode, doc.depth), (photocraft_doc::ColorMode::Cmyk, photocraft_doc::SampleType::U16));
+            assert_pixel(&mut h, [0.0; 4]);
+        }
+
+        #[test]
+        fn double_click_clipboard_preset_creates_its_size_and_current_details() {
+            let mut h = harness();
+            let mut f = fields(&h);
+            super::super::set_clipboard(&mut f, 37, 23);
+            apply_preset(&mut f, &("Other size", 100, 200, 300.0));
+            f.extend(serde_json::json!({"mode":"gray","depth":8,"background":"white"}).as_object().unwrap().clone());
+            set_fields(&mut h, f);
+            let at = preset_title_at(&h, super::super::CLIPBOARD);
+            click_at(&mut h, at);
+            assert_eq!(fields(&h)["__preset"], super::super::CLIPBOARD);
+            assert_eq!(
+                super::super::command_params(&fields(&h)),
+                serde_json::json!({"name":"Untitled-1","width":37,"height":23,"resolution":72.0,
+                    "mode":"gray","depth":8,"background":"white"})
+            );
+            second_click_creates_once(&mut h, at);
+            assert_eq!(created(&h), (37, 23, 72.0));
+            let doc = &h.state().session.active().unwrap().doc;
+            assert_eq!((doc.mode, doc.depth), (photocraft_doc::ColorMode::Grayscale, photocraft_doc::SampleType::U8));
+            assert_pixel(&mut h, [1.0; 4]);
+        }
+
+        #[test]
+        fn double_click_saved_preset_restores_all_settings_and_captured_background() {
+            let mut h = harness();
+            h.state_mut()
+                .run(
+                    "document.presets.save",
+                    serde_json::json!({"name":"Saved proof","settings":{
+                        "width":48,"height":32,"resolution":254.0,"mode":"rgb","depth":32,
+                        "background":"backgroundColor","backgroundColor":[0.125,0.375,0.625],"unit":"mm","resolutionUnit":"cm"
+                    }}),
+                )
+                .unwrap();
+            h.state_mut().session.tools.background = [1.0, 0.0, 1.0, 1.0];
+            let mut f = fields(&h);
+            f.insert("name".into(), serde_json::json!("Current document name"));
+            set_fields(&mut h, f);
+            h.get_by_label("Saved").click();
+            h.run_steps(2);
+            let at = h.get_by_label("Saved proof").rect().center();
+            click_at(&mut h, at);
+            assert_eq!(fields(&h)["__savedPreset"], "Saved proof");
+            assert_eq!(fields(&h)["__unit"], "mm");
+            assert_eq!(fields(&h)["__resUnit"], "cm");
+            second_click_creates_once(&mut h, at);
+            assert_eq!(created(&h), (48, 32, 254.0));
+            let doc = &h.state().session.active().unwrap().doc;
+            assert_eq!(doc.name, "Current document name");
+            assert_eq!((doc.mode, doc.depth), (photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F32));
+            assert_pixel(&mut h, [0.125, 0.375, 0.625, 1.0]);
+        }
+
+        #[test]
+        fn arithmetic_dimensions_create_the_evaluated_size() {
+            let mut h = harness();
+            type_into(&mut h, 0, "1920/2");
+            type_into(&mut h, 1, "(100+50)*2");
+            enter(&mut h);
+            assert_eq!(created(&h), (960, 300, 72.0));
         }
 
         #[test]

@@ -104,7 +104,8 @@ fn trace(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2
 
 /// Pointer events while the Magnetic Lasso is the tool (it takes them all).
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
-    if app.ui.tool != Tool::MagneticLasso {
+    // ⌘ held makes it the Move tool (`hold_keys::cmd_moves`): nothing to take then.
+    if app.active_tool() != Tool::MagneticLasso {
         return false;
     }
     match ev {

@@ -33,6 +33,11 @@
 	Open…	Відкрити…
 	Open	Відкрити
 	Open As…	Відкрити як…
+	Open EXR Parts…	Відкрити частини EXR…
+	Add beauty precomp from the AOVs	Додати попередню композицію краси з AOV
+	Both	Обидва
+	Left	Лівий
+	Right	Правий
 	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Close	Закрити
@@ -529,6 +534,11 @@
 	{n} commands are not in PhotoCraft.	Команд, яких немає в PhotoCraft: {n}.
 	Keyboard shortcuts imported	Сполучення клавіш імпортовано
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Тут використовується ваш набір сполучень клавіш {set}: сполучень, що відрізняються від стандартних: {n}. Їх показує Редагування › Сполучення клавіш; «Скинути все до стандартних» скасовує імпорт.
+	Import keyboard shortcuts?	Імпортувати сполучення клавіш?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft знайшов на цьому комп'ютері ваш набір сполучень клавіш {set} з іншого графічного редактора: сполучень, що відрізняються від PhotoCraft: {n}. Імпортувати його?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Редагування › Сполучення клавіш › «Скинути все до стандартних» скасовує імпорт.
+	Don't Import	Не імпортувати
+	The keyboard shortcut set was not imported: {error}	Набір сполучень клавіш не імпортовано: {error}
 	Defaults restored.	Типові значення відновлено.
 	Restore Defaults	Відновити типові значення
 	Restore original size	Відновити початковий розмір
@@ -949,8 +959,8 @@
 	Rename Brush…	Перейменувати пензель…
 	Delete Brush	Видалити пензель
 	Import Brushes…	Імпортувати пензлі…
-	List view	Список
-	Grid view	Сітка
+	Brush Name	Назва пензля
+	Brush Stroke	Мазок пензля
 	New Brush Preset…	Новий набір пензля…
 	Brush Preset Options	Параметри набору пензля
 	New Brush	Новий пензель
@@ -1053,8 +1063,6 @@
 	Single Word Justification	Вирівнювання одного слова по ширині
 	Alignment	Вирівнювання
 	Indent First	Відступ першого рядка
-	Left	Ліворуч
-	Right	Праворуч
 	Center	По центру
 	Justify	По ширині
 
@@ -1485,6 +1493,8 @@
 	Adjustment Layer	Коригувальний шар
 	{name} Properties	Властивості: {name}
 	Move Tool	Інструмент «Переміщення»
+	Could not use the move tool because the layer is locked.	Не вдалося використати інструмент «Переміщення», бо шар заблоковано.
+	Could not complete the Free Transform command because the layer is locked.	Не вдалося виконати команду «Вільна трансформація», бо шар заблоковано.
 	Rectangular Marquee Tool	Інструмент «Прямокутне виділення»
 	Elliptical Marquee Tool	Інструмент «Еліптичне виділення»
 	Brush Tool	Інструмент «Пензель»
@@ -1590,6 +1600,8 @@
 	Open a document to select a colour range.	Відкрийте документ, щоб виділити колірний діапазон.
 	Saved	Збережено
 	Reveal in Finder	Показати у Finder
+	Show in Explorer	Показати у Провіднику
+	Show in Folder	Показати в теці
 	Before (Y)	До (Y)
 	After (X)	Після (X)
 	Original	Оригінал
@@ -1904,7 +1916,6 @@
 	Bilinear	Білінійна
 	Black, White	Чорний, білий
 	Blue, Red, Yellow	Синій, червоний, жовтий
-	Both	Обидва
 	Bottom	Низ
 	Brightness Jitter	Коливання яскравості
 	Brush Reconstruct Options	Параметри пензля реконструкції
@@ -2468,6 +2479,7 @@ cameraRaw	Roughness	Шорсткість
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Вибір кольору (колір тексту)
+	Color Picker ({name})	Вибір кольору ({name})
 	Color Picker (Fill Color)	Вибір кольору (колір заливки)
 	Fill color	Колір заливки
 	Color Picker (Stroke Color)	Вибір кольору (колір обведення)
@@ -2575,6 +2587,17 @@ fontWeight	Italic	Курсивний
 	Create new snapshot	Створити новий знімок стану
 	Delete Cropped Pixels	Видаляти обрізані пікселі
 	Delete current state	Видалити поточний стан
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Видалити шар «{name}»?
+	Delete {count} layers? {names}	Видалити шари ({count})? {names}
+	Delete layer?	Видалити шар?
+	The document is closed	Документ закрито
+	The document or selected layers changed. Please request deletion again.	Документ або вибрані шари змінилися. Повторіть запит на видалення.
+	Missing delete command	Відсутня команда видалення
+	Invalid delete command	Недійсна команда видалення
+	Layer deleted, but confirmation preference could not be saved: {error}	Шар видалено, але не вдалося зберегти налаштування підтвердження: {error}
+
 	Delete layer	Видалити шар
 	Diamond Gradient	Ромбічний градієнт
 	Enable airbrush-style build-up effects	Увімкнути ефекти накопичення як в аерографі
@@ -2619,6 +2642,7 @@ fontWeight	Italic	Курсивний
 	Prevent auto-nesting in and out of Artboards and Frames	Запобігати автоматичному вкладенню в монтажні області та кадри або виходу з них
 	Quick Actions	Швидкі дії
 	Radial Gradient	Радіальний градієнт
+	Refine	Уточнення
 	Reflected Gradient	Відбитий градієнт
 	Reset to defaults	Скинути до типових значень
 	Search commands	Пошук команд
@@ -2705,6 +2729,7 @@ fontWeight	Italic	Курсивний
 	Pro (Medium Gray)	Профі (середньосіра)
 	Radial	Радіальний
 	Rasterize Layer	Растеризувати шар
+	Rasterize Layers	Растеризувати шари
 	Ratio	Пропорції
 	Reds	Червоні тони
 	Reflected	Відбитий
@@ -2840,6 +2865,7 @@ cameraRaw	Masking	Маскування
 	Reduce Color Noise	Зменшити колірний шум
 	Sharpen Details	Підвищити різкість деталей
 	Remove Jpeg Artifact	Прибрати артефакти JPEG
+	Remove Tool	Інструмент «Вилучення»
 	Blade Curvature	Кривина пелюсток діафрагми
 	Depth Map	Карта глибини
 	Focal Distance	Фокусна відстань
@@ -3415,6 +3441,9 @@ cameraRaw	Masking	Маскування
 	Dual Axis	Подвійна вісь
 	Diagonal	Діагональна
 	Transform Symmetry	Трансформувати симетрію
+
+	Rasterize svg groups deeper than	Растеризувати групи SVG глибше цього рівня
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 вимикає цей поріг; групи SVG із вкладеністю понад 100 рівнів завжди растеризуються.
 	Rule of Thirds	Правило третин
 	Golden Ratio	Золотий перетин
 	Golden Spiral	Золота спіраль
@@ -3452,6 +3481,8 @@ cameraRaw	Masking	Маскування
 	Create Ellipse	Створити еліпс
 	Create Triangle	Створити трикутник
 	Create Polygon	Створити багатокутник
+	Pressure curve	Крива натиску
+	Click to add a point, right-click to remove	Клацніть, щоб додати точку; клацання правою кнопкою вилучає її
 	Some brush presets could not be loaded	Не вдалося завантажити деякі набори пензлів
 	Retry saving presets	Повторити збереження наборів
 	Brush preset changes are not saved: {error}	Зміни наборів пензлів не збережено: {error}
@@ -3466,7 +3497,32 @@ cameraRaw	Masking	Маскування
 	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+	Stroke Options	Параметри обведення
+	Solid	Суцільне
+	Dashed	Штрихове
+	Dotted	Пунктирне
+	Caps	Кінці
+	Butt / Flat	Пласкі
+	Miter	Гострі
+	Round	Круглі
+	Bevel	Скошені
+	Miter limit	Межа гострого кута
+	Dashed line	Штрихова лінія
+	Dash	Штрих
+	Gap	Проміжок
+	Dash / gap lengths × stroke width	Довжини штриха / проміжку × ширина обведення
+	Add pair	Додати пару
+	Remove pair	Видалити пару
+	Dash offset	Зсув штрихів
+	Open paths use centered strokes	Відкриті контури використовують обведення по центру
+	Use finite lengths and a positive pattern total	Використовуйте скінченні довжини й додатну суму візерунка
 	No subject found — try Object Selection or the Lasso	Об'єкт не знайдено — спробуйте «Виділення об'єктів» або «Ласо»
 	Quick Selection found nothing there	Швидке виділення нічого тут не знайшло
 	Object Selection found nothing there — try a tighter rectangle	Виділення об'єктів нічого тут не знайшло — спробуйте вужчий прямокутник
 	No subject found — try a rectangle around the object	Об'єкт не знайдено — спробуйте прямокутник навколо об'єкта
+	Use Classic Mode	Використовувати класичний режим
+	Auto Center Preview	Автоматично центрувати перегляд
+	Next Document	Наступний документ
+	Previous Document	Попередній документ
+	W x H x Resolution	Ш x В x Роздільна здатність
+	Front Image	Зображення переднього плану

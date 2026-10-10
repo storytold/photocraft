@@ -101,6 +101,7 @@ fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
             let at = h.get_by_label(label).rect().center();
             click_with(&mut h, at, Modifiers::NONE);
             let l = layer(&h, masked);
+            assert!(h.state().ui.dialogs.is_empty(), "mask deletion remains immediate");
             let original = before.layer(photocraft_doc::LayerId(masked)).unwrap();
             assert_eq!(l.content, original.content);
             assert_eq!(layer(&h, shape), *before.layer(photocraft_doc::LayerId(shape)).unwrap());
@@ -130,6 +131,23 @@ fn footer_trash_still_deletes_the_layer_when_its_content_is_targeted() {
     assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target);
     let at = h.get_by_label("Delete layer").rect().center();
     click_with(&mut h, at, Modifiers::NONE);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_some());
+    assert!(h.state().ui.dialogs.iter().any(|d| crate::delete_layer_prompt::owns(&d.fields)));
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+/// Like Photoshop, ⌥/Alt-clicking the trash deletes the layer without asking.
+#[test]
+fn alt_click_on_the_footer_trash_deletes_without_confirmation() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    click_with(&mut h, pos2(row.left() + 46.0, row.center().y), Modifiers::NONE);
+    let at = h.get_by_label("Delete layer").rect().center();
+    click_with(&mut h, at, Modifiers::ALT);
+    assert!(h.state().ui.dialogs.is_empty(), "no confirmation");
     assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
 }
 
@@ -140,7 +158,8 @@ fn a_new_mask_is_targeted_so_the_next_footer_trash_keeps_its_layer() {
     h.state_mut().run("layer.new.layer", json!({"name": "Fresh mask"})).unwrap();
     let id = h.state().session.active().unwrap().active_layer.unwrap();
     h.run_steps(3);
-    let at = h.get_by_label("Add a mask  (from the selection; Alt inverts)").rect().center();
+    let label = format!("Add a mask  (from the selection; {} inverts)", crate::shortcuts::pretty("Alt"));
+    let at = h.get_by_label(&label).rect().center();
     click_with(&mut h, at, Modifiers::NONE);
     assert!(h.state().ui.mask_target && !h.state().ui.vector_mask_target);
     assert!(h.state().session.active().unwrap().doc.layer(id).unwrap().mask.is_some());
@@ -531,4 +550,61 @@ fn command_i_inverts_the_targeted_mask() {
     let st = app.session.active().unwrap();
     let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
     assert_eq!(mask.sample_channel(10, 10, 0), 0.0, "reveal all → hide all");
+}
+
+/// #2420: Selecting a layer mask in the Layers panel toggles the color swatches
+/// to the mask's colors (white/black by default), and deselecting toggles back.
+#[test]
+fn selecting_mask_thumbnail_toggles_swatches_to_mask_colors_and_back() {
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    let (mut s, masked, _) = dotted();
+    s.execute("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+
+    // Initial state: layer pixels targeted, red foreground, blue background.
+    assert!(!h.state().ui.mask_target);
+    assert_eq!(h.state().session.tools.foreground, RED);
+    assert_eq!(h.state().session.tools.background, BLUE);
+
+    // 1. Click mask thumbnail in Layers panel -> targets mask, swatches toggle to mask colors.
+    let r_mask = mask_rect(&h, masked, MaskKind::Pixel);
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target, "mask thumbnail clicked: mask is targeted");
+    assert_eq!(h.state().session.tools.foreground, WHITE);
+    assert_eq!(h.state().session.tools.background, BLACK);
+
+    // 2. Click layer thumbnail -> deselects mask, swatches toggle back to pixel colors.
+    let r_layer = layer_thumb_center(&h, masked);
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert!(!h.state().ui.mask_target, "layer thumbnail clicked: pixels are targeted");
+    assert_eq!(h.state().session.tools.foreground, RED);
+    assert_eq!(h.state().session.tools.background, BLUE);
+
+    // 3. Click mask thumbnail again -> swatches toggle back to mask colors.
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert!(h.state().ui.mask_target);
+    assert_eq!(h.state().session.tools.foreground, WHITE);
+    assert_eq!(h.state().session.tools.background, BLACK);
+
+    // 4. Changing mask colors preserves them when switching away and back.
+    h.state_mut().run("tools.setColors", json!({"foreground": "#808080"})).unwrap();
+    let grey = h.state().session.tools.foreground;
+    assert_eq!(grey, [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, RED, "pixel colors restored");
+
+    click_with(&mut h, r_mask.center(), Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, grey, "mask colors restored");
+
+    // 5. Creating a new adjustment layer targets its mask and toggles to mask colors.
+    click_with(&mut h, r_layer, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, RED);
+    h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    assert!(h.state().ui.mask_target, "new adjustment layer targets its mask");
+    assert_eq!(h.state().session.tools.foreground, grey);
 }

@@ -40,6 +40,11 @@
 	New from Clipboard	Nový ze schránky
 	Open…	Otevřít…
 	Open As…	Otevřít jako…
+	Open EXR Parts…	Otevřít části EXR…
+	Add beauty precomp from the AOVs	Přidat předběžnou kompozici krásy z AOV
+	Both	Obě
+	Left	Vlevo
+	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
 	Close	Zavřít
@@ -89,6 +94,8 @@
 	Import	Import
 	Browse…	Procházet…
 	Reveal in Finder	Zobrazit ve Finderu
+	Show in Explorer	Zobrazit v Průzkumníkovi
+	Show in Folder	Zobrazit ve složce
 	File Info…	Informace o souboru…
 	Print…	Tisk…
 	Print One Copy	Vytisknout jednu kopii
@@ -823,7 +830,6 @@
 	Blending Options	Možnosti prolnutí
 	Blue	Modrá
 	Blue, Red, Yellow	Modrá, červená, žlutá
-	Both	Obojí
 	Both Axes	Obě osy
 	Bottom	Dole
 	Brightness	Jas
@@ -963,6 +969,17 @@
 	Delete current channel	Odstranit aktuální kanál
 	Delete current state	Odstranit aktuální stav
 	Delete effect layer	Odstranit vrstvu efektu
+
+# Layers-panel trash confirmation
+	Delete layer ‘{name}’?	Smazat vrstvu „{name}“?
+	Delete {count} layers? {names}	Smazat vrstvy ({count})? {names}
+	Delete layer?	Smazat vrstvu?
+	The document is closed	Dokument je zavřený
+	The document or selected layers changed. Please request deletion again.	Dokument nebo vybrané vrstvy se změnily. Požádejte o smazání znovu.
+	Missing delete command	Chybí příkaz ke smazání
+	Invalid delete command	Neplatný příkaz ke smazání
+	Layer deleted, but confirmation preference could not be saved: {error}	Vrstva byla smazána, ale nastavení potvrzení se nepodařilo uložit: {error}
+
 	Delete layer	Odstranit vrstvu
 	Delete layer comp	Odstranit kompozici vrstev
 	Delete note	Odstranit poznámku
@@ -1131,7 +1148,6 @@
 	Leading	Proklad
 	Leading (set to the font size × auto-leading when Auto)	Proklad (při volbě Automaticky velikost písma × automatický proklad)
 	Leave as is (don't color manage)	Ponechat beze změny (bez správy barev)
-	Left	Vlevo
 	Left align text	Zarovnat text vlevo
 	Length:	Délka:
 	Level	Úroveň
@@ -1303,6 +1319,7 @@
 	Record ● a sequence of edits, then play ▶ it on any document.	Zaznamenejte ● posloupnost úprav a pak ji přehrajte ▶ na libovolném dokumentu.
 	Red	Červená
 	Redefine style by current selection	Předefinovat styl podle aktuálního výběru
+	Refine	Upřesnit
 	Reflected Gradient	Zrcadlený přechod
 	Registration Marks	Soutiskové značky
 	Regular	Obyčejné
@@ -1312,6 +1329,7 @@
 	Remove All Pins	Odstranit všechny špendlíky
 	Remove Background	Odstranit pozadí
 	Remove Planes	Odstranit roviny
+	Remove Tool	Nástroj odstranění
 	Remove stop	Odstranit zarážku
 	Remove variable	Odstranit proměnnou
 	Rename	Přejmenovat
@@ -1327,6 +1345,11 @@
 	{n} commands are not in PhotoCraft.	Příkazů, které v PhotoCraftu nejsou: {n}.
 	Keyboard shortcuts imported	Klávesové zkratky importovány
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Vaše sada klávesových zkratek {set} se zde používá: {n} zkratek se liší od výchozích. Zobrazí je Úpravy › Klávesové zkratky; Obnovit vše na výchozí to vrátí zpět.
+	Import keyboard shortcuts?	Importovat klávesové zkratky?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft na tomto počítači našel vaši sadu klávesových zkratek {set} z jiného editoru obrázků: {n} jejích zkratek se liší od zkratek PhotoCraftu. Importovat ji?
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Úpravy › Klávesové zkratky › Obnovit vše na výchozí import vrátí zpět.
+	Don't Import	Neimportovat
+	The keyboard shortcut set was not imported: {error}	Sada klávesových zkratek nebyla importována: {error}
 	Reset Section	Obnovit sekci
 	Reset Transform	Obnovit transformaci
 	Reset to defaults	Obnovit výchozí
@@ -1335,7 +1358,6 @@
 	Restore All	Obnovit vše
 	Restore Defaults	Obnovit výchozí
 	Restrictive (Web)	Omezená (web)
-	Right	Vpravo
 	Right align text	Zarovnat text vpravo
 	Rigid	Tuhý
 	Rotate:	Otočení:
@@ -1625,6 +1647,8 @@
 	Millimeters	Milimetry
 	Mobile	Mobilní zařízení
 	Move Tool	Nástroj přesun
+	Could not use the move tool because the layer is locked.	Nástroj Přesun nelze použít, protože vrstva je zamčená.
+	Could not complete the Free Transform command because the layer is locked.	Příkaz Volná transformace nelze dokončit, protože vrstva je zamčená.
 	Multiply	Násobit
 	My Brushes	Moje štětce
 	Neutrals	Neutrální
@@ -1669,6 +1693,7 @@
 	Quick Selection Tool	Nástroj rychlý výběr
 	Radial	Radiální
 	Rasterize Layer	Rastrovat vrstvu
+	Rasterize Layers	Rastrovat vrstvy
 	Ratio	Poměr
 	Recent	Nedávné
 	Rectangle Tool	Nástroj obdélník
@@ -2007,8 +2032,9 @@
 	Brush Preset Options	Možnosti přednastavení štětců
 	Group name	Název skupiny
 	Brush name	Název štětce
-	Grid view	Zobrazení mřížky
-	List view	Zobrazení seznamu
+	Brush Name	Název štětce
+	Brush Stroke	Tah štětce
+	Brush Tip	Hrot štětce
 	Off: the speed of the pointer sets the spacing	Vypnuto: rozestup určuje rychlost ukazatele
 	Tilt Scale	Měřítko náklonu
 	Brush Projection	Projekce štětce
@@ -2204,6 +2230,7 @@ cameraRaw	Color	Barvy
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Výběr barvy (Barva textu)
+	Color Picker ({name})	Výběr barvy ({name})
 	Color Picker (Fill Color)	Výběr barvy (Barva výplně)
 	Fill color	Barva výplně
 	Color Picker (Stroke Color)	Výběr barvy (Barva tahu)
@@ -2304,6 +2331,9 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+
+	Rasterize svg groups deeper than	Rasterizovat skupiny SVG hlubší než tato úroveň
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 vypne tento práh; skupiny SVG vnořené hlouběji než 100 úrovní se rastrují vždy.
 	Rule of Thirds	Pravidlo třetin
 	Triangle	Trojúhelník
 	Golden Ratio	Zlatý řez
@@ -2344,6 +2374,8 @@ fontWeight	Italic	Kurzíva
 	Create Ellipse	Vytvořit elipsu
 	Create Triangle	Vytvořit trojúhelník
 	Create Polygon	Vytvořit mnohoúhelník
+	Pressure curve	Křivka přítlaku
+	Click to add a point, right-click to remove	Kliknutím přidáte bod, pravým tlačítkem bod odeberete
 	Some brush presets could not be loaded	Některé předvolby štětců se nepodařilo načíst
 	Retry saving presets	Zkusit znovu uložit předvolby
 	Brush preset changes are not saved: {error}	Změny předvoleb štětců nejsou uloženy: {error}
@@ -2356,7 +2388,34 @@ fontWeight	Italic	Kurzíva
 	XOR	XOR
 	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
 	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)
+	Stroke Options	Volby tahu
+	Solid	Plný
+	Dashed	Čárkovaný
+	Dotted	Tečkovaný
+	Alignment	Zarovnání
+	Caps	Konce
+	Butt / Flat	Plochý
+	Corners	Rohy
+	Miter	Ostrý
+	Round	Kulatý
+	Bevel	Zkosený
+	Miter limit	Limit ostrého rohu
+	Dashed line	Čárkovaná čára
+	Dash	Čárka
+	Gap	Mezera
+	Dash / gap lengths × stroke width	Délky čárky / mezery × šířka tahu
+	Add pair	Přidat pár
+	Remove pair	Odebrat pár
+	Dash offset	Posun čárek
+	Open paths use centered strokes	Otevřené cesty používají vystředěné tahy
+	Use finite lengths and a positive pattern total	Použijte konečné délky a kladný součet vzoru
 	No subject found — try Object Selection or the Lasso	Nebyl nalezen žádný objekt — zkuste Výběr objektu nebo Laso
 	Quick Selection found nothing there	Rychlý výběr zde nic nenašel
 	Object Selection found nothing there — try a tighter rectangle	Výběr objektu zde nic nenašel — zkuste těsnější obdélník
 	No subject found — try a rectangle around the object	Nebyl nalezen žádný objekt — zkuste obdélník kolem objektu
+	Use Classic Mode	Použít klasický režim
+	Auto Center Preview	Automaticky vystředit náhled
+	Next Document	Další dokument
+	Previous Document	Předchozí dokument
+	W x H x Resolution	Š x V x Rozlišení
+	Front Image	Přední obraz
