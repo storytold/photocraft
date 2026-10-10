@@ -17,6 +17,8 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
+# shellcheck source=verified-download.sh
+. "$HERE/verified-download.sh"
 APP_ID=ai.storyteller.photocraft
 
 SKIP_BUILD=0
@@ -123,26 +125,10 @@ if has appimage; then
       RUNTIME_SHA256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
       ;;
   esac
-  download_verified() {
-    local url="$1" dest="$2" expected="$3" tmp
-    if [ -f "$dest" ] && [ "$(sha256 "$dest")" = "$expected" ]; then return 0; fi
-    tmp="$(mktemp "$dest.XXXXXX")"
-    if ! curl -fsSL -o "$tmp" "$url"; then rm -f "$tmp"; return 1; fi
-    if [ "$(sha256 "$tmp")" != "$expected" ]; then
-      echo "error: SHA-256 mismatch for $url" >&2
-      rm -f "$tmp"
-      return 1
-    fi
-    chmod 755 "$tmp"
-    mv -f "$tmp" "$dest"
-  }
   mkdir -p "$CARGO_TARGET_DIR"
   TOOL="${APPIMAGETOOL:-$CARGO_TARGET_DIR/appimagetool-$TOOL_VERSION-$ARCH.AppImage}"
   if [ -n "${APPIMAGETOOL:-}" ]; then
-    if [ ! -f "$TOOL" ] || [ "$(sha256 "$TOOL")" != "$TOOL_SHA256" ]; then
-      echo "error: APPIMAGETOOL must be the verified $TOOL_VERSION $ARCH release asset" >&2
-      exit 1
-    fi
+    verify_appimagetool_override "$TOOL" "$TOOL_SHA256" "$TOOL_VERSION" "$ARCH"
   else
     download_verified \
       "https://github.com/AppImage/appimagetool/releases/download/$TOOL_VERSION/appimagetool-$ARCH.AppImage" \

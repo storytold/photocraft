@@ -82,6 +82,7 @@ jobs:
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -149,6 +150,7 @@ jobs:
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -219,6 +221,8 @@ jobs:
           printf '%s  %s\n' '${{ matrix.nfpm_sha256 }}' "$RUNNER_TEMP/nfpm.deb" | sha256sum -c -
           sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-linux-${{ matrix.arch }}
@@ -362,6 +366,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
