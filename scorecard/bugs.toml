@@ -184,9 +184,9 @@ note = "paint/src/retouch.rs premultiplies; smudge_into_transparency_leaves_no_d
 [[item]]
 id = "BUG-207-4"
 target = "edit.transform transforms a targeted alpha channel"
-status = "missing"
+status = "done"
 issue = 207
-note = "transform_cmds.rs transform() has no target handling"
+note = "edit.transform follows a targeted alpha channel or Quick Mask (explicit target since #242, Channels panel target with no target/layer param since #2835); Edit > Transform > Rotate/Flip are routed to the target too; transforms_follow_the_targeted_alpha_channel"
 
 [[item]]
 id = "BUG-207-5"

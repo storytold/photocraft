@@ -333,11 +333,21 @@ fn clouds(s: &mut Session, p: &Value, difference: bool) -> Result<Value> {
 
 // ---------- transform presets ----------
 
-fn transform_preset(s: &mut Session, kind: &str) -> Result<Value> {
+/// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
+const TRANSFORM_TARGET: &str =
+    r#"{"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask turns alone)}"#;
+
+fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-    let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let b = crate::transform_cmds::transform_bounds(&d.doc, l);
+    // A targeted alpha channel, the Quick Mask or an unlinked layer mask turns by itself (#2835).
+    let (b, mut params) = match crate::transform_cmds::lone_target(&d.doc, d.active_layer, p)? {
+        Some(surf) => (crate::transform_cmds::target_bounds(&d.doc, surf), json!({"target": p.get("target")})),
+        None => {
+            let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
+            let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            (crate::transform_cmds::transform_bounds(&d.doc, l), json!({"layer": id.0}))
+        }
+    };
     if b.is_empty() {
         return Err(EngineError::Other("nothing to transform".into()));
     }
@@ -351,7 +361,9 @@ fn transform_preset(s: &mut Session, kind: &str) -> Result<Value> {
         "flipHorizontal" => [-1.0, 0.0, 0.0, 1.0, sx, 0.0],
         _ => [1.0, 0.0, 0.0, -1.0, 0.0, sy],
     };
-    s.execute("edit.transform", json!({"layer": id.0, "matrix": m, "interpolation": "nearest"}))
+    params["matrix"] = json!(m);
+    params["interpolation"] = json!("nearest");
+    s.execute("edit.transform", params)
 }
 
 // ---------- selection / clipboard ----------
@@ -712,14 +724,29 @@ pub fn specs() -> Vec<CommandSpec> {
             has_pixels,
             stroke
         ),
-        spec!("edit.transform.rotate180", "Rotate 180°", &["Edit", "Transform"], None, "{}", has_layer, |s, _| transform_preset(s, "rotate180")),
-        spec!("edit.transform.rotate90Cw", "Rotate 90° Clockwise", &["Edit", "Transform"], None, "{}", has_layer, |s, _| transform_preset(s, "rotate90Cw")),
-        spec!("edit.transform.rotate90Ccw", "Rotate 90° Counter Clockwise", &["Edit", "Transform"], None, "{}", has_layer, |s, _| transform_preset(
+        spec!("edit.transform.rotate180", "Rotate 180°", &["Edit", "Transform"], None, TRANSFORM_TARGET, has_layer, |s, p| transform_preset(
             s,
-            "rotate90Ccw"
+            p,
+            "rotate180"
         )),
-        spec!("edit.transform.flipHorizontal", "Flip Horizontal", &["Edit", "Transform"], None, "{}", has_layer, |s, _| transform_preset(s, "flipHorizontal")),
-        spec!("edit.transform.flipVertical", "Flip Vertical", &["Edit", "Transform"], None, "{}", has_layer, |s, _| transform_preset(s, "flipVertical")),
+        spec!("edit.transform.rotate90Cw", "Rotate 90° Clockwise", &["Edit", "Transform"], None, TRANSFORM_TARGET, has_layer, |s, p| transform_preset(
+            s,
+            p,
+            "rotate90Cw"
+        )),
+        spec!("edit.transform.rotate90Ccw", "Rotate 90° Counter Clockwise", &["Edit", "Transform"], None, TRANSFORM_TARGET, has_layer, |s, p| {
+            transform_preset(s, p, "rotate90Ccw")
+        }),
+        spec!("edit.transform.flipHorizontal", "Flip Horizontal", &["Edit", "Transform"], None, TRANSFORM_TARGET, has_layer, |s, p| transform_preset(
+            s,
+            p,
+            "flipHorizontal"
+        )),
+        spec!("edit.transform.flipVertical", "Flip Vertical", &["Edit", "Transform"], None, TRANSFORM_TARGET, has_layer, |s, p| transform_preset(
+            s,
+            p,
+            "flipVertical"
+        )),
         spec!(
             "edit.pasteSpecial.pasteInto",
             "Paste Into",

@@ -569,6 +569,15 @@ fn routed(id: &str) -> bool {
         || crate::fill_key_cmds::IDS.contains(&id)
         // Pasting into a targeted mask or channel (#1035).
         || matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside")
+        // Edit › Transform › Rotate/Flip turn a targeted mask or channel (#2835).
+        || matches!(
+            id,
+            "edit.transform.rotate180"
+                | "edit.transform.rotate90Cw"
+                | "edit.transform.rotate90Ccw"
+                | "edit.transform.flipHorizontal"
+                | "edit.transform.flipVertical"
+        )
         || matches!(
             id,
             "paint.cloneStamp"
