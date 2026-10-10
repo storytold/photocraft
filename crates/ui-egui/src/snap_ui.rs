@@ -193,6 +193,14 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
 }
 
+/// Snap a guide drag that ⌘ with a selection tool starts at `p` (`canvas::command_guide_at`,
+/// #2690) as the Move tool's guide drag: never to guides, so not back onto itself.
+pub fn begin_guide(app: &mut PhotocraftApp, p: [f64; 2]) {
+    app.prefs_rt.snap_lines.clear();
+    let targets = if snap_on(app) { build(app, &[], false).filtered(|k| k != SnapKind::Guide) } else { SnapTargets::default() };
+    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false });
+}
+
 /// Round to whole pixels when Preferences › Tools asks vector tools and transforms to snap to
 /// the pixel grid.
 fn pixel_round(app: &PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
