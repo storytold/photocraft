@@ -175,6 +175,10 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
 /// held, so ⇧⌘C is Copy Merged), and a ⌘V release without a ⌘V press (a paste event, or the Mac
 /// menu's key equivalent) becomes a ⌘V press.
 ///
+/// The web build gets both: eframe forwards the ⌘V key-down, then the browser's `paste` event
+/// (the key-down's default action) arrives as `Event::Paste` in the same frame. A clipboard event
+/// right after its own ⌘ key press is that press, not a second one (#2638).
+///
 /// Ctrl+Insert copies and Shift+Insert pastes: egui-winit maps them on Windows (a Shift+Insert
 /// release without a paste event pastes the image, like ⌘V), and we map them here on Linux.
 pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInput) {
@@ -202,6 +206,8 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
     // The modifiers held at each event: last frame's, updated as the events report changes.
     let mut mods = ctx.input(|i| i.modifiers);
     let mut out = Vec::with_capacity(raw.events.len());
+    // The last ⌘C/⌘X/⌘V press this frame whose clipboard event hasn't arrived (yet).
+    let mut unpaired: Option<Key> = None;
     for e in raw.events.drain(..) {
         if let egui::Event::ModifiersChanged(m) | egui::Event::Key { modifiers: m, .. } = &e {
             mods = *m;
@@ -210,14 +216,20 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
             if key == Key::V {
                 ctx.data_mut(|d| d.insert_temp(seen, true));
             }
-            out.push(press(key, held));
+            if unpaired.take_if(|k| *k == key).is_none() {
+                out.push(press(key, held));
+            }
             continue;
         }
         match &e {
-            // A ⌘V press egui-winit didn't swallow (the Mac menu's key equivalent, Shift+Insert on
-            // Linux): its release must not paste a second time (#1638).
-            egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.command => {
-                ctx.data_mut(|d| d.insert_temp(seen, true));
+            // A ⌘C/⌘X/⌘V press egui-winit didn't swallow (the web, the Mac menu's key equivalent,
+            // Shift+Insert on Linux): its clipboard event and, for ⌘V, its release must not run
+            // the command a second time (#2638, #1638).
+            egui::Event::Key { key: key @ (Key::C | Key::X | Key::V), pressed: true, modifiers, .. } if modifiers.command => {
+                unpaired = Some(*key);
+                if *key == Key::V {
+                    ctx.data_mut(|d| d.insert_temp(seen, true));
+                }
             }
             // A paste key's release ends that press, with or without ⌘ still held (else a stale
             // mark would swallow the next image paste); without a press it is the paste itself.
@@ -617,6 +629,21 @@ mod tests {
         assert_eq!(presses(vec![egui::Event::Paste("x".into())]), 1);
         assert_eq!(presses(vec![egui::Event::ModifiersChanged(Modifiers::NONE), key(Key::V, false, Modifiers::NONE)]), 0);
         assert_eq!(presses(vec![egui::Event::ModifiersChanged(Modifiers::COMMAND), key(Key::V, false, Modifiers::COMMAND)]), 1, "image paste");
+    }
+
+    /// #2638: on the web one ⌘V brings its key press and the browser's paste event; that is one paste.
+    #[test]
+    fn web_paste_key_and_paste_event_are_one_press() {
+        let ctx = egui::Context::default();
+        let key = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::COMMAND };
+        let mut r =
+            egui::RawInput { events: vec![key(Key::V, true), egui::Event::Paste("x".into()), key(Key::X, true), egui::Event::Cut], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        let presses = |k| r.events.iter().filter(|e| matches!(e, egui::Event::Key { key, pressed: true, .. } if *key == k)).count();
+        assert_eq!((presses(Key::V), presses(Key::X)), (1, 1));
+        let mut r = egui::RawInput { events: vec![key(Key::V, false)], ..Default::default() };
+        clipboard_keys(&ctx, false, &mut r);
+        assert!(!r.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })), "its release doesn't paste again");
     }
 
     /// #530: egui-winit sends Cut for Shift+Delete on Windows; on the canvas it opens Fill.
