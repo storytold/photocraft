@@ -363,6 +363,7 @@ pub struct LiveStroke {
     params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
+    push_count: u32,
     /// The document's CMYK profile the commit enters (`stroke_with`), so the preview shows the
     /// pixels a `paint.stroke` with `seed` will write.
     cmyk: Option<std::sync::Arc<photocraft_color::convert::CmykSpace>>,
@@ -414,7 +415,7 @@ impl LiveStroke {
             layer,
             params: p.clone(),
             tail: Rect::EMPTY,
-            cmyk: doc_cmyk_space(s),
+            push_count: 0,
         };
         live.push(&pts)?;
         Ok(live)
@@ -491,8 +492,49 @@ impl LiveStroke {
                 self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
                 dmg = dmg.union(&self.tail);
             }
-            Ok(dmg)
-        })
+            self.symmetry_regions =
+                std::iter::once(original_preview.bounds()).chain(copies.iter().map(StrokeRenderer::bounds)).filter(|r| !r.is_empty()).collect();
+            let damage = original_preview.composite_union_many(&copies, &self.pre, surf, self.sel.as_ref(), self.lock);
+            self.tail = bounds;
+            return Ok(damage.union(&bounds));
+        }
+        self.push_count = self.push_count.wrapping_add(1);
+        let update_tail = self.push_count <= 1 || self.push_count.is_multiple_of(2);
+        let mut dmg = Rect::EMPTY;
+        if update_tail {
+            let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
+            if !old.is_empty() {
+                surf.write_region(old, &self.pre.read_region(old));
+                self.renderer.mark_dirty(old);
+                dmg = old;
+            }
+        }
+        dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
+        if update_tail
+            && let Some(mut tail) = self.renderer.tail_preview()
+        {
+            self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+            dmg = dmg.union(&self.tail);
+        }
+        Ok(dmg)
+    }
+
+    /// Ensure the tail preview is up to date (undo the throttle skip so the surface shows the
+    /// correct smoothing catch-up). Call before reading pixels from `self.doc`.
+    pub fn finalize_tail(&mut self) -> Result<Rect> {
+        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
+        if !old.is_empty() {
+            surf.write_region(old, &self.pre.read_region(old));
+            self.renderer.mark_dirty(old);
+        }
+        let mut dmg = self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+        if let Some(mut tail) = self.renderer.tail_preview() {
+            self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+            dmg = dmg.union(&self.tail);
+        }
+        dmg = dmg.union(&old);
+        Ok(dmg)
     }
 }
 
