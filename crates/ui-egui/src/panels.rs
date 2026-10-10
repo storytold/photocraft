@@ -1678,17 +1678,10 @@ mod navigator_wheel_tests {
     fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, pointer: Pos2, wheel: f32) {
         let mut events = vec![Event::PointerMoved(pointer)];
         if wheel != 0.0 {
-            events.push(Event::MouseWheel {
-                unit: MouseWheelUnit::Line,
-                delta: vec2(0.0, wheel),
-                phase: TouchPhase::Move,
-                modifiers: Modifiers::NONE,
-            });
+            events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, wheel), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
         }
-        let mut out = ctx.run_ui(
-            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(430.0, 460.0))), events, ..Default::default() },
-            |ui| navigator(app, ui),
-        );
+        let mut out = ctx
+            .run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(430.0, 460.0))), events, ..Default::default() }, |ui| navigator(app, ui));
         out.textures_delta.clear();
     }
 
