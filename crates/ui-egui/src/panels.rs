@@ -3383,12 +3383,10 @@ mod symmetry_theme_tests {
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
                 app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
                 app.ui.tool = tool;
-                let mut h = Harness::builder().with_size(vec2(1600.0, 300.0))
-                    .build_ui_state(|ui, app| options_bar(app, ui), app);
+                let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).build_ui_state(|ui, app| options_bar(app, ui), app);
                 PhotocraftApp::setup_context(&h.ctx, kind);
                 h.run_steps(4);
-                assert!(h.query_by_label("Set painting symmetry options").is_some(),
-                    "missing symmetry menu in {:?} for {:?}", kind, tool);
+                assert!(h.query_by_label("Set painting symmetry options").is_some(), "missing symmetry menu in {:?} for {:?}", kind, tool);
             }
         }
     }
