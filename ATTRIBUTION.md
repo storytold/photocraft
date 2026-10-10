@@ -1,5 +1,9 @@
 # Attribution
 
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `assets/models/birefnet-general-lite.onnx` (downloaded, not committed) | BiRefNet General Lite | ZhengPeng | <https://github.com/ZhengPeng7/BiRefNet>, ONNX distribution via <https://github.com/danielgatis/rembg/releases/tag/v0.0.0> | MIT, `assets/models/LICENSE-BiRefNet.txt` |
+
 Every non-code asset in this repository, with its author, source and license. PhotoCraft's own
 code and original assets are MIT OR Apache-2.0 (see [`LICENSE-MIT`](LICENSE-MIT),
 [`LICENSE-APACHE`](LICENSE-APACHE) and [`NOTICE`](NOTICE)). When you add an asset, add a row here

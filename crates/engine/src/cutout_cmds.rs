@@ -4,7 +4,7 @@
 //! the Background layer into a normal layer first and has no menu item.
 
 use photocraft_algo::matting::{self, RefineParams};
-use photocraft_algo::segment::subject;
+use photocraft_algo::segment::{Sampler, subject};
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask};
 use serde_json::{Value, json};
 
@@ -17,6 +17,30 @@ const CMD: &str = "layer.removeBackground";
 /// Edge refinement after Select Subject: a narrow smart radius and a little smoothing, so soft
 /// edges and hair get partial coverage instead of a hard cut.
 const REFINE: RefineParams = RefineParams { radius: 2.0, smart_radius: true, smooth: 10.0, feather: 0.5, contrast: 10.0, shift_edge: 0.0 };
+
+/// Feed the model sRGB using the document's actual profile, including CMYK/Gray/Lab.
+/// Conversion affects only inference samples; the layer retains its original format and pixels.
+struct AiSampler<'a> {
+    surface: &'a photocraft_raster::Surface,
+    transform: std::sync::Arc<photocraft_cms::Transform>,
+}
+
+impl Sampler for AiSampler<'_> {
+    fn rgba(&self, bounds: photocraft_geom::Rect) -> Vec<[f32; 4]> {
+        let raw = self.surface.read_region(bounds);
+        let stride = self.surface.channels();
+        let mut rgb = vec![0.0; raw.len() / stride * 3];
+        self.transform.convert_f32(&raw, stride, &mut rgb, 3, false);
+        let alpha_channel = self.surface.format().mode.color_channels();
+        raw.chunks_exact(stride)
+            .zip(rgb.as_chunks::<3>().0)
+            .map(|(source, color)| {
+                let alpha = if self.surface.format().alpha { source.get(alpha_channel).copied().unwrap_or(0.0) } else { 1.0 };
+                [color.first().copied().unwrap_or(0.0), color.get(1).copied().unwrap_or(0.0), color.get(2).copied().unwrap_or(0.0), alpha]
+            })
+            .collect()
+    }
+}
 
 /// Remove Background needs an unlocked pixel layer.
 fn check(doc: &Document, l: &Layer) -> std::result::Result<(), String> {
@@ -41,10 +65,46 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     check(doc, doc.layer(id).ok_or(EngineError::NoLayer(id))?).map_err(EngineError::Other)?;
     let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
     let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
+    let ai = match p.get("method").and_then(Value::as_str).unwrap_or("subject") {
+        "ai" => true,
+        "subject" => false,
+        _ => return Err(EngineError::BadParams { cmd: CMD.into(), msg: "method must be ai or subject".into() }),
+    };
     crate::jobs::edit_job(
         s,
         "Remove Background",
         move |doc, _, ctx| {
+            if ai {
+                ctx.progress(0.1, "Removing background with local AI");
+                let surface = doc.layer(id).and_then(Layer::surface).ok_or(EngineError::NoLayer(id))?;
+                let format = surface.format();
+                let transparent_default = format.alpha && surface.default_pixel().get(format.mode.color_channels()).is_some_and(|a| *a == 0.0);
+                // A placed image is analyzed at its own extent, rather than surrounded by the
+                // entire empty canvas. Coverage stays in document coordinates when restored.
+                let bounds = if transparent_default { surface.content_bounds().intersect(&doc.bounds()) } else { doc.bounds() };
+                bounds
+                    .width()
+                    .checked_mul(bounds.height())
+                    .filter(|n| *n > 0 && *n <= 100_000_000)
+                    .ok_or_else(|| EngineError::Other("AI background removal supports images up to 100 megapixels".into()))?;
+                let src = crate::color_cmds::document_profile(doc);
+                let transform = photocraft_cms::cached(&src, photocraft_cms::Builtin::Srgb.profile(), photocraft_cms::TransformOptions::default())
+                    .map_err(|e| EngineError::Other(format!("AI colour conversion failed: {e}")))?;
+                if surface.channels() == 0 || transform.inputs() != surface.format().mode.color_channels() || transform.outputs() != 3 {
+                    return Err(EngineError::Other("Unsupported image colour format for AI background removal".into()));
+                }
+                let step = (bounds.width().max(bounds.height()) as usize).div_ceil(2048).max(1);
+                let image = AiSampler { surface, transform }.rgb_scaled(bounds, step);
+                ctx.check()?;
+                let mask = photocraft_ml::foreground(&image.px, image.w, image.h, bounds.width() as u32, bounds.height() as u32).map_err(EngineError::Other)?;
+                ctx.check()?;
+                let region = photocraft_algo::selection::Region { bbox: bounds, mask };
+                crate::extra_cmds::background_to_layer_for_mask(doc, id);
+                doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask =
+                    Some(LayerMask { surface: matting::region_surface(&region), ..LayerMask::reveal_all() });
+                doc.selection = None;
+                return Ok([bounds.x0, bounds.y0, bounds.width() as i32, bounds.height() as i32]);
+            }
             ctx.progress(0.1, "Finding subject");
             let found = with_doc_sampler(doc, Some(id), sample_all, |smp, d| subject::select_subject(smp, d.bounds()));
             let mut region = found.ok_or_else(|| EngineError::Other("no subject found".into()))?;
@@ -78,7 +138,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Remove Background",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true} → {layer,bounds} (adds a layer mask from Select Subject; the Background becomes a normal layer)"##,
+        params: r##"{"layer":id?,"method":"subject|ai"="subject","sampleAllLayers":bool=false,"refine":bool=true} → {layer,bounds} (ai uses local BiRefNet General Lite on this layer; adds an undoable mask; the Background becomes a normal layer)"##,
         enabled,
         run,
         journal: true,
@@ -91,6 +151,69 @@ mod tests {
     use photocraft_algo::segment::Rng;
     use photocraft_doc::LayerId;
     use photocraft_geom::Rect;
+
+    #[test]
+    fn invalid_ai_method_preserves_the_document() {
+        let (mut s, _) = disc(8);
+        let revision = s.active().unwrap().revision;
+        assert!(s.execute(CMD, json!({"method": "cloud"})).is_err());
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert!(layer(&s, active_id(&s)).mask.is_none());
+    }
+
+    #[test]
+    fn ai_samples_use_the_document_profile_at_every_depth_and_mode() {
+        for depth in [8, 16, 32] {
+            for mode in ["image.mode.rgb", "image.mode.grayscale", "image.mode.cmyk", "image.mode.lab"] {
+                let mut s = session_with(4, 4, depth, |_, _| [0.7, 0.3, 0.2]);
+                s.execute(mode, json!({})).unwrap();
+                let doc = &s.active().unwrap().doc;
+                let surface = layer(&s, active_id(&s)).surface().unwrap();
+                let source = crate::color_cmds::document_profile(doc);
+                let transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::Srgb.profile(), photocraft_cms::TransformOptions::default()).unwrap();
+                let sample = AiSampler { surface, transform }.rgba(doc.bounds());
+                assert_eq!(sample.len(), 16);
+                assert!(sample.iter().flatten().all(|v| v.is_finite()));
+                assert!(sample.iter().all(|v| v[3] > 0.99));
+                if mode == "image.mode.rgb" {
+                    for px in sample {
+                        assert!((px[0] - 0.7).abs() < 0.02);
+                        assert!((px[1] - 0.3).abs() < 0.02);
+                        assert!((px[2] - 0.2).abs() < 0.02);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires scripts/setup-background-removal.sh; runs real local BiRefNet inference"]
+    fn ai_background_removal_retains_pixels_and_undoes_at_all_depths() {
+        for depth in [8, 16, 32] {
+            let (mut s, _) = disc(depth);
+            let target = active_id(&s);
+            let bounds = s.active().unwrap().doc.bounds();
+            let original = layer(&s, target).surface().unwrap().read_region(bounds);
+            s.execute("layer.new.layer", json!({"name":"Other layer"})).unwrap();
+            let other = active_id(&s);
+            // An explicit target must be independent of the selected layer.
+            let steps = s.active().unwrap().history.past_len();
+            s.execute(CMD, json!({"layer":target.0,"method":"ai"})).unwrap();
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+            assert!(layer(&s, target).mask.is_some());
+            assert!(layer(&s, other).mask.is_none());
+            assert_eq!(layer(&s, target).surface().unwrap().read_region(bounds), original);
+            let mask = layer(&s, target).mask.as_ref().unwrap();
+            let values: Vec<f32> = (0..160).flat_map(|y| (0..200).map(move |x| mask.value(x, y))).collect();
+            assert!(values.iter().any(|v| *v < 0.1));
+            assert!(values.iter().any(|v| *v > 0.9));
+            assert!(values.iter().any(|v| *v > 0.0 && *v < 1.0));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert!(layer(&s, target).mask.is_none());
+            s.execute("edit.redo", json!({})).unwrap();
+            assert!(layer(&s, target).mask.is_some());
+        }
+    }
 
     fn session_with(w: u32, h: u32, depth: u32, px: impl Fn(u32, u32) -> [f32; 3]) -> Session {
         let mut s = Session::new();

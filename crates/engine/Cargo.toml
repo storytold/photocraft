@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 rayon = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-algo = { workspace = true }
+photocraft-ml = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }

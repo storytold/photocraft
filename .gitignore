@@ -11,3 +11,5 @@ target/
 /craft-fonts
 *.log
 __pycache__/
+
+/assets/models/*.onnx
