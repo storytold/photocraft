@@ -2,13 +2,17 @@
 //! by scenario id, and check it against `perf/budgets.toml` and `perf/baseline.json` (#221).
 //!
 //! ```text
-//! cargo xtask perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
+//! cargo xtask perf [--quick] [--update-baseline] [--baseline PATH] [--advisory-budgets] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
 //! ```
 //!
 //! - `--quick`: only the benches with `quick_args` (small synthetic documents; minutes, not tens
 //!   of minutes). Quick numbers are compared only with a quick baseline, and budgets don't apply
 //!   (they are set for the full-size documents).
 //! - `--update-baseline`: write this run into `perf/baseline.json` (the only way it changes).
+//! - `--baseline PATH`: the baseline file to compare with and update (default `perf/baseline.json`;
+//!   the nightly keeps one per GitHub runner OS, `perf/baseline-<os>.json`).
+//! - `--advisory-budgets`: a broken enforced budget is reported, not a failure (CI runners are
+//!   slower than the machine the budgets were set on; only regressions fail there).
 //! - `--threshold PCT`: the regression threshold (default `settings.regression_pct`, 15 %).
 //! - `--bench NAME`: run only these benches (repeatable).
 //! - `--skip-build`: don't run `cargo build` first. `--reuse`: don't run the benches either;
@@ -619,15 +623,27 @@ struct Opts {
     benches: Vec<String>,
     skip_build: bool,
     reuse: bool,
+    baseline: String,
+    advisory_budgets: bool,
 }
 
 fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
-    let mut o = Opts { quick: false, update_baseline: false, threshold: None, benches: Vec::new(), skip_build: false, reuse: false };
+    let mut o = Opts {
+        quick: false,
+        update_baseline: false,
+        threshold: None,
+        benches: Vec::new(),
+        skip_build: false,
+        reuse: false,
+        baseline: BASELINE.into(),
+        advisory_budgets: false,
+    };
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match *a {
             "--quick" => o.quick = true,
             "--update-baseline" => o.update_baseline = true,
+            "--advisory-budgets" => o.advisory_budgets = true,
             "--skip-build" => o.skip_build = true,
             "--reuse" => {
                 o.reuse = true;
@@ -638,6 +654,7 @@ fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
                 o.threshold = Some(v);
             }
             "--bench" => o.benches.push(it.next().ok_or("--bench needs a name")?.to_string()),
+            "--baseline" => o.baseline = it.next().ok_or("--baseline needs a path")?.to_string(),
             other => return Err(format!("perf: unknown option `{other}`")),
         }
     }
@@ -776,13 +793,19 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         obj.insert("class".into(), json!(class));
     }
 
-    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(BASELINE)).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(&o.baseline)).ok().and_then(|t| serde_json::from_str(&t).ok());
     let (baseline, baseline_note) = match baseline_value.as_ref().map(|b| baseline_for(b, &class, mode)) {
         Some(Ok(b)) => (Some(b), None),
         Some(Err(e)) => (None, Some(e)),
-        None => (None, Some(format!("no {BASELINE}: regression check skipped"))),
+        None => (None, Some(format!("no {}: regression check skipped", o.baseline))),
     };
-    let outcomes = evaluate(&budgets, &reports, baseline.as_ref(), threshold, !o.quick);
+    let mut outcomes = evaluate(&budgets, &reports, baseline.as_ref(), threshold, !o.quick);
+    if o.advisory_budgets {
+        // Budgets are set for a developer machine; on slower CI hardware only regressions fail.
+        for oc in outcomes.iter_mut().filter(|oc| oc.status == Status::Broken) {
+            oc.status = Status::Over;
+        }
+    }
 
     let scenarios: serde_json::Map<String, Value> = budgets
         .scenario
@@ -839,8 +862,8 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     if o.update_baseline {
         let nb = updated_baseline(baseline_value.as_ref(), &results);
         let text = serde_json::to_string_pretty(&nb).map_err(|e| format!("encode baseline: {e}"))?;
-        write(&root.join(BASELINE), &format!("{text}\n"))?;
-        println!("updated {BASELINE} ({mode}, machine class {class})");
+        write(&root.join(&o.baseline), &format!("{text}\n"))?;
+        println!("updated {} ({mode}, machine class {class})", o.baseline);
     }
     let all: Vec<&String> = failures.iter().chain(&bench_failures).collect();
     if all.is_empty() { Ok(()) } else { Err(format!("{} perf failure(s):\n  {}", all.len(), all.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  "))) }
@@ -1103,5 +1126,9 @@ not_measurable = "needs a frame harness"
         assert!(o.quick && o.reuse && o.skip_build);
         assert_eq!(o.threshold, Some(20.0));
         assert_eq!(o.benches, ["a"]);
+        assert_eq!(o.baseline, BASELINE);
+        assert!(!o.advisory_budgets && parse_opts(&["--advisory-budgets"]).unwrap().advisory_budgets);
+        assert!(parse_opts(&["--baseline"]).is_err());
+        assert_eq!(parse_opts(&["--baseline", "perf/baseline-linux.json"]).unwrap().baseline, "perf/baseline-linux.json");
     }
 }

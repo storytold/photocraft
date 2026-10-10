@@ -315,11 +315,15 @@ bench `--json` support through `photocraft_testkit::perf::{row, report, write_re
 `[[scenario]]` to `perf/budgets.toml` and run `cargo xtask scorecard`.
 
 **CI.** `ci.yml` runs `cargo xtask scorecard --check`. `perf-nightly.yml` runs `cargo xtask perf`
-on a fixed macOS runner every night (and on demand), posts the table as the job summary, uploads
-`results.json`, and fails on a broken budget or regression. It never runs on pull requests: the
-release build of the benches alone takes longer than PR CI should. To give the nightly runner
-its own baseline, run the workflow by hand with `update_baseline` and commit the `perf-baseline`
-artifact as `perf/baseline.json`.
+every night (and on demand) as a three-entry matrix of pinned GitHub-hosted runners (macOS
+Apple silicon, Linux x86-64, Windows x86-64), posts each table as its job summary, uploads
+`results.json`, and fails on a failed bench or a regression (budgets are reported, not enforced,
+there: `--advisory-budgets`, since they were set on a faster machine). Each entry compares only with its own
+baseline, `perf/baseline-<os>.json` (`--baseline PATH`), recorded on that runner; hosted Linux and
+Windows runners have no real GPU, so their GPU rows run on a software adapter (llvmpipe, WARP). It never runs on
+pull requests: the release build of the benches alone takes longer than PR CI should. To record
+the runner baselines, run the workflow by hand with `update_baseline` and commit each
+`perf-baseline-<os>` artifact as `perf/baseline-<os>.json`.
 
 ## Web build
 

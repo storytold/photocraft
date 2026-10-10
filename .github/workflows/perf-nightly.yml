@@ -1,13 +1,17 @@
 name: Perf (nightly)
 
-# The performance scorecard (#221): `cargo xtask perf` on a fixed macOS runner (Apple silicon,
-# Metal), every night and on demand. It never runs on pull requests, so it can't block one.
-# It fails when an enforced budget in perf/budgets.toml breaks or a scenario's p50 regresses
-# more than 15 % against perf/baseline.json from the same machine class (other classes are
-# never compared). The table goes to the job summary; results.json is uploaded as an artifact.
+# The performance scorecard (#221): `cargo xtask perf` every night and on demand, on three
+# GitHub-hosted runners (macOS Apple silicon/Metal, Linux x86-64, Windows x86-64), each a
+# separate matrix entry with its own baseline, perf/baseline-<os>.json, recorded on that runner.
+# It never runs on pull requests, so it can't block one. An entry fails when a bench fails or a
+# scenario's p50 regresses more than 15 % against its baseline from the same machine class (other
+# classes are never compared). Budgets in perf/budgets.toml were set on a faster developer machine,
+# so here they are reported, not enforced (--advisory-budgets). Hosted Linux/Windows runners
+# have no real GPU: the GPU rows run on a software adapter (llvmpipe, WARP), compared only with
+# themselves.
 #
-# To give this runner class its own baseline: run it by hand with "update_baseline", download
-# the `perf-baseline` artifact and commit it as perf/baseline.json in a PR.
+# To (re)record the baselines: run this workflow by hand with "update_baseline", download the
+# `perf-baseline-<os>` artifacts and commit them as perf/baseline-<os>.json in a PR.
 
 on:
   schedule:
@@ -19,7 +23,7 @@ on:
         type: boolean
         default: false
       update_baseline:
-        description: "Also write perf/baseline.json from this run (uploaded as an artifact, not committed)"
+        description: "Also write perf/baseline-<os>.json from this run (uploaded as artifacts, not committed)"
         type: boolean
         default: false
 
@@ -35,10 +39,20 @@ env:
 
 jobs:
   perf:
-    name: perf (macOS, Apple GPU)
-    # Pinned image, not -latest: the machine class must stay fixed for comparisons.
-    runs-on: macos-15
+    name: perf (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned images, not -latest: the machine class must stay fixed for comparisons.
+          - { name: macos, os: macos-15 }
+          - { name: linux, os: ubuntu-24.04 }
+          - { name: windows, os: windows-2025 }
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,9 +60,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Release builds only, one cache per OS; saved even when a bench fails (it holds compiled
+      # dependencies, not results). The job only runs on main, so it never evicts PR caches.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: perf-release
+          shared-key: perf-release-${{ matrix.name }}
+          cache-on-failure: true
+
+      # The hosted Linux image has no Vulkan driver; llvmpipe gives the GPU benches a fixed adapter.
+      - name: Software Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers
 
       - name: Run benchmarks
         id: perf
@@ -56,7 +78,7 @@ jobs:
           QUICK: ${{ inputs.quick }}
           UPDATE: ${{ inputs.update_baseline }}
         run: |
-          args=()
+          args=(--baseline "perf/baseline-${{ matrix.name }}.json" --advisory-budgets)
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline); fi
           cargo xtask perf "${args[@]}"
@@ -74,7 +96,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-results
+          name: perf-results-${{ matrix.name }}
           path: |
             target/perf/*.json
             target/perf/summary.md
@@ -85,7 +107,7 @@ jobs:
         if: always() && inputs.update_baseline
         uses: actions/upload-artifact@v4
         with:
-          name: perf-baseline
-          path: perf/baseline.json
+          name: perf-baseline-${{ matrix.name }}
+          path: perf/baseline-${{ matrix.name }}.json
           if-no-files-found: warn
           retention-days: 30
