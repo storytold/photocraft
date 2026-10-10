@@ -151,8 +151,7 @@ impl Headless {
         // alone (#1547).
         let ext =
             format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()));
-        let layered = matches!(ext.as_deref(), Some("psd" | "psb" | "ora")) || ext.as_deref() == Some(photocraft_format::EXTENSION);
-        if layered {
+        if ext.as_deref().is_some_and(file_cmds::layered_extension) {
             // Saving by index must not retarget the next automation command.
             let previously_active = self.session.active_index();
             self.session.set_active(i);

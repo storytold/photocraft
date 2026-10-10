@@ -3,7 +3,11 @@
 ## Prerequisites
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
-- macOS, Windows or Linux. Linux needs `libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`.
+- macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
+  - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
+  - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
+  - Arch: `sudo pacman -S libxkbcommon wayland libx11 libxrandr libxi mesa gtk3`
+  - openSUSE: `sudo zypper install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel Mesa-libGL-devel gtk3-devel`
 
 ### Windows source builds
 
@@ -37,10 +41,25 @@ cargo run --release -p photocraft -- --control 7878 --control-token-file .privat
 cargo test --workspace                                     # everything
 cargo xtask ci                                             # fmt + clippy + tests + layers + wasm
 cargo xtask stats                                          # tests and lines per crate
-cargo xtask parity                                         # Photoshop menu coverage -> docs/parity.md
+cargo xtask parity                                         # Photoshop menu coverage -> docs/parity-checklist.md
 ```
 
 Image code is slow at `opt-level 0`, so the workspace profile builds dependencies at `opt-level 2`. Use `--release` for anything interactive.
+
+The dev profile builds with `debug = "line-tables-only"`: panic backtraces keep file and line, and test binaries link about twice as fast. To inspect local variables in a debugger, build with `CARGO_PROFILE_DEV_DEBUG=true`.
+
+### Faster test loops
+
+Most of a `cargo test` run is linking test binaries and running them one after another. While iterating:
+
+```sh
+cargo test -p <crate> --lib --tests        # skip examples and doctests (ui-egui has 11 examples)
+cargo test -p <crate> --test <file>        # one integration-test file
+cargo nextest run --workspace              # parallel across binaries (cargo install cargo-nextest --locked)
+cargo test --doc --workspace               # nextest does not run doctests
+```
+
+[cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and ui-egui's integration and canvas/GPU tests) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. CI still runs `cargo test`, and a full `cargo test` stays the final check before a PR.
 
 ## Fonts (craft-fonts)
 
@@ -234,7 +253,7 @@ intents, black point compensation). It ships CC0 built-in profiles, including a 
 ## Menu parity
 
 `cargo xtask parity` compares Photoshop's menu tree (`crates/ui-egui/src/menu_catalog.rs`) with
-the live command registry (`menus::is_live`) and rewrites [`docs/parity.md`](parity.md). The test
+the live command registry (`menus::is_live`) and rewrites [`docs/parity-checklist.md`](parity-checklist.md). The test
 `parity::tests::parity_does_not_regress` fails if the live count drops below `parity::FLOOR`.
 
 `cargo xtask i18n-coverage` prints the UI translation coverage for each language in the
@@ -296,7 +315,7 @@ cargo xtask perf --update-baseline   # also write perf/baseline.json from this r
   class, commit, date and load average.
 - `crates/io/tests/corpus.rs`: the corpus floors (every `Source { .. }` constant).
 - The prefs audit: `Preferences` fields that no code reads (target 0, #204), plus counts taken
-  from the tree (never-crash attribute coverage, `docs/parity.md`).
+  from the tree (never-crash attribute coverage, `docs/parity-checklist.md`).
 
 **Perf runs.** `xtask perf` builds the benches in release (`perf_scenarios`, `interactive_bench`,
 `fx_bench`, `bevel_bench`, `type_bench`, `large_image_bench`, and `layout_bench` once it exists), runs each with
